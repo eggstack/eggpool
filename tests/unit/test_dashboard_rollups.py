@@ -1117,3 +1117,349 @@ class TestFreshnessHelpers:
             account_id=account_id,
         )
         assert latest == "2025-06-15 12:00:00"
+
+
+class TestRollupFirstPaintBehavior:
+    """Phase 3: rollups are authoritative for common dashboard chart windows.
+    Raw fallback is suppressed for large windows when rollups are empty."""
+
+    @pytest.mark.asyncio()
+    async def test_rollup_preferred_for_24h(self, db: Database) -> None:
+        """With both rollups and requests populated, 24h returns rollup rows."""
+        rollup_repo = UsageRollupRepository(db)
+        account_id = await _insert_account(db, "rp_acct")
+        await _insert_model(db, "model_a")
+        now = datetime.now(UTC)
+        anchor = now - timedelta(hours=6)
+        await _flush_events(
+            db,
+            rollup_repo,
+            [
+                UsageMetricEvent(
+                    timestamp=anchor,
+                    provider_id="provider_a",
+                    model_id="model_a",
+                    account_id=account_id,
+                    protocol="openai",
+                    streamed=False,
+                    status="completed",
+                    retry_count=0,
+                    input_tokens=100,
+                    output_tokens=200,
+                    cache_read_tokens=0,
+                    cache_write_tokens=0,
+                    reasoning_tokens=0,
+                    thinking_characters=0,
+                    cost_microdollars=500,
+                    bytes_received=1000,
+                    bytes_emitted=500,
+                    latency_ms=50,
+                    first_byte_ms=None,
+                ),
+            ],
+        )
+        async with db.transaction():
+            await db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, provider_id, started_at,
+                    completed_at, status, input_tokens, output_tokens,
+                    cost_microdollars, upstream_latency_ms,
+                    cache_read_tokens, cache_write_tokens, reasoning_tokens
+                ) VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, 0)
+                """,
+                (
+                    account_id,
+                    "model_a",
+                    "provider_a",
+                    format_dt(now - timedelta(hours=3)),
+                    format_dt(now - timedelta(hours=3)),
+                    999,
+                    888,
+                    100,
+                    10.0,
+                    0,
+                    0,
+                ),
+            )
+        time_range = TimeRange(
+            start=now - timedelta(hours=24),
+            end=now,
+            label="24h",
+        )
+        service = StatsService(db, rollup_repo=rollup_repo)
+        result = await service.get_timeseries(time_range, bucket="hour")
+        assert result is not None
+        total_requests = sum(int(r.get("request_count", 0)) for r in result)
+        assert total_requests == 1
+        total_in = sum(int(r.get("input_tokens", 0)) for r in result)
+        assert total_in == 100
+
+    @pytest.mark.asyncio()
+    async def test_raw_fallback_suppressed_for_30d_empty_rollups(
+        self, db: Database
+    ) -> None:
+        """With empty rollups and a 30d period, return empty list."""
+        rollup_repo = UsageRollupRepository(db)
+        account_id = await _insert_account(db, "supp_acct")
+        await _insert_model(db, "model_a")
+        async with db.transaction():
+            await db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, provider_id, started_at,
+                    completed_at, status, input_tokens, output_tokens,
+                    cost_microdollars, upstream_latency_ms
+                ) VALUES (?, ?, ?, datetime('now', '-1 hour'),
+                    datetime('now', '-1 hour'), 'completed', 100, 200, 100, 50.0)
+                """,
+                (account_id, "model_a", "provider_a"),
+            )
+        now = datetime.now(UTC)
+        time_range = TimeRange(
+            start=now - timedelta(days=30),
+            end=now,
+            label="30d",
+        )
+        service = StatsService(db, rollup_repo=rollup_repo)
+        result = await service.get_timeseries(time_range, bucket="hour")
+        assert result is not None
+        assert len(result) == 0
+
+    @pytest.mark.asyncio()
+    async def test_raw_fallback_suppressed_for_7d_empty_rollups(
+        self, db: Database
+    ) -> None:
+        """With empty rollups and a 7d period, return empty list."""
+        rollup_repo = UsageRollupRepository(db)
+        account_id = await _insert_account(db, "supp7_acct")
+        await _insert_model(db, "model_a")
+        async with db.transaction():
+            await db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, provider_id, started_at,
+                    completed_at, status, input_tokens, output_tokens,
+                    cost_microdollars, upstream_latency_ms
+                ) VALUES (?, ?, ?, datetime('now', '-30 minutes'),
+                    datetime('now', '-30 minutes'), 'completed', 10, 20, 5, 10.0)
+                """,
+                (account_id, "model_a", "provider_a"),
+            )
+        now = datetime.now(UTC)
+        time_range = TimeRange(
+            start=now - timedelta(days=7),
+            end=now,
+            label="7d",
+        )
+        service = StatsService(db, rollup_repo=rollup_repo)
+        result = await service.get_timeseries(time_range, bucket="hour")
+        assert result is not None
+        assert len(result) == 0
+
+    @pytest.mark.asyncio()
+    async def test_raw_fallback_allowed_for_1h_empty_rollups(
+        self, db: Database
+    ) -> None:
+        """With empty rollups, 1h falls back to raw requests."""
+        rollup_repo = UsageRollupRepository(db)
+        account_id = await _insert_account(db, "1h_acct")
+        await _insert_model(db, "model_a")
+        async with db.transaction():
+            await db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, provider_id, started_at,
+                    completed_at, status, input_tokens, output_tokens,
+                    cost_microdollars, upstream_latency_ms
+                ) VALUES (?, ?, ?, datetime('now', '-30 minutes'),
+                    datetime('now', '-30 minutes'), 'completed', 50, 60, 25, 20.0)
+                """,
+                (account_id, "model_a", "provider_a"),
+            )
+        now = datetime.now(UTC)
+        time_range = TimeRange(
+            start=now - timedelta(hours=1),
+            end=now,
+            label="1h",
+        )
+        service = StatsService(db, rollup_repo=rollup_repo)
+        result = await service.get_timeseries(time_range, bucket="hour")
+        assert result is not None
+        total_requests = sum(int(r.get("request_count", 0)) for r in result)
+        assert total_requests == 1
+
+    @pytest.mark.asyncio()
+    async def test_raw_fallback_allowed_for_custom_under_2h(self, db: Database) -> None:
+        """With empty rollups, a 90-minute custom range falls back to raw."""
+        rollup_repo = UsageRollupRepository(db)
+        account_id = await _insert_account(db, "custom_acct")
+        await _insert_model(db, "model_a")
+        async with db.transaction():
+            await db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, provider_id, started_at,
+                    completed_at, status, input_tokens, output_tokens,
+                    cost_microdollars, upstream_latency_ms
+                ) VALUES (?, ?, ?, datetime('now', '-60 minutes'),
+                    datetime('now', '-60 minutes'), 'completed', 10, 20, 5, 5.0)
+                """,
+                (account_id, "model_a", "provider_a"),
+            )
+        now = datetime.now(UTC)
+        time_range = TimeRange(
+            start=now - timedelta(minutes=90),
+            end=now,
+            label="custom",
+        )
+        service = StatsService(db, rollup_repo=rollup_repo)
+        result = await service.get_timeseries(time_range, bucket="hour")
+        assert result is not None
+        total_requests = sum(int(r.get("request_count", 0)) for r in result)
+        assert total_requests == 1
+
+    @pytest.mark.asyncio()
+    async def test_grouped_timeseries_metadata_rollup_source(
+        self, db: Database
+    ) -> None:
+        """get_grouped_timeseries returns source/degraded_reason from rollups."""
+        rollup_repo = UsageRollupRepository(db)
+        account_id = await _insert_account(db, "meta_acct")
+        await _insert_model(db, "model_a")
+        await _flush_events(
+            db,
+            rollup_repo,
+            [
+                UsageMetricEvent(
+                    timestamp=datetime(2025, 6, 15, 12, 0, 0, tzinfo=UTC),
+                    provider_id="provider_a",
+                    model_id="model_a",
+                    account_id=account_id,
+                    protocol="openai",
+                    streamed=False,
+                    status="completed",
+                    retry_count=0,
+                    input_tokens=10,
+                    output_tokens=20,
+                    cache_read_tokens=0,
+                    cache_write_tokens=0,
+                    reasoning_tokens=0,
+                    thinking_characters=0,
+                    cost_microdollars=0,
+                    bytes_received=0,
+                    bytes_emitted=0,
+                    latency_ms=10,
+                    first_byte_ms=None,
+                ),
+            ],
+        )
+        time_range = TimeRange(
+            start=datetime(2025, 1, 1),
+            end=datetime(2099, 12, 31),
+            label="custom",
+        )
+        service = StatsService(db, rollup_repo=rollup_repo)
+        result = await service.get_grouped_timeseries(
+            time_range, bucket="hour", group_by="provider_model"
+        )
+        assert result["source"] == "rollup"
+        assert result["degraded_reason"] == "none"
+        assert len(result["points"]) > 0
+
+    @pytest.mark.asyncio()
+    async def test_grouped_metadata_empty_rollups_large_window(
+        self, db: Database
+    ) -> None:
+        """Empty rollups on a 7d window -> source=empty, degraded_reason."""
+        rollup_repo = UsageRollupRepository(db)
+        account_id = await _insert_account(db, "empty_meta_acct")
+        await _insert_model(db, "model_a")
+        async with db.transaction():
+            await db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, provider_id, started_at,
+                    completed_at, status, input_tokens, output_tokens,
+                    cost_microdollars, upstream_latency_ms
+                ) VALUES (?, ?, ?, datetime('now', '-1 hour'),
+                    datetime('now', '-1 hour'), 'completed', 10, 20, 5, 10.0)
+                """,
+                (account_id, "model_a", "provider_a"),
+            )
+        now = datetime.now(UTC)
+        time_range = TimeRange(
+            start=now - timedelta(days=7),
+            end=now,
+            label="7d",
+        )
+        service = StatsService(db, rollup_repo=rollup_repo)
+        result = await service.get_grouped_timeseries(
+            time_range, bucket="hour", group_by="provider_model"
+        )
+        assert result["source"] == "empty"
+        assert result["degraded_reason"] == "rollup_empty"
+        assert result["points"] == []
+
+    @pytest.mark.asyncio()
+    async def test_grouped_metadata_empty_rollups_small_window(
+        self, db: Database
+    ) -> None:
+        """Empty rollups on a 1h window -> source=raw, degraded_reason=rollup_empty."""
+        rollup_repo = UsageRollupRepository(db)
+        account_id = await _insert_account(db, "small_meta_acct")
+        await _insert_model(db, "model_a")
+        async with db.transaction():
+            await db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, provider_id, started_at,
+                    completed_at, status, input_tokens, output_tokens,
+                    cost_microdollars, upstream_latency_ms
+                ) VALUES (?, ?, ?, datetime('now', '-30 minutes'),
+                    datetime('now', '-30 minutes'), 'completed', 10, 20, 5, 10.0)
+                """,
+                (account_id, "model_a", "provider_a"),
+            )
+        now = datetime.now(UTC)
+        time_range = TimeRange(
+            start=now - timedelta(hours=1),
+            end=now,
+            label="1h",
+        )
+        service = StatsService(db, rollup_repo=rollup_repo)
+        result = await service.get_grouped_timeseries(
+            time_range, bucket="hour", group_by="provider_model"
+        )
+        assert result["source"] == "raw"
+        assert result["degraded_reason"] == "rollup_empty"
+
+    @pytest.mark.asyncio()
+    async def test_grouped_metadata_no_rollup_repo(self, db: Database) -> None:
+        """Without a rollup repo, grouped timeseries returns source=raw."""
+        account_id = await _insert_account(db, "norollup_acct")
+        await _insert_model(db, "model_a")
+        async with db.transaction():
+            await db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, provider_id, started_at,
+                    completed_at, status, input_tokens, output_tokens,
+                    cost_microdollars, upstream_latency_ms
+                ) VALUES (?, ?, ?, datetime('now', '-30 minutes'),
+                    datetime('now', '-30 minutes'), 'completed', 10, 20, 5, 10.0)
+                """,
+                (account_id, "model_a", "provider_a"),
+            )
+        now = datetime.now(UTC)
+        time_range = TimeRange(
+            start=now - timedelta(hours=1),
+            end=now,
+            label="1h",
+        )
+        service = StatsService(db)
+        result = await service.get_grouped_timeseries(
+            time_range, bucket="hour", group_by="provider_model"
+        )
+        assert result["source"] == "raw"
+        assert result["degraded_reason"] == "none"

@@ -614,6 +614,121 @@
     }
   };
 
+  namespace.initChartLoadingShells = function initChartLoadingShells() {
+    var shells = document.querySelectorAll("[data-chart-endpoint]");
+    if (shells.length === 0) return;
+    if (!namespace.__chartHydrationInflight) {
+      namespace.__chartHydrationInflight = {};
+    }
+    if (!namespace.__chartHydrationHandles) {
+      namespace.__chartHydrationHandles = {};
+    }
+    for (var i = 0; i < shells.length; i++) {
+      (function (shell) {
+        var canvasId = shell.getAttribute("data-chart-canvas") || "";
+        var endpoint = shell.getAttribute("data-chart-endpoint") || "";
+        if (!endpoint || !canvasId) return;
+        if (namespace.__chartHydrationHandles[canvasId]) {
+          window.clearInterval(namespace.__chartHydrationHandles[canvasId]);
+          namespace.__chartHydrationHandles[canvasId] = null;
+        }
+        function showState(state, message) {
+          shell.setAttribute("data-chart-state", state);
+          var textEl = shell.querySelector("span:last-child");
+          if (textEl && message) textEl.textContent = message;
+        }
+        showState("loading", "Loading chart data\u2026");
+        var decoded = endpoint.replace(/&amp;/g, "&");
+        if (namespace.__chartHydrationInflight[decoded]) {
+          namespace.__chartHydrationInflight[decoded].then(
+            function (data) { renderIntoShell(shell, canvasId, data); },
+            function () { showState("error", "Chart data unavailable"); }
+          );
+          return;
+        }
+        var promise = fetch(decoded, { cache: "no-store", headers: { "x-dashboard-refresh": "1" } })
+          .then(function (response) {
+            if (!response.ok) throw new Error("chart fetch failed: " + response.status);
+            return response.json();
+          });
+        namespace.__chartHydrationInflight[decoded] = promise;
+        promise.then(
+          function (data) { renderIntoShell(shell, canvasId, data); },
+          function () { showState("error", "Chart data unavailable"); }
+        ).then(function () { delete namespace.__chartHydrationInflight[decoded]; });
+      })(shells[i]);
+    }
+    function renderIntoShell(shell, canvasId, data) {
+      var list = Array.isArray(data) ? data : [];
+      if (list.length === 0) {
+        shell.setAttribute("data-chart-state", "empty");
+        var textEl = shell.querySelector("span:last-child");
+        if (textEl) textEl.textContent = "No data for selected period";
+        return;
+      }
+      shell.setAttribute("data-chart-state", "loaded");
+      shell.style.display = "none";
+      var panel = shell.closest(".panel") || shell.parentElement;
+      if (!panel) return;
+      var wrap = document.createElement("div");
+      wrap.className = "chart-wrap";
+      wrap.style.height = shell.style.height || "300px";
+      var canvas = document.createElement("canvas");
+      canvas.id = canvasId;
+      var periodFromShell = "";
+      var ds = shell.getAttribute("data-chart-endpoint") || "";
+      var pm = ds.match(/period=([^&]+)/);
+      if (pm) periodFromShell = decodeURIComponent(pm[1]);
+      canvas.setAttribute("data-period", periodFromShell);
+      wrap.appendChild(canvas);
+      panel.insertBefore(wrap, shell);
+      var period = periodFromShell || "24h";
+      if (typeof window.Chart !== "undefined") {
+        var labels = list.map(function (d) { return d.bucket; });
+        var requests = list.map(function (d) { return Number(d.request_count || 0); });
+        var errors = list.map(function (d) { return Number(d.error_count || 0); });
+        canvas.__eggpoolChart = new window.Chart(canvas, {
+          type: "line",
+          data: {
+            labels: labels,
+            datasets: [
+              { label: "Requests", data: requests, borderColor: "rgb(75, 192, 192)", tension: 0.1 },
+              { label: "Errors", data: errors, borderColor: "rgb(255, 99, 132)", tension: 0.1 },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+              x: { title: { display: true, text: "Time" } },
+              y: { title: { display: true, text: "Count" }, beginAtZero: true },
+            },
+          },
+        });
+      }
+      if (namespace.__chartHydrationHandles[canvasId]) {
+        window.clearInterval(namespace.__chartHydrationHandles[canvasId]);
+      }
+      namespace.__chartHydrationHandles[canvasId] = window.setInterval(function () {
+        var p = period;
+        fetch("/api/timeseries?period=" + encodeURIComponent(p), {
+          cache: "no-store",
+          headers: { "x-dashboard-refresh": "1" },
+        })
+          .then(function (r) { if (!r.ok) throw new Error("refresh failed"); return r.json(); })
+          .then(function (d) {
+            if (!canvas.__eggpoolChart) return;
+            var rows = Array.isArray(d) ? d : [];
+            canvas.__eggpoolChart.data.labels = rows.map(function (r) { return r.bucket; });
+            canvas.__eggpoolChart.data.datasets[0].data = rows.map(function (r) { return Number(r.request_count || 0); });
+            canvas.__eggpoolChart.data.datasets[1].data = rows.map(function (r) { return Number(r.error_count || 0); });
+            canvas.__eggpoolChart.update();
+          })
+          .catch(function () {});
+      }, 60000);
+    }
+  };
+
   namespace.bootstrap = function bootstrap() {
     whenChartReady(function () {
       try {
@@ -638,6 +753,11 @@
         }
       } catch (err) {
         console.error("EggPoolDashboard: reinitTimeseriesChart failed", err);
+      }
+      try {
+        namespace.initChartLoadingShells();
+      } catch (err) {
+        console.error("EggPoolDashboard: initChartLoadingShells failed", err);
       }
     });
     try {

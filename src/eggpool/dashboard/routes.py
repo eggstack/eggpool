@@ -57,18 +57,12 @@ _ReliabilityPayload = tuple[
     dict[str, Any],
     list[dict[str, Any]],
     list[dict[str, Any]],
-    list[dict[str, Any]],
 ]
 _RoutingPayload = tuple[
     list[dict[str, Any]],
     list[dict[str, Any]],
     list[dict[str, Any]],
     dict[str, Any],
-]
-_BandwidthPayload = tuple[
-    dict[str, Any],
-    list[dict[str, Any]],
-    list[dict[str, Any]] | None,
 ]
 _PingsPayload = tuple[list[dict[str, Any]], list[dict[str, Any]]]
 
@@ -655,6 +649,8 @@ async def handle_overview(
     # shared connection lock serializes per-query execution, so without
     # this the page load is the sum of ten sequential round trips; with
     # it the load is bounded by the slowest query instead.
+    telemetry = getattr(request.app.state, "dashboard_telemetry", None)
+    _gather_start = time.perf_counter()
     (
         accounts,
         models,
@@ -662,7 +658,6 @@ async def handle_overview(
         bandwidth_daily,
         ping_summary,
         ip_stats,
-        timeseries,
         attempt_stats,
         operational_summary,
         pending_health,
@@ -678,7 +673,6 @@ async def handle_overview(
         stats.get_bandwidth_timeseries(heatmap_range, use_cache=True),
         stats.get_ping_summary(time_range, use_cache=True),
         stats.get_ip_stats(time_range, use_cache=True),
-        stats.get_timeseries(time_range, bucket="hour", use_cache=True),
         stats.get_attempt_stats(time_range),
         stats.get_operational_event_summary(time_range),
         stats.get_pending_health_snapshot(),
@@ -686,12 +680,55 @@ async def handle_overview(
         stats.get_compression_runtime(time_range.label, use_cache=True),
         stats.get_synthetic_cache_summary(time_range.label, use_cache=True),
     )
+    _gather_ms = (time.perf_counter() - _gather_start) * 1000
+
+    if telemetry is not None:
+        stage_names = [
+            "disabled_count",
+            "account_stats",
+            "model_stats",
+            "recent_events",
+            "bandwidth_daily",
+            "ping_summary",
+            "ip_stats",
+            "attempt_stats",
+            "operational_summary",
+            "pending_health",
+            "cache_observability",
+            "compression_runtime",
+        ]
+        gather_results = [
+            disabled_count,
+            accounts,
+            models,
+            events,
+            bandwidth_daily,
+            ping_summary,
+            ip_stats,
+            attempt_stats,
+            operational_summary,
+            pending_health,
+            cache_observability,
+            compression_runtime,
+        ]
+        for stage_name, _stage_val in zip(stage_names, gather_results, strict=True):
+            telemetry.record_stage(
+                "overview", stage_name, _gather_ms / len(stage_names)
+            )
+        telemetry.record_stage("overview", "synthetic_cache_summary", _gather_ms)
 
     # ``get_dashboard_overview`` is derived from ``accounts`` and the
     # per-period summary; both are cache hits after the gather above.
+    _overview_start = time.perf_counter()
     overview = await stats.get_dashboard_overview(
         time_range, account_stats=accounts, use_cache=True
     )
+    if telemetry is not None:
+        telemetry.record_stage(
+            "overview",
+            "dashboard_overview",
+            (time.perf_counter() - _overview_start) * 1000,
+        )
 
     from eggpool.metrics.thinking import get_counter
 
@@ -709,6 +746,7 @@ async def handle_overview(
         period=time_range.label,
     )
     enabled_count = sum(1 for a in accounts if a.get("account_enabled"))
+    _render_start = time.perf_counter()
     html = render_overview(
         overview=overview,
         accounts=accounts,
@@ -723,7 +761,7 @@ async def handle_overview(
         available_themes=available,
         current_theme=current_theme,
         ip_stats=ip_stats,
-        timeseries=timeseries or [],
+        timeseries=[],
         pending_health=pending_health,
         attempt_stats=attempt_stats,
         operational_summary=operational_summary,
@@ -733,9 +771,15 @@ async def handle_overview(
         enabled_count=enabled_count,
         thinking_stats=thinking_stats,
         request_shaping_summary=request_shaping_summary,
+        progressive_timeseries=True,
     )
+    if telemetry is not None:
+        telemetry.record_stage(
+            "overview",
+            "render_html",
+            (time.perf_counter() - _render_start) * 1000,
+        )
     _elapsed_ms = (time.perf_counter() - _start) * 1000
-    telemetry = getattr(request.app.state, "dashboard_telemetry", None)
     if telemetry is not None:
         telemetry.record_render("overview", _elapsed_ms)
     return HTMLResponse(content=html)
@@ -1626,26 +1670,37 @@ async def handle_reliability(
     _get_dashboard_config(request)
     time_range = resolve_time_range(period)
     stats = request.app.state.stats
+    telemetry = getattr(request.app.state, "dashboard_telemetry", None)
+    _gather_start = time.perf_counter()
     (
         attempt_stats,
         retry_distribution,
         pending_health,
         operational_summary,
         recent_operational_events,
-        timeseries,
     ) = cast(
-        _ReliabilityPayload,  # noqa: TC006 — pyright needs the TypeAlias to propagate through gather()
+        "_ReliabilityPayload",
         await asyncio.gather(
             stats.get_attempt_stats(time_range),
             stats.get_retry_distribution(time_range),
             stats.get_pending_health_snapshot(),
             stats.get_operational_event_summary(time_range),
             stats.get_recent_operational_events(limit=25),
-            stats.get_timeseries(time_range, bucket="hour", use_cache=True),
         ),
     )
+    _gather_ms = (time.perf_counter() - _gather_start) * 1000
+    if telemetry is not None:
+        for name in (
+            "attempt_stats",
+            "retry_distribution",
+            "pending_health",
+            "operational_summary",
+            "recent_operational_events",
+        ):
+            telemetry.record_stage("reliability", name, _gather_ms)
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
-    return HTMLResponse(
+    _render_start = time.perf_counter()
+    response = HTMLResponse(
         content=render_reliability(
             period=time_range.label,
             attempt_stats=attempt_stats,
@@ -1653,13 +1708,19 @@ async def handle_reliability(
             pending_health=pending_health,
             operational_summary=operational_summary or [],
             recent_operational_events=recent_operational_events or [],
-            timeseries=timeseries or [],
             theme_css=theme_css,
             available_themes=available,
             current_theme=current_theme,
             update_info=_get_update_info(request),
         )
     )
+    if telemetry is not None:
+        telemetry.record_stage(
+            "reliability",
+            "render_html",
+            (time.perf_counter() - _render_start) * 1000,
+        )
+    return response
 
 
 async def handle_routing(
@@ -1810,6 +1871,8 @@ async def handle_timeseries(
     group_by = _normalize_group_by(group_by)
     bounded_limit = clamp_grouped_limit(limit)
     stats = request.app.state.stats
+    telemetry = getattr(request.app.state, "dashboard_telemetry", None)
+    _gather_start = time.perf_counter()
     series, grouped = cast(
         "tuple[list[dict[str, Any]] | None, dict[str, Any]]",
         await asyncio.gather(
@@ -1831,10 +1894,15 @@ async def handle_timeseries(
             ),
         ),
     )
+    _gather_ms = (time.perf_counter() - _gather_start) * 1000
+    if telemetry is not None:
+        telemetry.record_stage("timeseries", "timeseries_flat", _gather_ms)
+        telemetry.record_stage("timeseries", "timeseries_grouped", _gather_ms)
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
     account_options = _collect_account_options(request)
     model_options = _collect_model_options(request)
-    return HTMLResponse(
+    _render_start = time.perf_counter()
+    response = HTMLResponse(
         content=render_timeseries(
             series if series is not None else [],
             bucket=bucket,
@@ -1853,6 +1921,13 @@ async def handle_timeseries(
             update_info=_get_update_info(request),
         )
     )
+    if telemetry is not None:
+        telemetry.record_stage(
+            "timeseries",
+            "render_html",
+            (time.perf_counter() - _render_start) * 1000,
+        )
+    return response
 
 
 async def handle_bandwidth(
@@ -1867,28 +1942,28 @@ async def handle_bandwidth(
     time_range = resolve_time_range(period)
     bucket = _normalize_bucket(bucket)
     stats = request.app.state.stats
-    summary, daily, timeseries = cast(
-        _BandwidthPayload,  # noqa: TC006 — pyright needs the TypeAlias to propagate through gather()
+    telemetry = getattr(request.app.state, "dashboard_telemetry", None)
+    _gather_start = time.perf_counter()
+    summary, daily = cast(
+        "tuple[dict[str, Any], list[dict[str, Any]]]",
         await asyncio.gather(
             stats.get_summary(time_range, account_name=account or None, use_cache=True),
             stats.get_bandwidth_timeseries(time_range, account_name=account or None),
-            stats.get_timeseries(
-                time_range,
-                bucket=bucket,
-                account_name=account or None,
-                use_cache=True,
-            ),
         ),
     )
+    _gather_ms = (time.perf_counter() - _gather_start) * 1000
+    if telemetry is not None:
+        telemetry.record_stage("bandwidth", "summary", _gather_ms)
+        telemetry.record_stage("bandwidth", "bandwidth_timeseries", _gather_ms)
     theme_css, heatmap_colors, current_theme, available = _get_theme_data(
         request, theme
     )
     account_options = _collect_account_options(request)
-    return HTMLResponse(
+    _render_start = time.perf_counter()
+    response = HTMLResponse(
         content=render_bandwidth(
             summary=summary,
             daily=daily,
-            timeseries=timeseries if timeseries is not None else [],
             bucket=bucket,
             period=time_range.label,
             account_filter=account or "",
@@ -1900,6 +1975,13 @@ async def handle_bandwidth(
             update_info=_get_update_info(request),
         )
     )
+    if telemetry is not None:
+        telemetry.record_stage(
+            "bandwidth",
+            "render_html",
+            (time.perf_counter() - _render_start) * 1000,
+        )
+    return response
 
 
 async def handle_timeseries_json(
@@ -1969,6 +2051,8 @@ async def handle_runtime(
     _get_dashboard_config(request)
     runtime_metrics = request.app.state.runtime_metrics
     stats_service = request.app.state.stats
+    telemetry = getattr(request.app.state, "dashboard_telemetry", None)
+    _gather_start = time.perf_counter()
     snapshot, transcoding_stats = cast(
         "tuple[dict[str, Any], dict[str, Any] | None]",
         await asyncio.gather(
@@ -1976,7 +2060,12 @@ async def handle_runtime(
             stats_service.get_transcoding_stats(period, use_cache=True),
         ),
     )
+    _gather_ms = (time.perf_counter() - _gather_start) * 1000
+    if telemetry is not None:
+        telemetry.record_stage("runtime", "snapshot", _gather_ms)
+        telemetry.record_stage("runtime", "transcoding_stats", _gather_ms)
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
+    _render_start = time.perf_counter()
     response = HTMLResponse(
         content=render_runtime(
             snapshot,
@@ -1988,8 +2077,13 @@ async def handle_runtime(
             period=period or "24h",
         )
     )
+    if telemetry is not None:
+        telemetry.record_stage(
+            "runtime",
+            "render_html",
+            (time.perf_counter() - _render_start) * 1000,
+        )
     _elapsed_ms = (time.perf_counter() - _start) * 1000
-    telemetry = getattr(request.app.state, "dashboard_telemetry", None)
     if telemetry is not None:
         telemetry.record_render("runtime", _elapsed_ms)
     return response
@@ -2005,6 +2099,8 @@ async def handle_cache(
     _get_dashboard_config(request)
     runtime_metrics = request.app.state.runtime_metrics
     stats_service = request.app.state.stats
+    telemetry = getattr(request.app.state, "dashboard_telemetry", None)
+    _gather_start = time.perf_counter()
     (
         cache_observability,
         canonical_request_segmentation,
@@ -2026,6 +2122,20 @@ async def handle_cache(
         stats_service.get_compression_tuning_window_metrics(period, use_cache=True),
         runtime_metrics.snapshot(),
     )
+    _gather_ms = (time.perf_counter() - _gather_start) * 1000
+    if telemetry is not None:
+        for name in (
+            "cache_observability",
+            "canonical_request_segmentation",
+            "compression_observability",
+            "compression_runtime",
+            "compression_policy_stats",
+            "cache_stability",
+            "synthetic_cache_summary",
+            "compression_tuning",
+            "snapshot",
+        ):
+            telemetry.record_stage("cache", name, _gather_ms)
     request_shaping_summary = _build_request_shaping_summary(
         request.app.state.config,
         routing_runtime=cast("dict[str, Any]", snapshot.get("routing_runtime") or {}),
@@ -2040,6 +2150,7 @@ async def handle_cache(
         period=period or "24h",
     )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
+    _render_start = time.perf_counter()
     response = HTMLResponse(
         content=render_cache(
             period=period or "24h",
@@ -2061,8 +2172,10 @@ async def handle_cache(
             request_shaping_summary=request_shaping_summary,
         )
     )
+    _render_ms = (time.perf_counter() - _render_start) * 1000
+    if telemetry is not None:
+        telemetry.record_stage("cache", "render_html", _render_ms)
     _elapsed_ms = (time.perf_counter() - _start) * 1000
-    telemetry = getattr(request.app.state, "dashboard_telemetry", None)
     if telemetry is not None:
         telemetry.record_render("cache", _elapsed_ms)
     return response

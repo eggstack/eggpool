@@ -2904,6 +2904,102 @@ def stats_transcoding(
     sys.exit(asyncio.run(_runner()))
 
 
+@stats.command("explain-dashboard")
+@click.option(
+    "--period",
+    default="24h",
+    help="Time period: 1h, 24h (default), 7d, or 30d.",
+)
+@click.option(
+    "--bucket",
+    default="hour",
+    help="Bucket size: hour or day.",
+)
+@click.option(
+    "--group-by",
+    default="provider_model",
+    help="Group by: provider, model, provider_model, account.",
+)
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="Output as JSON.",
+)
+@click.pass_context
+def stats_explain_dashboard(
+    ctx: click.Context,
+    period: str,
+    bucket: str,
+    group_by: str,
+    as_json: bool,
+) -> None:
+    """Show EXPLAIN QUERY PLAN for dashboard queries."""
+    import asyncio
+
+    config_path_raw = ctx.obj.get("config_path") if ctx.obj else None
+    config = AppConfig.from_toml(config_path_raw) if config_path_raw else None
+    if config is None:
+        click.echo(
+            "No config available; pass --config or set EGGPOOL_CONFIG.", err=True
+        )
+        sys.exit(2)
+
+    async def _runner() -> int:
+        from eggpool.db.connection import Database
+        from eggpool.stats.dashboard_explain import explain_dashboard_queries
+
+        db = Database(
+            path=config.database.path,
+            busy_timeout_ms=config.database.busy_timeout_ms,
+            wal=config.database.wal,
+            synchronous=config.database.synchronous,
+        )
+        await db.connect()
+        try:
+            result = await explain_dashboard_queries(
+                db, period=period, bucket=bucket, group_by=group_by
+            )
+        finally:
+            await db.disconnect()
+
+        if as_json:
+            import json as json_mod
+
+            serializable = {
+                "period": result.period,
+                "bucket": result.bucket,
+                "group_by": result.group_by,
+                "queries": [
+                    {
+                        "name": q.name,
+                        "elapsed_ms": round(q.elapsed_ms, 3),
+                        "plan": q.plan_lines,
+                    }
+                    for q in result.queries
+                ],
+            }
+            click.echo(json_mod.dumps(serializable, indent=2))
+            return 0
+
+        click.echo(
+            f"Period: {result.period}  Bucket: {result.bucket}"
+            f"  Group-by: {result.group_by}"
+        )
+        click.echo(
+            "\u2500" * 70  # noqa: W605
+        )
+        for q in result.queries:
+            click.echo(f"{q.name}:    {q.elapsed_ms:.1f} ms")
+            for line in q.plan_lines:
+                click.echo(f"  {line}")
+            click.echo("")
+
+        return 0
+
+    sys.exit(asyncio.run(_runner()))
+
+
 def _format_change_rows(rows: list[dict[str, Any]]) -> str:
     """Format recompute-costs output as a small text table."""
     include_exactness = any("new_exactness" in row for row in rows)

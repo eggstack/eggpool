@@ -1045,6 +1045,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     from eggpool.runtime_metrics import RuntimeMetricsService
 
     app.state.dashboard_telemetry = DashboardTelemetry()
+    app.state.dashboard_telemetry.cache_stats = app.state.stats.cache_snapshot
 
     app.state.runtime_metrics = RuntimeMetricsService(
         config=config,

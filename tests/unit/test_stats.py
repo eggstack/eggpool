@@ -1801,8 +1801,113 @@ class TestDashboardStatsCache:
         assert second is first
         fetch.assert_awaited_once()
 
+    @pytest.mark.asyncio()
+    async def test_per_namespace_ttl_honored(self, db: Database) -> None:
+        """Cache entry respects per-namespace TTL: timeseries expires at 30s."""
+        from eggpool.stats.service import _dashboard_cache_ttl
 
-class TestTTFTStatsService:
+        service = StatsService(db)
+        time_range = TimeRange(
+            start=datetime(2025, 1, 1, tzinfo=UTC),
+            end=datetime(2025, 1, 2, tzinfo=UTC),
+            label="24h",
+        )
+        assert _dashboard_cache_ttl("timeseries", "24h") == 60.0
+
+        t0 = 1000.0
+        with (
+            patch("eggpool.stats.service.time.monotonic", return_value=t0),
+            patch(
+                "eggpool.stats.service.fetch_timeseries",
+                new=AsyncMock(return_value=[{"bucket": "2025-01-01 00:00"}]),
+            ),
+        ):
+            first = await service.get_timeseries(time_range, use_cache=True)
+
+        with (
+            patch("eggpool.stats.service.time.monotonic", return_value=t0 + 59.0),
+            patch(
+                "eggpool.stats.service.fetch_timeseries",
+                new=AsyncMock(return_value=[{"bucket": "2025-01-01 00:00"}]),
+            ) as fetch2,
+        ):
+            second = await service.get_timeseries(time_range, use_cache=True)
+            assert second is first
+            fetch2.assert_not_awaited()
+
+        with (
+            patch("eggpool.stats.service.time.monotonic", return_value=t0 + 61.0),
+            patch(
+                "eggpool.stats.service.fetch_timeseries",
+                new=AsyncMock(return_value=[{"bucket": "2025-01-01 00:01"}]),
+            ) as fetch3,
+        ):
+            third = await service.get_timeseries(time_range, use_cache=True)
+            assert third is not first
+            fetch3.assert_awaited_once()
+
+    @pytest.mark.asyncio()
+    async def test_per_period_override_applied(self, db: Database) -> None:
+        """grouped_timeseries 7d gets 240s TTL; 1h gets 60s default."""
+        from eggpool.stats.service import _dashboard_cache_ttl
+
+        assert _dashboard_cache_ttl("grouped_timeseries", "7d") == 240.0
+        assert _dashboard_cache_ttl("grouped_timeseries", "1h") == 60.0
+        assert _dashboard_cache_ttl("grouped_timeseries", "24h") == 120.0
+
+    @pytest.mark.asyncio()
+    async def test_long_ttl_entries_survive_past_30s(self, db: Database) -> None:
+        """bandwidth entry with 24h period survives at 45s (TTL=120s)."""
+        service = StatsService(db)
+        time_range = TimeRange(
+            start=datetime(2025, 1, 1, tzinfo=UTC),
+            end=datetime(2025, 1, 2, tzinfo=UTC),
+            label="24h",
+        )
+        t0 = 1000.0
+        with (
+            patch("eggpool.stats.service.time.monotonic", return_value=t0),
+            patch(
+                "eggpool.stats.service.fetch_bandwidth_timeseries",
+                new=AsyncMock(return_value=[{"day": "2025-01-01"}]),
+            ),
+        ):
+            first = await service.get_bandwidth_timeseries(time_range, use_cache=True)
+
+        with (
+            patch("eggpool.stats.service.time.monotonic", return_value=t0 + 45.0),
+            patch(
+                "eggpool.stats.service.fetch_bandwidth_timeseries",
+                new=AsyncMock(return_value=[{"day": "2025-01-01"}]),
+            ) as fetch2,
+        ):
+            second = await service.get_bandwidth_timeseries(time_range, use_cache=True)
+            assert second is first
+            fetch2.assert_not_awaited()
+
+    @pytest.mark.asyncio()
+    async def test_30d_period_longest_ttl(self, db: Database) -> None:
+        """30d grouped_timeseries gets 300s TTL."""
+        from eggpool.stats.service import _dashboard_cache_ttl
+
+        assert _dashboard_cache_ttl("grouped_timeseries", "30d") == 300.0
+        assert _dashboard_cache_ttl("timeseries", "30d") == 240.0
+
+    @pytest.mark.asyncio()
+    async def test_pending_health_short_ttl(self, db: Database) -> None:
+        """pending_health gets a short 15s TTL."""
+        from eggpool.stats.service import _dashboard_cache_ttl
+
+        assert _dashboard_cache_ttl("pending_health", "24h") == 15.0
+
+    @pytest.mark.asyncio()
+    async def test_unknown_namespace_falls_back_to_30s(self, db: Database) -> None:
+        """Unknown namespace defaults to 30s TTL."""
+        from eggpool.stats.service import _dashboard_cache_ttl
+
+        assert _dashboard_cache_ttl("unknown_namespace", "24h") == 30.0
+        assert _dashboard_cache_ttl("unknown_namespace", "7d") == 30.0
+
     """Tests for StatsService TTFT methods."""
 
     @pytest.mark.asyncio()

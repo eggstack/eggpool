@@ -838,11 +838,12 @@ class RuntimeMetricsService:
             return {"enabled": True, "error": str(exc)}
 
     def _snapshot_dashboard_telemetry(self, probe_errors: list[str]) -> dict[str, Any]:
-        """Best-effort snapshot of dashboard render telemetry and profile."""
         telemetry_snapshot: dict[str, Any] = {}
         if self._dashboard_telemetry is not None:
             try:
                 telemetry_snapshot = self._dashboard_telemetry.snapshot()
+                stage_snap = self._dashboard_telemetry.stage_snapshot()
+                telemetry_snapshot.update(stage_snap)
             except Exception as exc:
                 _append_probe_error(
                     probe_errors, f"Dashboard telemetry snapshot failed: {exc}"
@@ -854,18 +855,24 @@ class RuntimeMetricsService:
             self._stats_db is not None and self._stats_db is not self._db
         )
 
-        # Routing trace mode
         trace_mode = "sampled"
         with contextlib.suppress(AttributeError, TypeError):
             trace_mode = self._config.routing.trace.mode
 
-        return {
+        result: dict[str, Any] = {
             **telemetry_snapshot,
             "separate_stats_db": stats_db_separate,
             "runtime_threads": self._config.server.threads,
             "database_worker_threads": config_db.worker_threads,
             "routing_trace_mode": trace_mode,
         }
+
+        cache_stats = getattr(self._dashboard_telemetry, "cache_stats", None)
+        if cache_stats is not None:
+            with contextlib.suppress(Exception):
+                result["cache_stats"] = cache_stats()
+
+        return result
 
 
 # -- Helpers ----------------------------------------------------------------

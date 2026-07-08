@@ -528,6 +528,41 @@ td.no { color: var(--color-error); font-weight: 600; }
   width: 100%;
 }
 
+.chart-loading-shell {
+  position: relative;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.chart-loading-shell .chart-loading-spinner {
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--card-border, var(--page-border, #ccc));
+  border-top-color: var(--page-text, #333);
+  border-radius: 50%;
+  animation: chart-spin 0.8s linear infinite;
+  margin-right: 0.5rem;
+  flex-shrink: 0;
+}
+
+@keyframes chart-spin {
+  to { transform: rotate(360deg); }
+}
+
+.chart-loading-shell[data-chart-state="empty"],
+.chart-loading-shell[data-chart-state="error"] {
+  animation: none;
+}
+
+.chart-loading-shell[data-chart-state="empty"] .chart-loading-spinner,
+.chart-loading-shell[data-chart-state="error"] .chart-loading-spinner {
+  display: none;
+}
+
 .timeseries-controls {
   flex-wrap: wrap;
   gap: 0.5rem 0.75rem;

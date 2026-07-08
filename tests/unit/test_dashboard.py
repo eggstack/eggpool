@@ -1893,30 +1893,21 @@ class TestRenderBandwidthPage:
         )
         assert "<svg" in html
 
-    def test_renders_timeseries_table(self) -> None:
-        timeseries = [
-            {
-                "bucket": "2024-06-01 12:00:00",
-                "request_count": 5,
-                "bytes_received": 1000,
-                "bytes_emitted": 500,
-            }
-        ]
+    def test_renders_timeseries_table_removed(self) -> None:
+        """Bandwidth page no longer renders the flat timeseries table."""
         html = render_bandwidth(
             summary={"total_bytes_received": 0, "total_bytes_emitted": 0},
             daily=[],
-            timeseries=timeseries,
         )
-        assert "2024-06-01 12:00:00" in html
-        assert "1.0 KB" in html
+        assert "Bandwidth timeseries" not in html
 
-    def test_empty_timeseries(self) -> None:
+    def test_empty_timeseries_removed(self) -> None:
+        """Bandwidth page no longer renders the flat timeseries table."""
         html = render_bandwidth(
             summary={"total_bytes_received": 0, "total_bytes_emitted": 0},
             daily=[],
-            timeseries=[],
         )
-        assert "No bandwidth data" in html
+        assert "No bandwidth data" not in html
 
     def test_account_filter(self) -> None:
         html = render_bandwidth(
@@ -3267,7 +3258,6 @@ class TestRenderReliability:
             pending_health=None,
             operational_summary=[],
             recent_operational_events=[],
-            timeseries=[],
         )
         assert "Reliability" in html
         assert "/static/chart.js" in html
@@ -3319,7 +3309,6 @@ class TestRenderReliability:
                     "occurred_at": "2024-01-01 12:00:00",
                 }
             ],
-            timeseries=[],
         )
         assert "Total attempts" in html
         assert "100" in html
@@ -3345,7 +3334,6 @@ class TestRenderReliability:
             },
             operational_summary=[],
             recent_operational_events=[],
-            timeseries=[],
         )
         assert 'class="card warning"' in html
 
@@ -3367,7 +3355,6 @@ class TestRenderReliability:
             pending_health=None,
             operational_summary=[],
             recent_operational_events=[],
-            timeseries=[],
         )
         assert 'id="reliability-attempts-by-provider"' in html
         assert (
@@ -4168,7 +4155,6 @@ class TestDashboardScriptAlwaysLoaded:
             pending_health=None,
             operational_summary=[],
             recent_operational_events=[],
-            timeseries=[],
         )
         self._assert_dashboard_js_loaded(html)
         assert '<script defer src="/static/chart.js"></script>' in html
@@ -5558,3 +5544,196 @@ class TestRenderModelDetail:
         )
         assert 'href="/models/gpt-4o?theme=' in html
         assert ">gpt-4o<" in html
+
+
+class TestProgressiveHydration:
+    """Tests for progressive graph hydration (Phase 5)."""
+
+    def test_overview_progressive_renders_loading_shell(self) -> None:
+        """Progressive overview renders a chart loading shell with endpoint."""
+        html = render_overview(
+            overview={
+                "summary": {"total_requests": 0},
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+            progressive_timeseries=True,
+        )
+        assert 'data-chart-endpoint="/api/timeseries?period=' in html
+        assert 'data-chart-canvas="timeseries-chart"' in html
+        assert 'data-chart-state="loading"' in html
+        assert "Loading chart data" in html
+
+    def test_overview_progressive_no_blocking_data_island(self) -> None:
+        """Progressive overview does NOT embed the blocking JSON data island
+        outside of <noscript>. The data island is inside <noscript> for
+        no-JS fallback, but JS-enabled browsers skip it."""
+        timeseries = [
+            {"bucket": "2024-01-01 12:00:00", "request_count": 3, "error_count": 1}
+        ]
+        html = render_overview(
+            overview={
+                "summary": {"total_requests": 3},
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+            timeseries=timeseries,
+            progressive_timeseries=True,
+        )
+        noscript_start = html.index("<noscript>")
+        before_noscript = html[:noscript_start]
+        assert 'id="timeseries-initial-data"' not in before_noscript
+
+    def test_overview_progressive_noscript_has_data_island(self) -> None:
+        """Progressive overview puts the data island inside <noscript>."""
+        timeseries = [
+            {"bucket": "2024-01-01 12:00:00", "request_count": 3, "error_count": 1}
+        ]
+        html = render_overview(
+            overview={
+                "summary": {"total_requests": 3},
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+            timeseries=timeseries,
+            progressive_timeseries=True,
+        )
+        noscript_start = html.index("<noscript>")
+        noscript_end = html.index("</noscript>", noscript_start)
+        noscript_block = html[noscript_start:noscript_end]
+        assert 'id="timeseries-initial-data"' in noscript_block
+        assert "2024-01-01 12:00:00" in noscript_block
+
+    def test_overview_default_has_data_island(self) -> None:
+        """Non-progressive overview still embeds the JSON data island."""
+        timeseries = [
+            {"bucket": "2024-01-01 12:00:00", "request_count": 3, "error_count": 1}
+        ]
+        html = render_overview(
+            overview={
+                "summary": {"total_requests": 3},
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+            timeseries=timeseries,
+        )
+        assert 'id="timeseries-initial-data"' in html
+        assert "2024-01-01 12:00:00" in html
+        assert 'id="timeseries-chart"' in html
+
+    def test_overview_progressive_has_canvas_in_noscript(self) -> None:
+        """Progressive overview still emits the canvas inside <noscript>."""
+        html = render_overview(
+            overview={
+                "summary": {"total_requests": 0},
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+            progressive_timeseries=True,
+        )
+        noscript_start = html.index("<noscript>")
+        noscript_end = html.index("</noscript>", noscript_start)
+        noscript_block = html[noscript_start:noscript_end]
+        assert 'id="timeseries-chart"' in noscript_block
+
+    def test_bandwidth_no_longer_has_timeseries_table(self) -> None:
+        """Bandwidth page no longer renders the flat timeseries table."""
+        html = render_bandwidth(
+            summary={"total_bytes_received": 1000, "total_bytes_emitted": 500},
+            daily=[],
+        )
+        assert "Bandwidth timeseries" not in html
+        assert "Bandwidth" in html
+
+    def test_reliability_no_timeseries_parameter(self) -> None:
+        """Reliability page renders without timeseries data."""
+        html = render_reliability(
+            period="24h",
+            attempt_stats=None,
+            retry_distribution=[],
+            pending_health=None,
+            operational_summary=[],
+            recent_operational_events=[],
+        )
+        assert "Reliability" in html
+        assert "Attempts by provider" in html
+
+
+class TestDashboardJSChartLoading:
+    """Static assertions against dashboard.js for chart loading shells."""
+
+    @staticmethod
+    def _load_js() -> str:
+        from pathlib import Path
+
+        js_path = (
+            Path(__file__).parent.parent.parent
+            / "src"
+            / "eggpool"
+            / "dashboard"
+            / "static"
+            / "dashboard.js"
+        )
+        return js_path.read_text(encoding="utf-8")
+
+    def test_init_chart_loading_shells_exists(self) -> None:
+        """initChartLoadingShells is defined on the namespace."""
+        js = self._load_js()
+        assert "namespace.initChartLoadingShells" in js
+
+    def test_queries_data_chart_endpoint(self) -> None:
+        """initChartLoadingShells queries [data-chart-endpoint] elements."""
+        js = self._load_js()
+        start = js.index("namespace.initChartLoadingShells")
+        block = js[start : start + 2000]
+        assert "data-chart-endpoint" in block
+
+    def test_renders_loading_state(self) -> None:
+        """Loading state shows 'Loading chart data...'."""
+        js = self._load_js()
+        start = js.index("namespace.initChartLoadingShells")
+        block = js[start : start + 3000]
+        assert "Loading chart data" in block
+
+    def test_renders_empty_state(self) -> None:
+        """Empty state shows 'No data for selected period'."""
+        js = self._load_js()
+        start = js.index("namespace.initChartLoadingShells")
+        block = js[start : start + 3000]
+        assert "No data for selected period" in block
+
+    def test_renders_error_state(self) -> None:
+        """Error state shows 'Chart data unavailable'."""
+        js = self._load_js()
+        start = js.index("namespace.initChartLoadingShells")
+        block = js[start : start + 3000]
+        assert "Chart data unavailable" in block
+
+    def test_per_canvas_interval_handle_cleanup(self) -> None:
+        """Per-canvas interval handles are tracked at namespace scope."""
+        js = self._load_js()
+        start = js.index("namespace.initChartLoadingShells")
+        block = js[start : start + 4000]
+        assert "namespace.__chartHydrationHandles" in block
+        assert "window.clearInterval" in block
+
+    def test_dedupes_inflight_fetches(self) -> None:
+        """In-flight fetches are deduped by URL."""
+        js = self._load_js()
+        start = js.index("namespace.initChartLoadingShells")
+        block = js[start : start + 3000]
+        assert "__chartHydrationInflight" in block
+
+    def test_bootstrap_calls_init_chart_loading_shells(self) -> None:
+        """bootstrap() calls initChartLoadingShells after Chart.js is ready."""
+        js = self._load_js()
+        bootstrap_start = js.index("namespace.bootstrap")
+        bootstrap_block = js[bootstrap_start : bootstrap_start + 1500]
+        assert "namespace.initChartLoadingShells();" in bootstrap_block
+
+    def test_auto_refresh_fallback_calls_init_chart_loading_shells(self) -> None:
+        """The auto-refresh fallback path calls initChartLoadingShells."""
+        from eggpool.dashboard.render import _render_auto_refresh_script
+
+        script = _render_auto_refresh_script(15)
+        assert "initChartLoadingShells" in script

@@ -63,8 +63,69 @@ PERIOD_PRESETS: dict[str, int] = {
 _UTILIZATION_5H = 5 * 3600
 _UTILIZATION_7D = 7 * 86400
 _UTILIZATION_30D = 30 * 86400
-_DASHBOARD_CACHE_TTL_S = 30.0
+_DASHBOARD_CACHE_TTL_BY_NAMESPACE: dict[str, float] = {
+    "summary": 30.0,
+    "timeseries": 30.0,
+    "grouped_timeseries": 60.0,
+    "bandwidth": 60.0,
+    "accounts": 30.0,
+    "models": 30.0,
+    "ips": 60.0,
+    "pings": 30.0,
+    "attempts": 30.0,
+    "retries": 60.0,
+    "routing": 60.0,
+    "routing_selections": 60.0,
+    "routing_exclusions": 60.0,
+    "routing_skew": 60.0,
+    "operational_summary": 60.0,
+    "latency_phases": 60.0,
+    "transcoding_stats": 60.0,
+    "cache_observability": 60.0,
+    "canonical_request_segmentation": 60.0,
+    "compression_observability": 60.0,
+    "compression_runtime": 60.0,
+    "compression_policy_stats": 60.0,
+    "cache_stability": 60.0,
+    "synthetic_cache_summary": 60.0,
+    "compression_tuning_window_metrics": 60.0,
+    "pending_health": 15.0,
+    "model_options": 300.0,
+    "account_options": 300.0,
+}
+
+_DASHBOARD_CACHE_PERIOD_OVERRIDES: dict[str, dict[str, float]] = {
+    "24h": {
+        "timeseries": 60.0,
+        "grouped_timeseries": 120.0,
+        "bandwidth": 120.0,
+    },
+    "7d": {
+        "timeseries": 120.0,
+        "grouped_timeseries": 240.0,
+        "bandwidth": 240.0,
+    },
+    "30d": {
+        "timeseries": 240.0,
+        "grouped_timeseries": 300.0,
+        "bandwidth": 300.0,
+    },
+}
+
 _DASHBOARD_CACHE_MAX_ENTRIES = 32
+
+
+def _dashboard_cache_ttl(namespace: str, period_label: str) -> float:
+    period_overrides = _DASHBOARD_CACHE_PERIOD_OVERRIDES.get(period_label, {})
+    if namespace in period_overrides:
+        return period_overrides[namespace]
+    return _DASHBOARD_CACHE_TTL_BY_NAMESPACE.get(namespace, 30.0)
+
+
+# Maximum window (in seconds) that allows a raw requests fallback when
+# rollups return empty.  Preset periods 24h/7d/30d and custom ranges
+# above this threshold require rollup data or a bounded live-tail merge.
+_RAW_FALLBACK_MAX_SECONDS = 2 * 3600
 
 
 def resolve_period(period: str | None) -> tuple[datetime, datetime, str]:
@@ -173,12 +234,15 @@ class StatsService:
         self._account_backoff_repo = account_backoff_repo
         self._rollup_repo = rollup_repo
         self._dashboard_cache: dict[tuple[str, ...], tuple[float, object]] = {}
+        self._dashboard_cache_hits: int = 0
+        self._dashboard_cache_misses: int = 0
 
     def _dashboard_cache_key(
         self, namespace: str, time_range: TimeRange, *parts: str
     ) -> tuple[str, ...]:
         if time_range.label in PERIOD_PRESETS:
-            period_key = str(int(time_range.end.timestamp() // _DASHBOARD_CACHE_TTL_S))
+            ttl = _dashboard_cache_ttl(namespace, time_range.label)
+            period_key = str(int(time_range.end.timestamp() // ttl))
         else:
             period_key = f"{time_range.start_str()}:{time_range.end_str()}"
         return (namespace, time_range.label, period_key, *parts)
@@ -186,15 +250,17 @@ class StatsService:
     def _get_dashboard_cache(self, key: tuple[str, ...]) -> object | None:
         cached = self._dashboard_cache.get(key)
         if cached is None:
+            self._dashboard_cache_misses += 1
             return None
         stored_at, value = cached
-        if time.monotonic() - stored_at >= _DASHBOARD_CACHE_TTL_S:
+        namespace = key[0]
+        period_label = key[1] if len(key) > 1 else ""
+        ttl = _dashboard_cache_ttl(namespace, period_label)
+        if time.monotonic() - stored_at >= ttl:
             self._dashboard_cache.pop(key, None)
+            self._dashboard_cache_misses += 1
             return None
-        # Dashboard cache values are read-only data frames (dicts and
-        # lists of dicts) returned straight to renderers; the renderer
-        # never mutates them. Return the cached reference directly to
-        # avoid the cost of a deep copy on every cache hit.
+        self._dashboard_cache_hits += 1
         return value
 
     def _set_dashboard_cache(self, key: tuple[str, ...], value: object) -> None:
@@ -208,6 +274,15 @@ class StatsService:
             )
             self._dashboard_cache.pop(oldest, None)
         self._dashboard_cache[key] = (time.monotonic(), value)
+
+    def cache_snapshot(self) -> dict[str, Any]:
+        total = self._dashboard_cache_hits + self._dashboard_cache_misses
+        return {
+            "hits": self._dashboard_cache_hits,
+            "misses": self._dashboard_cache_misses,
+            "hit_rate": (self._dashboard_cache_hits / total if total > 0 else 0.0),
+            "entries": len(self._dashboard_cache),
+        }
 
     async def get_summary(
         self,
@@ -558,9 +633,32 @@ class StatsService:
                 model_id=model_filter,
             )
             if result:
+                merged = await self._maybe_merge_livet(
+                    result,
+                    time_range,
+                    bucket=bucket,
+                    account_id=account_id,
+                    model_id=model_filter,
+                )
+                if use_cache:
+                    self._set_dashboard_cache(key, merged)
+                return merged
+            window_seconds = int((time_range.end - time_range.start).total_seconds())
+            if window_seconds <= _RAW_FALLBACK_MAX_SECONDS:
+                result = await fetch_timeseries(
+                    self._db,
+                    time_range.start_str(),
+                    time_range.end_str(),
+                    bucket=bucket,
+                    account_id=account_id,
+                    model_id=model_filter,
+                )
                 if use_cache:
                     self._set_dashboard_cache(key, result)
                 return result
+            if use_cache:
+                self._set_dashboard_cache(key, [])
+            return []
         result = await fetch_timeseries(
             self._db,
             time_range.start_str(),
@@ -663,9 +761,42 @@ class StatsService:
                 model_id=model_id,
             )
             if result["points"]:
+                merged = await self._maybe_merge_grouped_livet(
+                    result,
+                    time_range,
+                    bucket=bucket,
+                    group_by=group_by,
+                    limit=bounded_limit,
+                    account_id=account_id,
+                    model_id=model_id,
+                )
                 if use_cache:
-                    self._set_dashboard_cache(cache_key, result)
-                return result
+                    self._set_dashboard_cache(cache_key, merged)
+                return merged
+            window_seconds = int((time_range.end - time_range.start).total_seconds())
+            if window_seconds <= _RAW_FALLBACK_MAX_SECONDS:
+                model_filter: str | None = model_id if model_id else None
+                raw_result = await fetch_grouped_timeseries(
+                    self._db,
+                    time_range.start_str(),
+                    time_range.end_str(),
+                    bucket=bucket,
+                    group_by=group_by,
+                    limit=bounded_limit,
+                    account_id=account_id,
+                    model_id=model_filter,
+                )
+                raw_result["source"] = "raw"
+                raw_result["degraded_reason"] = "rollup_empty"
+                if use_cache:
+                    self._set_dashboard_cache(cache_key, raw_result)
+                return raw_result
+            empty = empty_grouped_timeseries(bucket, group_by, bounded_limit)
+            empty["source"] = "empty"
+            empty["degraded_reason"] = "rollup_empty"
+            if use_cache:
+                self._set_dashboard_cache(cache_key, empty)
+            return empty
         model_filter: str | None = model_id if model_id else None
         result = await fetch_grouped_timeseries(
             self._db,
@@ -677,6 +808,8 @@ class StatsService:
             account_id=account_id,
             model_id=model_filter,
         )
+        result["source"] = "raw"
+        result["degraded_reason"] = "none"
         if use_cache:
             self._set_dashboard_cache(cache_key, result)
         return result
@@ -891,6 +1024,113 @@ class StatsService:
             )
         return [day_buckets[k] for k in sorted(day_buckets)]
 
+    async def _maybe_merge_livet(
+        self,
+        rollup_rows: list[dict[str, Any]],
+        time_range: TimeRange,
+        *,
+        bucket: str,
+        account_id: int | None = None,
+        model_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Merge a bounded live-tail for the current open bucket if rollups
+        may be missing the most recent partial bucket.
+
+        Only queries raw data for the single current (incomplete) bucket
+        that falls after the last rollup bucket boundary.
+        """
+        bucket_s = _bucket_size_s(bucket)
+        if not rollup_rows:
+            return rollup_rows
+        latest_bucket = str(rollup_rows[-1].get("bucket", ""))
+        if not latest_bucket:
+            return rollup_rows
+        latest_dt = _parse_dt(latest_bucket)
+        if latest_dt is None:
+            return rollup_rows
+        bucket_end = latest_dt + timedelta(seconds=bucket_s)
+        now = datetime.now(UTC)
+        if now <= bucket_end:
+            return rollup_rows
+        current_bucket_start = format_dt(now)
+        livet_rows = await fetch_timeseries(
+            self._db,
+            current_bucket_start,
+            format_dt(now + timedelta(seconds=bucket_s)),
+            bucket=bucket,
+            account_id=account_id,
+            model_id=model_id,
+        )
+        if not livet_rows:
+            return rollup_rows
+        merged: dict[str, dict[str, Any]] = {}
+        for row in rollup_rows:
+            merged[str(row["bucket"])] = dict(row)
+        for row in livet_rows:
+            merged[str(row["bucket"])] = dict(row)
+        return [merged[k] for k in sorted(merged)]
+
+    async def _maybe_merge_grouped_livet(
+        self,
+        rollup_result: dict[str, Any],
+        time_range: TimeRange,
+        *,
+        bucket: str,
+        group_by: str,
+        limit: int,
+        account_id: int | None = None,
+        model_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Merge a bounded live-tail into grouped rollup results when the
+        current open bucket may be incomplete in rollups.
+        """
+        bucket_s = _bucket_size_s(bucket)
+        points = rollup_result.get("points", [])
+        if not points:
+            return rollup_result
+        latest_bucket = str(points[-1].get("bucket", ""))
+        if not latest_bucket:
+            return rollup_result
+        latest_dt = _parse_dt(latest_bucket)
+        if latest_dt is None:
+            return rollup_result
+        bucket_end = latest_dt + timedelta(seconds=bucket_s)
+        now = datetime.now(UTC)
+        if now <= bucket_end:
+            return rollup_result
+        current_bucket_start = format_dt(now)
+        model_filter: str | None = model_id if model_id else None
+        livet_raw = await fetch_grouped_timeseries(
+            self._db,
+            current_bucket_start,
+            format_dt(now + timedelta(seconds=bucket_s)),
+            bucket=bucket,
+            group_by=group_by,
+            limit=limit,
+            account_id=account_id,
+            model_id=model_filter,
+        )
+        livet_points = livet_raw.get("points", [])
+        if not livet_points:
+            rollup_result["source"] = "rollup"
+            rollup_result["degraded_reason"] = "none"
+            return rollup_result
+        existing_points: dict[tuple[str, str], dict[str, Any]] = {}
+        for pt in points:
+            key = (str(pt["bucket"]), str(pt["series_key"]))
+            existing_points[key] = pt
+        for pt in livet_points:
+            key = (str(pt["bucket"]), str(pt["series_key"]))
+            existing_points[key] = pt
+        merged_points = sorted(
+            existing_points.values(),
+            key=lambda p: (p["bucket"], p.get("label", "")),
+        )
+        rollup_result["points"] = merged_points
+        rollup_result["source"] = "mixed"
+        rollup_result["degraded_reason"] = "none"
+        return rollup_result
+
     async def get_grouped_timeseries_from_rollups(
         self,
         time_range: TimeRange,
@@ -911,7 +1151,7 @@ class StatsService:
             group_by=group_by,
             account_id=account_id,
             model_id=model_id,
-            limit=10000,
+            limit=limit * 4 + 100,
         )
         if not rows:
             return empty_grouped_timeseries(bucket, group_by, limit)

@@ -485,6 +485,11 @@ def _render_layout(
     chart_script = (
         '<script defer src="/static/chart.js"></script>' if include_chart_js else ""
     )
+    chart_preload = (
+        '<link rel="preload" href="/static/chart.js" as="script">'
+        if include_chart_js
+        else ""
+    )
     dashboard_script = '<script defer src="/static/dashboard.js"></script>'
     update_indicator = _render_update_indicator(update_info)
     return f"""<!DOCTYPE html>
@@ -497,6 +502,7 @@ def _render_layout(
 <link rel="preload" href="/static/dashboard.css" as="style">
 <link rel="stylesheet" href="/static/dashboard.css">
 {theme_link}
+{chart_preload}
 </head>
 <body>
 <svg class="egg-background" viewBox="0 0 256 256"
@@ -571,6 +577,9 @@ def _render_auto_refresh_script(refresh_interval_s: int) -> str:
             }}
             if (typeof dash.reinitTimeseriesChart === "function") {{
               dash.reinitTimeseriesChart();
+            }}
+            if (typeof dash.initChartLoadingShells === "function") {{
+              dash.initChartLoadingShells();
             }}
           }}
         }}
@@ -1353,8 +1362,33 @@ def _render_ip_stats(ip_stats: list[dict[str, Any]]) -> str:
     )
 
 
+def _render_chart_loading_shell(
+    canvas_id: str,
+    endpoint: str,
+    height_px: int = 300,
+    empty_message: str = "No data for selected period",
+) -> str:
+    """Render a progressive hydration shell for a chart."""
+    safe_id = escape_attr(canvas_id)
+    safe_endpoint = escape_attr(endpoint)
+    return (
+        f'<div class="chart-loading-shell" '
+        f'data-chart-endpoint="{safe_endpoint}" '
+        f'data-chart-canvas="{safe_id}" '
+        f'data-chart-state="loading" '
+        f'style="height: {height_px}px;">'
+        f'<span class="chart-loading-spinner" aria-hidden="true"></span>'
+        f"<span>Loading chart data\u2026</span>"
+        f"</div>"
+        f'<script type="application/json" class="chart-loading-shell-data" '
+        f'data-chart-canvas="{safe_id}">{{}}</script>'
+    )
+
+
 def _render_timeseries_chart(
-    period: str = "24h", initial_data: list[dict[str, Any]] | None = None
+    period: str = "24h",
+    initial_data: list[dict[str, Any]] | None = None,
+    progressive: bool = False,
 ) -> str:
     """Render an interactive timeseries chart using Chart.js.
 
@@ -1363,10 +1397,35 @@ def _render_timeseries_chart(
     canvas is touched. ``window.EggPoolDashboard.reinitTimeseriesChart``
     consumes the data island and falls back to ``GET /api/timeseries``
     when no inlined payload is available.
+
+    When ``progressive`` is ``True``, the data island is moved inside a
+    ``<noscript>`` block so the browser can parse and render the HTML
+    shell without waiting for the chart data payload. JS-enabled
+    browsers fetch the data asynchronously via the chart loading shell.
     """
     payload = list(initial_data or [])
     payload_json = escape_script_json(payload)
     period_attr = escape_attr(period)
+    if progressive:
+        endpoint = f"/api/timeseries?period={period_attr}&amp;bucket=hour"
+        shell = _render_chart_loading_shell(
+            "timeseries-chart",
+            endpoint,
+            height_px=300,
+        )
+        return f"""
+<section class="panel">
+  <h3>Request timeseries</h3>
+  {shell}
+  <noscript>
+  <div class="chart-wrap" style="height: 300px;">
+    <canvas id="timeseries-chart" data-period="{period_attr}"></canvas>
+  </div>
+  <script type="application/json" id="timeseries-initial-data"
+          data-period="{period_attr}">{payload_json}</script>
+  </noscript>
+</section>
+"""
     return f"""
 <section class="panel">
   <h3>Request timeseries</h3>
@@ -1736,6 +1795,7 @@ def render_overview(
     enabled_count: int = 0,
     thinking_stats: dict[str, Any] | None = None,
     request_shaping_summary: dict[str, Any] | None = None,
+    progressive_timeseries: bool = False,
 ) -> str:
     """Render the overview dashboard page.
 
@@ -2019,7 +2079,11 @@ def render_overview(
   {_render_account_breakdown_body(accounts, show_disabled, disabled_count)}
 </section>
 
-{_render_timeseries_chart(period, initial_data=timeseries)}
+{
+        _render_timeseries_chart(
+            period, initial_data=timeseries, progressive=progressive_timeseries
+        )
+    }
 
 <section class="overview-grid">
   <div class="panel">
@@ -3662,39 +3726,10 @@ def render_timeseries(
     )
 
 
-def _render_bandwidth_timeseries_table(
-    series: list[dict[str, Any]],
-) -> str:
-    """Render a timeseries table with bandwidth columns."""
-    if not series:
-        return '<p class="empty">No bandwidth data in this window.</p>'
-    parts = [
-        '<table class="data">',
-        "<thead><tr>",
-        _th("Bucket"),
-        _th("Requests"),
-        _th("BW received"),
-        _th("BW emitted"),
-        "</tr></thead><tbody>",
-    ]
-    for row in series:
-        req_count = int(row.get("request_count", 0))
-        parts.append(
-            f"<tr>"
-            f"{_td_priority(escape(row.get('bucket', row.get('day', ''))), 1)}"
-            f"{_td_priority(f'{req_count:,}', 1)}"
-            f"{_td_priority(format_bytes(row.get('bytes_received', 0)), 1)}"
-            f"{_td_priority(format_bytes(row.get('bytes_emitted', 0)), 1)}"
-            f"</tr>"
-        )
-    parts.append("</tbody></table>")
-    return "".join(parts)
-
-
 def render_bandwidth(
     summary: dict[str, Any],
     daily: list[dict[str, Any]],
-    timeseries: list[dict[str, Any]],
+    timeseries: list[dict[str, Any]] | None = None,
     bucket: str = "hour",
     period: str = "24h",
     account_filter: str = "",
@@ -3759,11 +3794,6 @@ def render_bandwidth(
 <section class="panel">
   <h3>Bandwidth activity (last 90 days)</h3>
   {_render_bandwidth_heatmap(daily, heatmap_colors=heatmap_colors)}
-</section>
-
-<section class="panel">
-  <h3>Bandwidth timeseries ({escape(bucket)} buckets)</h3>
-  {_render_bandwidth_timeseries_table(timeseries)}
 </section>
 """
     return _render_layout(
@@ -6766,7 +6796,6 @@ def render_reliability(
     pending_health: dict[str, Any] | None,
     operational_summary: list[dict[str, Any]],
     recent_operational_events: list[dict[str, Any]],
-    timeseries: list[dict[str, Any]],
     theme_css: str = "",
     available_themes: list[str] | None = None,
     current_theme: str = "",

@@ -500,6 +500,8 @@ async def test_grouped_timeseries_json_returns_stable_shape(
         "buckets",
         "bucket_totals",
         "points",
+        "source",
+        "degraded_reason",
     }
     assert set(payload.keys()) == expected_keys
     assert payload["series"] == []
