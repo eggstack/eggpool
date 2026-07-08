@@ -1324,9 +1324,13 @@ class StatsService:
         imbalance = await self.get_utilization_imbalance(
             time_range, account_stats=account_stats
         )
+        cache = await self.get_cache_observability(
+            time_range.label, use_cache=use_cache
+        )
         return {
             "summary": summary,
             "imbalance": imbalance,
+            "cache": cache,
             "period_label": time_range.label,
             "start": time_range.start_str(),
             "end": time_range.end_str(),

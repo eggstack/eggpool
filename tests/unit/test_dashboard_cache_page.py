@@ -778,7 +778,7 @@ class TestRenderCacheProviderCacheLabels:
         assert "Rows with cache counters" in html
         assert "Rows without cache counters" in html
         assert "Unrecognized payload shape" in html
-        assert "Provider-reported cached tokens" in html
+        assert "Read tokens (canonical)" in html
 
     def test_protocol_table_uses_renamed_columns(self) -> None:
         html = render_cache(
@@ -812,7 +812,7 @@ class TestRenderCacheProviderCacheLabels:
                 "per_model_status": {},
             },
         )
-        assert "Provider-reported cached input tokens" in html
+        assert "Read tokens (canonical)" in html
 
     def test_old_short_labels_absent(self) -> None:
         html = render_cache(

@@ -204,6 +204,17 @@ _CARD_TOOLTIPS: dict[str, str] = {
         "bounded read share cache_read / (input + cache_read + cache_write) "
         "and the cache write volume."
     ),
+    "Provider cache hit rate": (
+        "Protocol-aware cache hit rate: cache_read_tokens / "
+        "cache_eligible_input_tokens. For OpenAI-compatible providers the "
+        "denominator is total billed prompt tokens; for Anthropic it is "
+        "fresh input + cache read + cache creation. Cache writes/creation "
+        "are warmup, not hits."
+    ),
+    "Cache write/warmup rate": (
+        "Cache write (creation) tokens as a share of eligible input. "
+        "These populate cache entries and are not cache hits."
+    ),
     "Reasoning tokens": (
         "Tokens reported by upstreams as reasoning or extended-thinking output."
     ),
@@ -1707,13 +1718,11 @@ def _render_bandwidth_heatmap(
     return f'<div class="heatmap">{svg}{overlay}</div>'
 
 
-def _render_thinking_stats(thinking_stats: dict[str, Any] | None) -> str:
-    """Render the Thinking/Reasoning metrics card for the overview page.
+def _render_thinking_stats_card(thinking_stats: dict[str, Any] | None) -> str:
+    """Render the Thinking/Reasoning metric card markup (no section wrapper).
 
-    Shows total thinking requests, per-decision breakdown, and
-    per-protocol breakdown when data is available.  Returns an empty
-    string when the counter snapshot is empty so the layout stays
-    clean during idle periods.
+    Returns an empty string when the counter snapshot is empty so the
+    layout stays clean during idle periods.
     """
     if not thinking_stats:
         return ""
@@ -1753,20 +1762,14 @@ def _render_thinking_stats(thinking_stats: dict[str, Any] | None) -> str:
         sub_parts.append(f"{budget_clamped:,} budget-clamped")
     sub_text = " · ".join(sub_parts) if sub_parts else "no decisions recorded"
 
-    return f"""
-<section class="cards">
-  {
-        _render_metric_card(
-            title="Thinking/Reasoning",
-            metric=f"{total:,}",
-            sub=sub_text,
-            tooltip="In-memory thinking/reasoning observability counters. "
-            "Tracks per-request thinking decisions made by the transcoder "
-            "and routing layers.",
-        )
-    }
-</section>
-"""
+    return _render_metric_card(
+        title="Thinking/Reasoning",
+        metric=f"{total:,}",
+        sub=sub_text,
+        tooltip="In-memory thinking/reasoning observability counters. "
+        "Tracks per-request thinking decisions made by the transcoder "
+        "and routing layers.",
+    )
 
 
 def render_overview(
@@ -1796,6 +1799,7 @@ def render_overview(
     thinking_stats: dict[str, Any] | None = None,
     request_shaping_summary: dict[str, Any] | None = None,
     progressive_timeseries: bool = False,
+    cache_observability: dict[str, Any] | None = None,
 ) -> str:
     """Render the overview dashboard page.
 
@@ -1864,6 +1868,25 @@ def render_overview(
     total_tok = fresh_tok
     latency = format_latency(summary.get("avg_latency_ms", 0.0))
     imb_pct = format_percent(float(imbalance.get("imbalance_ratio", 0.0)))
+
+    if cache_observability is not None:
+        provider_cache_hit_rate = cache_observability.get("provider_cache_hit_rate")
+        cache_write_rate = cache_observability.get("cache_write_rate")
+        cache_counter_coverage_rate = cache_observability.get(
+            "cache_counter_coverage_rate"
+        )
+        cache_read_tokens_canonical = int(
+            cache_observability.get("cache_read_tokens_canonical", 0)
+        )
+        cache_eligible_input_tokens = int(
+            cache_observability.get("cache_eligible_input_tokens", 0)
+        )
+    else:
+        provider_cache_hit_rate = None
+        cache_write_rate = None
+        cache_counter_coverage_rate = None
+        cache_read_tokens_canonical = 0
+        cache_eligible_input_tokens = 0
 
     if total_input_tokens > 0 or total_cache_read_tokens > 0:
         cache_read_ratio = total_cache_read_tokens / (
@@ -2010,7 +2033,26 @@ def render_overview(
                 _render_metric_card(
                     title="Cache reads",
                     metric=cache_read,
-                    sub=f"{cache_read_pct} of prompt · write {cache_write}",
+                    sub=(f"{cache_read_pct} of prompt · write {cache_write}"),
+                )
+                if cache_observability is None
+                else _render_metric_card(
+                    title="Provider cache hit rate",
+                    metric=(
+                        _format_percent_unit(provider_cache_hit_rate, digits=1)
+                        if provider_cache_hit_rate is not None
+                        else "—"
+                    ),
+                    sub=(
+                        f"read {format_tokens(cache_read_tokens_canonical)} "
+                        f"/ eligible {format_tokens(cache_eligible_input_tokens)}"
+                        f" · write/warmup "
+                        f"{_format_percent_unit(cache_write_rate, digits=1)}"
+                        f" · {cache_counter_coverage_rate:.0%} reported"
+                        if cache_eligible_input_tokens > 0
+                        or cache_read_tokens_canonical > 0
+                        else "read 0 / eligible 0"
+                    ),
                 ),
                 _render_metric_card(
                     title="Reasoning tokens",
@@ -2060,12 +2102,11 @@ def render_overview(
                     metric=avg_ttft,
                     sub=f"P50 {p50_ttft} · P99 {p99_ttft}",
                 ),
+                _render_thinking_stats_card(thinking_stats),
             ]
         )
     }
 </section>
-
-{_render_thinking_stats(thinking_stats)}
 
 <section class="panel">
   <div class="panel-header">
@@ -4349,16 +4390,28 @@ def _render_cache_reporting_panel(
     co_reported = int(co_by_status.get("reported", 0))
     co_not_reported = int(co_by_status.get("not_reported", 0))
     co_unknown = int(co_by_status.get("unknown_format", 0))
-    co_total_cached = int(cache_observability.get("total_cached_input_tokens", 0))
     co_total_read = int(cache_observability.get("total_cache_read_input_tokens", 0))
     co_total_creation = int(
         cache_observability.get("total_cache_creation_input_tokens", 0)
     )
-    co_ratio = cache_observability.get("cache_hit_ratio_known_only")
-    co_ratio_str = f"{float(co_ratio):.1%}" if co_ratio is not None else "—"
     co_total = int(cache_observability.get("total_requests", 0))
     co_input_total = int(cache_observability.get("input_tokens_total", 0))
     co_output_total = int(cache_observability.get("output_tokens_total", 0))
+
+    # Canonical per-protocol cache metrics.
+    co_hit_rate = cache_observability.get("provider_cache_hit_rate")
+    co_hit_rate_str = f"{float(co_hit_rate):.1%}" if co_hit_rate is not None else "—"
+    co_write_rate = cache_observability.get("cache_write_rate")
+    co_write_rate_str = (
+        f"{float(co_write_rate):.1%}" if co_write_rate is not None else "—"
+    )
+    co_coverage_rate = cache_observability.get("cache_counter_coverage_rate")
+    co_coverage_str = (
+        f"{float(co_coverage_rate):.1%}" if co_coverage_rate is not None else "—"
+    )
+    co_read_canonical = int(cache_observability.get("cache_read_tokens_canonical", 0))
+    co_write_canonical = int(cache_observability.get("cache_write_tokens_canonical", 0))
+    co_eligible = int(cache_observability.get("cache_eligible_input_tokens", 0))
 
     # Per-provider × protocol breakdown rows.
     co_protocol: Any = cache_observability.get("per_protocol_status", {}) or {}
@@ -4450,7 +4503,7 @@ def _render_cache_reporting_panel(
     <thead><tr>
       {_th("Account ID")}
       {_th("Total requests", priority=2)}
-      {_th("Provider-reported cached tokens", priority=2)}
+      {_th("Read tokens (canonical)", priority=2)}
     </tr></thead>
     <tbody>
       {account_rows_html}
@@ -4465,7 +4518,7 @@ def _render_cache_reporting_panel(
     <thead><tr>
       {_th("Model")}
       {_th("Total requests", priority=2)}
-      {_th("Provider-reported cached tokens", priority=2)}
+      {_th("Read tokens (canonical)", priority=2)}
     </tr></thead>
     <tbody>
       {model_rows_html}
@@ -4503,11 +4556,23 @@ def _render_cache_reporting_panel(
             sub="parse failure or unrecognized",
         )
     }
-        {
+    {
         _render_metric_card(
-            title="Reported cache read share",
-            metric=co_ratio_str,
-            sub="cache_read / (input + cache_read + cache_write)",
+            title="Provider cache hit rate",
+            metric=co_hit_rate_str,
+            sub=(
+                f"read {format_tokens(co_read_canonical)} "
+                f"/ eligible {format_tokens(co_eligible)} "
+                f"· write/warmup {co_write_rate_str}"
+                f" · {co_coverage_str} reported"
+            ),
+        )
+    }
+    {
+        _render_metric_card(
+            title="Cache write/warmup rate",
+            metric=co_write_rate_str,
+            sub=(f"warmup, not hits · eligible {format_tokens(co_eligible)}"),
         )
     }
   </section>
@@ -4527,8 +4592,28 @@ def _render_cache_reporting_panel(
         <td class='num'>{format_int(co_output_total)}</td>
       </tr>
       <tr>
-        <td>Provider-reported cached input tokens</td>
-        <td class='num'>{format_int(co_total_cached)}</td>
+        <td>Read tokens (canonical)</td>
+        <td class='num'>{format_int(co_read_canonical)}</td>
+      </tr>
+      <tr>
+        <td>Write tokens (canonical)</td>
+        <td class='num'>{format_int(co_write_canonical)}</td>
+      </tr>
+      <tr>
+        <td>Eligible input tokens (denominator)</td>
+        <td class='num'>{format_int(co_eligible)}</td>
+      </tr>
+      <tr>
+        <td>Provider cache hit rate</td>
+        <td class='num'>{co_hit_rate_str}</td>
+      </tr>
+      <tr>
+        <td>Cache write/warmup rate</td>
+        <td class='num'>{co_write_rate_str}</td>
+      </tr>
+      <tr>
+        <td>Coverage (cache counters reported)</td>
+        <td class='num'>{co_coverage_str}</td>
       </tr>
       <tr>
         <td>Anthropic cache read</td>

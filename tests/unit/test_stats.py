@@ -2738,3 +2738,126 @@ class TestFetchCompressionObservability:
         assert acct_bucket.get("candidate_count", 0) == 0
         assert acct_bucket.get("eligible_count", 0) == 0
         assert acct_bucket.get("estimated_savings_tokens", 0) == 0
+
+
+class TestFetchCacheObservability:
+    """fetch_cache_observability returns canonical cache metric terms."""
+
+    @pytest.mark.asyncio()
+    async def test_canonical_keys_present(self, db: Database) -> None:
+        """New top-level canonical keys are present in the result."""
+        result = await queries.fetch_cache_observability(
+            db, "2020-01-01 00:00:00", "2030-01-01 00:00:00"
+        )
+        for key in (
+            "cache_read_tokens_canonical",
+            "cache_write_tokens_canonical",
+            "cache_eligible_input_tokens",
+            "provider_cache_hit_rate",
+            "cache_write_rate",
+            "cache_benefited_request_rate",
+            "cache_counter_coverage_rate",
+            "cache_benefited_requests",
+            "cache_eligible_requests",
+            "cache_counter_reported_requests",
+            "cache_counter_not_reported_requests",
+            "cache_counter_unknown_requests",
+            "inconsistent_cache_counter_rows",
+        ):
+            assert key in result, f"missing key {key!r}"
+
+    @pytest.mark.asyncio()
+    async def test_mixed_protocol_rows(self, db: Database) -> None:
+        """Seed Anthropic + OpenAI + no-cache rows; verify aggregation."""
+        from datetime import timedelta
+
+        now = datetime.now(UTC)
+
+        def ts(h: int) -> str:
+            return (now - timedelta(hours=h)).strftime("%Y-%m-%d %H:%M:%S")
+
+        async with db.transaction():
+            await db.execute_write(
+                "INSERT INTO accounts (name, api_key_env, enabled) VALUES (?, ?, ?)",
+                ("test_acct", "TEST_KEY", 1),
+            )
+            await db.execute_write(
+                "INSERT INTO models (model_id, protocol) VALUES (?, ?)",
+                ("model_x", "openai"),
+            )
+            # Anthropic row: input=80, read=20, creation=5
+            await db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, started_at, completed_at,
+                    status, input_tokens, output_tokens,
+                    cached_input_tokens, cache_read_input_tokens,
+                    cache_creation_input_tokens, cache_write_input_tokens,
+                    cache_counter_status, upstream_protocol
+                ) VALUES (
+                    (SELECT id FROM accounts WHERE name = 'test_acct'),
+                    'model_x',
+                    ?, ?, 'completed', 80, 100,
+                    20, 20, 5, NULL,
+                    'reported', 'anthropic'
+                )
+                """,
+                (ts(1), ts(1)),
+            )
+            # OpenAI row: input=100, cached=30, cache_write=10
+            await db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, started_at, completed_at,
+                    status, input_tokens, output_tokens,
+                    cached_input_tokens, cache_read_input_tokens,
+                    cache_creation_input_tokens, cache_write_input_tokens,
+                    cache_counter_status, upstream_protocol
+                ) VALUES (
+                    (SELECT id FROM accounts WHERE name = 'test_acct'),
+                    'model_x',
+                    ?, ?, 'completed', 100, 50,
+                    30, NULL, NULL, 10,
+                    'reported', 'openai'
+                )
+                """,
+                (ts(2), ts(2)),
+            )
+            # OpenAI row with no cache counters
+            await db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, started_at, completed_at,
+                    status, input_tokens, output_tokens,
+                    cache_counter_status, upstream_protocol
+                ) VALUES (
+                    (SELECT id FROM accounts WHERE name = 'test_acct'),
+                    'model_x',
+                    ?, ?, 'completed', 200, 80,
+                    'not_reported', 'openai'
+                )
+                """,
+                (ts(3), ts(3)),
+            )
+
+        result = await queries.fetch_cache_observability(
+            db, "2020-01-01 00:00:00", "2030-01-01 00:00:00"
+        )
+
+        # Anthropic: read=20, write=5, eligible=80+20+5=105
+        # OpenAI: read=30, write=10, eligible=100
+        # Reported: 2, Not reported: 1
+        assert result["cache_counter_reported_requests"] == 2
+        assert result["cache_counter_not_reported_requests"] == 1
+        assert result["cache_counter_unknown_requests"] == 0
+        assert result["cache_read_tokens_canonical"] == 50  # 20 + 30
+        assert result["cache_write_tokens_canonical"] == 15  # 5 + 10
+        assert result["cache_eligible_input_tokens"] == 205  # 105 + 100
+        # hit_rate = 50 / 205
+        assert result["provider_cache_hit_rate"] == pytest.approx(50 / 205)
+        assert result["cache_write_rate"] == pytest.approx(15 / 205)
+        # Both reported rows have read > 0
+        assert result["cache_benefited_requests"] == 2
+        assert result["cache_benefited_request_rate"] == pytest.approx(1.0)
+        # coverage = 2 / 3
+        assert result["cache_counter_coverage_rate"] == pytest.approx(2 / 3)

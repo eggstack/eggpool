@@ -554,7 +554,7 @@ class TestPhase7CachePageBehavior:
             },
         )
         assert "Provider cache counters" in html
-        assert "Reported cache read share" in html
+        assert "Provider cache hit rate" in html
         assert "Cache hit ratio" not in html
 
     def test_compression_panel_observe_only_does_not_claim_mutation(self) -> None:

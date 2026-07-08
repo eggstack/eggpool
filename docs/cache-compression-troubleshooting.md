@@ -334,7 +334,7 @@ One account or one provider is getting a disproportionate share of requests.
 
 **What is NOT a routing cause:**
 
-- Reported cache read share, even on a per-account basis.
+- Provider cache hit rate, even on a per-account basis.
 - Compression savings, even on a per-account basis.
 - Synthetic-cache apply rate.
 - Tuning recommendation state.

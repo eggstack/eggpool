@@ -98,7 +98,10 @@ class NormalizedUsage:
 # Cache-counter field names that, when present in a usage payload,
 # indicate the upstream actually reported cache state.  Used to choose
 # between ``reported`` and ``not_reported`` in :func:`normalize_usage`.
-_OPENAI_CACHE_FIELDS = ("cached_tokens",)
+# ``cached_tokens`` is the standard OpenAI-compatible read counter; the
+# nested ``cache_write_tokens`` field is the OpenRouter / OpenAI-compatible
+# warmup / cache-write counter and must NEVER be conflated with reads.
+_OPENAI_CACHE_FIELDS = ("cached_tokens", "cache_read_input_tokens")
 _ANTHROPIC_CACHE_FIELDS = (
     "cache_read_input_tokens",
     "cache_creation_input_tokens",
@@ -131,24 +134,43 @@ def _has_any_field(usage: dict[str, Any], fields: tuple[str, ...]) -> bool:
 def _extract_openai_cache_tokens(usage: dict[str, Any]) -> dict[str, int | None]:
     """Return the OpenAI-shape cache tokens as a mapping.
 
-    OpenAI providers expose ``usage.prompt_tokens_details.cached_tokens``
-    but do not (yet) split cache read vs. cache write.  We populate
-    :data:`cached_input_tokens` from that field and leave the
-    read/write-specific fields ``None`` so callers can distinguish a
-    provider that reported cache hits from one that did not.
+    OpenAI-compatible providers expose
+    ``usage.prompt_tokens_details.cached_tokens`` for prompt-cache reads
+    and (per OpenRouter and OpenAI-compatible peers)
+    ``usage.prompt_tokens_details.cache_write_tokens`` for warmup /
+    cache-write volume.  We populate both granular fields and also
+    :data:`cached_input_tokens` as the legacy aggregate so callers that
+    only knew about a single cached-token counter keep working.
+
+    ``cached_input_tokens`` is intentionally kept as the read-side
+    canonical aggregate for OpenAI-compatible rows: writes do NOT inflate
+    the read numerator.  Per the 2026-07-08 plan, writes must be reported
+    separately so dashboards never describe cache writes as hits.
     """
     prompt_details: Any = usage.get("prompt_tokens_details")
     cached: int | None = None
-    if isinstance(prompt_details, dict) and "cached_tokens" in prompt_details:
+    cache_write: int | None = None
+    if isinstance(prompt_details, dict):
         prompt_details_dict = cast("dict[str, Any]", prompt_details)
-        cached = coerce_token_count(prompt_details_dict.get("cached_tokens"))
-        if cached == 0:
-            cached = 0
+        if "cached_tokens" in prompt_details_dict:
+            cached = coerce_token_count(prompt_details_dict.get("cached_tokens"))
+            if cached == 0:
+                cached = 0
+        if "cache_write_tokens" in prompt_details_dict:
+            cache_write = coerce_token_count(
+                prompt_details_dict.get("cache_write_tokens")
+            )
+            if cache_write == 0:
+                cache_write = 0
+    # OpenAI-compatible rows expose reads under ``cached_tokens`` /
+    # ``cache_read_input_tokens``.  Writes are tracked separately under
+    # ``cache_write_input_tokens`` and never promoted into the read
+    # numerator.
     return {
         "cached_input_tokens": cached,
-        "cache_read_input_tokens": None,
+        "cache_read_input_tokens": cached,
         "cache_creation_input_tokens": None,
-        "cache_write_input_tokens": None,
+        "cache_write_input_tokens": cache_write,
     }
 
 
@@ -206,9 +228,20 @@ def _extract_openai(usage: dict[str, Any]) -> NormalizedUsage:
         reasoning_tokens = coerce_token_count(
             completion_details_dict.get("reasoning_tokens")
         )
+    # OpenAI-compatible providers (including OpenRouter) may also surface
+    # ``prompt_tokens_details.cache_write_tokens`` without a read counter,
+    # so key-presence in the nested prompt details must also mark the row
+    # as ``reported``.  ``_has_any_field`` checks top-level keys only; for
+    # nested write tokens we inspect the dict directly.
+    prompt_details_obj: Any = usage.get("prompt_tokens_details")
+    has_nested_cache_field = isinstance(prompt_details_obj, dict) and (
+        "cached_tokens" in prompt_details_obj
+        or "cache_write_tokens" in prompt_details_obj
+    )
     cache_status = (
         CacheCounterStatus.REPORTED
         if _has_any_field(usage, _OPENAI_CACHE_FIELDS)
+        or has_nested_cache_field
         or any(v is not None for v in cache_tokens.values())
         else CacheCounterStatus.NOT_REPORTED
     )
@@ -387,7 +420,12 @@ def normalize_from_stream_result(
             else None
         ),
         cached_input_tokens=cached_value,
-        cache_read_input_tokens=None,
+        # OpenAI-compatible stream path surfaces reads under the legacy
+        # ``cache_read_tokens`` field; the per-protocol granular
+        # ``cache_read_input_tokens`` mirrors it.  Write tokens are not
+        # surfaced here because the streaming usage record does not
+        # carry them yet.
+        cache_read_input_tokens=cached_value,
         cache_creation_input_tokens=None,
         cache_write_input_tokens=None,
         raw_usage=raw_usage,

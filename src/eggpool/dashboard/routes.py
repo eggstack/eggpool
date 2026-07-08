@@ -772,6 +772,7 @@ async def handle_overview(
         thinking_stats=thinking_stats,
         request_shaping_summary=request_shaping_summary,
         progressive_timeseries=True,
+        cache_observability=cache_observability,
     )
     if telemetry is not None:
         telemetry.record_stage(

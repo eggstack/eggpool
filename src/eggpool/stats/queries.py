@@ -9,6 +9,13 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, cast
 
+from eggpool.stats.cache_metrics import (
+    CacheCounterStatus as CacheMetricStatus,
+)
+from eggpool.stats.cache_metrics import (
+    aggregate_cache_terms,
+    derive_cache_metric_terms,
+)
 from eggpool.stats.grouped_timeseries import postprocess_grouped_timeseries
 
 if TYPE_CHECKING:
@@ -2227,6 +2234,64 @@ async def fetch_cache_observability(
         total_cached / total_input_reported if total_input_reported > 0 else None
     )
 
+    # --- canonical per-protocol cache metrics (Python-side aggregation) ---
+    reported_rows_sql = """
+    SELECT
+        input_tokens,
+        cached_input_tokens,
+        cache_read_input_tokens,
+        cache_creation_input_tokens,
+        cache_write_input_tokens,
+        cache_counter_status,
+        upstream_protocol
+    FROM requests
+    WHERE started_at >= ? AND started_at < ?
+        AND status != 'pending'
+    """
+    reported_rows = await db.fetch_all(reported_rows_sql, (start_dt, end_dt))
+    terms_list: list[Any] = []
+    status_list: list[CacheMetricStatus] = []
+    for row in reported_rows:
+        d = dict(row)
+        raw_status = d.get("cache_counter_status") or "not_reported"
+        try:
+            cs = CacheMetricStatus(raw_status)
+        except ValueError:
+            cs = CacheMetricStatus.UNKNOWN_FORMAT
+        status_list.append(cs)
+        # Derive protocol shape from granular fields when upstream_protocol
+        # is missing (legacy rows without the column).
+        protocol = d.get("upstream_protocol")
+        if protocol is None:
+            if d.get("cache_creation_input_tokens") is not None:
+                protocol = "anthropic"
+            elif (
+                d.get("cache_read_input_tokens") is not None
+                or d.get("cache_write_input_tokens") is not None
+            ):
+                protocol = "openai"
+            else:
+                protocol = "unknown"
+        # For OpenAI rows, cached_input_tokens is the legacy field that holds
+        # the read tokens when cache_read_input_tokens is not set.
+        read_tokens = d.get("cache_read_input_tokens")
+        if read_tokens is None:
+            read_tokens = d.get("cached_input_tokens")
+        # For Anthropic rows, cache_creation_input_tokens is the canonical
+        # write field; cache_write_input_tokens is the OpenAI-compatible alias.
+        write_tokens = d.get("cache_write_input_tokens")
+        if write_tokens is None:
+            write_tokens = d.get("cache_creation_input_tokens")
+        terms_list.append(
+            derive_cache_metric_terms(
+                input_tokens=d.get("input_tokens"),
+                cache_read_tokens=read_tokens,
+                cache_write_tokens=write_tokens,
+                protocol=protocol,
+            )
+        )
+    agg = aggregate_cache_terms(terms_list, status_list)
+
     total = sum(by_status.values())
 
     return {
@@ -2254,6 +2319,18 @@ async def fetch_cache_observability(
         ),
         "cache_hit_ratio_known_only": cache_hit_ratio_known_only,
         "transcoded_requests": int(totals.get("transcoded_requests", 0) or 0),
+        # Canonical per-protocol cache metrics.
+        "cache_read_tokens_canonical": agg.cache_read_tokens_canonical,
+        "cache_write_tokens_canonical": agg.cache_write_tokens_canonical,
+        "cache_eligible_input_tokens": agg.cache_eligible_input_tokens,
+        "provider_cache_hit_rate": agg.provider_cache_hit_rate,
+        "cache_write_rate": agg.cache_write_rate,
+        "cache_benefited_request_rate": agg.cache_benefited_request_rate,
+        "cache_counter_coverage_rate": agg.cache_counter_coverage_rate,
+        "cache_benefited_requests": agg.cache_benefited_requests,
+        "cache_eligible_requests": agg.cache_eligible_requests,
+        "cache_counter_not_reported_requests": agg.cache_counter_not_reported_requests,
+        "inconsistent_cache_counter_rows": agg.inconsistent_cache_counter_rows,
     }
 
 
