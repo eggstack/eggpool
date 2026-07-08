@@ -131,10 +131,7 @@ def has_digit_or_family_anchor(value: str) -> bool:
     """
     if not value:
         return False
-    for ch in value:
-        if ch.isdigit():
-            return True
-    return False
+    return any(ch.isdigit() for ch in value)
 
 
 def generate_deployment_suffix_variants(value: str) -> tuple[str, ...]:
@@ -227,10 +224,7 @@ def generate_deployment_suffix_variants(value: str) -> tuple[str, ...]:
         out = (value,)
         return out
 
-    if namespace:
-        stripped = f"{namespace}/{base_value}"
-    else:
-        stripped = base_value
+    stripped = f"{namespace}/{base_value}" if namespace else base_value
 
     out = (value, stripped)
     return out

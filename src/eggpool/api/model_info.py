@@ -385,15 +385,9 @@ async def handle_model_info_sources(request: Request) -> Response:
         data.append(
             {
                 "source": source_name,
-                "enabled": bool(
-                    health.get("enabled", diag.get("enabled", False))
-                ),
-                "configured": bool(
-                    diag.get("configured", bool(health))
-                ),
-                "constructed": bool(
-                    diag.get("constructed", bool(health))
-                ),
+                "enabled": bool(health.get("enabled", diag.get("enabled", False))),
+                "configured": bool(diag.get("configured", bool(health))),
+                "constructed": bool(diag.get("constructed", bool(health))),
                 "requires_api_key": bool(diag.get("requires_api_key", False)),
                 "api_key_present": bool(diag.get("api_key_present", False)),
                 "reason": diag.get("reason"),
@@ -404,9 +398,7 @@ async def handle_model_info_sources(request: Request) -> Response:
                 "failure_count": int(health.get("failure_count", 0) or 0),
                 "last_status_code": health.get("last_status_code"),
                 "rate_limited_until": health.get("rate_limited_until"),
-                "last_success_duration_ms": health.get(
-                    "last_success_duration_ms"
-                ),
+                "last_success_duration_ms": health.get("last_success_duration_ms"),
                 "last_payload_count": health.get("last_payload_count"),
             }
         )

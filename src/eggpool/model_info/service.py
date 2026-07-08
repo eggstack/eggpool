@@ -1600,11 +1600,12 @@ class ModelInfoService:
                 continue
             enabled = bool(getattr(cfg, "enabled", False))
             resolved_key = (
-                bool(cfg.resolved_api_key) if hasattr(cfg, "resolved_api_key") else False
+                bool(cfg.resolved_api_key)
+                if hasattr(cfg, "resolved_api_key")
+                else False
             )
             constructed = any(
-                name == source_name
-                for source_name in self._external_sources
+                name == source_name for source_name in self._external_sources
             )
             requires_key = bool(
                 getattr(cfg, "api_key", None) is not None
@@ -2988,9 +2989,7 @@ async def _resolve_aa_record(
         if isinstance(dn, str):
             display_name = dn
 
-    candidate_index = build_candidate_index(
-        "artificial_analysis", aa_indexed.values()
-    )
+    candidate_index = build_candidate_index("artificial_analysis", aa_indexed.values())
     if candidate_index.exact_by_source_id:
         try:
             decision = await resolve_source_record_tiered(

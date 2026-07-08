@@ -83,7 +83,9 @@ def _first_run_state(
         return "last_success"
     now = time.time()
     next_run_at = task._next_run_at if task._next_run_at > 0 else None  # pyright: ignore[reportPrivateUsage]
-    last_tick_started = task._last_tick_started_at if task._last_tick_started_at > 0 else None  # pyright: ignore[reportPrivateUsage]
+    last_tick_started = (
+        task._last_tick_started_at if task._last_tick_started_at > 0 else None  # pyright: ignore[reportPrivateUsage]
+    )
     has_run = last_tick_started is not None
 
     if task._failure_count > 0 and (  # pyright: ignore[reportPrivateUsage]

@@ -133,9 +133,7 @@ class TestHighspeedMinimaxM27ResolvesToBase:
             await _run_migrations(db)
             await _seed_model(db, "MiniMax-M2.7-highspeed")
 
-            cache = _make_provider_catalog_cache(
-                ["MiniMax-M2.7-highspeed"]
-            )
+            cache = _make_provider_catalog_cache(["MiniMax-M2.7-highspeed"])
             or_payload = _load_json(
                 FIXTURES_DIR / "openrouter_minimax_highspeed_sample.json"
             )
@@ -158,16 +156,12 @@ class TestHighspeedMinimaxM27ResolvesToBase:
             )
             assert result["errors"] == 0
 
-            info_after = await service.repo.get_canonical(
-                "MiniMax-M2.7-highspeed"
-            )
+            info_after = await service.repo.get_canonical("MiniMax-M2.7-highspeed")
             assert info_after is not None
             detail = info_after.detail
             assert isinstance(detail, dict)
             external_ids = detail.get("external_ids", {})
-            assert (
-                external_ids.get("openrouter") == "minimax/minimax-m2.7"
-            ), (
+            assert external_ids.get("openrouter") == "minimax/minimax-m2.7", (
                 f"expected external_ids.openrouter=minimax/minimax-m2.7, "
                 f"got detail={detail!r}"
             )
@@ -197,9 +191,7 @@ class TestHighspeedVariantsMoveStatusFromSparseToPartial:
             await _run_migrations(db)
             await _seed_model(db, "MiniMax-M2.5-highspeed")
 
-            cache = _make_provider_catalog_cache(
-                ["MiniMax-M2.5-highspeed"]
-            )
+            cache = _make_provider_catalog_cache(["MiniMax-M2.5-highspeed"])
             or_fixture = _load_json(
                 FIXTURES_DIR / "openrouter_minimax_highspeed_sample.json"
             )
@@ -216,19 +208,16 @@ class TestHighspeedVariantsMoveStatusFromSparseToPartial:
 
             await service.load_cache()
             await service.reconcile_catalog_snapshot()
-            await service.refresh_model_info(
-                "MiniMax-M2.5-highspeed", force=True
-            )
+            await service.refresh_model_info("MiniMax-M2.5-highspeed", force=True)
 
-            refreshed = await service.repo.get_canonical(
-                "MiniMax-M2.5-highspeed"
-            )
+            refreshed = await service.repo.get_canonical("MiniMax-M2.5-highspeed")
             assert refreshed is not None
             assert refreshed.sparse is False
             assert refreshed.status in ("partial", "fresh", "conflicting")
-            assert refreshed.detail.get("external_ids", {}).get(
-                "openrouter"
-            ) == "minimax/minimax-m2.5"
+            assert (
+                refreshed.detail.get("external_ids", {}).get("openrouter")
+                == "minimax/minimax-m2.5"
+            )
         finally:
             await db.disconnect()
 
@@ -275,8 +264,9 @@ class TestHighspeedM21Fixture:
 
             refreshed = await service.repo.get_canonical(variant_id)
             assert refreshed is not None
-            assert refreshed.detail.get("external_ids", {}).get(
-                "openrouter"
-            ) == expected_openrouter_id
+            assert (
+                refreshed.detail.get("external_ids", {}).get("openrouter")
+                == expected_openrouter_id
+            )
         finally:
             await db.disconnect()

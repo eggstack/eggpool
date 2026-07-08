@@ -271,8 +271,7 @@ class TestBuildCanonicalDetail:
         # it as preserved_external_id (Phase 4 contract).
         assert prov["sources"] == ["provider_catalog", "openrouter"]
         assert (
-            prov.get("source_states", {}).get("openrouter")
-            == "preserved_external_id"
+            prov.get("source_states", {}).get("openrouter") == "preserved_external_id"
         )
 
     def test_conflict_recorded_when_external_differs_materially(self) -> None:

@@ -2099,12 +2099,21 @@ AggregatorError (base)
 - **Detail API enhancements** (phase 5): `GET /api/model-info/{model_id}` returns benchmark data (per-source throughput/latency/pricing), alias list, Hugging Face metadata (pipeline_tags, model_card_url, library_name), and manual override indicators
 - **Richer summary generation** (phase 5): deterministic summaries now include sparse-data warnings, benchmark highlights (e.g., "74 tok/s on Artificial Analysis"), Hugging Face card availability, and conflict annotations when sources disagree on fields
 - **`model_info_overrides` table** (phase 5): migration `0038` adds a `model_info_overrides` table for persisting operator-set overrides to canonical fields. Overridden fields are marked with an `overridden` flag on canonical rows to distinguish from source-provided values
-- **Tiered identity matching** (migration `0049`): `model_info/matching.py` resolves local model IDs to source records through a 5-tier resolver:
+- **Tiered identity matching** (migration `0049`): `model_info/matching.py` resolves local model IDs to source records through a 6-tier resolver:
     0. `configured_exact_alias` — operator-configured `[model_info.aliases]` rows
     1. `exact_source_id` — raw `model_id` or `split(model_id)[1]` or provider-catalog
        `<provider_id>/<model_id>` aliases indexed verbatim
     2. `normalized_exact` — `normalize_model_key()` of model_id, display_name, and
        provider-catalog aliases compared against the candidate index
+    2b. `deployment_suffix_normalized_exact` — conservative stripping of
+       `DEPLOYMENT_SUFFIX_TOKENS` (`highspeed`, `fast`, `turbo`, `preview`,
+       `experimental`, `nitro`, `max`, `beta`, `default`, `base`). Only fires
+       when the original identifier has a digit or family anchor AND the
+       candidate set is unique. Refuses to strip when the original contains a
+       `SEMANTIC_VARIANT_TOKENS` token (`pro`, `mini`, `flash`, `lite`,
+       `nano`, `instruct`, `chat`, `reasoning`, `thinking`, `haiku`, `sonnet`,
+       `opus`, `coder`, `codex`). Opt-in via
+       `ModelInfoMatchingConfig.deployment_suffix_normalized_exact = True`.
      3. `regex_rule` — conservative built-in patterns for `minimax`, `claude`,
         `gemini` family shapes; rejects candidates whose version tokens or
         family tokens differ from the local model (e.g. `flash` vs `pro`)
@@ -2187,6 +2196,19 @@ The plan in `plans/model_info_openrouter_polish_closeout_plan.md` closes the rem
 - `TestCompactObservationsRepository` — DB rows return truthful `source_model_id`, `provider_id`, `confidence`; case-insensitive lookup; latest-per-source selection.
 - `TestDetailEndpointObservations` — API endpoint returns DB rows; synthesised fallback only fires when caller passes `observations=None`.
 - `TestParseEntryToRecord` — `OpenRouterModelInfoSource` parsing produces the canonical `MiniMax-M3` shape from the documented OpenRouter payload.
+
+### Suffix Matching, Benchmark Enrichment, and Startup Task Plan
+
+The plan in `plans/model_info_suffix_benchmarks_startup_tasks_plan.md` extends the model-info subsystem along three axes: deployment-suffix identity matching, benchmark source diagnostics + tiered Artificial Analysis (AA) matching, and operator-friendly background task first-run behavior. None of the changes alter routing or billing; they tighten the sidecar so live `/models` and `/api/model-info` panels surface accurate, auditable state without surprises.
+
+- **Deployment-suffix tier 2b (Phase 1)**: `src/eggpool/model_info/normalization.py` adds `DEPLOYMENT_SUFFIX_TOKENS` (`highspeed`, `fast`, `turbo`, `preview`, `experimental`, `nitro`, `max`, `beta`, `default`, `base`) and `SEMANTIC_VARIANT_TOKENS` (`pro`, `mini`, `flash`, `lite`, `nano`, `instruct`, `chat`, `reasoning`, `thinking`, `haiku`, `sonnet`, `opus`, `coder`, `codex`). `generate_deployment_suffix_variants()` enumerates conservative stripping candidates and `has_digit_or_family_anchor()` guards against stripping tokens when the original identifier contains a digit or family anchor. `matching.py` adds `_tier_deployment_suffix_normalized_exact` between tier 2 (`normalized_exact`) and tier 3 (`regex_rule`); the tier is opt-in via `ModelInfoMatchingConfig.deployment_suffix_normalized_exact: bool = True` and refuses to strip any candidate whose original contains a `SEMANTIC_VARIANT_TOKENS` token, so `MiniMax-M2.7-highspeed` resolves to `minimax/minimax-m2.7` while `claude-3-haiku-highspeed` keeps its semantic shape.
+- **Highspeed fixtures (Phase 2)**: `tests/fixtures/model_info/openrouter_minimax_highspeed_sample.json` and `tests/fixtures/model_info/provider_catalog_sample_minimax_highspeed.json` cover the `M2.1`/`M2.5`/`M2.7` highspeed variants. `tests/unit/test_model_info_deployment_suffix.py` pins status advancement, ambiguity rejection, persistence, and the `deployment_suffix_normalized_exact = False` opt-out. The highspeed tier 2b only fires when the suffix-stripped candidate is unique — ambiguous candidates fall through to the lower-priority tiers rather than risking a wrong alias.
+- **Artificial Analysis source diagnostics (Phase 3)**: `ModelInfoService.source_diagnostics()` enumerates every configured source (`provider_catalog`, `openrouter`, `artificial_analysis`, `huggingface`) with `configured` / `constructed` / `requires_api_key` / `api_key_present` / `reason` fields. The `/api/model-info/sources` handler merges the live `model_info_source_health` snapshot with the diagnostics so operators can see why a source has no `last_success_at` row (e.g. `requires_api_key`, `not_constructed`, `disabled`). The handler tolerates both sync and async health snapshots via `inspect.isawaitable` so legacy test doubles that pass `AsyncMock` keep working. `tests/unit/test_model_info_source_diagnostics.py` pins the contract.
+- **Tiered Artificial Analysis matching (Phase 3)**: `ModelInfoService._resolve_aa_record()` now consumes the shared tiered resolver, sharing the candidate index and `model_info_match_evidence` audit trail with OpenRouter. AA matches surface `match_method`/`discovered_by`/`diagnostics_json` on `model_info_aliases` and contribute to the same `MATCH_EVIDENCE` observability the OpenRouter plan already exposed.
+- **Preserved external IDs in provenance (Phase 4)**: `build_canonical_detail()` now credits `provenance.sources` for any `existing_detail.external_ids[*]` key that wasn't contributed this cycle, populating `provenance.source_states[<src>] = "preserved_external_id"`. The detail cycle therefore distinguishes three source states explicitly: `contributed` (newly fetched this cycle), `preserved_external_id` (carried from the prior canonical row because the external ID persists in `external_ids`), and `absent` (no observation and no external ID). `tests/unit/test_model_info_provenance_consistency.py` pins the new contract; the existing `test_model_info_reconciliation.py` was updated to expect preserved `openrouter` entries with the new `source_states["openrouter"] = "preserved_external_id"` flag.
+- **Background task first-run behavior (Phase 5)**: `update_checker`, `checkpoint`, and `model_info_refresh` in `app.py:_lifespan_runtime` are now registered with `run_immediately=True`, so their first tick fires during startup instead of after the first interval. `_first_run_state()` in `background/__init__.py` returns one of `last_success` / `last_error` / `never_run_not_due` / `never_run_startup_deferred` / `never_run_overdue` based on the supervisor's heartbeat fields, the configured `run_immediately` / `initial_delay_s`, and a 25%-of-interval (capped at 60s, minimum 5s) grace band. `SupervisedTask.snapshot()` exposes the label under `first_run_state` so the runtime API and dashboard can render friendly statuses.
+- **Source and task diagnostics (Phase 6)**: `RuntimeMetricsService._snapshot_background_task_summary` now counts `never_run_not_due` and `never_run_overdue` separately from `failed`, and `/api/stats/runtime` `background_task_summary` carries both new counters. The runtime dashboard renders a `startup deferred` / `not yet due` / `never ran (overdue)` / `failing` badge from `first_run_state` so a freshly started process never looks unhealthy just because the first 30- or 60-second tick has not yet fired.
+- **Tests**: `tests/unit/test_model_info_deployment_suffix.py`, `tests/unit/test_model_info_source_diagnostics.py`, `tests/unit/test_model_info_provenance_consistency.py`, and `tests/unit/test_background_first_run.py` lock the contracts. The matching-safety and tiered-matching test modules were extended to cover the deployment-suffix guards.
 
 ### Dashboard Model-Info Join Corrective Plan
 
@@ -2521,32 +2543,36 @@ Production (`eggpool deploy systemd --install --production`):
 
 Overdue detection uses a 25%-of-interval (capped at 60s, minimum 5s) grace band so transient scheduler jitter does not trip the alert.
 
+`SupervisedTask.snapshot()` exposes a `first_run_state` field (one of `last_success` / `last_error` / `never_run_not_due` / `never_run_startup_deferred` / `never_run_overdue`) so the runtime API and dashboard can distinguish a freshly started task that is merely waiting for its first tick from a task that has actually missed its deadline. `_first_run_state()` in `background/__init__.py` resolves the label by combining the supervisor's heartbeat fields, the configured `run_immediately` / `initial_delay_s` knob, and the same 25%-of-interval grace band used for overdue detection.
+
 All tasks are registered in `app.py` during lifespan setup. Periodic registrations are summarised below:
 
-| Task | Interval | Mode | Description |
-|------|----------|------|-------------|
-| `catalog_refresh` | `refresh_interval_s` | periodic | Upstream model catalog refresh, model-info reconciliation after refresh |
-| `model_info_refresh` | `config.model_info.refresh_interval_s` | periodic | Refresh due model-info rows from configured sources |
-| `model_info_canonical_backfill` | 60s | periodic | Backfill canonical rows for orphaned models |
-| `usage_window_refresh` | 60s | periodic | Reload persisted quota windows into memory |
-| `stale_request_finalizer` | 60s | periodic | Safety net for leaked streaming requests |
-| `health_disabled_models_prune` | 60s | periodic | Drop stale `model_availability` and `disabled_models` rows |
-| `metrics_flush` | `config.metrics.flush_interval_s` | periodic | Buffered analytics flush to `usage_rollups` (lifespan shutdown path stops the supervisor first, then issues a final `flush(reason="shutdown")` to drain without race) |
-| `retention_cleanup` | 1h | periodic | Cleanup of old requests, events, pings, rollups, expired reservations |
-| `checkpoint` | 4h | periodic | SQLite WAL checkpoint |
-| `update_checker` | 24h | periodic | PyPI update check; per-tick probe reuses the shared outbound client |
-| `automatic_backup` | `config.backup.interval_s` | periodic | In-process SQLite backup with count-based retention (`initial_delay_s = config.backup.startup_delay_s` preserves the historical startup wait) |
+| Task | Interval | Mode | First-tick | Description |
+|------|----------|------|------------|-------------|
+| `catalog_refresh` | `refresh_interval_s` | periodic | staggered | Upstream model catalog refresh, model-info reconciliation after refresh |
+| `model_info_refresh` | `config.model_info.refresh_interval_s` | periodic | `run_immediately=True` | Refresh due model-info rows from configured sources |
+| `model_info_canonical_backfill` | 60s | periodic | staggered | Backfill canonical rows for orphaned models |
+| `usage_window_refresh` | 60s | periodic | staggered | Reload persisted quota windows into memory |
+| `stale_request_finalizer` | 60s | periodic | staggered | Safety net for leaked streaming requests |
+| `health_disabled_models_prune` | 60s | periodic | staggered | Drop stale `model_availability` and `disabled_models` rows |
+| `metrics_flush` | `config.metrics.flush_interval_s` | periodic | staggered | Buffered analytics flush to `usage_rollups` (lifespan shutdown path stops the supervisor first, then issues a final `flush(reason="shutdown")` to drain without race) |
+| `retention_cleanup` | 1h | periodic | staggered | Cleanup of old requests, events, pings, rollups, expired reservations |
+| `checkpoint` | 4h | periodic | `run_immediately=True` | SQLite WAL checkpoint |
+| `update_checker` | 24h | periodic | `run_immediately=True` | PyPI update check; per-tick probe reuses the shared outbound client |
+| `automatic_backup` | `config.backup.interval_s` | periodic | `initial_delay_s = config.backup.startup_delay_s` | In-process SQLite backup with count-based retention (preserves the historical startup wait) |
+
+Tasks that the operator depends on for live health signalling (`update_checker`, `checkpoint`, `model_info_refresh`) use `run_immediately=True` so a freshly started process reports real state on the first dashboard paint rather than appearing as `never_run` for the entire first interval. Tasks that intentionally stagger (`stale_request_finalizer`, `health_disabled_models_prune`, `usage_window_refresh`, `metrics_flush`, `retention_cleanup`, `model_info_canonical_backfill`) keep their deterministic `initial_delay_s` offsets so first ticks never cluster on the same wall-clock second.
 
 ### Operator visibility
 
 The runtime dashboard renders the periodic-task table from the supervisor-owned snapshot fields:
 
-- **Status** — `running` (tick in flight), `tick slow` (tick running longer than 2×interval), `failing` (registered with failures and no successes), `cancelled`, `stopped`, or `daemon` (legacy mode without next-run projection).
+- **Status** — `running` (tick in flight), `tick slow` (tick running longer than 2×interval), `failing` (registered with failures and no successes), `cancelled`, `stopped`, or `daemon` (legacy mode without next-run projection). The status badge uses `first_run_state` to refine the rendering: a `never_run_not_due` task is labelled `startup deferred` / `not yet due`, a `never_run_overdue` task is labelled `never ran (overdue)`, and a task with `last_error` and no successes shows `failing` regardless of how recent the last attempt was.
 - **Next run** — `in <delta>` when `next_run_at` is in the future, `overdue <age>` when the deadline plus grace band has elapsed, or `—` for daemon tasks and tasks with no projected deadline.
 - **Success/Fail** — per-tick counters so a single transient failure does not look like a permanent regression.
 - **Last error** — `last_error_class` (type name) when a tick has failed.
 
-The runtime API (`/api/stats/runtime`) also exposes `background_task_summary` (`registered`, `running`, `failed`, `overdue`, `last_error_count`) so dashboards / alerts can consume a coherent at-a-glance count without iterating every task.
+The runtime API (`/api/stats/runtime`) also exposes `background_task_summary` (`registered`, `running`, `failed`, `overdue`, `never_run_not_due`, `never_run_overdue`, `last_error_count`) so dashboards / alerts can consume a coherent at-a-glance count without iterating every task. The new `never_run_not_due` counter tracks tasks that simply have not reached their first tick yet, separating them from `never_run_overdue` so a freshly started process is never mistaken for a broken one.
 
 ## Performance Optimization (Phases 0–5)
 
