@@ -392,6 +392,40 @@ class TestArbitraryChunkBoundaries:
         assert "Hello" in d["delta"]["text"]
 
 
+class TestSseParserEventNameReset:
+    """Regression: event-only frames must not leak their event name into
+    a following data-only frame.  Previously ``_emit_frame`` returned
+    ``None`` for event-only frames without resetting ``_current_event``,
+    so a leading ``event: ping`` would contaminate the next data frame.
+    """
+
+    def test_event_only_frame_resets_current_event(self) -> None:
+        transcoder = OpenAIToAnthropicStreaming()
+        chunk = b'event: ping\n\ndata: {"choices":[{"delta":{"role":"assistant"}}]}\n\n'
+        frames = transcoder._parse_chunk(chunk)
+        assert frames == [("", '{"choices":[{"delta":{"role":"assistant"}}]}')]
+
+    def test_multiple_event_only_frames_in_a_row(self) -> None:
+        transcoder = OpenAIToAnthropicStreaming()
+        chunk = (
+            b"event: ping\n\n"
+            b"event: ping\n\n"
+            b"event: ping\n\n"
+            b'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n'
+        )
+        frames = transcoder._parse_chunk(chunk)
+        assert frames == [("", '{"choices":[{"delta":{"role":"assistant"}}]}')]
+
+    def test_data_only_frame_after_reset(self) -> None:
+        transcoder = OpenAIToAnthropicStreaming()
+        chunk = b'event: ping\n\ndata: {"choices":[{"delta":{"role":"assistant"}}]}\n\n'
+        transcoder._parse_chunk(chunk)
+        second_chunk = b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'
+        frames = transcoder._parse_chunk(second_chunk)
+        assert all(event == "" for event, _ in frames)
+        assert frames[0][1] == '{"choices":[{"delta":{"content":"hi"}}]}'
+
+
 class TestToolCallStreaming:
     def test_tool_call_id_and_name_announced_buffers_until_finish(
         self,

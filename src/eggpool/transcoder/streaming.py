@@ -238,6 +238,7 @@ class _BaseStreamingTranscoder:
             self._reset_frame()
             return None
         if not self._current_data_lines:
+            self._reset_frame()
             return None
         event = self._current_event
         data = "\n".join(self._current_data_lines)

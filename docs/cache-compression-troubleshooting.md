@@ -178,7 +178,7 @@ snapshot.
 | Span key | What it measures |
 |----------|-----------------|
 | `body_read_ms` | `read_body_limited()` -- reading the raw request body |
-| `json_parse_ms` | `json.loads(body)` -- JSON deserialization |
+| `json_parse_ms` | `jsonx_loads(body)` -- JSON deserialization (via `eggpool.jsonx`) |
 | `model_parse_ms` | Provider-suffix parsing and known-provider lookup |
 | `context_limit_ms` | Original body context-limit enforcement |
 | `transcode_preflight_ms` | `_prepare_transcode_preflight()` and translated context-limit checks |

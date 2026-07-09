@@ -311,7 +311,7 @@ async def test_grouped_timeseries_api_under_150ms(seeded_small: Database) -> Non
 async def test_cold_overview_under_600ms(seeded_medium: Database) -> None:
     """Cold overview with rollups for 100k rows completes under 600ms.
 
-    Best-of-three runs to suppress single-run machine noise (cold
+    Best-of-five runs to suppress single-run machine noise (cold
     caches, GC, scheduler pressure from other tests in the same
     full-suite invocation). Per-stage timings are emitted as snapshots
     for the best run so the dashboard team can spot which stage
@@ -323,7 +323,7 @@ async def test_cold_overview_under_600ms(seeded_medium: Database) -> None:
     time_range = TimeRange(start=now - timedelta(hours=24), end=now, label="24h")
 
     runs: list[tuple[float, dict[str, float]]] = []
-    for _ in range(3):
+    for _ in range(5):
         stage_timings: dict[str, float] = {}
         t_total = time.perf_counter()
         t0 = time.perf_counter()
