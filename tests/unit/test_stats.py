@@ -1020,9 +1020,9 @@ class TestStatsService:
                 label="custom",
             )
         )
-        # Both named pairs must surface total_tokens and request_count so the
-        # dashboard "Utilization range" panel can render all three metrics
-        # (cost, tokens, requests) for the most/least used accounts.
+        # Both named pairs must surface total_tokens and request_count so
+        # downstream consumers (runtime API, history) can report per-metric
+        # most/least usage for the most/least used accounts.
         for key in ("most_used", "least_used"):
             row = imb[key]
             assert isinstance(row["total_tokens"], int)

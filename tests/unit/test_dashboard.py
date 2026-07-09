@@ -262,34 +262,6 @@ class TestRenderOverview:
         assert 'id="timeseries-initial-data"' in html
         assert 'id="timeseries-chart"' in html
 
-    def test_escapes_account_name_in_overview(self) -> None:
-        html = render_overview(
-            overview={
-                "summary": {
-                    "total_requests": 0,
-                    "successful_requests": 0,
-                    "error_requests": 0,
-                    "error_rate": 0.0,
-                    "total_input_tokens": 0,
-                    "total_output_tokens": 0,
-                    "total_cost_microdollars": 0,
-                    "avg_latency_ms": 0.0,
-                },
-                "imbalance": {
-                    "imbalance_ratio": 0.0,
-                    "active_accounts": 0,
-                    "most_used": {"name": "<bad>", "cost_microdollars": 0},
-                    "least_used": {"name": "<worse>", "cost_microdollars": 0},
-                },
-                "period_label": "24h",
-                "start": "2024-01-01 00:00:00",
-                "end": "2024-01-02 00:00:00",
-            },
-            accounts=[],
-        )
-        assert "<bad>" not in html
-        assert "&lt;bad&gt;" in html
-
     def test_renders_egg_background_svg(self) -> None:
         html = render_overview(
             overview={
@@ -1783,66 +1755,6 @@ class TestHtmlParseability:
         text = "".join(parser.text_parts)
         assert "10" in text
         assert "$1.50" in text
-
-    def test_overview_utilization_range_renders_all_three_metrics(self) -> None:
-        """'Utilization range' shows cost, tokens, and requests for both ends.
-
-        The most/least named accounts must surface three metrics: cost (in
-        dollars), tokens (formatted via format_tokens), and requests (count).
-        """
-        html = render_overview(
-            overview={
-                "summary": {
-                    "total_requests": 5,
-                    "successful_requests": 4,
-                    "error_requests": 1,
-                    "error_rate": 0.2,
-                    "total_input_tokens": 1300,
-                    "total_output_tokens": 2150,
-                    "total_cost_microdollars": 1_500_000,
-                    "avg_latency_ms": 250.0,
-                },
-                "imbalance": {
-                    "imbalance_ratio": 0.1,
-                    "active_accounts": 2,
-                    "most_used": {
-                        "name": "acct_a",
-                        "cost_microdollars": 1_500_000,
-                        "total_tokens": 900,
-                        "request_count": 3,
-                    },
-                    "least_used": {
-                        "name": "acct_b",
-                        "cost_microdollars": 0,
-                        "total_tokens": 250,
-                        "request_count": 2,
-                    },
-                },
-                "period_label": "24h",
-                "start": "2024-01-01 00:00:00",
-                "end": "2024-01-02 00:00:00",
-            },
-            accounts=[],
-        )
-        parser = _HTMLTextExtractor()
-        parser.feed(html)
-        text = "".join(parser.text_parts)
-        # Both account names appear.
-        assert "acct_a" in text
-        assert "acct_b" in text
-        # Three labeled metrics render.
-        assert "Cost" in text
-        assert "Tokens" in text
-        assert "Requests" in text
-        # Cost formatted via format_microdollars: 1_500_000 μ$ = $1.50; zero is "-".
-        assert "$1.50" in text
-        assert "-" in text
-        # Tokens formatted via format_tokens: 900 -> "900", 250 -> "250".
-        assert "900" in text
-        assert "250" in text
-        # Requests counts surface.
-        assert "3" in text
-        assert "2" in text
 
 
 class TestRenderNav:
