@@ -1074,7 +1074,7 @@ label.trace-limit {
 }
 
 /* The heatmap SVG carries an explicit `width` attribute derived from
-   the date range (~250px for 90 days). Without `max-width: 100%` it
+   the date range (~460px for 180 days). Without `max-width: 100%` it
    can overflow narrow viewports because the parent .panel scrolls
    only when its content's intrinsic width exceeds the panel — a fixed
    inline `width` attribute bypasses that check. */

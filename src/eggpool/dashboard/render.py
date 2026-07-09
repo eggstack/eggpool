@@ -1529,7 +1529,7 @@ def _render_event_glance(events: list[dict[str, Any]]) -> str:
 
 def _render_bandwidth_heatmap(
     daily_data: list[dict[str, Any]],
-    title: str = "Bandwidth activity (last 90 days)",
+    title: str = "Bandwidth activity (last 180 days)",
     heatmap_colors: list[str] | None = None,
     value_field: str = "bytes",
 ) -> str:
@@ -1573,9 +1573,9 @@ def _render_bandwidth_heatmap(
     else:
         raise ValueError(f"unsupported heatmap value_field: {value_field!r}")
 
-    # Date range: last 90 days ending today
+    # Date range: last 180 days ending today
     today = date.today()
-    start_date = today - timedelta(days=89)
+    start_date = today - timedelta(days=179)
 
     # Pad start to Sunday (GitHub convention: weeks start on Sunday)
     weekday = start_date.weekday()  # Monday=0, Sunday=6
@@ -2138,11 +2138,11 @@ def render_overview(
 {_render_ip_stats(ip_stats or [])}
 
 <section class="panel">
-  <h3>Token activity (last 90 days)</h3>
+  <h3>Token activity (last 180 days)</h3>
   {
         _render_bandwidth_heatmap(
             bandwidth_daily or [],
-            title="Token activity (last 90 days)",
+            title="Token activity (last 180 days)",
             heatmap_colors=heatmap_colors,
             value_field="total_tokens",
         )
@@ -3798,7 +3798,7 @@ def render_bandwidth(
 </section>
 
 <section class="panel">
-  <h3>Bandwidth activity (last 90 days)</h3>
+  <h3>Bandwidth activity (last 180 days)</h3>
   {_render_bandwidth_heatmap(daily, heatmap_colors=heatmap_colors)}
 </section>
 """

@@ -478,11 +478,11 @@ async def _get_model_info_summary_map(  # pyright: ignore[reportUnusedFunction]
 
 DEFAULT_REFRESH_S = 15
 
-# Heatmap TimeRange shows the trailing window.  Capped at 90 days so the
-# grid stays bounded and at ``retain_request_stats_days`` so it never
-# scans rows the retention job will purge.  Recomputed per request so
-# the dashboard cache key naturally advances with wall-clock time.
-_HEATMAP_MAX_DAYS = 90
+# Heatmap TimeRange shows the trailing window.  Capped at 180 days
+# (~6 months) so the grid stays bounded and at ``retain_request_stats_days``
+# so it never scans rows the retention job will purge.  Recomputed per
+# request so the dashboard cache key naturally advances with wall-clock time.
+_HEATMAP_MAX_DAYS = 180
 _VALID_BUCKETS = frozenset({"hour", "day"})
 _VALID_GROUP_BY = frozenset({"provider", "model", "provider_model", "account"})
 
@@ -1945,11 +1945,12 @@ async def handle_bandwidth(
     stats = request.app.state.stats
     telemetry = getattr(request.app.state, "dashboard_telemetry", None)
     _gather_start = time.perf_counter()
+    heatmap_range = _heatmap_time_range(_HEATMAP_MAX_DAYS)
     summary, daily = cast(
         "tuple[dict[str, Any], list[dict[str, Any]]]",
         await asyncio.gather(
             stats.get_summary(time_range, account_name=account or None, use_cache=True),
-            stats.get_bandwidth_timeseries(time_range, account_name=account or None),
+            stats.get_bandwidth_timeseries(heatmap_range, account_name=account or None),
         ),
     )
     _gather_ms = (time.perf_counter() - _gather_start) * 1000
