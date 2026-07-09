@@ -547,6 +547,48 @@ The complete catalogue lives in `eggpool.transcoder.LOSS_WARNING_KINDS`.
 
 The overhead is negligible compared to upstream latency (typically 200ms–30s). You will not measure a difference in p99 latency from transcoding alone.
 
+### Streaming hot path (transcoded-stream-dispatch-fixes)
+
+The streaming transcoder path is optimised to minimise per-chunk event-loop
+pressure when many transcoded streams are in flight concurrently:
+
+- **Single SSE observer**: Only the coordinator's `IncrementalSSEObserver`
+  observes upstream chunks. The transcoder no longer runs its own
+  observer for usage extraction — one parse/observe pass per upstream
+  chunk covers both translation and finalization. The transcoder's
+  `usage` property returns a default `StreamUsageResult()`; callers
+  should always read usage from the coordinator's observer.
+- **Synchronous `feed()` / `flush()`**: The streaming transcoder
+  interface is synchronous. The per-chunk work (incremental UTF-8
+  decoding, JSON parsing, nested dict construction, `json.dumps`)
+  performs no async I/O, so awaiting a coroutine per chunk is
+  unnecessary scheduler overhead. Any future implementation that
+  requires async I/O must not be placed in this per-chunk path without
+  a separate design review.
+- **Coalesced per-chunk output**: The coordinator joins the bytes the
+  transcoder produces for one upstream chunk into a single
+  `yield b"".join(out_chunks)` rather than yielding each translated
+  frame separately. This preserves wire ordering and granularity while
+  reducing ASGI send calls. `[DONE]` and the terminal
+  `message_delta`/`message_stop` frames are still emitted in the
+  correct order.
+- **Single-pass `include_usage`**: `upstream_include_usage` is computed
+  once in `_execute_streaming` (after any injection of OpenAI
+  `stream_options.include_usage`) and threaded into
+  `_build_stream_generator` via an explicit parameter. The generator
+  no longer re-parses the request body to determine the include-usage
+  behaviour.
+- **Compact JSON frames**: Frame helpers use
+  `json.dumps(data, separators=(",", ":"))`. SSE clients parse the
+  JSON payload and never rely on preserved whitespace, so this
+  reduces both output bytes and serialization work.
+
+Tests live under `tests/unit/test_transcoder/test_streaming_fixtures.py`
+(replay-based decoded event assertions), `tests/perf/test_streaming_transcoder_perf.py`
+(microbenchmarks), and `tests/integration/test_streaming_transcode_concurrency.py`
+(E2E concurrency regression). The fixtures themselves are JSON files
+under `tests/fixtures/streaming_transcode/`.
+
 ## Cache Stability (Phase 3)
 
 Provider-visible prompt caching (Anthropic's `cache_control` breakpoints) is **observational** in v1 — the transcoder preserves or annotates every `cache_control` event but never reorders key material, mutates prompt content, or synthesises cache hints that the caller did not provide. Two helpers make the cache surface explicit:

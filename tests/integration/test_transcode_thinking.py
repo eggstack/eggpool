@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from eggpool.transcoder.anthropic_to_openai import AnthropicToOpenAI
 from eggpool.transcoder.context import TranscodeContext
 from eggpool.transcoder.openai_to_anthropic import OpenAIToAnthropic
@@ -185,13 +183,12 @@ class TestThinkingAnthropicToOpenAIRoundTrip:
 
 
 class TestThinkingStreamingE2E:
-    @pytest.mark.asyncio
-    async def test_thinking_streaming_round_trip(self) -> None:
+    def test_thinking_streaming_round_trip(self) -> None:
         """Full stream: thinking delta → text delta → finish."""
         transcoder = AnthropicToOpenAIStreaming()
 
         # message_start
-        await transcoder.feed(
+        transcoder.feed(
             b'event: message_start\ndata: {"type":"message_start","message":'
             b'{"id":"msg-1","type":"message","role":"assistant","content":[],'
             b'"model":"claude-3","stop_reason":null,'
@@ -199,13 +196,13 @@ class TestThinkingStreamingE2E:
         )
 
         # thinking block start
-        await transcoder.feed(
+        transcoder.feed(
             b'event: content_block_start\ndata: {"type":"content_block_start",'
             b'"index":0,"content_block":{"type":"thinking","thinking":""}}\n\n'
         )
 
         # thinking delta
-        raw = await transcoder.feed(
+        raw = transcoder.feed(
             b"event: content_block_delta\n"
             b'data: {"type":"content_block_delta","index":0,'
             b'"delta":{"type":"thinking_delta","thinking":"Let me analyze"}}\n\n'
@@ -224,14 +221,14 @@ class TestThinkingStreamingE2E:
 
         # thinking block stop
         _cbs0 = b'{"type":"content_block_stop","index":0}'
-        await transcoder.feed(b"event: content_block_stop\ndata: " + _cbs0 + b"\n\n")
+        transcoder.feed(b"event: content_block_stop\ndata: " + _cbs0 + b"\n\n")
 
         # text block
-        await transcoder.feed(
+        transcoder.feed(
             b'event: content_block_start\ndata: {"type":"content_block_start",'
             b'"index":1,"content_block":{"type":"text","text":""}}\n\n'
         )
-        raw2 = await transcoder.feed(
+        raw2 = transcoder.feed(
             b'event: content_block_delta\ndata: {"type":"content_block_delta",'
             b'"index":1,"delta":{"type":"text_delta","text":"Answer"}}\n\n'
         )
@@ -247,14 +244,14 @@ class TestThinkingStreamingE2E:
 
         # finish
         _cbs1 = b'{"type":"content_block_stop","index":1}'
-        await transcoder.feed(b"event: content_block_stop\ndata: " + _cbs1 + b"\n\n")
-        raw3 = await transcoder.feed(
+        transcoder.feed(b"event: content_block_stop\ndata: " + _cbs1 + b"\n\n")
+        raw3 = transcoder.feed(
             b"event: message_delta\n"
             b'data: {"type":"message_delta",'
             b'"delta":{"stop_reason":"end_turn"},'
             b'"usage":{"output_tokens":20}}\n\n'
         )
-        await transcoder.flush()
+        transcoder.flush()
 
         finish_frames = []
         for block in b"".join(raw3).split(b"\n\n"):

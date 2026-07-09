@@ -225,6 +225,30 @@ when the client and upstream protocols differ. Same-protocol requests pass
 through unchanged. Tool calls, thinking, and routing widening are out of
 scope (phases 4–6).
 
+**Phase 9 — Streaming hot-path optimisation (transcoded-stream-dispatch-fixes)**:
+the streaming transcoder path is tuned for sustained concurrent coding-agent
+streaming loads. The coordinator's `IncrementalSSEObserver` is the single
+observer — the streaming transcoder no longer runs its own observer for
+usage extraction, so a single parse/observe pass per upstream chunk covers
+both translation and finalization. The transcoder's `usage` property
+returns a default `StreamUsageResult()`. `StreamingTranscoder.feed()` and
+`.flush()` are synchronous (the per-chunk work performs no async I/O), so
+the coordinator calls them without `await`. Translated output per upstream
+chunk is coalesced via `b"".join(out_chunks)` rather than yielding each
+translated frame separately, reducing ASGI send calls while preserving
+wire ordering and the `[DONE]` / `message_stop` terminal events.
+`upstream_include_usage` is computed once in `_execute_streaming` (after
+any injection of OpenAI `stream_options.include_usage`) and threaded into
+`_build_stream_generator` via an explicit parameter, removing the second
+JSON parse in the generator. Frame helpers use compact JSON separators
+`(",", ":")` to reduce output bytes and serialization work. The
+microbenchmark (`tests/perf/test_streaming_transcoder_perf.py`) and the
+E2E concurrency regression test
+(`tests/integration/test_streaming_transcode_concurrency.py`) pin the
+new behaviour; replay fixtures under `tests/fixtures/streaming_transcode/`
+let tests assert on decoded SSE event sequences rather than raw bytes so
+JSON whitespace changes do not break tests.
+
 **Phase 4 — Routing eligibility widening**: transcoding is **on by default**. The routing layer widens the candidate set to include accounts whose `provider.protocols` includes the model's native protocol even if it does not include the client protocol. `_validate_endpoint` checks for transcodable routes before raising `ProtocolMismatchError`. The `_resolve_upstream_protocol` method determines which protocol to use upstream based on the largest eligible-account set. `prefer_native = true` (default) keeps native-protocol accounts ranked above transcodable ones via a secondary sort key in `QuotaFairScorer`. The two-pass context-limit check in `api/proxy_request.py` validates both client-side and upstream limits when transcoding is active. The `[transcoder] enabled = false` flag is a deprecated escape hatch that disables all translation and reverts to the pre-default protocol-exact routing.
 
 **Phase 5 — Operator controls and docs**: the default `[transcoder]` config block is documented in `config.example.toml`. `eggpool stats transcoding` reports transcoded request counts and loss-warning summaries. The dashboard `/runtime` page includes a "Transcoding" card showing real-time counters. Structured DEBUG logs are emitted for every transcoded request and a startup line announces transcoding state. Loss warnings remain at INFO. See `docs/transcoding.md` for the full operator guide.

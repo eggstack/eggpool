@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import pytest
-
 from eggpool.transcoder.context import TranscodeContext
 from eggpool.transcoder.openai_to_anthropic import OpenAIToAnthropic
 from eggpool.transcoder.policy import (
@@ -277,12 +275,11 @@ class TestNonStreamingReasoningFields:
 
 
 class TestStreamingReasoningFields:
-    @pytest.mark.asyncio
-    async def test_default_field_name(self) -> None:
+    def test_default_field_name(self) -> None:
         transcoder = AnthropicToOpenAIStreaming()
-        await transcoder.feed(_anthropic_sse("message_start"))
-        await transcoder.feed(_anthropic_sse("content_block_start", index=0))
-        raw = await transcoder.feed(
+        transcoder.feed(_anthropic_sse("message_start"))
+        transcoder.feed(_anthropic_sse("content_block_start", index=0))
+        raw = transcoder.feed(
             _anthropic_sse("content_block_delta", thinking_text="Thinking...", index=0)
         )
         frames = _parse_sse_frames(b"".join(raw))
@@ -291,14 +288,13 @@ class TestStreamingReasoningFields:
         assert data["choices"][0]["delta"]["reasoning"] == "Thinking..."
         assert "reasoning_content" not in data["choices"][0]["delta"]
 
-    @pytest.mark.asyncio
-    async def test_custom_field_name(self) -> None:
+    def test_custom_field_name(self) -> None:
         transcoder = AnthropicToOpenAIStreaming(
             reasoning_field_names=["reasoning_content"],
         )
-        await transcoder.feed(_anthropic_sse("message_start"))
-        await transcoder.feed(_anthropic_sse("content_block_start", index=0))
-        raw = await transcoder.feed(
+        transcoder.feed(_anthropic_sse("message_start"))
+        transcoder.feed(_anthropic_sse("content_block_start", index=0))
+        raw = transcoder.feed(
             _anthropic_sse("content_block_delta", thinking_text="Thinking...", index=0)
         )
         frames = _parse_sse_frames(b"".join(raw))
@@ -307,15 +303,14 @@ class TestStreamingReasoningFields:
         assert data["choices"][0]["delta"]["reasoning_content"] == "Thinking..."
         assert "reasoning" not in data["choices"][0]["delta"]
 
-    @pytest.mark.asyncio
-    async def test_compat_aliases(self) -> None:
+    def test_compat_aliases(self) -> None:
         transcoder = AnthropicToOpenAIStreaming(
             reasoning_field_names=["reasoning", "reasoning_content"],
             emit_compat_aliases=True,
         )
-        await transcoder.feed(_anthropic_sse("message_start"))
-        await transcoder.feed(_anthropic_sse("content_block_start", index=0))
-        raw = await transcoder.feed(
+        transcoder.feed(_anthropic_sse("message_start"))
+        transcoder.feed(_anthropic_sse("content_block_start", index=0))
+        raw = transcoder.feed(
             _anthropic_sse("content_block_delta", thinking_text="Thinking...", index=0)
         )
         frames = _parse_sse_frames(b"".join(raw))
@@ -325,25 +320,23 @@ class TestStreamingReasoningFields:
         assert delta["reasoning"] == "Thinking..."
         assert delta["reasoning_content"] == "Thinking..."
 
-    @pytest.mark.asyncio
-    async def test_feature_gate_drops_thinking(self) -> None:
+    def test_feature_gate_drops_thinking(self) -> None:
         transcoder = AnthropicToOpenAIStreaming(
             features=TranscoderFeatures(thinking=False),
         )
-        await transcoder.feed(_anthropic_sse("message_start"))
-        await transcoder.feed(_anthropic_sse("content_block_start", index=0))
-        raw = await transcoder.feed(
+        transcoder.feed(_anthropic_sse("message_start"))
+        transcoder.feed(_anthropic_sse("content_block_start", index=0))
+        raw = transcoder.feed(
             _anthropic_sse("content_block_delta", thinking_text="Thinking...", index=0)
         )
         frames = _parse_sse_frames(b"".join(raw))
         assert len(frames) == 0
 
-    @pytest.mark.asyncio
-    async def test_feature_gate_none_allows_thinking(self) -> None:
+    def test_feature_gate_none_allows_thinking(self) -> None:
         transcoder = AnthropicToOpenAIStreaming(features=None)
-        await transcoder.feed(_anthropic_sse("message_start"))
-        await transcoder.feed(_anthropic_sse("content_block_start", index=0))
-        raw = await transcoder.feed(
+        transcoder.feed(_anthropic_sse("message_start"))
+        transcoder.feed(_anthropic_sse("content_block_start", index=0))
+        raw = transcoder.feed(
             _anthropic_sse("content_block_delta", thinking_text="Thinking...", index=0)
         )
         frames = _parse_sse_frames(b"".join(raw))
@@ -351,24 +344,23 @@ class TestStreamingReasoningFields:
         data = json.loads(frames[0]["data"])
         assert data["choices"][0]["delta"]["reasoning"] == "Thinking..."
 
-    @pytest.mark.asyncio
-    async def test_thinking_then_text_with_custom_fields(self) -> None:
+    def test_thinking_then_text_with_custom_fields(self) -> None:
         transcoder = AnthropicToOpenAIStreaming(
             reasoning_field_names=["reasoning_content"],
         )
-        await transcoder.feed(_anthropic_sse("message_start"))
-        await transcoder.feed(_anthropic_sse("content_block_start", index=0))
-        raw1 = await transcoder.feed(
+        transcoder.feed(_anthropic_sse("message_start"))
+        transcoder.feed(_anthropic_sse("content_block_start", index=0))
+        raw1 = transcoder.feed(
             _anthropic_sse("content_block_delta", thinking_text="Think...", index=0)
         )
-        await transcoder.feed(_anthropic_sse("content_block_stop", index=0))
-        await transcoder.feed(_anthropic_sse("content_block_start", index=1))
-        raw2 = await transcoder.feed(
+        transcoder.feed(_anthropic_sse("content_block_stop", index=0))
+        transcoder.feed(_anthropic_sse("content_block_start", index=1))
+        raw2 = transcoder.feed(
             _anthropic_sse("content_block_delta", text="Answer.", index=1)
         )
-        await transcoder.feed(_anthropic_sse("content_block_stop", index=1))
-        await transcoder.feed(_anthropic_sse("message_delta", stop_reason="end_turn"))
-        await transcoder.flush()
+        transcoder.feed(_anthropic_sse("content_block_stop", index=1))
+        transcoder.feed(_anthropic_sse("message_delta", stop_reason="end_turn"))
+        transcoder.flush()
 
         reasoning_text = ""
         content_text = ""

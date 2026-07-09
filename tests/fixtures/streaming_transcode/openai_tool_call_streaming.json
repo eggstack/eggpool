@@ -1,0 +1,151 @@
+{
+  "name": "openai_tool_call_streaming",
+  "description": "OpenAI streaming tool-call response with split tool_calls[*].function.arguments across many chunks",
+  "upstream_protocol": "openai",
+  "client_protocol": "anthropic",
+  "model": "gpt-4",
+  "events": [
+    {
+      "event": null,
+      "data": {
+        "id": "chatcmpl-gpt4-tool-001",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "gpt-4",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "role": "assistant",
+              "content": ""
+            },
+            "finish_reason": null
+          }
+        ]
+      }
+    },
+    {
+      "event": null,
+      "data": {
+        "id": "chatcmpl-gpt4-tool-001",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "gpt-4",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "tool_calls": [
+                {
+                  "index": 0,
+                  "id": "call_weather001",
+                  "type": "function",
+                  "function": {
+                    "name": "get_weather",
+                    "arguments": ""
+                  }
+                }
+              ]
+            },
+            "finish_reason": null
+          }
+        ]
+      }
+    },
+    {
+      "event": null,
+      "data": {
+        "id": "chatcmpl-gpt4-tool-001",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "gpt-4",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "tool_calls": [
+                {
+                  "index": 0,
+                  "function": {
+                    "arguments": "{\"loc"
+                  }
+                }
+              ]
+            },
+            "finish_reason": null
+          }
+        ]
+      }
+    },
+    {
+      "event": null,
+      "data": {
+        "id": "chatcmpl-gpt4-tool-001",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "gpt-4",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "tool_calls": [
+                {
+                  "index": 0,
+                  "function": {
+                    "arguments": "ation\":"
+                  }
+                }
+              ]
+            },
+            "finish_reason": null
+          }
+        ]
+      }
+    },
+    {
+      "event": null,
+      "data": {
+        "id": "chatcmpl-gpt4-tool-001",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "gpt-4",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "tool_calls": [
+                {
+                  "index": 0,
+                  "function": {
+                    "arguments": " \"NYC\"}"
+                  }
+                }
+              ]
+            },
+            "finish_reason": null
+          }
+        ]
+      }
+    },
+    {
+      "event": null,
+      "data": {
+        "id": "chatcmpl-gpt4-tool-001",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "gpt-4",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {},
+            "finish_reason": "tool_calls"
+          }
+        ]
+      }
+    },
+    {
+      "event": null,
+      "data": "[DONE]"
+    }
+  ]
+}

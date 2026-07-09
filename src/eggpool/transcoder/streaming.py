@@ -2,8 +2,10 @@
 
 Provides ``StreamingTranscoder`` implementations that translate upstream SSE
 byte streams into client-format bytes on a chunk-by-chunk basis.  Each
-transcoder owns an ``IncrementalSSEObserver`` for usage extraction and
-maintains its own incremental SSE frame parser for translation.
+transcoder maintains its own incremental SSE frame parser for translation;
+usage extraction is delegated to the coordinator's
+``IncrementalSSEObserver`` to avoid running two parse/observe passes per
+upstream chunk.
 
 Phase 6.1 adds tool-call delta support: ``AnthropicToOpenAIStreaming`` emits
 ``delta.tool_calls`` entries for every ``content_block_start`` /
@@ -12,6 +14,10 @@ Phase 6.1 adds tool-call delta support: ``AnthropicToOpenAIStreaming`` emits
 ``tool_calls[*].function.arguments`` strings and emits an Anthropic
 ``content_block_start`` + ``content_block_stop`` pair per call when the
 upstream signals ``finish_reason: "tool_calls"``.
+
+Phase 7 (transcoded-stream-dispatch-fixes): ``feed`` and ``flush`` are
+synchronous; the protocol is no longer ``async``.  Frame emission uses
+compact JSON separators to reduce output bytes and serialization work.
 """
 
 from __future__ import annotations
@@ -21,8 +27,6 @@ import json
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, cast
-
-from eggpool.proxy.sse_observer import IncrementalSSEObserver
 
 if TYPE_CHECKING:
     from eggpool.proxy.usage import StreamUsageResult
@@ -37,6 +41,11 @@ from eggpool.transcoder.usage import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Compact JSON separators for streaming frame emission.  SSE clients parse
+# the JSON payload and never rely on preserved whitespace, so this reduces
+# both output bytes and serialization work.
+_JSON_SEPARATORS = (",", ":")
 
 # Reversed from openai_to_anthropic.py STOP_REASON_MAP — maps OpenAI
 # finish_reason values to Anthropic stop_reason values.
@@ -93,20 +102,41 @@ def _utf8_len(value: str) -> int:
 
 
 class StreamingTranscoder(Protocol):
-    """Translate an upstream SSE stream into client-format bytes."""
+    """Translate an upstream SSE stream into client-format bytes.
+
+    ``feed`` and ``flush`` are synchronous because the implementations do
+    not perform async I/O — the per-upstream-chunk work is incremental
+    UTF-8 parsing, JSON decoding/encoding, and nested dict construction.
+    Keeping these synchronous removes an unnecessary ``await`` per chunk
+    on the hot streaming path.  Any future implementation that requires
+    async I/O must not be placed in this per-chunk path without a
+    separate design review.
+
+    The ``usage`` property remains on the protocol for compatibility, but
+    transcoders do not run their own ``IncrementalSSEObserver``; they
+    return a default ``StreamUsageResult``.  Finalization in the
+    coordinator uses the dedicated ``IncrementalSSEObserver`` it owns.
+    """
 
     client_protocol: str
     upstream_protocol: str
 
-    async def feed(self, chunk: bytes) -> list[bytes]: ...
-    async def flush(self) -> list[bytes]: ...
+    def feed(self, chunk: bytes) -> list[bytes]: ...
+    def flush(self) -> list[bytes]: ...
 
     @property
     def usage(self) -> StreamUsageResult: ...
 
 
 class _BaseStreamingTranscoder:
-    """Shared incremental SSE frame parser and observer wiring."""
+    """Shared incremental SSE frame parser for translation.
+
+    The transcoder no longer owns an ``IncrementalSSEObserver``; usage
+    extraction lives in the coordinator's observer so a single parse
+    pass per upstream chunk covers both translation and usage.  The
+    ``usage`` property returns a default :class:`StreamUsageResult` to
+    preserve the protocol contract.
+    """
 
     client_protocol: str
     upstream_protocol: str
@@ -120,7 +150,6 @@ class _BaseStreamingTranscoder:
     ) -> None:
         self.client_protocol = client_protocol
         self.upstream_protocol = upstream_protocol
-        self._observer = IncrementalSSEObserver(upstream_protocol)
         self._transcode_context = transcode_context
         self._decoder = codecs.getincrementaldecoder("utf-8")(
             errors="replace",
@@ -294,11 +323,13 @@ class _BaseStreamingTranscoder:
         event: str,
         data: dict[str, Any],
     ) -> bytes:
-        return (f"event: {event}\ndata: {json.dumps(data)}\n\n").encode()
+        return (
+            f"event: {event}\ndata: {json.dumps(data, separators=_JSON_SEPARATORS)}\n\n"
+        ).encode()
 
     @staticmethod
     def _openai_frame(data: dict[str, Any]) -> bytes:
-        return f"data: {json.dumps(data)}\n\n".encode()
+        return (f"data: {json.dumps(data, separators=_JSON_SEPARATORS)}\n\n").encode()
 
     @staticmethod
     def _openai_done() -> bytes:
@@ -306,7 +337,12 @@ class _BaseStreamingTranscoder:
 
     @property
     def usage(self) -> StreamUsageResult:
-        return self._observer.usage
+        # Transcoders no longer run their own IncrementalSSEObserver;
+        # usage extraction lives in the coordinator's observer.  This
+        # property returns a default result to preserve the protocol.
+        from eggpool.proxy.usage import StreamUsageResult
+
+        return StreamUsageResult()
 
 
 class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
@@ -330,16 +366,14 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
         self._anthropic_tool_blocks: dict[int, _AnthropicToolUse] = {}
         self._tool_blocks_emitted = False
 
-    async def feed(self, chunk: bytes) -> list[bytes]:
-        self._observer.observe(chunk)
+    def feed(self, chunk: bytes) -> list[bytes]:
         frames = self._parse_chunk(chunk)
         out: list[bytes] = []
         for event_type, data in frames:
             out.extend(self._translate(event_type, data))
         return out
 
-    async def flush(self) -> list[bytes]:
-        self._observer.flush()
+    def flush(self) -> list[bytes]:
         frames = self._drain_buffer()
         out: list[bytes] = []
         for event_type, data in frames:
@@ -716,16 +750,14 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
     def thinking_delta_count(self) -> int:
         return self._thinking_delta_count
 
-    async def feed(self, chunk: bytes) -> list[bytes]:
-        self._observer.observe(chunk)
+    def feed(self, chunk: bytes) -> list[bytes]:
         frames = self._parse_chunk(chunk)
         out: list[bytes] = []
         for event_type, data in frames:
             out.extend(self._translate(event_type, data))
         return out
 
-    async def flush(self) -> list[bytes]:
-        self._observer.flush()
+    def flush(self) -> list[bytes]:
         frames = self._drain_buffer()
         out: list[bytes] = []
         for event_type, data in frames:

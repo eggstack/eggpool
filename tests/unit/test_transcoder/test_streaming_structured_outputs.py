@@ -11,8 +11,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import pytest
-
 from eggpool.transcoder.streaming import AnthropicToOpenAIStreaming
 
 
@@ -90,17 +88,16 @@ def _anthropic_sse(
 class TestStructuredOutputsStreamingUnaffected:
     """Structured-outputs body translation does not affect streaming."""
 
-    @pytest.mark.asyncio
-    async def test_json_text_stream(self) -> None:
+    def test_json_text_stream(self) -> None:
         """JSON response text arrives as normal content deltas."""
         transcoder = AnthropicToOpenAIStreaming()
-        await transcoder.feed(_anthropic_sse("message_start"))
-        await transcoder.feed(_anthropic_sse("content_block_start", index=0))
+        transcoder.feed(_anthropic_sse("message_start"))
+        transcoder.feed(_anthropic_sse("content_block_start", index=0))
 
         json_chunks = ['{"name":', ' "Alice"}']
         all_content = []
         for chunk in json_chunks:
-            raw = await transcoder.feed(
+            raw = transcoder.feed(
                 _anthropic_sse("content_block_delta", content=chunk, index=0)
             )
             frames = _parse_sse_frames(b"".join(raw))
@@ -108,26 +105,23 @@ class TestStructuredOutputsStreamingUnaffected:
                 data = json.loads(f["data"])
                 all_content.append(data["choices"][0]["delta"]["content"])
 
-        await transcoder.feed(_anthropic_sse("content_block_stop", index=0))
-        await transcoder.feed(_anthropic_sse("message_delta", stop_reason="end_turn"))
-        await transcoder.flush()
+        transcoder.feed(_anthropic_sse("content_block_stop", index=0))
+        transcoder.feed(_anthropic_sse("message_delta", stop_reason="end_turn"))
+        transcoder.flush()
 
         assert "".join(all_content) == '{"name": "Alice"}'
 
-    @pytest.mark.asyncio
-    async def test_json_stream_finish_reason(self) -> None:
+    def test_json_stream_finish_reason(self) -> None:
         """JSON response stream terminates with stop finish_reason."""
         transcoder = AnthropicToOpenAIStreaming()
-        await transcoder.feed(_anthropic_sse("message_start"))
-        await transcoder.feed(_anthropic_sse("content_block_start", index=0))
-        await transcoder.feed(
+        transcoder.feed(_anthropic_sse("message_start"))
+        transcoder.feed(_anthropic_sse("content_block_start", index=0))
+        transcoder.feed(
             _anthropic_sse("content_block_delta", content='{"ok": true}', index=0)
         )
-        await transcoder.feed(_anthropic_sse("content_block_stop", index=0))
-        raw = await transcoder.feed(
-            _anthropic_sse("message_delta", stop_reason="end_turn")
-        )
-        await transcoder.flush()
+        transcoder.feed(_anthropic_sse("content_block_stop", index=0))
+        raw = transcoder.feed(_anthropic_sse("message_delta", stop_reason="end_turn"))
+        transcoder.flush()
 
         frames = _parse_sse_frames(b"".join(raw))
         finish_frames = [

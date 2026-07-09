@@ -135,7 +135,7 @@ Phase 6 feature flags (`[transcoder.features]`) — all **off** by default:
 - `structured_outputs` — `response_format` / `json_schema` coercion
 - `anthropic_primitives` — `top_k`, `cache_control`, `context_management`, `container`, `mcp_servers`
 
-See [docs/transcoding.md](docs/transcoding.md) for the full translation table and known limitations.
+The streaming hot path is optimised for sustained concurrent coding-agent loads: only the coordinator runs an SSE observer (the transcoder no longer runs its own for usage extraction), `StreamingTranscoder.feed()`/`.flush()` are synchronous, translated output per upstream chunk is coalesced into a single yield, and frame helpers use compact JSON separators. See [docs/transcoding.md](docs/transcoding.md) for the full translation table, known limitations, and the streaming hot-path notes.
 
 ## Request shaping
 

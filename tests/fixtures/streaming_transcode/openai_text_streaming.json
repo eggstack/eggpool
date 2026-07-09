@@ -1,0 +1,107 @@
+{
+  "name": "openai_text_streaming",
+  "description": "OpenAI text-only streaming response with normal choices[].delta.content chunks, final finish chunk with finish_reason=stop, usage chunk, and [DONE]",
+  "upstream_protocol": "openai",
+  "client_protocol": "anthropic",
+  "model": "gpt-4",
+  "events": [
+    {
+      "event": null,
+      "data": {
+        "id": "chatcmpl-gpt4-001",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "gpt-4",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "role": "assistant",
+              "content": ""
+            },
+            "finish_reason": null
+          }
+        ]
+      }
+    },
+    {
+      "event": null,
+      "data": {
+        "id": "chatcmpl-gpt4-001",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "gpt-4",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "content": "Hello"
+            },
+            "finish_reason": null
+          }
+        ]
+      }
+    },
+    {
+      "event": null,
+      "data": {
+        "id": "chatcmpl-gpt4-001",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "gpt-4",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "content": " there"
+            },
+            "finish_reason": null
+          }
+        ]
+      }
+    },
+    {
+      "event": null,
+      "data": {
+        "id": "chatcmpl-gpt4-001",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "gpt-4",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "content": "!"
+            },
+            "finish_reason": null
+          }
+        ]
+      }
+    },
+    {
+      "event": null,
+      "data": {
+        "id": "chatcmpl-gpt4-001",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "gpt-4",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {},
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 12,
+          "completion_tokens": 5,
+          "total_tokens": 17
+        }
+      }
+    },
+    {
+      "event": null,
+      "data": "[DONE]"
+    }
+  ]
+}

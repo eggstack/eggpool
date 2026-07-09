@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import pytest
-
 from eggpool.transcoder.streaming import (
     AnthropicToOpenAIStreaming,
     OpenAIToAnthropicStreaming,
@@ -132,11 +130,10 @@ def _anthropic_sse(
 class TestAnthropicErrorToOpenAI:
     """Anthropic upstream error → OpenAI client error format."""
 
-    @pytest.mark.asyncio
-    async def test_anthropic_error_to_openai(self) -> None:
+    def test_anthropic_error_to_openai(self) -> None:
         transcoder = AnthropicToOpenAIStreaming()
 
-        raw = await transcoder.feed(
+        raw = transcoder.feed(
             _anthropic_sse(
                 "error",
                 event_type="authentication_error",
@@ -156,11 +153,10 @@ class TestAnthropicErrorToOpenAI:
         has_done = any(f["data"] == "[DONE]" for f in frames)
         assert has_done
 
-    @pytest.mark.asyncio
-    async def test_anthropic_rate_limit_to_openai(self) -> None:
+    def test_anthropic_rate_limit_to_openai(self) -> None:
         transcoder = AnthropicToOpenAIStreaming()
 
-        raw = await transcoder.feed(
+        raw = transcoder.feed(
             _anthropic_sse(
                 "error",
                 event_type="rate_limit_error",
@@ -175,11 +171,10 @@ class TestAnthropicErrorToOpenAI:
         error_data = json.loads(error_frame["data"])
         assert error_data["error"]["type"] == "api_error"
 
-    @pytest.mark.asyncio
-    async def test_anthropic_api_error_to_openai(self) -> None:
+    def test_anthropic_api_error_to_openai(self) -> None:
         transcoder = AnthropicToOpenAIStreaming()
 
-        raw = await transcoder.feed(
+        raw = transcoder.feed(
             _anthropic_sse(
                 "error",
                 event_type="api_error",
@@ -203,11 +198,10 @@ class TestOpenAIErrorToAnthropic:
     into Anthropic client format.
     """
 
-    @pytest.mark.asyncio
-    async def test_openai_error_to_anthropic(self) -> None:
+    def test_openai_error_to_anthropic(self) -> None:
         transcoder = OpenAIToAnthropicStreaming()
 
-        raw = await transcoder.feed(
+        raw = transcoder.feed(
             _anthropic_sse(
                 "error",
                 event_type="authentication_error",
@@ -227,11 +221,10 @@ class TestOpenAIErrorToAnthropic:
         event_types = [f["event"] for f in frames]
         assert "message_stop" in event_types
 
-    @pytest.mark.asyncio
-    async def test_rate_limit_error_to_anthropic(self) -> None:
+    def test_rate_limit_error_to_anthropic(self) -> None:
         transcoder = OpenAIToAnthropicStreaming()
 
-        raw = await transcoder.feed(
+        raw = transcoder.feed(
             _anthropic_sse(
                 "error",
                 event_type="rate_limit_error",
@@ -246,11 +239,10 @@ class TestOpenAIErrorToAnthropic:
         error_data = json.loads(error_frame["data"])
         assert error_data["error"]["type"] == "api_error"
 
-    @pytest.mark.asyncio
-    async def test_api_error_to_anthropic(self) -> None:
+    def test_api_error_to_anthropic(self) -> None:
         transcoder = OpenAIToAnthropicStreaming()
 
-        raw = await transcoder.feed(
+        raw = transcoder.feed(
             _anthropic_sse(
                 "error",
                 event_type="api_error",
@@ -267,24 +259,23 @@ class TestOpenAIErrorToAnthropic:
 
 
 class TestErrorAfterPartialStream:
-    @pytest.mark.asyncio
-    async def test_error_after_partial_stream_openai_to_anthropic(
+    def test_error_after_partial_stream_openai_to_anthropic(
         self,
     ) -> None:
         transcoder = OpenAIToAnthropicStreaming()
 
         chunk1 = _openai_chunk(role="assistant", content="Hello")
-        await transcoder.feed(chunk1)
+        transcoder.feed(chunk1)
 
         chunk2 = _openai_chunk(content=" world")
-        await transcoder.feed(chunk2)
+        transcoder.feed(chunk2)
 
         error_chunk = _anthropic_sse(
             "error",
             event_type="api_error",
             content="Stream interrupted",
         )
-        raw = await transcoder.feed(error_chunk)
+        raw = transcoder.feed(error_chunk)
 
         combined = b"".join(raw)
         frames = _parse_sse_frames(combined)
@@ -293,30 +284,27 @@ class TestErrorAfterPartialStream:
         assert "error" in event_types
         assert "message_stop" in event_types
 
-    @pytest.mark.asyncio
-    async def test_error_after_partial_stream_anthropic_to_openai(
+    def test_error_after_partial_stream_anthropic_to_openai(
         self,
     ) -> None:
         transcoder = AnthropicToOpenAIStreaming()
 
-        await transcoder.feed(
+        transcoder.feed(
             _anthropic_sse(
                 "message_start",
                 message_id="msg-1",
                 model="claude-3",
             )
         )
-        await transcoder.feed(_anthropic_sse("content_block_start", index=0))
-        await transcoder.feed(
-            _anthropic_sse("content_block_delta", content="Hello", index=0)
-        )
+        transcoder.feed(_anthropic_sse("content_block_start", index=0))
+        transcoder.feed(_anthropic_sse("content_block_delta", content="Hello", index=0))
 
         error_chunk = _anthropic_sse(
             "error",
             event_type="api_error",
             content="Stream interrupted",
         )
-        raw = await transcoder.feed(error_chunk)
+        raw = transcoder.feed(error_chunk)
 
         combined = b"".join(raw)
         frames = _parse_sse_frames(combined)
@@ -324,8 +312,7 @@ class TestErrorAfterPartialStream:
         has_done = any(f["data"] == "[DONE]" for f in frames)
         assert has_done
 
-    @pytest.mark.asyncio
-    async def test_error_before_any_content(self) -> None:
+    def test_error_before_any_content(self) -> None:
         transcoder = OpenAIToAnthropicStreaming()
 
         error_chunk = _anthropic_sse(
@@ -333,7 +320,7 @@ class TestErrorAfterPartialStream:
             event_type="invalid_request_error",
             content="Bad model",
         )
-        raw = await transcoder.feed(error_chunk)
+        raw = transcoder.feed(error_chunk)
 
         combined = b"".join(raw)
         frames = _parse_sse_frames(combined)
@@ -349,8 +336,7 @@ class TestErrorAfterPartialStream:
 class TestLossWarnings:
     """Verify that malformed frames accumulate in TranscodeContext."""
 
-    @pytest.mark.asyncio
-    async def test_malformed_json_accumulates_warning(self) -> None:
+    def test_malformed_json_accumulates_warning(self) -> None:
         from eggpool.transcoder.context import TranscodeContext
 
         ctx = TranscodeContext(
@@ -362,16 +348,15 @@ class TestLossWarnings:
 
         # Send a frame with valid SSE structure but invalid JSON in data
         bad_frame = b"event: message_start\ndata: NOT-JSON\n\n"
-        await transcoder.feed(bad_frame)
+        transcoder.feed(bad_frame)
 
         assert len(ctx.loss_warnings) >= 1
         assert any("streaming_transcoder" in w for w in ctx.loss_warnings)
 
-    @pytest.mark.asyncio
-    async def test_no_warning_when_no_context(self) -> None:
+    def test_no_warning_when_no_context(self) -> None:
         transcoder = AnthropicToOpenAIStreaming()
         assert transcoder._transcode_context is None
 
         # Should not raise even without context
         bad_frame = b"event: message_start\ndata: NOT-JSON\n\n"
-        await transcoder.feed(bad_frame)
+        transcoder.feed(bad_frame)

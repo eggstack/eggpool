@@ -442,14 +442,21 @@ async def test_default_policy_handles_streaming_minimax(
 
     # OpenAI-style streaming markers present.
     assert "chat.completion.chunk" in full, full
-    assert '"role": "assistant"' in full, full
+    # The transcoder emits compact JSON (no whitespace after colons) so
+    # assert on parsed content rather than raw byte substrings.
+    import re
+
+    role_marker = re.search(r'"role"\s*:\s*"assistant"', full)
+    assert role_marker is not None, full
     assert "hello " in full, full
     assert "world" in full, full
     # Anthropic-specific markers must NOT leak into the OpenAI stream.
     assert "event: content_block_delta" not in full
     assert "event: message_start" not in full
     # Stream terminates cleanly.
-    assert full.rstrip().endswith("[DONE]") or '"finish_reason": "stop"' in full
+    assert full.rstrip().endswith("[DONE]") or re.search(
+        r'"finish_reason"\s*:\s*"stop"', full
+    )
 
 
 @pytest.mark.asyncio

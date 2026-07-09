@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from eggpool.transcoder.streaming import (
     AnthropicToOpenAIStreaming,
     OpenAIToAnthropicStreaming,
@@ -34,8 +32,7 @@ _MODEL_A = "claude-3"
 # ── Anthropic upstream → OpenAI client (tool_use blocks) ──────────────
 
 
-@pytest.mark.asyncio
-async def test_anthropic_tool_use_stream_emits_openai_tool_calls() -> None:
+def test_anthropic_tool_use_stream_emits_openai_tool_calls() -> None:
     """Full Anthropic tool_use stream translates to OpenAI tool_calls deltas."""
     transcoder = AnthropicToOpenAIStreaming()
 
@@ -100,11 +97,11 @@ async def test_anthropic_tool_use_stream_emits_openai_tool_calls() -> None:
 
     all_output = b""
     for chunk in chunks:
-        result = await transcoder.feed(chunk)
+        result = transcoder.feed(chunk)
         for frame in result:
             all_output += frame
 
-    flush_result = await transcoder.flush()
+    flush_result = transcoder.flush()
     for frame in flush_result:
         all_output += frame
 
@@ -124,16 +121,15 @@ async def test_anthropic_tool_use_stream_emits_openai_tool_calls() -> None:
     arg_frames = [f for f in frames if "tool_calls" in f and '"arguments"' in f]
     assert len(arg_frames) >= 1
 
-    # Should end with finish_reason: tool_calls
-    finish_frames = [f for f in frames if '"finish_reason": "tool_calls"' in f]
+    # Should end with finish_reason: tool_calls (compact JSON)
+    finish_frames = [f for f in frames if '"finish_reason":"tool_calls"' in f]
     assert len(finish_frames) == 1
 
     # Should end with [DONE]
     assert "data: [DONE]" in text
 
 
-@pytest.mark.asyncio
-async def test_anthropic_multiple_tool_use_blocks_parallel() -> None:
+def test_anthropic_multiple_tool_use_blocks_parallel() -> None:
     """Two Anthropic tool_use blocks produce two OpenAI tool_calls."""
     transcoder = AnthropicToOpenAIStreaming()
 
@@ -213,11 +209,11 @@ async def test_anthropic_multiple_tool_use_blocks_parallel() -> None:
 
     all_output = b""
     for chunk in chunks:
-        result = await transcoder.feed(chunk)
+        result = transcoder.feed(chunk)
         for frame in result:
             all_output += frame
 
-    flush_result = await transcoder.flush()
+    flush_result = transcoder.flush()
     for frame in flush_result:
         all_output += frame
 
@@ -247,8 +243,7 @@ async def test_anthropic_multiple_tool_use_blocks_parallel() -> None:
 # ── OpenAI upstream → Anthropic client (tool_calls deltas) ────────────
 
 
-@pytest.mark.asyncio
-async def test_openai_tool_calls_stream_emits_anthropic_tool_use() -> None:
+def test_openai_tool_calls_stream_emits_anthropic_tool_use() -> None:
     """OpenAI tool_calls deltas buffer and emit Anthropic tool_use blocks at finish."""
     transcoder = OpenAIToAnthropicStreaming()
 
@@ -359,11 +354,11 @@ async def test_openai_tool_calls_stream_emits_anthropic_tool_use() -> None:
 
     all_output = b""
     for chunk in chunks:
-        result = await transcoder.feed(chunk)
+        result = transcoder.feed(chunk)
         for frame in result:
             all_output += frame
 
-    flush_result = await transcoder.flush()
+    flush_result = transcoder.flush()
     for frame in flush_result:
         all_output += frame
 
@@ -378,9 +373,9 @@ async def test_openai_tool_calls_stream_emits_anthropic_tool_use() -> None:
     assert block_data["content_block"]["name"] == "get_weather"
     assert block_data["content_block"]["id"].startswith("toolu_")
 
-    # Should contain tool_use stop_reason
-    assert '"stop_reason": "tool_use"' in text
-    stop_frames = [f for f in text.split("\n\n") if '"stop_reason": "tool_use"' in f]
+    # Should contain tool_use stop_reason (compact JSON)
+    assert '"stop_reason":"tool_use"' in text
+    stop_frames = [f for f in text.split("\n\n") if '"stop_reason":"tool_use"' in f]
     assert len(stop_frames) >= 1
     stop_data = json.loads(stop_frames[0].split("data: ")[1])
     assert stop_data["delta"]["stop_reason"] == "tool_use"
@@ -389,8 +384,7 @@ async def test_openai_tool_calls_stream_emits_anthropic_tool_use() -> None:
     assert "message_stop" in text
 
 
-@pytest.mark.asyncio
-async def test_openai_parallel_tool_calls_stream() -> None:
+def test_openai_parallel_tool_calls_stream() -> None:
     """Multiple OpenAI tool_calls indices produce multiple Anthropic tool_use blocks."""
     transcoder = OpenAIToAnthropicStreaming()
 
@@ -500,11 +494,11 @@ async def test_openai_parallel_tool_calls_stream() -> None:
 
     all_output = b""
     for chunk in chunks:
-        result = await transcoder.feed(chunk)
+        result = transcoder.feed(chunk)
         for frame in result:
             all_output += frame
 
-    flush_result = await transcoder.flush()
+    flush_result = transcoder.flush()
     for frame in flush_result:
         all_output += frame
 

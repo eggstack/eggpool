@@ -7,8 +7,7 @@ respx to mock upstream SSE responses.
 from __future__ import annotations
 
 import json
-
-import pytest
+from typing import Any
 
 from eggpool.transcoder.streaming import (
     AnthropicToOpenAIStreaming,
@@ -33,8 +32,7 @@ _MODEL_O = "gpt-4"
 _MODEL_A = "claude-3"
 
 
-@pytest.mark.asyncio
-async def test_select_streaming_transcoder_returns_correct_type() -> None:
+def test_select_streaming_transcoder_returns_correct_type() -> None:
     """Factory returns the correct transcoder for each protocol pair."""
     t = select_streaming_transcoder(
         client_protocol="openai",
@@ -64,8 +62,7 @@ async def test_select_streaming_transcoder_returns_correct_type() -> None:
     )
 
 
-@pytest.mark.asyncio
-async def test_openai_upstream_to_anthropic_client_e2e() -> None:
+def test_openai_upstream_to_anthropic_client_e2e() -> None:
     """OpenAI upstream SSE -> Anthropic client SSE (end-to-end)."""
     transcoder = OpenAIToAnthropicStreaming()
 
@@ -140,11 +137,11 @@ async def test_openai_upstream_to_anthropic_client_e2e() -> None:
 
     all_output = b""
     for chunk in chunks:
-        result = await transcoder.feed(chunk)
+        result = transcoder.feed(chunk)
         for frame in result:
             all_output += frame
 
-    flush_result = await transcoder.flush()
+    flush_result = transcoder.flush()
     for frame in flush_result:
         all_output += frame
 
@@ -179,8 +176,7 @@ async def test_openai_upstream_to_anthropic_client_e2e() -> None:
     assert "event: message_stop" in frames[6]
 
 
-@pytest.mark.asyncio
-async def test_anthropic_upstream_to_openai_client_e2e() -> None:
+def test_anthropic_upstream_to_openai_client_e2e() -> None:
     """Anthropic upstream SSE -> OpenAI client SSE (end-to-end)."""
     transcoder = AnthropicToOpenAIStreaming()
 
@@ -251,105 +247,143 @@ async def test_anthropic_upstream_to_openai_client_e2e() -> None:
 
     all_output = b""
     for chunk in chunks:
-        result = await transcoder.feed(chunk)
+        result = transcoder.feed(chunk)
         for frame in result:
             all_output += frame
 
-    flush_result = await transcoder.flush()
+    flush_result = transcoder.flush()
     for frame in flush_result:
         all_output += frame
 
     text = all_output.decode()
 
+    # Parse SSE output into decoded frames; assert on the decoded
+    # event sequence rather than raw bytes so JSON whitespace changes
+    # (e.g. compact separators in streaming frames) don't break tests.
+    decoded_frames: list[dict[str, Any]] = []
+    for raw_frame in text.split("\n\n"):
+        raw_frame = raw_frame.strip()
+        if not raw_frame:
+            continue
+        if raw_frame == "data: [DONE]":
+            decoded_frames.append({"_done": True})
+            continue
+        data_lines = [
+            line[len("data: ") :]
+            for line in raw_frame.split("\n")
+            if line.startswith("data: ")
+        ]
+        decoded_frames.append(json.loads("\n".join(data_lines)))
+
     # Should contain OpenAI-formatted chunks
-    assert "chat.completion.chunk" in text
-    assert '"role": "assistant"' in text
-    assert '"content": "Hi"' in text
-    assert '"content": " there"' in text
-    assert '"finish_reason": "stop"' in text
-    assert "data: [DONE]" in text
+    assert any(f.get("object") == "chat.completion.chunk" for f in decoded_frames)
+    text_deltas = [
+        f["choices"][0]["delta"].get("content")
+        for f in decoded_frames
+        if "_done" not in f and f.get("choices")
+    ]
+    assert "Hi" in text_deltas
+    assert " there" in text_deltas
+    assert any(f.get("_done") for f in decoded_frames), (
+        "expected terminal [DONE] sentinel"
+    )
+
+    finish_frames = [
+        f
+        for f in decoded_frames
+        if "_done" not in f
+        and f.get("choices")
+        and f["choices"][0].get("finish_reason") == "stop"
+    ]
+    assert finish_frames
 
     # Parse and verify usage — the message_delta carries output_tokens;
     # prompt_tokens comes from the same frame (defaults to 0 when
     # upstream message_delta doesn't include input_tokens).
-    frames = [f for f in text.split("\n\n") if f.strip()]
-    usage_found = False
-    for frame in frames:
-        if '"usage"' in frame and '"prompt_tokens"' in frame:
-            usage_data = json.loads(frame.replace("data: ", ""))
-            assert usage_data["usage"]["completion_tokens"] == 2
-            usage_found = True
-            break
-    assert usage_found
+    usage_frames = [f for f in decoded_frames if "_done" not in f and f.get("usage")]
+    assert any(uf["usage"].get("completion_tokens") == 2 for uf in usage_frames)
 
 
-@pytest.mark.asyncio
-async def test_streaming_usage_finalized_correctly() -> None:
-    """Usage extracted from upstream frames is accessible via .usage."""
+def test_streaming_usage_finalized_correctly() -> None:
+    """Usage extracted from upstream frames is accessible via the
+    coordinator's ``IncrementalSSEObserver``.
+
+    The streaming transcoders no longer run their own observer
+    (transcoded-stream-dispatch-fixes Phase 2); usage collection lives
+    in the dedicated observer the coordinator owns.  This test now
+    drives that observer directly to verify it captures the same data
+    the transcoder pipeline emits.
+    """
+    from eggpool.proxy.sse_observer import IncrementalSSEObserver
+
+    observer = IncrementalSSEObserver("openai")
     o2a = OpenAIToAnthropicStreaming()
 
-    await o2a.feed(
-        _openai_sse(
-            {
-                "id": "c1",
-                "choices": [
-                    {
-                        "delta": {"role": "assistant", "content": "x"},
-                        "finish_reason": None,
-                    }
-                ],
-                "usage": {
-                    "prompt_tokens": 5,
-                    "completion_tokens": 3,
-                    "total_tokens": 8,
-                },
-            }
-        )
+    chunk = _openai_sse(
+        {
+            "id": "c1",
+            "choices": [
+                {
+                    "delta": {"role": "assistant", "content": "x"},
+                    "finish_reason": None,
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 5,
+                "completion_tokens": 3,
+                "total_tokens": 8,
+            },
+        }
     )
-    await o2a.flush()
+    observer.observe(chunk)
+    o2a.feed(chunk)
+    observer.flush()
+    o2a.flush()
 
-    usage = o2a.usage
+    usage = observer.usage
     assert usage.input_tokens == 5
     assert usage.output_tokens == 3
 
+    observer = IncrementalSSEObserver("anthropic")
     a2o = AnthropicToOpenAIStreaming()
-    await a2o.feed(
-        _anthropic_sse(
-            "message_start",
-            {
-                "type": "message_start",
-                "message": {
-                    "id": "m1",
-                    "model": _MODEL_A,
-                    "usage": {"input_tokens": 10},
-                },
-            },
-        )
-    )
-    await a2o.feed(
-        _anthropic_sse(
-            "message_delta",
-            {
-                "type": "message_delta",
-                "delta": {"stop_reason": "end_turn"},
-                "usage": {"output_tokens": 5},
-            },
-        )
-    )
-    await a2o.flush()
 
-    usage = a2o.usage
+    a2o_chunk_1 = _anthropic_sse(
+        "message_start",
+        {
+            "type": "message_start",
+            "message": {
+                "id": "m1",
+                "model": _MODEL_A,
+                "usage": {"input_tokens": 10},
+            },
+        },
+    )
+    observer.observe(a2o_chunk_1)
+    a2o.feed(a2o_chunk_1)
+    a2o_chunk_2 = _anthropic_sse(
+        "message_delta",
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 5},
+        },
+    )
+    observer.observe(a2o_chunk_2)
+    a2o.feed(a2o_chunk_2)
+    observer.flush()
+    a2o.flush()
+
+    usage = observer.usage
     assert usage.input_tokens == 10
     assert usage.output_tokens == 5
 
 
-@pytest.mark.asyncio
-async def test_streaming_anthropic_error_to_openai_e2e() -> None:
+def test_streaming_anthropic_error_to_openai_e2e() -> None:
     """Mid-stream Anthropic error translates to OpenAI error + [DONE]."""
     transcoder = AnthropicToOpenAIStreaming()
 
     # Start with a content chunk
-    await transcoder.feed(
+    transcoder.feed(
         _anthropic_sse(
             "message_start",
             {
@@ -365,7 +399,7 @@ async def test_streaming_anthropic_error_to_openai_e2e() -> None:
     )
 
     # Then an error
-    result = await transcoder.feed(
+    result = transcoder.feed(
         _anthropic_sse(
             "error",
             {
@@ -379,7 +413,7 @@ async def test_streaming_anthropic_error_to_openai_e2e() -> None:
     )
 
     all_output = b"".join(result)
-    flush_result = await transcoder.flush()
+    flush_result = transcoder.flush()
     for frame in flush_result:
         all_output += frame
 

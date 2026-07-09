@@ -11,8 +11,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import pytest
-
 from eggpool.transcoder.streaming import AnthropicToOpenAIStreaming
 
 
@@ -90,42 +88,38 @@ def _anthropic_sse(
 class TestVisionStreamingUnaffected:
     """Vision requests do not affect streaming — verify normal flow."""
 
-    @pytest.mark.asyncio
-    async def test_text_stream_after_vision_request(self) -> None:
+    def test_text_stream_after_vision_request(self) -> None:
         """A text response stream is unaffected by a prior vision request."""
         transcoder = AnthropicToOpenAIStreaming()
-        await transcoder.feed(_anthropic_sse("message_start"))
-        await transcoder.feed(_anthropic_sse("content_block_start", index=0))
-        raw = await transcoder.feed(
+        transcoder.feed(_anthropic_sse("message_start"))
+        transcoder.feed(_anthropic_sse("content_block_start", index=0))
+        raw = transcoder.feed(
             _anthropic_sse("content_block_delta", content="I see a cat.", index=0)
         )
-        await transcoder.feed(_anthropic_sse("content_block_stop", index=0))
-        await transcoder.feed(_anthropic_sse("message_delta", stop_reason="end_turn"))
-        await transcoder.flush()
+        transcoder.feed(_anthropic_sse("content_block_stop", index=0))
+        transcoder.feed(_anthropic_sse("message_delta", stop_reason="end_turn"))
+        transcoder.flush()
 
         frames = _parse_sse_frames(b"".join(raw))
         assert len(frames) == 1
         data = json.loads(frames[0]["data"])
         assert data["choices"][0]["delta"]["content"] == "I see a cat."
 
-    @pytest.mark.asyncio
-    async def test_text_stream_with_usage(self) -> None:
+    def test_text_stream_with_usage(self) -> None:
         """Usage is carried correctly even after a vision-heavy request."""
         transcoder = AnthropicToOpenAIStreaming()
-        await transcoder.feed(_anthropic_sse("message_start"))
-        await transcoder.feed(_anthropic_sse("content_block_start", index=0))
-        await transcoder.feed(
-            _anthropic_sse("content_block_delta", content="Done", index=0)
-        )
-        await transcoder.feed(_anthropic_sse("content_block_stop", index=0))
-        raw = await transcoder.feed(
+        transcoder.feed(_anthropic_sse("message_start"))
+        transcoder.feed(_anthropic_sse("content_block_start", index=0))
+        transcoder.feed(_anthropic_sse("content_block_delta", content="Done", index=0))
+        transcoder.feed(_anthropic_sse("content_block_stop", index=0))
+        raw = transcoder.feed(
             _anthropic_sse(
                 "message_delta",
                 stop_reason="end_turn",
                 usage={"output_tokens": 150},
             )
         )
-        await transcoder.flush()
+        transcoder.flush()
 
         frames = _parse_sse_frames(b"".join(raw))
         finish_frames = [f for f in frames if f["data"] != "[DONE]" and f["data"]]

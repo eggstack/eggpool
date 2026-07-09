@@ -1113,16 +1113,15 @@ class TestGroup7NonStreamingResponse:
 
 
 class TestGroup8StreamingResponse:
-    @pytest.mark.asyncio
-    async def test_thinking_delta_to_reasoning_delta(self) -> None:
+    def test_thinking_delta_to_reasoning_delta(self) -> None:
         transcoder = AnthropicToOpenAIStreaming(
             reasoning_field_names=["reasoning"],
         )
-        await transcoder.feed(_anthropic_sse("message_start"))
-        await transcoder.feed(
+        transcoder.feed(_anthropic_sse("message_start"))
+        transcoder.feed(
             _anthropic_sse("content_block_start", index=0, thinking_text="x")
         )
-        raw = await transcoder.feed(
+        raw = transcoder.feed(
             _anthropic_sse(
                 "content_block_delta", thinking_text="reasoning text", index=0
             )
@@ -1133,26 +1132,25 @@ class TestGroup8StreamingResponse:
         assert data["choices"][0]["delta"]["reasoning"] == "reasoning text"
         assert data["choices"][0]["delta"].get("content") is None
 
-    @pytest.mark.asyncio
-    async def test_ordering_preserved_relative_to_text(self) -> None:
+    def test_ordering_preserved_relative_to_text(self) -> None:
         transcoder = AnthropicToOpenAIStreaming(
             reasoning_field_names=["reasoning"],
         )
-        await transcoder.feed(_anthropic_sse("message_start"))
-        await transcoder.feed(
+        transcoder.feed(_anthropic_sse("message_start"))
+        transcoder.feed(
             _anthropic_sse("content_block_start", index=0, thinking_text="x")
         )
-        raw1 = await transcoder.feed(
+        raw1 = transcoder.feed(
             _anthropic_sse("content_block_delta", thinking_text="think", index=0)
         )
-        await transcoder.feed(_anthropic_sse("content_block_stop", index=0))
-        await transcoder.feed(_anthropic_sse("content_block_start", index=1))
-        raw2 = await transcoder.feed(
+        transcoder.feed(_anthropic_sse("content_block_stop", index=0))
+        transcoder.feed(_anthropic_sse("content_block_start", index=1))
+        raw2 = transcoder.feed(
             _anthropic_sse("content_block_delta", text="hello", index=1)
         )
-        await transcoder.feed(_anthropic_sse("content_block_stop", index=1))
-        await transcoder.feed(_anthropic_sse("message_delta", stop_reason="end_turn"))
-        await transcoder.flush()
+        transcoder.feed(_anthropic_sse("content_block_stop", index=1))
+        transcoder.feed(_anthropic_sse("message_delta", stop_reason="end_turn"))
+        transcoder.flush()
 
         all_frames = _parse_sse_bytes(raw1 + raw2)
         assert len(all_frames) >= 2
@@ -1169,17 +1167,16 @@ class TestGroup8StreamingResponse:
         assert len(reasoning_deltas) > 0
         assert len(content_deltas) > 0
 
-    @pytest.mark.asyncio
-    async def test_feature_disabled_path_consistent(self) -> None:
+    def test_feature_disabled_path_consistent(self) -> None:
         transcoder = AnthropicToOpenAIStreaming(
             features=TranscoderFeatures(thinking=False),
             reasoning_field_names=["reasoning"],
         )
-        await transcoder.feed(_anthropic_sse("message_start"))
-        await transcoder.feed(
+        transcoder.feed(_anthropic_sse("message_start"))
+        transcoder.feed(
             _anthropic_sse("content_block_start", index=0, thinking_text="x")
         )
-        raw = await transcoder.feed(
+        raw = transcoder.feed(
             _anthropic_sse("content_block_delta", thinking_text="secret", index=0)
         )
         frames = _parse_sse_bytes(raw)
@@ -1187,14 +1184,13 @@ class TestGroup8StreamingResponse:
             delta = f.get("choices", [{}])[0].get("delta", {})
             assert "reasoning" not in delta
 
-    @pytest.mark.asyncio
-    async def test_tool_call_streaming_unaffected(self) -> None:
+    def test_tool_call_streaming_unaffected(self) -> None:
         transcoder = AnthropicToOpenAIStreaming(
             reasoning_field_names=["reasoning"],
         )
-        await transcoder.feed(_anthropic_sse("message_start"))
-        await transcoder.feed(_anthropic_sse("content_block_start", index=0))
-        raw = await transcoder.feed(
+        transcoder.feed(_anthropic_sse("message_start"))
+        transcoder.feed(_anthropic_sse("content_block_start", index=0))
+        raw = transcoder.feed(
             _anthropic_sse(
                 "content_block_delta",
                 text="some text",
@@ -1371,8 +1367,7 @@ class TestGroup10Observability:
         assert snapshot["total"] == 2
         assert any(k.startswith("transcoded|") for k in snapshot["counters"])
 
-    @pytest.mark.asyncio
-    async def test_request_trace_metadata_only(self) -> None:
+    def test_request_trace_metadata_only(self) -> None:
         event = ThinkingMetricEvent(
             requested=True,
             client_protocol="openai",

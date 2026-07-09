@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import pytest
-
 from eggpool.transcoder.streaming import AnthropicToOpenAIStreaming
 
 
@@ -113,10 +111,9 @@ def _anthropic_sse(
 
 
 class TestMessageStart:
-    @pytest.mark.asyncio
-    async def test_message_start_emits_role_delta(self) -> None:
+    def test_message_start_emits_role_delta(self) -> None:
         transcoder = AnthropicToOpenAIStreaming()
-        raw = await transcoder.feed(
+        raw = transcoder.feed(
             _anthropic_sse(
                 "message_start",
                 message_id="msg-1",
@@ -132,12 +129,9 @@ class TestMessageStart:
         assert data["choices"][0]["delta"]["role"] == "assistant"
         assert data["choices"][0]["delta"]["content"] == ""
 
-    @pytest.mark.asyncio
-    async def test_message_start_preserves_id(self) -> None:
+    def test_message_start_preserves_id(self) -> None:
         transcoder = AnthropicToOpenAIStreaming()
-        raw = await transcoder.feed(
-            _anthropic_sse("message_start", message_id="msg-xyz")
-        )
+        raw = transcoder.feed(_anthropic_sse("message_start", message_id="msg-xyz"))
 
         combined = b"".join(raw)
         frames = _parse_sse_frames(combined)
@@ -147,10 +141,9 @@ class TestMessageStart:
 
 
 class TestContentBlockStart:
-    @pytest.mark.asyncio
-    async def test_content_block_start_noop(self) -> None:
+    def test_content_block_start_noop(self) -> None:
         transcoder = AnthropicToOpenAIStreaming()
-        await transcoder.feed(
+        transcoder.feed(
             _anthropic_sse(
                 "message_start",
                 message_id="msg-1",
@@ -158,7 +151,7 @@ class TestContentBlockStart:
             )
         )
 
-        raw = await transcoder.feed(_anthropic_sse("content_block_start", index=0))
+        raw = transcoder.feed(_anthropic_sse("content_block_start", index=0))
 
         combined = b"".join(raw)
         frames = _parse_sse_frames(combined)
@@ -167,19 +160,18 @@ class TestContentBlockStart:
 
 
 class TestContentBlockDelta:
-    @pytest.mark.asyncio
-    async def test_content_block_delta_emits_content(self) -> None:
+    def test_content_block_delta_emits_content(self) -> None:
         transcoder = AnthropicToOpenAIStreaming()
-        await transcoder.feed(
+        transcoder.feed(
             _anthropic_sse(
                 "message_start",
                 message_id="msg-1",
                 model="claude-3",
             )
         )
-        await transcoder.feed(_anthropic_sse("content_block_start", index=0))
+        transcoder.feed(_anthropic_sse("content_block_start", index=0))
 
-        raw = await transcoder.feed(
+        raw = transcoder.feed(
             _anthropic_sse("content_block_delta", content="Hello", index=0)
         )
 
@@ -191,22 +183,21 @@ class TestContentBlockDelta:
         assert data["choices"][0]["delta"]["content"] == "Hello"
         assert data["choices"][0]["delta"].get("role") is None
 
-    @pytest.mark.asyncio
-    async def test_multiple_deltas_concatenate(self) -> None:
+    def test_multiple_deltas_concatenate(self) -> None:
         transcoder = AnthropicToOpenAIStreaming()
-        await transcoder.feed(
+        transcoder.feed(
             _anthropic_sse(
                 "message_start",
                 message_id="msg-1",
                 model="claude-3",
             )
         )
-        await transcoder.feed(_anthropic_sse("content_block_start", index=0))
+        transcoder.feed(_anthropic_sse("content_block_start", index=0))
 
         texts = ["Hello", " ", "world"]
         all_content = []
         for text in texts:
-            raw = await transcoder.feed(
+            raw = transcoder.feed(
                 _anthropic_sse("content_block_delta", content=text, index=0)
             )
             combined = b"".join(raw)
@@ -219,24 +210,21 @@ class TestContentBlockDelta:
 
 
 class TestMessageDelta:
-    @pytest.mark.asyncio
-    async def test_message_delta_emits_finish_and_done(self) -> None:
+    def test_message_delta_emits_finish_and_done(self) -> None:
         """message_delta with end_turn emits finish + [DONE]."""
         transcoder = AnthropicToOpenAIStreaming()
-        await transcoder.feed(
+        transcoder.feed(
             _anthropic_sse(
                 "message_start",
                 message_id="msg-1",
                 model="claude-3",
             )
         )
-        await transcoder.feed(_anthropic_sse("content_block_start", index=0))
-        await transcoder.feed(
-            _anthropic_sse("content_block_delta", content="Hi", index=0)
-        )
-        await transcoder.feed(_anthropic_sse("content_block_stop", index=0))
+        transcoder.feed(_anthropic_sse("content_block_start", index=0))
+        transcoder.feed(_anthropic_sse("content_block_delta", content="Hi", index=0))
+        transcoder.feed(_anthropic_sse("content_block_stop", index=0))
 
-        raw = await transcoder.feed(
+        raw = transcoder.feed(
             _anthropic_sse(
                 "message_delta",
                 stop_reason="end_turn",
@@ -259,10 +247,9 @@ class TestMessageDelta:
         finish_data = json.loads(finish_frames[0]["data"])
         assert finish_data["choices"][0]["finish_reason"] == "stop"
 
-    @pytest.mark.asyncio
-    async def test_flush_after_message_delta_does_not_duplicate_done(self) -> None:
+    def test_flush_after_message_delta_does_not_duplicate_done(self) -> None:
         transcoder = AnthropicToOpenAIStreaming()
-        await transcoder.feed(
+        transcoder.feed(
             _anthropic_sse(
                 "message_start",
                 message_id="msg-1",
@@ -270,35 +257,28 @@ class TestMessageDelta:
             )
         )
 
-        raw = await transcoder.feed(
-            _anthropic_sse("message_delta", stop_reason="end_turn")
-        )
-        raw.extend(await transcoder.flush())
+        raw = transcoder.feed(_anthropic_sse("message_delta", stop_reason="end_turn"))
+        raw.extend(transcoder.flush())
 
         frames = _parse_sse_frames(b"".join(raw))
         done_frames = [f for f in frames if f["data"] == "[DONE]"]
         assert len(done_frames) == 1
 
-    @pytest.mark.asyncio
-    async def test_message_delta_maps_max_tokens(self) -> None:
+    def test_message_delta_maps_max_tokens(self) -> None:
         """message_delta with max_tokens emits finish_reason chunk."""
         transcoder = AnthropicToOpenAIStreaming()
-        await transcoder.feed(
+        transcoder.feed(
             _anthropic_sse(
                 "message_start",
                 message_id="msg-1",
                 model="claude-3",
             )
         )
-        await transcoder.feed(_anthropic_sse("content_block_start", index=0))
-        await transcoder.feed(
-            _anthropic_sse("content_block_delta", content="Hi", index=0)
-        )
-        await transcoder.feed(_anthropic_sse("content_block_stop", index=0))
+        transcoder.feed(_anthropic_sse("content_block_start", index=0))
+        transcoder.feed(_anthropic_sse("content_block_delta", content="Hi", index=0))
+        transcoder.feed(_anthropic_sse("content_block_stop", index=0))
 
-        raw = await transcoder.feed(
-            _anthropic_sse("message_delta", stop_reason="max_tokens")
-        )
+        raw = transcoder.feed(_anthropic_sse("message_delta", stop_reason="max_tokens"))
 
         combined = b"".join(raw)
         frames = _parse_sse_frames(combined)
@@ -312,27 +292,22 @@ class TestMessageDelta:
         finish_data = json.loads(finish_frames[0]["data"])
         assert finish_data["choices"][0]["finish_reason"] == "length"
 
-    @pytest.mark.asyncio
-    async def test_message_delta_tool_use_maps_to_tool_calls(
+    def test_message_delta_tool_use_maps_to_tool_calls(
         self,
     ) -> None:
         transcoder = AnthropicToOpenAIStreaming()
-        await transcoder.feed(
+        transcoder.feed(
             _anthropic_sse(
                 "message_start",
                 message_id="msg-1",
                 model="claude-3",
             )
         )
-        await transcoder.feed(_anthropic_sse("content_block_start", index=0))
-        await transcoder.feed(
-            _anthropic_sse("content_block_delta", content="Hi", index=0)
-        )
-        await transcoder.feed(_anthropic_sse("content_block_stop", index=0))
+        transcoder.feed(_anthropic_sse("content_block_start", index=0))
+        transcoder.feed(_anthropic_sse("content_block_delta", content="Hi", index=0))
+        transcoder.feed(_anthropic_sse("content_block_stop", index=0))
 
-        raw = await transcoder.feed(
-            _anthropic_sse("message_delta", stop_reason="tool_use")
-        )
+        raw = transcoder.feed(_anthropic_sse("message_delta", stop_reason="tool_use"))
 
         combined = b"".join(raw)
         frames = _parse_sse_frames(combined)
@@ -348,23 +323,20 @@ class TestMessageDelta:
 
 
 class TestUsageInMessageDelta:
-    @pytest.mark.asyncio
-    async def test_usage_in_message_delta(self) -> None:
+    def test_usage_in_message_delta(self) -> None:
         transcoder = AnthropicToOpenAIStreaming()
-        await transcoder.feed(
+        transcoder.feed(
             _anthropic_sse(
                 "message_start",
                 message_id="msg-1",
                 model="claude-3",
             )
         )
-        await transcoder.feed(_anthropic_sse("content_block_start", index=0))
-        await transcoder.feed(
-            _anthropic_sse("content_block_delta", content="Hi", index=0)
-        )
-        await transcoder.feed(_anthropic_sse("content_block_stop", index=0))
+        transcoder.feed(_anthropic_sse("content_block_start", index=0))
+        transcoder.feed(_anthropic_sse("content_block_delta", content="Hi", index=0))
+        transcoder.feed(_anthropic_sse("content_block_stop", index=0))
 
-        raw = await transcoder.feed(
+        raw = transcoder.feed(
             _anthropic_sse(
                 "message_delta",
                 stop_reason="end_turn",
@@ -385,10 +357,9 @@ class TestUsageInMessageDelta:
         assert "usage" in finish_data
         assert finish_data["usage"]["completion_tokens"] == 7
 
-    @pytest.mark.asyncio
-    async def test_usage_includes_cache_tokens_in_prompt_total(self) -> None:
+    def test_usage_includes_cache_tokens_in_prompt_total(self) -> None:
         transcoder = AnthropicToOpenAIStreaming()
-        await transcoder.feed(
+        transcoder.feed(
             _anthropic_sse(
                 "message_start",
                 message_id="msg-1",
@@ -401,7 +372,7 @@ class TestUsageInMessageDelta:
             )
         )
 
-        raw = await transcoder.feed(
+        raw = transcoder.feed(
             _anthropic_sse(
                 "message_delta",
                 stop_reason="end_turn",
@@ -426,10 +397,9 @@ class TestUsageInMessageDelta:
 
 
 class TestEmptyStream:
-    @pytest.mark.asyncio
-    async def test_empty_stream(self) -> None:
+    def test_empty_stream(self) -> None:
         transcoder = AnthropicToOpenAIStreaming()
-        raw = await transcoder.flush()
+        raw = transcoder.flush()
 
         combined = b"".join(raw)
         frames = _parse_sse_frames(combined)
@@ -439,19 +409,18 @@ class TestEmptyStream:
 
 
 class TestIdAndModelPreserved:
-    @pytest.mark.asyncio
-    async def test_id_and_model_preserved(self) -> None:
+    def test_id_and_model_preserved(self) -> None:
         transcoder = AnthropicToOpenAIStreaming()
-        await transcoder.feed(
+        transcoder.feed(
             _anthropic_sse(
                 "message_start",
                 message_id="msg-abc",
                 model="claude-3-opus",
             )
         )
-        await transcoder.feed(_anthropic_sse("content_block_start", index=0))
+        transcoder.feed(_anthropic_sse("content_block_start", index=0))
 
-        raw = await transcoder.feed(
+        raw = transcoder.feed(
             _anthropic_sse("content_block_delta", content="Hi", index=0)
         )
 
@@ -464,8 +433,7 @@ class TestIdAndModelPreserved:
 
 
 class TestArbitraryChunkBoundaries:
-    @pytest.mark.asyncio
-    async def test_arbitrary_chunk_boundaries(self) -> None:
+    def test_arbitrary_chunk_boundaries(self) -> None:
         transcoder = AnthropicToOpenAIStreaming()
         frame1 = _anthropic_sse("message_start", message_id="msg-1", model="claude-3")
         frame2 = _anthropic_sse("content_block_start", index=0)
@@ -478,8 +446,8 @@ class TestArbitraryChunkBoundaries:
         chunk1 = all_bytes[:split_at]
         chunk2 = all_bytes[split_at:]
 
-        raw1 = await transcoder.feed(chunk1)
-        raw2 = await transcoder.feed(chunk2)
+        raw1 = transcoder.feed(chunk1)
+        raw2 = transcoder.feed(chunk2)
 
         all_frames = []
         for raw in [raw1, raw2]:
@@ -507,10 +475,9 @@ class TestArbitraryChunkBoundaries:
 
 
 class TestToolUseStreaming:
-    @pytest.mark.asyncio
-    async def test_content_block_start_tool_use_emits_tool_call_delta(self) -> None:
+    def test_content_block_start_tool_use_emits_tool_call_delta(self) -> None:
         transcoder = AnthropicToOpenAIStreaming()
-        await transcoder.feed(
+        transcoder.feed(
             _anthropic_sse(
                 "message_start",
                 message_id="msg-1",
@@ -518,7 +485,7 @@ class TestToolUseStreaming:
             )
         )
 
-        raw = await transcoder.feed(
+        raw = transcoder.feed(
             _anthropic_sse(
                 "content_block_start",
                 index=0,
@@ -543,19 +510,18 @@ class TestToolUseStreaming:
         assert tool_call["function"]["name"] == "get_weather"
         assert tool_call["function"]["arguments"] == ""
 
-    @pytest.mark.asyncio
-    async def test_content_block_delta_input_json_emits_arguments(
+    def test_content_block_delta_input_json_emits_arguments(
         self,
     ) -> None:
         transcoder = AnthropicToOpenAIStreaming()
-        await transcoder.feed(
+        transcoder.feed(
             _anthropic_sse(
                 "message_start",
                 message_id="msg-1",
                 model="claude-3",
             )
         )
-        await transcoder.feed(
+        transcoder.feed(
             _anthropic_sse(
                 "content_block_start",
                 index=0,
@@ -565,7 +531,7 @@ class TestToolUseStreaming:
             )
         )
 
-        raw = await transcoder.feed(
+        raw = transcoder.feed(
             _anthropic_sse(
                 "content_block_delta",
                 index=0,
@@ -582,19 +548,18 @@ class TestToolUseStreaming:
         assert delta["tool_calls"][0]["index"] == 0
         assert delta["tool_calls"][0]["function"]["arguments"] == '{"city": "SF"}'
 
-    @pytest.mark.asyncio
-    async def test_full_tool_use_stream_emits_tool_calls_and_finish(
+    def test_full_tool_use_stream_emits_tool_calls_and_finish(
         self,
     ) -> None:
         transcoder = AnthropicToOpenAIStreaming()
-        await transcoder.feed(
+        transcoder.feed(
             _anthropic_sse(
                 "message_start",
                 message_id="msg-1",
                 model="claude-3",
             )
         )
-        tool_start_raw = await transcoder.feed(
+        tool_start_raw = transcoder.feed(
             _anthropic_sse(
                 "content_block_start",
                 index=0,
@@ -603,29 +568,29 @@ class TestToolUseStreaming:
                 tool_name="get_weather",
             )
         )
-        delta_raw_1 = await transcoder.feed(
+        delta_raw_1 = transcoder.feed(
             _anthropic_sse(
                 "content_block_delta",
                 index=0,
                 partial_json='{"city":',
             )
         )
-        delta_raw_2 = await transcoder.feed(
+        delta_raw_2 = transcoder.feed(
             _anthropic_sse(
                 "content_block_delta",
                 index=0,
                 partial_json='"SF"}',
             )
         )
-        await transcoder.feed(_anthropic_sse("content_block_stop", index=0))
+        transcoder.feed(_anthropic_sse("content_block_stop", index=0))
 
-        finish_raw = await transcoder.feed(
+        finish_raw = transcoder.feed(
             _anthropic_sse(
                 "message_delta",
                 stop_reason="tool_use",
             )
         )
-        flush_raw = await transcoder.flush()
+        flush_raw = transcoder.flush()
 
         all_raw = tool_start_raw + delta_raw_1 + delta_raw_2 + finish_raw + flush_raw
         combined = b"".join(all_raw)
@@ -656,21 +621,18 @@ class TestToolUseStreaming:
         assert tool_call_name == "get_weather"
         assert "".join(tool_args_pieces) == '{"city":"SF"}'
 
-    @pytest.mark.asyncio
-    async def test_full_stream_with_text_and_tool_use(self) -> None:
+    def test_full_stream_with_text_and_tool_use(self) -> None:
         transcoder = AnthropicToOpenAIStreaming()
-        await transcoder.feed(
+        transcoder.feed(
             _anthropic_sse("message_start", message_id="msg-1", model="claude-3")
         )
-        text_start_raw = await transcoder.feed(
-            _anthropic_sse("content_block_start", index=0)
-        )
-        text_delta_raw = await transcoder.feed(
+        text_start_raw = transcoder.feed(_anthropic_sse("content_block_start", index=0))
+        text_delta_raw = transcoder.feed(
             _anthropic_sse("content_block_delta", content="Looking up...", index=0)
         )
-        await transcoder.feed(_anthropic_sse("content_block_stop", index=0))
+        transcoder.feed(_anthropic_sse("content_block_stop", index=0))
 
-        tool_start_raw = await transcoder.feed(
+        tool_start_raw = transcoder.feed(
             _anthropic_sse(
                 "content_block_start",
                 index=1,
@@ -679,18 +641,18 @@ class TestToolUseStreaming:
                 tool_name="get_weather",
             )
         )
-        tool_delta_raw = await transcoder.feed(
+        tool_delta_raw = transcoder.feed(
             _anthropic_sse(
                 "content_block_delta",
                 index=1,
                 partial_json='{"city": "SF"}',
             )
         )
-        await transcoder.feed(_anthropic_sse("content_block_stop", index=1))
-        finish_raw = await transcoder.feed(
+        transcoder.feed(_anthropic_sse("content_block_stop", index=1))
+        finish_raw = transcoder.feed(
             _anthropic_sse("message_delta", stop_reason="tool_use")
         )
-        flush_raw = await transcoder.flush()
+        flush_raw = transcoder.flush()
 
         all_raw = (
             text_start_raw
@@ -734,13 +696,12 @@ class TestToolUseStreaming:
         assert "".join(tool_args) == '{"city": "SF"}'
         assert finish_reason == "tool_calls"
 
-    @pytest.mark.asyncio
-    async def test_multiple_tool_use_blocks_parallel_indices(self) -> None:
+    def test_multiple_tool_use_blocks_parallel_indices(self) -> None:
         transcoder = AnthropicToOpenAIStreaming()
-        await transcoder.feed(
+        transcoder.feed(
             _anthropic_sse("message_start", message_id="msg-1", model="claude-3")
         )
-        tool_a_raw = await transcoder.feed(
+        tool_a_raw = transcoder.feed(
             _anthropic_sse(
                 "content_block_start",
                 index=0,
@@ -749,7 +710,7 @@ class TestToolUseStreaming:
                 tool_name="get_weather",
             )
         )
-        tool_b_raw = await transcoder.feed(
+        tool_b_raw = transcoder.feed(
             _anthropic_sse(
                 "content_block_start",
                 index=1,
@@ -758,10 +719,10 @@ class TestToolUseStreaming:
                 tool_name="get_time",
             )
         )
-        await transcoder.feed(_anthropic_sse("content_block_stop", index=0))
-        await transcoder.feed(_anthropic_sse("content_block_stop", index=1))
-        await transcoder.feed(_anthropic_sse("message_delta", stop_reason="tool_use"))
-        await transcoder.flush()
+        transcoder.feed(_anthropic_sse("content_block_stop", index=0))
+        transcoder.feed(_anthropic_sse("content_block_stop", index=1))
+        transcoder.feed(_anthropic_sse("message_delta", stop_reason="tool_use"))
+        transcoder.flush()
 
         all_raw = tool_a_raw + tool_b_raw
         ids: list[str] = []
@@ -782,13 +743,12 @@ class TestToolUseStreaming:
         assert ids[0] != ids[1]
         assert names == ["get_weather", "get_time"]
 
-    @pytest.mark.asyncio
-    async def test_tool_arguments_split_across_chunks(self) -> None:
+    def test_tool_arguments_split_across_chunks(self) -> None:
         transcoder = AnthropicToOpenAIStreaming()
-        await transcoder.feed(
+        transcoder.feed(
             _anthropic_sse("message_start", message_id="msg-1", model="claude-3")
         )
-        await transcoder.feed(
+        transcoder.feed(
             _anthropic_sse(
                 "content_block_start",
                 index=0,
@@ -800,7 +760,7 @@ class TestToolUseStreaming:
 
         raw_pieces: list[bytes] = []
         for piece in ['{"city"', ": ", '"SF"}']:
-            raw = await transcoder.feed(
+            raw = transcoder.feed(
                 _anthropic_sse(
                     "content_block_delta",
                     index=0,
@@ -825,8 +785,7 @@ class TestToolUseStreaming:
                     chunks_args.append(args)
         assert "".join(chunks_args) == '{"city": "SF"}'
 
-    @pytest.mark.asyncio
-    async def test_tool_use_block_id_registered_in_id_map(self) -> None:
+    def test_tool_use_block_id_registered_in_id_map(self) -> None:
         from eggpool.transcoder.context import TranscodeContext
 
         context = TranscodeContext(
@@ -835,10 +794,10 @@ class TestToolUseStreaming:
             upstream_protocol="anthropic",
         )
         transcoder = AnthropicToOpenAIStreaming(transcode_context=context)
-        await transcoder.feed(
+        transcoder.feed(
             _anthropic_sse("message_start", message_id="msg-1", model="claude-3")
         )
-        await transcoder.feed(
+        transcoder.feed(
             _anthropic_sse(
                 "content_block_start",
                 index=0,
@@ -852,8 +811,7 @@ class TestToolUseStreaming:
 
 
 class TestPauseTurnSentinel:
-    @pytest.mark.asyncio
-    async def test_pause_turn_emits_sentinel_tool_call(self) -> None:
+    def test_pause_turn_emits_sentinel_tool_call(self) -> None:
         from eggpool.transcoder.context import TranscodeContext
 
         context = TranscodeContext(
@@ -862,12 +820,10 @@ class TestPauseTurnSentinel:
             upstream_protocol="anthropic",
         )
         transcoder = AnthropicToOpenAIStreaming(transcode_context=context)
-        await transcoder.feed(
+        transcoder.feed(
             _anthropic_sse("message_start", message_id="msg-1", model="claude-3")
         )
-        raw = await transcoder.feed(
-            _anthropic_sse("message_delta", stop_reason="pause_turn")
-        )
+        raw = transcoder.feed(_anthropic_sse("message_delta", stop_reason="pause_turn"))
 
         combined = b"".join(raw)
         frames = _parse_sse_frames(combined)
@@ -897,8 +853,7 @@ class TestPauseTurnSentinel:
         assert len(finish_frames) == 1
         assert finish_frames[0]["choices"][0]["finish_reason"] == "tool_calls"
 
-    @pytest.mark.asyncio
-    async def test_pause_turn_appends_loss_warning(self) -> None:
+    def test_pause_turn_appends_loss_warning(self) -> None:
         from eggpool.transcoder.context import TranscodeContext
 
         context = TranscodeContext(
@@ -907,10 +862,10 @@ class TestPauseTurnSentinel:
             upstream_protocol="anthropic",
         )
         transcoder = AnthropicToOpenAIStreaming(transcode_context=context)
-        await transcoder.feed(
+        transcoder.feed(
             _anthropic_sse("message_start", message_id="msg-1", model="claude-3")
         )
-        await transcoder.feed(_anthropic_sse("message_delta", stop_reason="pause_turn"))
+        transcoder.feed(_anthropic_sse("message_delta", stop_reason="pause_turn"))
 
         pause_warnings = [
             w for w in context.loss_warnings if w.get("kind") == "pause_turn"
@@ -918,8 +873,7 @@ class TestPauseTurnSentinel:
         assert len(pause_warnings) == 1
         assert pause_warnings[0]["to"] == "tool_calls"
 
-    @pytest.mark.asyncio
-    async def test_pause_turn_arguments_are_empty_json(self) -> None:
+    def test_pause_turn_arguments_are_empty_json(self) -> None:
         from eggpool.transcoder.context import TranscodeContext
 
         context = TranscodeContext(
@@ -928,12 +882,10 @@ class TestPauseTurnSentinel:
             upstream_protocol="anthropic",
         )
         transcoder = AnthropicToOpenAIStreaming(transcode_context=context)
-        await transcoder.feed(
+        transcoder.feed(
             _anthropic_sse("message_start", message_id="msg-1", model="claude-3")
         )
-        raw = await transcoder.feed(
-            _anthropic_sse("message_delta", stop_reason="pause_turn")
-        )
+        raw = transcoder.feed(_anthropic_sse("message_delta", stop_reason="pause_turn"))
 
         combined = b"".join(raw)
         frames = _parse_sse_frames(combined)

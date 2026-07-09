@@ -2179,6 +2179,7 @@ class RequestCoordinator:
 
         # Inject stream_options.include_usage for OpenAI
         body_to_send = context.body_for_upstream
+        upstream_include_usage: bool | None = None
         if context.upstream_protocol == "openai":
             payload_obj: object
             try:
@@ -2190,12 +2191,20 @@ class RequestCoordinator:
                     payload = cast("dict[str, Any]", payload_obj)
                     stream_opts_value: Any = payload.get("stream_options")
                     if isinstance(stream_opts_value, dict):
-                        if "include_usage" not in stream_opts_value:
-                            stream_opts_value["include_usage"] = True
+                        stream_opts_dict = cast("dict[str, Any]", stream_opts_value)
+                        if "include_usage" not in stream_opts_dict:
+                            stream_opts_dict["include_usage"] = True
                             body_to_send = encode_json_body(payload)
+                            upstream_include_usage = True
+                        else:
+                            raw_include: Any = stream_opts_dict.get(
+                                "include_usage", True
+                            )
+                            upstream_include_usage = bool(raw_include)
                     elif stream_opts_value is None:
                         payload["stream_options"] = {"include_usage": True}
                         body_to_send = encode_json_body(payload)
+                        upstream_include_usage = True
                     else:
                         # Non-dict stream_options (list, str, bool, etc.) —
                         # leave the body unchanged and let upstream reject it.
@@ -2325,6 +2334,7 @@ class RequestCoordinator:
                 selected=selected,
                 resp_headers=resp_headers,
                 request_started_monotonic=context.started_monotonic,
+                upstream_include_usage=upstream_include_usage,
             )
             generator_created = True
         finally:
@@ -2367,10 +2377,19 @@ class RequestCoordinator:
         selected: SelectedAttempt,
         resp_headers: list[tuple[str, str]],
         request_started_monotonic: float | None = None,
+        upstream_include_usage: bool | None = None,
     ) -> AsyncIterator[bytes]:
         """Build an async generator that streams upstream bytes downstream,
         extracts usage via IncrementalSSEObserver, and finalizes the request
-        on completion."""
+        on completion.
+
+        ``upstream_include_usage`` is computed once in ``_execute_streaming``
+        from the OpenAI ``stream_options.include_usage`` field after any
+        injection, then passed in to avoid re-parsing the body here.  When
+        ``None`` (Anthropic upstreams, or the upstream protocol did not
+        expose ``stream_options``) the default ``True`` is used so
+        existing behaviour is preserved.
+        """
         observer = IncrementalSSEObserver(
             context.upstream_protocol, provider_id=selected.provider_id
         )
@@ -2389,26 +2408,13 @@ class RequestCoordinator:
         persist_error_detail = self._persist_error_detail
         account_backoff_repo = self._account_backoff_repo
         clear_backoff = self._clear_backoff
+        include_usage = (
+            True if upstream_include_usage is None else upstream_include_usage
+        )
 
         async def _stream() -> AsyncIterator[bytes]:
             nonlocal bytes_emitted, first_byte_ms
             try:
-                # Determine include_usage from the request body's
-                # stream_options (already injected by _execute_streaming).
-                include_usage = True
-                if context.upstream_protocol == "openai":
-                    try:
-                        payload_obj = json.loads(context.body_for_upstream)
-                    except (json.JSONDecodeError, ValueError):
-                        pass
-                    else:
-                        if isinstance(payload_obj, dict):
-                            payload = cast("dict[str, Any]", payload_obj)
-                            so_raw: Any = payload.get("stream_options")
-                            if isinstance(so_raw, dict):
-                                so = cast("dict[str, Any]", so_raw)
-                                include_usage = bool(so.get("include_usage", True))
-
                 streaming_transcoder = select_streaming_transcoder(
                     client_protocol=context.protocol,
                     upstream_protocol=context.upstream_protocol,
@@ -2438,16 +2444,18 @@ class RequestCoordinator:
                     bytes_emitted = observer.bytes_emitted
 
                     if streaming_transcoder is not None:
-                        for out_chunk in await streaming_transcoder.feed(chunk):
-                            yield out_chunk
+                        out_chunks = streaming_transcoder.feed(chunk)
+                        if out_chunks:
+                            yield b"".join(out_chunks)
                     else:
                         yield chunk
 
                 # Stream completed - flush observer and transcoder
                 observer.flush()
                 if streaming_transcoder is not None:
-                    for out_chunk in await streaming_transcoder.flush():
-                        yield out_chunk
+                    out_chunks = streaming_transcoder.flush()
+                    if out_chunks:
+                        yield b"".join(out_chunks)
                 usage_result = observer.usage
 
                 upstream_latency_total = int((time.monotonic() - reference) * 1000)

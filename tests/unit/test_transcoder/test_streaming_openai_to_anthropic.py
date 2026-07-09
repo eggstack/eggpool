@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import pytest
-
 from eggpool.transcoder.streaming import OpenAIToAnthropicStreaming
 
 
@@ -84,13 +82,12 @@ def _openai_usage_chunk(
 
 
 class TestFirstContentChunk:
-    @pytest.mark.asyncio
-    async def test_first_content_chunk_emits_message_start_and_block(
+    def test_first_content_chunk_emits_message_start_and_block(
         self,
     ) -> None:
         transcoder = OpenAIToAnthropicStreaming()
         chunk = _openai_chunk(role="assistant", content="Hello")
-        raw = await transcoder.feed(chunk)
+        raw = transcoder.feed(chunk)
 
         combined = b"".join(raw)
         frames = _parse_sse_frames(combined)
@@ -100,8 +97,7 @@ class TestFirstContentChunk:
         assert "content_block_start" in event_types
         assert "content_block_delta" in event_types
 
-    @pytest.mark.asyncio
-    async def test_message_start_contains_model_and_id(self) -> None:
+    def test_message_start_contains_model_and_id(self) -> None:
         transcoder = OpenAIToAnthropicStreaming()
         chunk = _openai_chunk(
             chunk_id="chatcmpl-42",
@@ -109,7 +105,7 @@ class TestFirstContentChunk:
             role="assistant",
             content="Hi",
         )
-        raw = await transcoder.feed(chunk)
+        raw = transcoder.feed(chunk)
 
         combined = b"".join(raw)
         frames = _parse_sse_frames(combined)
@@ -120,11 +116,10 @@ class TestFirstContentChunk:
         assert msg_data["message"]["id"] == "chatcmpl-42"
         assert msg_data["message"]["model"] == "gpt-4o"
 
-    @pytest.mark.asyncio
-    async def test_empty_content_produces_no_output(self) -> None:
+    def test_empty_content_produces_no_output(self) -> None:
         transcoder = OpenAIToAnthropicStreaming()
         chunk = _openai_chunk(role="assistant", content="")
-        raw = await transcoder.feed(chunk)
+        raw = transcoder.feed(chunk)
 
         combined = b"".join(raw)
         frames = _parse_sse_frames(combined)
@@ -132,11 +127,10 @@ class TestFirstContentChunk:
         event_types = [f["event"] for f in frames]
         assert event_types == ["message_start"]
 
-    @pytest.mark.asyncio
-    async def test_role_only_chunk_starts_message_without_content_block(self) -> None:
+    def test_role_only_chunk_starts_message_without_content_block(self) -> None:
         transcoder = OpenAIToAnthropicStreaming()
         chunk = _openai_chunk(role="assistant")
-        raw = await transcoder.feed(chunk)
+        raw = transcoder.feed(chunk)
 
         combined = b"".join(raw)
         frames = _parse_sse_frames(combined)
@@ -146,14 +140,13 @@ class TestFirstContentChunk:
 
 
 class TestSubsequentChunks:
-    @pytest.mark.asyncio
-    async def test_subsequent_chunks_emit_only_delta(self) -> None:
+    def test_subsequent_chunks_emit_only_delta(self) -> None:
         transcoder = OpenAIToAnthropicStreaming()
         chunk1 = _openai_chunk(role="assistant", content="Hi")
-        await transcoder.feed(chunk1)
+        transcoder.feed(chunk1)
 
         chunk2 = _openai_chunk(content=" there")
-        raw = await transcoder.feed(chunk2)
+        raw = transcoder.feed(chunk2)
 
         combined = b"".join(raw)
         frames = _parse_sse_frames(combined)
@@ -161,14 +154,13 @@ class TestSubsequentChunks:
         event_types = [f["event"] for f in frames]
         assert event_types == ["content_block_delta"]
 
-    @pytest.mark.asyncio
-    async def test_delta_contains_text(self) -> None:
+    def test_delta_contains_text(self) -> None:
         transcoder = OpenAIToAnthropicStreaming()
         chunk1 = _openai_chunk(role="assistant", content="Start")
-        await transcoder.feed(chunk1)
+        transcoder.feed(chunk1)
 
         chunk2 = _openai_chunk(content=" continuation")
-        raw = await transcoder.feed(chunk2)
+        raw = transcoder.feed(chunk2)
 
         combined = b"".join(raw)
         frames = _parse_sse_frames(combined)
@@ -180,15 +172,14 @@ class TestSubsequentChunks:
 
 
 class TestFinishReason:
-    @pytest.mark.asyncio
-    async def test_finish_reason_emits_stop_sequence(self) -> None:
+    def test_finish_reason_emits_stop_sequence(self) -> None:
         transcoder = OpenAIToAnthropicStreaming()
         chunk1 = _openai_chunk(role="assistant", content="Hi")
-        await transcoder.feed(chunk1)
+        transcoder.feed(chunk1)
 
         chunk2 = _openai_chunk(finish_reason="stop")
-        raw = await transcoder.feed(chunk2)
-        raw.extend(await transcoder.feed(_openai_done()))
+        raw = transcoder.feed(chunk2)
+        raw.extend(transcoder.feed(_openai_done()))
 
         combined = b"".join(raw)
         frames = _parse_sse_frames(combined)
@@ -198,15 +189,14 @@ class TestFinishReason:
         assert "message_delta" in event_types
         assert "message_stop" in event_types
 
-    @pytest.mark.asyncio
-    async def test_finish_reason_maps_stop_to_end_turn(self) -> None:
+    def test_finish_reason_maps_stop_to_end_turn(self) -> None:
         transcoder = OpenAIToAnthropicStreaming()
         chunk1 = _openai_chunk(role="assistant", content="Hi")
-        await transcoder.feed(chunk1)
+        transcoder.feed(chunk1)
 
         chunk2 = _openai_chunk(finish_reason="stop")
-        raw = await transcoder.feed(chunk2)
-        raw.extend(await transcoder.feed(_openai_done()))
+        raw = transcoder.feed(chunk2)
+        raw.extend(transcoder.feed(_openai_done()))
 
         combined = b"".join(raw)
         frames = _parse_sse_frames(combined)
@@ -215,17 +205,16 @@ class TestFinishReason:
         delta_data = json.loads(msg_delta["data"])
         assert delta_data["delta"]["stop_reason"] == "end_turn"
 
-    @pytest.mark.asyncio
-    async def test_finish_reason_maps_length_to_max_tokens(
+    def test_finish_reason_maps_length_to_max_tokens(
         self,
     ) -> None:
         transcoder = OpenAIToAnthropicStreaming()
         chunk1 = _openai_chunk(role="assistant", content="Hi")
-        await transcoder.feed(chunk1)
+        transcoder.feed(chunk1)
 
         chunk2 = _openai_chunk(finish_reason="length")
-        raw = await transcoder.feed(chunk2)
-        raw.extend(await transcoder.feed(_openai_done()))
+        raw = transcoder.feed(chunk2)
+        raw.extend(transcoder.feed(_openai_done()))
 
         combined = b"".join(raw)
         frames = _parse_sse_frames(combined)
@@ -236,11 +225,10 @@ class TestFinishReason:
 
 
 class TestUsageChunk:
-    @pytest.mark.asyncio
-    async def test_usage_chunk_translates(self) -> None:
+    def test_usage_chunk_translates(self) -> None:
         transcoder = OpenAIToAnthropicStreaming()
         chunk1 = _openai_chunk(role="assistant", content="Hi")
-        await transcoder.feed(chunk1)
+        transcoder.feed(chunk1)
 
         usage_chunk = _openai_usage_chunk(
             usage={
@@ -249,7 +237,7 @@ class TestUsageChunk:
                 "total_tokens": 15,
             }
         )
-        raw = await transcoder.feed(usage_chunk)
+        raw = transcoder.feed(usage_chunk)
 
         combined = b"".join(raw)
         frames = _parse_sse_frames(combined)
@@ -260,12 +248,11 @@ class TestUsageChunk:
         assert "usage" in delta_data
         assert delta_data["usage"]["output_tokens"] == 5
 
-    @pytest.mark.asyncio
-    async def test_usage_chunk_before_done_emits_before_message_stop(self) -> None:
+    def test_usage_chunk_before_done_emits_before_message_stop(self) -> None:
         transcoder = OpenAIToAnthropicStreaming()
-        await transcoder.feed(_openai_chunk(role="assistant", content="Hi"))
-        finish_raw = await transcoder.feed(_openai_chunk(finish_reason="stop"))
-        usage_raw = await transcoder.feed(
+        transcoder.feed(_openai_chunk(role="assistant", content="Hi"))
+        finish_raw = transcoder.feed(_openai_chunk(finish_reason="stop"))
+        usage_raw = transcoder.feed(
             _openai_usage_chunk(
                 usage={
                     "prompt_tokens": 10,
@@ -274,7 +261,7 @@ class TestUsageChunk:
                 }
             )
         )
-        done_raw = await transcoder.feed(_openai_done())
+        done_raw = transcoder.feed(_openai_done())
 
         frames = _parse_sse_frames(b"".join(finish_raw + usage_raw + done_raw))
         event_types = [f["event"] for f in frames]
@@ -288,14 +275,13 @@ class TestUsageChunk:
         assert delta_data["delta"]["stop_reason"] == "end_turn"
         assert delta_data["usage"]["output_tokens"] == 5
 
-    @pytest.mark.asyncio
-    async def test_empty_completion_finishes_without_content_block_events(
+    def test_empty_completion_finishes_without_content_block_events(
         self,
     ) -> None:
         transcoder = OpenAIToAnthropicStreaming()
-        role_raw = await transcoder.feed(_openai_chunk(role="assistant"))
-        finish_raw = await transcoder.feed(_openai_chunk(finish_reason="stop"))
-        done_raw = await transcoder.feed(_openai_done())
+        role_raw = transcoder.feed(_openai_chunk(role="assistant"))
+        finish_raw = transcoder.feed(_openai_chunk(finish_reason="stop"))
+        done_raw = transcoder.feed(_openai_done())
 
         frames = _parse_sse_frames(b"".join(role_raw + finish_raw + done_raw))
         event_types = [f["event"] for f in frames]
@@ -308,20 +294,18 @@ class TestUsageChunk:
 
 
 class TestEmptyStream:
-    @pytest.mark.asyncio
-    async def test_empty_stream(self) -> None:
+    def test_empty_stream(self) -> None:
         transcoder = OpenAIToAnthropicStreaming()
-        raw = await transcoder.flush()
+        raw = transcoder.flush()
 
         assert raw == []
 
 
 class TestMultiChunkConcatenation:
-    @pytest.mark.asyncio
-    async def test_multi_chunk_concatenation(self) -> None:
+    def test_multi_chunk_concatenation(self) -> None:
         transcoder = OpenAIToAnthropicStreaming()
         chunk1 = _openai_chunk(role="assistant", content="Hello")
-        raw1 = await transcoder.feed(chunk1)
+        raw1 = transcoder.feed(chunk1)
 
         all_delta_text = []
         for raw in [raw1]:
@@ -333,7 +317,7 @@ class TestMultiChunkConcatenation:
 
         parts = [" ", "world", "!"]
         for part in parts:
-            raw = await transcoder.feed(_openai_chunk(content=part))
+            raw = transcoder.feed(_openai_chunk(content=part))
             combined = b"".join(raw)
             frames = _parse_sse_frames(combined)
             for f in frames:
@@ -345,8 +329,7 @@ class TestMultiChunkConcatenation:
 
 
 class TestIdAndModelPreserved:
-    @pytest.mark.asyncio
-    async def test_id_and_model_preserved(self) -> None:
+    def test_id_and_model_preserved(self) -> None:
         transcoder = OpenAIToAnthropicStreaming()
         chunk = _openai_chunk(
             chunk_id="chatcmpl-99",
@@ -354,7 +337,7 @@ class TestIdAndModelPreserved:
             role="assistant",
             content="Hi",
         )
-        raw = await transcoder.feed(chunk)
+        raw = transcoder.feed(chunk)
 
         combined = b"".join(raw)
         frames = _parse_sse_frames(combined)
@@ -372,8 +355,7 @@ class TestIdAndModelPreserved:
 
 
 class TestArbitraryChunkBoundaries:
-    @pytest.mark.asyncio
-    async def test_arbitrary_chunk_boundaries(self) -> None:
+    def test_arbitrary_chunk_boundaries(self) -> None:
         transcoder = OpenAIToAnthropicStreaming()
         full_sse = (
             b'data: {"id":"chatcmpl-1","choices":[{"delta":{'
@@ -392,8 +374,8 @@ class TestArbitraryChunkBoundaries:
         chunk1 = full_sse[:split_at]
         chunk2 = full_sse[split_at:]
 
-        raw1 = await transcoder.feed(chunk1)
-        raw2 = await transcoder.feed(chunk2)
+        raw1 = transcoder.feed(chunk1)
+        raw2 = transcoder.feed(chunk2)
 
         all_frames = []
         for raw in [raw1, raw2]:
@@ -411,8 +393,7 @@ class TestArbitraryChunkBoundaries:
 
 
 class TestToolCallStreaming:
-    @pytest.mark.asyncio
-    async def test_tool_call_id_and_name_announced_buffers_until_finish(
+    def test_tool_call_id_and_name_announced_buffers_until_finish(
         self,
     ) -> None:
         transcoder = OpenAIToAnthropicStreaming()
@@ -428,7 +409,7 @@ class TestToolCallStreaming:
             ],
         )
 
-        raw = await transcoder.feed(announce_chunk)
+        raw = transcoder.feed(announce_chunk)
 
         combined = b"".join(raw)
         frames = _parse_sse_frames(combined)
@@ -437,10 +418,9 @@ class TestToolCallStreaming:
         assert "content_block_start" not in event_types
         assert "message_start" in event_types
 
-    @pytest.mark.asyncio
-    async def test_tool_call_deltas_buffered_across_chunks(self) -> None:
+    def test_tool_call_deltas_buffered_across_chunks(self) -> None:
         transcoder = OpenAIToAnthropicStreaming()
-        await transcoder.feed(
+        transcoder.feed(
             _openai_chunk(
                 role="assistant",
                 tool_calls=[
@@ -455,7 +435,7 @@ class TestToolCallStreaming:
         )
 
         for piece in ['{"city"', ": ", '"SF"}']:
-            raw = await transcoder.feed(
+            raw = transcoder.feed(
                 _openai_chunk(
                     tool_calls=[
                         {
@@ -471,8 +451,7 @@ class TestToolCallStreaming:
             assert "content_block_start" not in event_types
             assert "content_block_stop" not in event_types
 
-    @pytest.mark.asyncio
-    async def test_finish_reason_tool_calls_emits_anthropic_blocks(self) -> None:
+    def test_finish_reason_tool_calls_emits_anthropic_blocks(self) -> None:
         from eggpool.transcoder.context import TranscodeContext
 
         context = TranscodeContext(
@@ -482,7 +461,7 @@ class TestToolCallStreaming:
         )
         transcoder = OpenAIToAnthropicStreaming(transcode_context=context)
 
-        await transcoder.feed(
+        transcoder.feed(
             _openai_chunk(
                 role="assistant",
                 tool_calls=[
@@ -495,16 +474,16 @@ class TestToolCallStreaming:
                 ],
             )
         )
-        await transcoder.feed(
+        transcoder.feed(
             _openai_chunk(
                 tool_calls=[
                     {"index": 0, "function": {"arguments": '{"city": "SF"}'}},
                 ],
             )
         )
-        finish_raw = await transcoder.feed(_openai_chunk(finish_reason="tool_calls"))
-        stop_raw = await transcoder.feed(_openai_done())
-        flush_raw = await transcoder.flush()
+        finish_raw = transcoder.feed(_openai_chunk(finish_reason="tool_calls"))
+        stop_raw = transcoder.feed(_openai_done())
+        flush_raw = transcoder.flush()
 
         all_raw = finish_raw + stop_raw + flush_raw
         combined = b"".join(all_raw)
@@ -527,10 +506,9 @@ class TestToolCallStreaming:
         delta_data = json.loads(msg_delta["data"])
         assert delta_data["delta"]["stop_reason"] == "tool_use"
 
-    @pytest.mark.asyncio
-    async def test_multiple_tool_calls_parallel_indices(self) -> None:
+    def test_multiple_tool_calls_parallel_indices(self) -> None:
         transcoder = OpenAIToAnthropicStreaming()
-        await transcoder.feed(
+        transcoder.feed(
             _openai_chunk(
                 role="assistant",
                 tool_calls=[
@@ -549,7 +527,7 @@ class TestToolCallStreaming:
                 ],
             )
         )
-        await transcoder.feed(
+        transcoder.feed(
             _openai_chunk(
                 tool_calls=[
                     {"index": 0, "function": {"arguments": '{"city": "SF"}'}},
@@ -557,9 +535,9 @@ class TestToolCallStreaming:
                 ],
             )
         )
-        finish_raw = await transcoder.feed(_openai_chunk(finish_reason="tool_calls"))
-        stop_raw = await transcoder.feed(_openai_done())
-        flush_raw = await transcoder.flush()
+        finish_raw = transcoder.feed(_openai_chunk(finish_reason="tool_calls"))
+        stop_raw = transcoder.feed(_openai_done())
+        flush_raw = transcoder.flush()
 
         all_raw = finish_raw + stop_raw + flush_raw
         combined = b"".join(all_raw)
@@ -577,8 +555,7 @@ class TestToolCallStreaming:
         block_stops = [f for f in frames if f["event"] == "content_block_stop"]
         assert len(block_stops) == 2
 
-    @pytest.mark.asyncio
-    async def test_malformed_tool_arguments_passes_through_as_raw(self) -> None:
+    def test_malformed_tool_arguments_passes_through_as_raw(self) -> None:
         from eggpool.transcoder.context import TranscodeContext
 
         context = TranscodeContext(
@@ -588,7 +565,7 @@ class TestToolCallStreaming:
         )
         transcoder = OpenAIToAnthropicStreaming(transcode_context=context)
 
-        await transcoder.feed(
+        transcoder.feed(
             _openai_chunk(
                 role="assistant",
                 tool_calls=[
@@ -601,7 +578,7 @@ class TestToolCallStreaming:
                 ],
             )
         )
-        await transcoder.feed(
+        transcoder.feed(
             _openai_chunk(
                 tool_calls=[
                     {
@@ -611,9 +588,9 @@ class TestToolCallStreaming:
                 ],
             )
         )
-        finish_raw = await transcoder.feed(_openai_chunk(finish_reason="tool_calls"))
-        stop_raw = await transcoder.feed(_openai_done())
-        flush_raw = await transcoder.flush()
+        finish_raw = transcoder.feed(_openai_chunk(finish_reason="tool_calls"))
+        stop_raw = transcoder.feed(_openai_done())
+        flush_raw = transcoder.flush()
 
         all_raw = finish_raw + stop_raw + flush_raw
         combined = b"".join(all_raw)
@@ -632,8 +609,7 @@ class TestToolCallStreaming:
         ]
         assert len(malformed_warnings) == 1
 
-    @pytest.mark.asyncio
-    async def test_tool_call_id_registered_in_id_map(self) -> None:
+    def test_tool_call_id_registered_in_id_map(self) -> None:
         from eggpool.transcoder.context import TranscodeContext
 
         context = TranscodeContext(
@@ -643,7 +619,7 @@ class TestToolCallStreaming:
         )
         transcoder = OpenAIToAnthropicStreaming(transcode_context=context)
 
-        await transcoder.feed(
+        transcoder.feed(
             _openai_chunk(
                 role="assistant",
                 tool_calls=[
@@ -656,16 +632,16 @@ class TestToolCallStreaming:
                 ],
             )
         )
-        await transcoder.feed(
+        transcoder.feed(
             _openai_chunk(
                 tool_calls=[
                     {"index": 0, "function": {"arguments": "{}"}},
                 ],
             )
         )
-        await transcoder.feed(_openai_chunk(finish_reason="tool_calls"))
-        await transcoder.feed(_openai_done())
-        await transcoder.flush()
+        transcoder.feed(_openai_chunk(finish_reason="tool_calls"))
+        transcoder.feed(_openai_done())
+        transcoder.flush()
 
         upstream_id = context.id_map.to_upstream("call_abc")
         assert upstream_id is not None
