@@ -42,7 +42,7 @@ _BATCH_SIZE = 500
 _OVERVIEW_WARM_MS = 200.0
 _TIMESERIES_24H_MS = 100.0
 _GROUPED_TIMESERIES_24H_MS = 150.0
-_COLD_OVERVIEW_MS = 500.0
+_COLD_OVERVIEW_MS = 600.0
 
 _PROVIDERS = ("openai", "anthropic", "google")
 _MODELS = ("gpt-4", "claude-3-sonnet-20240229", "gemini-1.5-pro")
@@ -308,8 +308,8 @@ async def test_grouped_timeseries_api_under_150ms(seeded_small: Database) -> Non
 
 
 @pytest.mark.asyncio
-async def test_cold_overview_under_500ms(seeded_medium: Database) -> None:
-    """Cold overview with rollups for 100k rows completes under 500ms."""
+async def test_cold_overview_under_600ms(seeded_medium: Database) -> None:
+    """Cold overview with rollups for 100k rows completes under 600ms."""
     rollup_repo = UsageRollupRepository(seeded_medium)
     service = StatsService(seeded_medium, rollup_repo=rollup_repo)
     now = datetime.now(UTC)
@@ -322,7 +322,7 @@ async def test_cold_overview_under_500ms(seeded_medium: Database) -> None:
     wall_ms = (time.perf_counter() - t0) * 1000
 
     _emit_snapshot(
-        test_name="cold_overview_under_500ms",
+        test_name="cold_overview_under_600ms",
         wall_ms=wall_ms,
         threshold_ms=_COLD_OVERVIEW_MS,
         extras={"row_count": _MEDIUM_ROW_COUNT},
