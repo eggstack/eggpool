@@ -1222,7 +1222,7 @@ def _render_provider_health(ping_summary: list[dict[str, Any]]) -> str:
     return (
         '<section class="panel">'
         "<h3>Provider health</h3>"
-        '<table class="data">'
+        '<div class="table-scroll"><table class="data">'
         "<thead><tr>"
         + _th("Provider")
         + _th("Status")
@@ -1232,7 +1232,7 @@ def _render_provider_health(ping_summary: list[dict[str, Any]]) -> str:
         + _th("Last ping", priority=3)
         + "</tr></thead><tbody>"
         + f"{''.join(rows)}"
-        + "</tbody></table>"
+        + "</tbody></table></div>"
         + "</section>"
     )
 
@@ -2301,7 +2301,7 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
     if not accounts:
         return '<p class="empty">No accounts configured.</p>'
     parts = [
-        '<table class="data">',
+        '<div class="table-scroll"><table class="data">',
         "<thead><tr>",
         # Priority 1 — always shown (the operator's quick-glance columns)
         _th("Account"),
@@ -2459,7 +2459,7 @@ def _render_account_table(accounts: list[dict[str, Any]]) -> str:
             f"{_td_priority(avg_cost_per_1k, 3)}"
             f"</tr>"
         )
-    parts.append("</tbody></table>")
+    parts.append("</tbody></table></div>")
     return "".join(parts)
 
 
@@ -2549,7 +2549,7 @@ def render_models(
             )
     else:
         parts = [
-            '<table class="data">',
+            '<div class="table-scroll"><table class="data">',
             "<thead><tr>",
             # Priority 1 — always shown
             _th("Model"),
@@ -2702,7 +2702,7 @@ def render_models(
                 f"{_td_priority(avg_cost_per_1k, 3)}"
                 f"</tr>"
             )
-        parts.append("</tbody></table>")
+        parts.append("</tbody></table></div>")
         rows_html = "".join(parts)
 
     def _sel(name: str, value: str, current: str) -> str:
@@ -3061,7 +3061,7 @@ def render_model_detail(
 
 <section class="panel">
   <h3>Provider / Callability</h3>
-  <table class="data">
+  <div class="table-scroll"><table class="data">
     <tbody>
       <tr><th>Providers</th><td>{providers_html}</td></tr>
       <tr><th>Sources</th><td>{sources_html}</td></tr>
@@ -3069,19 +3069,19 @@ def render_model_detail(
       <tr><th>Modalities</th><td>{modalities_html}</td></tr>
       <tr><th>Tool support</th><td>{tools_html}</td></tr>
     </tbody>
-  </table>
+  </table></div>
 </section>
 
 <section class="panel">
   <h3>Metadata</h3>
-  <table class="data">
+  <div class="table-scroll"><table class="data">
     <tbody>
       <tr><th>Family</th><td>{family_html}</td></tr>
       <tr><th>License</th><td>{license_html}</td></tr>
       <tr><th>Release date</th><td>{release_html}</td></tr>
       <tr><th>External IDs</th><td>{ext_ids_html}</td></tr>
     </tbody>
-  </table>
+  </table></div>
 </section>
 
 {benchmarks_html}
@@ -3092,12 +3092,12 @@ def render_model_detail(
 
 <section class="panel">
   <h3>Provenance</h3>
-  <table class="data">
+  <div class="table-scroll"><table class="data">
     <tbody>
       <tr><th>Sources</th><td>{sources_html}</td></tr>
       <tr><th>Reconciled at</th><td>{reconciled_html}</td></tr>
     </tbody>
-  </table>
+  </table></div>
 </section>
 
 {
@@ -3172,13 +3172,13 @@ def _render_model_observations_section(
     return (
         '<section class="panel">'
         "<h3>Observations</h3>"
-        '<table class="data">'
+        '<div class="table-scroll"><table class="data">'
         "<thead><tr>"
         "<th>Source</th><th>Source model id</th><th>Provider</th>"
         "<th>Observed</th><th>Confidence</th>"
         "</tr></thead>"
         f"<tbody>{''.join(rows)}</tbody>"
-        "</table>"
+        "</table></div>"
         "</section>"
     )
 
@@ -3228,9 +3228,9 @@ def _render_benchmarks_table(benchmarks: object) -> str:
     return (
         '<section class="panel">'
         "<h3>Benchmarks</h3>"
-        '<table class="data"><thead><tr>'
+        '<div class="table-scroll"><table class="data"><thead><tr>'
         "<th>Source</th><th>Benchmark</th><th>Value</th><th>Observed</th>"
-        "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></section>"
+        "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div></section>"
     )
 
 
@@ -3254,7 +3254,9 @@ def _render_hf_metadata(hf_metadata: object) -> str:
     return (
         '<section class="panel">'
         "<h3>Hugging Face</h3>"
-        '<table class="data"><tbody>' + "".join(parts) + "</tbody></table></section>"
+        '<div class="table-scroll"><table class="data"><tbody>'
+        + "".join(parts)
+        + "</tbody></table></div></section>"
     )
 
 
@@ -3293,9 +3295,9 @@ def _render_conflicts_section(conflicts: Mapping[str, object]) -> str:
     return (
         '<section class="panel">'
         "<h3>Conflicts</h3>"
-        '<table class="data"><thead><tr>'
+        '<div class="table-scroll"><table class="data"><thead><tr>'
         "<th>Field</th><th>Source values</th><th>Selected</th><th>Reason</th>"
-        "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></section>"
+        "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div></section>"
     )
 
 
@@ -3314,7 +3316,7 @@ def render_events(
         rows_html = '<p class="empty">No events recorded.</p>'
     else:
         parts = [
-            '<table class="data">',
+            '<div class="table-scroll"><table class="data">',
             "<thead><tr>",
             _th("When"),
             _th("Account"),
@@ -3345,7 +3347,7 @@ def render_events(
                 f"{_td_priority(details, 2)}"
                 f"</tr>"
             )
-        parts.append("</tbody></table>")
+        parts.append("</tbody></table></div>")
         rows_html = "".join(parts)
 
     type_select_options: list[tuple[str, str]] = [("", "(all types)")]
@@ -3395,7 +3397,7 @@ def _render_aggregate_timeseries_table(series: list[dict[str, Any]]) -> str:
     if not series:
         return '<p class="empty">No requests in this window.</p>'
     parts = [
-        '<table class="data">',
+        '<div class="table-scroll"><table class="data">',
         "<thead><tr>",
         # Priority 1 — always shown
         _th("Bucket"),
@@ -3431,7 +3433,7 @@ def _render_aggregate_timeseries_table(series: list[dict[str, Any]]) -> str:
             f"{_td_priority(format_bytes(row.get('bytes_emitted', 0)), 3)}"
             f"</tr>"
         )
-    parts.append("</tbody></table>")
+    parts.append("</tbody></table></div>")
     return "".join(parts)
 
 
@@ -3537,7 +3539,7 @@ def _render_grouped_timeseries_table(grouped: dict[str, Any]) -> str:
         ]
     )
     parts = [
-        '<table class="data">',
+        '<div class="table-scroll"><table class="data">',
         "<thead><tr>",
         *header_cells,
         "</tr></thead><tbody>",
@@ -3569,7 +3571,7 @@ def _render_grouped_timeseries_table(grouped: dict[str, Any]) -> str:
             ]
         )
         parts.append(f"<tr>{''.join(cells)}</tr>")
-    parts.append("</tbody></table>")
+    parts.append("</tbody></table></div>")
     return "".join(parts)
 
 
@@ -3865,7 +3867,7 @@ def render_pings(
     # Recent pings table
     if recent_pings:
         ping_parts = [
-            '<table class="data">',
+            '<div class="table-scroll"><table class="data">',
             "<thead><tr>",
             # Priority 1 — always shown
             _th("Provider"),
@@ -3899,7 +3901,7 @@ def render_pings(
                 f"{_td_priority(error, 3)}"
                 f"</tr>"
             )
-        ping_parts.append("</tbody></table>")
+        ping_parts.append("</tbody></table></div>")
         recent_table = (
             '<section class="panel">'
             "<h3>Recent pings</h3>"
@@ -7076,7 +7078,7 @@ def _render_retry_distribution_table(
             f"</tr>"
         )
     return (
-        '<table class="data">'
+        '<div class="table-scroll"><table class="data">'
         + "<thead><tr>"
         # Priority 1 — always shown
         + _th("Category")
@@ -7089,7 +7091,7 @@ def _render_retry_distribution_table(
         + _th("Avg attempt latency", priority=3)
         + "</tr></thead><tbody>"
         + f"{''.join(rows)}"
-        + "</tbody></table>"
+        + "</tbody></table></div>"
     )
 
 
@@ -7394,7 +7396,7 @@ def _render_routing_distribution_table(
             f"</tr>"
         )
     return (
-        '<table class="data">'
+        '<div class="table-scroll"><table class="data">'
         + "<thead><tr>"
         # Priority 1 — always shown
         + _th("Model")
@@ -7409,7 +7411,7 @@ def _render_routing_distribution_table(
         + _th("Distinct accounts", priority=3)
         + "</tr></thead><tbody>"
         + f"{''.join(rows)}"
-        + "</tbody></table>"
+        + "</tbody></table></div>"
     )
 
 
@@ -7449,7 +7451,7 @@ def _render_selection_breakdown_table(
             f"</tr>"
         )
     return (
-        '<table class="data">'
+        '<div class="table-scroll"><table class="data">'
         + "<thead><tr>"
         # Priority 1 — always shown
         + _th("Account")
@@ -7465,7 +7467,7 @@ def _render_selection_breakdown_table(
         + _th("Last selected", priority=3)
         + "</tr></thead><tbody>"
         + f"{''.join(rows)}"
-        + "</tbody></table>"
+        + "</tbody></table></div>"
     )
 
 
@@ -7488,7 +7490,7 @@ def _render_exclusion_table(exclusion_breakdown: list[dict[str, Any]]) -> str:
             f"</tr>"
         )
     return (
-        '<table class="data">'
+        '<div class="table-scroll"><table class="data">'
         + "<thead><tr>"
         + _th("Category")
         + _th("Account")
@@ -7496,7 +7498,7 @@ def _render_exclusion_table(exclusion_breakdown: list[dict[str, Any]]) -> str:
         + _th("Reason", priority=2)
         + "</tr></thead><tbody>"
         + f"{''.join(rows)}"
-        + "</tbody></table>"
+        + "</tbody></table></div>"
     )
 
 
@@ -7521,7 +7523,7 @@ def render_traces(
         rows_html = '<p class="empty">No recent requests.</p>'
     else:
         parts = [
-            '<table class="data">',
+            '<div class="table-scroll"><table class="data">',
             "<thead><tr>",
             # Priority 1 — always shown
             _th("Time"),
@@ -7580,7 +7582,7 @@ def render_traces(
                 f"{_td_priority(proxy_id, 3)}"
                 f"</tr>"
             )
-        parts.append("</tbody></table>")
+        parts.append("</tbody></table></div>")
         rows_html = "".join(parts)
 
     filter_form = f"""
@@ -7675,7 +7677,7 @@ def render_latency(
     # Per-provider/model breakdown table
     if model_ttft:
         model_parts = [
-            '<table class="data">',
+            '<div class="table-scroll"><table class="data">',
             "<thead><tr>",
             # Priority 1 — always shown
             _th("Provider"),
@@ -7709,7 +7711,7 @@ def render_latency(
                 tr += _td_priority(_format_phase_cell(row), 3)
             tr += "</tr>"
             model_parts.append(tr)
-        model_parts.append("</tbody></table>")
+        model_parts.append("</tbody></table></div>")
         model_table = (
             '<section class="panel">'
             "<h3>Per-model breakdown</h3>"
