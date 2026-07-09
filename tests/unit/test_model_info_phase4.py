@@ -333,6 +333,45 @@ class TestModelInfoAPIEndpoints:
         assert "last_error_message" not in entry
 
     @pytest.mark.asyncio()
+    async def test_sources_endpoint_no_coroutine_leak_with_async_mock(self) -> None:
+        """Regression: AsyncMock source_diagnostics() returns a coroutine.
+
+        The handler must consume (await or close) it without emitting a
+        RuntimeWarning about an unawaited coroutine.
+        """
+        import warnings
+
+        from eggpool.api.model_info import handle_model_info_sources
+
+        mock_service = AsyncMock()
+        mock_service.repo.source_health_snapshot.return_value = {
+            "openrouter": {
+                "enabled": True,
+                "last_success_at": "2026-06-29T20:00:00Z",
+                "cooldown_until": None,
+                "failure_count": 0,
+            }
+        }
+
+        request = MagicMock()
+        request.app.state.model_info = mock_service
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            response = await handle_model_info_sources(request)
+        leaked = [w for w in caught if "never awaited" in str(w.message)]
+        assert leaked == [], (
+            "handle_model_info_sources leaked an unawaited coroutine: "
+            + "; ".join(str(w.message) for w in leaked)
+        )
+        # Endpoint still returns the bare-health-row fallback payload.
+        import json
+
+        data = json.loads(response.body)
+        assert data["object"] == "list"
+        assert data["data"][0]["source"] == "openrouter"
+
+    @pytest.mark.asyncio()
     async def test_refresh_endpoint_requires_auth(self) -> None:
         from eggpool.api.model_info import handle_model_info_refresh
 

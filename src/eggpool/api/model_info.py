@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+from contextlib import suppress
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import unquote
 
@@ -369,10 +370,21 @@ async def handle_model_info_sources(request: Request) -> Response:
                 "dict[str, dict[str, Any]]",
                 diagnostics_attr(),
             )
-            # If a misbehaving mock returns a coroutine, treat it as
-            # not-implemented to preserve the bare-health-row fallback.
+            # If a misbehaving mock returns a coroutine, await it so the
+            # real diagnostics surface today and the coroutine is consumed
+            # without leaking. Fall back to closing the coroutine if the
+            # resolved value is not a dict, preserving the
+            # bare-health-row fallback path with no RuntimeWarning.
             if inspect.isawaitable(configured):
-                configured = {}
+                maybe_coro = cast("Any", configured)
+                try:
+                    configured = await maybe_coro
+                except Exception:
+                    with suppress(Exception):
+                        maybe_coro.close()
+                    configured = {}
+                if not isinstance(cast("object", configured), dict):
+                    configured = {}
         except Exception:
             # Same fallback path: legacy tests must not break.
             configured = {}
