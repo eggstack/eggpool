@@ -487,8 +487,8 @@ class StatsService:
         try:
             backoffs: list[
                 dict[str, Any]
-            ] = await self._account_backoff_repo.get_for_account_model(
-                account_id=int(account_id), model_id=None
+            ] = await self._account_backoff_repo.get_for_account(
+                account_id=int(account_id)
             )
         except Exception:
             row["upstream_backoff_reason"] = None

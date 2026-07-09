@@ -12,7 +12,11 @@ import pytest_asyncio
 from eggpool.cost_repair import repair_request_costs
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
-from eggpool.db.repositories import RequestRepository, ReservationRepository
+from eggpool.db.repositories import (
+    AccountBackoffRepository,
+    RequestRepository,
+    ReservationRepository,
+)
 from eggpool.stats import queries
 from eggpool.stats.service import (
     PERIOD_PRESETS,
@@ -1164,6 +1168,48 @@ class TestStatsService:
         assert summary["total_input_tokens"] == int(row["in_tok"])
         assert summary["total_output_tokens"] == int(row["out_tok"])
         assert summary["total_cost_microdollars"] == int(row["cost"])
+
+    @pytest.mark.asyncio()
+    async def test_get_account_stats_surfaces_model_scoped_backoff(
+        self, seeded_db: Database
+    ) -> None:
+        """``get_account_stats`` must surface model-scoped backoffs.
+
+        Regression: model-unavailable suppressions are persisted with a
+        concrete ``model_id``, but the enrichment path previously only
+        queried account-wide rows. Operators saw the account as having
+        no backoff while routing had disappeared for the specific model.
+        """
+        repo = AccountBackoffRepository(seeded_db)
+        # Look up acct_a's account_id.
+        row = await seeded_db.fetch_one(
+            "SELECT id FROM accounts WHERE name = ?", ("acct_a",)
+        )
+        assert row is not None
+        account_id = int(row["id"])
+
+        await repo.upsert_failure(
+            account_id=account_id,
+            model_id="model_x",
+            reason="model_unavailable",
+            status_code=503,
+            error_class="upstream_error",
+            backoff_until=None,
+            consecutive_failures=1,
+        )
+
+        service = StatsService(seeded_db, account_backoff_repo=repo)
+        rows = await service.get_account_stats(
+            TimeRange(
+                start=__import__("datetime").datetime.fromisoformat("2000-01-01"),
+                end=__import__("datetime").datetime.fromisoformat("2099-12-31"),
+                label="custom",
+            )
+        )
+        by_name = {r["account_name"]: r for r in rows}
+        assert by_name["acct_a"]["upstream_backoff_reason"] == "model_unavailable"
+        # terminal/indefinite backoff ⇒ None until
+        assert by_name["acct_a"]["backoff_until"] is None
 
 
 class TestBandwidthQueries:

@@ -1799,3 +1799,33 @@ class AccountBackoffRepository:
             entry["backoff_until_epoch"] = _iso_to_epoch(entry.get("backoff_until"))
             results.append(entry)
         return results
+
+    async def get_for_account(
+        self,
+        *,
+        account_id: int,
+    ) -> list[dict[str, Any]]:
+        """Return every backoff row for an account regardless of model scope.
+
+        Includes both account-wide rows (``model_id IS NULL``) and
+        model-scoped rows (e.g. ``model_unavailable``). Used by account
+        stats enrichment so a single bad model does not hide its
+        suppression from the accounts dashboard.
+        """
+        rows = await self._db.fetch_all(
+            """
+            SELECT id, account_id, model_id, reason, status_code,
+                   error_class, consecutive_failures, backoff_until,
+                   last_failure_at, updated_at
+            FROM account_backoffs
+            WHERE account_id = ?
+            ORDER BY model_id, reason
+            """,
+            (account_id,),
+        )
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            entry = dict(row)
+            entry["backoff_until_epoch"] = _iso_to_epoch(entry.get("backoff_until"))
+            results.append(entry)
+        return results
