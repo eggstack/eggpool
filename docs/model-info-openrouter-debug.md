@@ -17,11 +17,23 @@ reads the detail, and dumps the source-health snapshot:
 EGGPOOL_DB=/var/lib/eggpool/usage.sqlite3 \
     EGGPOOL_BASE_URL=https://gateway.example \
     ./scripts/debug_model_info_openrouter.sh                   # remote instance
+EGGPOOL_API_KEY=<server.api_key> \
+    ./scripts/debug_model_info_openrouter.sh                   # authenticated deploy
 ```
 
-Required tools: `curl`, `python3` (for `json.tool`), `sqlite3`.  The
-script never edits state — the only mutation it triggers is the
-read-only `force=1` refresh.
+Required tools: `curl`, `python3` (for `json.tool` and URL encoding),
+`sqlite3`.
+
+The script is **state-changing**: the first step is a `force=1` refresh
+that fetches from external sources and updates the model-info canonical
+rows, source health, aliases, observations, and match-evidence tables.
+Run it on production only when you intend that side-effect.  The
+`/api/model-info/refresh` endpoint is always auth-gated regardless of
+`dashboard.public`, so set `EGGPOOL_API_KEY` (or `x-api-key`) on
+deployments where `[server].api_key` is configured; otherwise the
+script exits with a clear 401 message instead of silently failing.
+The local SQLite inspection queries (source-health, match-evidence,
+aliases) remain read-only.
 
 ## What the script prints
 
