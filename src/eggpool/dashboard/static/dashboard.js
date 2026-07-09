@@ -229,7 +229,8 @@
     return Boolean(
       document.querySelector("script.static-chart-data[data-chart-id]") ||
         document.querySelector("canvas.grouped-timeseries-chart") ||
-        document.getElementById("timeseries-chart")
+        document.getElementById("timeseries-chart") ||
+        document.querySelector("[data-chart-endpoint]")
     );
   }
 

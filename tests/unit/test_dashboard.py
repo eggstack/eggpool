@@ -5820,3 +5820,20 @@ class TestDashboardJSChartLoading:
 
         script = _render_auto_refresh_script(15)
         assert "initChartLoadingShells" in script
+
+    def test_has_chart_work_gatekeeper_includes_progressive_shells(self) -> None:
+        """``hasChartWork`` must treat progressive hydration shells as chart
+        work, otherwise ``whenChartReady`` early-returns and
+        ``initChartLoadingShells`` never fetches ``/api/timeseries`` on the
+        overview page (the canvas lives inside ``<noscript>``, so neither
+        ``#timeseries-chart`` nor ``script.static-chart-data`` matches).
+
+        Regression for the "Loading chart data…" forever bug.
+        """
+        js = self._load_js()
+        gate_start = js.index("function hasChartWork")
+        gate_block = js[gate_start : gate_start + 600]
+        assert "data-chart-endpoint" in gate_block, (
+            "hasChartWork() must query [data-chart-endpoint] so progressive "
+            "hydration shells gate initChartLoadingShells"
+        )
