@@ -128,6 +128,27 @@ aggregate_only = true
 
 This trades dashboard freshness and trace detail for materially fewer database writes. Correctness-critical state (requests, reservations, routing) is never affected.
 
+### Optional `orjson` JSON backend
+
+The hot-path JSON helper (`eggpool.jsonx`) auto-detects `orjson` when it
+is importable. On capable hardware (macOS / Linux x86_64 / Linux aarch64)
+install the `fast` extra to enable the Rust-backed backend for transcoded
+streaming frames and request bodies:
+
+```bash
+uv pip install 'eggpool[fast]'
+# or
+uv sync --extra fast
+```
+
+The active backend is reported at startup in the `Granian profile` log
+line (`json_backend=orjson|stdlib`). On lightweight SBC targets where
+the `orjson` wheel is unavailable, EggPool silently falls back to the
+stdlib implementation with the same wire behaviour, so installing the
+extra is purely a performance optimisation and never a hard dependency.
+Override at runtime with `EGGPOOL_JSON_BACKEND=orjson|stdlib|auto` for
+A/B testing or rollback.
+
 ```bash
 sudo systemctl restart eggpool
 sudo systemctl status eggpool

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any, cast
 
+from eggpool.jsonx import dumps_str, loads
 from eggpool.transcoder.cache_stability import (
     CacheBoundaryAnnotation,
     extract_cache_boundaries,
@@ -214,7 +214,7 @@ def _parse_tool_input(raw: Any, warnings: list[dict[str, Any]]) -> dict[str, Any
     if not isinstance(raw, str):
         return {"__raw_arguments__": str(raw)}
     try:
-        parsed = json.loads(raw)
+        parsed = loads(raw)
     except (ValueError, TypeError):
         warnings.append(
             {
@@ -314,7 +314,7 @@ class AnthropicToOpenAI:
                                 "type": "function",
                                 "function": {
                                     "name": name,
-                                    "arguments": json.dumps(input_obj),
+                                    "arguments": dumps_str(input_obj),
                                 },
                             }
                         )

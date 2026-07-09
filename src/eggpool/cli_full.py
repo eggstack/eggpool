@@ -53,6 +53,7 @@ from eggpool.deploy_user import (
     resolve_env_path,
 )
 from eggpool.errors import AggregatorError, ConfigError
+from eggpool.jsonx import USING_ORJSON
 from eggpool.lifecycle import (
     InstallMethod,
     default_backup_dir,
@@ -294,7 +295,8 @@ def serve(
     click.echo(
         f"Granian profile: workers=1 runtime_threads={config.server.threads} "
         f"database_worker_threads={config.database.worker_threads} "
-        f"access_log={config.server.access_log}",
+        f"access_log={config.server.access_log} "
+        f"json_backend={'orjson' if USING_ORJSON else 'stdlib'}",
         err=True,
     )
     try:

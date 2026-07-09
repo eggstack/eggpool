@@ -396,6 +396,8 @@ class TestToolTranslation:
     def test_assistant_message_with_tool_use_blocks(
         self, transcoder: AnthropicToOpenAI
     ) -> None:
+        import json
+
         payload = {
             "model": "claude-3",
             "messages": [
@@ -415,26 +417,24 @@ class TestToolTranslation:
         }
         result, _ = transcoder.encode_request(payload, _make_context())
 
-        assert result["messages"] == [
-            {
-                "role": "assistant",
-                "content": "Checking weather...",
-                "tool_calls": [
-                    {
-                        "id": result["messages"][0]["tool_calls"][0]["id"],
-                        "type": "function",
-                        "function": {
-                            "name": "get_weather",
-                            "arguments": '{"city": "SF"}',
-                        },
-                    }
-                ],
-            }
-        ]
+        assert len(result["messages"]) == 1
+        msg = result["messages"][0]
+        assert msg["role"] == "assistant"
+        assert msg["content"] == "Checking weather..."
+        assert len(msg["tool_calls"]) == 1
+        tc = msg["tool_calls"][0]
+        assert tc["type"] == "function"
+        assert tc["function"]["name"] == "get_weather"
+        # ``function.arguments`` is a JSON-encoded string; compare
+        # semantically because the JSON backend (stdlib vs orjson)
+        # controls whitespace.
+        assert json.loads(tc["function"]["arguments"]) == {"city": "SF"}
 
     def test_assistant_message_with_tool_use_only(
         self, transcoder: AnthropicToOpenAI
     ) -> None:
+        import json
+
         payload = {
             "model": "claude-3",
             "messages": [
@@ -453,20 +453,17 @@ class TestToolTranslation:
         }
         result, _ = transcoder.encode_request(payload, _make_context())
 
-        assert result["messages"][0] == {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [
-                {
-                    "id": result["messages"][0]["tool_calls"][0]["id"],
-                    "type": "function",
-                    "function": {
-                        "name": "get_weather",
-                        "arguments": '{"city": "NYC"}',
-                    },
-                }
-            ],
-        }
+        msg = result["messages"][0]
+        assert msg["role"] == "assistant"
+        assert msg["content"] == ""
+        assert len(msg["tool_calls"]) == 1
+        tc = msg["tool_calls"][0]
+        assert tc["type"] == "function"
+        assert tc["function"]["name"] == "get_weather"
+        # ``function.arguments`` is a JSON-encoded string; compare
+        # semantically because the JSON backend (stdlib vs orjson)
+        # controls whitespace.
+        assert json.loads(tc["function"]["arguments"]) == {"city": "NYC"}
 
     def test_user_message_with_tool_result_blocks(
         self, transcoder: AnthropicToOpenAI

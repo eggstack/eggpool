@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import TYPE_CHECKING, Any
 
 from eggpool.errors import RequestTooLargeError
+from eggpool.jsonx import dumps_bytes
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -16,11 +16,7 @@ if TYPE_CHECKING:
 
 def encode_json_body(payload: Mapping[str, Any]) -> bytes:
     """Encode a modified proxy payload consistently and without ASCII expansion."""
-    return json.dumps(
-        payload,
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ).encode()
+    return dumps_bytes(payload)
 
 
 async def read_body_limited(request: Request, max_bytes: int) -> bytes:

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import time
 from typing import TYPE_CHECKING, Any, cast
 
+from eggpool.jsonx import dumps_str, loads
 from eggpool.transcoder.budget_resolver import BudgetResolutionError
 from eggpool.transcoder.cache_stability import (
     CacheBoundaryAnnotation,
@@ -87,7 +87,7 @@ def _parse_tool_arguments(raw: Any, warnings: list[dict[str, Any]]) -> dict[str,
     if not isinstance(raw, str):
         return {"__raw_arguments__": str(raw)}
     try:
-        parsed = json.loads(raw)
+        parsed = loads(raw)
     except (ValueError, TypeError):
         warnings.append(
             {
@@ -547,7 +547,7 @@ class OpenAIToAnthropic:
                     strict = bool(json_schema.get("strict", False))
                     schema_text = (
                         "\n\nRespond with a JSON object that matches this schema: "
-                        + json.dumps(schema_obj)
+                        + dumps_str(schema_obj)
                         + ". Do not include any text outside the JSON."
                     )
                     if strict:
@@ -782,7 +782,7 @@ class OpenAIToAnthropic:
                             "type": "function",
                             "function": {
                                 "name": name,
-                                "arguments": json.dumps(input_obj),
+                                "arguments": dumps_str(input_obj),
                             },
                         }
                     )

@@ -249,6 +249,24 @@ new behaviour; replay fixtures under `tests/fixtures/streaming_transcode/`
 let tests assert on decoded SSE event sequences rather than raw bytes so
 JSON whitespace changes do not break tests.
 
+**Phase 10 — JSON backend migration (`eggpool.jsonx`)**: hot-path JSON
+serialization and parsing live behind a small helper at
+`src/eggpool/jsonx.py`. The preferred backend is `orjson`; install with
+`uv pip install 'eggpool[fast]'` (or `uv sync --extra fast`) to enable
+it. Without the `fast` extra the helper falls back to the stdlib
+implementation with identical compact-separator wire behaviour.
+Override at runtime with `EGGPOOL_JSON_BACKEND=orjson|stdlib|auto`. The
+active backend is logged at startup (`json_backend=orjson|stdlib` in the
+Granian profile line). Wire bodies (`encode_json_body()`), SSE frame
+helpers (`_anthropic_frame`, `_openai_frame`), the streaming transcoder
+parse helpers (`_safe_json`, `IncrementalSSEObserver._flush_event`),
+tool-argument stringification, and the request-path body parses all
+route through `eggpool.jsonx`. The `requests/messages` error envelopes
+in `app.py` and `coordinator.py` also use the helper. Tests under
+`tests/unit/test_jsonx.py` are parametrised across both backends so the
+stdlib and orjson branches stay semantically equivalent. The plan that
+introduced this layer is `plans/transcoded-json-backend-orjson.md`.
+
 **Phase 4 — Routing eligibility widening**: transcoding is **on by default**. The routing layer widens the candidate set to include accounts whose `provider.protocols` includes the model's native protocol even if it does not include the client protocol. `_validate_endpoint` checks for transcodable routes before raising `ProtocolMismatchError`. The `_resolve_upstream_protocol` method determines which protocol to use upstream based on the largest eligible-account set. `prefer_native = true` (default) keeps native-protocol accounts ranked above transcodable ones via a secondary sort key in `QuotaFairScorer`. The two-pass context-limit check in `api/proxy_request.py` validates both client-side and upstream limits when transcoding is active. The `[transcoder] enabled = false` flag is a deprecated escape hatch that disables all translation and reverts to the pre-default protocol-exact routing.
 
 **Phase 5 — Operator controls and docs**: the default `[transcoder]` config block is documented in `config.example.toml`. `eggpool stats transcoding` reports transcoded request counts and loss-warning summaries. The dashboard `/runtime` page includes a "Transcoding" card showing real-time counters. Structured DEBUG logs are emitted for every transcoded request and a startup line announces transcoding state. Loss warnings remain at INFO. See `docs/transcoding.md` for the full operator guide.

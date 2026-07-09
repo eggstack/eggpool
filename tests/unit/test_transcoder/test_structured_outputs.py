@@ -17,6 +17,27 @@ def _make_context() -> TranscodeContext:
     )
 
 
+def _extract_schema(system: str) -> dict | None:
+    """Extract the embedded JSON schema from the generated system prompt.
+
+    The schema is appended after ``this schema: `` as a JSON literal;
+    its exact whitespace depends on the active JSON backend
+    (stdlib ``json.dumps`` vs orjson).  We parse the literal and
+    compare structurally.
+    """
+
+    marker = "this schema: "
+    start = system.find(marker)
+    if start < 0:
+        return None
+    rest = system[start + len(marker) :]
+    end = rest.find(". Do not include")
+    if end < 0:
+        return None
+    literal = rest[:end].strip()
+    return json.loads(literal)
+
+
 def _features(**kwargs: bool) -> TranscoderFeatures:
     defaults = {"structured_outputs": True}
     defaults.update(kwargs)
@@ -61,7 +82,11 @@ class TestStructuredOutputsOpenAIToAnthropic:
         )
         system = result.get("system", "")
         assert "Respond with a JSON object that matches this schema" in system
-        assert json.dumps(schema) in system
+        # The schema is embedded as a JSON string; compare semantically
+        # because the JSON backend (stdlib vs orjson) controls whitespace.
+        match = _extract_schema(system)
+        assert match is not None
+        assert match == schema
         assert "Be precise; do not omit required fields" in system
         assert any(
             w.get("kind") == "response_format_to_system_prompt" for w in warnings

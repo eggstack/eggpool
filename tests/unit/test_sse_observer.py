@@ -265,7 +265,7 @@ class TestSSEEventAssembly:
         content = _sse_data({"choices": [{"delta": {"content": "token"}}]})
         usage = _sse_data({"choices": [], "usage": {"prompt_tokens": 10}})
 
-        with patch("eggpool.proxy.sse_observer.json.loads", wraps=json.loads) as loads:
+        with patch("eggpool.proxy.sse_observer.jsonx_loads", wraps=json.loads) as loads:
             observer.observe(content * 100 + usage)
             observer.flush()
 

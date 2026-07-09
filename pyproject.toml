@@ -58,6 +58,12 @@ dev = [
     "coverage[toml]",
     "pre-commit",
 ]
+# ``fast`` enables the orjson-backed JSON helper used by the transcoding
+# hot paths.  EggPool falls back to the stdlib implementation when this
+# extra is not installed, so lightweight Raspberry Pi / SBC targets keep
+# working without a Rust-built wheel.  Install with ``uv pip install
+# 'eggpool[fast]'`` to enable it.
+fast = ["orjson>=3.10"]
 
 [project.scripts]
 eggpool = "eggpool.cli:main"

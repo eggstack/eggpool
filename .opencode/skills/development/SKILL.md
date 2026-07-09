@@ -24,6 +24,12 @@ Run specific test subsets without waiting for the full suite:
 # Request-path correctness only (routing, transcoding, finalization)
 uv run pytest -m request_path -v
 
+# JSON backend parity (eggs/loads/dumps_bytes/dumps_str across stdlib and orjson)
+uv run pytest tests/unit/test_jsonx.py -v
+
+# Run jsonx tests against the stdlib fallback to validate parity
+EGGPOOL_JSON_BACKEND=stdlib uv run pytest tests/unit/test_jsonx.py -v
+
 # Dashboard and cache-page tests only
 uv run pytest -m dashboard -v
 

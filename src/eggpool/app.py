@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -57,6 +56,7 @@ from eggpool.errors import (
     RequestTooLargeError,
 )
 from eggpool.health.health_manager import HealthManager
+from eggpool.jsonx import dumps_bytes as jsonx_dumps_bytes
 from eggpool.logging import configure_logging
 from eggpool.metrics.buffer import MetricsWriteCoalescer
 from eggpool.model_info.presentation import compact_model_info_summary
@@ -116,16 +116,15 @@ class _BodyLimitMiddleware:
             if declared_size is not None and declared_size > self._max_bytes:
                 path = scope.get("path", "")
                 if path.endswith("/messages"):
-                    error_body = json.dumps(
+                    error_body = jsonx_dumps_bytes(
                         {
                             "type": "error",
                             "error": {
                                 "type": "invalid_request_error",
                                 "message": "Request body too large",
                             },
-                        },
-                        separators=(",", ":"),
-                    ).encode()
+                        }
+                    )
                 else:
                     error_body = (
                         b'{"error":{"message":"Request body too large",'

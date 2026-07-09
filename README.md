@@ -311,6 +311,9 @@ uv run ruff format --check src/ tests/ scripts/
 uv run ruff check src/ tests/ scripts/
 uv run pyright src/ scripts/
 
+# Optional `orjson` backend for the JSON helper (transcoding hot paths)
+uv sync --extra fast     # or: uv pip install 'eggpool[fast]'
+
 # High-concurrency streaming reproducer (no real providers needed)
 uv run python scripts/repro_high_concurrency_streams.py --concurrency 50 --cancel-rate 0.25
 ```

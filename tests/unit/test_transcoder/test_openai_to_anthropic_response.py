@@ -315,16 +315,16 @@ class TestToolResponseTranslation:
 
         message = result["choices"][0]["message"]
         assert message["content"] == "Let me check."
-        assert message["tool_calls"] == [
-            {
-                "id": message["tool_calls"][0]["id"],
-                "type": "function",
-                "function": {
-                    "name": "weather",
-                    "arguments": '{"city": "SF"}',
-                },
-            }
-        ]
+        import json
+
+        assert len(message["tool_calls"]) == 1
+        tc = message["tool_calls"][0]
+        assert tc["type"] == "function"
+        assert tc["function"]["name"] == "weather"
+        # ``function.arguments`` is a JSON-encoded string; compare
+        # semantically because the JSON backend (stdlib vs orjson)
+        # controls whitespace.
+        assert json.loads(tc["function"]["arguments"]) == {"city": "SF"}
         assert result["choices"][0]["finish_reason"] == "tool_calls"
         id_warnings = [
             w
@@ -481,14 +481,14 @@ class TestToolResponseTranslation:
 
         message = result["choices"][0]["message"]
         assert message["content"] == "Let me check."
-        assert message["tool_calls"] == [
-            {
-                "id": message["tool_calls"][0]["id"],
-                "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "arguments": '{"city": "San Francisco"}',
-                },
-            }
-        ]
+        import json
+
+        assert len(message["tool_calls"]) == 1
+        tc = message["tool_calls"][0]
+        assert tc["type"] == "function"
+        assert tc["function"]["name"] == "get_weather"
+        # ``function.arguments`` is a JSON-encoded string; compare
+        # semantically because the JSON backend (stdlib vs orjson)
+        # controls whitespace.
+        assert json.loads(tc["function"]["arguments"]) == {"city": "San Francisco"}
         assert result["choices"][0]["finish_reason"] == "tool_calls"

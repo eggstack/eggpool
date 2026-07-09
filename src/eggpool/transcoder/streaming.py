@@ -23,7 +23,6 @@ compact JSON separators to reduce output bytes and serialization work.
 from __future__ import annotations
 
 import codecs
-import json
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -34,6 +33,7 @@ if TYPE_CHECKING:
     from eggpool.transcoder.ids import ToolCallIdMap
     from eggpool.transcoder.policy import TranscoderFeatures
 
+from eggpool.jsonx import dumps_bytes, loads
 from eggpool.transcoder.policy import build_reasoning_fields
 from eggpool.transcoder.usage import (
     merge_anthropic_usage,
@@ -41,11 +41,6 @@ from eggpool.transcoder.usage import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Compact JSON separators for streaming frame emission.  SSE clients parse
-# the JSON payload and never rely on preserved whitespace, so this reduces
-# both output bytes and serialization work.
-_JSON_SEPARATORS = (",", ":")
 
 # Reversed from openai_to_anthropic.py STOP_REASON_MAP — maps OpenAI
 # finish_reason values to Anthropic stop_reason values.
@@ -310,8 +305,8 @@ class _BaseStreamingTranscoder:
 
     def _safe_json(self, data: str) -> dict[str, Any] | None:
         try:
-            obj = json.loads(data)
-        except (json.JSONDecodeError, ValueError):
+            obj = loads(data)
+        except ValueError:
             self._warn("Malformed SSE data, skipping")
             return None
         if not isinstance(obj, dict):
@@ -324,12 +319,16 @@ class _BaseStreamingTranscoder:
         data: dict[str, Any],
     ) -> bytes:
         return (
-            f"event: {event}\ndata: {json.dumps(data, separators=_JSON_SEPARATORS)}\n\n"
-        ).encode()
+            b"event: "
+            + event.encode("ascii")
+            + b"\ndata: "
+            + dumps_bytes(data)
+            + b"\n\n"
+        )
 
     @staticmethod
     def _openai_frame(data: dict[str, Any]) -> bytes:
-        return (f"data: {json.dumps(data, separators=_JSON_SEPARATORS)}\n\n").encode()
+        return b"data: " + dumps_bytes(data) + b"\n\n"
 
     @staticmethod
     def _openai_done() -> bytes:
@@ -661,8 +660,8 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
         context (if available).
         """
         try:
-            parsed_obj: object = json.loads(raw) if raw else {}
-        except (json.JSONDecodeError, ValueError):
+            parsed_obj: object = loads(raw) if raw else {}
+        except ValueError:
             self._warn("malformed_tool_arguments", id=self._id)
             return {"__raw_arguments__": raw}
         if isinstance(parsed_obj, dict):

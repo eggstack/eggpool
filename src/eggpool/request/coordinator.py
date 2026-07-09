@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
-import json
 import logging
 import time
 import typing
@@ -48,6 +47,8 @@ from eggpool.health.health_manager import (
     FailureCategory,
     classify_failure_category,
 )
+from eggpool.jsonx import dumps_str as jsonx_dumps_str
+from eggpool.jsonx import loads as jsonx_loads
 from eggpool.metrics.thinking import get_counter
 from eggpool.providers.client_pool import ProviderClientPool
 from eggpool.providers.contract import (
@@ -176,7 +177,7 @@ def _prepare_error_detail(value: object | None, persist: bool) -> str | None:
 
 def _serialize_thinking_trace(trace: dict[str, Any] | None) -> str | None:
     """Serialize thinking trace to JSON for persistence."""
-    return json.dumps(trace) if trace else None
+    return jsonx_dumps_str(trace) if trace else None
 
 
 @contextlib.contextmanager
@@ -266,8 +267,8 @@ def _extract_original_thinking_budget_inputs(
     object or when no thinking controls are present.
     """
     try:
-        original_body_obj: object = json.loads(context.original_body)
-    except (json.JSONDecodeError, ValueError):
+        original_body_obj: object = jsonx_loads(context.original_body)
+    except ValueError:
         return (None, None)
     if not isinstance(original_body_obj, dict):
         return (None, None)
@@ -818,8 +819,8 @@ class RequestCoordinator:
                         _recompute_reason,
                     )
                     try:
-                        payload = json.loads(context.body_for_upstream)
-                    except (json.JSONDecodeError, ValueError):
+                        payload = jsonx_loads(context.body_for_upstream)
+                    except ValueError:
                         payload = None
                     if isinstance(payload, dict):
                         _thinking_cap: ThinkingCapability | None = None
@@ -1235,10 +1236,10 @@ class RequestCoordinator:
                 body_dict: dict[str, object] = {}
                 if context.original_body:
                     try:
-                        parsed: object = json.loads(context.original_body)
+                        parsed: object = jsonx_loads(context.original_body)
                         if isinstance(parsed, dict):
                             body_dict = parsed  # type: ignore[assignment]
-                    except (json.JSONDecodeError, ValueError):
+                    except ValueError:
                         pass
                 thinking_req = classify_thinking_request(body_dict, context.protocol)
                 context.thinking_requirement = thinking_req
@@ -1976,8 +1977,8 @@ class RequestCoordinator:
                 # Phase 2: re-render upstream error in client protocol
                 if transcoder is not None and context.transcode_context is not None:
                     try:
-                        err_payload = json.loads(resp_body)
-                    except (json.JSONDecodeError, ValueError):
+                        err_payload = jsonx_loads(resp_body)
+                    except ValueError:
                         err_payload = None
                     if isinstance(err_payload, dict) or err_payload is None:
                         _status, err_body, err_warnings = transcoder.reencode_error(
@@ -2016,8 +2017,8 @@ class RequestCoordinator:
             # fall back to the per-counter stream result.
             raw_response_payload: dict[str, Any] | None
             try:
-                raw_response_payload = json.loads(body)
-            except (json.JSONDecodeError, ValueError):
+                raw_response_payload = jsonx_loads(body)
+            except ValueError:
                 raw_response_payload = None
             normalized_usage = _build_normalized_usage(
                 usage=usage,
@@ -2094,8 +2095,8 @@ class RequestCoordinator:
             # Phase 2: decode upstream success response to client protocol
             if transcoder is not None and context.transcode_context is not None:
                 try:
-                    upstream_payload = json.loads(body)
-                except (json.JSONDecodeError, ValueError):
+                    upstream_payload = jsonx_loads(body)
+                except ValueError:
                     upstream_payload = None
                 if isinstance(upstream_payload, dict):
                     _features = (
@@ -2183,8 +2184,8 @@ class RequestCoordinator:
         if context.upstream_protocol == "openai":
             payload_obj: object
             try:
-                payload_obj = json.loads(body_to_send)
-            except (json.JSONDecodeError, ValueError):
+                payload_obj = jsonx_loads(body_to_send)
+            except ValueError:
                 pass
             else:
                 if isinstance(payload_obj, dict):
@@ -2835,8 +2836,8 @@ class RequestCoordinator:
         will fall back to locally derived cost in that case.
         """
         try:
-            data = json.loads(body)
-        except (json.JSONDecodeError, ValueError):
+            data = jsonx_loads(body)
+        except ValueError:
             logger.warning(
                 "Non-streaming upstream response body is not valid JSON; "
                 "usage will not be extracted (body_len=%d)",
@@ -3092,8 +3093,8 @@ class RequestCoordinator:
         if body is None:
             return
         try:
-            payload_obj: object = json.loads(body)
-        except (json.JSONDecodeError, ValueError):
+            payload_obj: object = jsonx_loads(body)
+        except ValueError:
             return
         if not isinstance(payload_obj, dict):
             return
@@ -3201,8 +3202,8 @@ class RequestCoordinator:
         if body is None:
             return
         try:
-            payload_obj: object = json.loads(body)
-        except (json.JSONDecodeError, ValueError):
+            payload_obj: object = jsonx_loads(body)
+        except ValueError:
             return
         if not isinstance(payload_obj, dict):
             return
@@ -3822,8 +3823,8 @@ class RequestCoordinator:
                 )
                 if transcoder is not None:
                     try:
-                        err_payload_obj: object = json.loads(body)
-                    except (json.JSONDecodeError, ValueError):
+                        err_payload_obj: object = jsonx_loads(body)
+                    except ValueError:
                         err_payload_obj = None
                     err_payload: dict[str, Any] | None
                     if isinstance(err_payload_obj, dict):
@@ -3859,7 +3860,7 @@ class RequestCoordinator:
         status_code = self._error_status_code(last_error)
         error_msg = str(last_error or "Request failed")
         if context.protocol == "anthropic":
-            error_body = json.dumps(
+            error_body = encode_json_body(
                 {
                     "type": "error",
                     "error": {
@@ -3867,9 +3868,9 @@ class RequestCoordinator:
                         "message": error_msg,
                     },
                 }
-            ).encode()
+            )
         else:
-            error_body = json.dumps(
+            error_body = encode_json_body(
                 {
                     "error": {
                         "message": error_msg,
@@ -3877,7 +3878,7 @@ class RequestCoordinator:
                         "code": status_code,
                     }
                 }
-            ).encode()
+            )
         return PreparedProxyResponse(
             status_code=status_code,
             headers=[
@@ -3907,8 +3908,8 @@ class RequestCoordinator:
         during preflight.
         """
         try:
-            body_obj: object = json.loads(original_body)
-        except (json.JSONDecodeError, ValueError):
+            body_obj: object = jsonx_loads(original_body)
+        except ValueError:
             return False
         if not isinstance(body_obj, dict):
             return False

@@ -7,10 +7,10 @@ bounded incomplete-frame memory, and usage extraction.
 from __future__ import annotations
 
 import codecs
-import json
 import logging
 from dataclasses import dataclass, field
 
+from eggpool.jsonx import loads as jsonx_loads
 from eggpool.proxy.usage import (
     AnthropicStreamUsageExtractor,
     OpenAIStreamUsageExtractor,
@@ -199,7 +199,7 @@ class IncrementalSSEObserver:
             return
 
         try:
-            parsed_raw = json.loads(data)
+            parsed_raw = jsonx_loads(data)
             parsed = safe_dict(parsed_raw)
             if parsed is None:
                 self._error_count += 1
@@ -211,7 +211,7 @@ class IncrementalSSEObserver:
             usage = self._extractor.extract(parsed)
             if usage:
                 self._merge_usage(usage)
-        except (json.JSONDecodeError, ValueError, TypeError, AttributeError):
+        except (ValueError, TypeError, AttributeError):
             self._error_count += 1
             logger.debug("Malformed SSE data frame, ignoring")
 

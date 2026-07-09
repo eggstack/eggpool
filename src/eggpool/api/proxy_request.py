@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import json
 import logging
 import sys
 import time
@@ -32,6 +31,8 @@ from eggpool.errors import (
     RequestTooLargeError,
     UpstreamExhaustedError,
 )
+from eggpool.jsonx import dumps_bytes
+from eggpool.jsonx import loads as jsonx_loads
 from eggpool.request.body import encode_json_body, read_body_limited
 from eggpool.request.coordinator import (
     PreparedProxyResponse,
@@ -119,7 +120,7 @@ def _tool_token_padding(payload: dict[str, Any]) -> int:
     total_bytes = 0
     tool_list = cast("list[dict[str, Any]]", tools)
     for tool in tool_list:
-        total_bytes += len(json.dumps(tool, separators=(",", ":")))
+        total_bytes += len(dumps_bytes(tool))
     return max(64, total_bytes // 4)
 
 
@@ -299,8 +300,8 @@ async def handle_proxy_request(
     with _span(span_recorder, SPAN_JSON_PARSE):
         payload_obj: object
         try:
-            payload_obj = json.loads(body)
-        except (json.JSONDecodeError, ValueError):
+            payload_obj = jsonx_loads(body)
+        except ValueError:
             return endpoint.error_response(
                 status_code=400,
                 message="Invalid JSON",

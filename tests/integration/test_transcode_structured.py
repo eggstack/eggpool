@@ -88,7 +88,16 @@ class TestStructuredOutputsRoundTrip:
         )
         system = upstream.get("system", "")
         assert "Respond with a JSON object that matches this schema" in system
-        assert json.dumps(schema) in system
+        # The schema is embedded as a JSON literal; compare semantically
+        # because the JSON backend (stdlib vs orjson) controls whitespace.
+        marker = "this schema: "
+        start = system.find(marker)
+        assert start >= 0
+        rest = system[start + len(marker) :]
+        end = rest.find(". Do not include")
+        assert end >= 0
+        literal = rest[:end].strip()
+        assert json.loads(literal) == schema
         assert "Be precise; do not omit required fields" in system
 
     def test_disabled_structured_outputs_preserves_v1(self) -> None:
