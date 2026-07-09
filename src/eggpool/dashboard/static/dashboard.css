@@ -3,9 +3,10 @@
 * { box-sizing: border-box; }
 
 /* Hard floor against any rogue horizontal overflow. The dashboard renders
-   many wide tables whose containing panels scroll horizontally by design
-   (see `.panel { overflow-x: auto }` below); this rule keeps any escapee
-   from triggering a body-level scrollbar. */
+   many wide tables; wide tables opt into scrolling via a `.table-scroll`
+   wrapper (see `.panel { overflow: visible }` below) so panel-level
+   tooltips can render outside the panel boundary without being clipped.
+   This rule keeps any escapee from triggering a body-level scrollbar. */
 html { overflow-x: hidden; }
 
 /* Themed scrollbars */
@@ -349,7 +350,16 @@ h3 {
   border-radius: 2px;
   padding: 1rem 1.25rem;
   margin-bottom: 1.5rem;
+  overflow: visible;
+}
+
+/* Tables inside panels that need horizontal scroll should be wrapped in
+   .table-scroll. The panel itself keeps overflow:visible so absolutely-
+   positioned descendants (notably CSS tooltips via [data-tooltip])
+   can render above the panel boundary instead of being clipped. */
+.table-scroll {
   overflow-x: auto;
+  overflow-y: visible;
 }
 
 
@@ -520,9 +530,8 @@ td.no { color: var(--color-error); font-weight: 600; }
    width-constrained wrapper around a Chart.js canvas. Inline-styled
    wrappers (`<div style="height: …; position: relative;">`) lack an
    explicit `width`, which can let Chart.js measure the parent's
-   `clientWidth` incorrectly when the wrapper sits inside
-   `.panel { overflow-x: auto }`. This class fixes that by giving the
-   wrapper `width: 100%`. */
+   `clientWidth` incorrectly when the wrapper sits inside a panel.
+   This class fixes that by giving the wrapper `width: 100%`. */
 .chart-wrap {
   position: relative;
   width: 100%;
@@ -914,7 +923,7 @@ label.trace-limit {
      `data-priority="1|2|3"` and these rules drop the lower-priority
      columns as the viewport shrinks. Priority 1 = always shown,
      priority 2 = shown on tablet+, priority 3 = desktop-only. The
-     panel's `overflow-x: auto` still kicks in for the rare
+     panel's `.table-scroll` wrapper still kicks in for the rare
      everything-shown case. */
   table.data th[data-priority="3"],
   table.data td[data-priority="3"] {
