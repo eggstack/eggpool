@@ -4619,6 +4619,72 @@ class TestUpdateIndicator:
         assert "update-indicator" not in html
 
 
+class TestFooterUpdateIndicatorCentering:
+    """The update indicator is horizontally centered via a wrapper span."""
+
+    @staticmethod
+    def _load_css() -> str:
+        from pathlib import Path
+
+        return (
+            Path(__file__).parent.parent.parent
+            / "src"
+            / "eggpool"
+            / "dashboard"
+            / "static"
+            / "dashboard.css"
+        ).read_text()
+
+    def test_indicator_wrapped_in_footer_update_indicator(self) -> None:
+        """The inner .update-indicator is wrapped in .footer-update-indicator."""
+        from eggpool.dashboard.render import _render_update_indicator
+        from eggpool.update_checker import UpdateInfo
+
+        info = UpdateInfo(
+            current_version="0.1.0",
+            latest_version="0.2.0",
+            update_available=True,
+            update_command="eggpool update",
+        )
+        html = _render_update_indicator(info)
+        assert 'class="footer-update-indicator"' in html
+        assert 'class="update-indicator"' in html
+        assert html.index('class="footer-update-indicator"') < html.index(
+            'class="update-indicator"'
+        )
+
+    def test_css_has_footer_update_indicator_rule(self) -> None:
+        """A CSS rule for footer .footer-update-indicator exists."""
+        css = self._load_css()
+        assert "footer .footer-update-indicator" in css
+
+    def test_css_footer_update_indicator_has_centering(self) -> None:
+        """The footer .footer-update-indicator rule contains centering."""
+        import re
+
+        css = self._load_css()
+        match = re.search(
+            r"footer\s+\.footer-update-indicator\s*\{([^}]*)\}",
+            css,
+        )
+        assert match is not None
+        rule_body = match.group(1)
+        assert (
+            "justify-content: center" in rule_body or "text-align: center" in rule_body
+        )
+
+    def test_css_does_not_center_whole_footer(self) -> None:
+        """The CSS does not center the whole footer element."""
+        import re
+
+        css = self._load_css()
+        match = re.search(r"^footer\s*\{([^}]*)\}", css, re.MULTILINE)
+        if match is not None:
+            rule_body = match.group(1)
+            assert "text-align: center" not in rule_body
+            assert "justify-content: center" not in rule_body
+
+
 class TestStickyTopbarStylesheet:
     """The topbar must use sticky positioning so it stays reachable on
     desktop viewports while scrolling long tables."""

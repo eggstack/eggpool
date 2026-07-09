@@ -332,3 +332,86 @@ class TestInstallScript:
         source = script.read_text()
         assert "eggpool onboard" in source
         assert "eggpool init-config" not in source
+
+
+# ---------------------------------------------------------------------------
+# CLI freshness-aware update path
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateFreshness:
+    """Tests for the freshness-aware CLI update path."""
+
+    def test_check_stale_first_fresh_second_reports_available(self) -> None:
+        """--check with stale-first / fresh-second reports update available.
+
+        ``async_check_for_update`` now handles the two-request freshness
+        logic internally, so the CLI receives a single (current, latest,
+        error) tuple after both fetches complete.  This test verifies the
+        final result surfaces correctly through the CLI.
+        """
+        runner = CliRunner()
+        with (
+            patch(
+                "eggpool.cli_full.async_check_for_update",
+                return_value=("0.1.0", "0.2.0", ""),
+            ),
+            patch("eggpool.cli_full._detect_install_method", return_value="pip"),
+        ):
+            result = runner.invoke(cli, ["update", "--check"])
+
+        assert result.exit_code == 0
+        assert "An update is available." in result.output
+
+    def test_check_both_say_current_exits_up_to_date(self) -> None:
+        """--check with latest==current exits 0 with Already up to date."""
+        runner = CliRunner()
+        with (
+            patch(
+                "eggpool.cli_full.async_check_for_update",
+                return_value=("0.1.0", "0.1.0", ""),
+            ),
+            patch("eggpool.cli_full._detect_install_method", return_value="pip"),
+        ):
+            result = runner.invoke(cli, ["update", "--check"])
+
+        assert result.exit_code == 0
+        assert "Already up to date." in result.output
+
+    def test_real_update_calls_subprocess_once(self) -> None:
+        """Real update path with newer latest calls subprocess exactly once."""
+        code, output, calls = _invoke_update(method="pip")
+        assert code == 0
+        assert "Updating from 0.1.0 to 0.2.0" in output
+        assert calls is not None
+        assert len(calls) == 1
+
+    def test_cli_does_not_read_snapshot(self) -> None:
+        """CLI path does not call UpdateChecker.snapshot() before deciding."""
+        from eggpool.update_checker import UpdateChecker
+
+        original_snapshot = UpdateChecker.snapshot
+        snapshot_called = False
+
+        def tracking_snapshot(self: UpdateChecker) -> object:
+            nonlocal snapshot_called
+            snapshot_called = True
+            return original_snapshot(self)
+
+        with (
+            patch.object(UpdateChecker, "snapshot", tracking_snapshot),
+            patch(
+                "eggpool.cli_full.async_check_for_update",
+                return_value=("0.1.0", "0.2.0", ""),
+            ),
+            patch("eggpool.cli_full._detect_install_method", return_value="pip"),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stderr="")
+            from eggpool.providers import connect as connect_mod
+
+            with patch.object(connect_mod, "restart_server", return_value=False):
+                runner = CliRunner()
+                runner.invoke(cli, ["update", "--check"])
+
+        assert snapshot_called is False

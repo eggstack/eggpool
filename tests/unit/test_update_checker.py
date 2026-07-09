@@ -15,6 +15,7 @@ from eggpool.update_checker import (
     UpdateInfo,
     _pep440_key,
     async_check_for_update,
+    is_newer_version,
 )
 
 
@@ -359,3 +360,186 @@ class TestAsyncCheckForUpdateSharedClient:
         from eggpool.update_checker import async_check_for_update
 
         assert not inspect.iscoroutinefunction(async_check_for_update)
+
+
+# ---------------------------------------------------------------------------
+# is_newer_version
+# ---------------------------------------------------------------------------
+
+
+class TestIsNewerVersion:
+    def test_orders_patch_versions(self) -> None:
+        assert is_newer_version("0.5.9", "0.5.10") is True
+        assert is_newer_version("0.5.10", "0.5.9") is False
+
+    def test_post_release_newer(self) -> None:
+        assert is_newer_version("0.5.9", "0.5.9.post1") is True
+
+    def test_rc_not_newer_than_final(self) -> None:
+        assert is_newer_version("0.5.9", "0.5.9rc1") is False
+
+    def test_equal_strings_not_newer(self) -> None:
+        assert is_newer_version("0.5.9", "0.5.9") is False
+
+    def test_empty_current(self) -> None:
+        assert is_newer_version("", "0.5.9") is False
+
+    def test_empty_latest(self) -> None:
+        assert is_newer_version("0.5.9", "") is False
+
+    def test_both_empty(self) -> None:
+        assert is_newer_version("", "") is False
+
+    def test_major_version_newer(self) -> None:
+        assert is_newer_version("1.0.0", "2.0.0") is True
+
+    def test_minor_version_newer(self) -> None:
+        assert is_newer_version("1.0.0", "1.1.0") is True
+
+
+# ---------------------------------------------------------------------------
+# async_check_for_update freshness
+# ---------------------------------------------------------------------------
+
+
+class TestAsyncCheckForUpdateFreshness:
+    """Tests for the freshness-aware CLI update check path."""
+
+    def test_sends_no_cache_headers_when_fresh(self) -> None:
+        """First request is fresh=True, so no-cache headers are sent."""
+        call_log: list[dict[str, Any]] = []
+
+        def tracking_get(*_a: Any, **kwargs: Any) -> httpx.Response:
+            call_log.append(kwargs)
+            return _fake_response("0.5.0")
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("httpx.get", tracking_get)
+            mp.setattr("importlib.metadata.version", lambda _name: "0.4.0")
+            current, latest, error = async_check_for_update()
+
+        assert current == "0.4.0"
+        assert latest == "0.5.0"
+        assert error == ""
+        assert len(call_log) >= 1
+        first_headers = call_log[0].get("headers") or {}
+        assert first_headers.get("Cache-Control") == "no-cache, max-age=0"
+        assert first_headers.get("Pragma") == "no-cache"
+
+    def test_cache_bust_token_appended(self) -> None:
+        """Cache-bust token is appended as a query parameter."""
+        call_log: list[dict[str, Any]] = []
+
+        def tracking_get(*_a: Any, **kwargs: Any) -> httpx.Response:
+            call_log.append(kwargs)
+            return _fake_response("0.5.0")
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("httpx.get", tracking_get)
+            mp.setattr("importlib.metadata.version", lambda _name: "0.4.0")
+            current, latest, error = async_check_for_update()
+
+        assert error == ""
+        params = call_log[0].get("params") or {}
+        assert "_cb" in params
+
+    def test_stale_first_then_fresh_second_returns_newer(self) -> None:
+        """First response says latest==current, second says newer -> returns newer."""
+        responses = [_fake_response("0.4.0"), _fake_response("0.5.0")]
+        call_idx = 0
+
+        def dual_get(*_a: Any, **_k: Any) -> httpx.Response:
+            nonlocal call_idx
+            resp = responses[call_idx]
+            call_idx += 1
+            return resp
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("httpx.get", dual_get)
+            mp.setattr("importlib.metadata.version", lambda _name: "0.4.0")
+            current, latest, error = async_check_for_update()
+
+        assert current == "0.4.0"
+        assert latest == "0.5.0"
+        assert error == ""
+        assert call_idx == 2
+
+    def test_both_fresh_say_current_reports_current(self) -> None:
+        """Both fresh responses say latest==current -> reports latest==current."""
+        responses = [_fake_response("0.4.0"), _fake_response("0.4.0")]
+        call_idx = 0
+
+        def dual_get(*_a: Any, **_k: Any) -> httpx.Response:
+            nonlocal call_idx
+            resp = responses[call_idx]
+            call_idx += 1
+            return resp
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("httpx.get", dual_get)
+            mp.setattr("importlib.metadata.version", lambda _name: "0.4.0")
+            current, latest, error = async_check_for_update()
+
+        assert current == "0.4.0"
+        assert latest == "0.4.0"
+        assert error == ""
+        assert call_idx == 2
+
+    def test_first_response_newer_skips_second_request(self) -> None:
+        """When first response is already newer, no second request is made."""
+        call_count = 0
+
+        def counting_get(*_a: Any, **_k: Any) -> httpx.Response:
+            nonlocal call_count
+            call_count += 1
+            return _fake_response("0.5.0")
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("httpx.get", counting_get)
+            mp.setattr("importlib.metadata.version", lambda _name: "0.4.0")
+            current, latest, error = async_check_for_update()
+
+        assert current == "0.4.0"
+        assert latest == "0.5.0"
+        assert error == ""
+        assert call_count == 1
+
+    def test_pypi_error_first_no_second_request(self) -> None:
+        """PyPI error on first response is preserved; no second request."""
+        call_count = 0
+
+        def boom(*_a: Any, **_k: Any) -> httpx.Response:
+            nonlocal call_count
+            call_count += 1
+            raise httpx.HTTPError("network")
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("httpx.get", boom)
+            mp.setattr("importlib.metadata.version", lambda _name: "0.4.0")
+            current, latest, error = async_check_for_update()
+
+        assert current == "0.4.0"
+        assert latest == ""
+        assert "network" in error
+        assert call_count == 1
+
+    def test_second_request_uses_different_cache_bust_token(self) -> None:
+        """The two cache-bust tokens are different (time-based)."""
+        params_log: list[dict[str, Any]] = []
+        responses = [_fake_response("0.4.0"), _fake_response("0.4.0")]
+        call_idx = 0
+
+        def tracking_get(*_a: Any, **kwargs: Any) -> httpx.Response:
+            nonlocal call_idx
+            params_log.append(kwargs.get("params") or {})
+            resp = responses[call_idx]
+            call_idx += 1
+            return resp
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("httpx.get", tracking_get)
+            mp.setattr("importlib.metadata.version", lambda _name: "0.4.0")
+            current, latest, error = async_check_for_update()
+
+        assert call_idx == 2
+        assert params_log[0].get("_cb") != params_log[1].get("_cb")

@@ -313,9 +313,10 @@ The `/timeseries` page replaces the old "table of bucket counts" with a stacked-
 - `_register_update_checker()` helper in `app.py` creates the checker, stores it on `app.state.update_checker`, and registers the periodic supervisor-owned tick
 - Default check interval is 24h; PyPI request timeout is 15s
 - `UpdateInfo` is a frozen dataclass that holds the snapshot; `snapshot()` returns an isolated copy via `dataclasses.replace` so callers cannot mutate the cached state
-- `async_check_for_update()` is the shared one-shot helper used by both the background periodic task and the `eggpool update` CLI — both paths MUST go through this helper instead of inlining their own PyPI lookup
+- `async_check_for_update()` is the shared one-shot helper used by the `eggpool update` CLI; it performs a fresh (no-cache, cache-busted) PyPI request and, when the first response says `latest <= current`, issues one additional fresh PyPI request with a different cache-bust token before concluding "already up to date". This guards against stale CDN responses that previously caused the first `eggpool update` invocation to miss a real newer release. The helper returns `(current_version, latest_version, error)` and does NOT read `UpdateChecker.snapshot()` — the install decision must be made from a live lookup.
+- `is_newer_version(current, latest)` is the module-level PEP 440 ordering helper. Both the CLI (`cli_full.update()`) and the background checker (`UpdateChecker._is_newer`) MUST go through this helper instead of raw string equality — tags like `0.5.10` and `0.5.9.post1` would otherwise miscompare against each other.
 - `GET /api/stats/update` returns the JSON snapshot; always auth-gated regardless of `dashboard.public`
-- Dashboard footer renders the update indicator only when `update_available=True`; renders nothing otherwise
+- Dashboard footer renders the update indicator only when `update_available=True`; renders nothing otherwise. The indicator markup is wrapped in `span.footer-update-indicator` (added in 0.5.10) so CSS can center the pill without disturbing the surrounding period/refresh/ready controls.
 - PyPI failures are non-fatal and reflected in `last_check_error`; the checker preserves the previous `latest_version` on failure so the indicator still surfaces a known-newer release during momentary outages
 - The checker never auto-installs; it is passive notification only
 

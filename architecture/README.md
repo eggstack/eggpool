@@ -45,7 +45,7 @@ src/eggpool/
 ├── runtime_metrics.py # Runtime/ops metrics: process, memory, DB, background tasks, OS load average
 ├── runtime_paths.py   # PID file and log path resolution (stdlib-only)
 ├── toml_edit.py       # Small, formatting-preserving edits for scalar TOML section values
-└── update_checker.py  # PyPI update checker (background + CLI)
+└── update_checker.py  # PyPI update checker (background + freshness-aware CLI)
 ```
 
 `integrations/common.py` owns configsetup context construction, catalog-backed
@@ -1647,6 +1647,34 @@ inputs.
 - `src/eggpool/api/stats.py` -- `/api/stats/cache-observability`, `/api/stats/canonical-request-segmentation`, `/api/stats/cache-stability`, `/api/stats/compression-observability`, `/api/stats/compression-runtime`, `/api/stats/compression-policies`, `/api/stats/synthetic-cache-observability`, `/api/stats/compression-tuning`
 - `src/eggpool/dashboard/render.py` -- request-shaping cards on `/cache` page (`compression`, `compression_runtime`, `compression_policy`, `cache_stability`) plus synthetic cache and tuning cards
 - `plans/cache_compression_phase_12_operator_docs_profiles.md` -- design plan
+
+## Update Checker — freshness and CLI install-decision isolation
+
+`src/eggpool/update_checker.py` exposes two paths:
+
+- **`UpdateChecker`** — the background/periodic probe registered via `TaskSupervisor.register_periodic("update_checker", ...)`. It caches the latest `UpdateInfo` so the dashboard footer indicator and `/api/stats/update` reflect a recent state without hitting PyPI on every request. The background probe reuses the shared outbound `httpx.AsyncClient` and is intentionally conservative (no freshness bypass) to keep PyPI traffic minimal.
+- **`async_check_for_update()`** — the CLI one-shot helper used by `eggpool update`. It performs its own live PyPI lookup and must NEVER read `UpdateChecker.snapshot()` — a stale dashboard cache could mask a real newer release and cause the operator to skip the update.
+
+### Freshness-aware CLI lookup
+
+The CLI helper guards against stale CDN/PyPI responses by:
+
+1. Sending a fresh request with `Cache-Control: no-cache, max-age=0`, `Pragma: no-cache`, `Accept: application/json`, and a distinct `User-Agent: eggpool/update-check`.
+2. Appending a cache-bust query parameter (`_cb=<monotonic_ns>`) to the PyPI URL via `httpx` parameter handling.
+3. If the first fresh response reports `latest <= current`, performing **one additional** fresh PyPI request with a different cache-bust token before concluding `Already up to date.`. The second fetch is bounded so a stale CDN response can no longer cause the operator to miss a real newer release; the failure path (second fetch errors out) falls back to the first response so transient failures are not escalated.
+4. Comparing versions through `is_newer_version(current, latest)` (module-level public helper backed by `_pep440_key`) so tags like `0.5.10`, `0.5.9.post1`, and `0.5.9rc1` order correctly. Both the CLI and the background checker go through this helper — raw string equality was a footgun because `0.5.10` and `0.5.9` compare lexicographically the wrong way for the dashboard's `update_available` decision.
+
+`_fetch_pypi_response_sync()` accepts `fresh: bool = False` and `cache_bust_token: str | None = None`; the background checker passes neither, keeping its traffic profile unchanged.
+
+### Dashboard footer centering
+
+The footer indicator markup is wrapped in `<span class="footer-update-indicator">` (added 0.5.10) so CSS can center the pill without disturbing the surrounding period/refresh/ready controls. The centering rule (`display: flex; justify-content: center; align-items: center; flex-wrap: wrap; width: 100%`) scopes to the new wrapper only — the rest of the footer keeps its existing left-aligned layout. The contract "render nothing when `update_available` is false" is preserved.
+
+### Test pin surface
+
+- `tests/unit/test_update_checker.py::TestAsyncCheckForUpdateFreshness` — covers fresh headers, cache-bust tokens, stale-first/fresh-second, single-fetch-when-newer, error passthrough, and the public `is_newer_version` helper.
+- `tests/unit/test_update.py::TestUpdateFreshness` — covers the CLI integration: stale-first/fresh-second `--check`, both-current `--check`, subprocess-once behavior, and the invariant that the CLI does not consult `UpdateChecker.snapshot()`.
+- `tests/unit/test_dashboard.py::TestFooterUpdateIndicatorCentering` — covers the wrapper span, the CSS centering rule, and the "do not center the whole footer" guard.
 
 ## Database
 

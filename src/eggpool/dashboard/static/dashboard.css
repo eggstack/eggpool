@@ -181,6 +181,15 @@ footer .period-label {
    release is available.  Hidden entirely (no markup) when there is
    nothing to advertise, so the dashboard never shows a stale or
    "no update" pill. */
+footer .footer-update-indicator {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+  width: 100%;
+  margin-top: 0.4rem;
+}
+
 footer .update-indicator {
   display: inline-flex;
   flex-wrap: wrap;

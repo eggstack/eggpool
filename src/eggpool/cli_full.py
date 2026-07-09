@@ -81,7 +81,7 @@ from eggpool.toml_edit import (
     render_toml_string,
     update_section_value,
 )
-from eggpool.update_checker import async_check_for_update
+from eggpool.update_checker import async_check_for_update, is_newer_version
 
 
 class _ConfigPathGroup(click.Group):
@@ -3952,7 +3952,7 @@ def update(ctx: click.Context, check_only: bool, from_source: bool) -> None:
 
     click.echo(f"Latest version:  {latest_version}")
 
-    if current_version == latest_version:
+    if not is_newer_version(current_version, latest_version):
         click.echo("Already up to date.")
         return
 

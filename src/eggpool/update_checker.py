@@ -46,6 +46,19 @@ _VERSION_RE = re.compile(
 _PRE_RELEASE_RANK = {"a": 1, "b": 2, "rc": 3}
 
 
+def is_newer_version(current: str, latest: str) -> bool:
+    """Return True when ``latest`` is strictly newer than ``current``.
+
+    Empty inputs are treated as unknown — never raises "update available"
+    on incomplete data.  Comparison is lexicographic on PEP 440 versions,
+    which matches ``packaging.version.Version`` ordering for the simple
+    ``X.Y.Z`` tags the project publishes.
+    """
+    if not current or not latest:
+        return False
+    return _pep440_key(latest) > _pep440_key(current)
+
+
 class UpdateCheckError(RuntimeError):
     """Raised when the PyPI lookup fails or returns an unparseable body."""
 
@@ -247,14 +260,9 @@ class UpdateChecker:
     def _is_newer(current: str, latest: str) -> bool:
         """Return True when ``latest`` is strictly newer than ``current``.
 
-        Empty inputs are treated as unknown — never raises "update
-        available" on incomplete data.  Comparison is lexicographic on
-        PEP 440 versions, which matches ``packaging.version.Version``
-        ordering for the simple ``X.Y.Z`` tags the project publishes.
+        Delegates to the module-level :func:`is_newer_version` helper.
         """
-        if not current or not latest:
-            return False
-        return _pep440_key(latest) > _pep440_key(current)
+        return is_newer_version(current, latest)
 
     @staticmethod
     def _build_update_command(install_method: str) -> str:
@@ -373,10 +381,35 @@ def _fetch_pypi_response_sync(
     *,
     timeout_s: float,
     http_get: Callable[..., httpx.Response] | None = None,
+    fresh: bool = False,
+    cache_bust_token: str | None = None,
 ) -> httpx.Response:
-    """Fetch PyPI release metadata with the sync client used by CLI paths."""
+    """Fetch PyPI release metadata with the sync client used by CLI paths.
+
+    When *fresh* is True, send cache-avoidance headers so the response
+    is not served from a CDN or browser cache.  When *cache_bust_token*
+    is set, it is appended as a query parameter to the PyPI URL via
+    ``httpx`` parameter handling.
+    """
     get = http_get or httpx.get
-    return get(PYPI_URL, timeout=timeout_s, follow_redirects=True)
+    headers: dict[str, str] = {}
+    params: dict[str, str] = {}
+    if fresh:
+        headers = {
+            "Cache-Control": "no-cache, max-age=0",
+            "Pragma": "no-cache",
+            "Accept": "application/json",
+            "User-Agent": "eggpool/update-check",
+        }
+    if cache_bust_token is not None:
+        params["_cb"] = cache_bust_token
+    return get(
+        PYPI_URL,
+        timeout=timeout_s,
+        follow_redirects=True,
+        headers=headers or None,
+        params=params or None,
+    )
 
 
 def async_check_for_update(
@@ -394,16 +427,47 @@ def async_check_for_update(
     This is a synchronous helper for CLI paths only.  Background checks
     go through :class:`UpdateChecker` which reuses the shared async
     client from the :class:`OutboundClientManager`.
+
+    The CLI path sends a fresh (no-cache) request by default.  If the
+    first fresh response says ``latest <= current``, one additional
+    fresh PyPI request with a different cache-bust token is performed
+    before concluding "already up to date".  This guards against stale
+    CDN responses that caused the original footgun.
     """
     try:
         current = importlib.metadata.version(package_name)
     except Exception as exc:  # noqa: BLE001
         return "", "", f"version: {exc}"
+
+    import time as _time
+
+    bust_1 = str(int(_time.monotonic_ns()))
     try:
-        response = _fetch_pypi_response_sync(timeout_s=timeout_s)
+        response = _fetch_pypi_response_sync(
+            timeout_s=timeout_s,
+            fresh=True,
+            cache_bust_token=bust_1,
+        )
         latest = _latest_version_from_response(response)
     except Exception as exc:  # noqa: BLE001
         return current, "", f"pypi: {exc}"
+
+    if is_newer_version(current, latest):
+        return current, latest, ""
+
+    bust_2 = str(int(_time.monotonic_ns()))
+    try:
+        response2 = _fetch_pypi_response_sync(
+            timeout_s=timeout_s,
+            fresh=True,
+            cache_bust_token=bust_2,
+        )
+        latest2 = _latest_version_from_response(response2)
+    except Exception:
+        return current, latest, ""
+
+    if is_newer_version(current, latest2):
+        return current, latest2, ""
     return current, latest, ""
 
 
@@ -423,5 +487,6 @@ __all__ = [
     "UpdateChecker",
     "UpdateInfo",
     "async_check_for_update",
+    "is_newer_version",
     "schedule_check",
 ]

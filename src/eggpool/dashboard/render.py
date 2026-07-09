@@ -58,6 +58,7 @@ _EM_DASH = "\u2014"
 
 
 _UPDATE_INDICATOR_TEMPLATE = (
+    '<span class="footer-update-indicator">'
     '<span class="update-indicator" '
     "data-update-indicator "
     'data-tooltip="A newer eggpool version is available. '
@@ -73,6 +74,7 @@ _UPDATE_INDICATOR_TEMPLATE = (
     "</code>"
     '<span class="update-copied" data-update-copied role="status" '
     'aria-live="polite"></span>'
+    "</span>"
     "</span>"
 )
 """Footer indicator shown only when an update is available.
