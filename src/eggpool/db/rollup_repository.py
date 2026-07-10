@@ -52,6 +52,15 @@ def _append_optional_filters(
         params.append(account_id)
 
 
+def _bucket_expression(bucket_size_s: int) -> str:
+    """Return the SQLite expression for a dashboard bucket size."""
+    if bucket_size_s == 3600:
+        return "strftime('%Y-%m-%d %H:00:00', bucket_start)"
+    if bucket_size_s == 86400:
+        return "strftime('%Y-%m-%d 00:00:00', bucket_start)"
+    return "bucket_start"
+
+
 class UsageRollupRepository:
     """Operations for the usage_rollups buffered analytics table.
 
@@ -63,6 +72,45 @@ class UsageRollupRepository:
 
     def __init__(self, db: Database) -> None:
         self._db = db
+
+    async def _select_source_bucket_size(
+        self,
+        *,
+        start: str,
+        end: str,
+        target_bucket_size_s: int,
+        provider_id: str | None = None,
+        model_id: str | None = None,
+        account_id: int | None = None,
+    ) -> int | None:
+        """Choose the largest available rollup that fits the target bucket.
+
+        Metrics may be persisted at 60 or 300 seconds while dashboard charts
+        request hourly or daily buckets. Prefer the largest available source
+        bucket not exceeding the requested size so rows are not double-counted
+        when an operator changes the metrics bucket configuration.
+        """
+        conditions = [
+            "bucket_start >= ?",
+            "bucket_start < ?",
+            "bucket_size_s <= ?",
+        ]
+        params: list[Any] = [start, end, target_bucket_size_s]
+        _append_optional_filters(
+            conditions,
+            params,
+            provider_id=provider_id,
+            model_id=model_id,
+            account_id=account_id,
+        )
+        row = await self._db.fetch_one(
+            "SELECT MAX(bucket_size_s) AS source_bucket_size_s "
+            "FROM usage_rollups WHERE " + " AND ".join(conditions),
+            tuple(params),
+        )
+        if row is None or row["source_bucket_size_s"] is None:
+            return None
+        return int(row["source_bucket_size_s"])
 
     async def upsert_many(self, rows: list[dict[str, object]]) -> int:
         """Upsert multiple rollup rows. Returns count of rows processed."""
@@ -193,8 +241,20 @@ class UsageRollupRepository:
 
         group_expr = _GROUP_KEY_EXPR[group_by]
 
+        source_bucket_size_s = await self._select_source_bucket_size(
+            start=start,
+            end=end,
+            target_bucket_size_s=bucket_size_s,
+            provider_id=provider_id,
+            model_id=model_id,
+            account_id=account_id,
+        )
+        if source_bucket_size_s is None:
+            return []
+
+        bucket_expr = _bucket_expression(bucket_size_s)
         conditions = ["bucket_start >= ?", "bucket_start < ?", "bucket_size_s = ?"]
-        params: list[Any] = [start, end, bucket_size_s]
+        params: list[Any] = [start, end, source_bucket_size_s]
 
         _append_optional_filters(
             conditions,
@@ -208,7 +268,7 @@ class UsageRollupRepository:
 
         sql = (
             f"SELECT "
-            f"bucket_start AS bucket, "
+            f"{bucket_expr} AS bucket, "
             f"{group_expr} AS series_key, "
             f"SUM(request_count) AS request_count, "
             f"SUM(error_count) AS error_count, "
@@ -240,11 +300,12 @@ class UsageRollupRepository:
             f"  ELSE 0 END AS avg_latency_ms "
             f"FROM usage_rollups "
             f"WHERE {where} "
-            f"GROUP BY bucket_start, series_key "
-            f"ORDER BY bucket_start "
-            f"LIMIT ?"
+            f"GROUP BY {bucket_expr}, series_key "
+            f"ORDER BY bucket "
         )
-        params.append(limit)
+        if source_bucket_size_s == bucket_size_s:
+            sql += " LIMIT ?"
+            params.append(limit)
 
         rows = await self._db.fetch_all(sql, tuple(params))
         return [dict(row) for row in rows]
@@ -345,8 +406,20 @@ class UsageRollupRepository:
 
         Returns one row per bucket with sums across all series.
         """
+        source_bucket_size_s = await self._select_source_bucket_size(
+            start=start,
+            end=end,
+            target_bucket_size_s=bucket_size_s,
+            provider_id=provider_id,
+            model_id=model_id,
+            account_id=account_id,
+        )
+        if source_bucket_size_s is None:
+            return []
+
+        bucket_expr = _bucket_expression(bucket_size_s)
         conditions = ["bucket_start >= ?", "bucket_start < ?", "bucket_size_s = ?"]
-        params: list[Any] = [start, end, bucket_size_s]
+        params: list[Any] = [start, end, source_bucket_size_s]
         _append_optional_filters(
             conditions,
             params,
@@ -358,7 +431,7 @@ class UsageRollupRepository:
 
         sql = (
             "SELECT "
-            "bucket_start AS bucket, "
+            f"{bucket_expr} AS bucket, "
             "SUM(request_count) AS request_count, "
             "SUM(error_count) AS error_count, "
             "SUM(retry_count) AS retry_count, "
@@ -381,8 +454,8 @@ class UsageRollupRepository:
             "  ELSE 0 END AS avg_ttft_ms "
             "FROM usage_rollups "
             f"WHERE {where} "
-            "GROUP BY bucket_start "
-            "ORDER BY bucket_start"
+            f"GROUP BY {bucket_expr} "
+            "ORDER BY bucket"
         )
         rows = await self._db.fetch_all(sql, tuple(params))
         return [dict(row) for row in rows]

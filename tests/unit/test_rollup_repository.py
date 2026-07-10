@@ -214,6 +214,37 @@ class TestQueryTimeseriesBasic:
         assert "series_key" in rows[0]
 
     @pytest.mark.asyncio()
+    async def test_resamples_finer_buckets_to_hour(
+        self, repo: UsageRollupRepository
+    ) -> None:
+        await repo.upsert_many(
+            [
+                _row(
+                    bucket_start="2025-06-15 12:00:00",
+                    bucket_size_s=60,
+                    request_count=3,
+                    input_tokens=30,
+                ),
+                _row(
+                    bucket_start="2025-06-15 12:01:00",
+                    bucket_size_s=60,
+                    request_count=2,
+                    input_tokens=20,
+                ),
+            ]
+        )
+
+        rows = await repo.query_timeseries(
+            start="2025-06-15 12:00:00",
+            end="2025-06-15 13:00:00",
+            bucket_size_s=3600,
+        )
+        assert len(rows) == 1
+        assert rows[0]["bucket"] == "2025-06-15 12:00:00"
+        assert rows[0]["request_count"] == 5
+        assert rows[0]["input_tokens"] == 50
+
+    @pytest.mark.asyncio()
     async def test_streamed_counts_use_request_count(
         self, repo: UsageRollupRepository
     ) -> None:
@@ -359,6 +390,34 @@ class TestQueryFlatTimeseries:
         assert rows[0]["input_tokens"] == 50
         assert rows[1]["bucket"] == "2025-06-15 12:01:00"
         assert rows[1]["request_count"] == 1
+
+    @pytest.mark.asyncio()
+    async def test_resamples_finer_buckets_to_day(
+        self, repo: UsageRollupRepository
+    ) -> None:
+        await repo.upsert_many(
+            [
+                _row(
+                    bucket_start="2025-06-15 12:00:00",
+                    bucket_size_s=60,
+                    request_count=3,
+                ),
+                _row(
+                    bucket_start="2025-06-15 13:00:00",
+                    bucket_size_s=60,
+                    request_count=2,
+                ),
+            ]
+        )
+
+        rows = await repo.query_flat_timeseries(
+            start="2025-06-15 00:00:00",
+            end="2025-06-16 00:00:00",
+            bucket_size_s=86400,
+        )
+        assert len(rows) == 1
+        assert rows[0]["bucket"] == "2025-06-15 00:00:00"
+        assert rows[0]["request_count"] == 5
 
 
 class TestQuerySummaryBasic:

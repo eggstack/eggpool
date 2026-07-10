@@ -70,12 +70,13 @@ async def _flush_events(
     db: Database,
     rollup_repo: UsageRollupRepository,
     events: list[UsageMetricEvent],
+    bucket_size_s: int = 3600,
 ) -> None:
     config = MetricsConfig(
         write_mode="balanced",
         flush_interval_s=30,
         max_buffered_events=500,
-        timeseries_bucket_s=3600,
+        timeseries_bucket_s=bucket_size_s,
     )
     coalescer = MetricsWriteCoalescer(config=config, db=db, rollup_repo=rollup_repo)
     for event in events:
@@ -231,6 +232,55 @@ class TestTimeseriesRollupPreference:
         assert len(result) > 0
         total_requests = sum(int(r.get("request_count", 0)) for r in result)
         assert total_requests == 1
+
+    @pytest.mark.asyncio()
+    async def test_fine_rollups_are_resampled_for_long_windows(
+        self, db: Database
+    ) -> None:
+        """The default 60-second rollups must feed hourly dashboard charts."""
+        rollup_repo = UsageRollupRepository(db)
+        account_id = await _insert_account(db, "ts_fine_acct")
+        await _insert_model(db, "model_a")
+        now = datetime.now(UTC)
+        await _flush_events(
+            db,
+            rollup_repo,
+            [
+                UsageMetricEvent(
+                    timestamp=now - timedelta(hours=6, minutes=1),
+                    provider_id="provider_a",
+                    model_id="model_a",
+                    account_id=account_id,
+                    protocol="openai",
+                    streamed=False,
+                    status="completed",
+                    retry_count=0,
+                    input_tokens=100,
+                    output_tokens=200,
+                    cache_read_tokens=0,
+                    cache_write_tokens=0,
+                    reasoning_tokens=0,
+                    thinking_characters=0,
+                    cost_microdollars=500,
+                    bytes_received=1000,
+                    bytes_emitted=500,
+                    latency_ms=50,
+                    first_byte_ms=None,
+                ),
+            ],
+            bucket_size_s=60,
+        )
+        time_range = TimeRange(start=now - timedelta(hours=24), end=now, label="24h")
+        service = StatsService(db, rollup_repo=rollup_repo)
+
+        flat = await service.get_timeseries(time_range, bucket="hour")
+        assert flat is not None
+        assert sum(int(row["request_count"]) for row in flat) == 1
+
+        grouped = await service.get_grouped_timeseries(
+            time_range, bucket="hour", group_by="provider_model"
+        )
+        assert sum(int(point["request_count"]) for point in grouped["points"]) == 1
 
     @pytest.mark.asyncio()
     async def test_empty_rollups_24h_returns_empty(self, db: Database) -> None:
