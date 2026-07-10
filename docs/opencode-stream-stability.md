@@ -71,24 +71,22 @@ finalizer is not running for some requests. Walk through:
 1. Confirm `finalization_retry_queue` is not backed up.
 2. Confirm `_crash_recovery` ran at startup (look for the
    "Recovered N pending requests" log line in supervisor output).
-3. Run `eggpool stats repair-reservations` to manually reconcile.
+3. Run `eggpool stats repair-costs` to reconcile any stale cost data.
 
 ## Recovery commands
 
 ```bash
-# Inspect runtime telemetry without dashboard access
-eggpool runtime show --db /var/lib/eggpool/eggpool.db
-
-# Drain the finalization retry queue immediately (instead of waiting
-# for the periodic supervisor tick)
-eggpool admin drain-finalization-queue
+# Inspect runtime health without dashboard access
+eggpool runtime-status
 
 # Reconcile active reservations whose request is no longer pending
-eggpool stats repair-reservations --dry-run
-eggpool stats repair-reservations
+# (crash recovery runs automatically at startup; for manual intervention
+# restart the service: eggpool restart)
+eggpool restart
 
-# Reset the routing trace guard threshold without a service restart
-eggpool admin set-routing-trace-threshold --p95-ms 500
+# Reset the routing trace guard threshold — edit config and restart
+# [routing.trace] skip_above_lock_wait_p95_ms = 500  in config.toml
+# then: eggpool restart
 ```
 
 ## Capacity planning

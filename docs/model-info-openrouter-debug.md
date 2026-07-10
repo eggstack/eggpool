@@ -97,12 +97,11 @@ model_id       source      alias               match_method      discovered_by
 minimax-m3     openrouter  minimax/minimax-m3  normalized_exact  openrouter
 ```
 
-## Expected outcomes (Phase 1 polish)
+## Expected outcomes
 
 The following invariants are pinned by the
 `tests/unit/test_model_info_openrouter_enrichment.py` and
-`tests/unit/test_model_info_alias_resolution.py` suites and by the
-acceptance criteria in the polish closeout plan:
+`tests/unit/test_model_info_alias_resolution.py` suites:
 
 | Surface | Expected |
 |---------|----------|
@@ -129,8 +128,7 @@ acceptance criteria in the polish closeout plan:
 
 ## Alias ambiguity regressions
 
-The Phase 1 polish closes three false-ambiguity holes created by
-case-insensitive alias lookup.  When you see
+Case-insensitive alias lookup can create false-ambiguity holes. When you see
 `miss_reason = "ambiguous_aliases"` or an empty `alias_candidates`
 list, inspect `model_info_aliases` for that model:
 
@@ -160,8 +158,7 @@ Verifying the polish invariants:
 
 ## When the read path fails
 
-The Phase 2 polish keeps the API truthful when the repository read
-fails.  The detail endpoint will respond with:
+When the repository read fails, the detail endpoint responds with:
 
 ```json
 {

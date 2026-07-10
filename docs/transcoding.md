@@ -110,15 +110,15 @@ When set, EggPool boots with a `WARNING` and reverts to the pre-default behaviou
 | `stop_sequences` | `stop` | Single → string, multi → list |
 | `metadata.user_id` | `user` | Mapped to OpenAI `user` field |
 | `top_k` | — | Dropped, warning `top_k_dropped` emitted |
-| `cache_control` | — | Dropped, warning `cache_control_feature_disabled` emitted (Phase 3) |
+| `cache_control` | — | Dropped, warning `cache_control_feature_disabled` emitted |
 | `thinking` | — | Dropped, warning emitted (see Extended Thinking below) |
 | `context_management` | — | Dropped, warning emitted (experimental) |
 | `container` | — | Dropped, warning emitted (experimental) |
 | `mcp_servers` | — | Dropped, warning emitted (experimental) |
 | `tools` (Anthropic-shape) | `tools` (function-shape) | Translated field-by-field (see Tool-Use Transcoding below) |
 | `tool_choice` | `tool_choice` | Translated between object and string shapes |
-| `tools[].cache_control` | — | Dropped with `cache_control_unsupported_by_target_protocol` warning (Phase 3); boundary tracked on `TranscodeContext.cache_boundary_tracker` |
-| `messages[].content[].cache_control` | — | Dropped with `cache_control_unsupported_by_target_protocol` warning (Phase 3) |
+| `tools[].cache_control` | — | Dropped with `cache_control_unsupported_by_target_protocol` warning; boundary tracked on `TranscodeContext.cache_boundary_tracker` |
+| `messages[].content[].cache_control` | — | Dropped with `cache_control_unsupported_by_target_protocol` warning |
 | `messages[assistant].content[thinking]` | `messages[assistant].reasoning_content` | Feature-gated: thinking text mapped; signature dropped with `thinking_signature_dropped` warning |
 | `messages[assistant].content[image]` | `messages[user].content[image_url]` | Feature-gated: base64 → data URI; URL → `image_url.url` |
 | `messages[user].content[document]` | `messages[user].content[file]` | Feature-gated: PDF base64 → `file` with data URI; URL dropped; non-PDF, invalid base64, and PDFs over 32 MB are dropped |
@@ -304,7 +304,7 @@ A `pause_turn` loss warning is also appended to `TranscodeContext.loss_warnings`
 
 OpenAI's `stream_options.include_usage` flag has no Anthropic analogue, so the wrapper object is dropped with a `dropped_field` warning when transcoding to an Anthropic upstream. The single field inside (`include_usage: bool`) is significant for usage accounting, so the transcoder lifts it onto `TranscodeContext.request_include_usage` before the streaming transcoder runs. The streaming transcoder reads `request_include_usage` from the context to decide whether to forward upstream usage chunks to the OpenAI client. The reverse direction (Anthropic → OpenAI) does not need this — OpenAI clients receive usage only when `stream_options.include_usage` was set on the request, which it wasn't.
 
-#### Thinking streaming (Phase 6.3 + Phase 8)
+#### Thinking streaming
 
 Anthropic `thinking_delta` events translate to OpenAI reasoning delta fields. The field names are configurable via `[transcoder.openai_reasoning_fields]` — `stream_delta` (default `["reasoning"]`) controls streaming field names. Order is preserved: thinking comes before tool_use comes before text in Anthropic, and reasoning content comes before content in OpenAI.
 
@@ -318,7 +318,7 @@ When `[transcoder.features].thinking = false`, streaming thinking deltas are dro
 
 Thinking deltas and text deltas are emitted independently — a stream may contain both reasoning and content chunks on the same request.
 
-#### Response-field compatibility (Phase 8)
+#### Response-field compatibility
 
 EggPool makes the JSON field names used for reasoning content configurable via `[transcoder.openai_reasoning_fields]`. This controls both non-streaming and streaming output.
 
@@ -589,7 +589,7 @@ Tests live under `tests/unit/test_transcoder/test_streaming_fixtures.py`
 (E2E concurrency regression). The fixtures themselves are JSON files
 under `tests/fixtures/streaming_transcode/`.
 
-## Cache Stability (Phase 3)
+## Cache Stability
 
 Provider-visible prompt caching (Anthropic's `cache_control` breakpoints) is **observational** in v1 — the transcoder preserves or annotates every `cache_control` event but never reorders key material, mutates prompt content, or synthesises cache hints that the caller did not provide. Two helpers make the cache surface explicit:
 
