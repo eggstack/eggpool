@@ -547,7 +547,7 @@ class TestChartHydrationIntervalCleanup:
     def test_init_chart_loading_shells_clears_prior_handles(self) -> None:
         js = self._load_js()
         start = js.index("namespace.initChartLoadingShells")
-        block = js[start : start + 4000]
+        block = js[start : start + 7000]
         assert "namespace.__chartHydrationHandles" in block
         assert "window.clearInterval" in block
 
@@ -563,7 +563,7 @@ class TestChartHydrationIntervalCleanup:
     def test_deduplicates_inflight_fetches(self) -> None:
         js = self._load_js()
         start = js.index("namespace.initChartLoadingShells")
-        block = js[start : start + 4000]
+        block = js[start : start + 7000]
         assert "namespace.__chartHydrationInflight" in block
         assert "__chartHydrationInflight[decoded]" in block
 

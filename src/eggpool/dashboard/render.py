@@ -548,8 +548,8 @@ def _render_layout(
     &middot; <span id="dashboard-updated">ready</span>{update_indicator}</small>
 </footer>
 {script_block}
-{chart_script}
 {dashboard_script}
+{chart_script}
 </body>
 </html>"""
 

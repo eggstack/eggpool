@@ -1766,6 +1766,25 @@ class TestDashboardStatsCache:
         assert second is first
         fetch.assert_awaited_once()
 
+    def test_generated_dashboard_periods_use_bucketed_cache_keys(self) -> None:
+        """Rolling heatmap labels remain cacheable across moving timestamps."""
+        service = StatsService(AsyncMock(spec=Database))
+        first = TimeRange(
+            start=datetime(2025, 1, 1, tzinfo=UTC),
+            end=datetime(2025, 1, 2, tzinfo=UTC),
+            label="180d",
+        )
+        second = TimeRange(
+            start=datetime(2025, 1, 1, 0, 0, 30, tzinfo=UTC),
+            end=datetime(2025, 1, 2, 0, 0, 30, tzinfo=UTC),
+            label="180d",
+        )
+
+        first_key = service._dashboard_cache_key("bandwidth", first)
+        second_key = service._dashboard_cache_key("bandwidth", second)
+
+        assert first_key == second_key
+
     @pytest.mark.asyncio()
     async def test_timeseries_cache_serves_repeated_lookups(self, db: Database) -> None:
         """``get_timeseries`` participates in the dashboard cache when opted in."""
@@ -1983,6 +2002,45 @@ class TestDashboardStatsCache:
         assert len(rows) == 1
         assert rows[0]["model_id"] == "model_ttft"
         assert float(rows[0]["avg_ttft_ms"]) == pytest.approx(300.0)
+
+    @pytest.mark.asyncio()
+    async def test_ttft_dashboard_cache_serves_repeated_lookups(
+        self, ttft_db: Database
+    ) -> None:
+        """Latency dashboard aggregates participate in the dashboard cache."""
+        service = StatsService(ttft_db)
+        time_range = TimeRange(
+            start=__import__("datetime").datetime.fromisoformat("2000-01-01"),
+            end=__import__("datetime").datetime.fromisoformat("2099-12-31"),
+            label="custom",
+        )
+        with (
+            patch(
+                "eggpool.stats.service.fetch_provider_ttft_summary",
+                new=AsyncMock(return_value=[{"provider_id": "cached"}]),
+            ) as provider_fetch,
+            patch(
+                "eggpool.stats.service.fetch_provider_model_ttft",
+                new=AsyncMock(return_value=[{"model_id": "cached"}]),
+            ) as model_fetch,
+        ):
+            first_provider = await service.get_provider_ttft_summary(
+                time_range, use_cache=True
+            )
+            second_provider = await service.get_provider_ttft_summary(
+                time_range, use_cache=True
+            )
+            first_model = await service.get_provider_model_ttft(
+                time_range, use_cache=True
+            )
+            second_model = await service.get_provider_model_ttft(
+                time_range, use_cache=True
+            )
+
+        assert second_provider is first_provider
+        assert second_model is first_model
+        provider_fetch.assert_awaited_once()
+        model_fetch.assert_awaited_once()
 
     @pytest.mark.asyncio()
     async def test_ttft_in_dashboard_overview(self, ttft_db: Database) -> None:

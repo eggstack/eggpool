@@ -1711,9 +1711,9 @@ async def handle_latency(
     provider_ttft, model_ttft, phases = cast(
         "tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any] | None]",
         await asyncio.gather(
-            stats.get_provider_ttft_summary(time_range),
-            stats.get_provider_model_ttft(time_range),
-            stats.get_latency_phase_breakdown(time_range),
+            stats.get_provider_ttft_summary(time_range, use_cache=True),
+            stats.get_provider_model_ttft(time_range, use_cache=True),
+            stats.get_latency_phase_breakdown(time_range, use_cache=True),
         ),
     )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
@@ -1749,10 +1749,10 @@ async def handle_reliability(
     ) = cast(
         "_ReliabilityPayload",
         await asyncio.gather(
-            stats.get_attempt_stats(time_range),
-            stats.get_retry_distribution(time_range),
-            stats.get_pending_health_snapshot(),
-            stats.get_operational_event_summary(time_range),
+            stats.get_attempt_stats(time_range, use_cache=True),
+            stats.get_retry_distribution(time_range, use_cache=True),
+            stats.get_pending_health_snapshot(use_cache=True),
+            stats.get_operational_event_summary(time_range, use_cache=True),
             stats.get_recent_operational_events(limit=25),
         ),
     )
@@ -1806,10 +1806,10 @@ async def handle_routing(
     ) = cast(
         _RoutingPayload,  # noqa: TC006 — pyright needs the TypeAlias to propagate through gather()
         await asyncio.gather(
-            stats.get_routing_distribution(time_range),
-            stats.get_routing_selection_breakdown(time_range),
-            stats.get_routing_exclusion_breakdown(time_range),
-            stats.get_routing_skew_summary(time_range),
+            stats.get_routing_distribution(time_range, use_cache=True),
+            stats.get_routing_selection_breakdown(time_range, use_cache=True),
+            stats.get_routing_exclusion_breakdown(time_range, use_cache=True),
+            stats.get_routing_skew_summary(time_range, use_cache=True),
         ),
     )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
@@ -1867,7 +1867,7 @@ async def handle_pings(
     ping_summary, recent_pings = cast(
         "_PingsPayload",
         await asyncio.gather(
-            stats.get_ping_summary(time_range),
+            stats.get_ping_summary(time_range, use_cache=True),
             stats.get_ping_recent(limit=50),
         ),
     )
@@ -2006,7 +2006,9 @@ async def handle_bandwidth(
         "tuple[dict[str, Any], list[dict[str, Any]]]",
         await asyncio.gather(
             stats.get_summary(time_range, account_name=account or None, use_cache=True),
-            stats.get_bandwidth_timeseries(heatmap_range, account_name=account or None),
+            stats.get_bandwidth_timeseries(
+                heatmap_range, account_name=account or None, use_cache=True
+            ),
         ),
     )
     _gather_ms = (time.perf_counter() - _gather_start) * 1000

@@ -80,6 +80,8 @@ _DASHBOARD_CACHE_TTL_BY_NAMESPACE: dict[str, float] = {
     "routing_skew": 60.0,
     "operational_summary": 60.0,
     "latency_phases": 60.0,
+    "ttft_providers": 60.0,
+    "ttft_models": 60.0,
     "transcoding_stats": 60.0,
     "cache_observability": 60.0,
     "canonical_request_segmentation": 60.0,
@@ -120,6 +122,19 @@ def _dashboard_cache_ttl(namespace: str, period_label: str) -> float:
     if namespace in period_overrides:
         return period_overrides[namespace]
     return _DASHBOARD_CACHE_TTL_BY_NAMESPACE.get(namespace, 30.0)
+
+
+def _is_dashboard_period_label(label: str) -> bool:
+    """Return whether a label represents a rolling dashboard window.
+
+    The overview heatmap uses generated labels such as ``180d`` rather than
+    one of :data:`PERIOD_PRESETS`. Treat those labels like presets so the
+    cache key advances in TTL-sized buckets instead of changing every second
+    as the rolling range's end timestamp moves.
+    """
+    return label in PERIOD_PRESETS or (
+        len(label) > 1 and label[-1] in {"h", "d"} and label[:-1].isdigit()
+    )
 
 
 # Maximum window (in seconds) that allows a raw requests fallback when
@@ -240,7 +255,7 @@ class StatsService:
     def _dashboard_cache_key(
         self, namespace: str, time_range: TimeRange, *parts: str
     ) -> tuple[str, ...]:
-        if time_range.label in PERIOD_PRESETS:
+        if _is_dashboard_period_label(time_range.label):
             ttl = _dashboard_cache_ttl(namespace, time_range.label)
             period_key = str(int(time_range.end.timestamp() // ttl))
         else:
@@ -1337,20 +1352,32 @@ class StatsService:
         }
 
     async def get_provider_ttft_summary(
-        self, time_range: TimeRange
+        self, time_range: TimeRange, *, use_cache: bool = False
     ) -> list[dict[str, Any]]:
         """Get per-provider TTFT aggregate (streamed requests only)."""
-        return await fetch_provider_ttft_summary(
+        key = self._dashboard_cache_key("ttft_providers", time_range)
+        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
+            return cast("list[dict[str, Any]]", cached)
+        result = await fetch_provider_ttft_summary(
             self._db, time_range.start_str(), time_range.end_str()
         )
+        if use_cache:
+            self._set_dashboard_cache(key, result)
+        return result
 
     async def get_provider_model_ttft(
-        self, time_range: TimeRange
+        self, time_range: TimeRange, *, use_cache: bool = False
     ) -> list[dict[str, Any]]:
         """Get per-provider, per-model TTFT breakdown (streamed requests only)."""
-        return await fetch_provider_model_ttft(
+        key = self._dashboard_cache_key("ttft_models", time_range)
+        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
+            return cast("list[dict[str, Any]]", cached)
+        result = await fetch_provider_model_ttft(
             self._db, time_range.start_str(), time_range.end_str()
         )
+        if use_cache:
+            self._set_dashboard_cache(key, result)
+        return result
 
     async def get_ping_summary(
         self, time_range: TimeRange, *, use_cache: bool = False

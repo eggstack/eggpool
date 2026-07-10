@@ -1279,6 +1279,36 @@ class TestDashboardJS:
         assert "namespace.initGroupedTimeseriesCharts();" in bootstrap_block
         assert "namespace.reinitTimeseriesChart();" in bootstrap_block
 
+    def test_chart_data_hydration_starts_before_chart_js_ready(self) -> None:
+        """API-backed chart data must not wait for the Chart.js download."""
+        js = self._load_js()
+        bootstrap_start = js.index("namespace.bootstrap")
+        bootstrap_block = js[bootstrap_start : bootstrap_start + 1800]
+        hydration_call = bootstrap_block.index("namespace.initChartLoadingShells();")
+        chart_ready_wait = bootstrap_block.index("whenChartReady(function ()")
+        assert hydration_call < chart_ready_wait
+        assert "namespace.__chartHydrationData" in js
+        assert 'showState(shell, "ready", "Preparing chart' in js
+
+    def test_chart_initialisation_disables_startup_animation(self) -> None:
+        """Large chart payloads should paint immediately after construction."""
+        js = self._load_js()
+        assert "animation: false" in js
+        assert 'canvas.__eggpoolChart.update("none")' in js
+
+    def test_dashboard_script_precedes_chart_script(self) -> None:
+        """The hydration bootstrap must execute before Chart.js's large asset."""
+        html = render_overview(
+            overview={
+                "summary": {"total_requests": 0},
+                "imbalance": {"imbalance_ratio": 0.0},
+            },
+            accounts=[],
+        )
+        assert html.index('/static/dashboard.js"></script>') < html.index(
+            '/static/chart.js"></script>'
+        )
+
     def test_chart_bootstrap_invokes_the_namespaced_function(self) -> None:
         """The startup hook must call the exported bootstrap function.
 
@@ -5895,21 +5925,21 @@ class TestDashboardJSChartLoading:
         """Loading state shows 'Loading chart data...'."""
         js = self._load_js()
         start = js.index("namespace.initChartLoadingShells")
-        block = js[start : start + 3000]
+        block = js[start : start + 7000]
         assert "Loading chart data" in block
 
     def test_renders_empty_state(self) -> None:
         """Empty state shows 'No data for selected period'."""
         js = self._load_js()
         start = js.index("namespace.initChartLoadingShells")
-        block = js[start : start + 3000]
+        block = js[start : start + 7000]
         assert "No data for selected period" in block
 
     def test_renders_error_state(self) -> None:
         """Error state shows 'Chart data unavailable'."""
         js = self._load_js()
         start = js.index("namespace.initChartLoadingShells")
-        block = js[start : start + 3000]
+        block = js[start : start + 7000]
         assert "Chart data unavailable" in block
 
     def test_per_canvas_interval_handle_cleanup(self) -> None:

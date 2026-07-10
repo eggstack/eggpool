@@ -236,7 +236,10 @@
 
   function whenChartReady(callback) {
     if (!hasChartWork()) return;
-    const maxAttempts = 40;
+    // dashboard.js is intentionally ordered before chart.js so the data
+    // request can start while Chart.js downloads. Give that deferred asset a
+    // generous window to arrive on low-bandwidth SBC deployments.
+    const maxAttempts = 200;
     const delayMs = 50;
     let attempts = 0;
     const run = function () {
@@ -606,6 +609,8 @@
         payload.options && typeof payload.options === "object"
           ? payload.options
           : {};
+      if (options.animation === undefined) options.animation = false;
+      if (options.normalized === undefined) options.normalized = true;
       destroyChartOn(canvas);
       canvas.__eggpoolChart = new window.Chart(canvas, {
         type: chartType,
@@ -624,50 +629,36 @@
     if (!namespace.__chartHydrationHandles) {
       namespace.__chartHydrationHandles = {};
     }
-    for (var i = 0; i < shells.length; i++) {
-      (function (shell) {
-        var canvasId = shell.getAttribute("data-chart-canvas") || "";
-        var endpoint = shell.getAttribute("data-chart-endpoint") || "";
-        if (!endpoint || !canvasId) return;
-        if (namespace.__chartHydrationHandles[canvasId]) {
-          window.clearInterval(namespace.__chartHydrationHandles[canvasId]);
-          namespace.__chartHydrationHandles[canvasId] = null;
-        }
-        function showState(state, message) {
-          shell.setAttribute("data-chart-state", state);
-          var textEl = shell.querySelector("span:last-child");
-          if (textEl && message) textEl.textContent = message;
-        }
-        showState("loading", "Loading chart data\u2026");
-        var decoded = endpoint.replace(/&amp;/g, "&");
-        if (namespace.__chartHydrationInflight[decoded]) {
-          namespace.__chartHydrationInflight[decoded].then(
-            function (data) { renderIntoShell(shell, canvasId, data); },
-            function () { showState("error", "Chart data unavailable"); }
-          );
-          return;
-        }
-        var promise = fetch(decoded, { cache: "no-store", headers: { "x-dashboard-refresh": "1" } })
-          .then(function (response) {
-            if (!response.ok) throw new Error("chart fetch failed: " + response.status);
-            return response.json();
-          });
-        namespace.__chartHydrationInflight[decoded] = promise;
-        promise.then(
-          function (data) { renderIntoShell(shell, canvasId, data); },
-          function () { showState("error", "Chart data unavailable"); }
-        ).then(function () { delete namespace.__chartHydrationInflight[decoded]; });
-      })(shells[i]);
+    if (!namespace.__chartHydrationData) {
+      namespace.__chartHydrationData = {};
     }
+
+    function showState(shell, state, message) {
+      shell.setAttribute("data-chart-state", state);
+      var textEl = shell.querySelector("span:last-child");
+      if (textEl && message) textEl.textContent = message;
+    }
+
     function renderIntoShell(shell, canvasId, data) {
+      // Auto-refresh replaces the shell's parent with new HTML. A response
+      // from the old shell must never insert a second canvas into the new DOM.
+      if (shell.getAttribute("data-chart-state") === "loaded") return;
       var list = Array.isArray(data) ? data : [];
       if (list.length === 0) {
-        shell.setAttribute("data-chart-state", "empty");
-        var textEl = shell.querySelector("span:last-child");
-        if (textEl) textEl.textContent = "No data for selected period";
+        showState(shell, "empty", "No data for selected period");
         return;
       }
-      shell.setAttribute("data-chart-state", "loaded");
+
+      // Start the data request independently of Chart.js. The latter is the
+      // largest dashboard asset, and waiting for it here makes the chart API
+      // request pay the full script-load latency before it even starts.
+      if (typeof window.Chart === "undefined") {
+        namespace.__chartHydrationData[canvasId] = data;
+        showState(shell, "ready", "Preparing chart…");
+        return;
+      }
+
+      showState(shell, "loaded", "");
       shell.style.display = "none";
       var panel = shell.closest(".panel") || shell.parentElement;
       if (!panel) return;
@@ -684,29 +675,29 @@
       wrap.appendChild(canvas);
       panel.insertBefore(wrap, shell);
       var period = periodFromShell || "24h";
-      if (typeof window.Chart !== "undefined") {
-        var labels = list.map(function (d) { return d.bucket; });
-        var requests = list.map(function (d) { return Number(d.request_count || 0); });
-        var errors = list.map(function (d) { return Number(d.error_count || 0); });
-        canvas.__eggpoolChart = new window.Chart(canvas, {
-          type: "line",
-          data: {
-            labels: labels,
-            datasets: [
-              { label: "Requests", data: requests, borderColor: "rgb(75, 192, 192)", tension: 0.1 },
-              { label: "Errors", data: errors, borderColor: "rgb(255, 99, 132)", tension: 0.1 },
-            ],
+      var labels = list.map(function (d) { return d.bucket; });
+      var requests = list.map(function (d) { return Number(d.request_count || 0); });
+      var errors = list.map(function (d) { return Number(d.error_count || 0); });
+      canvas.__eggpoolChart = new window.Chart(canvas, {
+        type: "line",
+        data: {
+          labels: labels,
+          datasets: [
+            { label: "Requests", data: requests, borderColor: "rgb(75, 192, 192)", tension: 0.1 },
+            { label: "Errors", data: errors, borderColor: "rgb(255, 99, 132)", tension: 0.1 },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          normalized: true,
+          scales: {
+            x: { title: { display: true, text: "Time" } },
+            y: { title: { display: true, text: "Count" }, beginAtZero: true },
           },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-              x: { title: { display: true, text: "Time" } },
-              y: { title: { display: true, text: "Count" }, beginAtZero: true },
-            },
-          },
-        });
-      }
+        },
+      });
       if (namespace.__chartHydrationHandles[canvasId]) {
         window.clearInterval(namespace.__chartHydrationHandles[canvasId]);
       }
@@ -723,14 +714,63 @@
             canvas.__eggpoolChart.data.labels = rows.map(function (r) { return r.bucket; });
             canvas.__eggpoolChart.data.datasets[0].data = rows.map(function (r) { return Number(r.request_count || 0); });
             canvas.__eggpoolChart.data.datasets[1].data = rows.map(function (r) { return Number(r.error_count || 0); });
-            canvas.__eggpoolChart.update();
+            canvas.__eggpoolChart.update("none");
           })
           .catch(function () {});
       }, 60000);
     }
+
+    for (var i = 0; i < shells.length; i++) {
+      (function (shell) {
+        var canvasId = shell.getAttribute("data-chart-canvas") || "";
+        var endpoint = shell.getAttribute("data-chart-endpoint") || "";
+        if (!endpoint || !canvasId) return;
+        var currentState = shell.getAttribute("data-chart-state");
+        if (currentState === "loaded" || currentState === "empty" || currentState === "error") return;
+        if (namespace.__chartHydrationHandles[canvasId]) {
+          window.clearInterval(namespace.__chartHydrationHandles[canvasId]);
+          namespace.__chartHydrationHandles[canvasId] = null;
+        }
+        showState(shell, "loading", "Loading chart data\u2026");
+        var decoded = endpoint.replace(/&amp;/g, "&");
+        if (Object.prototype.hasOwnProperty.call(namespace.__chartHydrationData, canvasId)) {
+          var readyData = namespace.__chartHydrationData[canvasId];
+          delete namespace.__chartHydrationData[canvasId];
+          renderIntoShell(shell, canvasId, readyData);
+          return;
+        }
+        if (namespace.__chartHydrationInflight[decoded]) {
+          namespace.__chartHydrationInflight[decoded].then(
+            function (data) { renderIntoShell(shell, canvasId, data); },
+            function () { showState(shell, "error", "Chart data unavailable"); }
+          );
+          return;
+        }
+        var promise = fetch(decoded, { cache: "no-store", headers: { "x-dashboard-refresh": "1" } })
+          .then(function (response) {
+            if (!response.ok) throw new Error("chart fetch failed: " + response.status);
+            return response.json();
+          });
+        namespace.__chartHydrationInflight[decoded] = promise;
+        promise.then(
+          function (data) { renderIntoShell(shell, canvasId, data); },
+          function () { showState(shell, "error", "Chart data unavailable"); }
+        ).then(
+          function () { delete namespace.__chartHydrationInflight[decoded]; },
+          function () { delete namespace.__chartHydrationInflight[decoded]; }
+        );
+      })(shells[i]);
+    }
   };
 
   namespace.bootstrap = function bootstrap() {
+    // Hydrate API-backed chart shells immediately. Chart.js is independent
+    // work, so its download must not delay the data request.
+    try {
+      namespace.initChartLoadingShells();
+    } catch (err) {
+      console.error("EggPoolDashboard: initial chart hydration failed", err);
+    }
     whenChartReady(function () {
       try {
         namespace.initStaticCharts();
