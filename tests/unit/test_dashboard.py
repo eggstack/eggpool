@@ -70,6 +70,34 @@ class _HTMLTextExtractor(HTMLParser):
             self.text_parts.append(data)
 
 
+class _TableScrollParser(HTMLParser):
+    """Count tables that are not contained by a horizontal-scroll wrapper."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.table_count = 0
+        self.unwrapped_table_count = 0
+        self._scroll_depth = 0
+        self._div_stack: list[bool] = []
+
+    def handle_starttag(self, tag: str, attrs: list) -> None:  # type: ignore[override]
+        if tag == "table":
+            self.table_count += 1
+            if self._scroll_depth == 0:
+                self.unwrapped_table_count += 1
+        elif tag == "div":
+            is_scroll_wrapper = dict(attrs).get("class") == "table-scroll"
+            self._div_stack.append(is_scroll_wrapper)
+            if is_scroll_wrapper:
+                self._scroll_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag != "div" or not self._div_stack:
+            return
+        if self._div_stack.pop():
+            self._scroll_depth -= 1
+
+
 class TestEscape:
     """Tests for escape utilities."""
 
@@ -465,6 +493,78 @@ class TestRenderOverview:
         assert "&lt;model&gt;" in html
         assert "<detail>" not in html
         assert "&lt;detail&gt;" in html
+
+    def test_overview_tables_all_use_horizontal_scroll_viewports(self) -> None:
+        """Every overview table must scroll inside its own card."""
+        html = render_overview(
+            overview={
+                "summary": {
+                    "total_requests": 1,
+                    "successful_requests": 1,
+                    "error_requests": 0,
+                    "error_rate": 0.0,
+                    "total_input_tokens": 10,
+                    "total_output_tokens": 20,
+                    "total_cost_microdollars": 100,
+                    "avg_latency_ms": 50.0,
+                },
+                "imbalance": {
+                    "imbalance_ratio": 0.0,
+                    "active_accounts": 1,
+                    "most_used": None,
+                    "least_used": None,
+                },
+            },
+            accounts=[
+                {
+                    "account_name": "acct_a",
+                    "account_enabled": 1,
+                    "provider_id": "provider-a",
+                    "request_count": 1,
+                    "error_count": 0,
+                    "input_tokens": 10,
+                    "output_tokens": 20,
+                    "cost_microdollars": 100,
+                    "avg_latency_ms": 50.0,
+                }
+            ],
+            models=[
+                {
+                    "model_id": "model-a",
+                    "provider_id": "provider-a",
+                    "request_count": 1,
+                    "error_count": 0,
+                    "cost_microdollars": 100,
+                    "avg_latency_ms": 50.0,
+                }
+            ],
+            events=[
+                {
+                    "created_at": "2024-01-01 12:00:00",
+                    "account_name": "acct_a",
+                    "event_type": "catalog_refresh",
+                    "details": "details",
+                }
+            ],
+            ip_stats=[
+                {
+                    "client_ip": "127.0.0.1",
+                    "request_count": 1,
+                    "cost_microdollars": 100,
+                    "avg_latency_ms": 50.0,
+                    "error_count": 0,
+                    "input_tokens": 10,
+                    "output_tokens": 20,
+                    "total_tokens": 30,
+                    "unique_models": 1,
+                }
+            ],
+        )
+
+        parser = _TableScrollParser()
+        parser.feed(html)
+        assert parser.table_count >= 4
+        assert parser.unwrapped_table_count == 0
 
     def test_overview_top_models_cells_match_header_order(self) -> None:
         html = render_overview(

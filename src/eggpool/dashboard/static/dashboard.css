@@ -367,8 +367,13 @@ h3 {
    positioned descendants (notably CSS tooltips via [data-tooltip])
    can render above the panel boundary instead of being clipped. */
 .table-scroll {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   overflow-x: auto;
   overflow-y: visible;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-inline: contain;
 }
 
 

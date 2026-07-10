@@ -923,7 +923,7 @@ def _render_dispatch_spans_panel(
     return f"""
 <section class="panel">
   <h3>Dispatch spans</h3>
-  <table class="data compact">
+  <div class="table-scroll"><table class="data compact">
     <thead><tr>
       {_th("Span")}
       {_th("p50", priority=2)}
@@ -934,7 +934,7 @@ def _render_dispatch_spans_panel(
     <tbody>
       {"".join(rows)}
     </tbody>
-  </table>
+  </table></div>
 </section>
 """
 
@@ -1354,7 +1354,7 @@ def _render_ip_stats(ip_stats: list[dict[str, Any]]) -> str:
     return (
         '<section class="panel">'
         "<h3>Request breakdown by IP</h3>"
-        '<table class="data compact">'
+        '<div class="table-scroll"><table class="data compact">'
         "<thead><tr>"
         # Priority 1 — always shown
         + _th("IP Address")
@@ -1370,7 +1370,7 @@ def _render_ip_stats(ip_stats: list[dict[str, Any]]) -> str:
         + _th("Models", priority=3)
         + "</tr></thead><tbody>"
         + f"{''.join(rows)}"
-        + "</tbody></table>"
+        + "</tbody></table></div>"
         + "</section>"
     )
 
@@ -1472,7 +1472,7 @@ def _render_model_glance(models: list[dict[str, Any]]) -> str:
             f"</tr>"
         )
     return (
-        '<table class="data compact">'
+        '<div class="table-scroll"><table class="data compact">'
         + "<thead><tr>"
         # Priority 1 — always shown
         + _th("Model")
@@ -1486,7 +1486,7 @@ def _render_model_glance(models: list[dict[str, Any]]) -> str:
         + _th("Total tokens", priority=3)
         + "</tr></thead><tbody>"
         + f"{''.join(rows)}"
-        + "</tbody></table>"
+        + "</tbody></table></div>"
     )
 
 
@@ -1517,7 +1517,7 @@ def _render_event_glance(events: list[dict[str, Any]]) -> str:
             f"</tr>"
         )
     return (
-        '<table class="data compact">'
+        '<div class="table-scroll"><table class="data compact">'
         + "<thead><tr>"
         + _th("When")
         + _th("Account")
@@ -1525,7 +1525,7 @@ def _render_event_glance(events: list[dict[str, Any]]) -> str:
         + _th("Details", priority=2)
         + "</tr></thead><tbody>"
         + f"{''.join(rows)}"
-        + "</tbody></table>"
+        + "</tbody></table></div>"
     )
 
 
@@ -4450,7 +4450,7 @@ def _render_cache_reporting_panel(
     if protocol_rows_html:
         protocol_section = f"""
   <h4>By provider &amp; protocol</h4>
-  <table class="data compact">
+  <div class="table-scroll"><table class="data compact">
     <thead><tr>
       {_th("Provider")}
       {_th("Protocol")}
@@ -4462,13 +4462,13 @@ def _render_cache_reporting_panel(
     <tbody>
       {protocol_rows_html}
     </tbody>
-  </table>"""
+  </table></div>"""
 
     account_section = ""
     if account_rows_html:
         account_section = f"""
   <h4>By account</h4>
-  <table class="data compact">
+  <div class="table-scroll"><table class="data compact">
     <thead><tr>
       {_th("Account ID")}
       {_th("Total requests", priority=2)}
@@ -4477,13 +4477,13 @@ def _render_cache_reporting_panel(
     <tbody>
       {account_rows_html}
     </tbody>
-  </table>"""
+  </table></div>"""
 
     model_section = ""
     if model_rows_html:
         model_section = f"""
   <h4>By model</h4>
-  <table class="data compact">
+  <div class="table-scroll"><table class="data compact">
     <thead><tr>
       {_th("Model")}
       {_th("Total requests", priority=2)}
@@ -4492,7 +4492,7 @@ def _render_cache_reporting_panel(
     <tbody>
       {model_rows_html}
     </tbody>
-  </table>"""
+  </table></div>"""
 
     cache_card = f"""
 <section class="panel">
@@ -4545,7 +4545,7 @@ def _render_cache_reporting_panel(
         )
     }
   </section>
-  <table class="data compact">
+  <div class="table-scroll"><table class="data compact">
     <thead><tr>{_th("Metric")}{_th("Value", priority=2)}</tr></thead>
     <tbody>
       <tr>
@@ -4593,7 +4593,7 @@ def _render_cache_reporting_panel(
         <td class='num'>{format_int(co_total_creation)}</td>
       </tr>
     </tbody>
-  </table>
+  </table></div>
   {protocol_section}
   {account_section}
   {model_section}
@@ -4648,7 +4648,7 @@ def _render_request_segmentation_panel(
     if seg_model_rows_html:
         seg_model_section = f"""
   <h4>By model</h4>
-  <table class="data compact">
+  <div class="table-scroll"><table class="data compact">
     <thead><tr>
       {_th("Model")}
       {_th("Total requests", priority=2)}
@@ -4658,7 +4658,7 @@ def _render_request_segmentation_panel(
     <tbody>
       {seg_model_rows_html}
     </tbody>
-  </table>"""
+  </table></div>"""
 
     segmentation_card = f"""
 <section class="panel">
@@ -4712,7 +4712,7 @@ def _render_request_segmentation_panel(
         )
     }
   </section>
-  <table class="data compact">
+  <div class="table-scroll"><table class="data compact">
     <thead><tr>{_th("Metric")}{_th("Value", priority=2)}</tr></thead>
     <tbody>
       <tr>
@@ -4744,7 +4744,7 @@ def _render_request_segmentation_panel(
         <td class='num'>{format_int(seg_byte_totals.get("volatile", 0))}</td>
       </tr>
     </tbody>
-  </table>
+  </table></div>
   {seg_model_section}
 </section>
 """
@@ -4824,7 +4824,7 @@ def _render_merged_compression_panel(
     if co_model_rows_html:
         co_model_section = f"""
   <h4>By model (top 5)</h4>
-  <table class="data compact">
+  <div class="table-scroll"><table class="data compact">
     <thead><tr>
       {_th("Model")}
       {_th("Total requests", priority=2)}
@@ -4835,7 +4835,7 @@ def _render_merged_compression_panel(
     <tbody>
       {co_model_rows_html}
     </tbody>
-  </table>"""
+  </table></div>"""
 
     # Safe-mode details section (only when runtime data exists).
     safe_mode_body = ""
@@ -4880,7 +4880,7 @@ def _render_merged_compression_panel(
         if cr_transform_rows_html:
             cr_transform_section = f"""
   <h4>Transforms</h4>
-  <table class="data compact">
+  <div class="table-scroll"><table class="data compact">
     <thead><tr>
       {_th("Reason code")}
       {_th("Applied", priority=2)}
@@ -4889,7 +4889,7 @@ def _render_merged_compression_panel(
     <tbody>
       {cr_transform_rows_html}
     </tbody>
-  </table>"""
+  </table></div>"""
 
         # Top-N warnings by count.
         cr_warnings_rows_html = ""
@@ -4910,7 +4910,7 @@ def _render_merged_compression_panel(
         if cr_warnings_rows_html:
             cr_warnings_section = f"""
   <h4>Warnings rollup</h4>
-  <table class="data compact">
+  <div class="table-scroll"><table class="data compact">
     <thead><tr>
       {_th("Warning")}
       {_th("Count", priority=2)}
@@ -4918,7 +4918,7 @@ def _render_merged_compression_panel(
     <tbody>
       {cr_warnings_rows_html}
     </tbody>
-  </table>"""
+  </table></div>"""
 
         safe_mode_body = f"""
   <section class="cards">
@@ -4953,7 +4953,7 @@ def _render_merged_compression_panel(
             )
         }
   </section>
-  <table class="data compact">
+  <div class="table-scroll"><table class="data compact">
     <thead><tr>{_th("Metric")}{_th("Value", priority=2)}</tr></thead>
     <tbody>
       <tr>
@@ -4989,7 +4989,7 @@ def _render_merged_compression_panel(
         <td class='num'>{_fmt_ms(cr_latency.get("max"))}</td>
       </tr>
     </tbody>
-  </table>
+  </table></div>
   {cr_transform_section}
   {cr_warnings_section}"""
 
@@ -5042,7 +5042,7 @@ def _render_merged_compression_panel(
         )
     }
   </section>
-  <table class="data compact">
+  <div class="table-scroll"><table class="data compact">
     <thead><tr>{_th("Metric")}{_th("Value", priority=2)}</tr></thead>
     <tbody>
       <tr>
@@ -5086,7 +5086,7 @@ def _render_merged_compression_panel(
         <td class='num'>{format_int(co_applied_preserved)}</td>
       </tr>
     </tbody>
-  </table>
+  </table></div>
   {co_model_section}
   {safe_mode_section}
 </section>
@@ -5161,7 +5161,7 @@ def _render_compression_policy_panel(
         )
     }
   </section>
-  <table class="data compact">
+  <div class="table-scroll"><table class="data compact">
     <thead><tr>
       {_th("Policy name")}
       {_th("Source")}
@@ -5177,7 +5177,7 @@ def _render_compression_policy_panel(
     <tbody>
       {cps_rows_html}
     </tbody>
-  </table>
+  </table></div>
 </section>
 """
     return compression_policy_card
@@ -5269,7 +5269,7 @@ def _render_synthetic_cache_controls_panel(
     if sc_status_rows_html:
         sc_status_section = f"""
   <h4>Status breakdown</h4>
-  <table class="data compact">
+  <div class="table-scroll"><table class="data compact">
     <thead><tr>
       {_th("Status")}
       {_th("Count", priority=2)}
@@ -5277,7 +5277,7 @@ def _render_synthetic_cache_controls_panel(
     <tbody>
       {sc_status_rows_html}
     </tbody>
-  </table>"""
+  </table></div>"""
 
     # Warning codes top-N table.
     sc_warnings_rows_html = ""
@@ -5298,7 +5298,7 @@ def _render_synthetic_cache_controls_panel(
     if sc_warnings_rows_html:
         sc_warnings_section = f"""
   <h4>Warnings (top 10)</h4>
-  <table class="data compact">
+  <div class="table-scroll"><table class="data compact">
     <thead><tr>
       {_th("Warning code")}
       {_th("Count", priority=2)}
@@ -5306,7 +5306,7 @@ def _render_synthetic_cache_controls_panel(
     <tbody>
       {sc_warnings_rows_html}
     </tbody>
-  </table>"""
+  </table></div>"""
 
     # By-policy table (top 5, <global> sentinel first).
     sc_policy_rows_html = ""
@@ -5340,7 +5340,7 @@ def _render_synthetic_cache_controls_panel(
     if sc_policy_rows_html:
         sc_policy_section = f"""
   <h4>By policy (top 5)</h4>
-  <table class="data compact">
+  <div class="table-scroll"><table class="data compact">
     <thead><tr>
       {_th("Policy name")}
       {_th("Source")}
@@ -5351,7 +5351,7 @@ def _render_synthetic_cache_controls_panel(
     <tbody>
       {sc_policy_rows_html}
     </tbody>
-  </table>"""
+  </table></div>"""
 
     synthetic_cache_card = f"""
 <section class="panel">
@@ -5581,7 +5581,7 @@ def _render_advisory_tuning_panel(
     }
   </section>
   <h4>Recommendations</h4>
-  <table class="data compact">
+  <div class="table-scroll"><table class="data compact">
     <thead><tr>
       <th>Policy</th>
       <th>Status</th>
@@ -5589,9 +5589,9 @@ def _render_advisory_tuning_panel(
       <th>Why</th>
     </tr></thead>
     <tbody>{ct_rec_rows_html}</tbody>
-  </table>
+  </table></div>
   <h4>Runtime overrides (reserved, dormant)</h4>
-  <table class="data compact">
+  <div class="table-scroll"><table class="data compact">
     <thead><tr>
       <th>Policy</th>
       <th>Fields</th>
@@ -5599,7 +5599,7 @@ def _render_advisory_tuning_panel(
       <th>State</th>
     </tr></thead>
     <tbody>{ct_ov_rows_html}</tbody>
-  </table>
+  </table></div>
   <p class="sub">
     Reporting only and never consumed by QuotaFairScorer. Tunable fields
     are limited to
@@ -6010,7 +6010,7 @@ def render_runtime(
                 f"</tr>"
             )
         tasks_table = (
-            '<table class="data compact">'
+            '<div class="table-scroll"><table class="data compact">'
             + "<thead><tr>"
             # Priority 1 — always shown
             + _th("Task")
@@ -6027,7 +6027,7 @@ def render_runtime(
             + _th("Last error", priority=4)
             + "</tr></thead><tbody>"
             + f"{''.join(task_rows)}"
-            + "</tbody></table>"
+            + "</tbody></table></div>"
         )
     else:
         tasks_table = '<p class="empty">No background tasks registered.</p>'
@@ -6115,13 +6115,13 @@ def render_runtime(
                 f"</tr>"
             )
         health_table = (
-            '<table class="data compact">'
+            '<div class="table-scroll"><table class="data compact">'
             + "<thead><tr>"
             + _th("Account")
             + _th("Health state")
             + "</tr></thead><tbody>"
             + f"{''.join(health_rows)}"
-            + "</tbody></table>"
+            + "</tbody></table></div>"
         )
     else:
         health_table = '<p class="empty">No health state data.</p>'
@@ -6226,12 +6226,12 @@ def render_runtime(
         tc_direction_table = ""
         if tc_direction_rows:
             tc_direction_table = (
-                '<table class="data compact"><thead><tr>'
+                '<div class="table-scroll"><table class="data compact"><thead><tr>'
                 + _th("Direction")
                 + _th("Count", priority=2)
                 + "</tr></thead><tbody>"
                 + tc_direction_rows
-                + "</tbody></table>"
+                + "</tbody></table></div>"
             )
         tc_loss_rows = ""
         tc_loss_warning_items = cast(
@@ -6265,12 +6265,12 @@ def render_runtime(
         if tc_loss_rows:
             tc_loss_panel = (
                 "<h4>Top loss warnings</h4>"
-                '<table class="data compact"><thead><tr>'
+                '<div class="table-scroll"><table class="data compact"><thead><tr>'
                 + _th("Direction")
                 + _th("Count", priority=2)
                 + "</tr></thead><tbody>"
                 + tc_loss_rows
-                + "</tbody></table>"
+                + "</tbody></table></div>"
             )
         else:
             tc_loss_panel = (
@@ -6406,12 +6406,12 @@ def render_cache(
         tc_direction_table = ""
         if tc_direction_rows:
             tc_direction_table = (
-                '<table class="data compact"><thead><tr>'
+                '<div class="table-scroll"><table class="data compact"><thead><tr>'
                 + _th("Direction")
                 + _th("Count", priority=2)
                 + "</tr></thead><tbody>"
                 + tc_direction_rows
-                + "</tbody></table>"
+                + "</tbody></table></div>"
             )
         tc_loss_rows = ""
         tc_loss_warning_items = cast(
@@ -6445,12 +6445,12 @@ def render_cache(
         if tc_loss_rows:
             tc_loss_panel = (
                 "<h4>Top loss warnings</h4>"
-                '<table class="data compact"><thead><tr>'
+                '<div class="table-scroll"><table class="data compact"><thead><tr>'
                 + _th("Direction")
                 + _th("Count", priority=2)
                 + "</tr></thead><tbody>"
                 + tc_loss_rows
-                + "</tbody></table>"
+                + "</tbody></table></div>"
             )
         else:
             tc_loss_panel = (
@@ -7123,7 +7123,7 @@ def _render_operational_events_table(
             f"</tr>"
         )
     summary_table = (
-        '<table class="data compact">'
+        '<div class="table-scroll"><table class="data compact">'
         + "<thead><tr>"
         # Priority 1 — always shown
         + _th("Event type")
@@ -7135,7 +7135,7 @@ def _render_operational_events_table(
         + _th("Released", priority=3)
         + "</tr></thead><tbody>"
         + f"{''.join(summary_rows)}"
-        + "</tbody></table>"
+        + "</tbody></table></div>"
     )
     if not summary_rows:
         summary_table = '<p class="empty">No operational events in this window.</p>'
@@ -7160,14 +7160,14 @@ def _render_operational_events_table(
                 f"</tr>"
             )
         recent_table = (
-            '<table class="data compact">'
+            '<div class="table-scroll"><table class="data compact">'
             + "<thead><tr>"
             + _th("When")
             + _th("Type")
             + _th("Details", priority=2)
             + "</tr></thead><tbody>"
             + f"{''.join(recent_rows)}"
-            + "</tbody></table>"
+            + "</tbody></table></div>"
         )
 
     return f"""
