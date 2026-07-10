@@ -31,7 +31,7 @@ from eggpool.model_info.types import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Sequence
 
     from eggpool.catalog.cache import ModelCatalogCache
     from eggpool.catalog.service import CatalogRefreshResult
@@ -2265,21 +2265,21 @@ def _enrich_detail_from_record(  # pyright: ignore[reportUnusedFunction]
     # Benchmarks (from Artificial Analysis or other sources)
     if record.benchmarks:
         existing_benchmarks = list(cast("list[object]", enriched.get("benchmarks", [])))
-        for b in record.benchmarks:
-            existing_benchmarks.append(
-                {
-                    "name": b.benchmark_name,
-                    "score": b.score,
-                    "rank": b.rank,
-                    "percentile": b.percentile,
-                    "source": b.source,
-                    "notes": b.notes,
-                    "observed_at": (
-                        b.observed_at.isoformat() if b.observed_at else None
-                    ),
-                }
-            )
-        enriched["benchmarks"] = existing_benchmarks
+        new_benchmarks = [
+            {
+                "name": b.benchmark_name,
+                "score": b.score,
+                "rank": b.rank,
+                "percentile": b.percentile,
+                "source": b.source,
+                "notes": b.notes,
+                "observed_at": (b.observed_at.isoformat() if b.observed_at else None),
+            }
+            for b in record.benchmarks
+        ]
+        enriched["benchmarks"] = _merge_benchmark_payloads(
+            existing_benchmarks, new_benchmarks
+        )
 
     # Hugging Face metadata (compact, never full card text)
     if source == "huggingface":
@@ -2302,6 +2302,48 @@ def _enrich_detail_from_record(  # pyright: ignore[reportUnusedFunction]
             enriched["huggingface_metadata"] = hf_meta
 
     return enriched
+
+
+def _benchmark_payload_key(value: object) -> tuple[str, str, str] | None:
+    """Return the stable identity of a serialized benchmark observation."""
+    if not isinstance(value, dict):
+        return None
+    payload = cast("dict[str, object]", value)
+    name_obj = payload.get("name", payload.get("benchmark_name"))
+    if not isinstance(name_obj, str) or not name_obj:
+        return None
+    source_obj = payload.get("source", "")
+    version_obj = payload.get("version", "")
+    source = source_obj if isinstance(source_obj, str) else str(source_obj)
+    version = version_obj if isinstance(version_obj, str) else str(version_obj)
+    return name_obj, source, version
+
+
+def _merge_benchmark_payloads(
+    existing: Sequence[object], incoming: Sequence[object]
+) -> list[object]:
+    """Merge benchmark snapshots, replacing stale values by identity.
+
+    Benchmark observations are refreshed snapshots, not an append-only event
+    log. ``observed_at`` changes on every source fetch, so raw dictionary
+    equality cannot prevent duplicates. Keep insertion order for stable
+    rendering while letting the newest observation replace the prior value.
+    Malformed payloads remain untouched rather than being silently discarded.
+    """
+    merged: list[object] = []
+    positions: dict[tuple[str, str, str], int] = {}
+    for value in [*existing, *incoming]:
+        key = _benchmark_payload_key(value)
+        if key is None:
+            merged.append(value)
+            continue
+        position = positions.get(key)
+        if position is None:
+            positions[key] = len(merged)
+            merged.append(value)
+        else:
+            merged[position] = value
+    return merged
 
 
 def _detect_context_conflicts(  # pyright: ignore[reportUnusedFunction]
@@ -2672,7 +2714,7 @@ def build_canonical_detail(
         if "benchmarks" in fragment:
             new_benchmarks = cast("list[object]", fragment["benchmarks"])
             if new_benchmarks:
-                benchmarks.extend(new_benchmarks)
+                benchmarks = _merge_benchmark_payloads(benchmarks, new_benchmarks)
                 contributed = True
         if "huggingface_metadata" in fragment:
             new_hf = cast("dict[str, object]", fragment["huggingface_metadata"])
@@ -2812,9 +2854,7 @@ def build_canonical_detail(
         existing_benchmarks = cast(
             "list[object]", existing_detail.get("benchmarks", [])
         )
-        for b in existing_benchmarks:
-            if b not in benchmarks:
-                benchmarks.append(b)
+        benchmarks = _merge_benchmark_payloads(existing_benchmarks, benchmarks)
         existing_modalities = cast(
             "list[str]", existing_detail.get("modalities_external", [])
         )

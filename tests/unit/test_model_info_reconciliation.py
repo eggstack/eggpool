@@ -346,6 +346,43 @@ class TestBuildCanonicalDetail:
         assert detail["benchmarks"][0]["name"] == "MMLU"
         assert "artificial_analysis" in prov["sources"]
 
+    def test_refresh_replaces_benchmark_snapshot_without_duplicates(self) -> None:
+        """A refreshed score replaces the prior observation by identity."""
+        existing = {
+            "benchmarks": [
+                {
+                    "name": "MMLU",
+                    "score": 0.88,
+                    "source": "artificial_analysis",
+                    "observed_at": "2026-07-10T00:00:00+00:00",
+                }
+            ]
+        }
+        detail, _provenance, _conflicts = build_canonical_detail(
+            model_id="gpt-4o",
+            provider_detail={"providers": ["openai"]},
+            observation_payloads=[
+                {
+                    "source": "artificial_analysis",
+                    "source_model_id": "gpt-4o",
+                    "normalized": {
+                        "benchmarks": [
+                            {
+                                "name": "MMLU",
+                                "score": 0.91,
+                                "source": "artificial_analysis",
+                                "observed_at": "2026-07-10T01:00:00+00:00",
+                            }
+                        ]
+                    },
+                }
+            ],
+            existing_detail=existing,
+        )
+
+        assert len(detail["benchmarks"]) == 1
+        assert detail["benchmarks"][0]["score"] == 0.91
+
 
 # ---------------------------------------------------------------------------
 # Integration: reconcile_catalog_snapshot does not wipe external data

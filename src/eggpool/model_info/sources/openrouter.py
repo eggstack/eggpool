@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -440,7 +441,9 @@ def _benchmark_label(key: str) -> str:
 def _numeric_value(value: object) -> float | None:
     """Return a real numeric value, excluding booleans."""
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return float(value)
+        numeric = float(value)
+        if math.isfinite(numeric):
+            return numeric
     return None
 
 

@@ -538,7 +538,12 @@ def _aggregate_series_from_grouped(
     totals = grouped.get("bucket_totals")
     if not isinstance(totals, list):
         return []
-    return [dict(row) for row in totals if isinstance(row, dict)]
+    result: list[dict[str, Any]] = []
+    for row_obj in cast("list[object]", totals):
+        if isinstance(row_obj, dict):
+            row = cast("dict[str, Any]", row_obj)
+            result.append(dict(row))
+    return result
 
 
 def _clamp_int(value: int, *, minimum: int, maximum: int) -> int:
@@ -1956,7 +1961,7 @@ async def handle_timeseries(
     _render_start = time.perf_counter()
     response = HTMLResponse(
         content=render_timeseries(
-            series if series is not None else [],
+            series,
             bucket=bucket,
             period=time_range.label,
             theme_css=theme_css,

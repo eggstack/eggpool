@@ -900,6 +900,26 @@ class TestParseEntryToRecord:
         assert arena.rank == 21
         assert len(record.normalized["benchmarks"]) == 3
 
+    def test_ignores_non_finite_benchmark_values(self) -> None:
+        """NaN and infinity must not enter persisted model metadata."""
+        raw = {
+            **_minimax_entry(),
+            "benchmarks": {
+                "artificial_analysis": {
+                    "valid_index": 55.7,
+                    "nan_index": float("nan"),
+                    "infinite_index": float("inf"),
+                }
+            },
+        }
+
+        record = _parse_entry_to_record(raw["id"], raw, datetime.now(UTC))
+
+        assert len(record.benchmarks) == 1
+        assert record.benchmarks[0].benchmark_name == (
+            "Artificial Analysis Valid Index"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Phase 3: scheduled refresh parity (refresh_due_models)
