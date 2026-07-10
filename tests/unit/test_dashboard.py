@@ -1279,6 +1279,26 @@ class TestDashboardJS:
         assert "namespace.initGroupedTimeseriesCharts();" in bootstrap_block
         assert "namespace.reinitTimeseriesChart();" in bootstrap_block
 
+    def test_chart_bootstrap_invokes_the_namespaced_function(self) -> None:
+        """The startup hook must call the exported bootstrap function.
+
+        ``namespace.bootstrap = function bootstrap()`` gives the function
+        expression a name that is scoped to the function body.  A bare
+        ``bootstrap()`` at the IIFE boundary therefore raises a
+        ``ReferenceError`` before any chart initializer can run.
+        """
+        js = self._load_js()
+        startup = js[js.rfind('if (document.readyState === "loading")') :]
+        assert (
+            'document.addEventListener("DOMContentLoaded", namespace.bootstrap);'
+            in startup
+        )
+        assert "namespace.bootstrap();" in startup
+        assert (
+            'document.addEventListener("DOMContentLoaded", bootstrap);' not in startup
+        )
+        assert "    bootstrap();" not in startup
+
     def test_grouped_chart_refresh_unhides_canvas_when_data_arrives(self) -> None:
         """An initially empty grouped chart hides its canvas in the SSR HTML.
 

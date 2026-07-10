@@ -1227,8 +1227,8 @@
   };
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", bootstrap);
+    document.addEventListener("DOMContentLoaded", namespace.bootstrap);
   } else {
-    bootstrap();
+    namespace.bootstrap();
   }
 })();
