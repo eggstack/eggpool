@@ -26,7 +26,7 @@ import httpx
 
 from eggpool.errors import ModelInfoSourceFetchError
 from eggpool.model_info.sources.base import SourceTTLCache
-from eggpool.model_info.types import SourceModelRecord
+from eggpool.model_info.types import BenchmarkObservation, SourceModelRecord
 
 if TYPE_CHECKING:
     from eggpool.models.config import ModelInfoSourceConfig
@@ -228,6 +228,11 @@ def _parse_entry_to_record(
     # Created timestamp
     created_at = _opt_datetime(raw, "created")
 
+    # OpenRouter exposes public benchmark metadata under a nested
+    # ``benchmarks`` object.  Keep it in the normalized observation as
+    # well as the typed record so it survives the DB round-trip.
+    benchmarks = _parse_benchmarks(raw, now)
+
     normalized: dict[str, object] = {
         "source_model_id": source_model_id,
         "display_name": display_name,
@@ -239,6 +244,7 @@ def _parse_entry_to_record(
         "input_price_per_1k": input_price,
         "output_price_per_1k": output_price,
         "created_at": created_at.isoformat() if created_at else None,
+        "benchmarks": [_benchmark_to_payload(b) for b in benchmarks],
     }
 
     return SourceModelRecord(
@@ -259,6 +265,7 @@ def _parse_entry_to_record(
         output_price_per_1k=output_price,
         confidence=0.5,
         sparse=not bool(display_name and display_name != source_model_id),
+        benchmarks=benchmarks,
     )
 
 
@@ -331,6 +338,125 @@ def _extract_thinking_capability(raw: dict[str, object]) -> dict[str, object] | 
         "source": "model_info",
         "confidence": "high",
         "notes": "OpenRouter reports reasoning/thinking in supported_parameters",
+    }
+
+
+def _parse_benchmarks(
+    raw: dict[str, object],
+    observed_at: datetime,
+) -> tuple[BenchmarkObservation, ...]:
+    """Parse OpenRouter's nested public benchmark metadata.
+
+    The current OpenRouter catalog shape is, for example::
+
+        {"benchmarks": {"artificial_analysis": {
+            "intelligence_index": 55.7,
+            "coding_index": 74.3,
+        }}}
+
+    ``design_arena`` is also published as a list of per-category rows.  The
+    parser intentionally ignores malformed or non-numeric values so one
+    provider's catalog variation cannot make the whole source unavailable.
+    """
+    raw_benchmarks_obj = raw.get("benchmarks")
+    if not isinstance(raw_benchmarks_obj, dict):
+        return ()
+    raw_benchmarks = cast("dict[str, object]", raw_benchmarks_obj)
+
+    benchmarks: list[BenchmarkObservation] = []
+
+    artificial_analysis_obj = raw_benchmarks.get("artificial_analysis")
+    if isinstance(artificial_analysis_obj, dict):
+        artificial_analysis = cast("dict[str, object]", artificial_analysis_obj)
+        for key, value in artificial_analysis.items():
+            score = _numeric_value(value)
+            if score is None:
+                continue
+            label = _benchmark_label(str(key))
+            if not label:
+                continue
+            benchmarks.append(
+                BenchmarkObservation(
+                    benchmark_name=f"Artificial Analysis {label}",
+                    score=score,
+                    source="artificial_analysis",
+                    observed_at=observed_at,
+                    notes="Published by OpenRouter",
+                )
+            )
+
+    design_arena_obj = raw_benchmarks.get("design_arena")
+    if isinstance(design_arena_obj, list):
+        design_arena = cast("list[object]", design_arena_obj)
+        for item in design_arena:
+            if not isinstance(item, dict):
+                continue
+            item_dict = cast("dict[str, object]", item)
+            arena = item_dict.get("arena")
+            category = item_dict.get("category")
+            name_parts = [
+                str(part).strip()
+                for part in (arena, category)
+                if isinstance(part, str) and part.strip()
+            ]
+            name = " / ".join(name_parts)
+            if not name:
+                continue
+            elo = item_dict.get("elo")
+            win_rate = item_dict.get("win_rate")
+            elo_score = _numeric_value(elo)
+            win_rate_score = _numeric_value(win_rate)
+            score_value = elo_score if elo_score is not None else win_rate_score
+            if score_value is None:
+                continue
+            rank_value = item_dict.get("rank")
+            rank_number = _numeric_value(rank_value)
+            rank = int(rank_number) if rank_number is not None else None
+            notes = (
+                f"Win rate: {win_rate}"
+                if win_rate_score is not None
+                else "Published by OpenRouter"
+            )
+            benchmarks.append(
+                BenchmarkObservation(
+                    benchmark_name=f"Design Arena: {name}",
+                    score=score_value,
+                    rank=rank,
+                    source="openrouter",
+                    observed_at=observed_at,
+                    notes=notes,
+                )
+            )
+
+    return tuple(benchmarks)
+
+
+def _benchmark_label(key: str) -> str:
+    """Turn a wire benchmark key into a stable human-readable label."""
+    normalized = key.removeprefix("artificial_analysis_").replace("_", " ")
+    return " ".join(part.capitalize() for part in normalized.split())
+
+
+def _numeric_value(value: object) -> float | None:
+    """Return a real numeric value, excluding booleans."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return None
+
+
+def _benchmark_to_payload(benchmark: BenchmarkObservation) -> dict[str, object]:
+    """Serialize a typed benchmark observation for normalized persistence."""
+    return {
+        "name": benchmark.benchmark_name,
+        "score": benchmark.score,
+        "rank": benchmark.rank,
+        "percentile": benchmark.percentile,
+        "version": benchmark.version,
+        "source": benchmark.source,
+        "observed_at": (
+            benchmark.observed_at.isoformat() if benchmark.observed_at else None
+        ),
+        "notes": benchmark.notes,
     }
 
 

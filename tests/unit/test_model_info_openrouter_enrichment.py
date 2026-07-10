@@ -862,6 +862,44 @@ class TestParseEntryToRecord:
         assert "video" in record.modalities
         assert record.supports_tools is True
 
+    def test_parses_nested_public_benchmarks(self) -> None:
+        """OpenRouter's nested benchmark object reaches normalized output."""
+        now = datetime.now(UTC)
+        raw = {
+            **_minimax_entry(),
+            "benchmarks": {
+                "artificial_analysis": {
+                    "intelligence_index": 55.7,
+                    "coding_index": 74.3,
+                },
+                "design_arena": [
+                    {
+                        "arena": "models",
+                        "category": "website",
+                        "elo": 1281,
+                        "win_rate": 55.0,
+                        "rank": 21,
+                    }
+                ],
+            },
+        }
+
+        record = _parse_entry_to_record(raw["id"], raw, now)
+
+        assert len(record.benchmarks) == 3
+        intelligence = next(
+            b
+            for b in record.benchmarks
+            if b.benchmark_name == "Artificial Analysis Intelligence Index"
+        )
+        assert intelligence.score == 55.7
+        assert intelligence.source == "artificial_analysis"
+        arena = next(b for b in record.benchmarks if b.source == "openrouter")
+        assert arena.benchmark_name == "Design Arena: models / website"
+        assert arena.score == 1281.0
+        assert arena.rank == 21
+        assert len(record.normalized["benchmarks"]) == 3
+
 
 # ---------------------------------------------------------------------------
 # Phase 3: scheduled refresh parity (refresh_due_models)
@@ -887,7 +925,18 @@ class TestRefreshDueModelsEnrichment:
             await _run_migrations(db)
             await _seed_model(db, "minimax-m3")
 
-            client = _MockHttpClient(response=_or_payload(_minimax_entry()))
+            client = _MockHttpClient(
+                response=_or_payload(
+                    {
+                        **_minimax_entry(),
+                        "benchmarks": {
+                            "artificial_analysis": {
+                                "intelligence_index": 55.7,
+                            }
+                        },
+                    }
+                )
+            )
             aliases = [
                 ModelInfoAliasConfig(
                     provider_id="opencode-go",
@@ -947,6 +996,13 @@ class TestRefreshDueModelsEnrichment:
             )
             assert canonical.detail["limits"]["external_context"] == 1_048_576
             assert canonical.detail["limits"]["external_output"] == 512_000
+            benchmarks = canonical.detail["benchmarks"]
+            assert isinstance(benchmarks, list)
+            assert len(benchmarks) == 1
+            assert benchmarks[0]["name"] == ("Artificial Analysis Intelligence Index")
+            assert benchmarks[0]["score"] == 55.7
+            assert benchmarks[0]["source"] == "artificial_analysis"
+            assert "Public benchmark metadata unavailable" not in canonical.summary
         finally:
             await db.disconnect()
 

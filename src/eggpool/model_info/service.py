@@ -2457,6 +2457,9 @@ def _normalize_observation_payload(
         if pricing_obs:
             pricing_obs["source"] = "openrouter"
             out["pricing_observation"] = pricing_obs
+        benchmarks = payload.get("benchmarks")
+        if isinstance(benchmarks, list) and benchmarks:
+            out["benchmarks"] = list(cast("list[object]", benchmarks))
     elif source == "artificial_analysis":
         benchmarks = payload.get("benchmarks")
         if isinstance(benchmarks, list) and benchmarks:
