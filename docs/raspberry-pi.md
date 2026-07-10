@@ -65,7 +65,7 @@ explicitly set the recommended profile:
 
 ```toml
 [server]
-threads = 2          # 2 runtime threads for dashboard responsiveness
+threads = 4          # runtime threads for dashboard responsiveness
 access_log = false   # optional: reduce I/O noise after initial setup
 
 [database]
@@ -100,20 +100,19 @@ include_score_components = false
 ## Process Model
 
 EggPool's default process model is Pi-friendly: one `eggpool serve`
-supervisor process plus one Granian worker, with two event-loop
+supervisor process plus one Granian worker, with four event-loop
 threads in the worker (configurable via `[server].threads`). Both
 processes appear as `eggpool` in `ps` / `top` (no generic `python`
-entry), so the total footprint is two processes and two threads before
+entry), so the total footprint is two processes and four runtime threads before
 considering any upstream outbound connections.
 
 The single tuning knob for per-worker concurrency is `[server].threads`
-(int, default `2`, max `64`), which maps to Granian `runtime_threads`.
-The default is correct for Pi 4 / Pi 5; raise it only if your workload
-genuinely needs more concurrency than two event loops can deliver:
+(int, default `4`, max `64`), which maps to Granian `runtime_threads`.
+Set it to `1` for minimum footprint or raise it on capable hardware:
 
 ```toml
 [server]
-threads = 2
+threads = 4
 ```
 
 The PID file path is resolved by `eggpool.runtime_paths.default_pid_file()` in this precedence: `$EGGPOOL_PID_FILE` → `$XDG_RUNTIME_DIR/eggpool.pid` → `~/.local/state/eggpool/eggpool.pid` → `/tmp/eggpool-<UID>.pid`, and is owned by the supervisor. If `eggpool serve` ever exits non-zero with a message about an existing instance, that is the duplicate-instance guard catching a live PID or a successful `/v1/healthz` probe — check `pgrep -f eggpool` before retrying.

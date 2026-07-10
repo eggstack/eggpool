@@ -11,7 +11,7 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from fastapi import Request  # noqa: TCH002 — FastAPI needs runtime access
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -45,7 +45,7 @@ from eggpool.stats.queries import fetch_disabled_account_count
 from eggpool.stats.segmentation import serialize_canonical_request_segmentation
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Awaitable, Iterable
 
     from fastapi.responses import Response  # noqa: TCH004
 
@@ -67,6 +67,26 @@ _RoutingPayload = tuple[
 _PingsPayload = tuple[list[dict[str, Any]], list[dict[str, Any]]]
 
 logger = logging.getLogger(__name__)
+_DashboardStageResult = TypeVar("_DashboardStageResult")
+
+
+async def _await_dashboard_stage(
+    telemetry: Any | None,
+    page: str,
+    stage: str,
+    awaitable: Awaitable[_DashboardStageResult],
+) -> _DashboardStageResult:
+    """Await one dashboard operation and record its actual elapsed time."""
+    started = time.perf_counter()
+    try:
+        return await awaitable
+    finally:
+        if telemetry is not None:
+            telemetry.record_stage(
+                page,
+                stage,
+                (time.perf_counter() - started) * 1000,
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -504,6 +524,23 @@ def _normalize_group_by(group_by: str) -> str:
     return group_by if group_by in _VALID_GROUP_BY else "provider_model"
 
 
+def _aggregate_series_from_grouped(
+    grouped: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Reuse grouped bucket totals for the legacy aggregate table.
+
+    The dedicated timeseries page previously issued both a grouped query
+    and a second flat query, even though the grouped contract already
+    carries lossless ``bucket_totals``.  Keeping the conversion here makes
+    the page's aggregate table a zero-cost view of the query it already
+    needs for the chart and detail table.
+    """
+    totals = grouped.get("bucket_totals")
+    if not isinstance(totals, list):
+        return []
+    return [dict(row) for row in totals if isinstance(row, dict)]
+
+
 def _clamp_int(value: int, *, minimum: int, maximum: int) -> int:
     """Clamp an integer query value to an inclusive range."""
     return max(minimum, min(value, maximum))
@@ -639,18 +676,22 @@ async def handle_overview(
     time_range = resolve_time_range(period)
     stats = request.app.state.stats
     heatmap_range = _heatmap_time_range(dashboard_config.retain_request_stats_days)
+    telemetry = getattr(request.app.state, "dashboard_telemetry", None)
 
     # Always fetch the disabled count so the Account breakdown empty
     # state can offer a one-click opt-in even when no rows are
     # currently visible. Cheap one-row aggregate; safe on every render.
-    disabled_count = await _get_disabled_account_count(request, show_disabled)
+    disabled_count = await _await_dashboard_stage(
+        telemetry,
+        "overview",
+        "disabled_count",
+        _get_disabled_account_count(request, show_disabled),
+    )
 
     # Fan out the independent stat reads concurrently.  The single
     # shared connection lock serializes per-query execution, so without
     # this the page load is the sum of ten sequential round trips; with
     # it the load is bounded by the slowest query instead.
-    telemetry = getattr(request.app.state, "dashboard_telemetry", None)
-    _gather_start = time.perf_counter()
     (
         accounts,
         models,
@@ -665,70 +706,91 @@ async def handle_overview(
         compression_runtime,
         synthetic_cache_summary,
     ) = await asyncio.gather(
-        stats.get_account_stats(
-            time_range, include_disabled=show_disabled, use_cache=True
-        ),
-        stats.get_model_stats(time_range, use_cache=True),
-        stats.get_recent_events(limit=10),
-        stats.get_bandwidth_timeseries(heatmap_range, use_cache=True),
-        stats.get_ping_summary(time_range, use_cache=True),
-        stats.get_ip_stats(time_range, use_cache=True),
-        stats.get_attempt_stats(time_range),
-        stats.get_operational_event_summary(time_range),
-        stats.get_pending_health_snapshot(),
-        stats.get_cache_observability(time_range.label, use_cache=True),
-        stats.get_compression_runtime(time_range.label, use_cache=True),
-        stats.get_synthetic_cache_summary(time_range.label, use_cache=True),
-    )
-    _gather_ms = (time.perf_counter() - _gather_start) * 1000
-
-    if telemetry is not None:
-        stage_names = [
-            "disabled_count",
+        _await_dashboard_stage(
+            telemetry,
+            "overview",
             "account_stats",
+            stats.get_account_stats(
+                time_range, include_disabled=show_disabled, use_cache=True
+            ),
+        ),
+        _await_dashboard_stage(
+            telemetry,
+            "overview",
             "model_stats",
+            stats.get_model_stats(time_range, use_cache=True),
+        ),
+        _await_dashboard_stage(
+            telemetry,
+            "overview",
             "recent_events",
+            stats.get_recent_events(limit=10),
+        ),
+        _await_dashboard_stage(
+            telemetry,
+            "overview",
             "bandwidth_daily",
+            stats.get_bandwidth_timeseries(heatmap_range, use_cache=True),
+        ),
+        _await_dashboard_stage(
+            telemetry,
+            "overview",
             "ping_summary",
+            stats.get_ping_summary(time_range, use_cache=True),
+        ),
+        _await_dashboard_stage(
+            telemetry,
+            "overview",
             "ip_stats",
+            stats.get_ip_stats(time_range, use_cache=True),
+        ),
+        _await_dashboard_stage(
+            telemetry,
+            "overview",
             "attempt_stats",
+            stats.get_attempt_stats(time_range, use_cache=True),
+        ),
+        _await_dashboard_stage(
+            telemetry,
+            "overview",
             "operational_summary",
+            stats.get_operational_event_summary(time_range, use_cache=True),
+        ),
+        _await_dashboard_stage(
+            telemetry,
+            "overview",
             "pending_health",
+            stats.get_pending_health_snapshot(use_cache=True),
+        ),
+        _await_dashboard_stage(
+            telemetry,
+            "overview",
             "cache_observability",
+            stats.get_cache_observability(time_range.label, use_cache=True),
+        ),
+        _await_dashboard_stage(
+            telemetry,
+            "overview",
             "compression_runtime",
-        ]
-        gather_results = [
-            disabled_count,
-            accounts,
-            models,
-            events,
-            bandwidth_daily,
-            ping_summary,
-            ip_stats,
-            attempt_stats,
-            operational_summary,
-            pending_health,
-            cache_observability,
-            compression_runtime,
-        ]
-        for stage_name, _stage_val in zip(stage_names, gather_results, strict=True):
-            telemetry.record_stage(
-                "overview", stage_name, _gather_ms / len(stage_names)
-            )
-        telemetry.record_stage("overview", "synthetic_cache_summary", _gather_ms)
-
+            stats.get_compression_runtime(time_range.label, use_cache=True),
+        ),
+        _await_dashboard_stage(
+            telemetry,
+            "overview",
+            "synthetic_cache_summary",
+            stats.get_synthetic_cache_summary(time_range.label, use_cache=True),
+        ),
+    )
     # ``get_dashboard_overview`` is derived from ``accounts`` and the
     # per-period summary; both are cache hits after the gather above.
-    _overview_start = time.perf_counter()
-    overview = await stats.get_dashboard_overview(
-        time_range, account_stats=accounts, use_cache=True
+    overview = await _await_dashboard_stage(
+        telemetry,
+        "overview",
+        "dashboard_overview",
+        stats.get_dashboard_overview(
+            time_range, account_stats=accounts, use_cache=True
+        ),
     )
-    if telemetry is not None:
-        telemetry.record_stage(
-            "overview",
-            "dashboard_overview",
-            (time.perf_counter() - _overview_start) * 1000,
-        )
 
     from eggpool.metrics.thinking import get_counter
 
@@ -1873,32 +1935,21 @@ async def handle_timeseries(
     bounded_limit = clamp_grouped_limit(limit)
     stats = request.app.state.stats
     telemetry = getattr(request.app.state, "dashboard_telemetry", None)
-    _gather_start = time.perf_counter()
-    series, grouped = cast(
-        "tuple[list[dict[str, Any]] | None, dict[str, Any]]",
-        await asyncio.gather(
-            stats.get_timeseries(
-                time_range,
-                bucket=bucket,
-                account_name=account or None,
-                model_id=model or None,
-                use_cache=True,
-            ),
-            stats.get_grouped_timeseries(
-                time_range,
-                bucket=bucket,
-                group_by=group_by,
-                limit=bounded_limit,
-                account_name=account or None,
-                model_id=model or None,
-                use_cache=True,
-            ),
+    grouped = await _await_dashboard_stage(
+        telemetry,
+        "timeseries",
+        "timeseries_grouped",
+        stats.get_grouped_timeseries(
+            time_range,
+            bucket=bucket,
+            group_by=group_by,
+            limit=bounded_limit,
+            account_name=account or None,
+            model_id=model or None,
+            use_cache=True,
         ),
     )
-    _gather_ms = (time.perf_counter() - _gather_start) * 1000
-    if telemetry is not None:
-        telemetry.record_stage("timeseries", "timeseries_flat", _gather_ms)
-        telemetry.record_stage("timeseries", "timeseries_grouped", _gather_ms)
+    series = _aggregate_series_from_grouped(grouped)
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
     account_options = _collect_account_options(request)
     model_options = _collect_model_options(request)

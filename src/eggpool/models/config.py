@@ -74,11 +74,11 @@ class ServerConfig(BaseModel):
     api_key_env: str = "SERVER_API_KEY"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     access_log: bool = True
-    # Number of Granian runtime (event-loop) threads. 2 is the recommended
-    # default for Raspberry Pi 4/5 and other SBC installs that serve dashboard
-    # traffic during active proxy use. 1 is minimum footprint. Granian keeps
+    # Number of Granian runtime (event-loop) threads. 4 is the recommended
+    # default for installs that serve dashboard traffic during active proxy
+    # use. 1 is minimum footprint. Granian keeps
     # ``workers=1`` so the process count remains small.
-    threads: int = Field(default=2, ge=1, le=64)
+    threads: int = Field(default=4, ge=1, le=64)
 
     @property
     def resolved_api_key(self) -> str | None:

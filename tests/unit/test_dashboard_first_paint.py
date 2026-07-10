@@ -13,6 +13,7 @@ import pytest
 import pytest_asyncio
 
 from eggpool.dashboard.render import render_overview
+from eggpool.dashboard.routes import _aggregate_series_from_grouped
 from eggpool.dashboard.telemetry import DashboardTelemetry
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
@@ -181,6 +182,23 @@ class TestProgressiveOverviewShell:
         )
         assert 'id="timeseries-initial-data"' in html
         assert "2024-01-01 12:00:00" in html
+
+
+def test_timeseries_aggregate_rows_reuse_grouped_bucket_totals() -> None:
+    """The timeseries page does not need a second flat aggregate query."""
+    grouped = {
+        "bucket_totals": [
+            {
+                "bucket": "2024-01-01 12:00:00",
+                "request_count": 3,
+                "error_count": 1,
+                "total_tokens": 300,
+            }
+        ]
+    }
+
+    assert _aggregate_series_from_grouped(grouped) == grouped["bucket_totals"]
+    assert _aggregate_series_from_grouped({"bucket_totals": None}) == []
 
 
 # ---------------------------------------------------------------------------

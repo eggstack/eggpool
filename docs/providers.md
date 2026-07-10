@@ -445,7 +445,7 @@ state:
 
 ```toml
 [server]
-threads = 2
+threads = 4
 
 [database]
 worker_threads = 2
@@ -468,7 +468,7 @@ read timeout to absorb slow model first-token latencies:
 
 ```toml
 [server]
-threads = 2
+threads = 4
 
 [database]
 worker_threads = 2
@@ -482,9 +482,10 @@ write_timeout_s = 30
 pool_timeout_s = 60
 ```
 
-Keep `server.threads` low — Granian already serializes the asyncio
-event loop, so adding threads does not improve HTTPX throughput. The
-real lever is `max_connections`.
+Keep `server.threads` bounded — it helps the single worker multiplex
+dashboard work alongside active streams, but it does not raise HTTPX
+pool capacity. The real upstream-concurrency lever is
+`max_connections`.
 
 ### Diagnostic low-noise mode
 

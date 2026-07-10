@@ -1002,16 +1002,22 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             offset_30d_microdollars=acct_cfg.monthly_offset_microdollars,
         )
 
-    # 20. Metrics write coalescer for buffered analytics
+    # 20. Metrics write coalescer for buffered analytics.  Writes stay on the
+    # primary connection; dashboard rollup reads use the same dedicated
+    # read-only stats connection as the rest of StatsService when available.
     rollup_repo = UsageRollupRepository(db)
+    stats_rollup_repo = UsageRollupRepository(stats_db)
+    stats_account_backoff_repo = (
+        account_backoff_repo if stats_db is db else AccountBackoffRepository(stats_db)
+    )
 
     # 21. Statistics service
     app.state.stats = StatsService(
         stats_db,
         health_manager=health_manager,
         ping_repo=PingRepository(stats_db),
-        account_backoff_repo=account_backoff_repo,
-        rollup_repo=rollup_repo,
+        account_backoff_repo=stats_account_backoff_repo,
+        rollup_repo=stats_rollup_repo,
     )
     if config.dashboard.enabled and stats_db is db:
         logger.warning(

@@ -101,6 +101,9 @@ class TestApplicationStartup:
                 # they share the same connection.
                 assert stats_db is not None
                 assert stats_db._conn is not None  # noqa: SLF001
+                stats_service = app.state.stats
+                assert stats_service._rollup_repo._db is stats_db  # noqa: SLF001
+                assert stats_service._account_backoff_repo._db is stats_db  # noqa: SLF001
 
                 rows = await db.fetch_all("SELECT name FROM accounts ORDER BY name")
                 names = [row["name"] for row in rows]

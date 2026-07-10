@@ -5,9 +5,7 @@ port = 11300
 log_level = "INFO"
 access_log = true
 # Granian runtime threads inside the single worker process. Keep workers=1.
-# 1 is minimum footprint; 2 is usually a better default for Raspberry Pi 4/5
-# and other SBC installs that serve dashboard traffic during active proxy use.
-threads = 2
+threads = 4
 
 [upstream]
 base_url = "https://opencode.ai/zen/go/v1"
