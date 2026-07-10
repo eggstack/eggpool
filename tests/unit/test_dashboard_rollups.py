@@ -89,6 +89,7 @@ async def seeded_db(db: Database) -> Database:
 
 def _make_event(
     *,
+    timestamp: datetime | None = None,
     provider_id: str = "provider_a",
     model_id: str = "model_a",
     account_id: int | None = 1,
@@ -105,7 +106,7 @@ def _make_event(
     first_byte_ms: int | None = None,
 ) -> UsageMetricEvent:
     return UsageMetricEvent(
-        timestamp=datetime.now(UTC),
+        timestamp=timestamp or datetime.now(UTC),
         provider_id=provider_id,
         model_id=model_id,
         account_id=account_id,
@@ -518,6 +519,68 @@ class TestRollupGroupedTimeseriesParity:
 
 class TestRollupBandwidthParity:
     """Verify rollup bandwidth matches request-table bandwidth."""
+
+    @pytest.mark.asyncio()
+    async def test_bandwidth_heatmap_reconciles_unflushed_request_day(
+        self, seeded_db: Database
+    ) -> None:
+        """A populated rollup must not hide a newer raw-requests day."""
+        rollup_repo = UsageRollupRepository(seeded_db)
+        now = datetime.now(UTC)
+        account_id = 1
+
+        await _flush_events(
+            seeded_db,
+            rollup_repo,
+            [
+                _make_event(
+                    timestamp=now - timedelta(days=1),
+                    account_id=account_id,
+                    input_tokens=10,
+                    output_tokens=20,
+                    bytes_received=100,
+                    bytes_emitted=50,
+                )
+            ],
+        )
+
+        async with seeded_db.transaction():
+            await seeded_db.execute_write(
+                """
+                INSERT INTO requests (
+                    account_id, model_id, provider_id, started_at,
+                    completed_at, status, input_tokens, output_tokens,
+                    bytes_received, bytes_emitted
+                ) VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?)
+                """,
+                (
+                    account_id,
+                    "model_a",
+                    "provider_a",
+                    format_dt(now),
+                    format_dt(now),
+                    300,
+                    400,
+                    3_000,
+                    1_500,
+                ),
+            )
+
+        service = StatsService(seeded_db, rollup_repo=rollup_repo)
+        daily = await service.get_bandwidth_timeseries(
+            TimeRange(
+                start=now - timedelta(days=2),
+                end=now + timedelta(seconds=1),
+                label="2d",
+            )
+        )
+
+        by_day = {str(row["day"]): row for row in daily}
+        assert now.strftime("%Y-%m-%d") in by_day
+        today = by_day[now.strftime("%Y-%m-%d")]
+        assert today["bytes_received"] >= 3_000
+        assert today["bytes_emitted"] >= 1_500
+        assert today["total_tokens"] >= 700
 
     @pytest.mark.asyncio()
     async def test_rollup_bandwidth_matches_requests_table(

@@ -711,6 +711,32 @@ class StatsService:
                 account_id=account_id,
             )
             if result:
+                # Requests are the correctness source for the daily view.
+                # Rollups can legitimately lag a finalized request (for
+                # example while the coalescer is waiting for its next flush),
+                # and trusting a non-empty rollup wholesale would make that
+                # day disappear from both heatmaps. Keep rollup coverage for
+                # older rows that may have been removed by request retention.
+                # When both sources contain a day, only replace the rollup
+                # when the raw request count is at least as complete; this
+                # avoids replacing a full boundary-day rollup with a
+                # retention-partial raw aggregate.
+                live_rows = await fetch_bandwidth_timeseries(
+                    self._db,
+                    time_range.start_str(),
+                    time_range.end_str(),
+                    account_id=account_id,
+                )
+                if live_rows:
+                    by_day = {str(row.get("day", "")): dict(row) for row in result}
+                    for row in live_rows:
+                        day = str(row.get("day", ""))
+                        rollup_row = by_day.get(day)
+                        if rollup_row is None or _int(
+                            row.get("request_count", 0)
+                        ) >= _int(rollup_row.get("request_count", 0)):
+                            by_day[day] = dict(row)
+                    result = [by_day[day] for day in sorted(by_day)]
                 if use_cache:
                     self._set_dashboard_cache(key, result)
                 return result

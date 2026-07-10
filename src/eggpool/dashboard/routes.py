@@ -680,7 +680,11 @@ async def handle_overview(
     dashboard_config = _get_dashboard_config(request)
     time_range = resolve_time_range(period)
     stats = request.app.state.stats
-    heatmap_range = _heatmap_time_range(dashboard_config.retain_request_stats_days)
+    # The renderer always displays the six-month calendar. Query that full
+    # window rather than the shorter raw-request retention setting, otherwise
+    # the overview renders empty-looking gaps for activity still available in
+    # usage_rollups.
+    heatmap_range = _heatmap_time_range(_HEATMAP_MAX_DAYS)
     telemetry = getattr(request.app.state, "dashboard_telemetry", None)
 
     # Always fetch the disabled count so the Account breakdown empty

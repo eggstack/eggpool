@@ -362,6 +362,16 @@ def _format_tooltip_date(day_str: str) -> str:
     return parsed.strftime("%a, %b %-d %Y")
 
 
+def _heatmap_today() -> date:
+    """Return the heatmap's UTC calendar day.
+
+    Request timestamps and the heatmap query range are normalized to UTC;
+    using the host-local date here would shift the final column around local
+    midnight on deployments whose system timezone is not UTC.
+    """
+    return datetime.now(UTC).date()
+
+
 def get_theme_css(theme_name: str, themes_dir: str | None = None) -> str:
     """Load a theme by name and return the CSS :root block, or empty string.
 
@@ -1549,34 +1559,38 @@ def _render_bandwidth_heatmap(
     day_requests: dict[str, int] = {}
     if value_field == "bytes":
         day_values: dict[str, int] = {}
+        in_out: dict[str, tuple[int, int]] = {}
         for row in daily_data:
             day_str = str(row.get("day", ""))
-            val = int(row.get("bytes_emitted", 0)) + int(row.get("bytes_received", 0))
-            day_values[day_str] = val
-            day_requests[day_str] = int(row.get("request_count", 0))
-        formatter: Any = format_bytes
-        in_out: dict[str, tuple[int, int]] = {
-            str(row.get("day", "")): (
-                int(row.get("bytes_received", 0)),
-                int(row.get("bytes_emitted", 0)),
+            received = int(row.get("bytes_received", 0))
+            emitted = int(row.get("bytes_emitted", 0))
+            day_values[day_str] = day_values.get(day_str, 0) + received + emitted
+            day_requests[day_str] = day_requests.get(day_str, 0) + int(
+                row.get("request_count", 0)
             )
-            for row in daily_data
-        }
+            previous_received, previous_emitted = in_out.get(day_str, (0, 0))
+            in_out[day_str] = (
+                previous_received + received,
+                previous_emitted + emitted,
+            )
+        formatter: Any = format_bytes
     elif value_field == "total_tokens":
-        day_values = {
-            str(row.get("day", "")): int(row.get("total_tokens", 0))
-            for row in daily_data
-        }
+        day_values = {}
         formatter = format_tokens
         in_out = {}
         for row in daily_data:
             day_str = str(row.get("day", ""))
-            day_requests[day_str] = int(row.get("request_count", 0))
+            day_values[day_str] = day_values.get(day_str, 0) + int(
+                row.get("total_tokens", 0)
+            )
+            day_requests[day_str] = day_requests.get(day_str, 0) + int(
+                row.get("request_count", 0)
+            )
     else:
         raise ValueError(f"unsupported heatmap value_field: {value_field!r}")
 
     # Date range: last 180 days ending today
-    today = date.today()
+    today = _heatmap_today()
     start_date = today - timedelta(days=179)
 
     # Pad start to Sunday (GitHub convention: weeks start on Sunday)
@@ -1587,10 +1601,15 @@ def _render_bandwidth_heatmap(
     # Calculate number of weeks
     num_weeks = ((today - grid_start).days // 7) + 1
 
-    # Find max value for color scaling
-    max_val = max(day_values.values()) if day_values else 1
-    if max_val == 0:
-        max_val = 1
+    # Find max value for color scaling from the rendered window only.  The
+    # service may return a boundary row just outside the calendar window
+    # because its query uses a rolling timestamp range; that row must not
+    # make every visible day look artificially faint.
+    visible_values = [
+        day_values.get((start_date + timedelta(days=offset)).isoformat(), 0)
+        for offset in range((today - start_date).days + 1)
+    ]
+    max_val = max(visible_values, default=0) or 1
 
     # Color scale (theme-aware or default GitHub Primer green)
     colors = heatmap_colors or _DEFAULT_HEATMAP_COLORS
@@ -1671,7 +1690,6 @@ def _render_bandwidth_heatmap(
                 color = _get_color(value)
                 x = left_margin + week * step
                 y = top_margin + day_of_week * step
-                tooltip = f"{day_str}: {formatter(value)}"
                 request_count = day_requests.get(day_str, 0)
                 request_count_text = (
                     f"{request_count:,} request{'s' if request_count != 1 else ''}"
@@ -1691,11 +1709,14 @@ def _render_bandwidth_heatmap(
                         f"{request_count_text}"
                     )
                 tooltip_attr = _stdlib_escape(tooltip_text, quote=True)
+                tooltip_title_text = tooltip_text.replace("\n", " — ")
+                tooltip_title = f"{day_str}: {tooltip_title_text}"
                 cells.append(
                     f'<rect x="{x}" y="{y}" width="{cell_size}" '
                     f'height="{cell_size}" rx="2" fill="{color}" '
                     f'class="heatmap-cell" pointer-events="none">'
-                    f"<title>{_stdlib_escape(tooltip)}</title></rect>"
+                    f"<title>{_stdlib_escape(tooltip_title)}"
+                    f"</title></rect>"
                 )
                 hitboxes.append(
                     f'<div class="heatmap-hitbox" '

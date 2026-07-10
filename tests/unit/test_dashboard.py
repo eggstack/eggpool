@@ -2018,6 +2018,57 @@ class TestRenderBandwidthHeatmap:
         assert "<svg" in html
         assert "4,242" in html  # token-formatted tooltip
 
+    def test_duplicate_day_rows_are_aggregated(self) -> None:
+        from datetime import date as _date
+
+        today = _date.today().isoformat()
+        html = _render_bandwidth_heatmap(
+            [
+                {
+                    "day": today,
+                    "bytes_received": 100,
+                    "bytes_emitted": 50,
+                    "request_count": 2,
+                },
+                {
+                    "day": today,
+                    "bytes_received": 200,
+                    "bytes_emitted": 150,
+                    "request_count": 3,
+                },
+            ]
+        )
+
+        assert "300 B in" in html
+        assert "200 B out" in html
+        assert "5 requests" in html
+        assert "200 B in" not in html
+        assert "150 B out" not in html
+
+    def test_hidden_input_days_do_not_change_visible_color_scale(self) -> None:
+        from datetime import date as _date
+        from datetime import timedelta as _td
+
+        today = _date.today()
+        html = _render_bandwidth_heatmap(
+            [
+                {
+                    "day": today.isoformat(),
+                    "bytes_received": 100,
+                    "bytes_emitted": 0,
+                },
+                {
+                    # This day is outside the rendered 180-day window, so
+                    # it must not make today's visible cell look faint.
+                    "day": (today - _td(days=180)).isoformat(),
+                    "bytes_received": 10_000,
+                    "bytes_emitted": 0,
+                },
+            ]
+        )
+
+        assert 'fill="#216e39"' in html
+
     def test_total_tokens_empty_data(self) -> None:
         html = _render_bandwidth_heatmap([], value_field="total_tokens")
         assert "No activity data" in html
@@ -2949,17 +3000,12 @@ class TestHeatmapTooltipSystem:
             for i in range(180)
         ]
 
-        class _FrozenDate(_date):
-            @classmethod
-            def today(cls) -> _date:
-                return sunday
-
-        original_date = _render_module.date
-        _render_module.date = _FrozenDate  # type: ignore[assignment]
+        original_today = _render_module._heatmap_today
+        _render_module._heatmap_today = lambda: sunday
         try:
             html = _render_bandwidth_heatmap(daily)
         finally:
-            _render_module.date = original_date  # type: ignore[assignment]
+            _render_module._heatmap_today = original_today
 
         import re
 
@@ -3006,17 +3052,12 @@ class TestHeatmapTooltipSystem:
             for i in range(180)
         ]
 
-        class _FrozenDate(_date):
-            @classmethod
-            def today(cls) -> _date:
-                return today
-
-        original_date = _render_module.date
-        _render_module.date = _FrozenDate  # type: ignore[assignment]
+        original_today = _render_module._heatmap_today
+        _render_module._heatmap_today = lambda: today
         try:
             html = _render_bandwidth_heatmap(daily)
         finally:
-            _render_module.date = original_date  # type: ignore[assignment]
+            _render_module._heatmap_today = original_today
 
         # Out-of-range days: those before start_date AND after today
         # in the 27-week grid.
