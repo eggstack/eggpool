@@ -8,6 +8,7 @@ import threading
 import time
 from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import aiosqlite
@@ -20,6 +21,13 @@ from eggpool.errors import DatabaseError
 
 class _RollbackProbeError(Exception):
     """Sentinel exception for probe_writable to roll back without logging."""
+
+
+@dataclass(slots=True)
+class _TransactionState:
+    """Mutable marker shared by tasks that inherit a transaction context."""
+
+    active: bool = True
 
 
 def _classify_op_kind(sql: str) -> str:
@@ -130,6 +138,10 @@ class Database:
         self._in_transaction_context: ContextVar[bool] = ContextVar(
             "database_in_transaction_context",
             default=False,
+        )
+        self._transaction_state: ContextVar[_TransactionState | None] = ContextVar(
+            "database_transaction_state",
+            default=None,
         )
         # Tracks which asyncio.Task issued ``BEGIN IMMEDIATE`` for
         # the active outermost transaction on this connection.
@@ -246,11 +258,21 @@ class Database:
             raise DatabaseError(
                 "Database is opened read-only; writes are not permitted"
             )
-        if not self._in_transaction_context.get():
+        if not self._has_active_transaction_context():
             raise DatabaseError(
                 "Database writes require an active transaction; "
                 "use 'async with db.transaction():'"
             )
+
+    def _has_active_transaction_context(self) -> bool:
+        """Return whether this task inherited a still-active transaction."""
+        state_context = getattr(self, "_transaction_state", None)
+        if state_context is None:
+            # Keep lightweight test doubles and legacy manually constructed
+            # Database instances compatible with the pre-state marker.
+            return self._in_transaction_context.get()
+        state = state_context.get()
+        return state is not None and state.active
 
     def _refresh_idle_connection_lock(self) -> None:
         """Recreate an idle connection lock if it was bound to another loop.
@@ -293,7 +315,12 @@ class Database:
         Lock wait time is tracked in contention counters for
         runtime diagnostics.
         """
-        if self._current_task_owns_transaction():
+        # ContextVar inheritance is the transaction's intentional
+        # piggyback signal.  A child task created inside the transaction
+        # inherits ``_in_transaction_context`` but not the identity of the
+        # task that issued BEGIN.  Checking only the owner task here would
+        # make child reads/PRAGMAs wait on the lock held by their parent.
+        if self._has_active_transaction_context():
             yield
             return
 
@@ -623,7 +650,7 @@ class Database:
         # task that opened it. Unrelated tasks that lack that
         # inheritance must acquire the lock instead, so two
         # concurrent requests cannot piggyback on each other.
-        if self._in_transaction_context.get():
+        if self._has_active_transaction_context():
             self._total_nested_transactions += 1
             ctx_token = self._in_transaction_context.set(True)
             try:
@@ -644,7 +671,7 @@ class Database:
         async with self._connection_lock:
             # Re-check under the lock. Another task may have raced
             # between our initial check and acquiring the lock.
-            if self._in_transaction_context.get():
+            if self._has_active_transaction_context():
                 self._total_nested_transactions += 1
                 ctx_token = self._in_transaction_context.set(True)
                 try:
@@ -658,10 +685,21 @@ class Database:
             self._total_transactions += 1
             owner = asyncio.current_task()
             owner_token = self._transaction_owner.set(owner)
+            state = _TransactionState()
+            state_context = getattr(self, "_transaction_state", None)
+            if state_context is None:
+                state_context = ContextVar[_TransactionState | None](
+                    "database_transaction_state_compat",
+                    default=None,
+                )
+                self._transaction_state = state_context
+            state_token = state_context.set(state)
             ctx_token = self._in_transaction_context.set(True)
             try:
                 await self._conn.execute("BEGIN IMMEDIATE")
             except Exception as exc:
+                state.active = False
+                state_context.reset(state_token)
                 self._in_transaction_context.reset(ctx_token)
                 self._transaction_owner.reset(owner_token)
                 raise DatabaseError(f"Begin transaction failed: {exc}") from exc
@@ -673,5 +711,7 @@ class Database:
             else:
                 await self._conn.commit()
             finally:
+                state.active = False
+                state_context.reset(state_token)
                 self._in_transaction_context.reset(ctx_token)
                 self._transaction_owner.reset(owner_token)

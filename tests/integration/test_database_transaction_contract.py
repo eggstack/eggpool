@@ -213,6 +213,73 @@ class TestWriteHelperContract:
             await db.disconnect()
 
     @pytest.mark.asyncio
+    async def test_child_task_inherited_transaction_context_allows_reads(self) -> None:
+        """Child reads must piggyback instead of waiting on the parent lock."""
+        db = Database(path=":memory:")
+        await db.connect()
+        await _run_migrations(db)
+        try:
+
+            async def child_reader() -> None:
+                row = await db.fetch_one(
+                    "SELECT name FROM accounts WHERE name = ?",
+                    ("parent-read",),
+                )
+                assert row is not None
+                pragma_rows = await db.execute_pragma("PRAGMA foreign_keys")
+                assert pragma_rows[0]["foreign_keys"] == 1
+
+            async with db.transaction():
+                await db.execute_write(
+                    "INSERT INTO accounts "
+                    "(name, api_key_env, enabled, weight) "
+                    "VALUES (?, ?, 1, 1.0)",
+                    ("parent-read", "X"),
+                )
+                await asyncio.wait_for(
+                    asyncio.create_task(child_reader()),
+                    timeout=1.0,
+                )
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_delayed_child_does_not_reuse_completed_transaction(self) -> None:
+        """An inherited context expires when its parent transaction commits."""
+        db = Database(path=":memory:")
+        await db.connect()
+        await _run_migrations(db)
+        try:
+            child_started = asyncio.Event()
+            release_child = asyncio.Event()
+
+            async def child_writer() -> None:
+                await child_started.wait()
+                async with db.transaction():
+                    await db.execute_write(
+                        "INSERT INTO accounts "
+                        "(name, api_key_env, enabled, weight) "
+                        "VALUES (?, ?, 1, 1.0)",
+                        ("delayed-child", "X"),
+                    )
+                release_child.set()
+
+            async with db.transaction():
+                child = asyncio.create_task(child_writer())
+                await asyncio.sleep(0)
+
+            child_started.set()
+            await asyncio.wait_for(release_child.wait(), timeout=1.0)
+            await child
+            row = await db.fetch_one(
+                "SELECT name FROM accounts WHERE name = ?",
+                ("delayed-child",),
+            )
+            assert row is not None
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio
     async def test_child_task_with_own_transaction_succeeds(self) -> None:
         """A child task that opens its own transaction can write.
 

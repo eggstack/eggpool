@@ -882,6 +882,40 @@ class TestConcurrentResolution:
             )
         assert result == ["5.6.7.8"]
 
+    @pytest.mark.asyncio
+    async def test_cancelled_singleflight_waiter_does_not_cancel_owner(self) -> None:
+        """Cancelling one waiter leaves the shared lookup available."""
+        cfg = _make_config(positive_ttl_seconds=300)
+        cache = DnsCache(cfg)
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def blocked_lookup(hostname: str, address_family: int) -> list[str]:
+            del hostname, address_family
+            started.set()
+            await release.wait()
+            return ["1.2.3.4"]
+
+        with patch.object(cache, "_dns_lookup", side_effect=blocked_lookup):
+            owner = asyncio.create_task(cache.resolve("waiter.com", socket.AF_INET))
+            await asyncio.wait_for(started.wait(), timeout=1.0)
+            waiter = asyncio.create_task(cache.resolve("waiter.com", socket.AF_INET))
+            for _ in range(20):
+                if cache.singleflight_waits == 1:
+                    break
+                await asyncio.sleep(0)
+            assert cache.singleflight_waits == 1
+
+            waiter.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await waiter
+
+            release.set()
+            assert await asyncio.wait_for(owner, timeout=1.0) == ["1.2.3.4"]
+
+        host_stats = cache.snapshot()["by_host"]["waiter.com/ipv4"]
+        assert host_stats["singleflight_waits"] == 1
+
 
 class TestSnapshot:
     def test_initial_snapshot(self) -> None:

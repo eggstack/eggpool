@@ -391,14 +391,18 @@ class CatalogService:
                     tuple[AccountCatalogOutcome, AccountCatalogUpdateResult | None]
                 ]
             ] = []
+            live_task_accounts: list[str] = []
+            outcomes_by_account: dict[str, AccountCatalogOutcome] = {}
             for state in enabled_accounts:
                 api_key = self._registry.get_api_key(state.name)
                 provider_id = self._registry.get_provider_for_account(state.name)
                 if provider_id is None:
+                    outcomes_by_account[state.name] = AccountCatalogOutcome.SKIPPED
                     continue
                 if api_key is None or not self._registry.has_usable_credentials(
                     state.name
                 ):
+                    outcomes_by_account[state.name] = AccountCatalogOutcome.SKIPPED
                     continue
 
                 # Get provider-specific client
@@ -412,11 +416,13 @@ class CatalogService:
                             provider_id,
                             state.name,
                         )
+                        outcomes_by_account[state.name] = AccountCatalogOutcome.SKIPPED
                         continue
                 elif self._httpx_client is not None:
                     client = self._httpx_client
 
                 if client is None:
+                    outcomes_by_account[state.name] = AccountCatalogOutcome.SKIPPED
                     continue
 
                 # Get provider config
@@ -455,28 +461,39 @@ class CatalogService:
                         )
                     )
                 )
+                live_task_accounts.append(state.name)
 
             if static_tasks:
                 await asyncio.gather(*static_tasks, return_exceptions=True)
-            outcomes: list[AccountCatalogOutcome] = []
             if live_tasks:
                 fetch_results = await asyncio.gather(
                     *live_tasks, return_exceptions=True
                 )
-                for state, fetch_result in zip(
-                    enabled_accounts, fetch_results, strict=False
+                for account_name, fetch_result in zip(
+                    live_task_accounts, fetch_results, strict=True
                 ):
                     if isinstance(fetch_result, BaseException):
                         logger.warning(
                             "Catalog refresh for account %r preserved prior "
                             "support after exception: %s",
-                            state.name,
+                            account_name,
                             fetch_result,
                         )
-                        outcomes.append(AccountCatalogOutcome.FAILED)
+                        outcomes_by_account[account_name] = AccountCatalogOutcome.FAILED
                         continue
                     outcome, _update = fetch_result
-                    outcomes.append(outcome)
+                    outcomes_by_account[account_name] = outcome
+
+            # Keep one outcome per enabled account.  In particular, an
+            # account skipped before task creation must not shift the result
+            # belonging to the next account when the summary is built.
+            outcomes = [
+                outcomes_by_account.get(
+                    state.name,
+                    AccountCatalogOutcome.SKIPPED,
+                )
+                for state in enabled_accounts
+            ]
 
             # Drop models no longer referenced by any account or provider
             # so the in-memory cache converges with the live catalog and

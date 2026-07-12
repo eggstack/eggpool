@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
-from eggpool.catalog.service import CatalogService
+from eggpool.catalog.service import AccountCatalogOutcome, CatalogService
 from eggpool.models.config import AppConfig, ProviderConfig
 
 
@@ -181,6 +181,45 @@ class TestCatalogServicePingRecording:
 
         call_kwargs = mock_ping_repo.record_ping.call_args[1]
         assert call_kwargs["model_count"] == 3
+
+    @pytest.mark.asyncio
+    async def test_refresh_keeps_outcomes_aligned_when_account_is_skipped(self) -> None:
+        """Skipped accounts must not shift another account's fetch result."""
+        config = _make_config()
+        registry = MagicMock()
+        skipped = MagicMock(name="skipped")
+        skipped.name = "skipped"
+        fetched = MagicMock(name="fetched")
+        fetched.name = "fetched"
+        registry.get_enabled_states.return_value = [skipped, fetched]
+        registry.get_api_key.side_effect = lambda name: (
+            None if name == "skipped" else "test-key"
+        )
+        registry.get_provider_for_account.side_effect = lambda name: (
+            None if name == "skipped" else "provider-a"
+        )
+        registry.has_usable_credentials.return_value = True
+
+        service = CatalogService(
+            config=config,
+            registry=registry,
+            db=MagicMock(),
+            client_pool=MagicMock(spec=httpx.AsyncClient),
+        )
+        service._cache_loaded = True  # pyright: ignore[reportPrivateUsage]
+        service._fetch_and_process_account = AsyncMock(  # type: ignore[method-assign]
+            return_value=(AccountCatalogOutcome.SUCCESS_EMPTY, None)
+        )
+        service._persist_catalog = AsyncMock()  # type: ignore[method-assign]
+        service._log_refresh_summary = MagicMock()  # type: ignore[method-assign]
+
+        await service.refresh()
+
+        summary_outcomes = service._log_refresh_summary.call_args.args[0]
+        assert summary_outcomes == [
+            AccountCatalogOutcome.SKIPPED,
+            AccountCatalogOutcome.SUCCESS_EMPTY,
+        ]
 
     @pytest.mark.asyncio
     async def test_unresolved_model_does_not_inherit_another_provider_protocol(

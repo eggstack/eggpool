@@ -111,6 +111,7 @@ class DnsCache:
                 "misses": 0,
                 "negative_hits": 0,
                 "stale_hits": 0,
+                "singleflight_waits": 0,
             }
         self._per_host[counter_key][field] += 1
 
@@ -170,7 +171,7 @@ class DnsCache:
             owner_misses = counters.get("misses", 0)
             if owner_misses > 0:
                 hits_count = counters.get("hits", 0)
-                sf_waits = owner_misses  # approximate from per-host misses
+                sf_waits = counters.get("singleflight_waits", 0)
                 entry = self._cache.get(DnsCacheKey(hostname=host, address_family=fam))
                 expires_in = -1.0
                 if entry is not None and isinstance(entry, PositiveCacheEntry):
@@ -319,10 +320,13 @@ class DnsCache:
                 self._singleflight[key] = future
             else:
                 self.singleflight_waits += 1
+                self._record(key, "singleflight_waits")
                 future = self._singleflight[key]
 
         if not is_owner:
-            return await future
+            # A cancellation of one waiter must not cancel the shared
+            # resolver future for the owner and other waiters.
+            return await asyncio.shield(future)
 
         try:
             self.resolver_calls += 1
