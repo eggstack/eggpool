@@ -118,7 +118,10 @@ class DnsCache:
         self, hostname: str, address_family: int, error_kind: str
     ) -> None:
         error_key = (hostname, address_family, error_kind)
-        if len(self._resolution_errors) >= self._MAX_TRACKED_HOSTS:
+        if (
+            error_key not in self._resolution_errors
+            and len(self._resolution_errors) >= self._MAX_TRACKED_HOSTS
+        ):
             return
         self._resolution_errors[error_key] = (
             self._resolution_errors.get(error_key, 0) + 1
@@ -349,6 +352,21 @@ class DnsCache:
             if not future.cancelled():
                 future.set_exception(exc)
             raise exc from None
+        except asyncio.CancelledError:
+            # ``CancelledError`` is a ``BaseException`` and therefore does
+            # not reach the generic error handler below.  Clear ownership so
+            # a cancelled request cannot leave later callers waiting on a
+            # future that no task will ever complete.
+            async with self._lock:
+                self._singleflight.pop(key, None)
+                self._restore_stale_fallback(
+                    key,
+                    stale_fallback,
+                    count_hit=False,
+                )
+            if not future.done():
+                future.cancel()
+            raise
         except Exception as exc:
             self.resolver_errors += 1
             async with self._lock:
@@ -377,11 +395,14 @@ class DnsCache:
         self,
         key: DnsCacheKey,
         fallback: PositiveCacheEntry | None,
+        *,
+        count_hit: bool = True,
     ) -> list[str] | None:
         if fallback is None:
             return None
-        self.stale_hits += 1
-        self._record(key, "stale_hits")
+        if count_hit:
+            self.stale_hits += 1
+            self._record(key, "stale_hits")
         self._cache.pop(key, None)
         self._cache[key] = fallback
         self._cache.move_to_end(key)

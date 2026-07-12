@@ -170,10 +170,43 @@ class ModelCatalogCache:
         # a model from a single account, so the in-memory cache can
         # converge with the live catalog.
         self._account_provider_keys: dict[str, set[tuple[str, str]]] = {}
+        # Config-derived override maps are reused across model exposure
+        # calls.  The previous implementation rebuilt these Pydantic dumps
+        # once per exposed provider row, which made dashboard and /models
+        # requests pay an avoidable per-row serialization cost.
+        self._override_config: AppConfig | None = None
+        self._global_capability_overrides: dict[str, dict[str, object]] = {}
+        self._provider_capability_overrides: dict[
+            str, dict[str, dict[str, object]]
+        ] = {}
 
     def set_config(self, config: AppConfig) -> None:
         """Set the application config reference for provider lookups."""
         self._config = config
+        self._refresh_capability_override_cache()
+
+    def _refresh_capability_override_cache(self) -> None:
+        """Materialize capability overrides once for the current config."""
+        config = self._config
+        if config is None:
+            self._global_capability_overrides = {}
+            self._provider_capability_overrides = {}
+            self._override_config = None
+            return
+
+        self._global_capability_overrides = {
+            model_id: override.model_dump(exclude_none=True)
+            for model_id, override in config.model_capabilities.items()
+        }
+        self._provider_capability_overrides = {
+            provider_id: {
+                model_id: override.model_dump(exclude_none=True)
+                for model_id, override in provider.model_capabilities.items()
+            }
+            for provider_id, provider in config.providers.items()
+            if provider.model_capabilities
+        }
+        self._override_config = config
 
     def update_from_account(
         self,
@@ -259,7 +292,14 @@ class ModelCatalogCache:
             for stale_key in prior_keys - new_keys:
                 if stale_key not in surviving:
                     self._provider_models.pop(stale_key, None)
-        self._account_provider_keys[account_name] = new_keys
+        if withdraw_destructive:
+            self._account_provider_keys[account_name] = new_keys
+        else:
+            # A non-destructive refresh is allowed to add newly observed
+            # keys, but it must not forget prior keys.  Those prior keys
+            # are needed by a later confirmed withdrawal to remove stale
+            # provider rows without de-pooling the account prematurely.
+            self._account_provider_keys[account_name] = prior_keys | new_keys
 
         for model in models:
             model_id = model["model_id"]
@@ -491,20 +531,17 @@ class ModelCatalogCache:
         else:
             base_caps = dict_to_model_capabilities({})
 
-        global_overrides: dict[str, dict[str, object]] = {}
-        provider_overrides: dict[str, dict[str, object]] = {}
-        if self._config is not None:
-            global_overrides = {
-                k: v.model_dump(exclude_none=True)
-                for k, v in self._config.model_capabilities.items()
-            }
-            if provider_id is not None:
-                provider_cfg = self._config.providers.get(provider_id)
-                if provider_cfg is not None:
-                    provider_overrides = {
-                        k: v.model_dump(exclude_none=True)
-                        for k, v in provider_cfg.model_capabilities.items()
-                    }
+        if self._config is not self._override_config:
+            # A few CLI/test paths replace ``_config`` directly instead of
+            # calling ``set_config``.  Keep those callers correct while
+            # retaining the fast path for the normal startup wiring.
+            self._refresh_capability_override_cache()
+        global_overrides = self._global_capability_overrides
+        provider_overrides = (
+            self._provider_capability_overrides.get(provider_id, {})
+            if provider_id is not None
+            else {}
+        )
 
         final_caps = apply_capability_overrides(
             model_id,

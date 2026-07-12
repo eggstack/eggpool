@@ -852,6 +852,36 @@ class TestConcurrentResolution:
         for r in results:
             assert isinstance(r, httpcore.ConnectError)
 
+    @pytest.mark.asyncio
+    async def test_cancelled_singleflight_owner_does_not_stick(self) -> None:
+        """A cancelled owner must release the key for the next resolver."""
+        cfg = _make_config(positive_ttl_seconds=300)
+        cache = DnsCache(cfg)
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def blocked_lookup(hostname: str, address_family: int) -> list[str]:
+            del hostname, address_family
+            started.set()
+            await release.wait()
+            return ["1.2.3.4"]
+
+        with patch.object(cache, "_dns_lookup", side_effect=blocked_lookup):
+            owner = asyncio.create_task(cache.resolve("cancelled.com", socket.AF_INET))
+            await asyncio.wait_for(started.wait(), timeout=1.0)
+            owner.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await owner
+
+        assert cache._singleflight == {}
+
+        with patch.object(cache, "_dns_lookup", return_value=["5.6.7.8"]):
+            result = await asyncio.wait_for(
+                cache.resolve("cancelled.com", socket.AF_INET),
+                timeout=1.0,
+            )
+        assert result == ["5.6.7.8"]
+
 
 class TestSnapshot:
     def test_initial_snapshot(self) -> None:
@@ -884,6 +914,19 @@ class TestSnapshot:
             "resolver_calls_per_logical_resolve": 0.0,
             "worst_missers": [],
         }
+
+    def test_resolution_error_counter_keeps_existing_keys_after_cap(self) -> None:
+        """The diagnostics cap must not freeze an already-known error."""
+        cfg = _make_config()
+        cache = DnsCache(cfg)
+        for index in range(cache._MAX_TRACKED_HOSTS):
+            cache._record_error(f"host-{index}.example", socket.AF_INET, "lookup")
+
+        cache._record_error("host-0.example", socket.AF_INET, "lookup")
+
+        assert (
+            cache._resolution_errors[("host-0.example", socket.AF_INET, "lookup")] == 2
+        )
 
     @pytest.mark.asyncio
     async def test_snapshot_after_operations(self) -> None:

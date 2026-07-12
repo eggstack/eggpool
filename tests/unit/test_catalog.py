@@ -382,6 +382,28 @@ def test_cache_refresh_removes_withdrawn_account_support() -> None:
     assert cache.get_models_for_exposure("union", {"acct1"}) == []
 
 
+def test_non_destructive_refresh_keeps_keys_for_later_provider_pruning() -> None:
+    """Confirmed withdrawal must prune rows after an empty soft refresh."""
+    cache = ModelCatalogCache()
+    cache.update_from_account(
+        "acct1", "opencode-go", [{"model_id": "gpt-4", "protocol": "openai"}]
+    )
+
+    # A failed/empty response preserves support and therefore must also
+    # preserve the bookkeeping needed to remove the provider row later.
+    cache.update_from_account("acct1", "opencode-go", [])
+    cache.update_from_account(
+        "acct1",
+        "opencode-go",
+        [],
+        authoritative=True,
+        allow_withdrawals=True,
+    )
+
+    assert cache.get_supporting_accounts("gpt-4") == set()
+    assert cache.get_provider_model_entry("gpt-4", "opencode-go") is None
+
+
 def test_cache_staleness() -> None:
     cache = ModelCatalogCache()
     assert cache.is_stale(60) is True  # Never refreshed
@@ -1243,6 +1265,40 @@ def test_get_provider_model_entries_applies_capability_overrides() -> None:
     thinking = entry["capabilities"].get("thinking", {})
     # Override should have promoted the thinking capability to "supported".
     assert thinking.get("status") in {"supported", "mixed"}
+
+
+def test_capability_override_cache_refreshes_when_config_is_replaced() -> None:
+    """Direct config replacement must not retain stale override maps."""
+    cache = ModelCatalogCache()
+    cache._provider_models[("minimax-m3", "opencode-go")] = {
+        "model_id": "minimax-m3",
+        "protocol": "openai",
+        "capabilities": {"thinking": {"status": "unknown"}},
+    }
+    supported = AppConfig.model_validate(
+        {"model_capabilities": {"minimax-m3": {"thinking": {"status": "supported"}}}}
+    )
+    unsupported = AppConfig.model_validate(
+        {"model_capabilities": {"minimax-m3": {"thinking": {"status": "unsupported"}}}}
+    )
+
+    cache.set_config(supported)
+    assert (
+        cache.get_provider_model_entries()[("minimax-m3", "opencode-go")][
+            "capabilities"
+        ]["thinking"]["status"]
+        == "supported"
+    )
+
+    # Keep this direct assignment: a few legacy CLI/test paths still replace
+    # the reference instead of calling set_config().
+    cache._config = unsupported
+    assert (
+        cache.get_provider_model_entries()[("minimax-m3", "opencode-go")][
+            "capabilities"
+        ]["thinking"]["status"]
+        == "unsupported"
+    )
 
 
 def test_get_provider_model_entries_keys_are_deterministic() -> None:
