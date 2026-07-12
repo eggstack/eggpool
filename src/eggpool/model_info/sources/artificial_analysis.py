@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
@@ -72,17 +73,25 @@ class ArtificialAnalysisSource:
         headers: dict[str, str] = {"User-Agent": "eggpool/1.0"}
         api_key = self._config.resolved_api_key
         if api_key:
+            # The current AA Data API documents x-api-key.  Keep the
+            # Authorization form too for older compatible deployments and
+            # test doubles; servers ignore the unknown alternate scheme.
+            headers["x-api-key"] = api_key
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
     def _url(self) -> str:
-        base = self._config.base_url or "https://api.artificialanalysis.ai"
-        path = self._config.options.get("models_path", "/v1/models")
+        base = self._config.base_url or "https://artificialanalysis.ai/api/v2"
+        path = self._config.options.get("models_path", "/language/models")
+        if not isinstance(path, str) or not path:
+            path = "/language/models"
         return f"{base.rstrip('/')}{path}"
 
     def _benchmarks_url(self) -> str:
-        base = self._config.base_url or "https://api.artificialanalysis.ai"
-        path = self._config.options.get("benchmarks_path", "/v1/benchmarks")
+        base = self._config.base_url or "https://artificialanalysis.ai/api/v2"
+        path = self._config.options.get("benchmarks_path", "/language/models")
+        if not isinstance(path, str) or not path:
+            path = "/language/models"
         return f"{base.rstrip('/')}{path}"
 
     async def fetch_all(self) -> list[SourceModelRecord]:
@@ -210,7 +219,17 @@ def _parse_benchmarks(
     benchmarks: list[BenchmarkObservation] = []
 
     # Intelligence index (AA's primary composite score)
-    ii = raw.get("intelligence_index") or raw.get("score")
+    evaluations = raw.get("evaluations")
+    evaluation_map = (
+        cast("dict[str, object]", evaluations) if isinstance(evaluations, dict) else {}
+    )
+
+    ii = _first_numeric(
+        raw.get("intelligence_index"),
+        raw.get("score"),
+        evaluation_map.get("artificial_analysis_intelligence_index"),
+        evaluation_map.get("intelligence_index"),
+    )
     if isinstance(ii, (int, float)):
         benchmarks.append(
             BenchmarkObservation(
@@ -222,7 +241,10 @@ def _parse_benchmarks(
         )
 
     # Speed index
-    si = raw.get("speed_index")
+    si = _first_numeric(
+        raw.get("speed_index"),
+        evaluation_map.get("speed_index"),
+    )
     if isinstance(si, (int, float)):
         benchmarks.append(
             BenchmarkObservation(
@@ -234,7 +256,10 @@ def _parse_benchmarks(
         )
 
     # Quality index
-    qi = raw.get("quality_index")
+    qi = _first_numeric(
+        raw.get("quality_index"),
+        evaluation_map.get("quality_index"),
+    )
     if isinstance(qi, (int, float)):
         benchmarks.append(
             BenchmarkObservation(
@@ -272,7 +297,49 @@ def _parse_benchmarks(
                 )
             )
 
+    # The current AA API puts the composite and individual scores under
+    # ``evaluations``.  Preserve every finite numeric evaluation so new
+    # benchmark names do not require a code release.
+    emitted_names = {b.benchmark_name.casefold() for b in benchmarks}
+    for key, value in evaluation_map.items():
+        score = _first_numeric(value)
+        if score is None:
+            continue
+        label = str(key).removeprefix("artificial_analysis_").replace("_", " ")
+        label = " ".join(part.capitalize() for part in label.split())
+        if not label:
+            continue
+        name = f"Artificial Analysis {label}"
+        if name.casefold() in emitted_names:
+            continue
+        benchmarks.append(
+            BenchmarkObservation(
+                benchmark_name=name,
+                score=score,
+                source="artificial_analysis",
+                notes="Published by Artificial Analysis",
+            )
+        )
+        emitted_names.add(name.casefold())
+
     return tuple(benchmarks)
+
+
+def _first_numeric(*values: object) -> float | None:
+    """Return the first finite numeric value from a list of candidates."""
+    for value in values:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            numeric = float(value)
+            if math.isfinite(numeric):
+                return numeric
+        if isinstance(value, str):
+            try:
+                numeric = float(value.strip())
+            except ValueError:
+                continue
+            if math.isfinite(numeric):
+                return numeric
+    return None
 
 
 def _opt_str(raw: dict[str, object], key: str) -> str | None:

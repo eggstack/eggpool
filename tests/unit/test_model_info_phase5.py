@@ -389,7 +389,7 @@ class TestArtificialAnalysisSource:
 
     @pytest.mark.asyncio()
     async def test_api_key_in_headers(self) -> None:
-        """API key is included in the Authorization header."""
+        """API key is included in current and legacy auth headers."""
         payload = _make_aa_payload()
         client = _MockHttpClient(payload)
         config = ModelInfoSourceConfig(api_key="test-key-123")
@@ -399,6 +399,34 @@ class TestArtificialAnalysisSource:
         assert client.last_headers is not None
         assert "Authorization" in client.last_headers
         assert client.last_headers["Authorization"] == "Bearer test-key-123"
+        assert client.last_headers["x-api-key"] == "test-key-123"
+
+    def test_current_api_url(self) -> None:
+        """The default URL follows the current AA Data API."""
+        config = ModelInfoSourceConfig(api_key="key")
+        source = ArtificialAnalysisSource(config=config, client=_MockHttpClient({}))
+        assert source._url() == ("https://artificialanalysis.ai/api/v2/language/models")
+
+    def test_parses_current_evaluations_shape(self) -> None:
+        """Current AA ``evaluations`` fields become benchmark rows."""
+        now = datetime.now(UTC)
+        record = _parse_entry_to_record(
+            "gpt-5-5-high",
+            {
+                "slug": "gpt-5-5-high",
+                "name": "GPT-5.5 (high)",
+                "evaluations": {
+                    "artificial_analysis_intelligence_index": 53.1,
+                    "artificial_analysis_coding_index": 71.6,
+                    "artificial_analysis_terminal_bench": 48.2,
+                },
+            },
+            now,
+        )
+        names = {benchmark.benchmark_name for benchmark in record.benchmarks}
+        assert "Artificial Analysis Intelligence Index" in names
+        assert "Artificial Analysis Coding Index" in names
+        assert "Artificial Analysis Terminal Bench" in names
 
     @pytest.mark.asyncio()
     async def test_ttl_cache_reuses_fresh_response(self) -> None:
@@ -1447,6 +1475,22 @@ class TestSummaryGeneration:
             has_benchmarks=False,
         )
         assert "1M" in summary
+        assert "public benchmark metadata unavailable" not in summary.lower()
+
+    def test_summary_with_external_limits_skips_benchmark_unavailable_note(
+        self,
+    ) -> None:
+        """External context is useful metadata even without benchmark scores."""
+        summary = _generate_summary(
+            model_id="external-model",
+            status="partial",
+            sparse=False,
+            detail={
+                "providers": ["test-provider"],
+                "limits": {"external_context": 128000},
+            },
+            has_benchmarks=False,
+        )
         assert "public benchmark metadata unavailable" not in summary.lower()
 
     def test_summary_fresh_no_benchmarks(self) -> None:

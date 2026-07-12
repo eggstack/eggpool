@@ -27,6 +27,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import quote
 
 import httpx
 import pytest
@@ -210,16 +211,12 @@ async def app_with_real_models_async(
 
     await service.refresh_provider_catalog_observations()
     await service.reconcile_catalog_snapshot(reason="test_e2e")
-    # The startup reconciliation only writes provider-catalog data;
-    # the periodic refresh (or a manual /v1/model-info/refresh) is what
-    # actually pulls OpenRouter observations and lands them on the
-    # canonical row.  ``refresh_due_models`` only picks up rows whose
-    # ``next_refresh_at`` has passed; after a fresh reconcile every
-    # row carries a 12h partial_ttl, so the test must use the
-    # ``force=True`` path the dashboard's "Refresh now" button and
-    # the API's ``POST /v1/model-info/refresh?force=true`` use.
-    for mid in base_ids:
-        await service.refresh_model_info(mid, force=True)
+    # This mirrors the supervisor's first startup tick.  Reconciliation
+    # assigns normal future TTLs, so the first tick must use the explicit
+    # force path or every model would remain benchmark-empty until later.
+    refresh_result = await service.refresh_due_models(force=True)
+    assert refresh_result["total"] == len(base_ids)
+    assert refresh_result["openrouter_matched"] == len(base_ids)
 
     try:
         yield application, base_ids
@@ -262,6 +259,10 @@ async def test_every_model_detail_populates(
             failures.append(
                 f"{base_id}: missing external_context from OpenRouter "
                 "(resolve_openrouter_record returned None without an alias)"
+            )
+        if "Public benchmark metadata unavailable." in (info.summary or ""):
+            failures.append(
+                f"{base_id}: summary still reports benchmark metadata unavailable"
             )
         external_ids = (
             info.detail.get("external_ids", {}) if isinstance(info.detail, dict) else {}
@@ -337,3 +338,47 @@ async def test_detail_page_renders_provider_and_openrouter_context(
     assert "Model info not available" not in body
     assert "Summary" in body
     assert "Effective ctx" in body or "External ctx" in body
+
+
+@pytest.mark.asyncio()
+async def test_real_fixture_benchmarks_reach_canonical_detail_and_page(
+    app_with_real_models_async: tuple[FastAPI, list[str]],
+) -> None:
+    """Captured current OpenRouter model data must render its benchmarks.
+
+    The fixture contains the real nested ``benchmarks`` shape returned by
+    OpenRouter.  This guards the complete path: source parsing, observation
+    persistence, canonical merge, summary generation, and HTML rendering.
+    """
+    application, base_ids = app_with_real_models_async
+    service = application.state.model_info
+    client = TestClient(application)
+    fixture = _load_real_openrouter_fixture()
+    by_base_id = {_base_model_id_from_or(str(entry["id"])): entry for entry in fixture}
+
+    benchmark_models = 0
+    fresh_benchmark_models = 0
+    for base_id in base_ids:
+        entry = by_base_id[base_id]
+        raw_benchmarks = entry.get("benchmarks")
+        if not isinstance(raw_benchmarks, dict):
+            continue
+        if not any(
+            raw_benchmarks.get(key) for key in ("artificial_analysis", "design_arena")
+        ):
+            continue
+        benchmark_models += 1
+        info = await service.repo.get_canonical(base_id)
+        assert info is not None
+        benchmarks = info.detail.get("benchmarks")
+        assert isinstance(benchmarks, list) and benchmarks
+        if info.status == "fresh":
+            fresh_benchmark_models += 1
+        assert "Public benchmark metadata unavailable." not in (info.summary or "")
+
+        response = client.get(f"/models/{quote(base_id, safe='')}")
+        assert response.status_code == 200
+        assert "<h3>Benchmarks</h3>" in response.text
+
+    assert benchmark_models >= 15
+    assert fresh_benchmark_models == benchmark_models

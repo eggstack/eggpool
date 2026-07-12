@@ -219,7 +219,8 @@ ttl_seconds = 86400
 # enabled = false                  # Artificial Analysis benchmark source (default: disabled)
 # priority = 200
 # ttl_seconds = 86400
-# api_key = "..."                  # required; get from https://artificialanalysis.ai
+# api_key = "..."                  # required; use an AA Data API key
+#                                   # (sent as x-api-key)
 #
 # [model_info.sources.huggingface]
 # enabled = false                  # Hugging Face model card metadata (default: disabled)

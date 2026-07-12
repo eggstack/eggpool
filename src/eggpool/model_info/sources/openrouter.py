@@ -106,6 +106,18 @@ class OpenRouterModelInfoSource:
         base = self._config.base_url or "https://openrouter.ai/api/v1"
         return f"{base.rstrip('/')}/models"
 
+    def _benchmarks_url(self) -> str:
+        """Return the unified OpenRouter benchmark endpoint.
+
+        OpenRouter moved benchmark rankings out of the models response for
+        some catalog versions.  Keep the path configurable for compatible
+        proxies and test doubles, while defaulting to the documented API.
+        """
+        base = self._config.base_url or "https://openrouter.ai/api/v1"
+        path_obj = self._config.options.get("benchmarks_path", "/benchmarks")
+        path = path_obj if isinstance(path_obj, str) and path_obj else "/benchmarks"
+        return f"{base.rstrip('/')}/{path.lstrip('/')}"
+
     async def fetch_all(self) -> list[SourceModelRecord]:
         """Fetch the full OpenRouter catalog and return ``SourceModelRecord``s."""
         indexed = await self._fetch_indexed()
@@ -153,8 +165,30 @@ class OpenRouterModelInfoSource:
                     f"OpenRouter model-info fetch failed: {exc}"
                 ) from exc
             entries = _parse_catalog_payload(payload_obj)
+            if entries:
+                # Benchmark rankings are a best-effort enrichment.  A
+                # missing/unauthorized benchmark endpoint must not discard a
+                # healthy model catalog or make all model-info unavailable.
+                benchmark_payload = await self._fetch_benchmark_payload()
+                _merge_benchmark_catalog_into_entries(entries, benchmark_payload)
             self._cache.store(entries)
             return entries
+
+    async def _fetch_benchmark_payload(self) -> object | None:
+        """Fetch unified rankings without making the model catalog fragile."""
+        try:
+            response = await self._client.get(
+                self._benchmarks_url(), headers=self._headers()
+            )
+            response.raise_for_status()
+            return response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.warning(
+                "OpenRouter benchmark endpoint unavailable; preserving model "
+                "metadata from /models: %s",
+                exc,
+            )
+            return None
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +214,134 @@ def _parse_catalog_payload(payload: object) -> dict[str, dict[str, object]]:
             continue
         entries[model_id_obj] = raw_dict
     return entries
+
+
+def _merge_benchmark_catalog_into_entries(
+    entries: dict[str, dict[str, object]], payload: object | None
+) -> None:
+    """Merge ``/benchmarks`` rows into the corresponding model payloads.
+
+    The endpoint returns one row per model/source.  The models endpoint uses
+    a nested object, so normalize both current and older response shapes into
+    that object before the existing benchmark parser runs.
+    """
+    if not isinstance(payload, dict):
+        return
+    payload_dict = cast("dict[str, object]", payload)
+    data_obj = payload_dict.get("data")
+    if not isinstance(data_obj, list):
+        return
+
+    for item_obj in cast("list[object]", data_obj):
+        if not isinstance(item_obj, dict):
+            continue
+        item = cast("dict[str, object]", item_obj)
+        model_id = _benchmark_model_id(item)
+        if model_id is None or model_id not in entries:
+            continue
+
+        raw = dict(entries[model_id])
+        existing_obj = raw.get("benchmarks")
+        benchmark_block: dict[str, object] = (
+            dict(cast("dict[str, object]", existing_obj))
+            if isinstance(existing_obj, dict)
+            else {}
+        )
+        source = str(item.get("source", "")).strip().lower().replace("-", "_")
+
+        evaluations = item.get("evaluations")
+        has_aa_keys = any(
+            token in str(key).lower()
+            for key in item
+            for token in ("intelligence", "coding", "agentic", "math", "quality")
+        )
+        if (
+            source in {"artificial_analysis", "aa"}
+            or (source == "" and has_aa_keys)
+            or (
+                isinstance(evaluations, dict)
+                and any(
+                    "intelligence" in str(key).lower()
+                    or "coding" in str(key).lower()
+                    or "agentic" in str(key).lower()
+                    for key in cast("dict[object, object]", evaluations)
+                )
+            )
+        ):
+            aa_obj = benchmark_block.get("artificial_analysis")
+            aa: dict[str, object] = (
+                dict(cast("dict[str, object]", aa_obj))
+                if isinstance(aa_obj, dict)
+                else {}
+            )
+            if isinstance(evaluations, dict):
+                for key, value in cast("dict[object, object]", evaluations).items():
+                    if isinstance(key, str) and _numeric_value(value) is not None:
+                        aa[key.removeprefix("artificial_analysis_")] = value
+            for key, value in item.items():
+                if key in {
+                    "id",
+                    "model_id",
+                    "model_permaslug",
+                    "model",
+                    "slug",
+                    "display_name",
+                    "source",
+                    "evaluations",
+                    "pricing",
+                }:
+                    continue
+                if _numeric_value(value) is not None:
+                    aa[key.removeprefix("artificial_analysis_")] = value
+            if aa:
+                benchmark_block["artificial_analysis"] = aa
+        elif source == "design_arena":
+            design_obj = benchmark_block.get("design_arena")
+            design_rows: list[object] = (
+                list(cast("list[object]", design_obj))
+                if isinstance(design_obj, list)
+                else []
+            )
+            design_row = {
+                key: item[key]
+                for key in ("arena", "category", "elo", "win_rate", "rank")
+                if key in item
+            }
+            if design_row:
+                design_rows.append(design_row)
+                benchmark_block["design_arena"] = design_rows
+        else:
+            # Preserve unfamiliar benchmark providers instead of throwing
+            # away useful numeric results.  The generic parser below renders
+            # these rows with OpenRouter provenance.
+            generic_obj = benchmark_block.get("other")
+            generic_rows: list[object] = (
+                list(cast("list[object]", generic_obj))
+                if isinstance(generic_obj, list)
+                else []
+            )
+            generic_rows.append(dict(item))
+            benchmark_block["other"] = generic_rows
+
+        if benchmark_block:
+            raw["benchmarks"] = benchmark_block
+            entries[model_id] = raw
+
+
+def _benchmark_model_id(item: dict[str, object]) -> str | None:
+    """Extract a model id from current and legacy benchmark row shapes."""
+    for key in ("model_permaslug", "model_id", "id", "slug"):
+        value = item.get(key)
+        if isinstance(value, str) and value:
+            return value
+    model_obj = item.get("model")
+    if isinstance(model_obj, dict):
+        model = cast("dict[str, object]", model_obj)
+        for key in ("id", "slug", "model_permaslug"):
+            value = model.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return None
 
 
 def _parse_entry_to_record(
@@ -360,9 +522,12 @@ def _parse_benchmarks(
     provider's catalog variation cannot make the whole source unavailable.
     """
     raw_benchmarks_obj = raw.get("benchmarks")
-    if not isinstance(raw_benchmarks_obj, dict):
+    if isinstance(raw_benchmarks_obj, list):
+        raw_benchmarks: dict[str, object] = {"other": raw_benchmarks_obj}
+    elif isinstance(raw_benchmarks_obj, dict):
+        raw_benchmarks = cast("dict[str, object]", raw_benchmarks_obj)
+    else:
         return ()
-    raw_benchmarks = cast("dict[str, object]", raw_benchmarks_obj)
 
     benchmarks: list[BenchmarkObservation] = []
 
@@ -429,6 +594,52 @@ def _parse_benchmarks(
                 )
             )
 
+    # Be forward-compatible with additional benchmark providers and with
+    # older clients that represented benchmark rows as a list.
+    for source_key, source_obj in raw_benchmarks.items():
+        if source_key in {"artificial_analysis", "design_arena"}:
+            continue
+        if isinstance(source_obj, dict):
+            source_map = cast("dict[str, object]", source_obj)
+            for key, value in source_map.items():
+                score = _numeric_value(value)
+                if score is None:
+                    continue
+                label = _benchmark_label(str(key))
+                if label:
+                    benchmarks.append(
+                        BenchmarkObservation(
+                            benchmark_name=f"{_benchmark_label(source_key)} {label}",
+                            score=score,
+                            source="openrouter",
+                            observed_at=observed_at,
+                            notes="Published by OpenRouter",
+                        )
+                    )
+        elif isinstance(source_obj, list):
+            for item_obj in cast("list[object]", source_obj):
+                if not isinstance(item_obj, dict):
+                    continue
+                item = cast("dict[str, object]", item_obj)
+                name_obj = item.get("name", item.get("benchmark"))
+                name = str(name_obj).strip() if isinstance(name_obj, str) else ""
+                score = _numeric_value(
+                    item.get("score", item.get("elo", item.get("win_rate")))
+                )
+                if not name or score is None:
+                    continue
+                rank_value = _numeric_value(item.get("rank"))
+                benchmarks.append(
+                    BenchmarkObservation(
+                        benchmark_name=name,
+                        score=score,
+                        rank=int(rank_value) if rank_value is not None else None,
+                        source="openrouter",
+                        observed_at=observed_at,
+                        notes="Published by OpenRouter",
+                    )
+                )
+
     return tuple(benchmarks)
 
 
@@ -442,6 +653,13 @@ def _numeric_value(value: object) -> float | None:
     """Return a real numeric value, excluding booleans."""
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         numeric = float(value)
+        if math.isfinite(numeric):
+            return numeric
+    if isinstance(value, str):
+        try:
+            numeric = float(value.strip())
+        except ValueError:
+            return None
         if math.isfinite(numeric):
             return numeric
     return None

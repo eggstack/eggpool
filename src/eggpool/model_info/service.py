@@ -525,7 +525,7 @@ class ModelInfoService:
             "total": len(result.live_model_ids),
         }
 
-    async def refresh_due_models(self) -> dict[str, object]:
+    async def refresh_due_models(self, *, force: bool = False) -> dict[str, object]:
         """Refresh provider-native and external observations for due models.
 
         Queries the repository for due rows, refreshes provider observations,
@@ -534,11 +534,23 @@ class ModelInfoService:
         aliases, reconciles canonical summaries, and updates next_refresh_at.
         Batch-writes all changes in a single transaction and skips rows
         where the computed payload is byte-identical to the existing row.
+        When ``force`` is true, refreshes the first bounded canonical batch
+        regardless of its scheduled TTL; the application uses this only for
+        the first supervisor tick after startup.
         """
         now = datetime.now(UTC)
-        due_rows = await self._repo.list_due(
-            limit=self._config.max_models_per_cycle, now=now
-        )
+        if force:
+            # The startup supervisor tick is intentionally immediate.  A
+            # startup reconciliation assigns a normal future refresh time to
+            # newly-created rows, so using ``list_due`` here would make that
+            # first tick a no-op and defer all external enrichment for hours.
+            due_rows = await self._repo.list_all_canonical(
+                limit=self._config.max_models_per_cycle
+            )
+        else:
+            due_rows = await self._repo.list_due(
+                limit=self._config.max_models_per_cycle, now=now
+            )
 
         if not due_rows:
             return {"refreshed": 0, "total": 0, "skipped": 0}
@@ -756,6 +768,10 @@ class ModelInfoService:
                 status=status,
                 sparse=sparse,
                 detail=merged_detail,
+                external_benchmark_refreshed=bool(
+                    (or_record is not None and or_record.benchmarks)
+                    or (aa_record is not None and aa_record.benchmarks)
+                ),
             )
             next_refresh = self._scheduler.next_refresh_for(
                 status=status,
@@ -1205,6 +1221,10 @@ class ModelInfoService:
             status=status,
             sparse=sparse,
             detail=merged_detail,
+            external_benchmark_refreshed=bool(
+                (or_record is not None and or_record.benchmarks)
+                or (aa_record is not None and aa_record.benchmarks)
+            ),
         )
 
         provenance: dict[str, object] = {
@@ -3233,13 +3253,35 @@ def _refine_status_from_detail(
     status: ModelInfoStatus,
     sparse: bool,
     detail: dict[str, object],
+    external_benchmark_refreshed: bool = False,
 ) -> tuple[ModelInfoStatus, bool]:
     """Promote sparse rows once merged detail has external enrichment."""
     if status != "sparse_new" or not sparse:
+        if (
+            status == "partial"
+            and external_benchmark_refreshed
+            and _detail_has_benchmark_or_release(detail)
+        ):
+            return cast("ModelInfoStatus", "fresh"), False
         return status, sparse
     if not _detail_has_external_enrichment(detail):
         return status, sparse
     return cast("ModelInfoStatus", "partial"), False
+
+
+def _detail_has_benchmark_or_release(detail: dict[str, object]) -> bool:
+    """Return whether detail has public enrichment for a fresh status."""
+    benchmarks = detail.get("benchmarks")
+    if isinstance(benchmarks, list) and any(
+        isinstance(item, dict) and bool(cast("dict[str, object]", item).get("name"))
+        for item in cast("list[object]", benchmarks)
+    ):
+        return True
+    for key in ("family", "release_date"):
+        value = detail.get(key)
+        if isinstance(value, str) and value.strip():
+            return True
+    return False
 
 
 def _detail_has_external_enrichment(detail: dict[str, object]) -> bool:
@@ -3360,7 +3402,13 @@ def _detail_has_actionable_provider_metadata(detail: dict[str, object]) -> bool:
     limits = detail.get("limits")
     if isinstance(limits, dict):
         typed_limits = cast("dict[str, object]", limits)
-        for key in ("effective_context", "effective_input", "effective_output"):
+        for key in (
+            "effective_context",
+            "effective_input",
+            "effective_output",
+            "external_context",
+            "external_output",
+        ):
             value = typed_limits.get(key)
             if isinstance(value, (int, float)) and value > 0:
                 return True

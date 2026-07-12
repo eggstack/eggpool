@@ -1200,9 +1200,14 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         and config.model_info.refresh_interval_s > 0
         and model_info is not None
     ):
+        initial_model_info_refresh = True
 
         async def _model_info_refresh_once() -> None:
-            result = await model_info.refresh_due_models()
+            nonlocal initial_model_info_refresh
+            result = await model_info.refresh_due_models(
+                force=initial_model_info_refresh
+            )
+            initial_model_info_refresh = False
             model_info.log_refresh_result(result)
 
         supervisor.register_periodic(

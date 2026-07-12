@@ -6,6 +6,7 @@ and payload-count health recording.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -18,7 +19,9 @@ from eggpool.model_info.repository import ModelInfoRepository
 from eggpool.model_info.sources.base import SourceTTLCache
 from eggpool.model_info.sources.openrouter import (
     OpenRouterModelInfoSource,
+    _merge_benchmark_catalog_into_entries,
     _parse_catalog_payload,
+    _parse_entry_to_record,
 )
 from eggpool.models.config import ModelInfoSourceConfig
 
@@ -209,6 +212,52 @@ class TestPayloadRecording:
             assert snapshot["openrouter"]["last_payload_count"] == 2
         finally:
             await db.disconnect()
+
+
+class TestBenchmarkEndpointContract:
+    def test_unified_benchmarks_shape_is_merged_into_model_payload(self) -> None:
+        """Current ``/benchmarks`` rows reach the typed model record."""
+        entries = _parse_catalog_payload(
+            {"data": [{"id": "openai/gpt-4o", "name": "GPT-4o"}]}
+        )
+        _merge_benchmark_catalog_into_entries(
+            entries,
+            {
+                "data": [
+                    {
+                        "source": "artificial-analysis",
+                        "model_permaslug": "openai/gpt-4o",
+                        "intelligence_index": 71.2,
+                        "coding_index": 65.8,
+                    },
+                    {
+                        "source": "design-arena",
+                        "model_permaslug": "openai/gpt-4o",
+                        "arena": "models",
+                        "category": "website",
+                        "elo": 1281,
+                        "win_rate": 55.0,
+                        "rank": 2,
+                    },
+                ]
+            },
+        )
+
+        record = _parse_entry_to_record(
+            "openai/gpt-4o", entries["openai/gpt-4o"], datetime.now(UTC)
+        )
+        names = {benchmark.benchmark_name for benchmark in record.benchmarks}
+        assert "Artificial Analysis Intelligence Index" in names
+        assert "Artificial Analysis Coding Index" in names
+        assert "Design Arena: models / website" in names
+
+    def test_benchmark_endpoint_is_best_effort(self) -> None:
+        """A benchmark endpoint failure cannot erase a healthy model list."""
+        entries = _parse_catalog_payload(
+            {"data": [{"id": "openai/gpt-4o", "name": "GPT-4o"}]}
+        )
+        _merge_benchmark_catalog_into_entries(entries, {"error": "unauthorized"})
+        assert list(entries) == ["openai/gpt-4o"]
 
 
 class TestParseCatalogPayload:
