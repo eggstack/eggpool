@@ -45,6 +45,45 @@ def iso_datetime(value: object) -> str | None:
     return str(value)
 
 
+def compact_benchmark_rows(
+    value: object,
+    *,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """Project persisted benchmark observations into a safe display shape.
+
+    Benchmark rows are public metadata, but the summary/API surfaces still
+    need a bounded, predictable payload.  Unknown fields from source APIs are
+    intentionally not copied through.
+    """
+    if not isinstance(value, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in cast("list[object]", value):
+        if not isinstance(item, dict):
+            continue
+        item_map = cast("dict[str, Any]", item)
+        name = item_map.get("name", item_map.get("benchmark"))
+        if not isinstance(name, str) or not name.strip():
+            continue
+        row: dict[str, Any] = {"name": name}
+        for key in (
+            "score",
+            "rank",
+            "percentile",
+            "version",
+            "source",
+            "observed_at",
+        ):
+            field = item_map.get(key)
+            if field is not None:
+                row[key] = field
+        rows.append(row)
+        if limit is not None and len(rows) >= limit:
+            break
+    return rows
+
+
 def compact_model_info_summary(
     info: Any,
     *,
@@ -58,6 +97,15 @@ def compact_model_info_summary(
         sources.append(str(source))
 
     detail_raw = cast("dict[str, Any]", getattr(info, "detail", {}))
+    benchmark_rows = compact_benchmark_rows(detail_raw.get("benchmarks"), limit=8)
+    all_benchmark_rows = compact_benchmark_rows(detail_raw.get("benchmarks"))
+    benchmark_sources = sorted(
+        {
+            str(row["source"])
+            for row in all_benchmark_rows
+            if isinstance(row.get("source"), str) and row["source"]
+        }
+    )
     providers: list[str] = []
     raw_providers = cast("list[object]", detail_raw.get("providers", []))
     for provider in raw_providers:
@@ -73,6 +121,9 @@ def compact_model_info_summary(
         "summary": getattr(info, "summary", "") or "",
         "sources": sources,
         "providers": providers,
+        "benchmarks": benchmark_rows,
+        "benchmark_count": len(all_benchmark_rows),
+        "benchmark_sources": benchmark_sources,
         "last_seen_at": iso_datetime(getattr(info, "last_seen_at", None)),
         "last_refreshed_at": iso_datetime(getattr(info, "last_refreshed_at", None)),
         "next_refresh_at": iso_datetime(getattr(info, "next_refresh_at", None)),

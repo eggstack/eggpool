@@ -172,6 +172,45 @@ def test_render_models_joins_provider_suffixed_row_to_canonical_summary() -> Non
     assert 'data-model-id="minimax-m3/opencode-go"' in html
 
 
+def test_render_models_shows_public_benchmark_values() -> None:
+    """The models table exposes actual benchmark values, not just a status."""
+    html = render_models(
+        models=[
+            {
+                "model_id": "minimax-m3",
+                "provider_id": "opencode-go",
+                "request_count": 1,
+            }
+        ],
+        period="24h",
+        model_info_map={
+            "minimax-m3": {
+                "model_id": "minimax-m3",
+                "status": "fresh",
+                "summary": "Benchmark metadata available from OpenRouter.",
+                "sources": ["provider_catalog", "openrouter"],
+                "benchmarks": [
+                    {
+                        "name": "Artificial Analysis Intelligence Index",
+                        "score": 44.4,
+                        "source": "artificial_analysis",
+                    },
+                    {
+                        "name": "Design Arena: models / website",
+                        "score": 1295,
+                        "rank": 15,
+                        "source": "openrouter",
+                    },
+                ],
+                "benchmark_count": 2,
+            },
+        },
+    )
+    assert "Benchmarks" in html
+    assert "AA 44.4" in html
+    assert "Arena 1295 #15" in html
+
+
 def test_render_models_lookup_id_wins_over_literal_model_id() -> None:
     """``_model_info_lookup_id`` is consulted before ``base_model_id``
     and the literal ``model_id``."""

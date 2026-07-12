@@ -87,6 +87,14 @@ class ArtificialAnalysisSource:
             path = "/language/models"
         return f"{base.rstrip('/')}{path}"
 
+    def _free_url(self) -> str:
+        """Return the Free-tier-compatible language model endpoint."""
+        base = self._config.base_url or "https://artificialanalysis.ai/api/v2"
+        path = self._config.options.get("free_models_path", "/language/models/free")
+        if not isinstance(path, str) or not path:
+            path = "/language/models/free"
+        return f"{base.rstrip('/')}{path}"
+
     def _benchmarks_url(self) -> str:
         base = self._config.base_url or "https://artificialanalysis.ai/api/v2"
         path = self._config.options.get("benchmarks_path", "/language/models")
@@ -124,6 +132,16 @@ class ArtificialAnalysisSource:
                 return self._cache.snapshot()
             try:
                 response = await self._client.get(self._url(), headers=self._headers())
+                # The full endpoint is Pro+ according to the current AA API
+                # contract.  A valid Free-tier key can still retrieve the
+                # public headline indices from the /free sibling.
+                if (
+                    response.status_code in {403, 404}
+                    and self._free_url() != self._url()
+                ):
+                    response = await self._client.get(
+                        self._free_url(), headers=self._headers()
+                    )
                 response.raise_for_status()
                 payload_obj: object = response.json()
             except (httpx.HTTPError, ValueError) as exc:
@@ -131,6 +149,13 @@ class ArtificialAnalysisSource:
                     f"Artificial Analysis model-info fetch failed: {exc}"
                 ) from exc
             entries = _parse_catalog_payload(payload_obj)
+            if not entries:
+                self._cache.invalidate()
+                logger.warning(
+                    "Artificial Analysis model-info fetch returned no catalog "
+                    "entries; not caching the empty response"
+                )
+                return entries
             self._cache.store(entries)
             return entries
 
@@ -149,15 +174,29 @@ def _parse_catalog_payload(payload: object) -> dict[str, dict[str, object]]:
     data_obj: object = data_dict.get("data", data_dict.get("models", []))
     if not isinstance(data_obj, list):
         # Some AA responses may be a flat dict of model entries
-        if isinstance(data_dict.get("slug"), str):
-            slug = data_dict["slug"]
+        slug_obj = (
+            data_dict.get("slug")
+            or data_dict.get("model_slug")
+            or data_dict.get("model_permaslug")
+            or data_dict.get("id")
+        )
+        if isinstance(slug_obj, str):
+            slug = slug_obj
             entries[slug] = data_dict
         return entries
     for raw_obj in cast("list[object]", data_obj):
         if not isinstance(raw_obj, dict):
             continue
         raw_dict: dict[str, Any] = cast("dict[str, Any]", raw_obj)
-        model_id_obj: object = raw_dict.get("id") or raw_dict.get("slug")
+        # Prefer AA's human-readable slug.  Some versions also expose an
+        # opaque UUID as ``id``; using that as the primary identity makes
+        # otherwise-correct local model names impossible to match.
+        model_id_obj: object = (
+            raw_dict.get("slug")
+            or raw_dict.get("model_slug")
+            or raw_dict.get("model_permaslug")
+            or raw_dict.get("id")
+        )
         if not isinstance(model_id_obj, str) or not model_id_obj:
             continue
         entries[model_id_obj] = raw_dict
@@ -197,6 +236,12 @@ def _parse_entry_to_record(
         ],
     }
 
+    aliases: list[str] = []
+    for key in ("id", "slug", "model_slug", "model_permaslug"):
+        value = raw.get(key)
+        if isinstance(value, str) and value and value != source_model_id:
+            aliases.append(value)
+
     return SourceModelRecord(
         source="artificial_analysis",
         source_model_id=source_model_id,
@@ -205,6 +250,7 @@ def _parse_entry_to_record(
         raw_payload=raw,
         normalized=normalized,
         display_name=display_name,
+        aliases=tuple(sorted(set(aliases))),
         benchmarks=benchmarks,
         confidence=0.7,
         sparse=not bool(display_name and display_name != source_model_id),

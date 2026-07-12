@@ -661,7 +661,14 @@ class ModelInfoService:
                 )
                 if hf_aliases:
                     for alias in hf_aliases:
-                        hf_record = await self._huggingface_source.fetch_one(alias)
+                        try:
+                            hf_record = await self._huggingface_source.fetch_one(alias)
+                        except Exception as exc:
+                            logger.warning(
+                                "Hugging Face fetch failed for %s: %s", alias, exc
+                            )
+                            await self.record_source_error("huggingface", exc)
+                            continue
                         if hf_record is not None:
                             await self._persist_source_observation(
                                 hf_record, model_id=model_id
@@ -3363,8 +3370,15 @@ def _generate_summary(
         parts.append(f"Capabilities: {', '.join(caps_parts)}.")
 
     if has_benchmarks:
+        benchmark_sources = _benchmark_sources(detail)
+        if not benchmark_sources or "artificial_analysis" in benchmark_sources:
+            source_label = "Artificial Analysis"
+        elif "openrouter" in benchmark_sources:
+            source_label = "OpenRouter"
+        else:
+            source_label = ", ".join(benchmark_sources)
         parts.append(
-            "Benchmark metadata available from Artificial Analysis; "
+            f"Benchmark metadata available from {source_label}; "
             "local latency and reliability may differ."
         )
 
@@ -3395,6 +3409,21 @@ def _generate_summary(
         parts.append("Public benchmark metadata unavailable.")
 
     return " ".join(parts)
+
+
+def _benchmark_sources(detail: dict[str, object]) -> list[str]:
+    """Return stable source names represented by canonical benchmark rows."""
+    raw = detail.get("benchmarks")
+    if not isinstance(raw, list):
+        return []
+    sources: set[str] = set()
+    for item in cast("list[object]", raw):
+        if not isinstance(item, dict):
+            continue
+        source = cast("dict[str, object]", item).get("source")
+        if isinstance(source, str) and source.strip():
+            sources.add(source.strip())
+    return sorted(sources)
 
 
 def _detail_has_actionable_provider_metadata(detail: dict[str, object]) -> bool:

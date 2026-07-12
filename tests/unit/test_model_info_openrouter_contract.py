@@ -215,6 +215,62 @@ class TestPayloadRecording:
 
 
 class TestBenchmarkEndpointContract:
+    @pytest.mark.asyncio()
+    async def test_empty_catalog_is_not_cached_for_the_ttl(self) -> None:
+        class _SequenceClient:
+            def __init__(self) -> None:
+                self.payloads: list[dict[str, object]] = [
+                    {"data": []},
+                    {"data": [{"id": "openai/gpt-4o", "name": "GPT-4o"}]},
+                ]
+                self.calls = 0
+
+            async def get(
+                self, url: str, *, headers: dict[str, str] | None = None
+            ) -> httpx.Response:
+                del headers
+                payload = self.payloads[min(self.calls, len(self.payloads) - 1)]
+                self.calls += 1
+                return httpx.Response(
+                    status_code=200,
+                    json=payload,
+                    request=httpx.Request("GET", url),
+                )
+
+        client = _SequenceClient()
+        source, _ = _make_source(client=client)  # type: ignore[arg-type]
+
+        assert await source.fetch_all() == []
+        assert len(await source.fetch_all()) == 1
+        assert client.calls == 2
+
+    @pytest.mark.asyncio()
+    async def test_protected_benchmark_endpoint_is_skipped_without_key(self) -> None:
+        client = RecordingClient(
+            payload={"data": [{"id": "openai/gpt-4o", "name": "GPT-4o"}]}
+        )
+        source, _ = _make_source(client=client)
+
+        await source.fetch_all()
+
+        assert [url for url, _headers in client.calls] == [
+            "https://openrouter.ai/api/v1/models"
+        ]
+
+    @pytest.mark.asyncio()
+    async def test_protected_benchmark_endpoint_is_used_with_key(self) -> None:
+        client = RecordingClient(
+            payload={"data": [{"id": "openai/gpt-4o", "name": "GPT-4o"}]}
+        )
+        source, _ = _make_source(client=client, api_key="test-key")
+
+        await source.fetch_all()
+
+        assert [url for url, _headers in client.calls] == [
+            "https://openrouter.ai/api/v1/models",
+            "https://openrouter.ai/api/v1/benchmarks",
+        ]
+
     def test_unified_benchmarks_shape_is_merged_into_model_payload(self) -> None:
         """Current ``/benchmarks`` rows reach the typed model record."""
         entries = _parse_catalog_payload(
@@ -258,6 +314,34 @@ class TestBenchmarkEndpointContract:
         )
         _merge_benchmark_catalog_into_entries(entries, {"error": "unauthorized"})
         assert list(entries) == ["openai/gpt-4o"]
+
+    def test_free_variant_benchmark_row_resolves_unique_catalog_entry(self) -> None:
+        entries = _parse_catalog_payload(
+            {
+                "data": [
+                    {
+                        "id": "openai/gpt-4o:free",
+                        "canonical_slug": "openai/gpt-4o",
+                    }
+                ]
+            }
+        )
+        _merge_benchmark_catalog_into_entries(
+            entries,
+            {
+                "data": [
+                    {
+                        "source": "artificial-analysis",
+                        "model_permaslug": "openai/gpt-4o",
+                        "intelligence_index": 71.2,
+                    }
+                ]
+            },
+        )
+        record = _parse_entry_to_record(
+            "openai/gpt-4o:free", entries["openai/gpt-4o:free"], datetime.now(UTC)
+        )
+        assert record.benchmarks[0].score == 71.2
 
 
 class TestParseCatalogPayload:

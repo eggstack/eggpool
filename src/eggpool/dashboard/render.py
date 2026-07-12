@@ -1091,6 +1091,52 @@ def _render_model_info_pill(info: dict[str, Any] | None) -> str:
     )
 
 
+def _render_model_benchmarks(info: dict[str, Any] | None) -> str:
+    """Render bounded public benchmark values on the models table."""
+    if not info:
+        return '<span class="muted">—</span>'
+    raw_rows = info.get("benchmarks")
+    if not isinstance(raw_rows, list) or not raw_rows:
+        return '<span class="muted">—</span>'
+
+    labels: list[str] = []
+    tooltip_rows: list[str] = []
+    for raw_row in cast("list[object]", raw_rows)[:3]:
+        if not isinstance(raw_row, dict):
+            continue
+        row = cast("dict[str, Any]", raw_row)
+        name = str(row.get("name", "")).strip()
+        if not name:
+            continue
+        source = str(row.get("source", "")).strip()
+        if source == "artificial_analysis":
+            label = "AA"
+        elif "design arena" in name.casefold():
+            label = "Arena"
+        else:
+            label = name.split()[0][:10]
+        score = row.get("score")
+        if isinstance(score, (int, float)) and not isinstance(score, bool):
+            score_text = f"{float(score):.1f}".removesuffix(".0")
+        else:
+            score_text = "—"
+        rank = row.get("rank")
+        rank_text = f" #{int(rank)}" if isinstance(rank, (int, float)) else ""
+        labels.append(f"{label} {score_text}{rank_text}")
+        tooltip_rows.append(f"{name}: {score_text}{rank_text}")
+
+    if not labels:
+        return '<span class="muted">—</span>'
+    tooltip = "; ".join(tooltip_rows)
+    count = info.get("benchmark_count")
+    if isinstance(count, int) and count > len(labels):
+        tooltip += f"; {count - len(labels)} more"
+    return (
+        f'<span class="benchmark-values" data-tooltip="{escape_attr(tooltip)}" '
+        f'aria-label="{escape_attr(tooltip)}">{escape(" · ".join(labels))}</span>'
+    )
+
+
 def _render_availability_pill(row: dict[str, Any]) -> str:
     """Render a compact availability pill for a catalog row.
 
@@ -2577,6 +2623,7 @@ def render_models(
             _th("Provider"),
             _th("Avail."),
             _th("Info"),
+            _th("Benchmarks", priority=2),
             _th("Requests"),
             _th("Cost"),
             _th("Exactness"),
@@ -2679,6 +2726,7 @@ def render_models(
                 or mi_map.get(str(model_id))
             )
             info_pill = _render_model_info_pill(mi_info)
+            benchmark_html = _render_model_benchmarks(mi_info)
 
             # URL path-encode the model id so provider suffixes
             # (``/``), query metacharacters (``?``), and any future
@@ -2704,6 +2752,7 @@ def render_models(
                 f"{_td_priority(provider, 1)}"
                 f"{_td_priority(avail_html, 1)}"
                 f"{_td_priority(info_pill, 1)}"
+                f"{_td_priority(benchmark_html, 2)}"
                 f"{_td_priority(f'{req_count:,}', 1)}"
                 f"{_td_priority(cost, 1)}"
                 f"{_td_priority(exactness, 1)}"

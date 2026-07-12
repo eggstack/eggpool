@@ -128,4 +128,5 @@ markers = [
     "request_path: request-path correctness tests (routing, transcoding, finalization)",
     "dashboard: dashboard and cache-page rendering tests",
     "performance: performance baseline and regression tests",
+    "live: opt-in live external-source verification tests",
 ]

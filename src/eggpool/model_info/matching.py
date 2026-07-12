@@ -94,6 +94,7 @@ class ModelInfoCandidateIndex:
     exact_by_source_id: dict[str, SourceModelRecord]
     by_normalized_key: dict[str, list[ModelInfoMatchCandidate]]
     by_vendor_and_key: dict[tuple[str, str], list[ModelInfoMatchCandidate]]
+    by_release_suffix_key: dict[str, list[ModelInfoMatchCandidate]]
 
 
 @dataclass(frozen=True)
@@ -116,12 +117,62 @@ class ModelInfoMatchingConfig:
     enabled: bool = True
     normalized_exact: bool = True
     deployment_suffix_normalized_exact: bool = True
+    release_suffix_normalized_exact: bool = True
     regex_rules: bool = True
     similarity: bool = False
     similarity_threshold: float = 0.92
     similarity_min_gap: float = 0.05
     persist_discovered_aliases: bool = True
     max_candidates_per_model: int = 20
+
+
+def _is_release_suffix(tokens: tuple[str, ...]) -> bool:
+    """Return whether numeric trailing tokens look like a release date."""
+    if not tokens or not all(token.isdigit() for token in tokens):
+        return False
+    if len(tokens) == 1:
+        return len(tokens[0]) in {4, 6, 8} or tokens[0].startswith("20")
+    if len(tokens) == 2:
+        try:
+            month, day = (int(token) for token in tokens)
+        except ValueError:
+            return False
+        return 1 <= month <= 12 and 1 <= day <= 31
+    if len(tokens) == 3:
+        try:
+            year, month, day = (int(token) for token in tokens)
+        except ValueError:
+            return False
+        return 2000 <= year <= 2100 and 1 <= month <= 12 and 1 <= day <= 31
+    return False
+
+
+def _release_suffix_base(value: str) -> str | None:
+    """Return a model ID with one date-like release suffix removed.
+
+    Providers commonly expose a stable alias such as ``qwen3.5-plus``
+    while OpenRouter publishes a dated variant such as
+    ``qwen/qwen3.5-plus-02-15``.  Only all-numeric date-like tails are
+    eligible, and callers still require a unique candidate before accepting
+    the match.  Semantic variants (``pro``, ``mini``, ``flash``) therefore
+    remain part of the model identity.
+    """
+    namespace, model_segment = split_source_id(value)
+    tokens = tokenize_model_key(model_segment)
+    if len(tokens) < 3:
+        return None
+    # Prefer the longest valid date tail.  Otherwise a final day token such
+    # as ``20`` could be mistaken for a one-token year and leave the month
+    # attached to the model base.
+    for cut in range(1, len(tokens)):
+        suffix = tokens[cut:]
+        if not _is_release_suffix(suffix):
+            continue
+        base = "-".join(tokens[:cut])
+        if not base:
+            return None
+        return f"{namespace}/{base}" if namespace else base
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +200,7 @@ def build_candidate_index(
     exact: dict[str, SourceModelRecord] = {}
     by_norm: dict[str, list[ModelInfoMatchCandidate]] = {}
     by_vk: dict[tuple[str, str], list[ModelInfoMatchCandidate]] = {}
+    by_release: dict[str, list[ModelInfoMatchCandidate]] = {}
 
     for record in records:
         src_model_id: str = record.source_model_id
@@ -158,6 +210,7 @@ def build_candidate_index(
         raw_keys: list[str] = [src_model_id, model_segment]
         if display:
             raw_keys.append(display)
+        raw_keys.extend(record.aliases)
 
         norm_keys: list[str] = []
         for k in raw_keys:
@@ -191,11 +244,20 @@ def build_candidate_index(
             for nk in norm_keys:
                 by_vk.setdefault((vendor_norm, nk), []).append(candidate)
 
+        for raw_key in raw_keys:
+            base_key = _release_suffix_base(raw_key)
+            if base_key is None:
+                continue
+            normalized_base = normalize_model_key(base_key)
+            if normalized_base:
+                by_release.setdefault(normalized_base, []).append(candidate)
+
     return ModelInfoCandidateIndex(
         source=source,
         exact_by_source_id=exact,
         by_normalized_key=by_norm,
         by_vendor_and_key=by_vk,
+        by_release_suffix_key=by_release,
     )
 
 
@@ -603,6 +665,68 @@ def _tier_deployment_suffix_normalized_exact(
 
 
 # ---------------------------------------------------------------------------
+# Tier 2c: date/release suffix normalized exact
+# ---------------------------------------------------------------------------
+
+
+def _tier_release_suffix_normalized_exact(
+    *,
+    local_raw_candidates: list[str],
+    candidate_index: ModelInfoCandidateIndex,
+) -> MatchDecision | None:
+    """Match a stable local alias to one unique dated source variant."""
+    matches: list[ModelInfoMatchCandidate] = []
+    matched_keys: dict[int, str] = {}
+    seen_ids: set[int] = set()
+
+    for raw in local_raw_candidates:
+        normalized = normalize_model_key(raw)
+        if not normalized:
+            continue
+        for candidate in candidate_index.by_release_suffix_key.get(normalized, []):
+            candidate_id = id(candidate.record)
+            if candidate_id in seen_ids:
+                continue
+            seen_ids.add(candidate_id)
+            matches.append(candidate)
+            matched_keys[candidate_id] = normalized
+
+    if not matches:
+        return None
+    if len(matches) != 1:
+        return MatchDecision(
+            record=None,
+            matched=False,
+            match_method="ambiguous_release_suffix_candidates",
+            confidence=0.0,
+            diagnostics={
+                "candidate_count": len(matches),
+                "candidates": [
+                    {
+                        "source_model_id": candidate.source_model_id,
+                        "display_name": candidate.display_name,
+                    }
+                    for candidate in matches
+                ],
+            },
+        )
+
+    candidate = matches[0]
+    return MatchDecision(
+        record=candidate.record,
+        matched=True,
+        match_method="release_suffix_normalized_exact",
+        confidence=0.72,
+        diagnostics={
+            "matched_source_model_id": candidate.source_model_id,
+            "matched_normalized_key": matched_keys[id(candidate.record)],
+            "candidate_count": 1,
+        },
+        alias_to_persist=candidate.source_model_id,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Tier 3: regex rule
 # ---------------------------------------------------------------------------
 
@@ -793,6 +917,7 @@ async def resolve_source_record_tiered(
       1. exact_source_id
       2. normalized_exact
       2b. deployment_suffix_normalized_exact
+      2c. release_suffix_normalized_exact
       3. regex_rule
       4. similarity_guarded
 
@@ -859,6 +984,15 @@ async def resolve_source_record_tiered(
         )
         if t2b is not None:
             return t2b
+
+    # Tier 2c: dated/release variant normalization.
+    if config.release_suffix_normalized_exact:
+        t2c = _tier_release_suffix_normalized_exact(
+            local_raw_candidates=local_raw,
+            candidate_index=candidate_index,
+        )
+        if t2c is not None:
+            return t2c
 
     # Tier 3: regex rules.
     if config.regex_rules:

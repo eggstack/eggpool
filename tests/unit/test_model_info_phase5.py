@@ -290,6 +290,55 @@ class TestArtificialAnalysisParsing:
 
 class TestArtificialAnalysisSource:
     @pytest.mark.asyncio()
+    async def test_free_tier_fallback_uses_slug_identity(self) -> None:
+        """A 403 on the Pro endpoint falls back to AA's Free shape."""
+
+        payload = {
+            "data": [
+                {
+                    "id": "opaque-aa-uuid",
+                    "slug": "gpt-4o",
+                    "name": "GPT-4o",
+                    "evaluations": {
+                        "artificial_analysis_intelligence_index": 71.2,
+                    },
+                }
+            ]
+        }
+
+        class _TieredClient:
+            def __init__(self) -> None:
+                self.urls: list[str] = []
+
+            async def get(
+                self, url: str, *, headers: dict[str, str] | None = None
+            ) -> httpx.Response:
+                del headers
+                self.urls.append(url)
+                status = 403 if len(self.urls) == 1 else 200
+                return httpx.Response(
+                    status_code=status,
+                    json=payload if status == 200 else {"error": "tier"},
+                    request=httpx.Request("GET", url),
+                )
+
+        client = _TieredClient()
+        source = ArtificialAnalysisSource(
+            config=ModelInfoSourceConfig(api_key="test-key"),
+            client=client,
+        )
+
+        records = await source.fetch_all()
+
+        assert [url.rsplit("/api/v2", 1)[-1] for url in client.urls] == [
+            "/language/models",
+            "/language/models/free",
+        ]
+        assert len(records) == 1
+        assert records[0].source_model_id == "gpt-4o"
+        assert records[0].benchmarks[0].score == 71.2
+
+    @pytest.mark.asyncio()
     async def test_fetch_all_returns_records(self) -> None:
         """fetch_all returns SourceModelRecords for all catalog entries."""
         payload = _make_aa_payload(

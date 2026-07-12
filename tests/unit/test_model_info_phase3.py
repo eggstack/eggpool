@@ -285,9 +285,9 @@ class TestOpenRouterSourceFetch:
 
         await source.fetch_all()
         await source.fetch_all()
-        # One catalog request plus one best-effort unified benchmark request;
-        # the second fetch_all call is served entirely from the TTL cache.
-        assert client.call_count == 2
+        # The second fetch_all call is served entirely from the TTL cache;
+        # the protected benchmark endpoint is skipped without a key.
+        assert client.call_count == 1
 
     @pytest.mark.asyncio()
     async def test_custom_base_url(self) -> None:
@@ -1039,8 +1039,9 @@ class TestServiceIntegration:
 
             result = await service.refresh_due_models()
             assert result["refreshed"] + result["skipped"] == result["total"]
-            # OpenRouter was fetched once per endpoint (models + benchmarks).
-            assert client.call_count == 2
+            # The public /models payload already carries benchmark fields;
+            # /benchmarks is authenticated and is skipped without a key.
+            assert client.call_count == 1
         finally:
             await db.disconnect()
 

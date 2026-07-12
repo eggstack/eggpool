@@ -244,6 +244,8 @@ async def test_every_model_detail_populates(
     mi_service = application.state.model_info
 
     failures: list[str] = []
+    expected_benchmark_models = 0
+    persisted_benchmark_models = 0
     for base_id in base_ids:
         info: CanonicalModelInfo | None = await mi_service.repo.get_canonical(base_id)
         if info is None:
@@ -278,6 +280,22 @@ async def test_every_model_detail_populates(
             if ext not in or_index:
                 failures.append(f"{base_id}: external_id {ext} not in fixture")
 
+        expected_entry = or_index.get(external_ids.get("openrouter"))
+        expected_benchmarks = (
+            expected_entry.get("benchmarks")
+            if isinstance(expected_entry, dict)
+            else None
+        )
+        if expected_benchmarks:
+            expected_benchmark_models += 1
+            if (
+                isinstance(info.detail.get("benchmarks"), list)
+                and info.detail["benchmarks"]
+            ):
+                persisted_benchmark_models += 1
+            else:
+                failures.append(f"{base_id}: benchmark payload was not persisted")
+
         from urllib.parse import quote
 
         response = client.get(f"/models/{quote(base_id, safe='')}")
@@ -286,6 +304,7 @@ async def test_every_model_detail_populates(
         if "Model info not available" in body:
             failures.append(f"{base_id}: detail route renders empty state")
 
+    assert persisted_benchmark_models == expected_benchmark_models
     assert not failures, (
         f"{len(failures)}/{len(base_ids)} models failed to populate:\n"
         + "\n".join(failures[:20])
@@ -338,6 +357,12 @@ async def test_detail_page_renders_provider_and_openrouter_context(
     assert "Model info not available" not in body
     assert "Summary" in body
     assert "Effective ctx" in body or "External ctx" in body
+
+    benchmarked_entry = next(entry for entry in fixture if entry.get("benchmarks"))
+    benchmarked_id = _base_model_id_from_or(benchmarked_entry["id"])
+    benchmarked_response = client.get(f"/models/{quote(benchmarked_id, safe='')}")
+    assert benchmarked_response.status_code == 200
+    assert "Benchmarks" in benchmarked_response.text
 
 
 @pytest.mark.asyncio()

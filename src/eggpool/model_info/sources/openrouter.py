@@ -169,8 +169,28 @@ class OpenRouterModelInfoSource:
                 # Benchmark rankings are a best-effort enrichment.  A
                 # missing/unauthorized benchmark endpoint must not discard a
                 # healthy model catalog or make all model-info unavailable.
-                benchmark_payload = await self._fetch_benchmark_payload()
-                _merge_benchmark_catalog_into_entries(entries, benchmark_payload)
+                # The documented endpoint requires an OpenRouter API key.
+                # The public /models response already carries benchmark
+                # fields for many models, so avoid a guaranteed 401 on
+                # installations that intentionally configure no OpenRouter
+                # key.  Operators can still opt in for older catalog shapes
+                # through the explicit compatibility option.
+                fetch_benchmarks_without_key = bool(
+                    self._config.options.get("fetch_benchmarks_without_api_key", False)
+                )
+                if self._config.resolved_api_key or fetch_benchmarks_without_key:
+                    benchmark_payload = await self._fetch_benchmark_payload()
+                    _merge_benchmark_catalog_into_entries(entries, benchmark_payload)
+            else:
+                # Never make a malformed/empty response fresh for the whole
+                # TTL window.  A transient proxy response or an upstream
+                # schema change must be retried on the next cycle.
+                self._cache.invalidate()
+                logger.warning(
+                    "OpenRouter model-info fetch returned no catalog entries; "
+                    "not caching the empty response"
+                )
+                return entries
             self._cache.store(entries)
             return entries
 
@@ -183,7 +203,7 @@ class OpenRouterModelInfoSource:
             response.raise_for_status()
             return response.json()
         except (httpx.HTTPError, ValueError) as exc:
-            logger.warning(
+            logger.info(
                 "OpenRouter benchmark endpoint unavailable; preserving model "
                 "metadata from /models: %s",
                 exc,
@@ -237,10 +257,11 @@ def _merge_benchmark_catalog_into_entries(
             continue
         item = cast("dict[str, object]", item_obj)
         model_id = _benchmark_model_id(item)
-        if model_id is None or model_id not in entries:
+        resolved_model_id = _resolve_benchmark_entry_id(model_id, entries)
+        if resolved_model_id is None:
             continue
 
-        raw = dict(entries[model_id])
+        raw = dict(entries[resolved_model_id])
         existing_obj = raw.get("benchmarks")
         benchmark_block: dict[str, object] = (
             dict(cast("dict[str, object]", existing_obj))
@@ -325,7 +346,7 @@ def _merge_benchmark_catalog_into_entries(
 
         if benchmark_block:
             raw["benchmarks"] = benchmark_block
-            entries[model_id] = raw
+            entries[resolved_model_id] = raw
 
 
 def _benchmark_model_id(item: dict[str, object]) -> str | None:
@@ -342,6 +363,41 @@ def _benchmark_model_id(item: dict[str, object]) -> str | None:
             if isinstance(value, str) and value:
                 return value
     return None
+
+
+def _resolve_benchmark_entry_id(
+    benchmark_model_id: str | None,
+    entries: dict[str, dict[str, object]],
+) -> str | None:
+    """Resolve a benchmark row to one model-catalog entry.
+
+    OpenRouter has used several identifiers for the same model across
+    benchmark and model endpoints: ``model_permaslug``/``model_id``,
+    ``canonical_slug``, and provider variants such as ``:free``.  Prefer
+    exact identity, then a unique base-variant match.  Ambiguous variants
+    are rejected rather than attaching a score to the wrong model.
+    """
+    if not isinstance(benchmark_model_id, str) or not benchmark_model_id:
+        return None
+    if benchmark_model_id in entries:
+        return benchmark_model_id
+
+    candidates: list[str] = []
+    benchmark_base = benchmark_model_id.removesuffix(":free")
+    for entry_id, raw in entries.items():
+        aliases = {entry_id}
+        canonical_slug = raw.get("canonical_slug")
+        if isinstance(canonical_slug, str) and canonical_slug:
+            aliases.add(canonical_slug)
+        for alias in aliases:
+            if alias == benchmark_model_id:
+                return entry_id
+            if alias.removesuffix(":free") == benchmark_base:
+                candidates.append(entry_id)
+                break
+
+    unique_candidates = sorted(set(candidates))
+    return unique_candidates[0] if len(unique_candidates) == 1 else None
 
 
 def _parse_entry_to_record(
@@ -410,6 +466,11 @@ def _parse_entry_to_record(
         "benchmarks": [_benchmark_to_payload(b) for b in benchmarks],
     }
 
+    aliases: list[str] = []
+    canonical_slug = raw.get("canonical_slug")
+    if isinstance(canonical_slug, str) and canonical_slug:
+        aliases.append(canonical_slug)
+
     return SourceModelRecord(
         source="openrouter",
         source_model_id=source_model_id,
@@ -417,6 +478,7 @@ def _parse_entry_to_record(
         raw_hash=raw_hash,
         raw_payload=raw,
         normalized=normalized,
+        aliases=tuple(sorted(set(aliases))),
         display_name=display_name,
         context_window=context_window,
         max_output_tokens=max_output,

@@ -344,6 +344,7 @@ class TestSimilarityDisabledByDefault:
         assert config.normalized_exact is True
         assert config.regex_rules is True
         assert config.deployment_suffix_normalized_exact is True
+        assert config.release_suffix_normalized_exact is True
         assert config.similarity_threshold == 0.92
         assert config.similarity_min_gap == 0.05
         assert config.persist_discovered_aliases is True
@@ -515,5 +516,55 @@ class TestDeploymentSuffixOffByConfig:
             repo=repo,
             candidate_index=index,
             config=config,
+        )
+        assert decision.matched is False
+
+
+class TestReleaseSuffixNormalizedExact:
+    """Dated source variants may resolve only when the base is unique."""
+
+    @pytest.mark.asyncio()
+    async def test_qwen_dated_variant_matches_stable_provider_alias(self) -> None:
+        record = _record("qwen/qwen3.5-plus-02-15")
+        index = build_candidate_index("openrouter", [record])
+        decision = await resolve_source_record_tiered(
+            source="openrouter",
+            model_id="qwen3.5-plus",
+            provider_id="opencode-go",
+            display_name=None,
+            repo=FakeRepo(),
+            candidate_index=index,
+        )
+        assert decision.matched is True
+        assert decision.match_method == "release_suffix_normalized_exact"
+        assert decision.record is record
+
+    @pytest.mark.asyncio()
+    async def test_ambiguous_dated_variants_do_not_guess(self) -> None:
+        records = [
+            _record("qwen/qwen3.5-plus-02-15"),
+            _record("qwen/qwen3.5-plus-04-20"),
+        ]
+        decision = await resolve_source_record_tiered(
+            source="openrouter",
+            model_id="qwen3.5-plus",
+            provider_id="opencode-go",
+            display_name=None,
+            repo=FakeRepo(),
+            candidate_index=build_candidate_index("openrouter", records),
+        )
+        assert decision.matched is False
+        assert decision.match_method == "ambiguous_release_suffix_candidates"
+
+    @pytest.mark.asyncio()
+    async def test_semantic_variant_is_not_created_by_date_fallback(self) -> None:
+        record = _record("qwen/qwen3.5-plus-02-15")
+        decision = await resolve_source_record_tiered(
+            source="openrouter",
+            model_id="qwen3.5",
+            provider_id="opencode-go",
+            display_name=None,
+            repo=FakeRepo(),
+            candidate_index=build_candidate_index("openrouter", [record]),
         )
         assert decision.matched is False

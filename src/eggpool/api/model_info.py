@@ -20,6 +20,7 @@ from fastapi import Request  # noqa: TCH002 — FastAPI needs runtime access
 from fastapi.responses import JSONResponse
 
 from eggpool.model_info.presentation import (
+    compact_benchmark_rows,
     compact_model_info_summary,
     iso_datetime,
 )
@@ -96,7 +97,7 @@ def _detail_response(
     external_ids = cast("dict[str, Any]", detail.get("external_ids", {}))
 
     # Benchmarks
-    benchmarks = cast("list[object]", detail.get("benchmarks", []))
+    benchmarks = compact_benchmark_rows(detail.get("benchmarks"))
 
     # Hugging Face metadata
     hf_metadata = cast("dict[str, Any]", detail.get("huggingface_metadata", {}))
@@ -189,6 +190,9 @@ def _clean_observation_rows(
             val = row.get(key)
             if val is not None:
                 entry[key] = val
+        benchmarks = compact_benchmark_rows(row.get("benchmarks"), limit=8)
+        if benchmarks:
+            entry["benchmarks"] = benchmarks
         modalities_raw_obj = row.get("modalities")
         if isinstance(modalities_raw_obj, list) and modalities_raw_obj:
             typed_mods: list[object] = cast("list[object]", modalities_raw_obj)

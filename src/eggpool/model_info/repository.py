@@ -7,10 +7,8 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
-from eggpool.model_info.types import (
-    CanonicalModelInfo,
-    SourceModelRecord,
-)
+from eggpool.model_info.presentation import compact_benchmark_rows
+from eggpool.model_info.types import CanonicalModelInfo, SourceModelRecord
 
 if TYPE_CHECKING:
     from eggpool.db.connection import Database
@@ -783,6 +781,9 @@ class ModelInfoRepository:
                     entry[key] = val
             if modalities:
                 entry["modalities"] = modalities
+            benchmarks = compact_benchmark_rows(decoded_dict.get("benchmarks"), limit=8)
+            if benchmarks:
+                entry["benchmarks"] = benchmarks
             out.append(entry)
         return out
 
