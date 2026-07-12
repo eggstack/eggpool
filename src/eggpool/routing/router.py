@@ -1223,21 +1223,22 @@ class Router:
 
         thinking_capable: list[AccountRuntimeState] = []
         for _provider_id, accounts in provider_support.items():
-            for state in accounts:
-                acct_provider = self._catalog.cache.get_provider_for_account(state.name)
-                if acct_provider is None:
-                    continue
-                entry = self._catalog.cache.get_provider_model_entry(
-                    model_id, acct_provider
-                )
-                if entry is None:
-                    continue
-                caps_raw = entry.get("capabilities", {})
-                if not isinstance(caps_raw, dict) or "thinking" not in caps_raw:
-                    continue
-                caps = dict_to_model_capabilities({"thinking": caps_raw["thinking"]})
-                if caps.thinking.status == "supported":
-                    thinking_capable.append(state)
+            acct_provider = self._catalog.cache.get_provider_for_account(
+                accounts[0].name
+            )
+            if acct_provider is None:
+                continue
+            entry = self._catalog.cache.get_provider_model_entry(
+                model_id, acct_provider
+            )
+            if entry is None:
+                continue
+            caps_raw = entry.get("capabilities", {})
+            if not isinstance(caps_raw, dict) or "thinking" not in caps_raw:
+                continue
+            caps = dict_to_model_capabilities({"thinking": caps_raw["thinking"]})
+            if caps.thinking.status == "supported":
+                thinking_capable.extend(accounts)
 
         if not thinking_capable:
             return eligible
@@ -1335,17 +1336,23 @@ class Router:
             active_requests,
             request_estimates,
         )
+        native_by_provider: dict[str | None, bool] = {}
         for score in scores:
             state = candidates.by_name.get(score.account_name)
             if state is not None:
                 score.tier = state.routing_priority
                 if client_protocol is not None and transcode_eligibility is not None:
-                    score.requires_transcode = not (
-                        self._registry.account_supports_protocol(
-                            score.account_name,
-                            client_protocol,
-                        )
+                    provider_id = self._registry.get_provider_for_account(
+                        score.account_name
                     )
+                    native = native_by_provider.get(provider_id)
+                    if native is None:
+                        native = provider_id is not None and (
+                            client_protocol
+                            in self._registry.get_provider_protocols(provider_id)
+                        )
+                        native_by_provider[provider_id] = native
+                    score.requires_transcode = not native
         return scores
 
     async def record_usage(

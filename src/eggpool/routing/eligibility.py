@@ -21,7 +21,7 @@ disablement, catalog/protocol incompatibility, or an explicit
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -72,6 +72,7 @@ def get_eligible_accounts(
     accounts. Switch to ``"hard_cap"`` to restore the pre-suppression
     behavior where locally over-quota accounts are excluded.
     """
+    from eggpool.catalog.cache import ModelCatalogCache as RuntimeModelCatalogCache
     from eggpool.catalog.capabilities import (
         candidate_supports_requested_effort,
         check_candidate_thinking_eligibility,
@@ -84,6 +85,20 @@ def get_eligible_accounts(
     unsupported_action = policy.get("unsupported_thinking", "reject")
     unknown_action = policy.get("unknown_thinking", "reject")
     mixed_action = policy.get("mixed_collapsed_thinking", "filter")
+    # All candidates in this decision share one model and freshness window.
+    # Compute the support set once instead of rebuilding it inside
+    # ``is_account_model_available`` for every account.  Keep a fallback for
+    # lightweight test doubles and alternate cache implementations that only
+    # expose the older predicate.
+    use_precomputed_support = type(catalog) is RuntimeModelCatalogCache
+    supporting_accounts: set[str] | frozenset[str] = frozenset()
+    if use_precomputed_support:
+        supporting_accounts = (
+            catalog.get_fresh_supporting_accounts(model_id, stale_after_s)
+            if stale_after_s is not None
+            else catalog.get_supporting_accounts(model_id)
+        )
+    capability_by_provider: dict[str, tuple[Any, str, bool]] = {}
 
     for state in all_states:
         if not state.is_eligible():
@@ -125,7 +140,16 @@ def get_eligible_accounts(
         ):
             continue
 
-        if not catalog.is_account_model_available(
+        if use_precomputed_support:
+            if state.name not in supporting_accounts:
+                continue
+            model_info = catalog.get_model_for_account(model_id, state.name)
+            resolved_protocol = model_info.get("protocol") if model_info else None
+            if not resolved_protocol or (
+                protocol is not None and resolved_protocol != protocol
+            ):
+                continue
+        elif not catalog.is_account_model_available(
             state.name,
             model_id,
             max_age_s=stale_after_s,
@@ -141,19 +165,23 @@ def get_eligible_accounts(
         if thinking_requirement is not None and thinking_requirement.required:
             account_provider = catalog.get_provider_for_account(state.name)
             if account_provider is not None:
-                entry = catalog.get_provider_model_entry(model_id, account_provider)
-                status = extract_thinking_status_from_entry(entry)
-                if not check_candidate_thinking_eligibility(
-                    status,
-                    unsupported_action=unsupported_action,
-                    unknown_action=unknown_action,
-                    mixed_action=mixed_action,
-                ):
-                    continue
-                if not candidate_supports_requested_effort(
-                    entry,
-                    thinking_requirement.requested_effort,
-                ):
+                cached_capability = capability_by_provider.get(account_provider)
+                if cached_capability is None:
+                    entry = catalog.get_provider_model_entry(model_id, account_provider)
+                    status = extract_thinking_status_from_entry(entry)
+                    allowed = check_candidate_thinking_eligibility(
+                        status,
+                        unsupported_action=unsupported_action,
+                        unknown_action=unknown_action,
+                        mixed_action=mixed_action,
+                    ) and candidate_supports_requested_effort(
+                        entry,
+                        thinking_requirement.requested_effort,
+                    )
+                    cached_capability = (entry, status, allowed)
+                    capability_by_provider[account_provider] = cached_capability
+                entry, status, allowed = cached_capability
+                if not allowed:
                     continue
                 _log_capability_warning(
                     state=state,

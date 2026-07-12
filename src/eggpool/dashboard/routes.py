@@ -706,6 +706,7 @@ async def handle_overview(
         models,
         events,
         bandwidth_daily,
+        summary,
         ping_summary,
         ip_stats,
         attempt_stats,
@@ -740,6 +741,12 @@ async def handle_overview(
             "overview",
             "bandwidth_daily",
             stats.get_bandwidth_timeseries(heatmap_range, use_cache=True),
+        ),
+        _await_dashboard_stage(
+            telemetry,
+            "overview",
+            "summary",
+            stats.get_summary(time_range, use_cache=True),
         ),
         _await_dashboard_stage(
             telemetry,
@@ -790,14 +797,19 @@ async def handle_overview(
             stats.get_synthetic_cache_summary(time_range.label, use_cache=True),
         ),
     )
-    # ``get_dashboard_overview`` is derived from ``accounts`` and the
-    # per-period summary; both are cache hits after the gather above.
+    # ``get_dashboard_overview`` is derived from already-fetched overview
+    # inputs. Passing them through avoids a second summary/cache query after
+    # the parallel stats batch completes.
     overview = await _await_dashboard_stage(
         telemetry,
         "overview",
         "dashboard_overview",
         stats.get_dashboard_overview(
-            time_range, account_stats=accounts, use_cache=True
+            time_range,
+            account_stats=accounts,
+            summary=summary,
+            cache_observability=cache_observability,
+            use_cache=True,
         ),
     )
 

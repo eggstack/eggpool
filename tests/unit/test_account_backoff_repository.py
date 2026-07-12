@@ -81,6 +81,36 @@ async def test_upsert_failure_inserts_row(repo: AccountBackoffRepository) -> Non
 
 
 @pytest.mark.asyncio
+async def test_get_for_accounts_batches_account_rows(
+    repo: AccountBackoffRepository,
+) -> None:
+    """Bulk enrichment returns every active row grouped by account."""
+    await repo.upsert_failure(
+        account_id=1,
+        model_id="gpt-4",
+        reason="model_unavailable",
+        status_code=503,
+        error_class="UpstreamError",
+        backoff_until=None,
+        consecutive_failures=1,
+    )
+    await repo.upsert_failure(
+        account_id=2,
+        model_id=None,
+        reason="rate_limited",
+        status_code=429,
+        error_class="RateLimitError",
+        backoff_until=None,
+        consecutive_failures=2,
+    )
+
+    grouped = await repo.get_for_accounts([1, 2, 1])
+
+    assert [row["reason"] for row in grouped[1]] == ["model_unavailable"]
+    assert [row["reason"] for row in grouped[2]] == ["rate_limited"]
+
+
+@pytest.mark.asyncio
 async def test_upsert_failure_refreshes_existing_row(
     repo: AccountBackoffRepository,
 ) -> None:

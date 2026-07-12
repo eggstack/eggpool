@@ -1142,6 +1142,39 @@ class TestStatsService:
         assert overview["summary"]["total_requests"] == 5
 
     @pytest.mark.asyncio()
+    async def test_dashboard_overview_reuses_prefetched_aggregates(
+        self, seeded_db: Database
+    ) -> None:
+        """The overview route can pass parallel-query results without rereads."""
+        service = StatsService(seeded_db)
+        time_range = TimeRange(
+            start=__import__("datetime").datetime.fromisoformat("2000-01-01"),
+            end=__import__("datetime").datetime.fromisoformat("2099-12-31"),
+            label="custom",
+        )
+        summary = {"total_requests": 7}
+        cache = {"requests_total": 7}
+        with (
+            patch.object(service, "get_summary", new_callable=AsyncMock) as get_summary,
+            patch.object(
+                service,
+                "get_cache_observability",
+                new_callable=AsyncMock,
+            ) as get_cache,
+        ):
+            overview = await service.get_dashboard_overview(
+                time_range,
+                account_stats=[],
+                summary=summary,
+                cache_observability=cache,
+            )
+
+        get_summary.assert_not_awaited()
+        get_cache.assert_not_awaited()
+        assert overview["summary"] is summary
+        assert overview["cache"] is cache
+
+    @pytest.mark.asyncio()
     async def test_dashboard_totals_match_db_aggregates(
         self, seeded_db: Database
     ) -> None:

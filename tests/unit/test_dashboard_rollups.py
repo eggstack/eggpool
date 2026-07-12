@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
@@ -581,6 +582,40 @@ class TestRollupBandwidthParity:
         assert today["bytes_received"] >= 3_000
         assert today["bytes_emitted"] >= 1_500
         assert today["total_tokens"] >= 700
+
+    @pytest.mark.asyncio()
+    async def test_bandwidth_rollup_reconciliation_is_current_day_only(
+        self, seeded_db: Database
+    ) -> None:
+        """A long heatmap window must not rescan its full raw history."""
+        rollup_repo = UsageRollupRepository(seeded_db)
+        now = datetime.now(UTC)
+        await _flush_events(
+            seeded_db,
+            rollup_repo,
+            [_make_event(timestamp=now - timedelta(days=1))],
+        )
+
+        service = StatsService(seeded_db, rollup_repo=rollup_repo)
+        time_range = TimeRange(
+            start=now - timedelta(days=180),
+            end=now + timedelta(seconds=1),
+            label="180d",
+        )
+        with patch(
+            "eggpool.stats.service.fetch_bandwidth_timeseries",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as fetch_live:
+            await service.get_bandwidth_timeseries(time_range)
+
+        assert fetch_live.await_count == 1
+        _, start, end = fetch_live.await_args.args
+        assert datetime.strptime(start, "%Y-%m-%d %H:%M:%S").date() == now.date()
+        assert (
+            datetime.strptime(end, "%Y-%m-%d %H:%M:%S")
+            - datetime.strptime(start, "%Y-%m-%d %H:%M:%S")
+        ) <= timedelta(days=1)
 
     @pytest.mark.asyncio()
     async def test_rollup_bandwidth_matches_requests_table(

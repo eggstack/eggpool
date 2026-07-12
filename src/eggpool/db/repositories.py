@@ -1829,3 +1829,40 @@ class AccountBackoffRepository:
             entry["backoff_until_epoch"] = _iso_to_epoch(entry.get("backoff_until"))
             results.append(entry)
         return results
+
+    async def get_for_accounts(
+        self,
+        account_ids: list[int],
+    ) -> dict[int, list[dict[str, Any]]]:
+        """Return all backoff rows for several accounts in one query.
+
+        The accounts dashboard enriches every row with backoff state.  A
+        per-account lookup turns that render into an N+1 query pattern, so
+        keep the same row contract while fetching the complete small set in
+        one indexed ``IN`` query.
+        """
+        unique_ids = list(dict.fromkeys(int(account_id) for account_id in account_ids))
+        if not unique_ids:
+            return {}
+        result: dict[int, list[dict[str, Any]]] = {}
+        # Stay below SQLite's host-parameter limit for unusually large
+        # installations while retaining one query per bounded batch.
+        for offset in range(0, len(unique_ids), 500):
+            batch = unique_ids[offset : offset + 500]
+            placeholders = ",".join("?" for _ in batch)
+            rows = await self._db.fetch_all(
+                f"""
+                SELECT id, account_id, model_id, reason, status_code,
+                       error_class, consecutive_failures, backoff_until,
+                       last_failure_at, updated_at
+                FROM account_backoffs
+                WHERE account_id IN ({placeholders})
+                ORDER BY account_id, model_id, reason
+                """,
+                tuple(batch),
+            )
+            for row in rows:
+                entry = dict(row)
+                entry["backoff_until_epoch"] = _iso_to_epoch(entry.get("backoff_until"))
+                result.setdefault(int(entry["account_id"]), []).append(entry)
+        return result

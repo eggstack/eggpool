@@ -431,6 +431,18 @@ class StatsService:
                 reservation_count_by_account.get(name, 0) + 1
             )
 
+        backoffs_by_account: dict[int, list[dict[str, Any]]] | None = None
+        if self._account_backoff_repo is not None:
+            try:
+                backoffs_by_account = await self._account_backoff_repo.get_for_accounts(
+                    [int(row["account_id"]) for row in rows if row.get("account_id")]
+                )
+            except Exception:
+                # Preserve the pre-bulk behavior for older repository doubles
+                # and transient read failures: the per-row helper catches its
+                # own query error and renders explicit empty backoff fields.
+                backoffs_by_account = None
+
         for row in rows:
             name = str(row.get("account_name", ""))
             row["reserved_microdollars"] = reserved_by_account.get(name, 0)
@@ -469,7 +481,16 @@ class StatsService:
                 row["consecutive_upstream_failures"] = 0
                 row["operator_disabled"] = False
 
-            await self._enrich_with_backoff(row, row.get("account_id"))
+            account_id = row.get("account_id")
+            await self._enrich_with_backoff(
+                row,
+                account_id,
+                backoffs=(
+                    backoffs_by_account.get(int(account_id), [])
+                    if backoffs_by_account is not None and account_id is not None
+                    else None
+                ),
+            )
 
             reserved = row.get("reserved_microdollars", 0) or 0
             row["estimated_over_local_budget"] = bool(
@@ -485,6 +506,7 @@ class StatsService:
         self,
         row: dict[str, Any],
         account_id: int | None,
+        backoffs: list[dict[str, Any]] | None = None,
     ) -> None:
         """Populate upstream-backoff fields on a single account row.
 
@@ -499,17 +521,16 @@ class StatsService:
             row["backoff_until"] = None
             row["authentication_failed"] = False
             return
-        try:
-            backoffs: list[
-                dict[str, Any]
-            ] = await self._account_backoff_repo.get_for_account(
-                account_id=int(account_id)
-            )
-        except Exception:
-            row["upstream_backoff_reason"] = None
-            row["backoff_until"] = None
-            row["authentication_failed"] = False
-            return
+        if backoffs is None:
+            try:
+                backoffs = await self._account_backoff_repo.get_for_account(
+                    account_id=int(account_id)
+                )
+            except Exception:
+                row["upstream_backoff_reason"] = None
+                row["backoff_until"] = None
+                row["authentication_failed"] = False
+                return
         now = time.time()
         active: list[dict[str, Any]] = []
         for b in backoffs:
@@ -711,32 +732,11 @@ class StatsService:
                 account_id=account_id,
             )
             if result:
-                # Requests are the correctness source for the daily view.
-                # Rollups can legitimately lag a finalized request (for
-                # example while the coalescer is waiting for its next flush),
-                # and trusting a non-empty rollup wholesale would make that
-                # day disappear from both heatmaps. Keep rollup coverage for
-                # older rows that may have been removed by request retention.
-                # When both sources contain a day, only replace the rollup
-                # when the raw request count is at least as complete; this
-                # avoids replacing a full boundary-day rollup with a
-                # retention-partial raw aggregate.
-                live_rows = await fetch_bandwidth_timeseries(
-                    self._db,
-                    time_range.start_str(),
-                    time_range.end_str(),
+                result = await self._maybe_merge_bandwidth_livet(
+                    result,
+                    time_range,
                     account_id=account_id,
                 )
-                if live_rows:
-                    by_day = {str(row.get("day", "")): dict(row) for row in result}
-                    for row in live_rows:
-                        day = str(row.get("day", ""))
-                        rollup_row = by_day.get(day)
-                        if rollup_row is None or _int(
-                            row.get("request_count", 0)
-                        ) >= _int(rollup_row.get("request_count", 0)):
-                            by_day[day] = dict(row)
-                    result = [by_day[day] for day in sorted(by_day)]
                 if use_cache:
                     self._set_dashboard_cache(key, result)
                 return result
@@ -1033,7 +1033,7 @@ class StatsService:
         rows = await self._rollup_repo.query_flat_timeseries(
             start=time_range.start_str(),
             end=time_range.end_str(),
-            bucket_size_s=3600,
+            bucket_size_s=86400,
             account_id=account_id,
         )
         day_buckets: dict[str, dict[str, Any]] = {}
@@ -1065,6 +1065,59 @@ class StatsService:
             )
         return [day_buckets[k] for k in sorted(day_buckets)]
 
+    async def _maybe_merge_bandwidth_livet(
+        self,
+        rollup_rows: list[dict[str, Any]],
+        time_range: TimeRange,
+        *,
+        account_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Reconcile only the current day against unflushed requests.
+
+        The heatmap spans up to 180 days.  Reading the entire raw request
+        window to reconcile one open rollup day defeats the point of the
+        rollup table, especially on the overview page.  The current UTC day
+        is the only bucket that can normally be incomplete while the rollup
+        writer is waiting for its next flush, so bound the raw query to that
+        day and retain older rollup coverage (which may outlive request
+        retention).
+        """
+        now = datetime.now(UTC)
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        range_start = (
+            time_range.start
+            if time_range.start.tzinfo is not None
+            else time_range.start.replace(tzinfo=UTC)
+        )
+        range_end = (
+            time_range.end
+            if time_range.end.tzinfo is not None
+            else time_range.end.replace(tzinfo=UTC)
+        )
+        tail_start = max(range_start, day_start)
+        tail_end = min(range_end, now)
+        if tail_start >= tail_end:
+            return rollup_rows
+
+        live_rows = await fetch_bandwidth_timeseries(
+            self._db,
+            format_dt(tail_start),
+            format_dt(tail_end),
+            account_id=account_id,
+        )
+        if not live_rows:
+            return rollup_rows
+
+        by_day = {str(row.get("day", "")): dict(row) for row in rollup_rows}
+        for row in live_rows:
+            day = str(row.get("day", ""))
+            rollup_row = by_day.get(day)
+            if rollup_row is None or _int(row.get("request_count", 0)) >= _int(
+                rollup_row.get("request_count", 0)
+            ):
+                by_day[day] = dict(row)
+        return [by_day[day] for day in sorted(by_day)]
+
     async def _maybe_merge_livet(
         self,
         rollup_rows: list[dict[str, Any]],
@@ -1083,21 +1136,31 @@ class StatsService:
         bucket_s = _bucket_size_s(bucket)
         if not rollup_rows:
             return rollup_rows
-        latest_bucket = str(rollup_rows[-1].get("bucket", ""))
-        if not latest_bucket:
-            return rollup_rows
-        latest_dt = _parse_dt(latest_bucket)
-        if latest_dt is None:
-            return rollup_rows
-        bucket_end = latest_dt + timedelta(seconds=bucket_s)
         now = datetime.now(UTC)
-        if now <= bucket_end:
+        current_bucket_start_dt = now.replace(
+            minute=0 if bucket_s == 3600 else now.minute,
+            second=0,
+            microsecond=0,
+        )
+        if bucket_s == 86400:
+            current_bucket_start_dt = current_bucket_start_dt.replace(hour=0)
+        range_start = (
+            time_range.start
+            if time_range.start.tzinfo is not None
+            else time_range.start.replace(tzinfo=UTC)
+        )
+        range_end = (
+            time_range.end
+            if time_range.end.tzinfo is not None
+            else time_range.end.replace(tzinfo=UTC)
+        )
+        if not (range_start <= current_bucket_start_dt < range_end):
             return rollup_rows
-        current_bucket_start = format_dt(now)
+        current_bucket_start = format_dt(max(range_start, current_bucket_start_dt))
         livet_rows = await fetch_timeseries(
             self._db,
             current_bucket_start,
-            format_dt(now + timedelta(seconds=bucket_s)),
+            format_dt(min(range_end, now)),
             bucket=bucket,
             account_id=account_id,
             model_id=model_id,
@@ -1129,22 +1192,32 @@ class StatsService:
         points = rollup_result.get("points", [])
         if not points:
             return rollup_result
-        latest_bucket = str(points[-1].get("bucket", ""))
-        if not latest_bucket:
-            return rollup_result
-        latest_dt = _parse_dt(latest_bucket)
-        if latest_dt is None:
-            return rollup_result
-        bucket_end = latest_dt + timedelta(seconds=bucket_s)
         now = datetime.now(UTC)
-        if now <= bucket_end:
+        current_bucket_start_dt = now.replace(
+            minute=0 if bucket_s == 3600 else now.minute,
+            second=0,
+            microsecond=0,
+        )
+        if bucket_s == 86400:
+            current_bucket_start_dt = current_bucket_start_dt.replace(hour=0)
+        range_start = (
+            time_range.start
+            if time_range.start.tzinfo is not None
+            else time_range.start.replace(tzinfo=UTC)
+        )
+        range_end = (
+            time_range.end
+            if time_range.end.tzinfo is not None
+            else time_range.end.replace(tzinfo=UTC)
+        )
+        if not (range_start <= current_bucket_start_dt < range_end):
             return rollup_result
-        current_bucket_start = format_dt(now)
+        current_bucket_start = format_dt(max(range_start, current_bucket_start_dt))
         model_filter: str | None = model_id if model_id else None
         livet_raw = await fetch_grouped_timeseries(
             self._db,
             current_bucket_start,
-            format_dt(now + timedelta(seconds=bucket_s)),
+            format_dt(min(range_end, now)),
             bucket=bucket,
             group_by=group_by,
             limit=limit,
@@ -1358,20 +1431,24 @@ class StatsService:
         time_range: TimeRange,
         account_stats: list[dict[str, Any]] | None = None,
         *,
+        summary: dict[str, Any] | None = None,
+        cache_observability: dict[str, Any] | None = None,
         use_cache: bool = False,
     ) -> dict[str, Any]:
         """Get the data set used to render the overview page."""
-        summary = await self.get_summary(time_range, use_cache=use_cache)
+        if summary is None:
+            summary = await self.get_summary(time_range, use_cache=use_cache)
         imbalance = await self.get_utilization_imbalance(
             time_range, account_stats=account_stats
         )
-        cache = await self.get_cache_observability(
-            time_range.label, use_cache=use_cache
-        )
+        if cache_observability is None:
+            cache_observability = await self.get_cache_observability(
+                time_range.label, use_cache=use_cache
+            )
         return {
             "summary": summary,
             "imbalance": imbalance,
-            "cache": cache,
+            "cache": cache_observability,
             "period_label": time_range.label,
             "start": time_range.start_str(),
             "end": time_range.end_str(),
