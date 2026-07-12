@@ -598,18 +598,20 @@ class TestRenderOverview:
 
         assert '<th data-priority="1">Model</th>' in html
         assert (
-            '<td data-priority="1">MiniMax-M3</td>'
-            '<td data-priority="1">12</td>'
-            '<td data-priority="1">$0.25</td>'
-            '<td data-priority="2">minimax</td>'
-            '<td data-priority="2">1</td>'
-            '<td data-priority="2">50.0 ms</td>'
-            '<td data-priority="3">3,456</td>'
+            '<td data-priority="1"><a class="model-link" '
+            'href="/models/MiniMax-M3?theme="'
         ) in html
+        assert 'data-model-id="MiniMax-M3"' in html
+        assert '<td data-priority="1">12</td>' in html
+        assert '<td data-priority="1">$0.25</td>' in html
+        assert '<td data-priority="2">minimax</td>' in html
+        assert '<td data-priority="2">1</td>' in html
+        assert '<td data-priority="2">50.0 ms</td>' in html
+        assert '<td data-priority="3">3,456</td>' in html
 
     def test_overview_total_tokens_card_renders(self) -> None:
         """A 'Fresh tokens' card surfaces input+output near the top of the
-        token row and the 'Accounted tokens' card surfaces the broader
+        token row and the 'Total tokens' card surfaces the broader
         provider-accounting total."""
         html = render_overview(
             overview={
@@ -639,13 +641,13 @@ class TestRenderOverview:
             accounts=[],
         )
         assert ">Fresh tokens<" in html
-        assert ">Accounted tokens<" in html
-        accounted_idx = html.index(">Accounted tokens<")
+        assert ">Total tokens<" in html
+        accounted_idx = html.index(">Total tokens<")
         fresh_idx = html.index(">Fresh tokens<")
         cache_idx = html.index(">Provider cache hit rate<")
-        # Accounted sits ahead of Fresh which sits ahead of Cache reads.
+        # Total sits ahead of Fresh which sits ahead of Cache reads.
         assert accounted_idx < fresh_idx < cache_idx
-        # Accounted metric line shows the provider-accounting total.
+        # Total metric line shows the provider-accounting total.
         accounted_section = html[accounted_idx:fresh_idx]
         assert ">3,750</p>" in accounted_section
         assert "fresh 3,500" in accounted_section
@@ -729,7 +731,7 @@ class TestRenderOverview:
 
     def test_overview_cache_heavy_does_not_imply_impossible_totals(self) -> None:
         """Cache-heavy workload: cache_read > fresh_tokens. The overview
-        must surface ``Accounted tokens`` so the headline total is not
+        must surface ``Total tokens`` so the headline total is not
         smaller than the cache-read sub-card.
 
         Regression for ``plans/2026-07-07-dashboard-cache-token-card-semantics-fix.md``.
@@ -761,14 +763,14 @@ class TestRenderOverview:
             },
             accounts=[],
         )
-        accounted_idx = html.index(">Accounted tokens<")
+        accounted_idx = html.index(">Total tokens<")
         fresh_idx = html.index(">Fresh tokens<")
         cache_idx = html.index(">Provider cache hit rate<")
-        # Accounted sits ahead of Provider cache hit rate so the headline total is not
+        # Total sits ahead of Provider cache hit rate so the headline total is not
         # smaller than the cache-read sub-card.
         assert accounted_idx < cache_idx
         accounted_section = html[accounted_idx:fresh_idx]
-        # Accounted metric = 100 + 50 + 900 + 100 = 1,150
+        # Total metric = 100 + 50 + 900 + 100 = 1,150
         assert ">1,150</p>" in accounted_section
         # Fresh metric = 100 + 50 = 150
         fresh_section = html[fresh_idx:cache_idx]
@@ -813,11 +815,11 @@ class TestRenderOverview:
             },
             accounts=[],
         )
-        accounted_idx = html.index(">Accounted tokens<")
+        accounted_idx = html.index(">Total tokens<")
         fresh_idx = html.index(">Fresh tokens<")
         cache_idx = html.index(">Provider cache hit rate<")
         accounted_section = html[accounted_idx:fresh_idx]
-        # Renderer fallback: accounted = 100 + 50 + 900 + 100 = 1,150
+        # Renderer fallback: total = 100 + 50 + 900 + 100 = 1,150
         assert ">1,150</p>" in accounted_section
         fresh_section = html[fresh_idx:cache_idx]
         # Fresh fallback: 100 + 50 = 150
@@ -5505,6 +5507,10 @@ class TestRenderModelDetail:
                         "source": "artificial_analysis",
                         "benchmark": "intelligence",
                         "score": 85.5,
+                        "rank": 7,
+                        "percentile": 0.92,
+                        "version": "2026.1",
+                        "notes": "Composite index",
                     }
                 ],
             },
@@ -5520,6 +5526,12 @@ class TestRenderModelDetail:
         assert "artificial_analysis" in html
         assert "intelligence" in html
         assert "85.5" in html
+        assert "#7" in html
+        assert "92%ile" in html
+        assert "v2026.1" in html
+        assert "Composite index" in html
+        assert "data-tooltip=" in html
+        assert "<th>Benchmark</th><th>Result</th><th>Source</th>" in html
 
     def test_conflicts_render_table(self) -> None:
         from datetime import UTC, datetime

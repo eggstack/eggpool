@@ -74,6 +74,8 @@ def compact_benchmark_rows(
             "version",
             "source",
             "observed_at",
+            "notes",
+            "caveat",
         ):
             field = item_map.get(key)
             if field is not None:

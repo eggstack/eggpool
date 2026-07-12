@@ -25,7 +25,7 @@ import pytest
 from fastapi import FastAPI
 from starlette.requests import Request
 
-from eggpool.dashboard.render import render_models
+from eggpool.dashboard.render import render_models, render_overview
 from eggpool.dashboard.routes import (
     CatalogRowsState,
     ModelInfoDashboardState,
@@ -194,6 +194,7 @@ def test_render_models_shows_public_benchmark_values() -> None:
                         "name": "Artificial Analysis Intelligence Index",
                         "score": 44.4,
                         "source": "artificial_analysis",
+                        "notes": "Composite intelligence index",
                     },
                     {
                         "name": "Design Arena: models / website",
@@ -209,6 +210,45 @@ def test_render_models_shows_public_benchmark_values() -> None:
     assert "Benchmarks" in html
     assert "AA 44.4" in html
     assert "Arena 1295 #15" in html
+    assert "Composite intelligence index" in html
+    assert "Benchmarks: AA: Intelligence Index 44.4" in html
+
+
+def test_render_overview_links_model_with_summary_and_benchmarks() -> None:
+    """Top-model rows link to model info and keep the tooltip compact."""
+    html = render_overview(
+        overview={
+            "summary": {"total_requests": 1},
+            "imbalance": {"imbalance_ratio": 0.0},
+        },
+        accounts=[],
+        models=[
+            {
+                "model_id": "gpt-4o",
+                "provider_id": "openai",
+                "request_count": 1,
+                "cost_microdollars": 0,
+                "total_tokens": 10,
+            }
+        ],
+        model_info_map={
+            "gpt-4o": {
+                "model_id": "gpt-4o",
+                "summary": "OpenAI vision model.",
+                "benchmarks": [
+                    {
+                        "name": "MMLU",
+                        "score": 88.7,
+                        "source": "artificial_analysis",
+                    }
+                ],
+                "benchmark_count": 1,
+            }
+        },
+    )
+    assert 'href="/models/gpt-4o?theme="' in html
+    assert "OpenAI vision model." in html
+    assert "Benchmarks: AA: MMLU 88.7" in html
 
 
 def test_render_models_lookup_id_wins_over_literal_model_id() -> None:

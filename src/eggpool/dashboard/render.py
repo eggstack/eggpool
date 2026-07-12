@@ -192,9 +192,9 @@ _CARD_TOOLTIPS: dict[str, str] = {
         "Coefficient of variation across active accounts. Higher values mean "
         "load is concentrated unevenly."
     ),
-    "Accounted tokens": (
+    "Total tokens": (
         "Input, output, cache-read, and cache-write tokens recorded for the "
-        "selected period. This is the broad provider-accounting total and can "
+        "selected period. This total includes provider cache counters and can "
         "exceed fresh input/output volume on cache-heavy workloads."
     ),
     "Fresh tokens": (
@@ -1047,13 +1047,184 @@ _MODEL_INFO_PILL_CLASSES: dict[str, str] = {
     "withdrawn": "pill-stale",
 }
 
+_BENCHMARK_SOURCE_LABELS: dict[str, str] = {
+    "artificial_analysis": "AA",
+    "openrouter": "OpenRouter",
+    "huggingface": "Hugging Face",
+}
+
+
+def _benchmark_source_label(value: object) -> str:
+    """Return a compact human label while retaining the source in tooltips."""
+    source = str(value or "").strip()
+    return _BENCHMARK_SOURCE_LABELS.get(source, source or "Unknown")
+
+
+def _benchmark_number(value: object) -> str | None:
+    """Format a numeric benchmark field without displaying Python noise."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return f"{float(value):.1f}".removesuffix(".0")
+
+
+def _benchmark_result_text(row: Mapping[str, Any]) -> str:
+    """Build the compact result text used in tables and model summaries."""
+    parts: list[str] = []
+    score = _benchmark_number(row.get("score"))
+    if score is not None:
+        parts.append(score)
+    rank = row.get("rank")
+    if isinstance(rank, (int, float)) and not isinstance(rank, bool):
+        parts.append(f"#{int(rank)}")
+    percentile = _benchmark_number(row.get("percentile"))
+    if percentile is not None:
+        percentile_value = float(row["percentile"])
+        if 0 <= percentile_value <= 1:
+            percentile = _benchmark_number(percentile_value * 100) or percentile
+        parts.append(f"{percentile}%ile")
+    version = str(row.get("version") or "").strip()
+    if version:
+        parts.append(f"v{version}")
+    return " · ".join(parts) if parts else "—"
+
+
+def _benchmark_detail_text(row: Mapping[str, Any], name: str) -> str:
+    """Return a complete, plain-text benchmark description for a tooltip."""
+    details: list[str] = [name]
+    score = _benchmark_number(row.get("score"))
+    if score is not None:
+        details.append(f"Score: {score}")
+    rank = row.get("rank")
+    if isinstance(rank, (int, float)) and not isinstance(rank, bool):
+        details.append(f"Rank: #{int(rank)}")
+    percentile = _benchmark_number(row.get("percentile"))
+    if percentile is not None:
+        percentile_value = float(row["percentile"])
+        if 0 <= percentile_value <= 1:
+            percentile = _benchmark_number(percentile_value * 100) or percentile
+        details.append(f"Percentile: {percentile}%")
+    version = str(row.get("version") or "").strip()
+    if version:
+        details.append(f"Version: {version}")
+    notes = str(row.get("notes") or row.get("caveat") or "").strip()
+    if notes:
+        details.append(notes)
+    source = str(row.get("source") or "").strip()
+    if source:
+        details.append(f"Source: {source}")
+    observed = str(row.get("observed_at") or "").strip()
+    if observed:
+        details.append(f"Observed: {observed}")
+    return "\n".join(details)
+
+
+def _benchmark_short_name(name: str) -> str:
+    """Remove redundant provider words from a visible benchmark label."""
+    for prefix in ("Artificial Analysis ", "Design Arena: "):
+        if name.startswith(prefix):
+            return name.removeprefix(prefix)
+    return name
+
+
+def _benchmark_brief(info: Mapping[str, Any] | None, *, limit: int = 4) -> str:
+    """Return a compact benchmark snapshot for model tooltips and summaries."""
+    if not info:
+        return ""
+    raw_rows = info.get("benchmarks")
+    if not isinstance(raw_rows, list):
+        return ""
+    items: list[str] = []
+    rows = cast("list[object]", raw_rows)
+    for raw_row in rows[:limit]:
+        if not isinstance(raw_row, dict):
+            continue
+        row = cast("dict[str, Any]", raw_row)
+        name = str(row.get("name") or row.get("benchmark") or "").strip()
+        if not name:
+            continue
+        source = _benchmark_source_label(row.get("source"))
+        result = _benchmark_result_text(row)
+        short_name = _benchmark_short_name(name)
+        items.append(f"{source}: {short_name} {result}")
+    if not items:
+        return ""
+    count = info.get("benchmark_count")
+    if isinstance(count, int) and count > len(items):
+        items.append(f"+{count - len(items)} more")
+    return " · ".join(items)
+
+
+def _model_info_for_row(
+    row: Mapping[str, Any],
+    model_info_map: Mapping[str, dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    """Find the canonical summary associated with a rendered model row."""
+    if not model_info_map:
+        return None
+    model_id = str(row.get("model_id") or "")
+    lookup_id = str(row.get("_model_info_lookup_id") or "")
+    base_id = str(row.get("base_model_id") or "")
+    candidates = [lookup_id, base_id, model_id]
+    if "/" in model_id:
+        candidates.append(model_id.split("/", 1)[0])
+    for candidate in candidates:
+        if candidate and candidate in model_info_map:
+            return model_info_map[candidate]
+    folded = {key.casefold(): value for key, value in model_info_map.items()}
+    for candidate in candidates:
+        if candidate.casefold() in folded:
+            return folded[candidate.casefold()]
+    return None
+
+
+def _render_model_link(
+    model_id: object,
+    *,
+    provider_id: object = None,
+    model_info: Mapping[str, Any] | None = None,
+    current_theme: str = "",
+) -> str:
+    """Render a model-info link with a compact metadata tooltip."""
+    raw_model_id = str(model_id or "")
+    if not raw_model_id:
+        return ""
+    # Provider identity remains available in the surrounding table row, but
+    # the canonical model-info page is keyed by the unsuffixed model id.
+    # Provider-suffixed ids are preserved when they are already present.
+    quoted_model_id = quote(raw_model_id, safe="")
+    theme_query = quote(current_theme, safe="")
+    provider_attr = (
+        f' data-provider-id="{escape_attr(provider_id)}"' if provider_id else ""
+    )
+    tooltip_parts: list[str] = []
+    if model_info:
+        summary = str(model_info.get("summary") or "").strip()
+        if summary:
+            tooltip_parts.append(summary)
+        benchmark_brief = _benchmark_brief(model_info)
+        if benchmark_brief:
+            tooltip_parts.append(f"Benchmarks: {benchmark_brief}")
+    if not tooltip_parts:
+        tooltip_parts.append(f"Open model info for {raw_model_id}")
+    tooltip = "\n".join(tooltip_parts)
+    lookup_id = str(model_info.get("model_id") or "") if model_info else ""
+    return (
+        f'<a class="model-link" href="/models/{quoted_model_id}'
+        f'?theme={escape_attr(theme_query)}"'
+        f' data-model-id="{escape_attr(raw_model_id)}"'
+        f"{provider_attr}"
+        f' data-model-info-key="{escape_attr(lookup_id or raw_model_id)}"'
+        f' data-tooltip="{escape_attr(tooltip)}"'
+        f' aria-label="{escape_attr(tooltip)}">{escape(raw_model_id)}</a>'
+    )
+
 
 def _render_model_info_pill(info: dict[str, Any] | None) -> str:
     """Render a compact model-info status pill.
 
     Returns an empty string when no model-info is available so the
-    column stays clean.  All user-visible text is HTML-escaped and
-    passed as a ``title`` tooltip attribute.
+    column stays clean. All user-visible text is HTML-escaped and
+    passed through the themed ``data-tooltip`` convention.
     """
     if not info:
         return (
@@ -1073,6 +1244,9 @@ def _render_model_info_pill(info: dict[str, Any] | None) -> str:
     tooltip_parts: list[str] = []
     if summary:
         tooltip_parts.append(summary)
+    benchmark_brief = _benchmark_brief(info)
+    if benchmark_brief:
+        tooltip_parts.append(f"Benchmarks: {benchmark_brief}")
     if sources:
         tooltip_parts.append(f"Sources: {', '.join(sources)}")
     if last_refreshed:
@@ -1115,19 +1289,15 @@ def _render_model_benchmarks(info: dict[str, Any] | None) -> str:
             label = "Arena"
         else:
             label = name.split()[0][:10]
-        score = row.get("score")
-        if isinstance(score, (int, float)) and not isinstance(score, bool):
-            score_text = f"{float(score):.1f}".removesuffix(".0")
-        else:
-            score_text = "—"
-        rank = row.get("rank")
-        rank_text = f" #{int(rank)}" if isinstance(rank, (int, float)) else ""
-        labels.append(f"{label} {score_text}{rank_text}")
-        tooltip_rows.append(f"{name}: {score_text}{rank_text}")
+        result_text = _benchmark_result_text(row)
+        # Keep the table value short; the complete benchmark row is available
+        # from the themed tooltip and on the model detail page.
+        labels.append(f"{label} {result_text.replace(' · ', ' ')}")
+        tooltip_rows.append(_benchmark_detail_text(row, name))
 
     if not labels:
         return '<span class="muted">—</span>'
-    tooltip = "; ".join(tooltip_rows)
+    tooltip = "\n\n".join(tooltip_rows)
     count = info.get("benchmark_count")
     if isinstance(count, int) and count > len(labels):
         tooltip += f"; {count - len(labels)} more"
@@ -1507,7 +1677,12 @@ def _render_timeseries_chart(
 """
 
 
-def _render_model_glance(models: list[dict[str, Any]]) -> str:
+def _render_model_glance(
+    models: list[dict[str, Any]],
+    *,
+    model_info_map: Mapping[str, dict[str, Any]] | None = None,
+    current_theme: str = "",
+) -> str:
     """Render a compact top-model table for the overview page."""
     if not models:
         return '<p class="empty">No model activity in this period.</p>'
@@ -1516,9 +1691,15 @@ def _render_model_glance(models: list[dict[str, Any]]) -> str:
         total_tok = format_tokens(row.get("total_tokens", 0))
         req_count = int(row.get("request_count", 0))
         err_count = int(row.get("error_count", 0))
+        model = _render_model_link(
+            row.get("model_id", ""),
+            provider_id=row.get("provider_id"),
+            model_info=_model_info_for_row(row, model_info_map),
+            current_theme=current_theme,
+        )
         rows.append(
             f"<tr>"
-            f"{_td_priority(escape(row.get('model_id', '')), 1)}"
+            f"{_td_priority(model, 1)}"
             f"{_td_priority(f'{req_count:,}', 1)}"
             f"{_td_priority(format_microdollars(row.get('cost_microdollars', 0)), 1)}"
             f"{_td_priority(escape(row.get('provider_id', '')), 2)}"
@@ -1869,6 +2050,7 @@ def render_overview(
     request_shaping_summary: dict[str, Any] | None = None,
     progressive_timeseries: bool = False,
     cache_observability: dict[str, Any] | None = None,
+    model_info_map: Mapping[str, dict[str, Any]] | None = None,
 ) -> str:
     """Render the overview dashboard page.
 
@@ -2079,7 +2261,7 @@ def render_overview(
         "".join(
             [
                 _render_metric_card(
-                    title="Accounted tokens",
+                    title="Total tokens",
                     metric=accounted_tok,
                     sub=(
                         f"fresh {fresh_tok} · cache read {cache_read} "
@@ -2196,7 +2378,11 @@ def render_overview(
 <section class="overview-grid">
   <div class="panel">
     <h3>Top models</h3>
-    {_render_model_glance(models or [])}
+    {
+        _render_model_glance(
+            models or [], model_info_map=model_info_map, current_theme=current_theme
+        )
+    }
   </div>
   <div class="panel">
     <h3>Recent events</h3>
@@ -2720,11 +2906,7 @@ def render_models(
             model_id = row.get("model_id", "")
             lookup_id = row.get("_model_info_lookup_id") or ""
             base_id = row.get("base_model_id", "") or model_id
-            mi_info = (
-                mi_map.get(str(lookup_id))
-                or mi_map.get(str(base_id))
-                or mi_map.get(str(model_id))
-            )
+            mi_info = _model_info_for_row(row, mi_map)
             info_pill = _render_model_info_pill(mi_info)
             benchmark_html = _render_model_benchmarks(mi_info)
 
@@ -2735,13 +2917,11 @@ def render_models(
             # ``/models/{model_id:path}`` plus the detail handler's
             # ``unquote()`` round-trip recovers the original id on
             # the server side.
-            quoted_model_id = quote(str(model_id or ""), safe="")
-            model_link = (
-                f'<a href="/models/{quoted_model_id}'
-                f'?theme={escape_attr(quote(current_theme, safe=""))}"'
-                f' data-model-id="{escape_attr(str(model_id))}"'
-                f' data-model-info-key="{escape_attr(str(lookup_id or base_id))}">'
-                f"{escape(model_id)}</a>"
+            model_link = _render_model_link(
+                model_id,
+                provider_id=row.get("provider_id"),
+                model_info=mi_info,
+                current_theme=current_theme,
             )
 
             parts.append(
@@ -3060,7 +3240,17 @@ def render_model_detail(
     ext_ids_html = "<br>".join(ext_id_parts) if ext_id_parts else _EM_DASH
 
     # Benchmarks
-    benchmarks_html = _render_benchmarks_table(detail.get("benchmarks"))
+    raw_benchmarks = detail.get("benchmarks")
+    benchmark_rows: list[object] = (
+        cast("list[object]", raw_benchmarks) if isinstance(raw_benchmarks, list) else []
+    )
+    benchmark_brief = _benchmark_brief(
+        {
+            "benchmarks": benchmark_rows,
+            "benchmark_count": len(benchmark_rows),
+        }
+    )
+    benchmarks_html = _render_benchmarks_table(benchmark_rows)
 
     # HuggingFace metadata
     hf_html = _render_hf_metadata(detail.get("huggingface_metadata"))
@@ -3127,6 +3317,12 @@ def render_model_detail(
 <section class="panel">
   <h3>Summary</h3>
   <p>{escape(summary) if summary else "<em>No summary available.</em>"}</p>
+  {
+        f'<p class="sub"><strong>Benchmark snapshot:</strong> '
+        f"{escape(benchmark_brief)}</p>"
+        if benchmark_brief
+        else ""
+    }
 </section>
 
 <section class="panel">
@@ -3272,26 +3468,31 @@ def _render_benchmarks_table(benchmarks: object) -> str:
         bm_map = _as_mapping(bm)
         if not bm_map:
             continue
-        source = escape(str(bm_map.get("source", "")))
-        name = escape(str(bm_map.get("benchmark", bm_map.get("name", ""))))
-        score = bm_map.get("score")
-        rank = bm_map.get("rank")
-        percentile = bm_map.get("percentile")
-        observed = bm_map.get("observed_at", "")
-        caveat = bm_map.get("caveat", "")
-        value_parts: list[str] = []
-        if score is not None:
-            value_parts.append(f"Score: {escape(str(score))}")
-        if rank is not None:
-            value_parts.append(f"Rank: {escape(str(rank))}")
-        if percentile is not None:
-            value_parts.append(f"Percentile: {escape(str(percentile))}")
-        value_html = ", ".join(value_parts) if value_parts else "—"
-        caveat_html = f"<br><em>{escape(str(caveat))}</em>" if caveat else ""
+        raw_source = str(bm_map.get("source", "")).strip()
+        raw_name = str(bm_map.get("benchmark", bm_map.get("name", ""))).strip()
+        if not raw_name:
+            continue
+        result = _benchmark_result_text(bm_map)
+        detail_tooltip = _benchmark_detail_text(bm_map, raw_name)
+        source_label = _benchmark_source_label(raw_source)
+        observed = str(bm_map.get("observed_at", "") or "").strip()
+        display_observed = observed[:19] if observed else "—"
+        observed_tooltip = observed or "No observation timestamp"
+        source_tooltip = raw_source or "Unknown source"
         rows.append(
-            f"<tr><td>{source}</td><td>{name}</td>"
-            f"<td>{value_html}{caveat_html}</td>"
-            f"<td>{escape(str(observed)) if observed else '—'}</td></tr>"
+            "<tr>"
+            f'<td><span data-tooltip="{escape_attr(raw_name)}" '
+            f'aria-label="{escape_attr(raw_name)}">'
+            f"{truncate(_benchmark_short_name(raw_name), 42)}</span></td>"
+            f'<td><span data-tooltip="{escape_attr(detail_tooltip)}" '
+            f'aria-label="{escape_attr(detail_tooltip)}">{escape(result)}</span></td>'
+            f'<td><span data-tooltip="{escape_attr(source_tooltip)}" '
+            f'aria-label="{escape_attr(source_tooltip)}">'
+            f"{escape(source_label)}</span></td>"
+            f'<td><span data-tooltip="{escape_attr(observed_tooltip)}" '
+            f'aria-label="{escape_attr(observed_tooltip)}">'
+            f"{escape(display_observed)}</span></td>"
+            "</tr>"
         )
     if not rows:
         return ""
@@ -3299,7 +3500,7 @@ def _render_benchmarks_table(benchmarks: object) -> str:
         '<section class="panel">'
         "<h3>Benchmarks</h3>"
         '<div class="table-scroll"><table class="data"><thead><tr>'
-        "<th>Source</th><th>Benchmark</th><th>Value</th><th>Observed</th>"
+        "<th>Benchmark</th><th>Result</th><th>Source</th><th>Observed</th>"
         "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div></section>"
     )
 
@@ -3573,7 +3774,12 @@ def _render_grouped_timeseries_chart(
 """
 
 
-def _render_grouped_timeseries_table(grouped: dict[str, Any]) -> str:
+def _render_grouped_timeseries_table(
+    grouped: dict[str, Any],
+    *,
+    model_info_map: Mapping[str, dict[str, Any]] | None = None,
+    current_theme: str = "",
+) -> str:
     """Render the grouped detail table below the chart."""
     points = list(grouped.get("points") or [])
     buckets = list(grouped.get("buckets") or [])
@@ -3615,11 +3821,18 @@ def _render_grouped_timeseries_table(grouped: dict[str, Any]) -> str:
         "</tr></thead><tbody>",
     ]
     for row in points:
+        model_id = str(row.get("model_id") or "")
+        model_link = _render_model_link(
+            model_id,
+            provider_id=row.get("provider_id"),
+            model_info=_model_info_for_row(row, model_info_map),
+            current_theme=current_theme,
+        )
         cells = [
             _td_priority(escape(row.get("bucket", "")), 1),
             _td_priority(escape(row.get("label", "")), 1),
             _td_priority(escape(row.get("provider_id") or ""), 1),
-            _td_priority(escape(row.get("model_id") or ""), 1),
+            _td_priority(model_link, 1),
         ]
         if include_account:
             cells.append(_td_priority(escape(row.get("account_name") or ""), 2))
@@ -3742,6 +3955,7 @@ def render_timeseries(
     account_options: list[str] | None = None,
     model_options: list[str] | None = None,
     update_info: Any | None = None,
+    model_info_map: Mapping[str, dict[str, Any]] | None = None,
 ) -> str:
     """Render the timeseries page.
 
@@ -3773,7 +3987,11 @@ def render_timeseries(
         account_filter=account_filter,
         model_filter=model_filter,
     )
-    detail_table = _render_grouped_timeseries_table(grouped or {})
+    detail_table = _render_grouped_timeseries_table(
+        grouped or {},
+        model_info_map=model_info_map,
+        current_theme=current_theme,
+    )
     aggregate_table = _render_aggregate_timeseries_table(series)
 
     body = f"""
@@ -7264,6 +7482,7 @@ def render_routing(
     available_themes: list[str] | None = None,
     current_theme: str = "",
     update_info: Any | None = None,
+    model_info_map: Mapping[str, dict[str, Any]] | None = None,
 ) -> str:
     """Render the Routing page.
 
@@ -7342,7 +7561,11 @@ def render_routing(
 """
 
     exclusion_chart = _render_exclusion_taxonomy_chart(routing_exclusion_breakdown)
-    distribution_table = _render_routing_distribution_table(routing_distribution)
+    distribution_table = _render_routing_distribution_table(
+        routing_distribution,
+        model_info_map=model_info_map,
+        current_theme=current_theme,
+    )
     selection_table = _render_selection_breakdown_table(routing_selection_breakdown)
     exclusion_table = _render_exclusion_table(routing_exclusion_breakdown)
 
@@ -7439,13 +7662,21 @@ def _render_exclusion_taxonomy_chart(
 
 def _render_routing_distribution_table(
     distribution: list[dict[str, Any]],
+    *,
+    model_info_map: Mapping[str, dict[str, Any]] | None = None,
+    current_theme: str = "",
 ) -> str:
     """Render per-(model, provider) routing distribution."""
     if not distribution:
         return '<p class="empty">No routing decisions in this period.</p>'
     rows: list[str] = []
     for row in distribution:
-        model_id = escape(str(row.get("model_id", "")))
+        model_id = _render_model_link(
+            row.get("model_id", ""),
+            provider_id=row.get("provider_id"),
+            model_info=_model_info_for_row(row, model_info_map),
+            current_theme=current_theme,
+        )
         provider_id = escape(str(row.get("provider_id", "")))
         decision_count = int(row.get("decision_count", 0) or 0)
         avg_eligible = float(row.get("avg_eligible_count", 0.0) or 0.0)
@@ -7581,6 +7812,7 @@ def render_traces(
     available_themes: list[str] | None = None,
     current_theme: str = "",
     update_info: Any | None = None,
+    model_info_map: Mapping[str, dict[str, Any]] | None = None,
 ) -> str:
     """Render the recent-request trace table.
 
@@ -7616,7 +7848,12 @@ def render_traces(
             ts = escape(str(row.get("started_at", "")))
             account = escape(str(row.get("account_name", "")))
             provider = escape(str(row.get("provider_id", "")))
-            model = escape(str(row.get("model_id", "")))
+            model = _render_model_link(
+                row.get("model_id", ""),
+                provider_id=row.get("provider_id"),
+                model_info=_model_info_for_row(row, model_info_map),
+                current_theme=current_theme,
+            )
             protocol = escape(str(row.get("protocol", "")))
             status = escape(str(row.get("status", "")))
             status_code = row.get("status_code")
@@ -7708,6 +7945,7 @@ def render_latency(
     *,
     phases: dict[str, Any] | None = None,
     update_info: Any | None = None,
+    model_info_map: Mapping[str, dict[str, Any]] | None = None,
 ) -> str:
     """Render the latency breakdown page.
 
@@ -7763,7 +8001,12 @@ def render_latency(
         model_parts.append("</tr></thead><tbody>")
         for row in model_ttft:
             pid = escape(str(row.get("provider_id", "")))
-            mid = escape(str(row.get("model_id", "")))
+            mid = _render_model_link(
+                row.get("model_id", ""),
+                provider_id=row.get("provider_id"),
+                model_info=_model_info_for_row(row, model_info_map),
+                current_theme=current_theme,
+            )
             avg = format_latency(row.get("avg_ttft_ms", 0.0))
             p50 = format_latency(row.get("p50_ttft_ms", 0.0))
             p99 = format_latency(row.get("p99_ttft_ms", 0.0))

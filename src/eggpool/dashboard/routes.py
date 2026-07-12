@@ -58,12 +58,6 @@ _ReliabilityPayload = tuple[
     list[dict[str, Any]],
     list[dict[str, Any]],
 ]
-_RoutingPayload = tuple[
-    list[dict[str, Any]],
-    list[dict[str, Any]],
-    list[dict[str, Any]],
-    dict[str, Any],
-]
 _PingsPayload = tuple[list[dict[str, Any]], list[dict[str, Any]]]
 
 logger = logging.getLogger(__name__)
@@ -686,6 +680,7 @@ async def handle_overview(
     # usage_rollups.
     heatmap_range = _heatmap_time_range(_HEATMAP_MAX_DAYS)
     telemetry = getattr(request.app.state, "dashboard_telemetry", None)
+    model_info_service = getattr(request.app.state, "model_info", None)
 
     # Always fetch the disabled count so the Account breakdown empty
     # state can offer a one-click opt-in even when no rows are
@@ -715,6 +710,7 @@ async def handle_overview(
         cache_observability,
         compression_runtime,
         synthetic_cache_summary,
+        model_info_state,
     ) = await asyncio.gather(
         _await_dashboard_stage(
             telemetry,
@@ -796,6 +792,12 @@ async def handle_overview(
             "synthetic_cache_summary",
             stats.get_synthetic_cache_summary(time_range.label, use_cache=True),
         ),
+        _await_dashboard_stage(
+            telemetry,
+            "overview",
+            "model_info_summaries",
+            _get_model_info_summary_state(model_info_service),
+        ),
     )
     # ``get_dashboard_overview`` is derived from already-fetched overview
     # inputs. Passing them through avoids a second summary/cache query after
@@ -856,6 +858,7 @@ async def handle_overview(
         request_shaping_summary=request_shaping_summary,
         progressive_timeseries=True,
         cache_observability=cache_observability,
+        model_info_map=model_info_state.summaries,
     )
     if telemetry is not None:
         telemetry.record_stage(
@@ -1724,12 +1727,15 @@ async def handle_latency(
     _get_dashboard_config(request)
     time_range = resolve_time_range(period)
     stats = request.app.state.stats
-    provider_ttft, model_ttft, phases = cast(
-        "tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any] | None]",
+    model_info_service = getattr(request.app.state, "model_info", None)
+    provider_ttft, model_ttft, phases, model_info_state = cast(
+        "tuple[list[dict[str, Any]], list[dict[str, Any]],"
+        " dict[str, Any] | None, ModelInfoDashboardState]",
         await asyncio.gather(
             stats.get_provider_ttft_summary(time_range, use_cache=True),
             stats.get_provider_model_ttft(time_range, use_cache=True),
             stats.get_latency_phase_breakdown(time_range, use_cache=True),
+            _get_model_info_summary_state(model_info_service),
         ),
     )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
@@ -1743,6 +1749,7 @@ async def handle_latency(
             current_theme=current_theme,
             phases=phases,
             update_info=_get_update_info(request),
+            model_info_map=model_info_state.summaries,
         )
     )
 
@@ -1814,18 +1821,23 @@ async def handle_routing(
     _get_dashboard_config(request)
     time_range = resolve_time_range(period)
     stats = request.app.state.stats
+    model_info_service = getattr(request.app.state, "model_info", None)
     (
         routing_distribution,
         routing_selection_breakdown,
         routing_exclusion_breakdown,
         routing_skew_summary,
+        model_info_state,
     ) = cast(
-        _RoutingPayload,  # noqa: TC006 — pyright needs the TypeAlias to propagate through gather()
+        "tuple[list[dict[str, Any]], list[dict[str, Any]],"
+        " list[dict[str, Any]], dict[str, Any],"
+        " ModelInfoDashboardState]",
         await asyncio.gather(
             stats.get_routing_distribution(time_range, use_cache=True),
             stats.get_routing_selection_breakdown(time_range, use_cache=True),
             stats.get_routing_exclusion_breakdown(time_range, use_cache=True),
             stats.get_routing_skew_summary(time_range, use_cache=True),
+            _get_model_info_summary_state(model_info_service),
         ),
     )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
@@ -1840,6 +1852,7 @@ async def handle_routing(
             available_themes=available,
             current_theme=current_theme,
             update_info=_get_update_info(request),
+            model_info_map=model_info_state.summaries,
         )
     )
 
@@ -1858,7 +1871,14 @@ async def handle_traces(
     _get_dashboard_config(request)
     bounded_limit = _clamp_int(limit, minimum=10, maximum=500)
     stats = request.app.state.stats
-    recent_requests = await stats.get_recent_requests(limit=bounded_limit)
+    model_info_service = getattr(request.app.state, "model_info", None)
+    recent_requests, model_info_state = cast(
+        "tuple[list[dict[str, Any]], ModelInfoDashboardState]",
+        await asyncio.gather(
+            stats.get_recent_requests(limit=bounded_limit),
+            _get_model_info_summary_state(model_info_service),
+        ),
+    )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
     return HTMLResponse(
         content=render_traces(
@@ -1869,6 +1889,7 @@ async def handle_traces(
             available_themes=available,
             current_theme=current_theme,
             update_info=_get_update_info(request),
+            model_info_map=model_info_state.summaries,
         )
     )
 
@@ -1956,19 +1977,23 @@ async def handle_timeseries(
     bounded_limit = clamp_grouped_limit(limit)
     stats = request.app.state.stats
     telemetry = getattr(request.app.state, "dashboard_telemetry", None)
-    grouped = await _await_dashboard_stage(
-        telemetry,
-        "timeseries",
-        "timeseries_grouped",
-        stats.get_grouped_timeseries(
-            time_range,
-            bucket=bucket,
-            group_by=group_by,
-            limit=bounded_limit,
-            account_name=account or None,
-            model_id=model or None,
-            use_cache=True,
+    model_info_service = getattr(request.app.state, "model_info", None)
+    grouped, model_info_state = await asyncio.gather(
+        _await_dashboard_stage(
+            telemetry,
+            "timeseries",
+            "timeseries_grouped",
+            stats.get_grouped_timeseries(
+                time_range,
+                bucket=bucket,
+                group_by=group_by,
+                limit=bounded_limit,
+                account_name=account or None,
+                model_id=model or None,
+                use_cache=True,
+            ),
         ),
+        _get_model_info_summary_state(model_info_service),
     )
     series = _aggregate_series_from_grouped(grouped)
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
@@ -1992,6 +2017,7 @@ async def handle_timeseries(
             account_options=account_options,
             model_options=model_options,
             update_info=_get_update_info(request),
+            model_info_map=model_info_state.summaries,
         )
     )
     if telemetry is not None:
