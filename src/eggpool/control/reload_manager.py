@@ -154,11 +154,42 @@ class ReloadManager:
         self._drain_timeout_s = drain_timeout_s
         self._reload_lock = asyncio.Lock()
         self._operation_state: ReloadOperationState | None = None
+        self._last_reload_result: ReloadOperationResult | None = None
+        self._last_reload_completed_at: float | None = None
+        self._reload_count: int = 0
+        self._reload_error_count: int = 0
 
     @property
     def operation_state(self) -> ReloadOperationState | None:
         """Return the current reload operation state for diagnostics."""
         return self._operation_state
+
+    def snapshot(self) -> dict[str, Any]:
+        """Return reload state for diagnostics."""
+        return {
+            "operation_state": {
+                "stage": self._operation_state.stage,
+                "started_at": self._operation_state.started_at,
+                "generation_id": self._operation_state.generation_id,
+                "digest_prefix": self._operation_state.digest_prefix,
+                "error": self._operation_state.error,
+            }
+            if self._operation_state
+            else None,
+            "last_reload_result": {
+                "ok": self._last_reload_result.ok,
+                "stage": self._last_reload_result.stage,
+                "generation": self._last_reload_result.generation,
+                "changed_sections": self._last_reload_result.changed_sections,
+                "message": self._last_reload_result.message,
+                "duration_s": self._last_reload_result.duration_s,
+            }
+            if self._last_reload_result
+            else None,
+            "last_reload_completed_at": self._last_reload_completed_at,
+            "reload_count": self._reload_count,
+            "reload_error_count": self._reload_error_count,
+        }
 
     # -- public entry point ------------------------------------------------
 
@@ -217,6 +248,11 @@ class ReloadManager:
                 restart_required = tuple(diff.restart_required)
                 if restart_required:
                     sections = tuple(sorted({c.section for c in restart_required}))
+                    await self._record_event(
+                        "reload_restart_required_rejected",
+                        digest_prefix=digest_prefix,
+                        changed_sections=sections,
+                    )
                     return ReloadResult(
                         ok=False,
                         stage=ReloadStage.DIFF,
@@ -301,7 +337,7 @@ class ReloadManager:
                     duration,
                     ",".join(changed_sections) or "(none)",
                 )
-                return ReloadResult(
+                result = ReloadResult(
                     ok=True,
                     stage=ReloadStage.RETIREMENT,
                     generation=generation_id,
@@ -313,6 +349,26 @@ class ReloadManager:
                         f"{len(changed_sections)} section(s) changed"
                     ),
                 )
+                self._reload_count += 1
+                self._last_reload_result = ReloadOperationResult(
+                    ok=True,
+                    stage=ReloadStage.RETIREMENT.value,
+                    generation=generation_id,
+                    changed_sections=changed_sections,
+                    warnings=warnings,
+                    restart_required=(),
+                    retirement_pending=True,
+                    message=result.message,
+                    duration_s=duration,
+                )
+                self._last_reload_completed_at = time.time()
+                await self._record_event(
+                    "reload_activated",
+                    generation_id=generation_id,
+                    digest_prefix=digest_prefix,
+                    changed_sections=changed_sections,
+                )
+                return result
 
             except ReloadInProgressError:
                 raise
@@ -324,6 +380,30 @@ class ReloadManager:
                     else ReloadOperationStage.IDLE
                 )
                 logger.exception("Reload failed at stage %s", error_stage)
+                self._reload_count += 1
+                self._reload_error_count += 1
+                self._last_reload_result = ReloadOperationResult(
+                    ok=False,
+                    stage=error_stage,
+                    generation=generation_id,
+                    changed_sections=changed_sections,
+                    warnings=warnings,
+                    restart_required=restart_required,
+                    retirement_pending=False,
+                    message=f"Reload failed: {exc!r}",
+                    duration_s=duration,
+                )
+                self._last_reload_completed_at = time.time()
+                event_type = "reload_preparation_failure"
+                if error_stage == ReloadOperationStage.RECONCILIATION:
+                    event_type = "reload_reconciliation_failure"
+                await self._record_event(
+                    event_type,
+                    generation_id=generation_id,
+                    digest_prefix=digest_prefix,
+                    changed_sections=changed_sections,
+                    error=f"{exc!r}",
+                )
                 return ReloadResult(
                     ok=False,
                     stage=ReloadStage.VALIDATION,
@@ -352,6 +432,35 @@ class ReloadManager:
             digest_prefix=digest_prefix,
             error=error,
         )
+
+    async def _record_event(
+        self,
+        event_type: str,
+        *,
+        generation_id: int | None = None,
+        digest_prefix: str = "",
+        changed_sections: tuple[str, ...] = (),
+        error: str | None = None,
+    ) -> None:
+        """Record an operational event for reload lifecycle tracking."""
+        from eggpool.db.repositories import OperationalEventRepository  # noqa: PLC0415
+
+        details: dict[str, Any] = {}
+        if generation_id is not None:
+            details["generation_id"] = generation_id
+        if digest_prefix:
+            details["digest_prefix"] = digest_prefix
+        if changed_sections:
+            details["changed_sections"] = list(changed_sections)
+        if error:
+            details["error"] = error
+        try:
+            repo = OperationalEventRepository(self._process.db)
+            await repo.record(event_type, details)
+        except Exception:
+            logger.debug(
+                "Failed to record operational event %s", event_type, exc_info=True
+            )
 
     # -- step implementations ----------------------------------------------
 

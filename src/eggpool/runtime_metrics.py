@@ -124,6 +124,7 @@ class RuntimeMetricsService:
         finalization_retry_queue: Any | None = None,  # noqa: ANN401
         routing_trace_guard: Any | None = None,  # noqa: ANN401
         runtime_manager: Any | None = None,  # noqa: ANN401
+        reload_manager: Any | None = None,  # noqa: ANN401
     ) -> None:
         self._config = config
         self._db = db
@@ -146,6 +147,7 @@ class RuntimeMetricsService:
         self._finalization_retry_queue = finalization_retry_queue
         self._routing_trace_guard = routing_trace_guard
         self._runtime_manager = runtime_manager
+        self._reload_manager = reload_manager
 
     async def snapshot(self) -> dict[str, Any]:
         """Return a best-effort runtime snapshot.
@@ -233,6 +235,8 @@ class RuntimeMetricsService:
         ] = await self._snapshot_finalization_retry_queue(probe_errors)
 
         result["routing_trace_guard"] = self._snapshot_routing_trace_guard(probe_errors)
+
+        result["reload_state"] = self._snapshot_reload_state(probe_errors)
 
         return result
 
@@ -981,6 +985,23 @@ class RuntimeMetricsService:
             _append_probe_error(
                 probe_errors,
                 f"Routing trace guard snapshot failed: {exc}",
+            )
+            return {"enabled": True, "error": str(exc)}
+
+    def _snapshot_reload_state(self, probe_errors: list[str]) -> dict[str, Any]:
+        """Best-effort snapshot of the live-reload manager state.
+
+        Returns ``enabled: False`` when no reload manager is wired
+        (older test harnesses or pre-C builds).
+        """
+        if self._reload_manager is None:
+            return {"enabled": False}
+        try:
+            return {"enabled": True, **self._reload_manager.snapshot()}
+        except Exception as exc:
+            _append_probe_error(
+                probe_errors,
+                f"Reload manager snapshot failed: {exc}",
             )
             return {"enabled": True, "error": str(exc)}
 

@@ -1319,8 +1319,9 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             # Acquire a generation lease so the refresh uses the
             # current generation's catalog, not a stale reference
             # captured at registration time.
-            if _runtime_manager_for_tasks is not None:
-                async with leased_runtime(_runtime_manager_for_tasks) as gen:
+            mgr = _runtime_manager_ref["manager"]
+            if mgr is not None:
+                async with leased_runtime(mgr) as gen:
                     result = await gen.catalog.refresh()
             else:
                 result = await catalog.refresh()
@@ -1383,6 +1384,8 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # owns the cadence so the dashboard never reports a false overdue
     # age for this long-cadence loop.
     async def _retention_cleanup_once() -> None:
+        from eggpool.runtime_manager import leased_runtime  # noqa: PLC0415
+
         await cleanup_old_requests(db, config.dashboard.retain_request_stats_days)
         await cleanup_old_events(db, config.dashboard.retain_event_days)
         await ping_repo.cleanup_old_pings(config.models.ping_retain_days)
@@ -1390,11 +1393,20 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             config.metrics.rollup_retain_days,
             max_rows=config.metrics.cleanup_max_rows_per_pass,
         )
-        await reconcile_expired_reservations(
-            db,
-            quota_estimator=router.quota_estimator,
-            router=router,
-        )
+        mgr = _runtime_manager_ref["manager"]
+        if mgr is not None:
+            async with leased_runtime(mgr) as gen:
+                await reconcile_expired_reservations(
+                    db,
+                    quota_estimator=gen.router.quota_estimator,
+                    router=gen.router,
+                )
+        else:
+            await reconcile_expired_reservations(
+                db,
+                quota_estimator=router.quota_estimator,
+                router=router,
+            )
 
     supervisor.register_periodic(
         "retention_cleanup",
@@ -1419,7 +1431,14 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # dashboard no longer shows a false ``overdue`` age for the
     # healthy sleeping schedule.
     async def _refresh_usage_windows_once() -> None:
-        await router.quota_estimator.load_persisted_windows()
+        from eggpool.runtime_manager import leased_runtime  # noqa: PLC0415
+
+        mgr = _runtime_manager_ref["manager"]
+        if mgr is not None:
+            async with leased_runtime(mgr) as gen:
+                await gen.router.quota_estimator.load_persisted_windows()
+        else:
+            await router.quota_estimator.load_persisted_windows()
 
     supervisor.register_periodic(
         "usage_window_refresh",
@@ -1433,7 +1452,14 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # when the queue is empty so the longer idle cadence does not
     # impact the data plane.
     async def _finalization_retry_tick() -> None:
-        await finalization_retry_queue.drain_once()
+        from eggpool.runtime_manager import leased_runtime  # noqa: PLC0415
+
+        mgr = _runtime_manager_ref["manager"]
+        if mgr is not None:
+            async with leased_runtime(mgr) as gen:
+                await gen.finalization_retry_queue.drain_once()
+        else:
+            await finalization_retry_queue.drain_once()
 
     supervisor.register_periodic(
         "finalization_retry_drain",
@@ -1449,12 +1475,24 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # disconnect + cancellation timeout killed the generator task
     # before finalize() could acquire the DB lock).
     async def _stale_request_finalizer_once() -> None:
-        await _finalize_stale_requests_once(
-            db=db,
-            router=router,
-            quota_estimator=router.quota_estimator,
-            max_pending_seconds=config.upstream.read_timeout_s,
-        )
+        from eggpool.runtime_manager import leased_runtime  # noqa: PLC0415
+
+        mgr = _runtime_manager_ref["manager"]
+        if mgr is not None:
+            async with leased_runtime(mgr) as gen:
+                await _finalize_stale_requests_once(
+                    db=db,
+                    router=gen.router,
+                    quota_estimator=gen.router.quota_estimator,
+                    max_pending_seconds=config.upstream.read_timeout_s,
+                )
+        else:
+            await _finalize_stale_requests_once(
+                db=db,
+                router=router,
+                quota_estimator=router.quota_estimator,
+                max_pending_seconds=config.upstream.read_timeout_s,
+            )
 
     supervisor.register_periodic(
         "stale_request_finalizer",
@@ -1469,11 +1507,12 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # one cycle without requiring a process restart. Wiring is wrapped
     # so a missing dependency (e.g. a future test app) cannot crash
     # startup.
-    # Capture the runtime manager so the prune tick acquires a
-    # generation lease rather than reading app.state directly.  This
-    # ensures the task uses the current generation's registry,
-    # health_manager, and catalog even after a live reload (milestone C).
-    _runtime_manager_for_tasks = getattr(app.state, "runtime_manager", None)
+    # Mutable reference so tasks can read the RuntimeManager lazily
+    # after it is created later in the lifespan.  Capturing
+    # ``getattr(app.state, "runtime_manager", None)`` here would always
+    # yield ``None`` because the manager is created after task
+    # registration.
+    _runtime_manager_ref: dict[str, Any] = {"manager": None}
 
     try:
 
@@ -1482,8 +1521,9 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
                 leased_runtime,
             )
 
-            if _runtime_manager_for_tasks is not None:
-                async with leased_runtime(_runtime_manager_for_tasks) as gen:
+            mgr = _runtime_manager_ref["manager"]
+            if mgr is not None:
+                async with leased_runtime(mgr) as gen:
                     await _prune_health_disabled_models_once(gen)
             else:
                 await _prune_health_disabled_models_once(app.state)
@@ -1626,6 +1666,9 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     )
     await runtime_manager.install_initial(initial_generation)
     attach_runtime_manager(app, runtime_manager)
+    # Expose the manager to background tasks via the mutable ref so
+    # they acquire generation leases instead of using stale captures.
+    _runtime_manager_ref["manager"] = runtime_manager
     # Re-wire the runtime metrics service so its snapshot includes
     # the manager's diagnostics.  The service was constructed before
     # the manager existed; ``runtime_manager=None`` is replaced here.
@@ -1651,6 +1694,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         process=process,
     )
     app.state.reload_manager = reload_manager
+    runtime_metrics_service._reload_manager = reload_manager  # pyright: ignore[reportPrivateUsage]
 
     async def _control_reload_handler(request: ControlRequest) -> ControlResponse:
         """Handle a reload_config command from the control socket."""

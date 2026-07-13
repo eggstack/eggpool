@@ -3060,6 +3060,93 @@ control-plane socket accepts a validated `ConfigDiff` and applies
 `ConfigDiff`, `ConfigChange`, `ReloadResult`, and `ReloadStage`
 types defined here.
 
+### Control server protocol (Milestone C)
+
+The control server (`src/eggpool/control/server.py`) exposes a
+single-shot newline-delimited JSON protocol on a Unix-domain socket.
+One request per connection, structured response, then close.
+
+**Socket**: `~/.local/state/eggpool/eggpool.sock` with `0o600`
+(owner-only). Stale sockets are cleaned up on start and stop.
+
+**Protocol v1** wire format:
+
+- Request: `{"protocol_version": 1, "request_id": "<uuid>",
+  "command": "reload_config", "validated_digest": "<sha-256>"}`
+- Response: `{"protocol_version": 1, "request_id": "<uuid>",
+  "ok": true|false, "stage": "commit"|"validate"|"diff"|"apply"|"parse"|"error"|"timeout",
+  "generation": N, "changed_sections": [...], "warnings": [...],
+  "restart_required": [...], "retirement_pending": bool,
+  "message": "..."}`
+
+**Security model**: socket mode `0o600` prevents unprivileged
+clients on shared hosts from issuing reload commands.
+
+### Reload manager transaction flow (Milestone C)
+
+`src/eggpool/control/reload_manager.py` implements `ReloadManager`,
+which orchestrates the complete reload transaction under a serializing
+`asyncio.Lock`:
+
+1. **Lock** — Reject concurrent reloads (`ReloadInProgressError`).
+2. **Digest validation** — Verify the content digest matches the
+   CLI-validated bytes (prevents TOCTOU races).
+3. **Diff** — `compute_diff(old_config, new_config)` produces a
+   `ConfigDiff` with per-field dispositions.
+4. **Restart-required gate** — Any `RESTART_REQUIRED` change causes
+   the entire operation to be rejected with the offending field paths.
+5. **No-op detection** — Identical fingerprints return success without
+   building a new generation.
+6. **Candidate preparation** — `_build_candidate_generation()` builds
+   a new `RuntimeGeneration` off to the side (router, DB, app state)
+   without touching the active generation.
+7. **Persistence reconciliation** — Database state is reconciled in a
+   transaction; failures trigger rollback.
+8. **Atomic publication** — `RuntimeManager.install_generation()` swaps
+   the active/retiring slots. New requests immediately use the new
+   generation.
+9. **Retirement** — Old generation is marked retiring; active streams
+   continue on it. Old resources close after all leases drain
+   (timeout: 300s default).
+
+The manager exposes `snapshot()` for runtime diagnostics, including
+`reload_count`, `reload_error_count`, `last_reload_result`, and
+`operation_state` (current stage, started_at, generation_id,
+digest_prefix).
+
+### Control client (Milestone C)
+
+`src/eggpool/control/client.py` implements `ControlClient`, the async
+client used by `eggpool rehash`. It connects to the UDS, sends one
+`reload_config` request, reads one response, and disconnects. Error
+classes: `ControlClientConnectionError`, `ControlClientTimeoutError`,
+`ControlClientProtocolError`, `ControlClientError`.
+
+### Background task first-run transition (Milestone C-related)
+
+`src/eggpool/background/` manages `SupervisedTask` lifecycle. Tasks
+with `run_immediately=True` fire their first tick without delay (used
+by `update_checker`, `checkpoint`, `model_info_refresh`). Tasks with
+`initial_delay_s` override the first-tick delay. `never_run_not_due`
+and `never_run_overdue` labels distinguish freshly started tasks from
+missed-deadline tasks. The `/api/stats/runtime` endpoint and
+`eggpool runtime-status` CLI surface `background_task_summary` with
+per-label counters.
+
+### Diagnostics (Milestone C-related)
+
+- **Stream diagnostics** (`src/eggpool/request/stream_diagnostics.py`):
+  bounded ring histograms for `completed_ms`, `client_cancel_ms`,
+  `finalizer_timeout_ms`. Exposed under `/api/stats/runtime`.
+- **Finalization retry queue** (`src/eggpool/request/finalization_queue.py`):
+  drains cancellation finalizations that escaped the 10s shielded
+  path. Supervisor-owned periodic task (active 1.5s, idle 15s).
+- **Routing trace guard** (`src/eggpool/request/routing_trace_guard.py`):
+  skips diagnostic routing trace writes when SQLite lock-wait p95
+  exceeds threshold (default 200ms).
+- **DB contention snapshot**: `lock_wait_p50_ms`, `p95_ms`, `p99_ms`,
+  `max_ms`, `sample_count` exposed via `/api/stats/runtime`.
+
 ### Critical rules
 
 - Do not raise `server.threads` or `workers` to "fix" high-concurrency

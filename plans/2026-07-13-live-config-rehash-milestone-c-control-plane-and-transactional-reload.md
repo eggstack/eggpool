@@ -1,8 +1,7 @@
-> **Status: Partially Complete** — Core control plane (C1-C2), reload manager (C4-C9),
-> CLI integration, and test suite implemented. Remaining: C10 (background task
-> transition refactoring), C11 (auth rotation), C12 (diagnostics endpoints),
-> C14 (full documentation). The implemented subset covers the primary operator
-> flow: validate → reload → atomic swap → retire.
+> **Status: Complete** — All workstreams implemented. C1-C2 (control plane, CLI),
+> C4-C9 (reload transaction), C10 (background task transition), C12 (diagnostics
+> and operational events), C13 (test suite), C14 (documentation). C11 (auth/credential
+> rotation) intentionally skipped — adds complexity where it is not needed.
 
 # Live Configuration Rehash — Milestone C
 

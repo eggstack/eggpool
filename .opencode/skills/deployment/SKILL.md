@@ -107,22 +107,58 @@ The env file lives at `<config-dir>/.env` (overridable via
 
 ## Configuration Changes
 
-Supported configuration changes can be applied live via `eggpool rehash`,
-which contacts the running server's control socket, applies the diff
-atomically, and retires the old generation. Restart-required changes
-(host, port, database path, etc.) reject the entire operation — use
-`eggpool restart` (or `systemctl restart eggpool`) for those.
+### Live rehash (fast, no restart)
+
+```bash
+$EDITOR ~/.config/eggpool/config.toml
+eggpool rehash
+```
+
+`eggpool rehash` applies supported configuration changes without a
+restart. The command validates the config locally, contacts the running
+server's control socket, and the server atomically swaps the active
+generation when safe.
+
+**Prerequisites**: the server must be running (`eggpool serve` or
+`systemctl status eggpool`).
+
+**What happens during a rehash**:
+
+1. CLI validates the config (fail-closed on invalid config).
+2. CLI sends the validated content digest to the control socket.
+3. Server re-validates the config (prevents TOCTOU races).
+4. Server computes a diff against the active generation.
+5. Restart-required changes reject the entire operation.
+6. Server builds a candidate generation (router, DB, app state).
+7. Server reconciles persistence in a transaction.
+8. Server atomically publishes the new generation.
+9. Old generation retires after active streams drain.
+
+**Currently all fields are `RESTART_REQUIRED`**, so `eggpool rehash`
+will reject any config change. Use `eggpool restart` for all changes
+until a future milestone introduces live-reloadable fields.
+
+**Error cases**:
+
+| Message | Action |
+|---------|--------|
+| "Control socket unavailable" | Server not running — use `eggpool restart` |
+| "Reload transaction already in progress" | Wait and retry |
+| "Restart-required changes: …" | Use `eggpool restart` |
+
+### Restart (disruptive changes)
+
+```bash
+eggpool restart                     # graceful stop + start
+systemctl restart eggpool           # systemd-managed
+```
+
+Use `eggpool restart` for changes that require a process restart:
+host, port, database path, server threads, database worker threads,
+and any other `RESTART_REQUIRED` field.
 
 The systemd unit intentionally omits `ExecReload` so
 `systemctl reload eggpool` fails cleanly.
-
-- `eggpool rehash` validates the new config locally, sends the validated
-  digest to the control socket, and the server re-validates, computes a
-  diff, rejects restart-required changes, builds a candidate generation,
-  reconciles persistence, and atomically publishes. Active streams
-  continue on the old generation; new requests use the new generation
-  immediately. Use `eggpool restart` for disruptive changes (host, port,
-  database path, etc.).
 
 ### Low-wear metrics for microSD
 
