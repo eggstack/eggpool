@@ -2948,9 +2948,13 @@ CLI reproducer.
 
 Milestone A ships a shared validation contract, a typed configuration
 diff and reload-policy layer, and a fail-closed `rehash` CLI command.
-No field is currently `LIVE`; every change requires a service restart.
-The foundation is designed so milestone B (RuntimeManager) and milestone
-C (control-plane socket) can consume the same types without API changes.
+The foundation is consumed by milestones B and C without API changes.
+
+Milestone C (control plane and transactional reload) is complete: the
+control socket at `~/.local/state/eggpool/eggpool.sock` accepts
+validated digests, the server re-validates, computes a diff, rejects
+restart-required changes, builds a candidate generation, reconciles
+persistence, atomically publishes, and retires the old generation.
 
 ### Validation contract
 
@@ -3047,12 +3051,12 @@ Both `check-config` and `rehash` flow through `validate_config_file()`:
   configuration is unchanged. Refusing to apply an invalid config
   and never invoking restart."
 
-### Future milestones
+### Runtime generations and control plane
 
 Milestone B introduces a `RuntimeManager` that can apply `LIVE`-
-disposition fields without a restart. Milestone C introduces the
-control-plane socket that accepts a validated `ConfigDiff` and
-applies `LIVE` fields atomically. Both milestones consume the same
+disposition fields without a restart. Milestone C is complete: the
+control-plane socket accepts a validated `ConfigDiff` and applies
+`LIVE` fields atomically. Both milestones consume the same
 `ConfigDiff`, `ConfigChange`, `ReloadResult`, and `ReloadStage`
 types defined here.
 

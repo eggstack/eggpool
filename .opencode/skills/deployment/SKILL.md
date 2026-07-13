@@ -107,18 +107,22 @@ The env file lives at `<config-dir>/.env` (overridable via
 
 ## Configuration Changes
 
-**All configuration changes require a full restart.** The systemd
-unit intentionally omits `ExecReload` so `systemctl reload eggpool`
-fails cleanly. This includes changes to `routing_priority`,
-`collapse_models`, `expose_mode`, `model_overrides`, and any other
-config field.
+Supported configuration changes can be applied live via `eggpool rehash`,
+which contacts the running server's control socket, applies the diff
+atomically, and retires the old generation. Restart-required changes
+(host, port, database path, etc.) reject the entire operation — use
+`eggpool restart` (or `systemctl restart eggpool`) for those.
 
-- `eggpool rehash` validates the new config against the same contract as
-  `eggpool check-config` (see `config_validation.py`). It does not implicitly
-  restart the service; it exits zero and reports that the live control plane
-  is unavailable until milestone C ships. Operators continue to use
-  `eggpool restart` (or `systemctl restart eggpool`) to apply process-bound
-  changes.
+The systemd unit intentionally omits `ExecReload` so
+`systemctl reload eggpool` fails cleanly.
+
+- `eggpool rehash` validates the new config locally, sends the validated
+  digest to the control socket, and the server re-validates, computes a
+  diff, rejects restart-required changes, builds a candidate generation,
+  reconciles persistence, and atomically publishes. Active streams
+  continue on the old generation; new requests use the new generation
+  immediately. Use `eggpool restart` for disruptive changes (host, port,
+  database path, etc.).
 
 ### Low-wear metrics for microSD
 

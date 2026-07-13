@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from click.testing import CliRunner
 
@@ -72,7 +72,12 @@ class TestRehashPreflight:
     def test_valid_config_reaches_post_validation_seam(self, tmp_path: Path) -> None:
         path = _write_config(tmp_path, _valid_body())
         runner = CliRunner()
-        with patch("eggpool.cli_full._validate_config_file") as mock_validate:
+        from eggpool.control.client import ControlClientConnectionError
+
+        with (
+            patch("eggpool.cli_full._validate_config_file") as mock_validate,
+            patch("eggpool.control.client.ControlClient") as mock_client_cls,
+        ):
             from eggpool.config_validation import ConfigValidationResult
             from eggpool.models.config import AppConfig
 
@@ -84,20 +89,27 @@ class TestRehashPreflight:
                 runtime_fingerprint="1234" * 16,
                 warnings=(),
             )
+            mock_client = mock_client_cls.return_value
+            mock_client.reload = AsyncMock(
+                side_effect=ControlClientConnectionError("no server")
+            )
 
             result = runner.invoke(cli, ["--config", path, "rehash"])
 
         assert mock_validate.call_count == 1
-        # Validation seam was reached; the command reported a
-        # post-validation message and exited zero.
-        assert "control is not yet available" in result.output.lower()
+        # Validation seam was reached; the command attempted to contact
+        # the control socket and reported the connection failure.
+        assert "control socket unavailable" in result.output.lower()
 
     def test_no_automatic_restart_fallback(self, tmp_path: Path) -> None:
         path = _write_config(tmp_path, _valid_body())
         runner = CliRunner()
+        from eggpool.control.client import ControlClientConnectionError
+
         with (
             patch("eggpool.cli_full.restart") as mock_restart,
             patch("eggpool.cli_full._validate_config_file") as mock_validate,
+            patch("eggpool.control.client.ControlClient") as mock_client_cls,
         ):
             from eggpool.config_validation import ConfigValidationResult
             from eggpool.models.config import AppConfig
@@ -110,13 +122,17 @@ class TestRehashPreflight:
                 runtime_fingerprint="beef" * 16,
                 warnings=(),
             )
+            mock_client = mock_client_cls.return_value
+            mock_client.reload = AsyncMock(
+                side_effect=ControlClientConnectionError("no server")
+            )
 
             result = runner.invoke(cli, ["--config", path, "rehash"])
 
         assert mock_restart.call_count == 0
-        # Post-validation path explicitly notes that live rehash is not yet
-        # wired up rather than silently delegating to ``restart``.
-        assert "restart` to apply" in result.output
+        # Control socket unavailable; the command suggests restart as
+        # the disruptive fallback rather than invoking it automatically.
+        assert "eggpool restart" in result.output.lower()
 
     def test_warning_output_is_retained(self, tmp_path: Path) -> None:
         path = _write_config(tmp_path, _valid_body())

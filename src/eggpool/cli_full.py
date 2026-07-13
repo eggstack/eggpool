@@ -18,10 +18,6 @@ if TYPE_CHECKING:
 import click
 
 from eggpool.accounts.registry import account_config_rows
-from eggpool.config_reload_policy import (
-    ReloadResult,
-    ReloadStage,
-)
 from eggpool.config_utils import (
     detect_lan_ip as _detect_lan_ip,
 )
@@ -2537,22 +2533,21 @@ def deploy_all(ctx: click.Context, install: bool) -> None:
 @cli.command()
 @click.pass_context
 def rehash(ctx: click.Context) -> None:
-    """Validate the new config and prepare a live refresh.
+    """Validate the new config and apply a live refresh.
 
     The preflight runs :func:`eggpool.config_validation.validate_config_file`
     against the same TOML the operator is editing.  A validation failure
     prints a clear message, exits non-zero, and leaves the running
     configuration untouched.
 
-    After validation succeeds, milestone C will hand the validated result
-    and digest to the control-plane handler that swaps the active
-    generation.  Until that control path is wired up the command reports
-    that live reload is not yet available and reminds the operator to use
-    :func:`restart` for the disruptive path.  ``rehash`` never invokes
-    ``restart`` implicitly.
+    After validation succeeds, the command connects to the running
+    server's control socket and requests a live configuration reload.
+    The server independently re-validates the config, computes a diff,
+    and atomically swaps the active generation when safe.
     """
     config_path: str = ctx.obj["config_path"]
 
+    # Step 1: Local validation (fail-closed)
     try:
         validation = _validate_config_file(config_path)
     except ConfigValidationError as exc:
@@ -2575,28 +2570,66 @@ def rehash(ctx: click.Context) -> None:
         f"runtime_fingerprint={validation.runtime_fingerprint[:12] or 'unavailable'}…)"
     )
 
-    result = ReloadResult(
-        ok=True,
-        stage=ReloadStage.VALIDATION,
-        generation=None,
-        changed_sections=(),
-        warnings=validation.warnings,
-        restart_required=(),
-        message=(
-            "Live rehash control is not yet available; run "
-            "`eggpool restart` to apply process-bound changes. Validation "
-            "passed and the running configuration is currently unchanged."
-        ),
+    # Step 2: Connect to control socket and request reload
+    from eggpool.control.client import (  # noqa: PLC0415
+        ControlClient,
+        ControlClientConnectionError,
+        ControlClientError,
+        ControlClientProtocolError,
+        ControlClientTimeoutError,
     )
 
-    click.echo(result.message, err=True)
-    click.echo(
-        "Hint: once the control-plane handler from the Live Configuration "
-        "Rehash milestone C is wired up, `rehash` will hand the validated "
-        "result to the server instead of exiting here.",
-        err=True,
-    )
-    sys.exit(0)
+    async def _send_reload() -> Any:
+        client = ControlClient()
+        return await client.reload(validation.content_digest)
+
+    try:
+        result = asyncio.run(_send_reload())
+    except ControlClientConnectionError:
+        click.echo(
+            "\nControl socket unavailable. Is the server running?\n"
+            "Use `eggpool restart` for a disruptive configuration reload.",
+            err=True,
+        )
+        sys.exit(1)
+    except ControlClientTimeoutError:
+        click.echo(
+            "\nControl socket request timed out.\n"
+            "Use `eggpool restart` for a disruptive configuration reload.",
+            err=True,
+        )
+        sys.exit(1)
+    except ControlClientProtocolError as exc:
+        click.echo(f"\nProtocol error: {exc}", err=True)
+        sys.exit(1)
+    except ControlClientError as exc:
+        click.echo(f"\nControl socket error: {exc}", err=True)
+        sys.exit(1)
+
+    # Step 3: Render the structured response
+    if result.ok:
+        click.echo(f"\n{result.message}")
+        if result.changed_sections:
+            click.echo(f"  Changed sections: {', '.join(result.changed_sections)}")
+        if result.generation is not None:
+            click.echo(f"  Generation: {result.generation}")
+        if result.retirement_pending:
+            click.echo(
+                "  Old generation is draining; active requests will complete "
+                "on their original configuration."
+            )
+        for warning in result.warnings:
+            click.echo(f"  warning: {warning}")
+        sys.exit(0)
+    else:
+        click.echo(f"\n{result.message}", err=True)
+        if result.restart_required:
+            click.echo("  Restart-required changes:", err=True)
+            for field in result.restart_required:
+                click.echo(f"    - {field}", err=True)
+        for warning in result.warnings:
+            click.echo(f"  warning: {warning}", err=True)
+        sys.exit(1)
 
 
 @cli.group()

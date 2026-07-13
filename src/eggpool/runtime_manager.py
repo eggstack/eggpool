@@ -161,6 +161,7 @@ class ProcessRuntime:
     db: Database
     stats_db: Database
     config_path: str | None = None
+    metrics_coalescer: Any = None  # noqa: ANN401
 
 
 # ---------------------------------------------------------------------------
@@ -459,6 +460,43 @@ class RuntimeManager:
                 generation.generation_id,
                 _digest_prefix(generation.config_digest),
             )
+
+    async def install_candidate(
+        self,
+        generation: RuntimeGeneration,
+        *,
+        drain_timeout_s: float = 300.0,
+    ) -> None:
+        """Publish a candidate generation, retiring the current active slot.
+
+        Called by the reload manager after candidate preparation and
+        persistence reconciliation.  The publication is atomic: the new
+        slot begins accepting leases immediately and the old slot is
+        marked for retirement under the same lock acquisition.
+
+        Idempotent: if the generation has the same ``generation_id``
+        already active, this is a no-op.  After shutdown begins the
+        call raises :class:`RuntimeManagerShutdownError`.
+        """
+        async with self._lock:
+            if self._shutdown_in_progress:
+                raise RuntimeManagerShutdownError(
+                    "Cannot install candidate generation after shutdown"
+                )
+            old_slot = self._active
+            new_slot = _GenerationSlot(generation=generation)
+            self._active = new_slot
+            self._next_generation_id = max(
+                self._next_generation_id,
+                generation.generation_id + 1,
+            )
+            logger.info(
+                "Runtime generation %d published (candidate swap; digest=%s)",
+                generation.generation_id,
+                _digest_prefix(generation.config_digest),
+            )
+        if old_slot is not None:
+            await self.begin_retirement(old_slot)
 
     # -- lease acquisition -------------------------------------------------
 

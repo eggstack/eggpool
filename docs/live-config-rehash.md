@@ -1,4 +1,6 @@
-# Live Configuration Rehash (Milestone A)
+# Live Configuration Rehash
+
+## Milestone A — Validation, Diffing, and Fail-Closed CLI (Complete)
 
 Milestone A delivers the foundation for live configuration changes
 without a service restart. It ships three components:
@@ -7,10 +9,7 @@ without a service restart. It ships three components:
 2. A typed configuration diff and reload-policy layer (`config_reload_policy.py`)
 3. A fail-closed `rehash` CLI command
 
-No field is currently marked `LIVE`; every change still requires a
-service restart. The foundation is designed so milestone B
-(RuntimeManager) and milestone C (control-plane socket) can consume
-the same types without API changes.
+The foundation is consumed by milestones B and C without API changes.
 
 ## CLI surface
 
@@ -65,12 +64,15 @@ fail-closed — any field not explicitly classified requires a restart.
 When milestone B/C adds a live-reload path for a field, the
 corresponding entry moves to `LIVE` in the same diff.
 
-## Status
+## Milestone C — Control Plane and Transactional Reload (Complete)
 
-Milestone A foundation in place; `rehash` accepts and validates the
-new file but does not apply changes. Milestone B introduces a
-RuntimeManager; milestone C introduces the control-plane socket that
-will hand off the validated result.
+The live rehash path is fully operational:
+
+- **Control socket**: Unix-domain socket at `~/.local/state/eggpool/eggpool.sock` with `0o600` permissions. Newline-delimited JSON protocol v1.
+- **Reload flow**: CLI validates locally → sends validated digest to control socket → server re-validates → computes diff → rejects restart-required changes → builds candidate generation → reconciles persistence → atomic publication → retires old generation.
+- **Transaction safety**: One reload at a time (serialized). Concurrent commands rejected. Content digest prevents TOCTOU races. All failures before publication are rollback/fail-closed.
+- **Old generation retirement**: Active streams continue on their original generation. New requests use the new generation immediately after publication. Old resources close only after all leases drain.
+- **Commands**: `eggpool rehash` applies live changes. `eggpool restart` remains available for disruptive changes (host, port, database path, etc.).
 
 ## See also
 

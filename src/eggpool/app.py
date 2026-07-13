@@ -32,6 +32,13 @@ from eggpool.background.cleanup import (
 from eggpool.catalog.pricing import CostCalculator, PriceRepository
 from eggpool.catalog.service import CatalogService
 from eggpool.constants import API_V1_PREFIX, MAX_REQUEST_BODY_BYTES
+from eggpool.control.reload_manager import ReloadInProgressError, ReloadManager
+from eggpool.control.server import (
+    PROTOCOL_VERSION,
+    ControlRequest,
+    ControlResponse,
+    ControlServer,
+)
 from eggpool.dashboard.routes import register_dashboard_routes
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
@@ -784,6 +791,18 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         )
         await stats_db.connect()
     app.state.stats_db = stats_db
+
+    # 6b. ProcessRuntime — process-owned dependency container for
+    # resources that outlive any single generation (milestone B/C).
+    raw_config_path: str | None = getattr(app.state, "config_path", None)
+    process = ProcessRuntime(
+        db=db,
+        stats_db=stats_db,
+        config_path=raw_config_path,
+        metrics_coalescer=None,  # populated later after coalescer init
+    )
+    app.state.process = process
+
     # Operator warning: when dashboard reads must share the primary
     # connection, they queue behind the request path and amplify lock
     # contention under high concurrency.  This is informational, not
@@ -1145,6 +1164,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         rollup_repo=rollup_repo,
     )
     app.state.metrics_coalescer = metrics_coalescer
+    process.metrics_coalescer = metrics_coalescer
 
     # 18c. Dispatch-overhead recorder (shared between coordinator and runtime metrics)
     dispatch_overhead_recorder = DispatchOverheadRecorder(window_size=100)
@@ -1625,6 +1645,107 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         len([name for name in vars(initial_generation) if name != "config"]),
     )
 
+    # 25. Start the control server for live config rehash (milestone C)
+    reload_manager = ReloadManager(
+        runtime_manager=runtime_manager,
+        process=process,
+    )
+    app.state.reload_manager = reload_manager
+
+    async def _control_reload_handler(request: ControlRequest) -> ControlResponse:
+        """Handle a reload_config command from the control socket."""
+        from eggpool.config_validation import validate_config_file  # noqa: PLC0415
+
+        if process.config_path is None:
+            return ControlResponse(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=request.request_id,
+                ok=False,
+                stage="validation",
+                generation=None,
+                changed_sections=(),
+                warnings=(),
+                restart_required=(),
+                retirement_pending=False,
+                message="No config file path available for validation",
+            )
+
+        try:
+            validation = validate_config_file(process.config_path)
+        except Exception as exc:
+            return ControlResponse(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=request.request_id,
+                ok=False,
+                stage="validation",
+                generation=None,
+                changed_sections=(),
+                warnings=(),
+                restart_required=(),
+                retirement_pending=False,
+                message=f"Server-side validation failed: {exc}",
+            )
+
+        try:
+            result = await reload_manager.reload(
+                validation,
+                expected_digest=request.validated_digest,
+            )
+        except ReloadInProgressError as exc:
+            return ControlResponse(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=request.request_id,
+                ok=False,
+                stage="reload_in_progress",
+                generation=None,
+                changed_sections=(),
+                warnings=(),
+                restart_required=(),
+                retirement_pending=False,
+                message=str(exc),
+            )
+        except Exception as exc:
+            return ControlResponse(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=request.request_id,
+                ok=False,
+                stage="error",
+                generation=None,
+                changed_sections=(),
+                warnings=(),
+                restart_required=(),
+                retirement_pending=False,
+                message=f"Reload failed: {exc}",
+            )
+
+        return ControlResponse(
+            protocol_version=PROTOCOL_VERSION,
+            request_id=request.request_id,
+            ok=result.ok,
+            stage=(
+                result.stage.value
+                if hasattr(result.stage, "value")
+                else str(result.stage)
+            ),
+            generation=result.generation,
+            changed_sections=result.changed_sections,
+            warnings=tuple(w.to_display() for w in result.warnings),
+            restart_required=tuple(
+                f"{c.path} ({c.old_display} → {c.new_display})"
+                for c in result.restart_required
+            ),
+            retirement_pending=result.ok,
+            message=result.message,
+        )
+
+    control_server = ControlServer(_control_reload_handler)
+    try:
+        await control_server.start()
+        app.state.control_server = control_server
+    except Exception:
+        logger.exception("Failed to start control server; live reload unavailable")
+        app.state.control_server = None
+
     yield
 
 
@@ -1642,6 +1763,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         # network clients in the documented order; the metrics coalescer
         # and database remain process-owned and are flushed/closed
         # below so buffered analytics still hit disk on exit.
+
+        # Stop the control server first so no new reload requests arrive
+        # while we're tearing down the runtime.
+        control_server: ControlServer | None = getattr(
+            app.state, "control_server", None
+        )
+        if control_server is not None:
+            try:
+                await control_server.stop()
+            except Exception:
+                logger.exception("Error stopping control server during shutdown")
 
         runtime_manager: RuntimeManager | None = getattr(
             app.state, "runtime_manager", None
