@@ -587,6 +587,48 @@ async def test_grouped_timeseries_json_invalid_group_by_falls_back(
 
 
 @pytest.mark.asyncio()
+async def test_grouped_timeseries_json_auto_bucket_period_aware(
+    migrated_app: FastAPI,
+) -> None:
+    """``bucket=auto`` resolves to the period-aware default.
+
+    ``30d`` windows resolve to ``"day"`` and shorter windows resolve to
+    ``"hour"``.  ``period`` without an explicit ``bucket`` also
+    resolves to the period-aware default rather than always defaulting
+    to ``"hour"``.
+    """
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    response = client.get("/api/timeseries/grouped?period=30d&bucket=auto")
+    assert response.status_code == 200
+    assert response.json()["bucket"] == "day"
+
+    response = client.get("/api/timeseries/grouped?period=24h")
+    assert response.status_code == 200
+    assert response.json()["bucket"] == "hour"
+
+    response = client.get("/api/timeseries/grouped?period=24h&bucket=hour")
+    assert response.status_code == 200
+    assert response.json()["bucket"] == "hour"
+
+
+@pytest.mark.asyncio()
+async def test_timeseries_json_auto_bucket_period_aware(
+    migrated_app: FastAPI,
+) -> None:
+    """``/api/timeseries`` honors the same period-aware bucket default."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(migrated_app)
+    response = client.get("/api/timeseries?period=30d&bucket=auto")
+    assert response.status_code == 200
+
+    response = client.get("/api/timeseries?period=24h")
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio()
 async def test_timeseries_page_loads_with_grouped_chart(
     migrated_app: FastAPI,
 ) -> None:

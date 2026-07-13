@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -9,6 +10,12 @@ if TYPE_CHECKING:
 
 MIN_GROUPED_LIMIT = 1
 MAX_GROUPED_LIMIT = 25
+
+# Cap is comfortably above the largest expected chart width so legitimate
+# padding always succeeds but pathological windows (multi-year spans with
+# sparse data, or hand-crafted giant SQL windows) cannot produce tens of
+# thousands of zero rows.
+_MAX_ZERO_PAD_BUCKETS = 2048
 
 
 def clamp_grouped_limit(limit: int) -> int:
@@ -53,7 +60,7 @@ def postprocess_grouped_timeseries(
         key=lambda k: (-series_totals[k], k),
     )
     top_keys = set(ranked_keys[:limit])
-    include_other = len(top_keys) < len(ranked_keys)
+    include_other = len(top_keys) < len(series_totals)
 
     bucket_set: set[str] = set()
     fold: dict[tuple[str, str], dict[str, Any]] = {}
@@ -102,13 +109,17 @@ def postprocess_grouped_timeseries(
         )
     )
 
+    buckets = _pad_grouped_buckets(sorted(bucket_set), bucket)
+    bucket_totals_out = _reindex_bucket_totals(bucket_totals_out, buckets)
+    points = _extend_grouped_points(points, series_out, buckets)
+
     return {
         "bucket": bucket,
         "group_by": group_by,
         "metric": "requests",
         "limit": limit,
         "series": series_out,
-        "buckets": sorted(bucket_set),
+        "buckets": buckets,
         "bucket_totals": bucket_totals_out,
         "points": points,
     }
@@ -358,3 +369,159 @@ def _finish_bucket_total(bucket: dict[str, Any]) -> dict[str, Any]:
     del bucket["_weighted_latency_num"]
     del bucket["_weighted_ttft_num"]
     return bucket
+
+
+def _pad_grouped_buckets(buckets: list[str], bucket: str) -> list[str]:
+    """Fill missing bucket labels between the first and last seen.
+
+    Returns ``buckets`` unchanged when fewer than two labels are present
+    (no useful spine to extrapolate) or when the bucket size is
+    unrecognized.  Otherwise returns every bucket label from the first to
+    the last inclusive at the chosen granularity.
+    """
+    if len(buckets) < 2 or bucket not in ("hour", "day"):
+        return buckets
+    span = _bucket_label_span(buckets[0], buckets[-1], bucket)
+    if span is None:
+        return buckets
+    return span
+
+
+def _reindex_bucket_totals(
+    totals: list[dict[str, Any]], buckets: list[str]
+) -> list[dict[str, Any]]:
+    """Re-emit bucket_totals so every padded bucket has a row.
+
+    Preserves the existing rows (and their aggregations) verbatim; for
+    any padded bucket between the first and last totals, inserts a
+    zero-valued entry that matches the bucket_totals column shape.
+    """
+    if not totals or len(buckets) < 2:
+        return totals
+    by_label = {str(row["bucket"]): row for row in totals}
+    padded: list[dict[str, Any]] = []
+    zero_inserted = 0
+    for label in buckets:
+        existing = by_label.get(label)
+        if existing is not None:
+            padded.append(existing)
+        else:
+            padded.append(_new_bucket_total(label))
+            zero_inserted += 1
+            if zero_inserted > _MAX_ZERO_PAD_BUCKETS:
+                # Append any remaining original totals that fall inside
+                # the still-pending portion of the spine so callers see
+                # a strictly monotonic prefix instead of an arbitrary
+                # truncation.
+                for follow_label in buckets[len(padded) :]:
+                    follow_row = by_label.get(follow_label)
+                    if follow_row is not None:
+                        padded.append(follow_row)
+                return padded
+    return padded
+
+
+def _extend_grouped_points(
+    points: list[dict[str, Any]],
+    series: list[dict[str, Any]],
+    buckets: list[str],
+) -> list[dict[str, Any]]:
+    """Insert zero-valued points for every series in every padded bucket.
+
+    The grouped chart renders one polyline per series across the full
+    x-axis.  Without padding each series disappears for hours it had no
+    traffic, producing broken line segments.  This helper emits a
+    zero-valued point for every (series_key, missing_bucket) pair so
+    each line stays anchored to the axis.
+    """
+    if len(buckets) < 2 or not series:
+        return points
+    series_keys_seen = {str(point["series_key"]) for point in points}
+    series_keys = [str(s["key"]) for s in series]
+    buckets_with_data = {str(p["bucket"]) for p in points}
+    padded_point_count = 0
+    new_points: list[dict[str, Any]] = []
+    for bucket_label in buckets:
+        for series_key, series_summary in zip(series_keys, series, strict=False):
+            if bucket_label in buckets_with_data:
+                continue
+            if series_key not in series_keys_seen and not _series_covers_buckets(
+                series_summary
+            ):
+                continue
+            is_other = bool(series_summary.get("is_other"))
+            new_points.append(
+                _zero_point(
+                    bucket_label,
+                    series_key,
+                    is_other=is_other,
+                    series_summary=series_summary,
+                )
+            )
+            padded_point_count += 1
+            if padded_point_count > _MAX_ZERO_PAD_BUCKETS * max(1, len(series_keys)):
+                return points + new_points
+    return points + new_points
+
+
+def _series_covers_buckets(summary: dict[str, Any]) -> bool:
+    """Return whether a series should be padded across empty buckets.
+
+    Top-N series and the synthetic ``__other__`` bucket both deserve
+    full padding so the chart's lines stay continuous.  External
+    callers should not see this helper.
+    """
+    return True
+
+
+def _zero_point(
+    bucket: str,
+    series_key: str,
+    *,
+    is_other: bool,
+    series_summary: dict[str, Any],
+) -> dict[str, Any]:
+    """Return a zero-valued point matching ``_new_point``'s shape."""
+    if is_other:
+        return _new_point(
+            bucket=bucket,
+            series_key=series_key,
+            label="Other",
+            provider_id=None,
+            model_id=None,
+            account_name=None,
+            is_other=True,
+        )
+    return _new_point(
+        bucket=bucket,
+        series_key=series_key,
+        label=str(series_summary.get("label") or series_key),
+        provider_id=series_summary.get("provider_id"),
+        model_id=series_summary.get("model_id"),
+        account_name=series_summary.get("account_name"),
+        is_other=False,
+    )
+
+
+def _bucket_label_span(first: str, last: str, bucket: str) -> list[str] | None:
+    """Return every bucket label between two endpoints at the chosen size.
+
+    Both labels are inclusive.  Returns ``None`` when the endpoints
+    cannot be parsed or are out of order so the caller can fall back to
+    the raw rows.
+    """
+    fmt = "%Y-%m-%d %H:00:00" if bucket == "hour" else "%Y-%m-%d 00:00:00"
+    try:
+        first_dt = datetime.strptime(first, fmt)
+        last_dt = datetime.strptime(last, fmt)
+    except ValueError:
+        return None
+    if last_dt < first_dt:
+        return None
+    step = timedelta(hours=1) if bucket == "hour" else timedelta(days=1)
+    labels: list[str] = []
+    cursor = first_dt
+    while cursor <= last_dt:
+        labels.append(cursor.strftime(fmt))
+        cursor = cursor + step
+    return labels

@@ -863,9 +863,13 @@
       get("period") ||
       new URLSearchParams(window.location.search).get("period") ||
       "24h";
+    const bucketRaw = get("bucket") || "auto";
+    // "auto" is the period-aware default; let the server resolve it so
+    // the URL stays clean and operators don't have to flip buckets when
+    // they switch periods.
     return {
       period: period,
-      bucket: get("bucket") || "hour",
+      bucket: bucketRaw === "auto" ? "" : bucketRaw,
       group_by: get("group_by") || "provider_model",
       metric: get("metric") || "tokens",
       limit: get("limit") || "12",

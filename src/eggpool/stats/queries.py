@@ -6,7 +6,7 @@ SQL logic lives here, not in HTTP route handlers.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
 from eggpool.stats.cache_metrics import (
@@ -513,6 +513,12 @@ async def fetch_timeseries(
     """Get time-bucketed time series for a time window.
 
     Bucket must be one of: "hour", "day".
+
+    Rows are returned in lexicographic bucket order.  When at least one
+    bucket carries traffic, missing buckets between the min and max are
+    zero-filled so the chart's x-axis covers the full data span rather
+    than collapsing to only the hours that have requests.  An empty
+    window returns an empty list unchanged.
     """
     if bucket not in ("hour", "day"):
         bucket = "hour"
@@ -552,7 +558,101 @@ async def fetch_timeseries(
     ORDER BY bucket
     """
     rows = await db.fetch_all(sql, tuple(params))
-    return [dict(row) for row in rows]
+    out = [dict(row) for row in rows]
+    return _pad_timeseries_spacing(out, bucket)
+
+
+def _empty_timeseries_row(bucket: str) -> dict[str, Any]:
+    """Build a zero-valued row matching the ``fetch_timeseries`` shape."""
+    return {
+        "bucket": bucket,
+        "request_count": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "cost_microdollars": 0,
+        "error_count": 0,
+        "bytes_received": 0,
+        "bytes_emitted": 0,
+        "avg_ttft_ms": 0,
+    }
+
+
+# Cap is comfortably above the largest expected chart width so legitimate
+# padding always succeeds but pathological windows (multi-year spans with
+# sparse data, or hand-crafted giant SQL windows) cannot produce tens of
+# thousands of zero rows.
+_MAX_ZERO_PAD_BUCKETS = 2048
+
+
+def _pad_timeseries_spacing(
+    rows: list[dict[str, Any]], bucket: str
+) -> list[dict[str, Any]]:
+    """Fill missing bucket labels between the first and last seen.
+
+    Preserves the historical "empty window → empty list" contract: when no
+    rows have data, nothing is added and the caller sees an empty payload.
+    When at least one bucket is present, every bucket label between the
+    first and last seen at the chosen granularity is emitted in order.
+    Rows that match a real SQL bucket keep their SQL-supplied counts;
+    missing labels carry zero-valued rows so the chart's x-axis stays
+    contiguous over the actual data span.
+    """
+    if not rows or len(rows) == 1:
+        return rows
+    if bucket not in ("hour", "day"):
+        return rows
+
+    first_label = str(rows[0]["bucket"])
+    last_label = str(rows[-1]["bucket"])
+    span = _bucket_label_span(first_label, last_label, bucket)
+    if span is None:
+        return rows
+
+    by_label: dict[str, dict[str, Any]] = {str(row["bucket"]): row for row in rows}
+    padded: list[dict[str, Any]] = []
+    zero_inserted = 0
+    for label in span:
+        existing = by_label.get(label)
+        if existing is not None:
+            padded.append(existing)
+        else:
+            padded.append(_empty_timeseries_row(label))
+            zero_inserted += 1
+            if zero_inserted > _MAX_ZERO_PAD_BUCKETS:
+                return padded
+    return padded
+
+
+def _bucket_label_span(first: str, last: str, bucket: str) -> list[str] | None:
+    """Return every bucket label between two endpoints at the chosen size.
+
+    Both labels are inclusive.  Returns ``None`` when the endpoints cannot
+    be parsed or are out of order so the caller can fall back to the raw
+    rows.
+    """
+    fmt = "%Y-%m-%d %H:00:00" if bucket == "hour" else "%Y-%m-%d 00:00:00"
+    try:
+        first_dt = datetime.strptime(first, fmt)
+        last_dt = datetime.strptime(last, fmt)
+    except ValueError:
+        return None
+    if last_dt < first_dt:
+        return None
+    step = _bucket_step(bucket)
+    labels: list[str] = []
+    cursor = first_dt
+    while cursor <= last_dt:
+        labels.append(cursor.strftime(fmt))
+        cursor = cursor + step
+    return labels
+
+
+def _bucket_step(bucket: str) -> timedelta:
+    """Return the timedelta between successive bucket labels."""
+    if bucket == "hour":
+        return timedelta(hours=1)
+    return timedelta(days=1)
 
 
 async def fetch_error_breakdown(

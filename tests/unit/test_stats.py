@@ -2667,6 +2667,141 @@ class TestFetchGroupedTimeseries:
         assert by_key["acct_a"]["account_name"] == "acct_a"
         assert by_key["acct_b"]["account_name"] == "acct_b"
 
+    @pytest.mark.asyncio()
+    async def test_pads_missing_buckets_in_data_span(
+        self, grouped_db: Database
+    ) -> None:
+        """Sparse data within the window is zero-filled across the spine.
+
+        A request at 12:15 and another at 14:45 should produce three
+        hourly buckets in the response (``12:00``, ``13:00``,
+        ``14:00``) so the chart's x-axis covers the full data span
+        instead of collapsing to only the hours that have traffic.
+        """
+        a_id = await _account_id(grouped_db, "acct_a")
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_x",
+            provider_id="prov_one",
+            started_at="2024-01-01 12:15:00",
+        )
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_x",
+            provider_id="prov_one",
+            started_at="2024-01-01 14:45:00",
+        )
+
+        result = await queries.fetch_grouped_timeseries(
+            grouped_db,
+            "2024-01-01 00:00:00",
+            "2024-01-02 00:00:00",
+        )
+        # Three contiguous hourly buckets in the data span.
+        assert result["buckets"] == [
+            "2024-01-01 12:00:00",
+            "2024-01-01 13:00:00",
+            "2024-01-01 14:00:00",
+        ]
+        # The middle bucket carries zero traffic.
+        totals_by_bucket = {
+            t["bucket"]: int(t["request_count"]) for t in result["bucket_totals"]
+        }
+        assert totals_by_bucket == {
+            "2024-01-01 12:00:00": 1,
+            "2024-01-01 13:00:00": 0,
+            "2024-01-01 14:00:00": 1,
+        }
+
+    @pytest.mark.asyncio()
+    async def test_padding_respects_daily_granularity(
+        self, grouped_db: Database
+    ) -> None:
+        """``bucket=day`` zero-fills whole days, not hours."""
+        a_id = await _account_id(grouped_db, "acct_a")
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_x",
+            provider_id="prov_one",
+            started_at="2024-01-01 12:15:00",
+        )
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_x",
+            provider_id="prov_one",
+            started_at="2024-01-03 12:15:00",
+        )
+
+        result = await queries.fetch_grouped_timeseries(
+            grouped_db,
+            "2024-01-01 00:00:00",
+            "2024-01-05 00:00:00",
+            bucket="day",
+        )
+        assert result["buckets"] == [
+            "2024-01-01 00:00:00",
+            "2024-01-02 00:00:00",
+            "2024-01-03 00:00:00",
+        ]
+
+    @pytest.mark.asyncio()
+    async def test_padding_skipped_for_empty_window(self, grouped_db: Database) -> None:
+        """No data → no padded buckets (preserves the empty contract)."""
+        result = await queries.fetch_grouped_timeseries(
+            grouped_db, "2024-01-01 00:00:00", "2024-01-02 00:00:00"
+        )
+        assert result["buckets"] == []
+        assert result["bucket_totals"] == []
+        assert result["points"] == []
+
+
+class TestFetchTimeseriesSpacing:
+    """Tests for the zero-padding helper on ``fetch_timeseries``."""
+
+    @pytest.mark.asyncio()
+    async def test_pads_missing_hourly_buckets(self, grouped_db: Database) -> None:
+        """Sparse traffic within a 4-hour window pads to 4 buckets."""
+        a_id = await _account_id(grouped_db, "acct_a")
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_x",
+            provider_id="prov_one",
+            started_at="2024-01-01 10:15:00",
+        )
+        await _seed_request(
+            grouped_db,
+            account_id=a_id,
+            model_id="model_x",
+            provider_id="prov_one",
+            started_at="2024-01-01 13:45:00",
+        )
+
+        rows = await queries.fetch_timeseries(
+            grouped_db, "2024-01-01 10:00:00", "2024-01-01 14:00:00"
+        )
+        labels = [row["bucket"] for row in rows]
+        assert labels == [
+            "2024-01-01 10:00:00",
+            "2024-01-01 11:00:00",
+            "2024-01-01 12:00:00",
+            "2024-01-01 13:00:00",
+        ]
+        counts = [int(row["request_count"]) for row in rows]
+        assert counts == [1, 0, 0, 1]
+
+    @pytest.mark.asyncio()
+    async def test_empty_window_returns_empty(self, grouped_db: Database) -> None:
+        """No traffic → no padded rows (preserves the empty contract)."""
+        rows = await queries.fetch_timeseries(
+            grouped_db, "2024-01-01 00:00:00", "2024-01-02 00:00:00"
+        )
+        assert rows == []
+
 
 class TestStatsServiceGroupedTimeseries:
     """Tests for ``StatsService.get_grouped_timeseries``."""

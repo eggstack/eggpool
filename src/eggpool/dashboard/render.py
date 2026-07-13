@@ -3889,6 +3889,7 @@ def _render_timeseries_controls(
         return f'<select name="{name}">{"".join(items)}</select>'
 
     bucket_options: list[tuple[str, str]] = [
+        ("auto", "Auto (period-aware)"),
         ("hour", "Hour"),
         ("day", "Day"),
     ]
@@ -3956,15 +3957,21 @@ def render_timeseries(
     model_options: list[str] | None = None,
     update_info: Any | None = None,
     model_info_map: Mapping[str, dict[str, Any]] | None = None,
+    resolved_bucket: str | None = None,
 ) -> str:
     """Render the timeseries page.
 
-    The page renders the period selector at the top, then a filter form
-    for bucket/group/metric/limit/account/model, then the grouped chart
-    panel and the grouped detail table.  The legacy aggregate per-bucket
-    table remains below as a secondary reference for operators who want
-    the older single-bucket totals view.
+    ``bucket`` is the user-facing bucket selector value (one of
+    ``"auto"``, ``"hour"``, ``"day"``).  ``resolved_bucket`` is the
+    actual bucket size the data layer used (defaulting to ``bucket``
+    when not provided).  The page renders the period selector at the
+    top, then a filter form with the bucket dropdown set to the
+    user-facing value, then the grouped chart panel and detail table.
+    The legacy aggregate per-bucket table remains below as a secondary
+    reference for operators who want the older single-bucket totals
+    view.
     """
+    effective_resolved = resolved_bucket or bucket
     controls = _render_timeseries_controls(
         bucket=bucket,
         group_by=group_by,
@@ -3980,7 +3987,7 @@ def render_timeseries(
     chart_panel = _render_grouped_timeseries_chart(
         grouped or {},
         period=period,
-        bucket=bucket,
+        bucket=effective_resolved,
         group_by=group_by,
         metric=metric,
         limit=limit,
@@ -3995,7 +4002,7 @@ def render_timeseries(
     aggregate_table = _render_aggregate_timeseries_table(series)
 
     body = f"""
-<h2>Timeseries ({escape(bucket)} buckets, group by {escape(group_by)})</h2>
+<h2>Timeseries ({escape(effective_resolved)} buckets, group by {escape(group_by)})</h2>
 {_render_period_selector(period, current_theme, "timeseries-period-selector")}
 {controls}
 

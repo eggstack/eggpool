@@ -34,6 +34,10 @@ from eggpool.dashboard.render import (
     render_timeseries,
     render_traces,
 )
+from eggpool.dashboard.timeseries_buckets import (
+    AUTO_BUCKET,
+    resolve_bucket,
+)
 from eggpool.errors import ConfigError
 from eggpool.model_info.presentation import (
     compact_model_info_summary,
@@ -516,14 +520,23 @@ _VALID_GROUP_BY = frozenset({"provider", "model", "provider_model", "account"})
 
 async def _get_disabled_account_count(request: Request, show_disabled: bool) -> int:
     """Return hidden disabled-account count for pages with that toggle."""
-    if show_disabled:
+    if not show_disabled:
         return 0
     return await fetch_disabled_account_count(request.app.state.stats_db)
 
 
-def _normalize_bucket(bucket: str) -> str:
-    """Return a supported dashboard bucket, falling back to hourly."""
-    return bucket if bucket in _VALID_BUCKETS else "hour"
+def _normalize_bucket(bucket: str | None, period: str | None = None) -> str:
+    """Return a supported dashboard bucket, expanding ``"auto"`` via the period.
+
+    Preserved as a thin shim around
+    :func:`eggpool.dashboard.timeseries_buckets.resolve_bucket` so the
+    existing call sites and their unit tests keep working.  Unknown
+    buckets (including ``"auto"`` and ``None``) fall back to the
+    period-aware default rather than always defaulting to ``"hour"`` —
+    that lets a 30-day window render at daily granularity when the
+    client omits the bucket parameter.
+    """
+    return resolve_bucket(bucket, period)
 
 
 def _normalize_group_by(group_by: str) -> str:
@@ -1971,7 +1984,7 @@ async def handle_events(
 async def handle_timeseries(
     request: Request,
     period: str | None = "24h",
-    bucket: str = "hour",
+    bucket: str = AUTO_BUCKET,
     account: str | None = None,
     model: str | None = None,
     group_by: str = "provider_model",
@@ -1982,7 +1995,8 @@ async def handle_timeseries(
     """Render the timeseries page."""
     _get_dashboard_config(request)
     time_range = resolve_time_range(period)
-    bucket = _normalize_bucket(bucket)
+    raw_bucket = bucket
+    bucket = _normalize_bucket(bucket, time_range.label)
     group_by = _normalize_group_by(group_by)
     bounded_limit = clamp_grouped_limit(limit)
     stats = request.app.state.stats
@@ -2013,7 +2027,8 @@ async def handle_timeseries(
     response = HTMLResponse(
         content=render_timeseries(
             series,
-            bucket=bucket,
+            bucket=raw_bucket,
+            resolved_bucket=bucket,
             period=time_range.label,
             theme_css=theme_css,
             available_themes=available,
@@ -2042,14 +2057,14 @@ async def handle_timeseries(
 async def handle_bandwidth(
     request: Request,
     period: str | None = "24h",
-    bucket: str = "hour",
+    bucket: str = AUTO_BUCKET,
     account: str | None = None,
     theme: str | None = None,
 ) -> Response:
     """Render the bandwidth page."""
     _get_dashboard_config(request)
     time_range = resolve_time_range(period)
-    bucket = _normalize_bucket(bucket)
+    bucket = _normalize_bucket(bucket, time_range.label)
     stats = request.app.state.stats
     telemetry = getattr(request.app.state, "dashboard_telemetry", None)
     _gather_start = time.perf_counter()
@@ -2099,14 +2114,14 @@ async def handle_bandwidth(
 async def handle_timeseries_json(
     request: Request,
     period: str | None = "24h",
-    bucket: str = "hour",
+    bucket: str = AUTO_BUCKET,
     account: str | None = None,
     model: str | None = None,
 ) -> Response:
     """Return timeseries data as JSON for Chart.js."""
     _get_dashboard_config(request)
     time_range = resolve_time_range(period)
-    bucket = _normalize_bucket(bucket)
+    bucket = _normalize_bucket(bucket, time_range.label)
     stats = request.app.state.stats
     series = await stats.get_timeseries(
         time_range,
@@ -2121,7 +2136,7 @@ async def handle_timeseries_json(
 async def handle_grouped_timeseries_json(
     request: Request,
     period: str | None = "24h",
-    bucket: str = "hour",
+    bucket: str = AUTO_BUCKET,
     account: str | None = None,
     model: str | None = None,
     group_by: str = "provider_model",
@@ -2133,11 +2148,11 @@ async def handle_grouped_timeseries_json(
     The ``metric`` parameter is accepted for API stability but unused in
     this pass; the dashboard contract always ranks series by
     ``request_count``.  ``limit`` is clamped to ``1..25`` and ``bucket``
-    is normalized to ``"hour"`` or ``"day"``.
+    accepts ``"hour"``, ``"day"``, or ``"auto"`` (period-aware default).
     """
     _get_dashboard_config(request)
     time_range = resolve_time_range(period)
-    bucket = _normalize_bucket(bucket)
+    bucket = _normalize_bucket(bucket, time_range.label)
     group_by = _normalize_group_by(group_by)
     bounded_limit = clamp_grouped_limit(limit)
     stats = request.app.state.stats
