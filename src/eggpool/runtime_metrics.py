@@ -123,6 +123,7 @@ class RuntimeMetricsService:
         stream_diagnostics: Any | None = None,  # noqa: ANN401
         finalization_retry_queue: Any | None = None,  # noqa: ANN401
         routing_trace_guard: Any | None = None,  # noqa: ANN401
+        runtime_manager: Any | None = None,  # noqa: ANN401
     ) -> None:
         self._config = config
         self._db = db
@@ -144,6 +145,7 @@ class RuntimeMetricsService:
         self._stream_diagnostics = stream_diagnostics
         self._finalization_retry_queue = finalization_retry_queue
         self._routing_trace_guard = routing_trace_guard
+        self._runtime_manager = runtime_manager
 
     async def snapshot(self) -> dict[str, Any]:
         """Return a best-effort runtime snapshot.
@@ -172,6 +174,13 @@ class RuntimeMetricsService:
 
         # Dispatch-overhead recorder (in-memory rolling window)
         result["dispatch_overhead"] = self._snapshot_dispatch_overhead(probe_errors)
+
+        # Runtime manager snapshot (milestone B): active and retiring
+        # generation counts, digests, lease counts, and shutdown state
+        # so operators can verify the live reload state without
+        # guessing from process logs.  Tolerates a missing manager
+        # (older builds, partial app.state) by returning ``None``.
+        result["runtime_manager"] = self._snapshot_runtime_manager(probe_errors)
 
         # Phase 6 fine-grained dispatch spans (Phase 1 hot-path optimization).
         # Per-span latency (avg / p50 / p95 / p99) for the named proxy
@@ -758,6 +767,26 @@ class RuntimeMetricsService:
             )
             return {"error": str(exc)}
 
+    def _snapshot_runtime_manager(
+        self, probe_errors: list[str]
+    ) -> dict[str, Any] | None:
+        """Best-effort snapshot of the milestone-B runtime manager.
+
+        Returns ``None`` when the manager is missing or has not been
+        installed yet (early startup, tests that build a bare service,
+        or pre-B builds).  Never raises; probe errors are recorded so
+        the runtime dashboard can surface them without crashing.
+        """
+        manager = self._runtime_manager
+        if manager is None:
+            return None
+        try:
+            diag = manager.diagnostics()
+        except Exception as exc:
+            _append_probe_error(probe_errors, f"Runtime manager snapshot failed: {exc}")
+            return {"error": str(exc)}
+        return _runtime_manager_to_dict(diag)
+
     def _snapshot_dispatch_spans(self, probe_errors: list[str]) -> dict[str, Any]:
         """Best-effort snapshot of the named-span dispatch recorder.
 
@@ -1002,3 +1031,37 @@ def _detect_daemon_hint() -> bool:
     except (AttributeError, ValueError):
         return True
     return False
+
+
+def _runtime_manager_to_dict(diag: Any) -> dict[str, Any]:
+    """Render a :class:`RuntimeDiagnostics` snapshot as a JSON-safe dict.
+
+    Diagnostic output is intentionally lossy: only counts, IDs, digests,
+    and timestamps.  Never includes the underlying ``AppConfig``,
+    raw services, or secret material.
+    """
+    return {
+        "active": _generation_diag_to_dict(diag.active),
+        "retiring": [_generation_diag_to_dict(g) for g in diag.retiring],
+        "retiring_count": len(diag.retiring),
+        "shutdown_in_progress": diag.shutdown_in_progress,
+        "next_generation_id": diag.next_generation_id,
+    }
+
+
+def _generation_diag_to_dict(diag: Any) -> dict[str, Any] | None:
+    """Render a :class:`GenerationDiagnostics` as a JSON-safe dict."""
+    if diag is None:
+        return None
+    return {
+        "generation_id": diag.generation_id,
+        "config_digest_prefix": diag.config_digest_prefix,
+        "created_at_monotonic": diag.created_at_monotonic,
+        "created_at_epoch": diag.created_at_epoch,
+        "age_seconds": round(diag.age_seconds, 3),
+        "active_leases": diag.active_leases,
+        "accepting_leases": diag.accepting_leases,
+        "retirement_started": diag.retirement_started,
+        "retirement_complete": diag.retirement_complete,
+        "last_close_error": diag.last_close_error,
+    }

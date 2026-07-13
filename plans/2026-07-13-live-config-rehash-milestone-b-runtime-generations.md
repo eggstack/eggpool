@@ -2,6 +2,10 @@
 
 ## Runtime Generations and Request-Lease Infrastructure
 
+> **Status: Completed** — see implementation in `src/eggpool/runtime_manager.py`,
+> `src/eggpool/app.py`, `src/eggpool/runtime_metrics.py`, and
+> `tests/unit/test_runtime_manager.py`.
+
 ## Objective
 
 Refactor EggPool's runtime ownership so configuration-derived services can be replaced as a coherent unit without changing process-owned resources or interrupting active requests. This milestone introduces a `RuntimeManager`, immutable runtime generations, request/stream generation leases, deterministic generation startup/retirement, and generation-aware background-service ownership.

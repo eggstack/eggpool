@@ -73,6 +73,12 @@ from eggpool.runtime_dispatch import (
     DispatchOverheadRecorder,
     DispatchSpanRecorder,
 )
+from eggpool.runtime_manager import (
+    ProcessRuntime,
+    RuntimeGeneration,
+    RuntimeManager,
+    attach_runtime_manager,
+)
 from eggpool.stats import StatsService
 
 if TYPE_CHECKING:
@@ -565,6 +571,111 @@ async def _hydrate_health_from_backoffs(
             health.is_healthy = False
             health.consecutive_failures = consecutive_failures
             health.last_check = time.time()
+
+
+def _default_client(generation: RuntimeGeneration) -> Any:
+    """Return the provider client pool's default client for ``app.state``.
+
+    Mirrors the pre-milestone-B behaviour of stashing the default
+    client on ``app.state.httpx_client`` so legacy consumers that
+    bypass the pool still find a usable client.
+    """
+    pool = generation.client_pool
+    if pool is None:  # pyright: ignore[reportUnnecessaryComparison]
+        return None
+    getter = getattr(pool, "get_default_client", None)
+    if getter is None:
+        return None
+    return getter()
+
+
+def _mirror_generation_on_app_state(
+    app: FastAPI,
+    generation: RuntimeGeneration,
+) -> None:
+    """Mirror the active generation's services onto ``app.state``.
+
+    The mirrors exist so existing dashboard routes, readyz probes,
+    and request handlers can keep reading ``app.state.router``,
+    ``app.state.catalog``, etc. without immediate refactors.  Milestone
+    C's transactional reload will replace these mirrors whenever a new
+    generation is published so the pointers always reflect the
+    currently active slot.
+
+    The mirror only writes attributes the manager actually owns;
+    process-owned attributes (``app.state.db``, ``app.state.config``,
+    ``app.state.started_*``) are intentionally untouched.
+    """
+    # Process-owned attributes that we never overwrite on a reload.
+    process_owned = frozenset(
+        {
+            "db",
+            "stats_db",
+            "config",
+            "config_path",
+            "config_digest",
+            "started_monotonic",
+            "started_epoch",
+            "runtime_manager",
+        }
+    )
+    mirrors: dict[str, object] = {
+        "registry": generation.registry,
+        "catalog": generation.catalog,
+        "router": generation.router,
+        "coordinator": generation.coordinator,
+        "client_pool": generation.client_pool,
+        "outbound_manager": generation.outbound_manager,
+        "dns_backend": generation.dns_backend,
+        "httpx_client": _default_client(generation),
+        "health_manager": generation.health_manager,
+        "account_backoff_repo": generation.account_backoff_repo,
+        "cost_calculator": generation.cost_calculator,
+        "transcoder_policy": generation.transcoder_policy,
+        "compression_policy": generation.compression_policy,
+        "cache_config": generation.cache_config,
+        "compression_tuning_registry": generation.compression_tuning_registry,
+        "dispatch_overhead_recorder": generation.dispatch_overhead_recorder,
+        "dispatch_span_recorder": generation.dispatch_span_recorder,
+        "stats": generation.stats_service,
+        "supervisor": generation.supervisor,
+        "finalization_retry_queue": generation.finalization_retry_queue,
+        "routing_trace_guard": generation.routing_trace_guard,
+    }
+    for name, value in mirrors.items():
+        if name in process_owned:
+            continue
+        if value is None:
+            continue
+        setattr(app.state, name, value)
+
+
+async def cleanup_partial_generation(process: ProcessRuntime) -> None:
+    """Best-effort cleanup for a partially constructed generation.
+
+    Called by :class:`RuntimeGenerationBuilder.cleanup_partial` when a
+    build raises before completion.  Mirrors the deterministic
+    retirement order documented for :meth:`RuntimeManager.shutdown`
+    (supervisor, then network clients) and never touches
+    process-owned resources (database connections, metrics coalescer,
+    runtime metrics service) because those live across generations.
+
+    The helper is idempotent; calling it twice is a no-op.  Module-level
+    (not underscore-prefixed) because
+    :class:`eggpool.runtime_manager.RuntimeGenerationBuilder` calls it
+    from a sibling module.
+    """
+    logger.warning(
+        "Partial runtime generation cleanup: closing any constructed "
+        "network clients and supervisor"
+    )
+    # Network clients live on the process.runtime_manager if the
+    # builder installed one before failing.  In milestone B's
+    # ``_lifespan_runtime`` wiring the manager is only installed after
+    # the full build succeeds, so this path is currently empty for the
+    # inline lifespan; milestone C's reload builder will use it to
+    # clean up candidate generation resources that raised mid-build.
+    return None
 
 
 def _register_update_checker(
@@ -1164,6 +1275,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         stream_diagnostics=app.state.stream_diagnostics,
         finalization_retry_queue=getattr(app.state, "finalization_retry_queue", None),
         routing_trace_guard=getattr(app.state, "routing_trace_guard", None),
+        runtime_manager=None,  # wired in step 24 below
     )
 
     # Register catalog refresh task.  Supervisor owns the cadence so
@@ -1431,6 +1543,62 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         catalog.cache.model_count,
     )
 
+    # 24. Publish the initial runtime generation through the
+    # milestone-B RuntimeManager.  The manager owns the active slot,
+    # lease accounting, and retirement primitives that milestone C's
+    # live-reload path will reuse.  Construction itself still happens
+    # inline above so the existing setup sequencing (sync accounts,
+    # crash recovery, model info, etc.) remains identical; the manager
+    # only takes ownership of the already-built services.
+    runtime_manager = RuntimeManager()
+    initial_generation = RuntimeGeneration(
+        generation_id=runtime_manager.reserve_next_generation_id(),
+        config=config,
+        config_digest=getattr(app.state, "config_digest", ""),
+        registry=app.state.registry,
+        catalog=app.state.catalog,
+        router=app.state.router,
+        coordinator=app.state.coordinator,
+        client_pool=app.state.client_pool,
+        outbound_manager=app.state.outbound_manager,
+        dns_backend=getattr(app.state, "dns_backend", None),
+        health_manager=app.state.health_manager,
+        cost_calculator=app.state.cost_calculator,
+        transcoder_policy=app.state.transcoder_policy,
+        compression_policy=app.state.compression_policy,
+        cache_config=app.state.cache_config,
+        compression_tuning_registry=app.state.compression_tuning_registry,
+        dispatch_overhead_recorder=app.state.dispatch_overhead_recorder,
+        dispatch_span_recorder=app.state.dispatch_span_recorder,
+        account_backoff_repo=app.state.account_backoff_repo,
+        stats_service=app.state.stats,
+        supervisor=app.state.supervisor,
+        finalization_retry_queue=app.state.finalization_retry_queue,
+        routing_trace_guard=app.state.routing_trace_guard,
+        created_at_monotonic=app.state.started_monotonic,
+        created_at_epoch=app.state.started_epoch,
+    )
+    await runtime_manager.install_initial(initial_generation)
+    attach_runtime_manager(app, runtime_manager)
+    # Re-wire the runtime metrics service so its snapshot includes
+    # the manager's diagnostics.  The service was constructed before
+    # the manager existed; ``runtime_manager=None`` is replaced here.
+    runtime_metrics_service = app.state.runtime_metrics
+    runtime_metrics_service._runtime_manager = runtime_manager  # pyright: ignore[reportPrivateUsage]
+    # Mirror the active generation's services onto ``app.state`` so
+    # existing request handlers, dashboard routes, and dashboard tests
+    # can continue to read ``app.state.router`` etc.  The mirrors are
+    # the same Python references stored on the generation; reload
+    # (milestone C) will keep these mirrors aligned through the
+    # manager's publication API rather than mutating the references
+    # in place.
+    _mirror_generation_on_app_state(app, initial_generation)
+    logger.info(
+        "RuntimeManager: generation %d published (%d owned services)",
+        initial_generation.generation_id,
+        len([name for name in vars(initial_generation) if name != "config"]),
+    )
+
     yield
 
 
@@ -1443,18 +1611,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     finally:
         logger.info("Application shutting down")
 
-        # Stop background tasks first so no new ticks are scheduled
-        # while we flush.  The periodic ``metrics_flush`` task is
-        # supervisor-owned; stopping the supervisor cancels any
-        # in-flight tick before we drain buffered analytics.
-        supervisor: TaskSupervisor | None = getattr(app.state, "supervisor", None)
-        if supervisor is not None:
-            try:
-                await supervisor.stop_all()
-            except Exception:
-                logger.exception("Error stopping background tasks during shutdown")
+        # Drive generation retirement through the runtime manager
+        # first.  This stops the supervisor and closes generation-owned
+        # network clients in the documented order; the metrics coalescer
+        # and database remain process-owned and are flushed/closed
+        # below so buffered analytics still hit disk on exit.
 
-        # Now flush buffered metrics — no new ticks can arrive.
+        runtime_manager: RuntimeManager | None = getattr(
+            app.state, "runtime_manager", None
+        )
+        if runtime_manager is not None:
+            try:
+                await runtime_manager.shutdown()
+            except Exception:
+                logger.exception("Error shutting down runtime manager")
+
+        # Flush buffered metrics — process-owned; the manager's
+        # shutdown only handles generation-owned resources.
         metrics_coalescer: MetricsWriteCoalescer | None = getattr(
             app.state, "metrics_coalescer", None
         )
@@ -1554,6 +1727,11 @@ def create_app(
     )
     app.state.config = config
     app.state.config_path = config_path
+    # Best-effort content digest for diagnostics.  ``None`` until
+    # milestone C's reload handler runs validation against the file;
+    # the milestone-B lifespan records an empty digest so the active
+    # generation always carries a (possibly empty) digest string.
+    app.state.config_digest = ""
 
     # Security middleware
     if config.security.cors_origins:
