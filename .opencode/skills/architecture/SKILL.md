@@ -491,6 +491,14 @@ Long-running deployments — especially Raspberry Pi / SBC nodes — must keep s
 - `scripts/verify_upstream_auth.py` is operator-only: it bypasses EggPool to confirm the configured key works directly upstream
 - Pyright in CI covers `src/` AND `scripts/`; narrow type annotations with `cast` or `Any` rather than excluding a file
 
+## Live Configuration Rehash
+
+`config_validation.py` is the single reusable validation contract used by both `check-config` and `rehash`. It is Click-free and never raises `SystemExit`; every failure is a typed subclass of `ConfigValidationError` (`ConfigFileAccessError`, `ConfigParseError`, `ConfigSchemaError`, `ConfigStartupAuthError`, `ConfigAccountCredentialError`, `ConfigInternalError`). The helper returns a `ConfigValidationResult` carrying two distinct hashes: `content_digest` (SHA-256 of the exact config bytes) for time-of-check/time-of-use drift detection, and `runtime_fingerprint` (a deterministic, secret-safe canonical hash for no-op detection and diagnostics). Secret fields are redacted to `"<redacted>"` before any hash computation or log emission.
+
+The reload policy (`config_reload_policy.py`) classifies every `AppConfig` field as `LIVE`, `RESTART_REQUIRED`, or `IGNORED` via the `ReloadDisposition` enum. Milestone A defaults every field to `RESTART_REQUIRED` so the system is fail-closed — any field not explicitly classified requires a process restart. The `_FIELD_DISPOSITION` map is the single reviewable inventory; never mark a field `LIVE` until milestone B/C adds a live replacement path.
+
+`ConfigDiff`, `ConfigChange`, `ReloadResult`, and `ReloadStage` are the protocol-neutral wire types that milestone C's control socket will speak directly. `compute_diff()` produces a `ConfigDiff` from two parsed configs; `diff_from_validation()` produces one from a validation result for the case where only one config is available. `ConfigChange` carries `field_path`, `old_value`, `new_value`, `disposition`, and `secret` (redacted in repr).
+
 ## CLI Commands
 
 - `models refresh` synchronizes configured accounts via `AccountRepository.sync_from_config` before refreshing the catalog, so cached account/model relationships match normal application startup

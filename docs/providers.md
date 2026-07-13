@@ -313,8 +313,13 @@ deployments that used the unsuffixed `minimax-m2.7` ID should either:
 - Set `collapse_models = true` to keep the old single-ID exposure, or
 - Rewrite the client to use the suffixed `minimax-m2.7/<provider>` IDs.
 
-Either change requires a service restart; live reload is intentionally not
-supported.
+Either change currently requires a service restart.  `eggpool rehash`
+validates the new config against the same contract as `eggpool
+check-config` (see `docs/live-config-rehash.md`) and reports whether the
+running process can pick up the change without a restart — but the live
+control plane is not yet available, so operators should run `eggpool
+restart` (or `systemctl restart eggpool`) to apply these field-level
+changes.
 
 ### Rebalancing providers
 

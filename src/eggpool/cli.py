@@ -36,7 +36,6 @@ _LAZY_ATTRS: frozenset[str] = frozenset(
         "_detect_lan_ip",
         "_read_dashboard_public",
         "_write_dashboard_public",
-        "_check_stale_contracts",
         "_detect_install_method",
     }
 )

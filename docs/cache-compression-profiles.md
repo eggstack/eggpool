@@ -278,7 +278,7 @@ The `enabled = false` overlay stops the analyzer and applier entirely for matchi
 Profiles are config-only changes. No schema migration is required:
 
 1. Edit `config.toml` to the new profile.
-2. Run `eggpool check-config` to validate.
+2. Run `eggpool check-config` (or `eggpool rehash`) to validate.
 3. Run `eggpool restart` (or `systemctl restart eggpool`) to apply.
 4. Inspect the relevant `/api/stats/...` endpoint to confirm the new mode is active.
 

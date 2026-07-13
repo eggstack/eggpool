@@ -13,7 +13,8 @@ from typing import TYPE_CHECKING
 
 from click.testing import CliRunner
 
-from eggpool.cli import _check_stale_contracts, cli
+from eggpool.cli import cli
+from eggpool.config_validation import check_stale_contracts
 from eggpool.models.config import (
     AppConfig,
     ProviderConfig,
@@ -355,9 +356,11 @@ class TestCheckStaleContractsDirect:
             providers={"bad": provider},
         )
 
-        warnings = _check_stale_contracts(config, "/nonexistent/path.toml")
+        warnings = check_stale_contracts(config, "/nonexistent/path.toml")
 
-        assert any("duplicate /v1 segment" in message for message in warnings), warnings
+        assert any(
+            "duplicate /v1 segment" in warning.message for warning in warnings
+        ), warnings
 
 
 class TestCheckConfigParseErrors:

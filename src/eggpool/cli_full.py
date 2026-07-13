@@ -11,7 +11,6 @@ import zipfile
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
-from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
@@ -19,7 +18,10 @@ if TYPE_CHECKING:
 import click
 
 from eggpool.accounts.registry import account_config_rows
-from eggpool.auth import require_auth_at_startup
+from eggpool.config_reload_policy import (
+    ReloadResult,
+    ReloadStage,
+)
 from eggpool.config_utils import (
     detect_lan_ip as _detect_lan_ip,
 )
@@ -41,6 +43,12 @@ from eggpool.config_utils import (
 from eggpool.config_utils import (
     write_server_api_key as _write_server_api_key_raw,
 )
+from eggpool.config_validation import (
+    ConfigValidationError,
+)
+from eggpool.config_validation import (
+    validate_config_file as _validate_config_file,
+)
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
 from eggpool.db.repositories import AccountRepository, ProviderRepository
@@ -52,7 +60,7 @@ from eggpool.deploy_user import (
     resolve_deploy_user,
     resolve_env_path,
 )
-from eggpool.errors import AggregatorError, ConfigError
+from eggpool.errors import AggregatorError
 from eggpool.jsonx import USING_ORJSON
 from eggpool.lifecycle import (
     InstallMethod,
@@ -75,7 +83,7 @@ from eggpool.lifecycle.backup import (
 from eggpool.logging import configure_logging
 from eggpool.models.config import AppConfig
 from eggpool.providers.client_pool import ProviderClientPool
-from eggpool.providers.contract import PROVIDER_STATUS_SYMBOLS, compose_provider_url
+from eggpool.providers.contract import PROVIDER_STATUS_SYMBOLS
 from eggpool.providers.outbound import OutboundClientManager
 from eggpool.toml_edit import (
     render_toml_string,
@@ -543,168 +551,43 @@ def logout(ctx: click.Context, target: str | None) -> None:
         click.echo("  Server is not running.")
 
 
-def _check_stale_contracts(config: AppConfig, config_path: str) -> list[str]:
-    """Return advisories for provider contract shapes that have grown stale.
-
-    These are warnings, not errors: the config may still load and run, but the
-    shape suggests the provider block was written for an older eggpool version
-    whose behavior has since changed. Each advisory is a single human-readable
-    line; the caller prints them and exits 0.
-
-    Inspects both the parsed ``AppConfig`` and the raw TOML so legacy
-    ``models_method``/``models_path`` keys (which the parser strips into a
-    synthesized ``models_endpoint`` table) can still be flagged for migration.
-    """
-    warnings: list[str] = []
-    raw = _load_raw_config(config_path)
-    raw_providers_section = _get_section(raw, "providers")
-    raw_providers: dict[str, object] = raw_providers_section
-
-    for provider in config.providers.values():
-        endpoint = provider.models_endpoint
-        raw_section_obj = raw_providers.get(provider.id)
-        raw_section: dict[str, object] = (
-            cast("dict[str, object]", raw_section_obj)
-            if isinstance(raw_section_obj, dict)
-            else {}
-        )
-
-        if (
-            endpoint is not None
-            and endpoint.method == "DISABLED"
-            and not provider.static_models
-        ):
-            warnings.append(
-                f"[{provider.id}] models_endpoint is DISABLED but "
-                "static_models is empty; the catalog will not list any "
-                "models from this provider"
-            )
-
-        if (
-            endpoint is not None
-            and endpoint.method == "DISABLED"
-            and provider.verify.require_models
-        ):
-            warnings.append(
-                f"[{provider.id}] models_endpoint is DISABLED but "
-                "verify.require_models is true; the contract is contradictory"
-            )
-
-        if (
-            "anthropic_path" in raw_section
-            and provider.anthropic_path
-            and "anthropic" not in provider.protocols
-        ):
-            warnings.append(
-                f"[{provider.id}] anthropic_path is set but 'anthropic' is "
-                "not in protocols; the field will be ignored"
-            )
-
-        if (
-            "openai_path" in raw_section
-            and provider.openai_path
-            and "openai" not in provider.protocols
-        ):
-            warnings.append(
-                f"[{provider.id}] openai_path is set but 'openai' is not "
-                "in protocols; the field will be ignored"
-            )
-
-        parsed_base = urlsplit(provider.base_url)
-        if (
-            parsed_base.hostname == "api.minimax.io"
-            and "openai" in provider.protocols
-            and parsed_base.path.rstrip("/") != "/anthropic"
-        ):
-            warnings.append(
-                f"[{provider.id}] api.minimax.io token-plan keys should use "
-                "the Anthropic-compatible MiniMax contract "
-                "(base_url='https://api.minimax.io/anthropic', "
-                "protocols=['anthropic'], anthropic_path='/v1/messages', "
-                "auth.header='x-api-key'); the OpenAI "
-                "/v1/chat/completions surface can return upstream "
-                "'insufficient balance (1008)' for token-plan keys"
-            )
-
-        if endpoint is not None:
-            try:
-                compose_provider_url(provider, endpoint.path)
-            except ConfigError:
-                warnings.append(
-                    f"[{provider.id}] base_url + models_endpoint.path "
-                    "produces a duplicate /v1 segment; see docs/providers.md"
-                )
-
-        if provider.auth.mode != "none":
-            for header in provider.headers:
-                if header.name.casefold() == "authorization":
-                    warnings.append(
-                        f"[{provider.id}] static header 'Authorization' is "
-                        f"set but auth.mode is '{provider.auth.mode}'; the "
-                        "auth header will be replaced"
-                    )
-                    break
-
-        if (
-            provider.auth.mode == "api_key"
-            and provider.auth.header == "Authorization"
-            and "anthropic" in provider.protocols
-        ):
-            warnings.append(
-                f"[{provider.id}] auth.mode='api_key' with "
-                "header='Authorization' looks wrong; Anthropic-compatible "
-                "providers typically use header='x-api-key'"
-            )
-
-        if raw_section:
-            has_legacy_key = (
-                "models_method" in raw_section or "models_path" in raw_section
-            )
-            has_endpoint_table = "models_endpoint" in raw_section
-            if has_legacy_key and not has_endpoint_table:
-                warnings.append(
-                    f"[{provider.id}] using legacy models_method/models_path; "
-                    f"consider migrating to "
-                    f"[[providers.{provider.id}.models_endpoint]]"
-                )
-
-    return warnings
+def _format_validation_failure(exc: ConfigValidationError) -> str:
+    """Strip the internal ``Error:`` prefix and normalize phrasing."""
+    message = str(exc)
+    if message.startswith("Error:"):
+        message = message[len("Error:") :].strip()
+    return f"Error: configuration validation failed: {message}"
 
 
 @cli.command("check-config")
 @click.pass_context
 def check_config(ctx: click.Context) -> None:
-    """Validate the configuration file."""
+    """Validate the configuration file.
+
+    The presentation layer around :func:`eggpool.config_validation
+    .validate_config_file`.  Validation, account-credential checks, and
+    stale-contract detection live in the shared helper so server-side
+    reload code can call the same implementation without importing Click.
+    """
     config_path: str = ctx.obj["config_path"]
 
     try:
-        config = AppConfig.from_toml(config_path)
-    except AggregatorError as exc:
-        click.echo(f"Error: {exc}", err=True)
+        result = _validate_config_file(config_path)
+    except ConfigValidationError as exc:
+        click.echo(_format_validation_failure(exc), err=True)
         sys.exit(1)
 
-    try:
-        require_auth_at_startup(config.server.resolved_api_key)
-    except RuntimeError as exc:
-        click.echo(f"Error: {exc}", err=True)
-        sys.exit(1)
-
-    try:
-        config.validate_account_credentials()
-    except AggregatorError as exc:
-        click.echo(f"Error: {exc}", err=True)
-        sys.exit(1)
-
+    config = result.config
     click.echo(f"Configuration loaded successfully from {config_path}")
     click.echo(f"  Server: {config.server.host}:{config.server.port}")
     click.echo(f"  Accounts: {len(config.all_accounts())}")
     click.echo(f"  Database: {config.database.path}")
+    click.echo(f"  Content digest: {result.content_digest}")
 
-    stale_warnings = _check_stale_contracts(config, config_path)
-    for message in stale_warnings:
-        click.echo(f"  warning: {message}")
-    if stale_warnings:
-        click.echo(f"  {len(stale_warnings)} contract warning(s)")
+    for warning in result.warnings:
+        click.echo(f"  warning: {warning.to_display()}")
+    if result.warnings:
+        click.echo(f"  {len(result.warnings)} contract warning(s)")
 
 
 @cli.command()
@@ -2654,8 +2537,66 @@ def deploy_all(ctx: click.Context, install: bool) -> None:
 @cli.command()
 @click.pass_context
 def rehash(ctx: click.Context) -> None:
-    """Restart the server to apply configuration changes."""
-    ctx.invoke(restart, timeout=10.0)
+    """Validate the new config and prepare a live refresh.
+
+    The preflight runs :func:`eggpool.config_validation.validate_config_file`
+    against the same TOML the operator is editing.  A validation failure
+    prints a clear message, exits non-zero, and leaves the running
+    configuration untouched.
+
+    After validation succeeds, milestone C will hand the validated result
+    and digest to the control-plane handler that swaps the active
+    generation.  Until that control path is wired up the command reports
+    that live reload is not yet available and reminds the operator to use
+    :func:`restart` for the disruptive path.  ``rehash`` never invokes
+    ``restart`` implicitly.
+    """
+    config_path: str = ctx.obj["config_path"]
+
+    try:
+        validation = _validate_config_file(config_path)
+    except ConfigValidationError as exc:
+        click.echo(_format_validation_failure(exc), err=True)
+        click.echo(
+            "Live configuration is unchanged. Refusing to apply an invalid "
+            "config and never invoking restart.",
+            err=True,
+        )
+        sys.exit(1)
+
+    for warning in validation.warnings:
+        click.echo(f"  warning: {warning.to_display()}")
+    if validation.warnings:
+        click.echo(f"  {len(validation.warnings)} contract warning(s)")
+
+    click.echo(
+        f"  Validated config from {validation.source_path} "
+        f"(digest={validation.content_digest[:12]}…, "
+        f"runtime_fingerprint={validation.runtime_fingerprint[:12] or 'unavailable'}…)"
+    )
+
+    result = ReloadResult(
+        ok=True,
+        stage=ReloadStage.VALIDATION,
+        generation=None,
+        changed_sections=(),
+        warnings=validation.warnings,
+        restart_required=(),
+        message=(
+            "Live rehash control is not yet available; run "
+            "`eggpool restart` to apply process-bound changes. Validation "
+            "passed and the running configuration is currently unchanged."
+        ),
+    )
+
+    click.echo(result.message, err=True)
+    click.echo(
+        "Hint: once the control-plane handler from the Live Configuration "
+        "Rehash milestone C is wired up, `rehash` will hand the validated "
+        "result to the server instead of exiting here.",
+        err=True,
+    )
+    sys.exit(0)
 
 
 @cli.group()

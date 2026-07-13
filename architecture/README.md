@@ -32,7 +32,9 @@ src/eggpool/
 ├── cli.py             # CLI bootstrap entry point (tiny, dispatches fast-path then Click)
 ├── cli_full.py        # Click CLI commands (heavy imports)
 ├── config.py          # Config file helpers
+├── config_reload_policy.py # Typed configuration diff, reload policy, ReloadResult, ReloadStage
 ├── config_utils.py    # Configuration utility functions for CLI and integrations
+├── config_validation.py # Reusable validation contract used by check-config and rehash
 ├── constants.py       # Project-wide constants
 ├── cost_recompute.py  # Cost recompute CLI command
 ├── deploy_user.py     # Deploy user and path resolution
@@ -1623,7 +1625,7 @@ enabled = false
 mode = "recommend"
 ```
 
-After editing, run `eggpool rehash` to restart the supervisor.
+After editing, run `eggpool rehash` to validate the new config. Then run `eggpool restart` to apply changes.
 
 ### Routing non-interference
 
@@ -2941,6 +2943,118 @@ CLI reproducer.
   coding-agent streaming (`max_connections=256`, `max_keepalive=128`,
   `read_timeout_s=900`, `pool_timeout_s=60`), and diagnostic
   low-noise (`routing.trace.mode = "off"`, `read_timeout_s=1800`).
+
+## Live Configuration Rehash — Validation, Diffing, and Fail-Closed CLI
+
+Milestone A ships a shared validation contract, a typed configuration
+diff and reload-policy layer, and a fail-closed `rehash` CLI command.
+No field is currently `LIVE`; every change requires a service restart.
+The foundation is designed so milestone B (RuntimeManager) and milestone
+C (control-plane socket) can consume the same types without API changes.
+
+### Validation contract
+
+`src/eggpool/config_validation.py` owns the reusable, Click-free
+`validate_config_file()` function. It accepts a config path and returns
+a `ConfigValidationResult` without raising `SystemExit`. Every failure
+path is a typed subclass of `ConfigValidationError(ConfigError)`:
+
+| Class | Meaning |
+|-------|---------|
+| `ConfigFileAccessError` | File missing, unreadable, or not a regular file |
+| `ConfigParseError` | TOML syntax error |
+| `ConfigSchemaError` | Pydantic validation failure |
+| `ConfigStartupAuthError` | Config-level auth constraints violated |
+| `ConfigAccountCredentialError` | Account credential validation failed |
+| `ConfigInternalError` | Unexpected internal error |
+
+Both `check-config` and `rehash` call the same helper. The result
+carries two distinct hashes:
+
+- **`content_digest`** — SHA-256 of the exact file bytes. Used for
+  time-of-check / time-of-use drift detection: if the digest changes
+  between validation and restart, the process must re-validate.
+- **`runtime_fingerprint`** — deterministic, secret-safe canonical
+  hash. Secret fields (API keys, tokens) are redacted to
+  `"<redacted>"` before fingerprinting. Used for no-op detection
+  ("is the running config identical to the new one?") and diagnostics.
+
+### Reload policy
+
+`src/eggpool/config_reload_policy.py` defines the typed diff and
+reload-policy layer.
+
+**Dispositions.** `ReloadDisposition` is an enum with three values:
+
+- `LIVE` — the field can be hot-swapped without a restart.
+- `RESTART_REQUIRED` — changing the field requires a service restart.
+- `IGNORED` — the field is ignored for reload purposes (e.g.
+  logging-only fields).
+
+The `_FIELD_DISPOSITION` map is the single reviewable inventory of
+every `AppConfig` field and its disposition. **In milestone A every
+field defaults to `RESTART_REQUIRED`** (fail-closed). No field is
+currently `LIVE`.
+
+**Diff shape.** `ConfigChange` carries:
+
+- `field_path` (dotted string, e.g. `"server.threads"`)
+- `old_value` / `new_value` (the raw values from each config)
+- `disposition` (from `_FIELD_DISPOSITION`)
+- `secret` (bool — when `True`, the value renders as `<changed>` in
+  repr and never appears in logs or diagnostic output)
+
+Account and provider order is normalized before diffing so reordering
+`[[providers.*.accounts]]` rows does not produce spurious changes.
+
+`ConfigDiff` is the collection of `ConfigChange` entries plus a
+`content_digest` and `runtime_fingerprint` for the new config.
+`compute_diff(old, new)` produces a `ConfigDiff` from two parsed
+configs; `diff_from_validation(result)` produces one from a validation
+result when only one config is available.
+
+### Wire types for milestone C
+
+`ReloadStage` and `ReloadResult` are the protocol-neutral types that
+milestone C's control socket will speak directly:
+
+```python
+class ReloadStage(StrEnum):
+    VALIDATE = "validate"
+    DIFF = "diff"
+    APPLY = "apply"
+
+@dataclass(frozen=True)
+class ReloadResult:
+    stage: ReloadStage
+    success: bool
+    digest: str | None = None
+    fingerprint: str | None = None
+    changes: list[ConfigChange] | None = None
+    error: str | None = None
+```
+
+### CLI surface
+
+Both `check-config` and `rehash` flow through `validate_config_file()`:
+
+- **`eggpool check-config`** — validates the config, prints warnings,
+  and exits. Output now includes "Content digest: <hex>".
+- **`eggpool rehash`** — runs the same validation, prints warnings
+  and the digest, then reports that the live control plane is not yet
+  available. It exits zero and never invokes `restart` implicitly.
+  On validation failure, the preflight exits nonzero with "Live
+  configuration is unchanged. Refusing to apply an invalid config
+  and never invoking restart."
+
+### Future milestones
+
+Milestone B introduces a `RuntimeManager` that can apply `LIVE`-
+disposition fields without a restart. Milestone C introduces the
+control-plane socket that accepts a validated `ConfigDiff` and
+applies `LIVE` fields atomically. Both milestones consume the same
+`ConfigDiff`, `ConfigChange`, `ReloadResult`, and `ReloadStage`
+types defined here.
 
 ### Critical rules
 

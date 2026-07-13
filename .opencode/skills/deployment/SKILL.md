@@ -76,7 +76,7 @@ For the hardened systemd unit:
 - `ProtectSystem=strict`, `ReadWritePaths=/var/lib/eggpool`
 - `User=eggpool`, `Group=eggpool` — never runs as root
 - `Restart=on-failure` with `RestartSec=5` and a 300s burst cap
-- No `ExecReload` — config changes require `sudo systemctl restart eggpool`
+- No `ExecReload` — config changes require `sudo systemctl restart eggpool` (run `eggpool rehash` first for fast validation without restarting)
 - Graceful shutdown: stops accepting new connections, waits for
   in-flight requests (up to 30s), closes connections, exits cleanly
 
@@ -112,6 +112,13 @@ unit intentionally omits `ExecReload` so `systemctl reload eggpool`
 fails cleanly. This includes changes to `routing_priority`,
 `collapse_models`, `expose_mode`, `model_overrides`, and any other
 config field.
+
+- `eggpool rehash` validates the new config against the same contract as
+  `eggpool check-config` (see `config_validation.py`). It does not implicitly
+  restart the service; it exits zero and reports that the live control plane
+  is unavailable until milestone C ships. Operators continue to use
+  `eggpool restart` (or `systemctl restart eggpool`) to apply process-bound
+  changes.
 
 ### Low-wear metrics for microSD
 
