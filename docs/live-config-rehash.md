@@ -131,10 +131,13 @@ in `config_reload_policy.py`:
 | `RESTART_REQUIRED` | Changing the field requires a service restart |
 | `IGNORED` | Field is ignored for reload purposes |
 
-**All fields are currently `RESTART_REQUIRED`.** This is fail-closed —
-any field not explicitly classified requires a restart. When a future
-milestone adds a live-reload path for a field, the corresponding entry
-moves to `LIVE` in the same diff.
+**All fields are currently `RESTART_REQUIRED`.** The Milestone C control
+plane infrastructure is complete — the control socket, reload manager,
+candidate generation builder, persistence reconciliation, and atomic
+publication are all operational. However, no individual `AppConfig` field
+has been classified `LIVE` yet. This is intentionally fail-closed: when
+a future milestone moves a field to `LIVE`, `eggpool rehash` will apply
+it without restarting.
 
 Currently, `eggpool rehash` will reject the entire operation for any
 config change because all fields are `RESTART_REQUIRED`. Use

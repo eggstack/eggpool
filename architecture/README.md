@@ -3044,12 +3044,15 @@ Both `check-config` and `rehash` flow through `validate_config_file()`:
 
 - **`eggpool check-config`** — validates the config, prints warnings,
   and exits. Output now includes "Content digest: <hex>".
-- **`eggpool rehash`** — runs the same validation, prints warnings
-  and the digest, then reports that the live control plane is not yet
-  available. It exits zero and never invokes `restart` implicitly.
-  On validation failure, the preflight exits nonzero with "Live
-  configuration is unchanged. Refusing to apply an invalid config
-  and never invoking restart."
+- **`eggpool rehash`** — runs the same validation, connects to the
+  running server's control socket, sends the validated content digest,
+  and renders the structured result (changed sections, generation
+  number, retirement status, warnings). Exits zero on success
+  (including semantic no-op). On validation failure, the preflight
+  exits nonzero with "Live configuration is unchanged. Refusing to
+  apply an invalid config and never invoking restart." All fields are
+  currently `RESTART_REQUIRED`, so any config change is rejected today;
+  the infrastructure is ready for future `LIVE` fields.
 
 ### Runtime generations and control plane
 
@@ -3058,7 +3061,9 @@ disposition fields without a restart. Milestone C is complete: the
 control-plane socket accepts a validated `ConfigDiff` and applies
 `LIVE` fields atomically. Both milestones consume the same
 `ConfigDiff`, `ConfigChange`, `ReloadResult`, and `ReloadStage`
-types defined here.
+types defined here. The control socket is wired into the FastAPI
+lifespan (`app.py:_lifespan_runtime`), and the `ReloadManager` is
+the single transaction entry point for all reload operations.
 
 ### Control server protocol (Milestone C)
 

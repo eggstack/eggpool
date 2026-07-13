@@ -219,13 +219,24 @@ instructions for you to copy-paste.
 
 ### 9. Configuration changes
 
-Live reload is **not yet operational**.  The Milestone A foundation ships a
-shared validation contract and a typed reload policy (`config_validation.py`
-/ `config_reload_policy.py`) and `eggpool rehash` validates the new
-configuration against the same contract as `eggpool check-config`.  The CLI
-command is fail-closed and never implicitly restarts the service.  Continue
-to use `eggpool restart` (or `systemctl restart eggpool`) to apply
-process-bound changes until milestone C introduces the live control socket.
+```bash
+# Live reload for supported changes (no restart needed)
+$EDITOR ~/.config/eggpool/config.toml
+eggpool rehash
+
+# Disruptive changes (host, port, database path) require a restart
+eggpool restart
+```
+
+`eggpool rehash` applies supported configuration changes without a
+restart. The command validates the config locally, contacts the running
+server's control socket, and the server atomically swaps the active
+configuration generation when safe. All fields are currently
+`RESTART_REQUIRED`, so `eggpool rehash` will reject any config change
+today — use `eggpool restart` for all changes. When a future milestone
+moves a field to `LIVE`, `eggpool rehash` will apply it without
+restarting. The CLI is fail-closed and never implicitly restarts the
+service.
 
 ```bash
 sudo systemctl restart eggpool

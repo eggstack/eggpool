@@ -135,8 +135,11 @@ generation when safe.
 9. Old generation retires after active streams drain.
 
 **Currently all fields are `RESTART_REQUIRED`**, so `eggpool rehash`
-will reject any config change. Use `eggpool restart` for all changes
-until a future milestone introduces live-reloadable fields.
+will reject any config change today. Use `eggpool restart` for all
+changes. When a future milestone moves a field to `LIVE`, `eggpool
+rehash` will apply it without restarting. The control plane
+infrastructure (control socket, reload manager, candidate generation,
+persistence reconciliation, atomic publication) is fully operational.
 
 **Error cases**:
 
