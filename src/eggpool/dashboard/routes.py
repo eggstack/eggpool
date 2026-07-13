@@ -59,6 +59,19 @@ _ReliabilityPayload = tuple[
     list[dict[str, Any]],
 ]
 _PingsPayload = tuple[list[dict[str, Any]], list[dict[str, Any]]]
+_LatencyPayload = tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[str, Any] | None,
+    "ModelInfoDashboardState",
+]
+_RoutingPayload = tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[str, Any],
+    "ModelInfoDashboardState",
+]
 
 logger = logging.getLogger(__name__)
 _DashboardStageResult = TypeVar("_DashboardStageResult")
@@ -1729,8 +1742,7 @@ async def handle_latency(
     stats = request.app.state.stats
     model_info_service = getattr(request.app.state, "model_info", None)
     provider_ttft, model_ttft, phases, model_info_state = cast(
-        "tuple[list[dict[str, Any]], list[dict[str, Any]],"
-        " dict[str, Any] | None, ModelInfoDashboardState]",
+        "_LatencyPayload",
         await asyncio.gather(
             stats.get_provider_ttft_summary(time_range, use_cache=True),
             stats.get_provider_model_ttft(time_range, use_cache=True),
@@ -1829,9 +1841,7 @@ async def handle_routing(
         routing_skew_summary,
         model_info_state,
     ) = cast(
-        "tuple[list[dict[str, Any]], list[dict[str, Any]],"
-        " list[dict[str, Any]], dict[str, Any],"
-        " ModelInfoDashboardState]",
+        "_RoutingPayload",
         await asyncio.gather(
             stats.get_routing_distribution(time_range, use_cache=True),
             stats.get_routing_selection_breakdown(time_range, use_cache=True),
