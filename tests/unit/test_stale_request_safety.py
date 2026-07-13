@@ -3,9 +3,9 @@
 Covers:
 
 - ``_crash_recovery`` recovering ALL pending requests (no time threshold)
-- ``_finalize_stale_requests_once`` finalizing leaked requests past the threshold
-- ``_finalize_stale_requests_once`` releasing reservations and reconciling runtime state
-- ``_finalize_stale_requests_once`` being idempotent (second pass is a no-op)
+- ``finalize_stale_requests_once`` finalizing leaked requests past the threshold
+- ``finalize_stale_requests_once`` releasing reservations and reconciling runtime state
+- ``finalize_stale_requests_once`` being idempotent (second pass is a no-op)
 - Migration 0025 creating the ``idx_requests_status_started`` index idempotently
 """
 
@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import pytest_asyncio
 
-from eggpool.app import _crash_recovery, _finalize_stale_requests_once
+from eggpool.app import _crash_recovery, finalize_stale_requests_once
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
 from eggpool.db.repositories import RequestRepository, ReservationRepository
@@ -176,7 +176,7 @@ async def test_stale_finalizer_transitions_pending(db: Database) -> None:
     quota_estimator = MagicMock()
     quota_estimator.remove_reservation = AsyncMock()
 
-    transitioned = await _finalize_stale_requests_once(
+    transitioned = await finalize_stale_requests_once(
         db,
         router,  # type: ignore[arg-type]
         quota_estimator,  # type: ignore[arg-type]
@@ -215,7 +215,7 @@ async def test_stale_finalizer_releases_reservations(db: Database) -> None:
     quota_estimator = MagicMock()
     quota_estimator.remove_reservation = AsyncMock()
 
-    await _finalize_stale_requests_once(
+    await finalize_stale_requests_once(
         db,
         router,  # type: ignore[arg-type]
         quota_estimator,  # type: ignore[arg-type]
@@ -247,7 +247,7 @@ async def test_stale_finalizer_reconciles_runtime_state(db: Database) -> None:
     quota_estimator = MagicMock()
     quota_estimator.remove_reservation = AsyncMock()
 
-    await _finalize_stale_requests_once(
+    await finalize_stale_requests_once(
         db,
         router,  # type: ignore[arg-type]
         quota_estimator,  # type: ignore[arg-type]
@@ -276,7 +276,7 @@ async def test_stale_finalizer_idempotent(db: Database) -> None:
     quota_estimator = MagicMock()
     quota_estimator.remove_reservation = AsyncMock()
 
-    first = await _finalize_stale_requests_once(
+    first = await finalize_stale_requests_once(
         db,
         router,  # type: ignore[arg-type]
         quota_estimator,  # type: ignore[arg-type]
@@ -284,7 +284,7 @@ async def test_stale_finalizer_idempotent(db: Database) -> None:
     )
     assert first == 1
 
-    second = await _finalize_stale_requests_once(
+    second = await finalize_stale_requests_once(
         db,
         router,  # type: ignore[arg-type]
         quota_estimator,  # type: ignore[arg-type]
@@ -311,7 +311,7 @@ async def test_stale_finalizer_handles_no_work(db: Database) -> None:
     quota_estimator = MagicMock()
     quota_estimator.remove_reservation = AsyncMock()
 
-    transitioned = await _finalize_stale_requests_once(
+    transitioned = await finalize_stale_requests_once(
         db,
         router,  # type: ignore[arg-type]
         quota_estimator,  # type: ignore[arg-type]
@@ -345,7 +345,7 @@ async def test_stale_finalizer_dedups_reconciliation_per_account(
     quota_estimator = MagicMock()
     quota_estimator.remove_reservation = AsyncMock()
 
-    transitioned = await _finalize_stale_requests_once(
+    transitioned = await finalize_stale_requests_once(
         db,
         router,  # type: ignore[arg-type]
         quota_estimator,  # type: ignore[arg-type]
@@ -381,7 +381,7 @@ async def test_stale_finalizer_uses_quota_estimator_when_provided(
     estimator = QuotaEstimator()
     await estimator.add_reservation("acct-1", 750_000)
 
-    await _finalize_stale_requests_once(
+    await finalize_stale_requests_once(
         db,
         router,  # type: ignore[arg-type]
         estimator,

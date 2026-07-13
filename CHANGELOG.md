@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Live configuration rehash** (`eggpool rehash`): control socket, reload
+  manager, atomic generation swap, and non-disruptive old-generation retirement.
+  All configuration fields remain `RESTART_REQUIRED` for now; the
+  infrastructure is ready for future `LIVE` field classification.
+
 ## [0.6.0] - 2026-07-09
 
 ### Fixed

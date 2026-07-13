@@ -238,6 +238,11 @@ moves a field to `LIVE`, `eggpool rehash` will apply it without
 restarting. The CLI is fail-closed and never implicitly restarts the
 service.
 
+**Control socket**: The running server listens on a Unix-domain socket
+at `~/.local/state/eggpool/eggpool.sock` with `0o600` permissions
+(owner read/write only). The CLI connects to this socket to issue
+reload commands.
+
 ```bash
 sudo systemctl restart eggpool
 ```

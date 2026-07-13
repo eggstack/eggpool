@@ -202,6 +202,7 @@ The dashboard `/models` page shows enriched model metadata from provider catalog
 | Model-info OpenRouter debugging | [docs/model-info-openrouter-debug.md](docs/model-info-openrouter-debug.md) |
 | Thinking & reasoning | [docs/thinking.md](docs/thinking.md) |
 | Architecture overview | [architecture/README.md](architecture/README.md) |
+| Live Configuration Rehash | [docs/live-config-rehash.md](docs/live-config-rehash.md) |
 
 ## Development
 

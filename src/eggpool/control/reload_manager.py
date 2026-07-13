@@ -181,6 +181,9 @@ class ReloadManager:
                 "stage": self._last_reload_result.stage,
                 "generation": self._last_reload_result.generation,
                 "changed_sections": self._last_reload_result.changed_sections,
+                "restart_required": self._last_reload_result.restart_required,
+                "warnings_count": len(self._last_reload_result.warnings),
+                "retirement_pending": self._last_reload_result.retirement_pending,
                 "message": self._last_reload_result.message,
                 "duration_s": self._last_reload_result.duration_s,
             }
@@ -253,6 +256,24 @@ class ReloadManager:
                         digest_prefix=digest_prefix,
                         changed_sections=sections,
                     )
+                    duration = time.monotonic() - started_at
+                    self._reload_count += 1
+                    self._reload_error_count += 1
+                    self._last_reload_result = ReloadOperationResult(
+                        ok=False,
+                        stage=ReloadStage.DIFF.value,
+                        generation=None,
+                        changed_sections=sections,
+                        warnings=warnings,
+                        restart_required=tuple(restart_required),
+                        retirement_pending=False,
+                        message=(
+                            f"Reload rejected: {len(restart_required)} "
+                            "restart-required field(s) changed"
+                        ),
+                        duration_s=duration,
+                    )
+                    self._last_reload_completed_at = time.time()
                     return ReloadResult(
                         ok=False,
                         stage=ReloadStage.DIFF,
@@ -279,6 +300,20 @@ class ReloadManager:
                         message="No configuration changes detected",
                     )
 
+                # All changes are IGNORED (no LIVE changes) — success with explanation
+                if not diff.live:
+                    active = self._runtime_manager.active_snapshot()
+                    ignored_sections = tuple(sorted({c.section for c in diff.changes}))
+                    return ReloadResult(
+                        ok=True,
+                        stage=ReloadStage.DIFF,
+                        generation=active.generation_id,
+                        changed_sections=ignored_sections,
+                        warnings=warnings,
+                        restart_required=(),
+                        message="Configuration changes detected but all are ignored",
+                    )
+
                 changed_sections = tuple(sorted({c.section for c in diff.changes}))
 
                 # Stage 5: Build candidate generation
@@ -291,6 +326,7 @@ class ReloadManager:
                 candidate = await self._build_candidate_generation(
                     validation,
                     diff,
+                    runtime_manager=self._runtime_manager,
                 )
                 generation_id = candidate.generation.generation_id
                 digest_prefix = candidate.generation.config_digest[:12]
@@ -372,6 +408,47 @@ class ReloadManager:
 
             except ReloadInProgressError:
                 raise
+            except ReloadPreparationError as exc:
+                duration = time.monotonic() - started_at
+                error_stage = (
+                    self._operation_state.stage
+                    if self._operation_state
+                    else ReloadOperationStage.IDLE
+                )
+                logger.exception("Reload failed at stage %s", error_stage)
+                self._reload_count += 1
+                self._reload_error_count += 1
+                event_type = "reload_preparation_failure"
+                if "digest mismatch" in str(exc).lower():
+                    event_type = "reload_digest_mismatch"
+                self._last_reload_result = ReloadOperationResult(
+                    ok=False,
+                    stage=error_stage,
+                    generation=generation_id,
+                    changed_sections=changed_sections,
+                    warnings=warnings,
+                    restart_required=restart_required,
+                    retirement_pending=False,
+                    message=f"Reload failed: {exc!r}",
+                    duration_s=duration,
+                )
+                self._last_reload_completed_at = time.time()
+                await self._record_event(
+                    event_type,
+                    generation_id=generation_id,
+                    digest_prefix=digest_prefix,
+                    changed_sections=changed_sections,
+                    error=f"{exc!r}",
+                )
+                return ReloadResult(
+                    ok=False,
+                    stage=ReloadStage.VALIDATION,
+                    generation=None,
+                    changed_sections=(),
+                    warnings=warnings,
+                    restart_required=(),
+                    message=f"Reload failed: {exc!r}",
+                )
             except Exception as exc:
                 duration = time.monotonic() - started_at
                 error_stage = (
@@ -485,6 +562,8 @@ class ReloadManager:
         self,
         validation: ConfigValidationResult,
         diff: ConfigDiff,
+        *,
+        runtime_manager: RuntimeManager | None = None,
     ) -> CandidateGeneration:
         """Construct all generation-owned services for the candidate config.
 
@@ -823,8 +902,21 @@ class ReloadManager:
                 rollup_repo=stats_rollup_repo,
             )
 
-            # -- Task supervisor (empty; tasks registered post-publication)
+            # -- Task supervisor (tasks registered for candidate generation)
             supervisor = TaskSupervisor()
+
+            # Register background tasks on the candidate supervisor so
+            # periodic work (catalog refresh, metrics flush, etc.)
+            # continues after the old generation is retired.
+            if runtime_manager is not None:
+                from eggpool.app import register_candidate_tasks  # noqa: PLC0415
+
+                register_candidate_tasks(
+                    supervisor,
+                    candidate_config,
+                    process,
+                    runtime_manager,
+                )
 
             # -- Assemble generation via builder ---------------------------
             builder = RuntimeGenerationBuilder()
@@ -865,6 +957,17 @@ class ReloadManager:
             logger.exception(
                 "Candidate generation construction failed; aborting reload"
             )
+            # Clean up any partially constructed network resources.
+            # The builder's cleanup_partial delegates to app.cleanup_partial_generation.
+            try:
+                from eggpool.runtime_manager import (  # noqa: PLC0415
+                    RuntimeGenerationBuilder,
+                )
+
+                builder_cleanup = RuntimeGenerationBuilder()
+                await builder_cleanup.cleanup_partial(process)
+            except Exception:
+                logger.debug("Partial generation cleanup failed", exc_info=True)
             raise ReloadPreparationError(
                 "Failed to construct candidate generation"
             ) from None
@@ -922,9 +1025,11 @@ class ReloadManager:
         the active slot and begins retirement of the old generation.
         """
         try:
+            active = self._runtime_manager.active_snapshot()
             await self._runtime_manager.install_candidate(
                 candidate.generation,
                 drain_timeout_s=self._drain_timeout_s,
+                expected_active_generation_id=active.generation_id,
             )
         except Exception as exc:
             logger.exception("Generation publication failed")

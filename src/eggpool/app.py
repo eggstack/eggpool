@@ -283,7 +283,7 @@ async def _finalize_stale_requests(  # pyright: ignore[reportUnusedFunction]
     """Legacy ``while True`` wrapper kept for backward compatibility.
 
     The supervisor now drives the periodic cadence via
-    :func:`_finalize_stale_requests_once` directly (see the
+    :func:`finalize_stale_requests_once` directly (see the
     registration in :func:`_lifespan_runtime`).  This wrapper remains
     so existing tests that rely on ``_finalize_stale_requests`` for
     direct invocation can still drive a single-pass finalizer with a
@@ -292,7 +292,7 @@ async def _finalize_stale_requests(  # pyright: ignore[reportUnusedFunction]
     while True:
         await asyncio.sleep(cycle_interval_s)
         try:
-            await _finalize_stale_requests_once(
+            await finalize_stale_requests_once(
                 db=db,
                 router=router,
                 quota_estimator=quota_estimator,
@@ -304,7 +304,7 @@ async def _finalize_stale_requests(  # pyright: ignore[reportUnusedFunction]
             logger.exception("Stale request finalizer failed")
 
 
-async def _finalize_stale_requests_once(
+async def finalize_stale_requests_once(
     db: Database,
     router: Router,
     quota_estimator: QuotaEstimator | None,
@@ -456,14 +456,14 @@ async def _prune_health_disabled_models_loop(  # pyright: ignore[reportUnusedFun
     """Legacy ``while True`` wrapper kept for backward compatibility.
 
     The supervisor now drives the periodic cadence via
-    :func:`_prune_health_disabled_models_once` directly.  This
+    :func:`prune_health_disabled_models_once` directly.  This
     wrapper is retained so external callers and tests that expect a
     loop entry point can still drive the prune with a custom cadence.
     """
     while True:
         await asyncio.sleep(cycle_interval_s)
         try:
-            pruned = await _prune_health_disabled_models_once(app_state)
+            pruned = await prune_health_disabled_models_once(app_state)
             if pruned > 0:
                 logger.info(
                     "health_disabled_models_prune: removed %d stale rows",
@@ -475,7 +475,7 @@ async def _prune_health_disabled_models_loop(  # pyright: ignore[reportUnusedFun
             logger.exception("health_disabled_models_prune failed")
 
 
-async def _prune_health_disabled_models_once(app_state: Any) -> int:
+async def prune_health_disabled_models_once(app_state: Any) -> int:
     """Run a single sweep of the disabled-models prune.
 
     Returns the number of pruned rows. Split out from
@@ -684,6 +684,217 @@ async def cleanup_partial_generation(process: ProcessRuntime) -> None:
         "network clients and supervisor"
     )
     return None
+
+
+def register_candidate_tasks(
+    supervisor: TaskSupervisor,
+    config: AppConfig,
+    process: ProcessRuntime,
+    runtime_manager: RuntimeManager,
+    *,
+    effective_model_info: Any = None,
+) -> None:
+    """Register background tasks on a candidate generation's supervisor.
+
+    Mirrors the task registrations from ``_lifespan_runtime`` but uses
+    ``leased_runtime()`` so each tick acquires the current generation
+    per-tick instead of capturing stale references.  Called by the
+    reload manager after candidate generation construction.
+    """
+    from eggpool.runtime_manager import leased_runtime  # noqa: PLC0415
+
+    db = process.db
+
+    if config.models.refresh_interval_s > 0:
+
+        async def _catalog_refresh_once() -> None:
+            async with leased_runtime(runtime_manager) as gen:
+                result = await gen.catalog.refresh()
+            if effective_model_info is not None:
+                try:
+                    await effective_model_info.reconcile_catalog_refresh(result)
+                except Exception:
+                    logger.exception(
+                        "Model info reconciliation after catalog refresh failed"
+                    )
+
+        supervisor.register_periodic(
+            "catalog_refresh",
+            _catalog_refresh_once,
+            interval_s=float(config.models.refresh_interval_s),
+        )
+
+    if (
+        config.model_info.enabled
+        and config.model_info.refresh_interval_s > 0
+        and effective_model_info is not None
+    ):
+        initial_model_info_refresh = True
+
+        async def _model_info_refresh_once() -> None:
+            nonlocal initial_model_info_refresh
+            async with leased_runtime(runtime_manager) as gen:
+                mi = getattr(gen, "model_info", effective_model_info)
+                result = await mi.refresh_due_models(force=initial_model_info_refresh)
+                initial_model_info_refresh = False
+                mi.log_refresh_result(result)
+
+        supervisor.register_periodic(
+            "model_info_refresh",
+            _model_info_refresh_once,
+            interval_s=float(config.model_info.refresh_interval_s),
+            run_immediately=True,
+        )
+
+    if config.model_info.enabled and effective_model_info is not None:
+
+        async def _model_info_backfill_once() -> None:
+            async with leased_runtime(runtime_manager) as gen:
+                mi = getattr(gen, "model_info", effective_model_info)
+                result = await mi.backfill_missing_canonical()
+                if result.get("backfilled", 0) > 0:
+                    logger.info("Model info canonical backfill: %s", result)
+
+        supervisor.register_periodic(
+            "model_info_canonical_backfill",
+            _model_info_backfill_once,
+            interval_s=60.0,
+            initial_delay_s=10.0,
+        )
+
+    async def _retention_cleanup_once() -> None:
+        from eggpool.background.cleanup import (  # noqa: PLC0415
+            cleanup_old_events,
+            cleanup_old_requests,
+            reconcile_expired_reservations,
+        )
+        from eggpool.db.repositories import PingRepository  # noqa: PLC0415
+
+        ping_repo = PingRepository(db)
+        await cleanup_old_requests(db, config.dashboard.retain_request_stats_days)
+        await cleanup_old_events(db, config.dashboard.retain_event_days)
+        await ping_repo.cleanup_old_pings(config.models.ping_retain_days)
+        async with leased_runtime(runtime_manager) as gen:
+            await reconcile_expired_reservations(
+                db,
+                quota_estimator=gen.router.quota_estimator,
+                router=gen.router,
+            )
+
+    supervisor.register_periodic(
+        "retention_cleanup",
+        _retention_cleanup_once,
+        interval_s=3600.0,
+    )
+
+    async def _checkpoint_once() -> None:
+        from eggpool.background.cleanup import checkpoint_database  # noqa: PLC0415
+
+        await checkpoint_database(db)
+
+    supervisor.register_periodic(
+        "checkpoint",
+        _checkpoint_once,
+        interval_s=14400.0,
+        run_immediately=True,
+    )
+
+    async def _refresh_usage_windows_once() -> None:
+        async with leased_runtime(runtime_manager) as gen:
+            await gen.router.quota_estimator.load_persisted_windows()
+
+    supervisor.register_periodic(
+        "usage_window_refresh",
+        _refresh_usage_windows_once,
+        interval_s=60.0,
+        initial_delay_s=15.0,
+    )
+
+    async def _finalization_retry_tick() -> None:
+        async with leased_runtime(runtime_manager) as gen:
+            await gen.finalization_retry_queue.drain_once()
+
+    supervisor.register_periodic(
+        "finalization_retry_drain",
+        _finalization_retry_tick,
+        interval_s=15.0,
+        initial_delay_s=5.0,
+    )
+
+    async def _stale_request_finalizer_once() -> None:
+        from eggpool.app import finalize_stale_requests_once  # noqa: PLC0415
+
+        async with leased_runtime(runtime_manager) as gen:
+            await finalize_stale_requests_once(
+                db=db,
+                router=gen.router,
+                quota_estimator=gen.router.quota_estimator,
+                max_pending_seconds=config.upstream.read_timeout_s,
+            )
+
+    supervisor.register_periodic(
+        "stale_request_finalizer",
+        _stale_request_finalizer_once,
+        interval_s=60.0,
+        initial_delay_s=25.0,
+    )
+
+    async def _health_disabled_models_prune_once() -> None:
+        from eggpool.app import prune_health_disabled_models_once  # noqa: PLC0415
+
+        async with leased_runtime(runtime_manager) as gen:
+            await prune_health_disabled_models_once(gen)
+
+    supervisor.register_periodic(
+        "health_disabled_models_prune",
+        _health_disabled_models_prune_once,
+        interval_s=60.0,
+        initial_delay_s=40.0,
+    )
+
+    if config.metrics.write_mode != "immediate":
+        metrics_coalescer = process.metrics_coalescer
+
+        async def _metrics_flush_once() -> None:
+            await metrics_coalescer.flush(reason="periodic")
+
+        supervisor.register_periodic(
+            "metrics_flush",
+            _metrics_flush_once,
+            interval_s=float(config.metrics.flush_interval_s),
+            initial_delay_s=5.0,
+        )
+
+    if config.backup.enabled and config.backup.interval_s > 0:
+        from eggpool.background.backup import run_backup_once  # noqa: PLC0415
+
+        raw_config_path: str | None = getattr(process, "config_path", None)
+        resolved_config_path = Path(raw_config_path) if raw_config_path else None
+        resolved_env_path: Path | None = None
+        if resolved_config_path is not None:
+            candidate_env = resolved_config_path.parent / ".env"
+            if candidate_env.exists():
+                resolved_env_path = candidate_env
+
+        async def _automatic_backup_once() -> None:
+            try:
+                await run_backup_once(
+                    config=config,
+                    db=db,
+                    config_path=resolved_config_path,
+                    env_path=resolved_env_path,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Automatic backup tick failed")
+
+        supervisor.register_periodic(
+            "automatic_backup",
+            _automatic_backup_once,
+            interval_s=float(config.backup.interval_s),
+            initial_delay_s=float(config.backup.startup_delay_s),
+        )
 
 
 def _register_update_checker(
@@ -1480,14 +1691,14 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         mgr = _runtime_manager_ref["manager"]
         if mgr is not None:
             async with leased_runtime(mgr) as gen:
-                await _finalize_stale_requests_once(
+                await finalize_stale_requests_once(
                     db=db,
                     router=gen.router,
                     quota_estimator=gen.router.quota_estimator,
                     max_pending_seconds=config.upstream.read_timeout_s,
                 )
         else:
-            await _finalize_stale_requests_once(
+            await finalize_stale_requests_once(
                 db=db,
                 router=router,
                 quota_estimator=router.quota_estimator,
@@ -1524,9 +1735,9 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             mgr = _runtime_manager_ref["manager"]
             if mgr is not None:
                 async with leased_runtime(mgr) as gen:
-                    await _prune_health_disabled_models_once(gen)
+                    await prune_health_disabled_models_once(gen)
             else:
-                await _prune_health_disabled_models_once(app.state)
+                await prune_health_disabled_models_once(app.state)
 
         supervisor.register_periodic(
             "health_disabled_models_prune",
@@ -1717,6 +1928,21 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         try:
             validation = validate_config_file(process.config_path)
         except Exception as exc:
+            try:
+                from eggpool.db.repositories import (
+                    OperationalEventRepository,
+                )
+
+                repo = OperationalEventRepository(process.db)
+                await repo.record(
+                    "reload_validation_rejection",
+                    {"error_class": type(exc).__name__},
+                )
+            except Exception:
+                logger.debug(
+                    "Failed to record validation rejection event",
+                    exc_info=True,
+                )
             return ControlResponse(
                 protocol_version=PROTOCOL_VERSION,
                 request_id=request.request_id,

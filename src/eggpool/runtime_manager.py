@@ -466,6 +466,7 @@ class RuntimeManager:
         generation: RuntimeGeneration,
         *,
         drain_timeout_s: float = 300.0,
+        expected_active_generation_id: int | None = None,
     ) -> None:
         """Publish a candidate generation, retiring the current active slot.
 
@@ -484,6 +485,16 @@ class RuntimeManager:
                     "Cannot install candidate generation after shutdown"
                 )
             old_slot = self._active
+            if (
+                expected_active_generation_id is not None
+                and old_slot is not None
+                and old_slot.generation.generation_id != expected_active_generation_id
+            ):
+                raise RuntimeError(
+                    "Active generation changed during candidate preparation; "
+                    f"expected {expected_active_generation_id}, "
+                    f"found {old_slot.generation.generation_id}"
+                )
             new_slot = _GenerationSlot(generation=generation)
             self._active = new_slot
             self._next_generation_id = max(
@@ -496,7 +507,7 @@ class RuntimeManager:
                 _digest_prefix(generation.config_digest),
             )
         if old_slot is not None:
-            await self.begin_retirement(old_slot)
+            await self.begin_retirement(old_slot, drain_timeout_s=drain_timeout_s)
 
     # -- lease acquisition -------------------------------------------------
 
@@ -563,7 +574,9 @@ class RuntimeManager:
 
     # -- retirement ---------------------------------------------------------
 
-    async def begin_retirement(self, slot: _GenerationSlot) -> None:
+    async def begin_retirement(
+        self, slot: _GenerationSlot, *, drain_timeout_s: float = 5.0
+    ) -> None:
         """Drive the deterministic teardown for one slot.
 
         Marks the slot as not accepting new leases, waits for active
@@ -595,14 +608,12 @@ class RuntimeManager:
                 self._active = None
             if slot not in self._retiring:
                 self._retiring.append(slot)
-        await self._drain_and_close(slot)
+        await self._drain_and_close(slot, drain_timeout_s=drain_timeout_s)
 
-    async def _drain_and_close(self, slot: _GenerationSlot) -> None:
+    async def _drain_and_close(
+        self, slot: _GenerationSlot, *, drain_timeout_s: float = 5.0
+    ) -> None:
         """Wait for active leases to reach zero, then close owned resources."""
-        # The manager's hard ceiling on drain time.  Live reload (future)
-        # will use a much larger bound; process shutdown intentionally
-        # keeps it bounded so a stuck stream cannot block exit forever.
-        drain_timeout_s = 5.0
         deadline = time.monotonic() + drain_timeout_s
         while slot.active_leases > 0:
             remaining = deadline - time.monotonic()
@@ -706,7 +717,7 @@ class RuntimeManager:
             self._shutdown_in_progress = True
             active = self._active
         if active is not None:
-            await self.begin_retirement(active)
+            await self.begin_retirement(active, drain_timeout_s=5.0)
             return
         # No active generation (e.g. startup never completed): still
         # wait for any already-retiring slots to finish.

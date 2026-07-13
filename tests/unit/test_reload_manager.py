@@ -9,6 +9,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from eggpool.config_reload_policy import (
+    ConfigChange,
+    ConfigDiff,
+    ReloadDisposition,
     ReloadResult,
     ReloadStage,
 )
@@ -20,6 +23,8 @@ from eggpool.control.reload_manager import (
     ReloadOperationState,
     ReloadPreparationError,
 )
+from eggpool.models.config import AppConfig, ServerConfig
+from eggpool.runtime_manager import RuntimeGeneration, RuntimeManager
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -556,3 +561,194 @@ class TestCandidateGeneration:
         assert candidate.generation is gen
         assert candidate.process is proc
         assert candidate.diff is diff
+
+
+# ---------------------------------------------------------------------------
+# Helpers for critical reload-manager tests
+# ---------------------------------------------------------------------------
+
+
+def _make_real_config(
+    *,
+    host: str = "0.0.0.0",
+    port: int = 8080,
+) -> AppConfig:
+    """Build a real AppConfig with the given server settings."""
+    return AppConfig(server=ServerConfig(host=host, port=port))
+
+
+def _make_real_generation(
+    *,
+    generation_id: int = 0,
+    config: AppConfig | None = None,
+    config_digest: str = "a" * 64,
+) -> RuntimeGeneration:
+    """Build a real RuntimeGeneration with mock services but real config."""
+    if config is None:
+        config = _make_real_config()
+    return RuntimeGeneration(
+        generation_id=generation_id,
+        config=config,
+        config_digest=config_digest,
+        registry=MagicMock(),
+        catalog=MagicMock(),
+        router=MagicMock(),
+        coordinator=MagicMock(),
+        client_pool=MagicMock(),
+        outbound_manager=MagicMock(),
+        dns_backend=None,
+        health_manager=MagicMock(),
+        cost_calculator=MagicMock(),
+        transcoder_policy=MagicMock(),
+        compression_policy=MagicMock(),
+        cache_config=MagicMock(),
+        compression_tuning_registry=MagicMock(),
+        dispatch_overhead_recorder=MagicMock(),
+        dispatch_span_recorder=MagicMock(),
+        account_backoff_repo=MagicMock(),
+        stats_service=MagicMock(),
+        supervisor=MagicMock(),
+        finalization_retry_queue=MagicMock(),
+        routing_trace_guard=MagicMock(),
+        created_at_monotonic=time.monotonic(),
+        created_at_epoch=time.time(),
+    )
+
+
+def _make_real_validation(config: AppConfig) -> MagicMock:
+    """Build a mock ConfigValidationResult wrapping a real config."""
+    v = MagicMock()
+    v.content_digest = "b" * 64
+    v.warnings = ()
+    v.config = config
+    return v
+
+
+# ---------------------------------------------------------------------------
+# Critical tests: restart-required field rejection through ReloadManager
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_restart_required_host_change_rejects_entire_reload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A host change (RESTART_REQUIRED) must reject the entire reload,
+    not apply a subset of changes."""
+    rm = RuntimeManager()
+    proc = _make_process()
+    mgr = ReloadManager(rm, proc)
+
+    baseline = _make_real_config(host="0.0.0.0", port=8080)
+    gen = _make_real_generation(generation_id=0, config=baseline)
+    await rm.install_initial(gen)
+
+    candidate_config = _make_real_config(host="127.0.0.1", port=8080)
+    validation = _make_real_validation(candidate_config)
+
+    monkeypatch.setattr(mgr, "_record_event", AsyncMock())
+
+    result = await mgr.reload(validation)
+
+    assert result.ok is False
+    assert len(result.restart_required) > 0
+    assert rm.active_snapshot().generation_id == 0
+
+
+# ---------------------------------------------------------------------------
+# Critical tests: ignored-only changes return success without candidate build
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ignored_only_changes_return_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When all changes are IGNORED (no LIVE, no RESTART_REQUIRED),
+    the reload returns success without building a candidate."""
+    rm = RuntimeManager()
+    proc = _make_process()
+    mgr = ReloadManager(rm, proc)
+
+    baseline = _make_real_config()
+    gen = _make_real_generation(generation_id=0, config=baseline)
+    await rm.install_initial(gen)
+
+    candidate_config = _make_real_config()
+    validation = _make_real_validation(candidate_config)
+
+    ignored_change = ConfigChange(
+        path="models.refresh_interval_s",
+        disposition=ReloadDisposition.IGNORED,
+        old_display="300",
+        new_display="600",
+        section="models",
+    )
+    mock_diff = ConfigDiff(changes=(ignored_change,))
+
+    monkeypatch.setattr(
+        "eggpool.control.reload_manager.compute_diff",
+        lambda _active, _candidate: mock_diff,
+    )
+    monkeypatch.setattr(mgr, "_record_event", AsyncMock())
+
+    result = await mgr.reload(validation)
+
+    assert result.ok is True
+    assert rm.active_snapshot().generation_id == 0
+
+
+# ---------------------------------------------------------------------------
+# Critical tests: publication guard rejects concurrent installs
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_publication_guard_rejects_generation_mismatch() -> None:
+    """install_candidate rejects when active generation changed during prep."""
+    rm = RuntimeManager()
+
+    gen1 = _make_real_generation(generation_id=0)
+    await rm.install_initial(gen1)
+
+    gen2 = _make_real_generation(generation_id=1)
+    await rm.install_candidate(gen2)
+
+    gen3 = _make_real_generation(generation_id=2)
+    with pytest.raises(RuntimeError, match="Active generation changed"):
+        await rm.install_candidate(gen3, expected_active_generation_id=0)
+
+
+# ---------------------------------------------------------------------------
+# Critical tests: diagnostic snapshot includes restart_required and warnings
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_snapshot_includes_restart_required_and_warnings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reload manager snapshot includes restart_required and warnings."""
+    rm = RuntimeManager()
+    proc = _make_process()
+    mgr = ReloadManager(rm, proc)
+
+    snapshot = mgr.snapshot()
+    assert snapshot["last_reload_result"] is None
+
+    baseline = _make_real_config(host="0.0.0.0")
+    gen = _make_real_generation(generation_id=0, config=baseline)
+    await rm.install_initial(gen)
+
+    candidate_config = _make_real_config(host="127.0.0.1")
+    validation = _make_real_validation(candidate_config)
+
+    monkeypatch.setattr(mgr, "_record_event", AsyncMock())
+
+    await mgr.reload(validation)
+
+    snapshot = mgr.snapshot()
+    result = snapshot["last_reload_result"]
+    assert result is not None
+    assert result["ok"] is False
+    assert len(result["restart_required"]) > 0

@@ -688,7 +688,7 @@ class TestBackgroundTaskLease:
         """The health prune callback acquires a generation lease."""
         from unittest.mock import patch
 
-        from eggpool.app import _prune_health_disabled_models_once
+        from eggpool.app import prune_health_disabled_models_once
 
         manager = RuntimeManager()
         gen = _fake_generation(0)
@@ -706,7 +706,7 @@ class TestBackgroundTaskLease:
             return _ctx()
 
         with patch("eggpool.runtime_manager.leased_runtime", fake_leased_runtime):
-            result = await _prune_health_disabled_models_once(gen)
+            result = await prune_health_disabled_models_once(gen)
 
         assert result == 0  # No accounts to prune
 
