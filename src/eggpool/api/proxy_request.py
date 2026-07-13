@@ -62,6 +62,7 @@ from eggpool.runtime_dispatch import (
     SPAN_TRANSCODE_PREFLIGHT,
     DispatchSpanRecorder,
 )
+from eggpool.runtime_manager import GenerationLease, wrap_stream_with_lease
 from eggpool.transcoder.context import TranscodeContext
 from eggpool.transcoder.errors import TranscodeLossError
 from eggpool.transcoder.prepared import PreparedTranscode
@@ -278,12 +279,47 @@ async def handle_proxy_request(
     endpoint: ProxyEndpointConfig,
 ) -> Response:
     """Validate and dispatch one OpenAI- or Anthropic-compatible request."""
-    coordinator = cast("RequestCoordinator", request.app.state.coordinator)
-    span_recorder = cast(
-        "DispatchSpanRecorder | None",
-        getattr(request.app.state, "dispatch_span_recorder", None),
-    )
+    # Acquire a generation lease so the active generation cannot be
+    # retired while this request is in flight.  For streaming responses
+    # the lease is transferred to ``wrap_stream_with_lease`` which
+    # releases it after the last chunk or on client disconnect.
+    lease: GenerationLease | None = None
+    runtime_manager = getattr(request.app.state, "runtime_manager", None)
+    if runtime_manager is not None:
+        try:
+            lease = await runtime_manager.acquire()
+        except Exception:  # noqa: BLE001 — fall back to app.state
+            lease = None
 
+    if lease is not None:
+        coordinator = lease.runtime.coordinator
+        span_recorder = getattr(lease.runtime, "dispatch_span_recorder", None)
+    else:
+        coordinator = cast("RequestCoordinator", request.app.state.coordinator)
+        span_recorder = cast(
+            "DispatchSpanRecorder | None",
+            getattr(request.app.state, "dispatch_span_recorder", None),
+        )
+
+    try:
+        return await _handle_proxy_request_inner(
+            request, endpoint, coordinator, span_recorder, lease
+        )
+    finally:
+        # For non-streaming error paths the lease is still held here.
+        # Streaming success transfers the lease to wrap_stream_with_lease.
+        if lease is not None and not lease.released:
+            await lease.release()
+
+
+async def _handle_proxy_request_inner(
+    request: Request,
+    endpoint: ProxyEndpointConfig,
+    coordinator: RequestCoordinator,
+    span_recorder: DispatchSpanRecorder | None,
+    lease: GenerationLease | None,
+) -> Response:
+    """Inner handler body; called within the lease's try/finally."""
     with _span(span_recorder, SPAN_AUTH):
         await require_auth(request)
 
@@ -788,7 +824,28 @@ async def handle_proxy_request(
             error_type="invalid_request_error",
         )
 
-    return render_proxy_response(result)
+    response = render_proxy_response(result)
+
+    # For streaming responses, transfer the generation lease to the
+    # stream wrapper so it outlives the handler return.  The wrapper
+    # releases the lease on stream completion, client disconnect, or
+    # error — whichever happens first.
+    if (
+        lease is not None
+        and result.stream_iterator is not None
+        and isinstance(response, StreamingResponse)
+    ):
+        response = StreamingResponse(
+            wrap_stream_with_lease(result.stream_iterator, lease),
+            status_code=response.status_code,
+            media_type=response.media_type,
+            headers=response.headers,
+        )
+    elif lease is not None:
+        # Non-streaming: release immediately since finalization is done.
+        await lease.release()
+
+    return response
 
 
 @contextlib.contextmanager

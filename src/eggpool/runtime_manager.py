@@ -33,6 +33,63 @@ contract that the existing ``_lifespan_runtime`` flow uses, and
 milestone C will add a narrow ``install_candidate()`` transactional
 publication API on top of this primitive without bypassing it.
 
+Ownership inventory
+-------------------
+
+Every object initialized in ``app._lifespan_runtime`` and
+``create_app`` is classified below.  This table is the single
+reviewable inventory; changes to ownership must update both this
+table and ``_RUNTIME_OWNED_APP_STATE_ATTRS``.
+
+**Process-owned** (never recreated for a generation):
+
+- ``AppConfig`` -- immutable after startup; shared across generations.
+- ``Database`` (primary + stats) -- single-connection serialization.
+- All repositories (``AccountRepository``, ``RequestRepository``,
+  ``AttemptRepository``, ``ReservationRepository``,
+  ``UsageWindowRepository``, ``OperationalEventRepository``,
+  ``AccountEventRepository``, ``PingRepository``,
+  ``ProviderRepository``, ``UsageRollupRepository``,
+  ``RoutingDecisionRepository``) -- thin repos over process-owned DB.
+- ``MetricsWriteCoalescer`` -- flushed at shutdown; survives gen.
+- ``RuntimeMetricsService`` -- reads manager diagnostics.
+- ``DashboardTelemetry`` -- 30s in-memory cache.
+- ``UpdateChecker`` -- 24h PyPI probe.
+
+**Generation-owned** (rebuilt/closed on config change):
+
+- ``AccountRegistry`` -- rebuilt on config change.
+- ``Router`` -- rebuilt on config change.
+- ``RequestCoordinator`` -- rebuilt; carries generation finalizer.
+- ``ProviderClientPool`` -- closed on retirement.
+- ``OutboundClientManager`` -- closed on retirement.
+- ``DnsNetworkBackend`` -- closed on retirement.
+- ``HealthManager`` -- rebuilt on config change.
+- ``CostCalculator`` -- rebuilt on config change.
+- ``CatalogService`` -- rebuilt on config change.
+- ``ModelInfoService`` -- rebuilt on config change.
+- ``StatsService`` -- DB-backed; lifecycle matches gen.
+- ``AccountBackoffRepository`` -- DB-backed; lifecycle matches gen.
+- ``TaskSupervisor`` -- closed on retirement.
+- ``TranscoderPolicy`` / ``CompressionPolicy`` / ``CacheConfig``
+  / ``CompressionTuningRegistry`` -- frozen config snapshots.
+- ``DispatchOverheadRecorder`` / ``DispatchSpanRecorder``
+  / ``StreamDiagnostics`` / ``FinalizationRetryQueue``
+  / ``RoutingTraceGuard`` -- per-generation telemetry/guardrails.
+
+**Closures that capture startup services** (reload hazard):
+
+- ``_catalog_refresh_once`` captures ``catalog``, ``effective_model_info``.
+- ``_retention_cleanup_once`` captures ``db``, ``config``, ``router``.
+- ``_refresh_usage_windows_once`` captures ``router``.
+- ``_stale_request_finalizer_once`` captures ``db``, ``router``, ``config``.
+- ``_health_disabled_models_prune_once`` captures ``app`` (reads ``app.state``).
+- ``_metrics_flush_once`` captures ``metrics_coalescer``.
+- ``_automatic_backup_once`` captures ``config``, ``db``, paths.
+
+All other callbacks capture only process-owned resources (``db``,
+``config``, ``metrics_coalescer``).
+
 Forward references
 ------------------
 
@@ -56,8 +113,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final, cast
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
-
     from eggpool.accounts.registry import AccountRegistry
     from eggpool.catalog.pricing import CostCalculator
     from eggpool.catalog.service import CatalogService
@@ -741,25 +796,18 @@ class GenerationBuildResult:
 
 
 class RuntimeGenerationBuilder:
-    """Default builder that wires the runtime manager to ``_lifespan_runtime``.
+    """Constructs a :class:`RuntimeGeneration` from process-owned resources.
 
-    The builder does not own the construction logic directly; it
-    delegates to :class:`eggpool.app._build_runtime_generation` (a
-    private module-level function that extracts the same wiring used
-    by ``_lifespan_runtime``).  That keeps the construction site in
-    exactly one place while still letting the manager own the
-    lifecycle primitives.
+    The builder owns the single construction site that both startup
+    and future reload (milestone C) will use.  It wraps the services
+    already constructed by ``_lifespan_runtime`` into an immutable
+    generation snapshot; milestone C will extend this to construct
+    services from a candidate config.
 
     Tests inject a thinner subclass to avoid pulling in the full
     service graph; production code uses the default ``build_initial``
     path.
     """
-
-    def __init__(
-        self,
-        build_fn: Callable[..., Awaitable[GenerationBuildResult]],
-    ) -> None:
-        self._build_fn = build_fn
 
     async def build_initial(
         self,
@@ -768,24 +816,85 @@ class RuntimeGenerationBuilder:
         *,
         generation_id: int = 0,
         config_digest: str = "",
+        **services: Any,
     ) -> GenerationBuildResult:
-        """Build the first runtime generation for process startup."""
-        return await self._build_fn(
-            config=config,
-            process=process,
+        """Wrap pre-built services into a :class:`RuntimeGeneration`.
+
+        The ``**services`` keyword arguments are the generation-owned
+        services already constructed by the lifespan.  The builder
+        validates that all required keys are present, wraps them in an
+        immutable ``RuntimeGeneration``, and returns the result.
+
+        When a required service is missing the builder raises
+        ``RuntimeError`` so the caller can invoke
+        :meth:`cleanup_partial`.
+        """
+        required = (
+            "registry",
+            "catalog",
+            "router",
+            "coordinator",
+            "client_pool",
+            "outbound_manager",
+            "health_manager",
+            "cost_calculator",
+            "transcoder_policy",
+            "compression_policy",
+            "cache_config",
+            "compression_tuning_registry",
+            "dispatch_overhead_recorder",
+            "dispatch_span_recorder",
+            "account_backoff_repo",
+            "stats_service",
+            "supervisor",
+        )
+        missing = [k for k in required if k not in services]
+        if missing:
+            raise RuntimeError(
+                f"build_initial missing required services: {', '.join(missing)}"
+            )
+
+        now_mono = time.monotonic()
+        now_epoch = time.time()
+        generation = RuntimeGeneration(
             generation_id=generation_id,
+            config=config,
             config_digest=config_digest,
+            registry=services["registry"],
+            catalog=services["catalog"],
+            router=services["router"],
+            coordinator=services["coordinator"],
+            client_pool=services["client_pool"],
+            outbound_manager=services["outbound_manager"],
+            dns_backend=services.get("dns_backend"),
+            health_manager=services["health_manager"],
+            cost_calculator=services["cost_calculator"],
+            transcoder_policy=services["transcoder_policy"],
+            compression_policy=services["compression_policy"],
+            cache_config=services["cache_config"],
+            compression_tuning_registry=services["compression_tuning_registry"],
+            dispatch_overhead_recorder=services["dispatch_overhead_recorder"],
+            dispatch_span_recorder=services["dispatch_span_recorder"],
+            account_backoff_repo=services["account_backoff_repo"],
+            stats_service=services["stats_service"],
+            supervisor=services["supervisor"],
+            finalization_retry_queue=services.get("finalization_retry_queue"),
+            routing_trace_guard=services.get("routing_trace_guard"),
+            created_at_monotonic=services.get("created_at_monotonic", now_mono),
+            created_at_epoch=services.get("created_at_epoch", now_epoch),
+        )
+        return GenerationBuildResult(
+            generation=generation,
+            process=process,
         )
 
     async def cleanup_partial(self, process: ProcessRuntime) -> None:
         """Best-effort cleanup after a partial build failure.
 
-        The default builder delegates cleanup to its injected build
-        function via ``eggpool.app._cleanup_partial_generation``; that
-        helper inspects the process container to determine which
-        generation-owned resources are open and closes them in the
-        documented order.  If the build function did not register any
-        resources, this is a no-op.
+        Delegates to :func:`eggpool.app.cleanup_partial_generation`
+        which closes any generation-owned resources that were
+        constructed before the failure.  Tolerates partially
+        constructed state and repeated calls.
         """
         from eggpool.app import cleanup_partial_generation  # noqa: PLC0415
 

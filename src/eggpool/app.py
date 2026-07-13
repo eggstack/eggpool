@@ -664,17 +664,18 @@ async def cleanup_partial_generation(process: ProcessRuntime) -> None:
     (not underscore-prefixed) because
     :class:`eggpool.runtime_manager.RuntimeGenerationBuilder` calls it
     from a sibling module.
+
+    During milestone B the initial build is done inline in
+    ``_lifespan_runtime`` and the manager is only installed after the
+    full build succeeds, so this path is currently a no-op for the
+    inline lifespan.  Milestone C's reload builder will populate the
+    process container with candidate-generation resources before
+    calling this helper on failure.
     """
     logger.warning(
         "Partial runtime generation cleanup: closing any constructed "
         "network clients and supervisor"
     )
-    # Network clients live on the process.runtime_manager if the
-    # builder installed one before failing.  In milestone B's
-    # ``_lifespan_runtime`` wiring the manager is only installed after
-    # the full build succeeds, so this path is currently empty for the
-    # inline lifespan; milestone C's reload builder will use it to
-    # clean up candidate generation resources that raised mid-build.
     return None
 
 
@@ -1291,7 +1292,18 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         effective_model_info = model_info if config.model_info.enabled else None
 
         async def _catalog_refresh_once() -> None:
-            result = await catalog.refresh()
+            from eggpool.runtime_manager import (  # noqa: PLC0415
+                leased_runtime,
+            )
+
+            # Acquire a generation lease so the refresh uses the
+            # current generation's catalog, not a stale reference
+            # captured at registration time.
+            if _runtime_manager_for_tasks is not None:
+                async with leased_runtime(_runtime_manager_for_tasks) as gen:
+                    result = await gen.catalog.refresh()
+            else:
+                result = await catalog.refresh()
             if effective_model_info is not None:
                 try:
                     await effective_model_info.reconcile_catalog_refresh(result)
@@ -1437,10 +1449,24 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # one cycle without requiring a process restart. Wiring is wrapped
     # so a missing dependency (e.g. a future test app) cannot crash
     # startup.
+    # Capture the runtime manager so the prune tick acquires a
+    # generation lease rather than reading app.state directly.  This
+    # ensures the task uses the current generation's registry,
+    # health_manager, and catalog even after a live reload (milestone C).
+    _runtime_manager_for_tasks = getattr(app.state, "runtime_manager", None)
+
     try:
 
         async def _health_disabled_models_prune_once() -> None:
-            await _prune_health_disabled_models_once(app.state)
+            from eggpool.runtime_manager import (  # noqa: PLC0415
+                leased_runtime,
+            )
+
+            if _runtime_manager_for_tasks is not None:
+                async with leased_runtime(_runtime_manager_for_tasks) as gen:
+                    await _prune_health_disabled_models_once(gen)
+            else:
+                await _prune_health_disabled_models_once(app.state)
 
         supervisor.register_periodic(
             "health_disabled_models_prune",
