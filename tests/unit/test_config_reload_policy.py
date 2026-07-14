@@ -56,12 +56,17 @@ class TestPolicyDefaults:
         )
 
     def test_live_field_inventory_matches_expected(self) -> None:
-        """Pin the closure-pass LIVE inventory.
+        """Pin the closure-pass plus milestone D1 LIVE inventory.
 
-        The closure pass enables provider/account/routing/model-overrides
-        as ``LIVE``.  Every other field stays fail-closed.  This guard
-        prevents future field additions from silently claiming live
-        reloadability without an explicit policy decision.
+        Closure pass: provider/account/routing/model-overrides/model-
+        capabilities as ``LIVE``.  Milestone D1 adds the request-policy
+        blocks (``transcoder``, ``compression``, ``cache``) and the
+        request-path-visible ``models`` + ``security`` subset whose
+        consumers are generation-owned rebuilders in
+        :mod:`eggpool.control.reload_manager`.  Every other field stays
+        fail-closed.  This guard prevents future field additions from
+        silently claiming live reloadability without an explicit policy
+        decision.
         """
         expected_live = {
             # Provider definitions and account credentials:
@@ -87,6 +92,22 @@ class TestPolicyDefaults:
             # Model overrides and per-model capability overrides:
             "model_overrides",
             "model_capabilities",
+            # Milestone D1: request-policy blocks consumed via
+            # generation-owned policy objects on the candidate
+            # ``RequestCoordinator`` and ``CatalogService``.
+            "transcoder",
+            "compression",
+            "cache",
+            # Milestone D1: request-path-visible models subset.
+            "models.refresh_interval_s",
+            "models.expose_mode",
+            "models.collapse_models",
+            "models.stale_after_s",
+            "models.allow_stale_catalog",
+            # Milestone D1: persisted error detail toggle is wired via
+            # the candidate ``RequestCoordinator`` so a rehash toggles
+            # the policy live for new generations only.
+            "security.persist_redacted_error_detail",
         }
         actual_live = {
             path
@@ -201,10 +222,12 @@ class TestDispositionCoverage:
             "dashboard.public",
             "dns_cache.enabled",
             "backup.enabled",
-            "transcoder",
-            "compression",
-            "cache",
             "proxies",
+            "model_info.enabled",
+            "models.startup_refresh",
+            "models.ping_retain_days",
+            "models.catalog_withdrawal_policy",
+            "upstream.read_timeout_s",
         }
         for path in must_be_restart:
             assert _disposition_for(path) is ReloadDisposition.RESTART_REQUIRED, (
@@ -231,6 +254,43 @@ class TestDispositionCoverage:
         for path in live_inherited:
             assert _disposition_for(path) is ReloadDisposition.LIVE, (
                 f"{path} should inherit LIVE from its parent collection"
+            )
+
+    def test_request_policy_sub_paths_inherit_live(self) -> None:
+        """D1: sub-paths of transcoder/compression/cache/models inherit LIVE.
+
+        Reload manager rebuilds these blocks as fresh generation-owned
+        policy objects, so any sub-path change is ``LIVE``.  This test
+        pins the prefix-inherit rule to keep future drift visible.
+        """
+        live_inherited = {
+            # Transcoder surface consumed via ``coordinator._transcoder_policy``.
+            "transcoder.enabled",
+            "transcoder.loss_policy",
+            "transcoder.prefer_native",
+            "transcoder.capability_policy",
+            "transcoder.features.thinking",
+            "transcoder.thinking_budget_defaults.high",
+            "transcoder.openai_reasoning_fields.stream_delta",
+            # Compression surface consumed via ``coordinator._compression_policy``.
+            "compression.enabled",
+            "compression.mode",
+            "compression.min_candidate_tokens",
+            "compression.transforms.fold_repeated_lines",
+            "compression.header_override",
+            "compression.tuning.mode",
+            # Cache surface consumed via ``coordinator._cache_config``.
+            "cache.synthetic_cache_controls.enabled",
+            "cache.synthetic_cache_controls.dry_run",
+            "cache.synthetic_cache_controls.max_breakpoints",
+            # Models surface consumed by generation-owned catalog + tasks.
+            "models.refresh_interval_s",
+            "models.expose_mode",
+            "models.collapse_models",
+        }
+        for path in live_inherited:
+            assert _disposition_for(path) is ReloadDisposition.LIVE, (
+                f"{path} should inherit LIVE from its request-policy parent"
             )
 
     def test_unknown_paths_still_default_to_restart(self) -> None:

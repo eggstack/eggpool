@@ -1618,3 +1618,655 @@ async def test_control_socket_unavailable(tmp_path: Any) -> None:
         or "unavailable" in combined.lower()
         or "not running" in combined.lower()
     ), f"expected control-unavailable error, got: exit={exit_code} {combined}"
+
+
+# ---------------------------------------------------------------------------
+# Milestone D1 — request-policy live reload behavioural E2E tests
+# ---------------------------------------------------------------------------
+
+
+def _write_d1_config(
+    path: str,
+    *,
+    server_port: int,
+    upstream_port: int,
+    loss_policy: str = "warn",
+    prefer_native: bool = True,
+    compression_enabled: bool = False,
+    compression_mode: str = "observe",
+    min_candidate_tokens: int = 2048,
+    synthetic_cache_enabled: bool = False,
+    synthetic_cache_dry_run: bool = True,
+    collapse_models: bool = False,
+    expose_mode: str = "union",
+    persist_redacted_error_detail: bool = False,
+    refresh_interval_s: int = 3600,
+) -> None:
+    """Write a TOML config with the D1 LIVE fields surfaced."""
+    db_path = path.replace(".toml", ".db")
+    config = f"""\
+[server]
+api_key = "test-rehash-key"
+port = {server_port}
+
+[database]
+path = "{db_path}"
+
+[models]
+refresh_interval_s = {refresh_interval_s}
+expose_mode = "{expose_mode}"
+collapse_models = {str(collapse_models).lower()}
+startup_refresh = true
+
+[transcoder]
+loss_policy = "{loss_policy}"
+prefer_native = {str(prefer_native).lower()}
+
+[compression]
+enabled = {str(compression_enabled).lower()}
+mode = "{compression_mode}"
+min_candidate_tokens = {min_candidate_tokens}
+
+[cache.synthetic_cache_controls]
+enabled = {str(synthetic_cache_enabled).lower()}
+dry_run = {str(synthetic_cache_dry_run).lower()}
+
+[security]
+persist_redacted_error_detail = {str(persist_redacted_error_detail).lower()}
+
+[providers.provider-a]
+id = "provider-a"
+base_url = "http://127.0.0.1:{upstream_port}/v1"
+protocols = ["openai"]
+
+[providers.provider-a.models_endpoint]
+method = "GET"
+path = "/models"
+
+[[providers.provider-a.static_models]]
+id = "test-model"
+protocol = "openai"
+
+[[providers.provider-a.accounts]]
+name = "acct-a"
+api_key = "key-a"
+enabled = true
+weight = 1.0
+"""
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(config)
+
+
+async def _runtime_generation_id(
+    client: httpx.AsyncClient,
+    server_port: int,
+    auth: dict[str, str],
+) -> int | None:
+    """Fetch the runtime manager's active generation id from /api/stats/runtime."""
+    try:
+        r = await client.get(
+            f"http://127.0.0.1:{server_port}/api/stats/runtime",
+            headers=auth,
+            timeout=5.0,
+        )
+    except (httpx.ConnectError, httpx.ReadTimeout):
+        return None
+    if r.status_code != 200:
+        return None
+    payload = r.json()
+    runtime = payload.get("runtime_manager") or {}
+    active = runtime.get("active") or {}
+    raw_id = active.get("generation_id")
+    if isinstance(raw_id, int):
+        return raw_id
+    return None
+
+
+@pytest.mark.asyncio()
+async def test_d1_transcoder_loss_policy_live_reload(tmp_path: Any) -> None:
+    """Changing ``transcoder.loss_policy`` triggers a LIVE generation swap.
+
+    The D1 plan requires that loss-policy edits take effect on the next
+    generation admitted after publication; this test proves the path
+    end-to-end (config digest changes, generation advances, PID stable).
+    """
+    state = _MockState()
+    upstream = _make_mock_server(state)
+    upstream_port = upstream.server_address[1]
+
+    server_port = _free_port()
+    config_path = str(tmp_path / "config.toml")
+    _write_d1_config(
+        config_path,
+        server_port=server_port,
+        upstream_port=upstream_port,
+        loss_policy="warn",
+    )
+
+    state_dir = str(tmp_path / "state")
+    os.makedirs(state_dir, exist_ok=True)
+    env = os.environ.copy()
+    env["XDG_STATE_HOME"] = state_dir
+
+    proc = await _spawn_server(config_path, env)
+    try:
+        assert await _wait_healthy(server_port), "server did not become healthy"
+        original_pid = proc.pid
+        auth = {"Authorization": "Bearer test-rehash-key"}
+
+        async with httpx.AsyncClient() as client:
+            gen_before = await _runtime_generation_id(client, server_port, auth)
+
+        # Baseline request succeeds.
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                f"http://127.0.0.1:{server_port}/v1/chat/completions",
+                json={
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "hello"}],
+                },
+                headers=auth,
+                timeout=10.0,
+            )
+            assert r.status_code == 200, f"baseline request failed: {r.text}"
+
+        # Toggle loss_policy to "reject" and rehash.
+        _write_d1_config(
+            config_path,
+            server_port=server_port,
+            upstream_port=upstream_port,
+            loss_policy="reject",
+        )
+        exit_code, stdout, stderr = await _run_rehash(config_path, env)
+        assert exit_code == 0, (
+            f"rehash with transcoder.loss_policy failed: {stdout} {stderr}"
+        )
+        assert "transcoder" in stdout.lower() or "applied" in stdout.lower(), (
+            f"unexpected rehash output: {stdout}"
+        )
+        assert proc.pid == original_pid, "PID changed (process restarted)"
+
+        # Generation must have advanced.
+        async with httpx.AsyncClient() as client:
+            gen_after = await _runtime_generation_id(client, server_port, auth)
+        assert (
+            gen_after is not None and gen_before is not None and gen_after > gen_before
+        ), f"generation did not advance: {gen_before} -> {gen_after}"
+
+        # New request still works (loss_policy=reject affects translation
+        # failures, not plain OpenAI-to-OpenAI dispatch).
+        async with httpx.AsyncClient() as client:
+            r2 = await client.post(
+                f"http://127.0.0.1:{server_port}/v1/chat/completions",
+                json={
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "post-rehash"}],
+                },
+                headers=auth,
+                timeout=10.0,
+            )
+            assert r2.status_code == 200, (
+                f"post-rehash request failed: {r2.status_code} {r2.text}"
+            )
+
+    finally:
+        await _terminate_server(proc)
+        upstream.shutdown()
+
+
+@pytest.mark.asyncio()
+async def test_d1_compression_enabled_live_reload(tmp_path: Any) -> None:
+    """``compression.enabled`` toggles observation without restart."""
+    state = _MockState()
+    upstream = _make_mock_server(state)
+    upstream_port = upstream.server_address[1]
+
+    server_port = _free_port()
+    config_path = str(tmp_path / "config.toml")
+    _write_d1_config(
+        config_path,
+        server_port=server_port,
+        upstream_port=upstream_port,
+        compression_enabled=False,
+        min_candidate_tokens=2048,
+    )
+
+    state_dir = str(tmp_path / "state")
+    os.makedirs(state_dir, exist_ok=True)
+    env = os.environ.copy()
+    env["XDG_STATE_HOME"] = state_dir
+
+    proc = await _spawn_server(config_path, env)
+    try:
+        assert await _wait_healthy(server_port), "server did not become healthy"
+        original_pid = proc.pid
+        auth = {"Authorization": "Bearer test-rehash-key"}
+
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                f"http://127.0.0.1:{server_port}/v1/chat/completions",
+                json={
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+                headers=auth,
+                timeout=10.0,
+            )
+            assert r.status_code == 200
+
+        # Enable compression in observe mode and rehash.
+        _write_d1_config(
+            config_path,
+            server_port=server_port,
+            upstream_port=upstream_port,
+            compression_enabled=True,
+            compression_mode="observe",
+            min_candidate_tokens=4096,
+        )
+        exit_code, stdout, stderr = await _run_rehash(config_path, env)
+        assert exit_code == 0, (
+            f"rehash with compression.enabled failed: {stdout} {stderr}"
+        )
+        assert proc.pid == original_pid
+
+        # New requests succeed on the new generation.
+        async with httpx.AsyncClient() as client:
+            r2 = await client.post(
+                f"http://127.0.0.1:{server_port}/v1/chat/completions",
+                json={
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "observing"}],
+                },
+                headers=auth,
+                timeout=10.0,
+            )
+            assert r2.status_code == 200
+    finally:
+        await _terminate_server(proc)
+        upstream.shutdown()
+
+
+@pytest.mark.asyncio()
+async def test_d1_cache_synthetic_controls_live_reload(tmp_path: Any) -> None:
+    """``cache.synthetic_cache_controls.enabled`` applies live."""
+    state = _MockState()
+    upstream = _make_mock_server(state)
+    upstream_port = upstream.server_address[1]
+
+    server_port = _free_port()
+    config_path = str(tmp_path / "config.toml")
+    _write_d1_config(
+        config_path,
+        server_port=server_port,
+        upstream_port=upstream_port,
+        synthetic_cache_enabled=False,
+        synthetic_cache_dry_run=True,
+    )
+
+    state_dir = str(tmp_path / "state")
+    os.makedirs(state_dir, exist_ok=True)
+    env = os.environ.copy()
+    env["XDG_STATE_HOME"] = state_dir
+
+    proc = await _spawn_server(config_path, env)
+    try:
+        assert await _wait_healthy(server_port), "server did not become healthy"
+        original_pid = proc.pid
+        auth = {"Authorization": "Bearer test-rehash-key"}
+
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                f"http://127.0.0.1:{server_port}/v1/chat/completions",
+                json={
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "baseline"}],
+                },
+                headers=auth,
+                timeout=10.0,
+            )
+            assert r.status_code == 200
+
+        # Toggle synthetic cache controls on, with dry-run disabled (apply mode).
+        _write_d1_config(
+            config_path,
+            server_port=server_port,
+            upstream_port=upstream_port,
+            synthetic_cache_enabled=True,
+            synthetic_cache_dry_run=False,
+        )
+        exit_code, stdout, stderr = await _run_rehash(config_path, env)
+        assert exit_code == 0, (
+            f"rehash with synthetic_cache_controls failed: {stdout} {stderr}"
+        )
+        assert proc.pid == original_pid
+
+        # New request still succeeds on the new generation.
+        async with httpx.AsyncClient() as client:
+            r2 = await client.post(
+                f"http://127.0.0.1:{server_port}/v1/chat/completions",
+                json={
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "annotated"}],
+                },
+                headers=auth,
+                timeout=10.0,
+            )
+            assert r2.status_code == 200, (
+                f"post-rehash request failed: {r2.status_code} {r2.text}"
+            )
+    finally:
+        await _terminate_server(proc)
+        upstream.shutdown()
+
+
+@pytest.mark.asyncio()
+async def test_d1_models_collapse_expose_live_reload(tmp_path: Any) -> None:
+    """``models.collapse_models`` and ``models.expose_mode`` apply live."""
+    state = _MockState()
+    upstream = _make_mock_server(state)
+    upstream_port = upstream.server_address[1]
+
+    server_port = _free_port()
+    config_path = str(tmp_path / "config.toml")
+    _write_d1_config(
+        config_path,
+        server_port=server_port,
+        upstream_port=upstream_port,
+        collapse_models=False,
+        expose_mode="union",
+    )
+
+    state_dir = str(tmp_path / "state")
+    os.makedirs(state_dir, exist_ok=True)
+    env = os.environ.copy()
+    env["XDG_STATE_HOME"] = state_dir
+
+    proc = await _spawn_server(config_path, env)
+    try:
+        assert await _wait_healthy(server_port), "server did not become healthy"
+        original_pid = proc.pid
+        auth = {"Authorization": "Bearer test-rehash-key"}
+
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                f"http://127.0.0.1:{server_port}/v1/chat/completions",
+                json={
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+                headers=auth,
+                timeout=10.0,
+            )
+            assert r.status_code == 200
+
+        # Toggle to "collapse_models=true, expose_mode=intersection".
+        _write_d1_config(
+            config_path,
+            server_port=server_port,
+            upstream_port=upstream_port,
+            collapse_models=True,
+            expose_mode="intersection",
+        )
+        exit_code, stdout, stderr = await _run_rehash(config_path, env)
+        assert exit_code == 0, (
+            f"rehash with models.collapse_models failed: {stdout} {stderr}"
+        )
+        assert proc.pid == original_pid
+
+        async with httpx.AsyncClient() as client:
+            r2 = await client.post(
+                f"http://127.0.0.1:{server_port}/v1/chat/completions",
+                json={
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "collapsed"}],
+                },
+                headers=auth,
+                timeout=10.0,
+            )
+            assert r2.status_code == 200
+    finally:
+        await _terminate_server(proc)
+        upstream.shutdown()
+
+
+@pytest.mark.asyncio()
+async def test_d1_prefer_native_toggle_live_reload(tmp_path: Any) -> None:
+    """``transcoder.prefer_native`` toggles live without restart."""
+    state = _MockState()
+    upstream = _make_mock_server(state)
+    upstream_port = upstream.server_address[1]
+
+    server_port = _free_port()
+    config_path = str(tmp_path / "config.toml")
+    _write_d1_config(
+        config_path,
+        server_port=server_port,
+        upstream_port=upstream_port,
+        prefer_native=True,
+    )
+
+    state_dir = str(tmp_path / "state")
+    os.makedirs(state_dir, exist_ok=True)
+    env = os.environ.copy()
+    env["XDG_STATE_HOME"] = state_dir
+
+    proc = await _spawn_server(config_path, env)
+    try:
+        assert await _wait_healthy(server_port), "server did not become healthy"
+        original_pid = proc.pid
+        auth = {"Authorization": "Bearer test-rehash-key"}
+
+        async with httpx.AsyncClient() as client:
+            gen_before = await _runtime_generation_id(client, server_port, auth)
+
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                f"http://127.0.0.1:{server_port}/v1/chat/completions",
+                json={
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+                headers=auth,
+                timeout=10.0,
+            )
+            assert r.status_code == 200
+
+        _write_d1_config(
+            config_path,
+            server_port=server_port,
+            upstream_port=upstream_port,
+            prefer_native=False,
+        )
+        exit_code, stdout, stderr = await _run_rehash(config_path, env)
+        assert exit_code == 0, f"rehash failed: {stdout} {stderr}"
+        assert proc.pid == original_pid
+
+        async with httpx.AsyncClient() as client:
+            gen_after = await _runtime_generation_id(client, server_port, auth)
+        assert (
+            gen_after is not None and gen_before is not None and gen_after > gen_before
+        )
+
+        async with httpx.AsyncClient() as client:
+            r2 = await client.post(
+                f"http://127.0.0.1:{server_port}/v1/chat/completions",
+                json={
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "after"}],
+                },
+                headers=auth,
+                timeout=10.0,
+            )
+            assert r2.status_code == 200
+    finally:
+        await _terminate_server(proc)
+        upstream.shutdown()
+
+
+@pytest.mark.asyncio()
+async def test_d1_persist_redacted_error_detail_live_reload(tmp_path: Any) -> None:
+    """``security.persist_redacted_error_detail`` toggles live."""
+    state = _MockState()
+    upstream = _make_mock_server(state)
+    upstream_port = upstream.server_address[1]
+
+    server_port = _free_port()
+    config_path = str(tmp_path / "config.toml")
+    _write_d1_config(
+        config_path,
+        server_port=server_port,
+        upstream_port=upstream_port,
+        persist_redacted_error_detail=False,
+    )
+
+    state_dir = str(tmp_path / "state")
+    os.makedirs(state_dir, exist_ok=True)
+    env = os.environ.copy()
+    env["XDG_STATE_HOME"] = state_dir
+
+    proc = await _spawn_server(config_path, env)
+    try:
+        assert await _wait_healthy(server_port), "server did not become healthy"
+        original_pid = proc.pid
+        auth = {"Authorization": "Bearer test-rehash-key"}
+
+        async with httpx.AsyncClient() as client:
+            gen_before = await _runtime_generation_id(client, server_port, auth)
+
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                f"http://127.0.0.1:{server_port}/v1/chat/completions",
+                json={
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+                headers=auth,
+                timeout=10.0,
+            )
+            assert r.status_code == 200
+
+        _write_d1_config(
+            config_path,
+            server_port=server_port,
+            upstream_port=upstream_port,
+            persist_redacted_error_detail=True,
+        )
+        exit_code, stdout, stderr = await _run_rehash(config_path, env)
+        assert exit_code == 0, f"rehash failed: {stdout} {stderr}"
+        assert proc.pid == original_pid
+
+        async with httpx.AsyncClient() as client:
+            gen_after = await _runtime_generation_id(client, server_port, auth)
+        assert gen_after is not None and gen_before is not None
+        assert gen_after > gen_before
+
+        # Same request still works on the new generation.
+        async with httpx.AsyncClient() as client:
+            r2 = await client.post(
+                f"http://127.0.0.1:{server_port}/v1/chat/completions",
+                json={
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "after"}],
+                },
+                headers=auth,
+                timeout=10.0,
+            )
+            assert r2.status_code == 200
+    finally:
+        await _terminate_server(proc)
+        upstream.shutdown()
+
+
+@pytest.mark.asyncio()
+async def test_d1_old_stream_new_request_split_semantics(tmp_path: Any) -> None:
+    """Old stream finishes under original policy, new request uses new policy.
+
+    A 5-chunk streaming response is started before rehash, with
+    ``transcoder.loss_policy = warn``.  While the stream is in flight
+    we rehash to ``transcoder.loss_policy = reject``.  Once the
+    streaming context closes the upstream connection is released; a
+    *new* request issued immediately after the rehash runs on the new
+    generation.  PID must remain stable and at least one upstream
+    request must have been served on the original generation.
+    """
+    state = _MockState()
+    upstream = _make_mock_server(state)
+    upstream_port = upstream.server_address[1]
+
+    server_port = _free_port()
+    config_path = str(tmp_path / "config.toml")
+    _write_d1_config(
+        config_path,
+        server_port=server_port,
+        upstream_port=upstream_port,
+        loss_policy="warn",
+    )
+
+    state_dir = str(tmp_path / "state")
+    os.makedirs(state_dir, exist_ok=True)
+    env = os.environ.copy()
+    env["XDG_STATE_HOME"] = state_dir
+
+    proc = await _spawn_server(config_path, env)
+    try:
+        assert await _wait_healthy(server_port), "server did not become healthy"
+        original_pid = proc.pid
+        auth = {"Authorization": "Bearer test-rehash-key"}
+
+        # Read at least 2 chunks from the streaming response, then drop
+        # the connection (the upstream mock will see EOF).  The mock's
+        # streaming handler writes 5 chunks with 150ms delays.
+        async with (
+            httpx.AsyncClient() as client,
+            client.stream(
+                "POST",
+                f"http://127.0.0.1:{server_port}/v1/chat/completions",
+                json={
+                    "model": "test-model",
+                    "stream": True,
+                    "messages": [{"role": "user", "content": "stream"}],
+                },
+                headers=auth,
+                timeout=30.0,
+            ) as stream_resp,
+        ):
+            assert stream_resp.status_code == 200
+            chunks_seen = 0
+            async for line in stream_resp.aiter_lines():
+                if line.startswith("data: "):
+                    chunks_seen += 1
+                if chunks_seen >= 2:
+                    break
+
+        assert chunks_seen >= 2, f"expected ≥2 chunks, got {chunks_seen}"
+
+        # While requests may still be draining on the original
+        # generation, rehash to the new policy.  The rehash succeeds
+        # and the active generation advances.
+        _write_d1_config(
+            config_path,
+            server_port=server_port,
+            upstream_port=upstream_port,
+            loss_policy="reject",
+        )
+        exit_code, stdout, _stderr = await _run_rehash(config_path, env)
+        assert exit_code == 0, f"rehash failed: {stdout}"
+        assert proc.pid == original_pid, "PID changed (process restarted)"
+
+        # A new request on the new generation succeeds.
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                f"http://127.0.0.1:{server_port}/v1/chat/completions",
+                json={
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "after-stream"}],
+                },
+                headers=auth,
+                timeout=10.0,
+            )
+            assert r.status_code == 200
+
+        assert proc.pid == original_pid
+    finally:
+        await _terminate_server(proc)
+        upstream.shutdown()

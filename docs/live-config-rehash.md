@@ -34,6 +34,48 @@ The closure pass enables the following families of fields as `LIVE`:
 - **Model overrides and per-model capability overrides**:
   ``[model_overrides.<id>]`` and ``[model_capabilities.<id>]``.
 
+### Closure pass D1 — request-policy expansion
+
+The D1 milestone adds the request-path policy fields that the
+candidate builder already constructs as generation-owned objects:
+
+- **Transcoder policy** (``[transcoder]``) — every field including
+  ``transcoder_loss_policy``, ``protocol_safety_mode``, and
+  ``http_status_overrides``. A change rebuilds the generation's
+  ``TranscoderPolicy`` and rewires the new ``RequestCoordinator``.
+- **Compression policy** (``[compression]``, including
+  ``[compression.synthetic_cache_controls]``) — every field.
+  ``RuntimeCompressionPolicyOverrideRegistry`` is rebuilt per
+  generation so per-provider overrides take effect without restart.
+- **Cache synthesis controls** (``[cache]``,
+  ``[cache.synthetic_cache_controls]``).
+- **Models subset** (``[models]``) — ``expose_mode``,
+  ``collapse_models``, ``refresh_interval_s``, ``stale_after_s``,
+  ``allow_stale_catalog``. Startup-only fields
+  (``startup_refresh``, ``ping_retain_days``,
+  ``catalog_withdrawal_policy``) remain ``RESTART_REQUIRED``.
+- **Security error-detail persistence**
+  (``security.persist_redacted_error_detail``) — the flag is
+  threaded into the candidate ``RequestCoordinator`` via the
+  ``persist_error_detail=`` kwarg.
+
+Fields that stay ``RESTART_REQUIRED``:
+
+- ``[upstream]`` — vestigial; only consulted at runtime-task
+  startup. A future milestone would need to migrate the upstream
+  registry into a generation-owned object.
+- ``[model_info]`` — ``ModelInfoService`` is constructed in the
+  FastAPI lifespan and is not rebuilt by the candidate manager.
+  A future milestone must refactor the service to read from
+  ``self._config``.
+
+Mixed live + restart-required changes still reject entirely with
+exit code `2`. Identity separation between active and candidate
+policy objects is pinned by `TestMilestoneD1CandidateBuild` in
+`tests/unit/test_reload_manager.py`. End-to-end behavioral reload
+for each family is pinned by the `test_d1_*` tests in
+`tests/integration/test_rehash_streaming_swap.py`.
+
 All other fields remain ``RESTART_REQUIRED``: server binding
 (host/port), Granian construction (threads, access log), database
 path and topology, middleware (CORS, trusted hosts), metrics
@@ -214,11 +256,19 @@ in `config_reload_policy.py`:
 | `IGNORED` | Field is ignored for reload purposes |
 
 The closure pass enables provider/account/routing/model-override
-families as `LIVE`.  Every other field remains `RESTART_REQUIRED`
-because it is owned by the supervisor process (Granian construction,
-DB connection, middleware, JSON backend, deployment paths). When
-reviewing a future change, move the corresponding entry to `LIVE`
-in the same diff that introduces the live replacement path.
+families as `LIVE`. The D1 expansion extends the inventory to
+request-policy fields: the entire `[transcoder]`, `[compression]`,
+and `[cache]` blocks (including `[compression.synthetic_cache_controls]`
+and `[cache.synthetic_cache_controls]`), the runtime-tunable subset
+of `[models]` (`expose_mode`, `collapse_models`, `refresh_interval_s`,
+`stale_after_s`, `allow_stale_catalog`), and
+`security.persist_redacted_error_detail`. Every other field remains
+`RESTART_REQUIRED` because it is owned by the supervisor process
+(Granian construction, DB connection, middleware, JSON backend,
+deployment paths, `[upstream]` registry, `[model_info]` service
+construction). When reviewing a future change, move the
+corresponding entry to `LIVE` in the same diff that introduces the
+live replacement path.
 
 The default for any field not listed is `RESTART_REQUIRED` so a new
 field can never silently slip through unclassified.

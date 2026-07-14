@@ -51,6 +51,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   healthy server; standardized 9-key `--json` contract
   (`cli_rehash_format.py`); busy stage (`reload_in_progress`) now exits 4;
   secret-safe diagnostics. The LIVE field inventory is unchanged.
+- **Live config rehash closure pass D1 (request-policy expansion).**
+  The request-path policy fields the candidate builder already constructs
+  as generation-owned objects are now classified `LIVE` so `eggpool rehash`
+  publishes the new policy without restarting. Concretely: the entire
+  `[transcoder]` block, the entire `[compression]` block (including
+  `[compression.synthetic_cache_controls]`), and the entire `[cache]`
+  block (including `[cache.synthetic_cache_controls]`) are `LIVE`;
+  the runtime-tunable subset of `[models]` (`expose_mode`,
+  `collapse_models`, `refresh_interval_s`, `stale_after_s`,
+  `allow_stale_catalog`) is `LIVE`; and
+  `security.persist_redacted_error_detail` is `LIVE`. The
+  `_disposition_for()` helper inherits `LIVE` from `transcoder`,
+  `compression`, `cache`, and `models` for the expanded per-key paths
+  so adding a new field through `rehash` publishes a generation
+  rather than rejecting with `restart_required`. Startup-only fields
+  in `[models]` (`startup_refresh`, `ping_retain_days`,
+  `catalog_withdrawal_policy`), the entire `[upstream]` block, and the
+  entire `[model_info]` block stay `RESTART_REQUIRED`. The new
+  inventory is pinned by `test_live_field_inventory_matches_expected`
+  and the new `test_request_policy_sub_paths_inherit_live` test in
+  `tests/unit/test_config_reload_policy.py`. Identity separation
+  between active and candidate policies is pinned by
+  `TestMilestoneD1CandidateBuild` in `tests/unit/test_reload_manager.py`,
+  and end-to-end behavioral reload for each new family is pinned by
+  the seven `test_d1_*` tests in
+  `tests/integration/test_rehash_streaming_swap.py` (transcoder loss
+  policy, compression enabled/disabled, cache synthetic controls,
+  models collapse/expose, prefer-native toggle, persist-redacted-
+  error-detail, and old-stream/new-request split semantics). A new
+  repeated-reload soak test (`TestMilestoneD1RepeatedReloadSoak`)
+  exercises 25 alternating loss-policy reloads and asserts no
+  retiring-slot leaks and per-generation identity separation.
+  Documentation in `architecture/README.md`, `docs/live-config-rehash.md`,
+  and `AGENTS.md` updated. See
+  `plans/2026-07-14-live-config-rehash-final-milestone-d1-request-policy-expansion.md`.
 
 ## [0.6.0] - 2026-07-09
 

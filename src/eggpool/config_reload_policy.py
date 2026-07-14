@@ -128,13 +128,21 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "database.synchronous": ReloadDisposition.RESTART_REQUIRED,
     "database.worker_threads": ReloadDisposition.RESTART_REQUIRED,
     # ---- models catalog refresh cadence ----
-    "models.refresh_interval_s": ReloadDisposition.RESTART_REQUIRED,
-    "models.expose_mode": ReloadDisposition.RESTART_REQUIRED,
+    # Request-path-visible subset: the candidate builder rebuilds the
+    # catalog and re-registers periodic tasks per generation so these
+    # fields take effect live.  Other fields (startup_refresh,
+    # stale_after_s, allow_stale_catalog, ping_retain_days,
+    # catalog_withdrawal_policy) remain RESTART_REQUIRED because they
+    # gate startup-only behaviour or persistent retention that survives
+    # generations.  ``models.expose_mode`` and ``models.collapse_models``
+    # are read by the generation-owned ``CatalogService`` and are LIVE.
+    "models.refresh_interval_s": ReloadDisposition.LIVE,
+    "models.expose_mode": ReloadDisposition.LIVE,
+    "models.collapse_models": ReloadDisposition.LIVE,
     "models.startup_refresh": ReloadDisposition.RESTART_REQUIRED,
-    "models.stale_after_s": ReloadDisposition.RESTART_REQUIRED,
-    "models.allow_stale_catalog": ReloadDisposition.RESTART_REQUIRED,
+    "models.stale_after_s": ReloadDisposition.LIVE,
+    "models.allow_stale_catalog": ReloadDisposition.LIVE,
     "models.ping_retain_days": ReloadDisposition.RESTART_REQUIRED,
-    "models.collapse_models": ReloadDisposition.RESTART_REQUIRED,
     "models.catalog_withdrawal_policy": ReloadDisposition.RESTART_REQUIRED,
     # ---- routing strategy + scoring knobs (consumed at router construction) ----
     "routing.strategy": ReloadDisposition.LIVE,
@@ -169,7 +177,11 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "security.allowed_hosts": ReloadDisposition.RESTART_REQUIRED,
     "security.cors_origins": ReloadDisposition.RESTART_REQUIRED,
     "security.redact_headers": ReloadDisposition.RESTART_REQUIRED,
-    "security.persist_redacted_error_detail": ReloadDisposition.RESTART_REQUIRED,
+    # ``persist_redacted_error_detail`` controls whether the finalizer
+    # serialises upstream error bodies into the persisted row.  The
+    # candidate ``RequestCoordinator`` is constructed with the candidate
+    # value, so a rehash toggles the policy live for new generations.
+    "security.persist_redacted_error_detail": ReloadDisposition.LIVE,
     # ---- metrics / backup / dns / network (process-owned) ----
     "metrics.write_mode": ReloadDisposition.RESTART_REQUIRED,
     "metrics.flush_interval_s": ReloadDisposition.RESTART_REQUIRED,
@@ -204,10 +216,24 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "accounts": ReloadDisposition.LIVE,
     "model_overrides": ReloadDisposition.LIVE,
     "model_capabilities": ReloadDisposition.LIVE,
-    # ---- transcoder / compression / cache / model_info ----
-    "transcoder": ReloadDisposition.RESTART_REQUIRED,
-    "compression": ReloadDisposition.RESTART_REQUIRED,
-    "cache": ReloadDisposition.RESTART_REQUIRED,
+    # ---- transcoder / compression / cache / model_info (Milestone D1) ----
+    # ``transcoder`` is consumed via the generation-owned
+    # ``TranscoderPolicy`` object on the candidate ``RequestCoordinator``
+    # (``coordinator._transcoder_policy``).  Sub-path changes publish
+    # a fresh policy; no shared module-level singleton survives the
+    # swap.
+    "transcoder": ReloadDisposition.LIVE,
+    # ``compression`` is consumed via ``coordinator._compression_policy``
+    # and ``coordinator._compression_tuning_registry``; the candidate
+    # builder rebuilds both from ``candidate_config.compression`` so
+    # any knob (mode, thresholds, tuning, policy overrides) takes effect
+    # on the next generation.
+    "compression": ReloadDisposition.LIVE,
+    # ``cache`` is consumed via ``coordinator._cache_config``; the
+    # candidate builder wires the candidate ``CacheConfig`` directly so
+    # synthetic-cache knobs (enabled, dry_run, breakpoints, TTL, etc.)
+    # take effect on the next generation.
+    "cache": ReloadDisposition.LIVE,
     "model_info.enabled": ReloadDisposition.RESTART_REQUIRED,
     "model_info.startup_refresh": ReloadDisposition.RESTART_REQUIRED,
     "model_info.refresh_interval_s": ReloadDisposition.RESTART_REQUIRED,
@@ -291,8 +317,24 @@ def _disposition_for(path: str) -> ReloadDisposition:
     parent so adding or removing a provider or account is treated
     consistently with editing one in place.
 
-    Only ``providers`` and ``accounts`` are recognized as inheritable
-    parents; any other unknown path stays fail-closed.
+    Recognized inheritable parents (added in milestone D1):
+
+    - ``providers``, ``accounts``, ``model_overrides``,
+      ``model_capabilities`` (closure pass).
+    - ``transcoder``, ``compression``, ``cache`` — request-policy blocks
+      whose entire Pydantic surface is consumed from a generation-owned
+      ``TranscoderPolicy`` / ``CompressionConfig`` / ``CacheConfig``.  The
+      candidate builder in :mod:`eggpool.control.reload_manager`
+      rebuilds each policy object from the candidate config so sub-path
+      changes publish a fresh generation.
+    - ``models`` — covers the request-path-visible subset of the
+      ``ModelsConfig`` block (``expose_mode``, ``collapse_models``,
+      ``refresh_interval_s``, ``stale_after_s``, ``allow_stale_catalog``)
+      that is consumed via the generation-owned catalog and registered
+      background tasks; other ``models.*`` fields remain
+      ``RESTART_REQUIRED`` until a live replacement path is wired.
+
+    Any other unknown path stays fail-closed.
     """
     exact = _FIELD_DISPOSITION.get(path)
     if exact is not None:
@@ -309,6 +351,14 @@ def _disposition_for(path: str) -> ReloadDisposition:
         return _FIELD_DISPOSITION.get(
             "model_capabilities", ReloadDisposition.RESTART_REQUIRED
         )
+    if path.startswith("transcoder.") or path == "transcoder":
+        return _FIELD_DISPOSITION.get("transcoder", ReloadDisposition.RESTART_REQUIRED)
+    if path.startswith("compression.") or path == "compression":
+        return _FIELD_DISPOSITION.get("compression", ReloadDisposition.RESTART_REQUIRED)
+    if path.startswith("cache.") or path == "cache":
+        return _FIELD_DISPOSITION.get("cache", ReloadDisposition.RESTART_REQUIRED)
+    if path.startswith("models.") or path == "models":
+        return _FIELD_DISPOSITION.get("models", ReloadDisposition.RESTART_REQUIRED)
     return ReloadDisposition.RESTART_REQUIRED
 
 

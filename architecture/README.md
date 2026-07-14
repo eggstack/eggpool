@@ -2982,6 +2982,65 @@ deployment tooling can detect the situation. See
 `plans/2026-07-13-live-config-rehash-closure-plan.md` for the
 complete closure criteria.
 
+#### Closure pass D1 — request-policy expansion
+
+The D1 milestone extends the `LIVE` inventory to the request-path
+policy fields that are already generation-owned by the candidate
+builder (Milestone B wired `transcoder_policy`, `compression_policy`,
+`cache_config`, and `compression_tuning_registry` into
+`_build_candidate_generation` in `control/reload_manager.py`):
+
+- **Transcoder policy** (`[transcoder]`) is `LIVE` — `transcoder_loss_policy`,
+  `protocol_safety_mode`, `http_status_overrides`, and the entire
+  subtree. A change is hot-swapped by constructing a new
+  `TranscoderPolicy` from the candidate config and wiring it into the
+  new generation's `RequestCoordinator`; identity is preserved
+  (`is`/`id()`) so existing coordinators keep the old policy until
+  their `GenerationLease` releases.
+- **Compression policy** (`[compression]`, including
+  `[compression.synthetic_cache_controls]`) is `LIVE` —
+  `enabled`, `observe_only`, `max_request_body_bytes`,
+  `max_output_tokens`, `prefer_native_cache`, `prefer_native_min_tokens`,
+  `provider_cache_equivalents`, `overrides`, and the entire subtree.
+  `RuntimeCompressionPolicyOverrideRegistry` is rebuilt for each
+  generation so per-provider override changes take effect without a
+  restart.
+- **Cache synthesis controls** (`[cache]`, including
+  `[cache.synthetic_cache_controls]`) are `LIVE`. The cache config
+  feeds `_apply_synthetic_cache_controls` on the new generation.
+- **Models subset** (`[models]`) — `expose_mode`, `collapse_models`,
+  `refresh_interval_s`, `stale_after_s`, `allow_stale_catalog` are
+  `LIVE`. Catalog objects are generation-owned and re-read the
+  candidate config via `self._config`. Startup-only fields
+  (`startup_refresh`, `ping_retain_days`,
+  `catalog_withdrawal_policy`) remain `RESTART_REQUIRED` because they
+  bind to the Granian lifespan and the SQLite persistence layer.
+- **Security error-detail persistence** (`security.persist_redacted_error_detail`)
+  is `LIVE`. The flag is threaded into the candidate
+  `RequestCoordinator` via the `persist_error_detail=` kwarg.
+
+Fields that stay `RESTART_REQUIRED` (intentionally):
+
+- `[upstream]` — vestigial; only consulted at runtime-task startup
+  (`runtime_tasks.py:248`). A later milestone would need a full
+  rewrite to migrate the registry into a generation-owned object.
+- `[model_info]` — `ModelInfoService` is constructed in the FastAPI
+  lifespan (`app.py:935`) and is not rebuilt by the candidate
+  manager. A follow-up milestone must refactor the service to read
+  from `self._config` before `model_info.*` can become `LIVE`.
+
+Mixed live + restart-required changes still reject entirely with
+exit code `2`. The expanded inventory is pinned by
+`tests/unit/test_config_reload_policy.py::test_live_field_inventory_matches_expected`
+and inheritance is pinned by
+`tests/unit/test_config_reload_policy.py::test_request_policy_sub_paths_inherit_live`.
+Identity separation between active and candidate policies is pinned
+by `TestMilestoneD1CandidateBuild` in `tests/unit/test_reload_manager.py`,
+and end-to-end behavioral reload is pinned by the `test_d1_*`
+tests in `tests/integration/test_rehash_streaming_swap.py`. See
+`plans/2026-07-14-live-config-rehash-final-milestone-d1-request-policy-expansion.md`
+for the rollout plan.
+
 ### Validation contract
 
 `src/eggpool/config_validation.py` owns the reusable, Click-free
@@ -3194,6 +3253,34 @@ to `resolve_apply_outcome()` when `prefer_live=True`. Tests in
 `tests/integration/test_connect_logout_fallback.py` prove that
 rehash exits with code 3 when the control socket is missing and a
 healthy server is running, and that the server PID does not change.
+
+### Closure pass D1 — behavioral verification pattern
+
+Every `LIVE` field family added by D1 is pinned by a behavioral E2E
+test in `tests/integration/test_rehash_streaming_swap.py`. The
+canonical pattern is:
+
+1. **Start the server with the original config** (port + mock upstream).
+2. **Capture `original_pid = proc.pid`** and the
+   `/api/stats/runtime` `runtime_manager.active.generation_id` via
+   the public HTTP API.
+3. **Rewrite the config** to flip the target `LIVE` field
+   (e.g. `transcoder_loss_policy = "warn"` → `"reject"`,
+   `compression.enabled = false` → `true`,
+   `models.collapse_models = false` → `true`).
+4. **`eggpool rehash`** and assert exit code `0`,
+   `"Generation:"` in stdout, and `proc.pid == original_pid`.
+5. **Re-read `/api/stats/runtime`** and assert the
+   `runtime_manager.active.generation_id` advanced (i.e. the active
+   generation is now the candidate, not the original).
+6. **Trigger a request** that exercises the changed policy and
+   assert observable behavior (e.g. a cache-eligible request now
+   hits the new compression rules; a new provider matches the new
+   `models.collapse_models` view).
+
+This pattern proves that the policy object the new generation
+publishes is the candidate policy — not the original — without
+requiring private attribute access from outside the process.
 
 ### Polish pass additions (Milestone C follow-up)
 
