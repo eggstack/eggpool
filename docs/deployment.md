@@ -231,12 +231,18 @@ eggpool restart
 `eggpool rehash` applies supported configuration changes without a
 restart. The command validates the config locally, contacts the running
 server's control socket, and the server atomically swaps the active
-configuration generation when safe. All fields are currently
-`RESTART_REQUIRED`, so `eggpool rehash` will reject any config change
-today — use `eggpool restart` for all changes. When a future milestone
-moves a field to `LIVE`, `eggpool rehash` will apply it without
-restarting. The CLI is fail-closed and never implicitly restarts the
-service.
+configuration generation when safe.
+
+The closure pass enables provider/account/routing/model-override
+families as `LIVE`, so editing ``[providers.<id>]``,
+``[[providers.<id>.accounts]]``, ``[routing]``, ``[model_overrides.<id>]``,
+or ``[model_capabilities.<id>]`` applies without a restart. Other
+fields (server bind host/port, Granian construction, database path,
+middleware, security headers, metrics topology, backup paths,
+transcoder/compression storage topology) remain `RESTART_REQUIRED` —
+use `eggpool restart` for those. A mixed live + restart-required
+change is rejected entirely (exit code `2`); no partial application.
+The CLI is fail-closed and never implicitly restarts the service.
 
 **Control socket**: The running server listens on a Unix-domain socket
 at `~/.local/state/eggpool/eggpool.sock` with `0o600` permissions

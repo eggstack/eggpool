@@ -2956,6 +2956,32 @@ validated digests, the server re-validates, computes a diff, rejects
 restart-required changes, builds a candidate generation, reconciles
 persistence, atomically publishes, and retires the old generation.
 
+The **closure pass** (Phases 1-5) enables the first deliberately bounded
+set of `LIVE` fields so `eggpool rehash` actually applies supported
+configuration changes to a running process. The new ownership map:
+
+- **Provider definitions and accounts** (`[providers.<id>]`,
+  `[[providers.<id>.accounts]]`, model endpoints, static models,
+  protocols, authentication, headers, weights, enabled flags) are
+  `LIVE`. The diff algorithm inherits `LIVE` for expanded per-key
+  paths (`providers.<id>`, `accounts.<provider>/<name>`,
+  `model_overrides.<id>`, `model_capabilities.<id>`) so adding,
+  removing, or editing a provider or account publishes a new
+  generation without restarting.
+- **Routing and scoring knobs** under `[routing]` (strategy,
+  fairness, scoring penalties, retry limits, quota advisory mode,
+  trace policy) are `LIVE`.
+- **Background-task cadences and process-bound construction**
+  remain `RESTART_REQUIRED` (server bind, Granian construction,
+  database path, middleware, security headers, metrics topology,
+  backup paths, transcoder/compression storage topology).
+
+Mixed live + restart-required changes are rejected entirely (no
+partial application); the CLI returns exit code `2` so scripts and
+deployment tooling can detect the situation. See
+`plans/2026-07-13-live-config-rehash-closure-plan.md` for the
+complete closure criteria.
+
 ### Validation contract
 
 `src/eggpool/config_validation.py` owns the reusable, Click-free

@@ -137,22 +137,22 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "models.collapse_models": ReloadDisposition.RESTART_REQUIRED,
     "models.catalog_withdrawal_policy": ReloadDisposition.RESTART_REQUIRED,
     # ---- routing strategy + scoring knobs (consumed at router construction) ----
-    "routing.strategy": ReloadDisposition.RESTART_REQUIRED,
-    "routing.near_tie_epsilon": ReloadDisposition.RESTART_REQUIRED,
-    "routing.max_retries_before_stream": ReloadDisposition.RESTART_REQUIRED,
-    "routing.unknown_request_reservation_microdollars": ReloadDisposition.RESTART_REQUIRED,  # noqa: E501
-    "routing.inflight_penalty": ReloadDisposition.RESTART_REQUIRED,
-    "routing.health_penalty": ReloadDisposition.RESTART_REQUIRED,
-    "routing.randomize_near_ties": ReloadDisposition.RESTART_REQUIRED,
-    "routing.quota_exhausted_cooldown_seconds": ReloadDisposition.RESTART_REQUIRED,
-    "routing.local_quota_mode": ReloadDisposition.RESTART_REQUIRED,
-    "routing.fairness_mode": ReloadDisposition.RESTART_REQUIRED,
-    "routing.fairness_epsilon": ReloadDisposition.RESTART_REQUIRED,
-    "routing.fairness_scope": ReloadDisposition.RESTART_REQUIRED,
-    "routing.trace.mode": ReloadDisposition.RESTART_REQUIRED,
-    "routing.trace.sample_rate": ReloadDisposition.RESTART_REQUIRED,
-    "routing.trace.include_score_components": ReloadDisposition.RESTART_REQUIRED,
-    "routing.trace.skip_above_lock_wait_p95_ms": ReloadDisposition.RESTART_REQUIRED,
+    "routing.strategy": ReloadDisposition.LIVE,
+    "routing.near_tie_epsilon": ReloadDisposition.LIVE,
+    "routing.max_retries_before_stream": ReloadDisposition.LIVE,
+    "routing.unknown_request_reservation_microdollars": ReloadDisposition.LIVE,  # noqa: E501
+    "routing.inflight_penalty": ReloadDisposition.LIVE,
+    "routing.health_penalty": ReloadDisposition.LIVE,
+    "routing.randomize_near_ties": ReloadDisposition.LIVE,
+    "routing.quota_exhausted_cooldown_seconds": ReloadDisposition.LIVE,
+    "routing.local_quota_mode": ReloadDisposition.LIVE,
+    "routing.fairness_mode": ReloadDisposition.LIVE,
+    "routing.fairness_epsilon": ReloadDisposition.LIVE,
+    "routing.fairness_scope": ReloadDisposition.LIVE,
+    "routing.trace.mode": ReloadDisposition.LIVE,
+    "routing.trace.sample_rate": ReloadDisposition.LIVE,
+    "routing.trace.include_score_components": ReloadDisposition.LIVE,
+    "routing.trace.skip_above_lock_wait_p95_ms": ReloadDisposition.LIVE,
     # ---- limits / pricing / dashboard / security ----
     "limits.five_hour_microdollars": ReloadDisposition.RESTART_REQUIRED,
     "limits.weekly_microdollars": ReloadDisposition.RESTART_REQUIRED,
@@ -200,10 +200,10 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "network.keepalive_expiry_s": ReloadDisposition.RESTART_REQUIRED,
     # ---- proxies / providers / accounts / overrides ----
     "proxies": ReloadDisposition.RESTART_REQUIRED,
-    "providers": ReloadDisposition.RESTART_REQUIRED,
-    "accounts": ReloadDisposition.RESTART_REQUIRED,
-    "model_overrides": ReloadDisposition.RESTART_REQUIRED,
-    "model_capabilities": ReloadDisposition.RESTART_REQUIRED,
+    "providers": ReloadDisposition.LIVE,
+    "accounts": ReloadDisposition.LIVE,
+    "model_overrides": ReloadDisposition.LIVE,
+    "model_capabilities": ReloadDisposition.LIVE,
     # ---- transcoder / compression / cache / model_info ----
     "transcoder": ReloadDisposition.RESTART_REQUIRED,
     "compression": ReloadDisposition.RESTART_REQUIRED,
@@ -283,8 +283,33 @@ def _path_segments(root: object, dotted_path: str) -> tuple[object, str]:
 
 
 def _disposition_for(path: str) -> ReloadDisposition:
-    """Return the policy for ``path``, defaulting to ``RESTART_REQUIRED``."""
-    return _FIELD_DISPOSITION.get(path, ReloadDisposition.RESTART_REQUIRED)
+    """Return the policy for ``path``, defaulting to ``RESTART_REQUIRED``.
+
+    Exact match wins over prefix match.  The expanded per-key paths
+    emitted by :func:`_iter_tracked_fields` (``providers.<id>`` and
+    ``accounts.<provider>/<name>``) inherit the disposition of their
+    parent so adding or removing a provider or account is treated
+    consistently with editing one in place.
+
+    Only ``providers`` and ``accounts`` are recognized as inheritable
+    parents; any other unknown path stays fail-closed.
+    """
+    exact = _FIELD_DISPOSITION.get(path)
+    if exact is not None:
+        return exact
+    if path.startswith("providers.") or path == "providers":
+        return _FIELD_DISPOSITION.get("providers", ReloadDisposition.RESTART_REQUIRED)
+    if path.startswith("accounts.") or path == "accounts":
+        return _FIELD_DISPOSITION.get("accounts", ReloadDisposition.RESTART_REQUIRED)
+    if path.startswith("model_overrides.") or path == "model_overrides":
+        return _FIELD_DISPOSITION.get(
+            "model_overrides", ReloadDisposition.RESTART_REQUIRED
+        )
+    if path.startswith("model_capabilities.") or path == "model_capabilities":
+        return _FIELD_DISPOSITION.get(
+            "model_capabilities", ReloadDisposition.RESTART_REQUIRED
+        )
+    return ReloadDisposition.RESTART_REQUIRED
 
 
 def _is_structured_object(value: object) -> bool:

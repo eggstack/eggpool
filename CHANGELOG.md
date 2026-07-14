@@ -13,6 +13,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   manager, atomic generation swap, and non-disruptive old-generation retirement.
   All configuration fields remain `RESTART_REQUIRED` for now; the
   infrastructure is ready for future `LIVE` field classification.
+- **Live configuration rehash closure pass (Phases 1-5).** The first
+  deliberately bounded set of configuration paths is now `LIVE` so
+  `eggpool rehash` actually applies supported changes to a running process.
+  The `[providers]`, `[accounts]`, `[model_overrides]`, `[model_capabilities]`,
+  and all `[routing]` fields support live rehash; the closure-pass diff
+  algorithm inherits the parent collection's `LIVE` disposition for expanded
+  per-key paths (`providers.<id>`, `accounts.<provider>/<name>`,
+  `model_overrides.<id>`, `model_capabilities.<id>`) so adding a new provider
+  through `rehash` publishes a generation rather than rejecting with
+  `restart_required`. Every other field stays `RESTART_REQUIRED` until a
+  live replacement path is added in a separate diff; the unit test
+  `test_live_field_inventory_matches_expected` pins the actual set of `LIVE`
+  paths and fails closed on accidental expansion. Initial startup and
+  candidate generation construction now share a single
+  `register_runtime_tasks()` helper (`src/eggpool/runtime_tasks.py`) so the
+  process-level E2E test
+  (`tests/integration/test_rehash_streaming_swap.py`) can prove streaming
+  generation swap end-to-end with a real `eggpool serve` subprocess, a
+  mock upstream, and `eggpool --config X rehash` against the control socket.
+  Stable exit codes (`src/eggpool/cli_exit_codes.py`) make the `rehash`
+  command scriptable (0=ok, 1=validation, 2=restart-required,
+  3=control-unavailable, 4=busy, 5=prep-failed, 6=digest-mismatch); `--json`
+  output is supported. `eggpool accounts connect` and `eggpool accounts
+  logout` route through the same helper via
+  `providers.connect.apply_or_restart` so they apply `LIVE` changes when
+  the server is running and fall back to `restart_server()` only when the
+  control socket is unreachable. Documentation in
+  `docs/live-config-rehash.md`, `docs/deployment.md`, `architecture/README.md`,
+  `AGENTS.md`, and `.opencode/skills/architecture/SKILL.md` updated. See
+  `plans/2026-07-13-live-config-rehash-closure-plan.md`.
 
 ## [0.6.0] - 2026-07-09
 

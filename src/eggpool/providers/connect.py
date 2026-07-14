@@ -38,6 +38,42 @@ def restart_server(config_path: str, timeout: float = 10.0) -> bool:
     return _restart_server(config_path, timeout)
 
 
+def apply_or_restart(
+    config_path: str,
+    *,
+    prefer_live: bool = True,
+) -> tuple[bool, str]:
+    """Apply a config change live when possible, fall back to a hard restart.
+
+    The closure-pass plan (§7) routes ``connect`` and ``logout`` through
+    the shared validate-and-reload helper so a running server picks up
+    provider/account changes without a process restart.  When the
+    server is unreachable, falls back to
+    :func:`restart_server` so the change still applies.
+
+    Returns ``(applied, message)`` where ``applied`` is ``True`` when
+    the live reload succeeded and ``False`` when a restart was used
+    (or no change was needed).
+    """
+    if prefer_live:
+        try:
+            from eggpool.cli_rehash_helper import try_live_rehash
+
+            applied, message = try_live_rehash(config_path)
+            if applied:
+                return True, message
+            # Server unreachable or rejected with restart-required.
+            # Fall through to a hard restart so the change still applies.
+        except SystemExit:
+            # try_live_rehash raises SystemExit on validation failure;
+            # the failure has already been reported to stderr.
+            return False, "validation failed"
+
+    if restart_server(config_path):
+        return True, "Server restarted."
+    return False, "Server is not running."
+
+
 @dataclass(frozen=True)
 class ConfiguredAccount:
     """Configured provider account with optional resolved API key."""
@@ -946,9 +982,6 @@ def connect(
 
     sys.stdout.write(f"  Added {account_name} to {provider_id}.\n")
 
-    if restart_server(config_path):
-        sys.stdout.write("  Server restarted.\n")
-    else:
-        sys.stdout.write("  Start the server to apply changes.\n")
-
+    _applied, message = apply_or_restart(config_path)
+    sys.stdout.write(f"  {message}\n")
     return True

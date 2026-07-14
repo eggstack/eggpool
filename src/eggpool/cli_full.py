@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shutil
 import subprocess
@@ -18,6 +19,11 @@ if TYPE_CHECKING:
 import click
 
 from eggpool.accounts.registry import account_config_rows
+from eggpool.cli_exit_codes import (
+    EXIT_CONTROL_UNAVAILABLE,
+    EXIT_OK,
+    EXIT_VALIDATION,
+)
 from eggpool.config_utils import (
     detect_lan_ip as _detect_lan_ip,
 )
@@ -493,7 +499,6 @@ def logout(ctx: click.Context, target: str | None) -> None:
         TerminalMenu,
         matching_logout_accounts,
         remove_account_from_config,
-        restart_server,
         select_config_account,
     )
 
@@ -541,10 +546,12 @@ def logout(ctx: click.Context, target: str | None) -> None:
 
     click.echo(f"Removed {account.provider_id}/{account.name} from {config_path}.")
 
-    if restart_server(config_path):
-        click.echo("  Server restarted.")
-    else:
-        click.echo("  Server is not running.")
+    # Apply the change live when the server is running; fall back to
+    # a hard restart only when the control socket is unreachable.
+    from eggpool.providers.connect import apply_or_restart
+
+    _, message = apply_or_restart(config_path)
+    click.echo(f"  {message}")
 
 
 def _format_validation_failure(exc: ConfigValidationError) -> str:
@@ -2531,8 +2538,14 @@ def deploy_all(ctx: click.Context, install: bool) -> None:
 
 
 @cli.command()
+@click.option(
+    "--json",
+    "json_output",
+    is_flag=True,
+    help="Emit the structured reload response as JSON instead of human-readable text.",
+)
 @click.pass_context
-def rehash(ctx: click.Context) -> None:
+def rehash(ctx: click.Context, json_output: bool) -> None:
     """Validate the new config and apply a live refresh.
 
     The preflight runs :func:`eggpool.config_validation.validate_config_file`
@@ -2557,7 +2570,7 @@ def rehash(ctx: click.Context) -> None:
             "config and never invoking restart.",
             err=True,
         )
-        sys.exit(1)
+        sys.exit(EXIT_VALIDATION)
 
     for warning in validation.warnings:
         click.echo(f"  warning: {warning.to_display()}")
@@ -2591,45 +2604,87 @@ def rehash(ctx: click.Context) -> None:
             "Use `eggpool restart` for a disruptive configuration reload.",
             err=True,
         )
-        sys.exit(1)
+        sys.exit(EXIT_CONTROL_UNAVAILABLE)
     except ControlClientTimeoutError:
         click.echo(
             "\nControl socket request timed out.\n"
             "Use `eggpool restart` for a disruptive configuration reload.",
             err=True,
         )
-        sys.exit(1)
+        sys.exit(EXIT_CONTROL_UNAVAILABLE)
     except ControlClientProtocolError as exc:
         click.echo(f"\nProtocol error: {exc}", err=True)
-        sys.exit(1)
+        sys.exit(EXIT_CONTROL_UNAVAILABLE)
     except ControlClientError as exc:
         click.echo(f"\nControl socket error: {exc}", err=True)
-        sys.exit(1)
+        sys.exit(EXIT_CONTROL_UNAVAILABLE)
 
     # Step 3: Render the structured response
     if result.ok:
-        click.echo(f"\n{result.message}")
-        if result.changed_sections:
-            click.echo(f"  Changed sections: {', '.join(result.changed_sections)}")
-        if result.generation is not None:
-            click.echo(f"  Generation: {result.generation}")
-        if result.retirement_pending:
+        if json_output:
             click.echo(
-                "  Old generation is draining; active requests will complete "
-                "on their original configuration."
+                json.dumps(
+                    {
+                        "ok": True,
+                        "stage": result.stage,
+                        "generation": result.generation,
+                        "changed_sections": list(result.changed_sections),
+                        "warnings": list(result.warnings),
+                        "retirement_pending": result.retirement_pending,
+                        "message": result.message,
+                    },
+                    indent=2,
+                )
             )
-        for warning in result.warnings:
-            click.echo(f"  warning: {warning}")
-        sys.exit(0)
+        else:
+            click.echo(f"\n{result.message}")
+            if result.changed_sections:
+                click.echo(f"  Changed sections: {', '.join(result.changed_sections)}")
+            if result.generation is not None:
+                click.echo(f"  Generation: {result.generation}")
+            if result.retirement_pending:
+                click.echo(
+                    "  Old generation is draining; active requests will complete "
+                    "on their original configuration."
+                )
+            for warning in result.warnings:
+                click.echo(f"  warning: {warning}")
+        sys.exit(EXIT_OK)
     else:
-        click.echo(f"\n{result.message}", err=True)
-        if result.restart_required:
-            click.echo("  Restart-required changes:", err=True)
-            for field in result.restart_required:
-                click.echo(f"    - {field}", err=True)
-        for warning in result.warnings:
-            click.echo(f"  warning: {warning}", err=True)
-        sys.exit(1)
+        from eggpool.cli_exit_codes import (  # noqa: PLC0415
+            exit_code_for_failure,
+        )
+
+        exit_code = exit_code_for_failure(
+            stage=result.stage,
+            restart_required=result.restart_required,
+            message=result.message,
+        )
+        if json_output:
+            click.echo(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "stage": result.stage,
+                        "generation": result.generation,
+                        "changed_sections": list(result.changed_sections),
+                        "warnings": list(result.warnings),
+                        "restart_required": list(result.restart_required),
+                        "exit_code": exit_code,
+                        "message": result.message,
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            click.echo(f"\n{result.message}", err=True)
+            if result.restart_required:
+                click.echo("  Restart-required changes:", err=True)
+                for field in result.restart_required:
+                    click.echo(f"    - {field}", err=True)
+            for warning in result.warnings:
+                click.echo(f"  warning: {warning}", err=True)
+        sys.exit(exit_code)
 
 
 @cli.group()

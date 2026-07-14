@@ -10,13 +10,40 @@ atomically swaps the active configuration generation when safe.
 ## Quick start
 
 ```bash
-# Edit config, then apply live changes
+# Edit config, then apply supported LIVE changes
 $EDITOR ~/.config/eggpool/config.toml
 eggpool rehash
 
-# Disruptive changes (host, port, database path) require a restart
+# Disruptive changes (host, port, database path, middleware) require a restart
 eggpool restart
 ```
+
+## Supported LIVE fields (closure pass)
+
+The closure pass enables the following families of fields as `LIVE`:
+
+- **Provider definitions and accounts**: ``[providers.<id>]`` blocks
+  (base URL, protocols, headers, models endpoint, static models,
+  authentication, routing priority) and ``[[providers.<id>.accounts]]``
+  blocks (name, API key, weight, enabled flag). Adding, removing,
+  or editing a provider or account publishes a new generation
+  without restarting the process.
+- **Routing and scoring knobs**: every field under ``[routing]``
+  including strategy, fairness, scoring penalties, retry limits,
+  quota advisory mode, and routing trace policy.
+- **Model overrides and per-model capability overrides**:
+  ``[model_overrides.<id>]`` and ``[model_capabilities.<id>]``.
+
+All other fields remain ``RESTART_REQUIRED``: server binding
+(host/port), Granian construction (threads, access log), database
+path and topology, middleware (CORS, trusted hosts), metrics
+storage topology, security header construction, and process-owned
+background-task cadences. These need a full restart because the
+runtime builds them once at startup.
+
+When a `rehash` includes a mix of LIVE and RESTART_REQUIRED changes
+the entire reload is rejected (no partial application), and the CLI
+returns exit code `2` so scripts can detect the situation.
 
 ## Complete reload flow
 
@@ -30,7 +57,9 @@ The reload follows a strict transactional pipeline:
 3. **Server-side re-validation** — The server independently re-validates
    the config to guard against TOCTOU drift.
 4. **Diff** — Server computes a `ConfigDiff` against the active
-   generation's config.
+   generation's config. Expanded per-key paths
+   (``providers.<id>``, ``accounts.<provider>/<name>``) inherit the
+   LIVE disposition of their parent collection.
 5. **Restart-required check** — Any field with `RESTART_REQUIRED`
    disposition causes the entire operation to be rejected. The server
    lists the offending fields in the response.
@@ -97,19 +126,50 @@ The CLI performs these steps:
 2. **Connect to control socket** — Sends the validated
    `content_digest` to the running server. If the server is not
    running, prints "Control socket unavailable. Is the server running?"
-   and exits non-zero.
+   and exits with code `3`.
 3. **Render result** — On success, prints changed sections and the
    new generation number. On failure, lists restart-required fields.
 
+### Exit codes
+
+The `rehash` command returns stable exit codes that scripts and
+deployment tooling can rely on:
+
+| Exit code | Meaning |
+|-----------|---------|
+| `0` | Applied, no-op, or ignored-only success |
+| `1` | Validation / configuration failure |
+| `2` | Restart required (one or more fields need a full restart) |
+| `3` | Control socket unavailable (server not running) |
+| `4` | Reload conflict / busy (another reload in progress) |
+| `5` | Candidate preparation or publication failure |
+| `6` | Digest mismatch between CLI preflight and server read |
+
+The constants are pinned in `src/eggpool/cli_exit_codes.py`.
+
+### JSON output
+
+For programmatic consumers (systemd hooks, configuration-management
+tooling, future `connect`/`logout` automation) pass `--json`:
+
+```bash
+eggpool --config /etc/eggpool/config.toml rehash --json
+```
+
+Outputs the structured response as JSON on stdout, suitable for
+`jq` pipelines. Secrets are redacted as `"<changed>"` in any
+displayed fields.
+
 ### Error messages
 
-| Message | Meaning |
-|---------|---------|
-| "Live configuration is unchanged. Refusing to apply an invalid config…" | Local validation failed; config was not sent to the server |
-| "Control socket unavailable. Is the server running?" | Server is not running; use `eggpool restart` |
-| "Control socket request timed out." | Server did not respond within 30s |
-| "A reload transaction is already in progress" | Concurrent `rehash` rejected; only one reload at a time |
-| "Restart-required changes: …" | One or more fields require a restart; use `eggpool restart` |
+| Message | Exit code | Meaning |
+|---------|-----------|---------|
+| "Live configuration is unchanged. Refusing to apply an invalid config…" | `1` | Local validation failed; config was not sent to the server |
+| "Control socket unavailable. Is the server running?" | `3` | Server is not running; use `eggpool restart` |
+| "Control socket request timed out." | `3` | Server did not respond within 30s |
+| "A reload transaction is already in progress" | `4` | Concurrent `rehash` rejected; only one reload at a time |
+| "Restart-required changes: …" | `2` | One or more fields require a restart; use `eggpool restart` |
+| "Configuration refresh rejected; active configuration is unchanged." | varies | Validation/preparation failure; old config is untouched |
 
 ## Digests and fingerprints
 
@@ -127,21 +187,33 @@ in `config_reload_policy.py`:
 
 | Disposition | Meaning |
 |-------------|---------|
-| `LIVE` | Can be hot-swapped without a restart (none currently) |
+| `LIVE` | Can be hot-swapped without a restart |
 | `RESTART_REQUIRED` | Changing the field requires a service restart |
 | `IGNORED` | Field is ignored for reload purposes |
 
-**All fields are currently `RESTART_REQUIRED`.** The Milestone C control
-plane infrastructure is complete — the control socket, reload manager,
-candidate generation builder, persistence reconciliation, and atomic
-publication are all operational. However, no individual `AppConfig` field
-has been classified `LIVE` yet. This is intentionally fail-closed: when
-a future milestone moves a field to `LIVE`, `eggpool rehash` will apply
-it without restarting.
+The closure pass enables provider/account/routing/model-override
+families as `LIVE`.  Every other field remains `RESTART_REQUIRED`
+because it is owned by the supervisor process (Granian construction,
+DB connection, middleware, JSON backend, deployment paths). When
+reviewing a future change, move the corresponding entry to `LIVE`
+in the same diff that introduces the live replacement path.
 
-Currently, `eggpool rehash` will reject the entire operation for any
-config change because all fields are `RESTART_REQUIRED`. Use
-`eggpool restart` for any configuration change.
+The default for any field not listed is `RESTART_REQUIRED` so a new
+field can never silently slip through unclassified.
+
+### Generating the live/restart table
+
+The policy map is the single reviewable inventory.  To print a
+live/restart summary from a checkout:
+
+```python
+from eggpool.config_reload_policy import _FIELD_DISPOSITION
+for path, disp in sorted(_FIELD_DISPOSITION.items()):
+    print(f"{disp.value:18s} {path}")
+```
+
+To regenerate this section in the future, re-run the snippet above
+and replace the table.
 
 ## Transaction safety
 

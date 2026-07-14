@@ -24,9 +24,6 @@ from eggpool.api.stats import register_stats_routes
 from eggpool.auth import require_auth, require_auth_at_startup
 from eggpool.background import TaskSupervisor
 from eggpool.background.cleanup import (
-    checkpoint_database,
-    cleanup_old_events,
-    cleanup_old_requests,
     reconcile_expired_reservations,
 )
 from eggpool.catalog.pricing import CostCalculator, PriceRepository
@@ -94,7 +91,6 @@ if TYPE_CHECKING:
     import httpcore
 
     from eggpool.quota.estimation import QuotaEstimator
-    from eggpool.update_checker import UpdateChecker
 
 logger = logging.getLogger(__name__)
 
@@ -692,252 +688,33 @@ def register_candidate_tasks(
     process: ProcessRuntime,
     runtime_manager: RuntimeManager,
     *,
-    effective_model_info: Any = None,
+    effective_model_info: Any = None,  # noqa: ARG001 -- legacy arg, ignored
 ) -> None:
-    """Register background tasks on a candidate generation's supervisor.
+    """Backward-compatible wrapper for the unified task registration.
 
-    Mirrors the task registrations from ``_lifespan_runtime`` but uses
-    ``leased_runtime()`` so each tick acquires the current generation
-    per-tick instead of capturing stale references.  Called by the
-    reload manager after candidate generation construction.
+    The closure-pass plan unified startup and candidate task
+    registration behind :func:`eggpool.runtime_tasks.register_runtime_tasks`.
+    This thin wrapper preserves the old positional signature so
+    external callers (and the reload manager) keep working, while
+    delegating to the shared function.  ``effective_model_info`` is
+    accepted for backward compatibility but ignored -- the unified
+    function acquires the current generation per tick and reads
+    ``gen.model_info`` directly.
     """
-    from eggpool.runtime_manager import leased_runtime  # noqa: PLC0415
-
-    db = process.db
-
-    if config.models.refresh_interval_s > 0:
-
-        async def _catalog_refresh_once() -> None:
-            async with leased_runtime(runtime_manager) as gen:
-                result = await gen.catalog.refresh()
-            if effective_model_info is not None:
-                try:
-                    await effective_model_info.reconcile_catalog_refresh(result)
-                except Exception:
-                    logger.exception(
-                        "Model info reconciliation after catalog refresh failed"
-                    )
-
-        supervisor.register_periodic(
-            "catalog_refresh",
-            _catalog_refresh_once,
-            interval_s=float(config.models.refresh_interval_s),
-        )
-
-    if (
-        config.model_info.enabled
-        and config.model_info.refresh_interval_s > 0
-        and effective_model_info is not None
-    ):
-        initial_model_info_refresh = True
-
-        async def _model_info_refresh_once() -> None:
-            nonlocal initial_model_info_refresh
-            async with leased_runtime(runtime_manager) as gen:
-                mi = getattr(gen, "model_info", effective_model_info)
-                result = await mi.refresh_due_models(force=initial_model_info_refresh)
-                initial_model_info_refresh = False
-                mi.log_refresh_result(result)
-
-        supervisor.register_periodic(
-            "model_info_refresh",
-            _model_info_refresh_once,
-            interval_s=float(config.model_info.refresh_interval_s),
-            run_immediately=True,
-        )
-
-    if config.model_info.enabled and effective_model_info is not None:
-
-        async def _model_info_backfill_once() -> None:
-            async with leased_runtime(runtime_manager) as gen:
-                mi = getattr(gen, "model_info", effective_model_info)
-                result = await mi.backfill_missing_canonical()
-                if result.get("backfilled", 0) > 0:
-                    logger.info("Model info canonical backfill: %s", result)
-
-        supervisor.register_periodic(
-            "model_info_canonical_backfill",
-            _model_info_backfill_once,
-            interval_s=60.0,
-            initial_delay_s=10.0,
-        )
-
-    async def _retention_cleanup_once() -> None:
-        from eggpool.background.cleanup import (  # noqa: PLC0415
-            cleanup_old_events,
-            cleanup_old_requests,
-            reconcile_expired_reservations,
-        )
-        from eggpool.db.repositories import PingRepository  # noqa: PLC0415
-
-        ping_repo = PingRepository(db)
-        await cleanup_old_requests(db, config.dashboard.retain_request_stats_days)
-        await cleanup_old_events(db, config.dashboard.retain_event_days)
-        await ping_repo.cleanup_old_pings(config.models.ping_retain_days)
-        async with leased_runtime(runtime_manager) as gen:
-            await reconcile_expired_reservations(
-                db,
-                quota_estimator=gen.router.quota_estimator,
-                router=gen.router,
-            )
-
-    supervisor.register_periodic(
-        "retention_cleanup",
-        _retention_cleanup_once,
-        interval_s=3600.0,
+    from eggpool.runtime_tasks import (  # noqa: PLC0415
+        TaskRegistrationContext,
+        register_runtime_tasks,
     )
 
-    async def _checkpoint_once() -> None:
-        from eggpool.background.cleanup import checkpoint_database  # noqa: PLC0415
-
-        await checkpoint_database(db)
-
-    supervisor.register_periodic(
-        "checkpoint",
-        _checkpoint_once,
-        interval_s=14400.0,
-        run_immediately=True,
+    register_runtime_tasks(
+        supervisor,
+        TaskRegistrationContext(
+            process=process,
+            runtime_manager=runtime_manager,
+            config=config,
+            update_checker_outbound=None,
+        ),
     )
-
-    async def _refresh_usage_windows_once() -> None:
-        async with leased_runtime(runtime_manager) as gen:
-            await gen.router.quota_estimator.load_persisted_windows()
-
-    supervisor.register_periodic(
-        "usage_window_refresh",
-        _refresh_usage_windows_once,
-        interval_s=60.0,
-        initial_delay_s=15.0,
-    )
-
-    async def _finalization_retry_tick() -> None:
-        async with leased_runtime(runtime_manager) as gen:
-            await gen.finalization_retry_queue.drain_once()
-
-    supervisor.register_periodic(
-        "finalization_retry_drain",
-        _finalization_retry_tick,
-        interval_s=15.0,
-        initial_delay_s=5.0,
-    )
-
-    async def _stale_request_finalizer_once() -> None:
-        from eggpool.app import finalize_stale_requests_once  # noqa: PLC0415
-
-        async with leased_runtime(runtime_manager) as gen:
-            await finalize_stale_requests_once(
-                db=db,
-                router=gen.router,
-                quota_estimator=gen.router.quota_estimator,
-                max_pending_seconds=config.upstream.read_timeout_s,
-            )
-
-    supervisor.register_periodic(
-        "stale_request_finalizer",
-        _stale_request_finalizer_once,
-        interval_s=60.0,
-        initial_delay_s=25.0,
-    )
-
-    async def _health_disabled_models_prune_once() -> None:
-        from eggpool.app import prune_health_disabled_models_once  # noqa: PLC0415
-
-        async with leased_runtime(runtime_manager) as gen:
-            await prune_health_disabled_models_once(gen)
-
-    supervisor.register_periodic(
-        "health_disabled_models_prune",
-        _health_disabled_models_prune_once,
-        interval_s=60.0,
-        initial_delay_s=40.0,
-    )
-
-    if config.metrics.write_mode != "immediate":
-        metrics_coalescer = process.metrics_coalescer
-
-        async def _metrics_flush_once() -> None:
-            await metrics_coalescer.flush(reason="periodic")
-
-        supervisor.register_periodic(
-            "metrics_flush",
-            _metrics_flush_once,
-            interval_s=float(config.metrics.flush_interval_s),
-            initial_delay_s=5.0,
-        )
-
-    if config.backup.enabled and config.backup.interval_s > 0:
-        from eggpool.background.backup import run_backup_once  # noqa: PLC0415
-
-        raw_config_path: str | None = getattr(process, "config_path", None)
-        resolved_config_path = Path(raw_config_path) if raw_config_path else None
-        resolved_env_path: Path | None = None
-        if resolved_config_path is not None:
-            candidate_env = resolved_config_path.parent / ".env"
-            if candidate_env.exists():
-                resolved_env_path = candidate_env
-
-        async def _automatic_backup_once() -> None:
-            try:
-                await run_backup_once(
-                    config=config,
-                    db=db,
-                    config_path=resolved_config_path,
-                    env_path=resolved_env_path,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Automatic backup tick failed")
-
-        supervisor.register_periodic(
-            "automatic_backup",
-            _automatic_backup_once,
-            interval_s=float(config.backup.interval_s),
-            initial_delay_s=float(config.backup.startup_delay_s),
-        )
-
-
-def _register_update_checker(
-    app: FastAPI,
-    supervisor: TaskSupervisor,
-    outbound_manager: OutboundClientManager,
-) -> UpdateChecker:
-    """Register the periodic PyPI update checker as a supervised background task.
-
-    Returns the checker instance so callers can attach it to app.state
-    or use it for tests.  The checker runs an initial PyPI probe on
-    the first tick and repeats every 24 hours; it never auto-installs.
-
-    The shared outbound client from *outbound_manager* is wired into
-    the checker once at registration so per-tick probes reuse the same
-    connection pool rather than constructing fresh clients.
-    """
-    from eggpool.update_checker import UpdateChecker
-
-    update_checker = UpdateChecker()
-    app.state.update_checker = update_checker
-
-    async def _update_check_once() -> None:
-        # First-tick connection wiring mirrors the previous
-        # ``_run_with_client`` wrapper so the very first probe lands
-        # with a shared client (no cold-pool DNS/TCP).  ``get_client``
-        # is idempotent on the manager, so subsequent ticks are a
-        # cheap pointer swap.
-        update_checker._client = await outbound_manager.get_client()  # pyright: ignore[reportPrivateUsage]
-        try:
-            await update_checker.check_once()
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001 — best-effort probe
-            logger.warning("Update check failed: %s", exc)
-
-    supervisor.register_periodic(
-        "update_checker",
-        _update_check_once,
-        interval_s=float(update_checker.check_interval_s),
-        run_immediately=True,
-    )
-    return update_checker
 
 
 @asynccontextmanager
@@ -1464,9 +1241,57 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         router=router,
     )
 
-    # 20. Background task supervisor
+    # 19b. Publish the initial runtime generation.  This used to be
+    # step 24 (after task registration) but the closure pass requires
+    # the unified register_runtime_tasks() helper to receive a real
+    # RuntimeManager reference rather than a mutable dict ref, so the
+    # manager is created first.  The supervisor reference is patched
+    # in step 20 below via RuntimeManager.attach_supervisor_to_active.
+    runtime_manager = RuntimeManager()
+    initial_generation = RuntimeGeneration(
+        generation_id=runtime_manager.reserve_next_generation_id(),
+        config=config,
+        config_digest=getattr(app.state, "config_digest", ""),
+        registry=app.state.registry,
+        catalog=app.state.catalog,
+        router=app.state.router,
+        coordinator=app.state.coordinator,
+        client_pool=app.state.client_pool,
+        outbound_manager=app.state.outbound_manager,
+        dns_backend=getattr(app.state, "dns_backend", None),
+        health_manager=app.state.health_manager,
+        cost_calculator=app.state.cost_calculator,
+        transcoder_policy=app.state.transcoder_policy,
+        compression_policy=app.state.compression_policy,
+        cache_config=app.state.cache_config,
+        compression_tuning_registry=app.state.compression_tuning_registry,
+        dispatch_overhead_recorder=app.state.dispatch_overhead_recorder,
+        dispatch_span_recorder=app.state.dispatch_span_recorder,
+        account_backoff_repo=app.state.account_backoff_repo,
+        stats_service=app.state.stats,
+        supervisor=None,  # patched in step 20 via attach_supervisor_to_active
+        finalization_retry_queue=app.state.finalization_retry_queue,
+        routing_trace_guard=app.state.routing_trace_guard,
+        created_at_monotonic=app.state.started_monotonic,
+        created_at_epoch=app.state.started_epoch,
+    )
+    await runtime_manager.install_initial(initial_generation)
+    attach_runtime_manager(app, runtime_manager)
+    _mirror_generation_on_app_state(app, initial_generation)
+    logger.info(
+        "RuntimeManager: generation %d published (%d owned services)",
+        initial_generation.generation_id,
+        len([name for name in vars(initial_generation) if name != "config"]),
+    )
+
+    # 20. Background task supervisor.
     supervisor = TaskSupervisor()
     app.state.supervisor = supervisor
+    # Patch the active generation's supervisor reference now that it
+    # exists so retirement closes it.
+    patched = runtime_manager.attach_supervisor_to_active(supervisor)
+    if patched is not None:
+        _mirror_generation_on_app_state(app, patched)
 
     # 20a. Background task monitor for runtime metrics
     from eggpool.background import BackgroundTaskMonitor
@@ -1510,307 +1335,26 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         runtime_manager=None,  # wired in step 24 below
     )
 
-    # Register catalog refresh task.  Supervisor owns the cadence so
-    # heartbeat fields (``last_tick_started_at``, ``next_run_at``,
-    # ``overdue_seconds``) are accurate on the runtime dashboard for
-    # long-running processes; previously this lived in an inner
-    # ``while True`` loop that never reported completion.  We
-    # cross-check ``_catalog_refresh_loop`` at registration so a
-    # missing local symbol surfaces as a startup log line instead of a
-    # a silently-broken tick (the previous bug referenced by the
-    # remediation plan).
-    if config.models.refresh_interval_s > 0:
-        effective_model_info = model_info if config.model_info.enabled else None
-
-        async def _catalog_refresh_once() -> None:
-            from eggpool.runtime_manager import (  # noqa: PLC0415
-                leased_runtime,
-            )
-
-            # Acquire a generation lease so the refresh uses the
-            # current generation's catalog, not a stale reference
-            # captured at registration time.
-            mgr = _runtime_manager_ref["manager"]
-            if mgr is not None:
-                async with leased_runtime(mgr) as gen:
-                    result = await gen.catalog.refresh()
-            else:
-                result = await catalog.refresh()
-            if effective_model_info is not None:
-                try:
-                    await effective_model_info.reconcile_catalog_refresh(result)
-                except Exception:
-                    logger.exception(
-                        "Model info reconciliation after catalog refresh failed"
-                    )
-
-        supervisor.register_periodic(
-            "catalog_refresh",
-            _catalog_refresh_once,
-            interval_s=float(config.models.refresh_interval_s),
-        )
-
-    # Register model info periodic refresh task (supervisor-owned).
-    if (
-        config.model_info.enabled
-        and config.model_info.refresh_interval_s > 0
-        and model_info is not None
-    ):
-        initial_model_info_refresh = True
-
-        async def _model_info_refresh_once() -> None:
-            nonlocal initial_model_info_refresh
-            result = await model_info.refresh_due_models(
-                force=initial_model_info_refresh
-            )
-            initial_model_info_refresh = False
-            model_info.log_refresh_result(result)
-
-        supervisor.register_periodic(
-            "model_info_refresh",
-            _model_info_refresh_once,
-            interval_s=float(config.model_info.refresh_interval_s),
-            run_immediately=True,
-        )
-
-    # Register periodic backfill of canonical rows for models that lack
-    # one.  Runs every 60s so withdrawn-and-reappeared models are
-    # covered within one cycle.  Now supervisor-owned so the dashboard
-    # reports heartbeats without inferring from lifecycle timestamps.
-    if config.model_info.enabled and model_info is not None:
-
-        async def _model_info_backfill_once() -> None:
-            result = await model_info.backfill_missing_canonical()
-            if result.get("backfilled", 0) > 0:
-                logger.info("Model info canonical backfill: %s", result)
-
-        supervisor.register_periodic(
-            "model_info_canonical_backfill",
-            _model_info_backfill_once,
-            interval_s=60.0,
-            initial_delay_s=10.0,
-        )
-
-    # Register retention cleanup task (runs every hour).  Supervisor
-    # owns the cadence so the dashboard never reports a false overdue
-    # age for this long-cadence loop.
-    async def _retention_cleanup_once() -> None:
-        from eggpool.runtime_manager import leased_runtime  # noqa: PLC0415
-
-        await cleanup_old_requests(db, config.dashboard.retain_request_stats_days)
-        await cleanup_old_events(db, config.dashboard.retain_event_days)
-        await ping_repo.cleanup_old_pings(config.models.ping_retain_days)
-        await rollup_repo.cleanup_old_rollups(
-            config.metrics.rollup_retain_days,
-            max_rows=config.metrics.cleanup_max_rows_per_pass,
-        )
-        mgr = _runtime_manager_ref["manager"]
-        if mgr is not None:
-            async with leased_runtime(mgr) as gen:
-                await reconcile_expired_reservations(
-                    db,
-                    quota_estimator=gen.router.quota_estimator,
-                    router=gen.router,
-                )
-        else:
-            await reconcile_expired_reservations(
-                db,
-                quota_estimator=router.quota_estimator,
-                router=router,
-            )
-
-    supervisor.register_periodic(
-        "retention_cleanup",
-        _retention_cleanup_once,
-        interval_s=3600.0,
+    # Use the unified register_runtime_tasks helper so the startup and
+    # reload paths share one registration table.  Pass the
+    # update_checker_outbound manager so the process-owned PyPI
+    # probe is registered at startup; the reload path leaves it
+    # None so a candidate generation does not duplicate the checker.
+    from eggpool.runtime_tasks import (  # noqa: PLC0415
+        TaskRegistrationContext,
+        register_runtime_tasks,
     )
 
-    # Register periodic checkpoint task (runs every 4 hours).  Long
-    # cadence; supervisor-owned so dashboard timing stays coherent.
-    async def _checkpoint_once() -> None:
-        await checkpoint_database(db)
-
-    supervisor.register_periodic(
-        "checkpoint",
-        _checkpoint_once,
-        interval_s=14400.0,
-        run_immediately=True,
+    register_runtime_tasks(
+        supervisor,
+        TaskRegistrationContext(
+            process=process,
+            runtime_manager=runtime_manager,
+            config=config,
+            update_checker_outbound=outbound_manager,
+            app_state=app.state,
+        ),
     )
-
-    # Register periodic usage window refresh (every 60 seconds).
-    # Supervisor-owned: heartbeat fields report last/next run so the
-    # dashboard no longer shows a false ``overdue`` age for the
-    # healthy sleeping schedule.
-    async def _refresh_usage_windows_once() -> None:
-        from eggpool.runtime_manager import leased_runtime  # noqa: PLC0415
-
-        mgr = _runtime_manager_ref["manager"]
-        if mgr is not None:
-            async with leased_runtime(mgr) as gen:
-                await gen.router.quota_estimator.load_persisted_windows()
-        else:
-            await router.quota_estimator.load_persisted_windows()
-
-    supervisor.register_periodic(
-        "usage_window_refresh",
-        _refresh_usage_windows_once,
-        interval_s=60.0,
-        initial_delay_s=15.0,
-    )
-
-    # Finalization retry queue periodic drain task.  Cadence is the
-    # queue's ``idle_interval_s`` (default 15s); the drain is cheap
-    # when the queue is empty so the longer idle cadence does not
-    # impact the data plane.
-    async def _finalization_retry_tick() -> None:
-        from eggpool.runtime_manager import leased_runtime  # noqa: PLC0415
-
-        mgr = _runtime_manager_ref["manager"]
-        if mgr is not None:
-            async with leased_runtime(mgr) as gen:
-                await gen.finalization_retry_queue.drain_once()
-        else:
-            await finalization_retry_queue.drain_once()
-
-    supervisor.register_periodic(
-        "finalization_retry_drain",
-        _finalization_retry_tick,
-        interval_s=finalization_retry_queue.idle_interval_s,
-        initial_delay_s=5.0,
-    )
-
-    # Register stale request finalizer (runs every 60s).  Default
-    # threshold matches the upstream read_timeout so legitimate
-    # long-running requests are never touched; the safety net only
-    # catches leaked requests whose finalizer never ran (client
-    # disconnect + cancellation timeout killed the generator task
-    # before finalize() could acquire the DB lock).
-    async def _stale_request_finalizer_once() -> None:
-        from eggpool.runtime_manager import leased_runtime  # noqa: PLC0415
-
-        mgr = _runtime_manager_ref["manager"]
-        if mgr is not None:
-            async with leased_runtime(mgr) as gen:
-                await finalize_stale_requests_once(
-                    db=db,
-                    router=gen.router,
-                    quota_estimator=gen.router.quota_estimator,
-                    max_pending_seconds=config.upstream.read_timeout_s,
-                )
-        else:
-            await finalize_stale_requests_once(
-                db=db,
-                router=router,
-                quota_estimator=router.quota_estimator,
-                max_pending_seconds=config.upstream.read_timeout_s,
-            )
-
-    supervisor.register_periodic(
-        "stale_request_finalizer",
-        _stale_request_finalizer_once,
-        interval_s=60.0,
-        initial_delay_s=25.0,
-    )
-
-    # Register periodic prune of stale per-account model state
-    # (model_availability + disabled_models). Runs every 60s so an
-    # upstream model withdrawal is reflected in in-memory state within
-    # one cycle without requiring a process restart. Wiring is wrapped
-    # so a missing dependency (e.g. a future test app) cannot crash
-    # startup.
-    # Mutable reference so tasks can read the RuntimeManager lazily
-    # after it is created later in the lifespan.  Capturing
-    # ``getattr(app.state, "runtime_manager", None)`` here would always
-    # yield ``None`` because the manager is created after task
-    # registration.
-    _runtime_manager_ref: dict[str, Any] = {"manager": None}
-
-    try:
-
-        async def _health_disabled_models_prune_once() -> None:
-            from eggpool.runtime_manager import (  # noqa: PLC0415
-                leased_runtime,
-            )
-
-            mgr = _runtime_manager_ref["manager"]
-            if mgr is not None:
-                async with leased_runtime(mgr) as gen:
-                    await prune_health_disabled_models_once(gen)
-            else:
-                await prune_health_disabled_models_once(app.state)
-
-        supervisor.register_periodic(
-            "health_disabled_models_prune",
-            _health_disabled_models_prune_once,
-            interval_s=60.0,
-            initial_delay_s=40.0,
-        )
-    except Exception:  # noqa: BLE001 - best-effort registration
-        logger.exception(
-            "Failed to register health_disabled_models_prune; skipping",
-        )
-
-    # Register metrics flush task for buffered modes.  Previously the
-    # supervisor delegated to ``metrics_coalescer.run(stop_event)``,
-    # whose inner loop owned the cadence.  The supervisor now drives
-    # the cadence and calls ``flush()`` per tick; the lifespan-owned
-    # shutdown block performs the final ``flush(reason="shutdown")``
-    # after ``stop_all()`` so buffered analytics still hit disk on
-    # process exit.
-    if config.metrics.write_mode != "immediate":
-
-        async def _metrics_flush_once() -> None:
-            await metrics_coalescer.flush(reason="periodic")
-
-        supervisor.register_periodic(
-            "metrics_flush",
-            _metrics_flush_once,
-            interval_s=float(config.metrics.flush_interval_s),
-            initial_delay_s=5.0,
-        )
-
-    # Periodic PyPI update check (default 24h). Drives the dashboard
-    # footer indicator and the /api/stats/update endpoint; never
-    # auto-installs.  Runs an initial check immediately so the first
-    # dashboard render shows the latest state.
-    _register_update_checker(app, supervisor, outbound_manager)
-
-    # Register automatic backup task (default: daily, retain 14).  The
-    # supervisor owns the cadence so the dashboard reports heartbeat
-    # fields cleanly; ``initial_delay_s`` preserves the original
-    # ``config.backup.startup_delay_s`` behavior so the first backup
-    # attempt still lands after the configured startup wait.
-    if config.backup.enabled and config.backup.interval_s > 0:
-        from eggpool.background.backup import run_backup_once
-
-        raw_config_path: str | None = getattr(app.state, "config_path", None)
-        resolved_config_path = Path(raw_config_path) if raw_config_path else None
-        resolved_env_path: Path | None = None
-        if resolved_config_path is not None:
-            candidate = resolved_config_path.parent / ".env"
-            if candidate.exists():
-                resolved_env_path = candidate
-
-        async def _automatic_backup_once() -> None:
-            try:
-                await run_backup_once(
-                    config=config,
-                    db=db,
-                    config_path=resolved_config_path,
-                    env_path=resolved_env_path,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Automatic backup tick failed")
-
-        supervisor.register_periodic(
-            "automatic_backup",
-            _automatic_backup_once,
-            interval_s=float(config.backup.interval_s),
-            initial_delay_s=float(config.backup.startup_delay_s),
-        )
-
     # 21. Start background tasks
     await supervisor.start_all()
 
@@ -1840,64 +1384,16 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         catalog.cache.model_count,
     )
 
-    # 24. Publish the initial runtime generation through the
-    # milestone-B RuntimeManager.  The manager owns the active slot,
-    # lease accounting, and retirement primitives that milestone C's
-    # live-reload path will reuse.  Construction itself still happens
-    # inline above so the existing setup sequencing (sync accounts,
-    # crash recovery, model info, etc.) remains identical; the manager
-    # only takes ownership of the already-built services.
-    runtime_manager = RuntimeManager()
-    initial_generation = RuntimeGeneration(
-        generation_id=runtime_manager.reserve_next_generation_id(),
-        config=config,
-        config_digest=getattr(app.state, "config_digest", ""),
-        registry=app.state.registry,
-        catalog=app.state.catalog,
-        router=app.state.router,
-        coordinator=app.state.coordinator,
-        client_pool=app.state.client_pool,
-        outbound_manager=app.state.outbound_manager,
-        dns_backend=getattr(app.state, "dns_backend", None),
-        health_manager=app.state.health_manager,
-        cost_calculator=app.state.cost_calculator,
-        transcoder_policy=app.state.transcoder_policy,
-        compression_policy=app.state.compression_policy,
-        cache_config=app.state.cache_config,
-        compression_tuning_registry=app.state.compression_tuning_registry,
-        dispatch_overhead_recorder=app.state.dispatch_overhead_recorder,
-        dispatch_span_recorder=app.state.dispatch_span_recorder,
-        account_backoff_repo=app.state.account_backoff_repo,
-        stats_service=app.state.stats,
-        supervisor=app.state.supervisor,
-        finalization_retry_queue=app.state.finalization_retry_queue,
-        routing_trace_guard=app.state.routing_trace_guard,
-        created_at_monotonic=app.state.started_monotonic,
-        created_at_epoch=app.state.started_epoch,
-    )
-    await runtime_manager.install_initial(initial_generation)
-    attach_runtime_manager(app, runtime_manager)
-    # Expose the manager to background tasks via the mutable ref so
-    # they acquire generation leases instead of using stale captures.
-    _runtime_manager_ref["manager"] = runtime_manager
-    # Re-wire the runtime metrics service so its snapshot includes
+    # 23b. Wire the runtime metrics service so its snapshot includes
     # the manager's diagnostics.  The service was constructed before
     # the manager existed; ``runtime_manager=None`` is replaced here.
     runtime_metrics_service = app.state.runtime_metrics
     runtime_metrics_service._runtime_manager = runtime_manager  # pyright: ignore[reportPrivateUsage]
-    # Mirror the active generation's services onto ``app.state`` so
-    # existing request handlers, dashboard routes, and dashboard tests
-    # can continue to read ``app.state.router`` etc.  The mirrors are
-    # the same Python references stored on the generation; reload
-    # (milestone C) will keep these mirrors aligned through the
-    # manager's publication API rather than mutating the references
-    # in place.
-    _mirror_generation_on_app_state(app, initial_generation)
-    logger.info(
-        "RuntimeManager: generation %d published (%d owned services)",
-        initial_generation.generation_id,
-        len([name for name in vars(initial_generation) if name != "config"]),
-    )
+
+    # 24. (moved earlier to step 19b).  The active generation is
+    # already installed via install_initial above; the supervisor
+    # reference is patched via attach_supervisor_to_active once the
+    # supervisor is constructed (step 20).
 
     # 25. Start the control server for live config rehash (milestone C)
     reload_manager = ReloadManager(

@@ -550,14 +550,24 @@ class TestAppStateAuditEnforcement:
         )
 
     def test_background_prune_uses_lease_pattern(self) -> None:
-        """Verify _health_disabled_models_prune_once acquires a lease."""
-        app_path = (
-            Path(__file__).resolve().parent.parent.parent / "src" / "eggpool" / "app.py"
+        """Verify health-disabled-models prune callback acquires a lease.
+
+        After the closure-pass refactor the unified
+        :mod:`eggpool.runtime_tasks` module owns the registration
+        table, so the audit reads from there rather than ``app.py``.
+        """
+        runtime_tasks_path = (
+            Path(__file__).resolve().parent.parent.parent
+            / "src"
+            / "eggpool"
+            / "runtime_tasks.py"
         )
-        source = app_path.read_text()
-        # Check that the prune callback references leased_runtime
+        source = runtime_tasks_path.read_text()
+        assert "_health_disabled_models_prune_once" in source, (
+            "runtime_tasks.py must register health_disabled_models_prune"
+        )
         assert "leased_runtime" in source, (
-            "_health_disabled_models_prune_once should use leased_runtime"
+            "health-disabled-models prune callback must use leased_runtime"
         )
 
 

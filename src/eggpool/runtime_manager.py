@@ -109,7 +109,7 @@ from collections.abc import (  # noqa: TC003 - used at runtime
     AsyncIterator,
 )
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Final, cast
 
 if TYPE_CHECKING:
@@ -766,6 +766,26 @@ class RuntimeManager:
         current = self._next_generation_id
         self._next_generation_id = current + 1
         return current
+
+    def attach_supervisor_to_active(
+        self,
+        supervisor: Any,
+    ) -> RuntimeGeneration | None:
+        """Replace the supervisor field on the active generation.
+
+        Used by initial startup to wire the :class:`TaskSupervisor` into
+        the already-installed generation: the supervisor is constructed
+        after ``install_initial`` so the lifespan can publish the
+        generation first, then register tasks through the unified
+        helper.  Returns the new generation, or ``None`` when no
+        active generation is installed.
+        """
+        slot = self._active
+        if slot is None:
+            return None
+        new_generation = replace(slot.generation, supervisor=supervisor)
+        slot.generation = new_generation
+        return new_generation
 
 
 # ---------------------------------------------------------------------------

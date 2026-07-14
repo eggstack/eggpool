@@ -2,6 +2,8 @@
 
 ## Status
 
+**Implementation status: closure-pass Phases 1-5 complete; Phase 6 (docs) complete.**
+
 Closure and corrective implementation plan for completing the live configuration rehash roadmap after Milestones A-C.
 
 The repository now contains the core validation, diffing, runtime-generation, control-socket, transactional publication, lease, retirement, diagnostics, and failure-handling infrastructure. The remaining gap is functional rather than architectural: every configuration field is still classified as `RESTART_REQUIRED`, so `eggpool rehash` validates and evaluates changes but does not yet apply a useful configuration change to the running process.

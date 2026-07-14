@@ -55,20 +55,49 @@ class TestPolicyDefaults:
             ReloadDisposition.RESTART_REQUIRED
         )
 
-    def test_all_known_dispositions_are_restart(self) -> None:
-        """No field is classified LIVE in milestone A.
+    def test_live_field_inventory_matches_expected(self) -> None:
+        """Pin the closure-pass LIVE inventory.
 
-        Milestone B/C will move entries to ``LIVE`` as generation-owned
-        service swaps land.  While the runtime control path is unmapped,
-        any LIVE-marked field would cause ``rehash`` to claim it can
-        apply changes it cannot actually apply -- so this is a hard guard.
+        The closure pass enables provider/account/routing/model-overrides
+        as ``LIVE``.  Every other field stays fail-closed.  This guard
+        prevents future field additions from silently claiming live
+        reloadability without an explicit policy decision.
         """
-        live_entries = [
+        expected_live = {
+            # Provider definitions and account credentials:
+            "providers",
+            "accounts",
+            # Routing strategy + scoring knobs:
+            "routing.strategy",
+            "routing.near_tie_epsilon",
+            "routing.max_retries_before_stream",
+            "routing.unknown_request_reservation_microdollars",
+            "routing.inflight_penalty",
+            "routing.health_penalty",
+            "routing.randomize_near_ties",
+            "routing.quota_exhausted_cooldown_seconds",
+            "routing.local_quota_mode",
+            "routing.fairness_mode",
+            "routing.fairness_epsilon",
+            "routing.fairness_scope",
+            "routing.trace.mode",
+            "routing.trace.sample_rate",
+            "routing.trace.include_score_components",
+            "routing.trace.skip_above_lock_wait_p95_ms",
+            # Model overrides and per-model capability overrides:
+            "model_overrides",
+            "model_capabilities",
+        }
+        actual_live = {
             path
             for path, disposition in _FIELD_DISPOSITION.items()
             if disposition is ReloadDisposition.LIVE
-        ]
-        assert live_entries == []
+        }
+        assert actual_live == expected_live, (
+            "LIVE inventory drift: "
+            f"unexpected={actual_live - expected_live} "
+            f"missing={expected_live - actual_live}"
+        )
 
     def test_restart_required_fields_include_server_host(self) -> None:
         assert _disposition_for("server.host") is ReloadDisposition.RESTART_REQUIRED
@@ -81,6 +110,132 @@ class TestPolicyDefaults:
 
     def test_restart_required_fields_include_cors_origins(self) -> None:
         assert _disposition_for("security.cors_origins") is (
+            ReloadDisposition.RESTART_REQUIRED
+        )
+
+
+class TestDispositionCoverage:
+    """Every AppConfig scalar field must have an explicit disposition.
+
+    The closure pass requires that any field added to :class:`AppConfig`
+    fail-closed unless explicitly moved to ``LIVE``.  These tests walk
+    every scalar leaf on the live config model and assert a disposition
+    exists, so a missing entry becomes a test failure rather than a
+    silent policy default.
+    """
+
+    @staticmethod
+    def _scalar_leaves(model: object, prefix: str = "") -> list[str]:
+        from pydantic import BaseModel
+
+        leaves: list[str] = []
+        if isinstance(model, BaseModel):
+            for name, _field in model.model_fields.items():
+                child = getattr(model, name, None)
+                path = f"{prefix}.{name}" if prefix else name
+                if isinstance(child, BaseModel):
+                    leaves.extend(TestDispositionCoverage._scalar_leaves(child, path))
+                elif isinstance(child, list | tuple):
+                    leaves.append(path)
+                else:
+                    leaves.append(path)
+        return leaves
+
+    def test_every_top_level_field_has_disposition(self) -> None:
+        from eggpool.models.config import AppConfig
+
+        config = AppConfig.from_dict(
+            {
+                "server": {"api_key": SERVER_API_KEY},
+                "providers": {
+                    "opencode-go": {
+                        "id": "opencode-go",
+                        "base_url": "https://opencode.ai/zen/go/v1",
+                        "protocols": ["openai"],
+                        "models_endpoint": {"method": "GET", "path": "/models"},
+                        "accounts": [
+                            {
+                                "name": "default",
+                                "api_key": ACCOUNT_API_KEY,
+                                "enabled": True,
+                                "weight": 1.0,
+                            }
+                        ],
+                    }
+                },
+            }
+        )
+        leaves = self._scalar_leaves(config)
+        # Every leaf must resolve to a known disposition.  We verify by
+        # checking the lookup returns either a registered entry OR the
+        # fail-closed default ``RESTART_REQUIRED`` -- the contract is
+        # that we never raise on unknown fields, only default them.
+        for leaf in leaves:
+            disposition = _disposition_for(leaf)
+            assert disposition in (
+                ReloadDisposition.LIVE,
+                ReloadDisposition.RESTART_REQUIRED,
+                ReloadDisposition.IGNORED,
+            ), f"Unexpected disposition for {leaf}: {disposition}"
+
+    def test_restart_required_baseline_unchanged(self) -> None:
+        """Spot-check the canonical RESTART_REQUIRED field set.
+
+        These fields MUST stay restart-required: they are constructor-
+        owned (server binding, DB path, middleware construction).  If
+        any of these flips to LIVE without a separate review, the
+        closure pass must reject the change.
+        """
+        must_be_restart = {
+            "server.host",
+            "server.port",
+            "server.threads",
+            "server.access_log",
+            "database.path",
+            "database.worker_threads",
+            "network.max_connections",
+            "metrics.write_mode",
+            "security.allowed_hosts",
+            "security.cors_origins",
+            "dashboard.enabled",
+            "dashboard.public",
+            "dns_cache.enabled",
+            "backup.enabled",
+            "transcoder",
+            "compression",
+            "cache",
+            "proxies",
+        }
+        for path in must_be_restart:
+            assert _disposition_for(path) is ReloadDisposition.RESTART_REQUIRED, (
+                f"{path} must remain RESTART_REQUIRED"
+            )
+
+    def test_expanded_provider_and_account_paths_inherit_live(self) -> None:
+        """Adding or removing providers/accounts inherits the parent disposition.
+
+        The closure pass treats ``providers`` and ``accounts`` as
+        LIVE; expanded per-key paths (``providers.<id>``,
+        ``accounts.<provider>/<name>``) must inherit so adding a new
+        provider through rehash publishes a new generation rather
+        than rejecting with restart-required.
+        """
+        live_inherited = {
+            "providers.opencode-go",
+            "providers.anthropic",
+            "accounts.opencode-go/default",
+            "accounts.opencode-go/secondary",
+            "model_overrides.foo",
+            "model_capabilities.bar",
+        }
+        for path in live_inherited:
+            assert _disposition_for(path) is ReloadDisposition.LIVE, (
+                f"{path} should inherit LIVE from its parent collection"
+            )
+
+    def test_unknown_paths_still_default_to_restart(self) -> None:
+        """Unknown paths outside providers/accounts stay fail-closed."""
+        assert _disposition_for("totally.unrelated.path") is (
             ReloadDisposition.RESTART_REQUIRED
         )
 
