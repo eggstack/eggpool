@@ -17,6 +17,22 @@ logger = logging.getLogger(__name__)
 
 TaskMode = Literal["daemon", "periodic"]
 
+# Task names owned by the process (not by a generation lease).
+# Used by :meth:`TaskSupervisor.apply_spec_diff` to classify specs.
+_PROCESS_OWNED_TASKS: frozenset[str] = frozenset(
+    {
+        "checkpoint",
+        "metrics_flush",
+        "update_checker",
+        "automatic_backup",
+    }
+)
+
+# Process-owned tasks that are never part of a reload diff.
+# Registered once at startup; ``apply_spec_diff`` skips them on both
+# the active and candidate sides so they survive generation swaps.
+_PERSISTENT_PROCESS_TASKS: frozenset[str] = frozenset({"update_checker"})
+
 
 def periodic_initial_offset(
     name: str, interval_s: float, *, max_fraction: float = 0.5
@@ -248,15 +264,19 @@ class SupervisedTask:
         configured delay before the first tick fires.
         """
         assert self._tick_factory is not None
-        interval_s = float(self._interval_s) if self._interval_s else 0.0
-        first_sleep = (
-            float(self._initial_delay_s)
-            if self._initial_delay_s is not None
-            else interval_s
-        )
         self._last_started_at = time.time()
         try:
             while self._running:
+                # Re-read schedule attributes each iteration so live
+                # reloads via ``update_task_spec`` and ``apply_spec_diff``
+                # take effect at the next tick boundary without a task
+                # restart.
+                interval_s = float(self._interval_s) if self._interval_s else 0.0
+                first_sleep = (
+                    float(self._initial_delay_s)
+                    if self._initial_delay_s is not None
+                    else interval_s
+                )
                 try:
                     await asyncio.sleep(first_sleep)
                 except asyncio.CancelledError:
@@ -510,6 +530,78 @@ class TaskSupervisor:
         """Get a task by name."""
         return self._tasks.get(name)
 
+    async def update_task_spec(
+        self,
+        name: str,
+        *,
+        tick_factory: Callable[[], Coroutine[Any, Any, None]] | None = None,
+        interval_s: float | None = None,
+        initial_delay_s: float | None = None,
+        run_immediately: bool | None = None,
+        timeout_s: float | None = None,
+        max_restarts: int = 10,
+    ) -> SupervisedTask | None:
+        """Atomically replace a registered periodic task with a fresh one.
+
+        The existing task under ``name`` (if any) is stopped and removed
+        from the registry before a new :class:`SupervisedTask` is
+        constructed using the supplied attributes plus the existing
+        values for any attributes not provided.  The new task is
+        started so callers see a single live schedule swap.
+
+        Returns the new supervised task on success, or ``None`` when no
+        task is registered under ``name``.
+        """
+        existing = self._tasks.get(name)
+        if existing is None:
+            return None
+        if existing.mode != "periodic":
+            return None
+
+        new_interval = (
+            float(interval_s)
+            if interval_s is not None
+            else float(existing._interval_s or 0.0)  # pyright: ignore[reportPrivateUsage]
+        )
+        new_factory = (
+            tick_factory if tick_factory is not None else existing._tick_factory  # pyright: ignore[reportPrivateUsage]
+        )
+        new_timeout = (
+            float(timeout_s) if timeout_s is not None else existing._timeout_s  # pyright: ignore[reportPrivateUsage]
+        )
+        new_run_immediately = (
+            bool(run_immediately) if run_immediately is not None else False
+        )
+        # For a fresh replacement task, the first-tick delay defaults to the
+        # new interval unless the caller explicitly overrides it.  We do not
+        # carry over the previous task's initial_delay_s because that was the
+        # schedule chosen for the *old* lifecycle, not this one.
+        new_initial_delay: float | None
+        if initial_delay_s is not None:
+            new_initial_delay = float(initial_delay_s)
+        elif new_run_immediately:
+            new_initial_delay = 0.0
+        else:
+            new_initial_delay = new_interval
+
+        await existing.stop()
+        self._tasks.pop(name, None)
+
+        if new_run_immediately:
+            new_initial_delay = 0.0
+
+        new_task = self.register_periodic(
+            name,
+            new_factory,  # type: ignore[arg-type]
+            interval_s=new_interval,
+            run_immediately=new_run_immediately,
+            initial_delay_s=new_initial_delay,
+            timeout_s=new_timeout,
+            max_restarts=max_restarts,
+        )
+        await new_task.start()
+        return new_task
+
     def snapshot(self) -> list[dict[str, Any]]:
         """Return runtime snapshots for all registered tasks."""
         tasks: list[dict[str, Any]] = []
@@ -517,6 +609,163 @@ class TaskSupervisor:
             with contextlib.suppress(Exception):
                 tasks.append(supervised.snapshot())
         return tasks
+
+    async def apply_spec_diff(
+        self,
+        candidate_specs: tuple[Any, ...],
+        *,
+        callback_factories: dict[str, Callable[[], Coroutine[Any, Any, None]]],
+        process: Any | None = None,  # noqa: ANN401 — ProcessRuntime, avoids circular import
+    ) -> Any:
+        """Apply a task-spec diff against the current registration state.
+
+        Builds the active spec tuple from the current ``_tasks`` dict,
+        computes the diff against ``candidate_specs``, and applies it.
+        Returns a :class:`~eggpool.runtime_tasks.TaskTransitionResult`.
+
+        When ``process`` is a :class:`~eggpool.runtime_manager.ProcessRuntime`,
+        the method increments ``process.task_spec_version`` and records
+        the transition summary in ``process.last_task_transition``.
+        """
+        from eggpool.runtime_task_inventory import (  # noqa: PLC0415
+            RuntimeTaskSpec,
+            TaskOwnership,
+        )
+        from eggpool.runtime_tasks import (  # noqa: PLC0415
+            TaskTransitionResult,
+            compute_spec_diff,
+        )
+
+        active_specs: list[RuntimeTaskSpec] = []
+        for name, task in self._tasks.items():
+            if name in _PERSISTENT_PROCESS_TASKS:
+                continue  # persistent task; not part of the reload diff
+            if task.mode == "periodic":
+                interval_val = float(task._interval_s) if task._interval_s else 0.0  # pyright: ignore[reportPrivateUsage]
+                delay_val = task._initial_delay_s  # pyright: ignore[reportPrivateUsage]
+                run_immed = (delay_val == 0.0) if delay_val is not None else False
+                active_specs.append(
+                    RuntimeTaskSpec(
+                        name=name,
+                        interval_s=interval_val,
+                        initial_delay_s=delay_val,
+                        run_immediately=run_immed,
+                        timeout_s=task._timeout_s,  # pyright: ignore[reportPrivateUsage]
+                        ownership=TaskOwnership.PROCESS
+                        if name in _PROCESS_OWNED_TASKS
+                        else TaskOwnership.GENERATION_LEASED,
+                        enabled=True,
+                        description="",
+                        reloadable_fields=(),
+                        generation_dependencies=(),
+                        process_dependencies=(),
+                        callback_kind=name,
+                    )
+                )
+
+        diff = compute_spec_diff(tuple(active_specs), candidate_specs)
+
+        added_names: list[str] = []
+        removed_names: list[str] = []
+        changed_details: list[tuple[str, tuple[float, float]]] = []
+        unchanged_names: list[str] = [s.name for s in diff.unchanged]
+        duplicates_rejected: list[str] = []
+
+        for spec in diff.removed:
+            if spec.name in _PERSISTENT_PROCESS_TASKS:
+                continue  # persistent task — never removed during reload
+            existing = self._tasks.get(spec.name)
+            if existing is not None:
+                await existing.stop()
+                self._tasks.pop(spec.name, None)  # noqa: SLF001
+                removed_names.append(spec.name)
+
+        for spec in diff.added:
+            factory = callback_factories.get(spec.name)
+            if factory is None:
+                logger.warning("No callback factory for added task %r", spec.name)
+                continue
+            if spec.name in self._tasks:  # noqa: SLF001
+                duplicates_rejected.append(spec.name)
+                continue
+            self.register_periodic(
+                spec.name,
+                factory,
+                interval_s=spec.interval_s,
+                run_immediately=spec.run_immediately,
+                initial_delay_s=spec.initial_delay_s,
+                timeout_s=spec.timeout_s,
+            )
+            task = self.get_task(spec.name)
+            if task is not None:
+                await task.start()
+            added_names.append(spec.name)
+
+        for active_spec, candidate_spec in diff.changed:
+            factory = callback_factories.get(candidate_spec.name)
+            if factory is None:
+                logger.warning(
+                    "No callback factory for changed task %r", candidate_spec.name
+                )
+                unchanged_names.append(candidate_spec.name)
+                continue
+            existing = self._tasks.get(candidate_spec.name)
+            old_interval = active_spec.interval_s
+            if existing is not None:
+                await existing.stop()
+                self._tasks.pop(candidate_spec.name, None)  # noqa: SLF001
+            self.register_periodic(
+                candidate_spec.name,
+                factory,
+                interval_s=candidate_spec.interval_s,
+                run_immediately=candidate_spec.run_immediately,
+                initial_delay_s=candidate_spec.initial_delay_s,
+                timeout_s=candidate_spec.timeout_s,
+            )
+            task = self.get_task(candidate_spec.name)
+            if task is not None:
+                await task.start()
+            changed_details.append(
+                (candidate_spec.name, (old_interval, candidate_spec.interval_s))
+            )
+
+        result = TaskTransitionResult(
+            added=tuple(added_names),
+            removed=tuple(removed_names),
+            changed=tuple(changed_details),
+            unchanged=tuple(unchanged_names),
+            duplicates_rejected=tuple(duplicates_rejected),
+        )
+
+        if process is not None:
+            process.task_spec_version += 1  # pyright: ignore[reportOptionalMemberAccess]
+            process.last_task_transition = {  # pyright: ignore[reportOptionalMemberAccess]
+                "last_reload_monotonic": time.monotonic(),
+                "added": tuple(added_names),
+                "removed": tuple(removed_names),
+                "changed": tuple(
+                    (name, old_int, new_int)
+                    for name, (old_int, new_int) in changed_details
+                ),
+                "unchanged": tuple(unchanged_names),
+            }
+
+        return result
+
+    def unregister(self, name: str) -> SupervisedTask | None:
+        """Stop and remove a task by name.
+
+        Returns the removed supervised task, or ``None`` if no task was
+        registered.  Cancel is best-effort; the caller should ``await``
+        any tasks they want a clean shutdown for before this call.
+        """
+        existing = self._tasks.pop(name, None)
+        if existing is None:
+            return None
+        if existing._task is not None and not existing._task.done():  # pyright: ignore[reportPrivateUsage]
+            existing._running = False  # pyright: ignore[reportPrivateUsage]
+            existing._task.cancel()  # pyright: ignore[reportPrivateUsage]
+        return existing
 
     @property
     def all_healthy(self) -> bool:

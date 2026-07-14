@@ -113,9 +113,12 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "server.access_log": ReloadDisposition.RESTART_REQUIRED,
     "server.threads": ReloadDisposition.RESTART_REQUIRED,
     # ---- upstream provider transport (consumed at client-pool build) ----
+    # Milestone D2: ``upstream.read_timeout_s`` is consumed by the
+    # ``stale_request_finalizer`` task which reads it from the current
+    # generation's config on each tick.
     "upstream.base_url": ReloadDisposition.RESTART_REQUIRED,
     "upstream.connect_timeout_s": ReloadDisposition.RESTART_REQUIRED,
-    "upstream.read_timeout_s": ReloadDisposition.RESTART_REQUIRED,
+    "upstream.read_timeout_s": ReloadDisposition.LIVE,
     "upstream.write_timeout_s": ReloadDisposition.RESTART_REQUIRED,
     "upstream.pool_timeout_s": ReloadDisposition.RESTART_REQUIRED,
     "upstream.max_connections": ReloadDisposition.RESTART_REQUIRED,
@@ -131,18 +134,21 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     # Request-path-visible subset: the candidate builder rebuilds the
     # catalog and re-registers periodic tasks per generation so these
     # fields take effect live.  Other fields (startup_refresh,
-    # stale_after_s, allow_stale_catalog, ping_retain_days,
-    # catalog_withdrawal_policy) remain RESTART_REQUIRED because they
-    # gate startup-only behaviour or persistent retention that survives
-    # generations.  ``models.expose_mode`` and ``models.collapse_models``
-    # are read by the generation-owned ``CatalogService`` and are LIVE.
+    # stale_after_s, allow_stale_catalog, catalog_withdrawal_policy)
+    # remain RESTART_REQUIRED because they gate startup-only behaviour
+    # or persistent retention that survives generations.
+    # ``models.expose_mode`` and ``models.collapse_models`` are read by
+    # the generation-owned ``CatalogService`` and are LIVE.
+    # Milestone D2: ``models.ping_retain_days`` is consumed by the
+    # ``retention_cleanup`` task which reads it from the current
+    # generation's config on each tick.
     "models.refresh_interval_s": ReloadDisposition.LIVE,
     "models.expose_mode": ReloadDisposition.LIVE,
     "models.collapse_models": ReloadDisposition.LIVE,
     "models.startup_refresh": ReloadDisposition.RESTART_REQUIRED,
     "models.stale_after_s": ReloadDisposition.LIVE,
     "models.allow_stale_catalog": ReloadDisposition.LIVE,
-    "models.ping_retain_days": ReloadDisposition.RESTART_REQUIRED,
+    "models.ping_retain_days": ReloadDisposition.LIVE,
     "models.catalog_withdrawal_policy": ReloadDisposition.RESTART_REQUIRED,
     # ---- routing strategy + scoring knobs (consumed at router construction) ----
     "routing.strategy": ReloadDisposition.LIVE,
@@ -170,8 +176,11 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "dashboard.public": ReloadDisposition.RESTART_REQUIRED,
     "dashboard.theme": ReloadDisposition.RESTART_REQUIRED,
     "dashboard.themes_dir": ReloadDisposition.RESTART_REQUIRED,
-    "dashboard.retain_request_stats_days": ReloadDisposition.RESTART_REQUIRED,
-    "dashboard.retain_event_days": ReloadDisposition.RESTART_REQUIRED,
+    # Milestone D2: retention fields are consumed by the
+    # ``retention_cleanup`` task which reads them from the current
+    # generation's config on each tick.
+    "dashboard.retain_request_stats_days": ReloadDisposition.LIVE,
+    "dashboard.retain_event_days": ReloadDisposition.LIVE,
     "dashboard.store_request_content": ReloadDisposition.RESTART_REQUIRED,
     "dashboard.refresh_interval_s": ReloadDisposition.RESTART_REQUIRED,
     "security.allowed_hosts": ReloadDisposition.RESTART_REQUIRED,
@@ -184,7 +193,10 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "security.persist_redacted_error_detail": ReloadDisposition.LIVE,
     # ---- metrics / backup / dns / network (process-owned) ----
     "metrics.write_mode": ReloadDisposition.RESTART_REQUIRED,
-    "metrics.flush_interval_s": ReloadDisposition.RESTART_REQUIRED,
+    # Milestone D2: ``metrics.flush_interval_s`` is consumed by the
+    # ``metrics_flush`` task; the process supervisor reconfigures the
+    # task with the candidate config's interval on reload.
+    "metrics.flush_interval_s": ReloadDisposition.LIVE,
     "metrics.max_buffered_events": ReloadDisposition.RESTART_REQUIRED,
     "metrics.timeseries_bucket_s": ReloadDisposition.RESTART_REQUIRED,
     "metrics.trace_sample_rate": ReloadDisposition.RESTART_REQUIRED,
@@ -193,9 +205,12 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "metrics.cleanup_interval_s": ReloadDisposition.RESTART_REQUIRED,
     "metrics.cleanup_max_rows_per_pass": ReloadDisposition.RESTART_REQUIRED,
     "backup.enabled": ReloadDisposition.RESTART_REQUIRED,
-    "backup.interval_s": ReloadDisposition.RESTART_REQUIRED,
-    "backup.retain_count": ReloadDisposition.RESTART_REQUIRED,
-    "backup.startup_delay_s": ReloadDisposition.RESTART_REQUIRED,
+    # Milestone D2: backup scheduling and retention fields are consumed
+    # by the ``automatic_backup`` task; the process supervisor
+    # reconfigures the task with the candidate config on reload.
+    "backup.interval_s": ReloadDisposition.LIVE,
+    "backup.retain_count": ReloadDisposition.LIVE,
+    "backup.startup_delay_s": ReloadDisposition.LIVE,
     "backup.directory": ReloadDisposition.RESTART_REQUIRED,
     "backup.include_env": ReloadDisposition.RESTART_REQUIRED,
     "dns_cache.enabled": ReloadDisposition.RESTART_REQUIRED,

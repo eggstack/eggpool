@@ -51,10 +51,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine
+
     from eggpool.background import TaskSupervisor
     from eggpool.models.config import AppConfig
     from eggpool.providers.outbound import OutboundClientManager
     from eggpool.runtime_manager import ProcessRuntime, RuntimeManager
+    from eggpool.runtime_task_inventory import RuntimeTaskSpec
 
 
 logger = logging.getLogger(__name__)
@@ -87,6 +90,7 @@ class TaskRegistrationContext:
     config: AppConfig
     update_checker_outbound: OutboundClientManager | None = None
     app_state: Any | None = None
+    process_supervisor: TaskSupervisor | None = None
 
 
 def register_runtime_tasks(
@@ -103,6 +107,13 @@ def register_runtime_tasks(
     config = context.config
     process = context.process
     runtime_manager = context.runtime_manager
+
+    # Process-owned tasks go on the process supervisor when provided;
+    # otherwise they fall back to the gen supervisor (backward compat).
+    process_supervisor = context.process_supervisor
+    _process_target = (
+        process_supervisor if process_supervisor is not None else supervisor
+    )
 
     db = process.db
 
@@ -166,6 +177,8 @@ def register_runtime_tasks(
         )
 
     # ----- retention cleanup ---------------------------------------------
+    # Reads retention values from the current generation's config on
+    # each tick so config changes take effect without restart.
     async def _retention_cleanup_once() -> None:
         from eggpool.background.cleanup import (  # noqa: PLC0415
             cleanup_old_events,
@@ -175,11 +188,14 @@ def register_runtime_tasks(
         from eggpool.db.repositories import PingRepository  # noqa: PLC0415
         from eggpool.runtime_manager import leased_runtime  # noqa: PLC0415
 
-        ping_repo = PingRepository(db)
-        await cleanup_old_requests(db, config.dashboard.retain_request_stats_days)
-        await cleanup_old_events(db, config.dashboard.retain_event_days)
-        await ping_repo.cleanup_old_pings(config.models.ping_retain_days)
         async with leased_runtime(runtime_manager) as gen:
+            gen_config = gen.config
+            ping_repo = PingRepository(db)
+            await cleanup_old_requests(
+                db, gen_config.dashboard.retain_request_stats_days
+            )
+            await cleanup_old_events(db, gen_config.dashboard.retain_event_days)
+            await ping_repo.cleanup_old_pings(gen_config.models.ping_retain_days)
             await reconcile_expired_reservations(
                 db,
                 quota_estimator=gen.router.quota_estimator,
@@ -200,7 +216,7 @@ def register_runtime_tasks(
 
         await checkpoint_database(db)
 
-    supervisor.register_periodic(
+    _process_target.register_periodic(
         "checkpoint",
         _checkpoint_once,
         interval_s=14400.0,
@@ -236,6 +252,8 @@ def register_runtime_tasks(
     )
 
     # ----- stale request finalizer ---------------------------------------
+    # Reads upstream.read_timeout_s from the current generation's config
+    # on each tick so the timeout threshold takes effect without restart.
     async def _stale_request_finalizer_once() -> None:
         from eggpool.app import finalize_stale_requests_once  # noqa: PLC0415
         from eggpool.runtime_manager import leased_runtime  # noqa: PLC0415
@@ -245,7 +263,7 @@ def register_runtime_tasks(
                 db=db,
                 router=gen.router,
                 quota_estimator=gen.router.quota_estimator,
-                max_pending_seconds=config.upstream.read_timeout_s,
+                max_pending_seconds=gen.config.upstream.read_timeout_s,
             )
 
     supervisor.register_periodic(
@@ -277,7 +295,7 @@ def register_runtime_tasks(
         async def _metrics_flush_once() -> None:
             await metrics_coalescer.flush(reason="periodic")
 
-        supervisor.register_periodic(
+        _process_target.register_periodic(
             "metrics_flush",
             _metrics_flush_once,
             interval_s=float(config.metrics.flush_interval_s),
@@ -287,7 +305,7 @@ def register_runtime_tasks(
     # ----- update checker (process-owned; only registered at startup) ---
     if context.update_checker_outbound is not None:
         _register_update_checker(
-            supervisor=supervisor,
+            supervisor=_process_target,
             outbound_manager=context.update_checker_outbound,
             app_state=getattr(context, "app_state", None),
         )
@@ -317,12 +335,230 @@ def register_runtime_tasks(
             except Exception:
                 logger.exception("Automatic backup tick failed")
 
-        supervisor.register_periodic(
+        _process_target.register_periodic(
             "automatic_backup",
             _automatic_backup_once,
             interval_s=float(config.backup.interval_s),
             initial_delay_s=float(config.backup.startup_delay_s),
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Unified reconfiguration mechanism
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TaskSpecDiff:
+    """Result of comparing two task-spec tuples.
+
+    ``added``: specs in ``candidate`` but not in ``active`` (by name).
+    ``removed``: specs in ``active`` but not in ``candidate`` (by name).
+    ``changed``: name matches but at least one scheduling parameter differs.
+    ``unchanged``: identical specs.
+    """
+
+    added: tuple[RuntimeTaskSpec, ...]
+    removed: tuple[RuntimeTaskSpec, ...]
+    changed: tuple[tuple[RuntimeTaskSpec, RuntimeTaskSpec], ...]
+    unchanged: tuple[RuntimeTaskSpec, ...]
+
+
+@dataclass(frozen=True)
+class TaskTransitionResult:
+    """Outcome of applying a :class:`TaskSpecDiff` to a supervisor.
+
+    Records which tasks were added, removed, or changed, and which
+    were left untouched.  ``duplicates_rejected`` captures names that
+    could not be added because a task with that name already existed.
+    """
+
+    added: tuple[str, ...]
+    removed: tuple[str, ...]
+    changed: tuple[tuple[str, tuple[float, float]], ...]
+    unchanged: tuple[str, ...]
+    duplicates_rejected: tuple[str, ...]
+    error: str | None = None
+
+
+_SCHEDULING_KEYS = (
+    "interval_s",
+    "initial_delay_s",
+    "run_immediately",
+    "timeout_s",
+    "enabled",
+)
+
+
+def build_task_specs(context: TaskRegistrationContext) -> tuple[RuntimeTaskSpec, ...]:
+    """Build resolved task specs from the inventory for a given context.
+
+    Reads the authoritative inventory from
+    :mod:`eggpool.runtime_task_inventory`, applies config-driven
+    enable/disable rules, and overlays config values onto reloadable
+    scheduling parameters.  Returns the resolved spec tuple.
+    """
+    from eggpool.runtime_task_inventory import inventory_for_config  # noqa: PLC0415
+
+    return inventory_for_config(
+        context.config,
+        include_update_checker=context.update_checker_outbound is not None,
+    )
+
+
+def compute_spec_diff(
+    active: tuple[RuntimeTaskSpec, ...],
+    candidate: tuple[RuntimeTaskSpec, ...],
+) -> TaskSpecDiff:
+    """Compute the diff between two task-spec tuples.
+
+    Compares by ``name``.  A spec is ``changed`` when the name matches
+    but any scheduling parameter (``interval_s``, ``initial_delay_s``,
+    ``run_immediately``, ``timeout_s``, ``enabled``) differs.  Ownership
+    changes are included in ``changed`` but not tracked separately in
+    this phase.
+    """
+    active_by_name = {s.name: s for s in active}
+    candidate_by_name = {s.name: s for s in candidate}
+
+    active_names = set(active_by_name)
+    candidate_names = set(candidate_by_name)
+
+    added = tuple(candidate_by_name[n] for n in sorted(candidate_names - active_names))
+    removed = tuple(active_by_name[n] for n in sorted(active_names - candidate_names))
+
+    changed_pairs: list[tuple[RuntimeTaskSpec, RuntimeTaskSpec]] = []
+    unchanged: list[RuntimeTaskSpec] = []
+    for name in sorted(active_names & candidate_names):
+        a = active_by_name[name]
+        c = candidate_by_name[name]
+        is_different = any(getattr(a, k) != getattr(c, k) for k in _SCHEDULING_KEYS)
+        if is_different:
+            changed_pairs.append((a, c))
+        else:
+            unchanged.append(a)
+
+    return TaskSpecDiff(
+        added=added,
+        removed=removed,
+        changed=tuple(changed_pairs),
+        unchanged=tuple(unchanged),
+    )
+
+
+async def apply_spec_diff(
+    supervisor: TaskSupervisor,
+    *,
+    active_specs: tuple[RuntimeTaskSpec, ...],
+    candidate_specs: tuple[RuntimeTaskSpec, ...],
+    callback_factories: dict[str, Callable[[], Coroutine[Any, Any, None]]],
+    process: Any | None = None,  # noqa: ANN401 — ProcessRuntime, avoids circular import
+) -> TaskTransitionResult:
+    """Apply a spec diff to the supervisor atomically.
+
+    For ``unchanged`` tasks: no-op.
+    For ``added`` tasks: register and start.
+    For ``removed`` tasks: stop and unregister.
+    For ``changed`` tasks: stop the old, register with new params, start.
+
+    ``callback_factories`` maps task name → coroutine factory for the
+    tick callback.  Every added or changed task must have a factory.
+
+    When ``process`` is a :class:`~eggpool.runtime_manager.ProcessRuntime`,
+    the method increments ``process.task_spec_version`` and records
+    the transition summary in ``process.last_task_transition``.
+
+    Returns a :class:`TaskTransitionResult` with counters and outcomes.
+    """
+    diff = compute_spec_diff(active_specs, candidate_specs)
+
+    added_names: list[str] = []
+    removed_names: list[str] = []
+    changed_details: list[tuple[str, tuple[float, float]]] = []
+    unchanged_names: list[str] = [s.name for s in diff.unchanged]
+    duplicates_rejected: list[str] = []
+
+    for spec in diff.removed:
+        existing = supervisor.get_task(spec.name)
+        if existing is not None:
+            await existing.stop()
+            supervisor._tasks.pop(spec.name, None)  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
+            removed_names.append(spec.name)
+
+    for spec in diff.added:
+        factory = callback_factories.get(spec.name)
+        if factory is None:
+            logger.warning("No callback factory for added task %r", spec.name)
+            continue
+        if spec.name in supervisor._tasks:  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
+            duplicates_rejected.append(spec.name)
+            continue
+        supervisor.register_periodic(
+            spec.name,
+            factory,
+            interval_s=spec.interval_s,
+            run_immediately=spec.run_immediately,
+            initial_delay_s=spec.initial_delay_s,
+            timeout_s=spec.timeout_s,
+        )
+        task = supervisor.get_task(spec.name)
+        if task is not None:
+            await task.start()
+        added_names.append(spec.name)
+
+    for active_spec, candidate_spec in diff.changed:
+        factory = callback_factories.get(candidate_spec.name)
+        if factory is None:
+            logger.warning(
+                "No callback factory for changed task %r", candidate_spec.name
+            )
+            unchanged_names.append(candidate_spec.name)
+            continue
+        existing = supervisor.get_task(candidate_spec.name)
+        if existing is not None:
+            old_interval = active_spec.interval_s
+            await existing.stop()
+            supervisor._tasks.pop(candidate_spec.name, None)  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
+        else:
+            old_interval = active_spec.interval_s
+        supervisor.register_periodic(
+            candidate_spec.name,
+            factory,
+            interval_s=candidate_spec.interval_s,
+            run_immediately=candidate_spec.run_immediately,
+            initial_delay_s=candidate_spec.initial_delay_s,
+            timeout_s=candidate_spec.timeout_s,
+        )
+        task = supervisor.get_task(candidate_spec.name)
+        if task is not None:
+            await task.start()
+        changed_details.append(
+            (candidate_spec.name, (old_interval, candidate_spec.interval_s))
+        )
+
+    result = TaskTransitionResult(
+        added=tuple(added_names),
+        removed=tuple(removed_names),
+        changed=tuple(changed_details),
+        unchanged=tuple(unchanged_names),
+        duplicates_rejected=tuple(duplicates_rejected),
+    )
+
+    if process is not None:
+        import time as _time  # noqa: PLC0415
+
+        process.task_spec_version += 1  # pyright: ignore[reportOptionalMemberAccess]
+        process.last_task_transition = {  # pyright: ignore[reportOptionalMemberAccess]
+            "last_reload_monotonic": _time.monotonic(),
+            "added": tuple(added_names),
+            "removed": tuple(removed_names),
+            "changed": tuple(
+                (name, old_int, new_int) for name, (old_int, new_int) in changed_details
+            ),
+            "unchanged": tuple(unchanged_names),
+        }
+
+    return result
 
 
 def _register_update_checker(
@@ -366,5 +602,10 @@ def _register_update_checker(
 
 __all__ = [
     "TaskRegistrationContext",
+    "TaskSpecDiff",
+    "TaskTransitionResult",
+    "apply_spec_diff",
+    "build_task_specs",
+    "compute_spec_diff",
     "register_runtime_tasks",
 ]

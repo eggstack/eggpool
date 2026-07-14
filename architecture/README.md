@@ -3041,6 +3041,84 @@ tests in `tests/integration/test_rehash_streaming_swap.py`. See
 `plans/2026-07-14-live-config-rehash-final-milestone-d1-request-policy-expansion.md`
 for the rollout plan.
 
+#### Closure pass D2 — background and observability expansion
+
+The D2 milestone extends the `LIVE` inventory to background-task
+cadences and retention durations.  It introduces a dual-ownership
+model via `TaskOwnership` (`src/eggpool/runtime_task_inventory.py`):
+
+- **Process-owned** tasks (`checkpoint`, `metrics_flush`,
+  `update_checker`, `automatic_backup`) register on
+  `process.process_supervisor` and survive generation swaps.
+  Only one instance exists; reconfiguration mutates the schedule
+  in place via `apply_spec_diff()`.
+- **Generation-leased** tasks (`catalog_refresh`,
+  `model_info_refresh`, `model_info_canonical_backfill`,
+  `retention_cleanup`, `usage_window_refresh`,
+  `finalization_retry_drain`, `stale_request_finalizer`,
+  `health_disabled_models_prune`) acquire a generation lease on
+  every tick and are retired when their generation is retired;
+  a new generation gets a fresh registration.
+
+The `RUNTIME_TASK_INVENTORY` tuple (`src/eggpool/runtime_task_inventory.py`)
+is the single reviewable inventory driving both startup and reload.
+`inventory_for_config()` resolves enabled state from the live config.
+`build_task_specs()` (`src/eggpool/runtime_tasks.py`) builds spec
+tuples from the inventory; `compute_spec_diff()` and
+`apply_spec_diff()` drive the live transition.
+
+D2 LIVE families and their consumers:
+
+- **Retention durations**: `dashboard.retain_request_stats_days`,
+  `dashboard.retain_event_days`, `models.ping_retain_days` — read
+  by `retention_cleanup` and `stale_request_finalizer` closures
+  that re-read `gen.config` per tick.
+- **Upstream timeout**: `upstream.read_timeout_s` — applied to
+  outbound HTTPX clients via `OutboundClientManager`.
+- **Metrics flush cadence**: `metrics.flush_interval_s` — mutates
+  the process-owned `metrics_flush` schedule in place.
+- **Backup scheduling**: `backup.interval_s`, `backup.retain_count`,
+  `backup.startup_delay_s` — mutates the process-owned
+  `automatic_backup` schedule in place.
+
+The `_run_periodic_loop` in `src/eggpool/background/__init__.py`
+re-reads `self._interval_s` and `self._initial_delay_s` each
+iteration so live interval changes take effect at the next tick
+boundary without requiring a task restart.
+
+Process-owned task resources retain identity across reloads — no
+duplicated schedules, no orphaned tasks.  The `update_checker` task
+now lives on the process supervisor and survives reloads (was a
+regression on reload before D2).
+
+Process-bound storage/deployment fields remain `RESTART_REQUIRED`
+(database path, backup destination paths that cross permission
+boundaries, control socket).
+
+`ProcessRuntime` (`src/eggpool/runtime_manager.py`) now carries
+`process_supervisor`, `task_spec_version`, and
+`last_task_transition` fields.  `task_spec_version` increments on
+each `apply_spec_diff` call; `last_task_transition` records the
+added/removed/changed/unchanged counts.  Diagnostics are exposed
+under `/api/stats/runtime` via `_snapshot_runtime_manager`
+(`src/eggpool/runtime_metrics.py`).
+
+Fields that stay `RESTART_REQUIRED` (intentionally):
+
+- `[model_info]` — `ModelInfoService` is constructed in the
+  FastAPI lifespan and is not rebuilt by the candidate manager.
+- Process-bound storage/deployment paths (database, backup
+  destinations, control socket).
+
+Tests: `tests/unit/test_runtime_task_inventory.py` (35 tests),
+`tests/unit/test_d2_transitions.py` (15 tests covering interval
+changes, enable/disable, retention policy, metrics/backup cadence,
+rapid reloads, observability), and `tests/unit/test_runtime_tasks.py`
+extended with `TestProcessSupervisorRouting` and
+`TestProcessSupervisorSurvival`.  See
+`plans/2026-07-14-live-config-rehash-final-milestone-d2-background-observability-expansion.md`
+for the rollout plan.
+
 ### Validation contract
 
 `src/eggpool/config_validation.py` owns the reusable, Click-free

@@ -59,17 +59,21 @@ class TestPolicyDefaults:
         )
 
     def test_live_field_inventory_matches_expected(self) -> None:
-        """Pin the closure-pass plus milestone D1 LIVE inventory.
+        """Pin the closure-pass plus milestone D1+D2 LIVE inventory.
 
         Closure pass: provider/account/routing/model-overrides/model-
         capabilities as ``LIVE``.  Milestone D1 adds the request-policy
         blocks (``transcoder``, ``compression``, ``cache``) and the
         request-path-visible ``models`` + ``security`` subset whose
         consumers are generation-owned rebuilders in
-        :mod:`eggpool.control.reload_manager`.  Every other field stays
-        fail-closed.  This guard prevents future field additions from
-        silently claiming live reloadability without an explicit policy
-        decision.
+        :mod:`eggpool.control.reload_manager`.  Milestone D2 adds
+        background-policy fields (retention, metrics flush, backup
+        scheduling, upstream read timeout) whose consumers read from
+        the current generation's config on each tick or are
+        reconfigured via the process supervisor on reload.
+        Every other field stays fail-closed.  This guard prevents
+        future field additions from silently claiming live
+        reloadability without an explicit policy decision.
         """
         expected_live = {
             # Provider definitions and account credentials:
@@ -108,9 +112,22 @@ class TestPolicyDefaults:
             "models.stale_after_s",
             "models.allow_stale_catalog",
             # Milestone D1: persisted error detail toggle is wired via
-            # the candidate ``RequestCoordinator`` so a rehash toggles
-            # the policy live for new generations only.
+            # the candidate ``RequestCoordinator`` (see candidate builder
+            # ``persist_error_detail`` kwarg).
             "security.persist_redacted_error_detail",
+            # Milestone D2: background-policy fields.
+            # Retention fields read from generation config per tick.
+            "models.ping_retain_days",
+            "dashboard.retain_request_stats_days",
+            "dashboard.retain_event_days",
+            # Upstream read timeout read from generation config per tick.
+            "upstream.read_timeout_s",
+            # Metrics flush interval reconfigured via process supervisor.
+            "metrics.flush_interval_s",
+            # Backup scheduling fields reconfigured via process supervisor.
+            "backup.interval_s",
+            "backup.retain_count",
+            "backup.startup_delay_s",
         }
         actual_live = {
             path
@@ -228,9 +245,12 @@ class TestDispositionCoverage:
             "proxies",
             "model_info.enabled",
             "models.startup_refresh",
-            "models.ping_retain_days",
             "models.catalog_withdrawal_policy",
-            "upstream.read_timeout_s",
+            # Milestone D2: dashboard retention fields moved to LIVE
+            # (read from gen config per tick by retention_cleanup).
+            # dashboard.theme and dashboard.themes_dir remain
+            # RESTART_REQUIRED because they are read from
+            # app.state.config which is process-owned and not swapped.
         }
         for path in must_be_restart:
             assert _disposition_for(path) is ReloadDisposition.RESTART_REQUIRED, (
@@ -290,6 +310,8 @@ class TestDispositionCoverage:
             "models.refresh_interval_s",
             "models.expose_mode",
             "models.collapse_models",
+            # Milestone D2: retention field read from gen config per tick.
+            "models.ping_retain_days",
         }
         for path in live_inherited:
             assert _disposition_for(path) is ReloadDisposition.LIVE, (
@@ -355,7 +377,6 @@ class TestDispositionCoverage:
             "models.brand_new_toggle",
             "models.unknown_new_field",
             "models.startup_refresh",
-            "models.ping_retain_days",
         ):
             assert _disposition_for(path) is ReloadDisposition.RESTART_REQUIRED, (
                 f"{path} must default to RESTART_REQUIRED "
@@ -1154,6 +1175,21 @@ LIVE_FIELD_CONSUMERS: dict[str, tuple[str, ...]] = {
     # candidate ``RequestCoordinator`` (see candidate builder
     # ``persist_error_detail`` kwarg).
     "security.persist_redacted_error_detail": ("RequestCoordinator",),
+    # Milestone D2: background-policy fields.
+    # Retention fields consumed by the ``retention_cleanup`` task which
+    # reads them from the current generation's config on each tick.
+    "models.ping_retain_days": ("retention_cleanup (gen config per tick)",),
+    "dashboard.retain_request_stats_days": ("retention_cleanup (gen config per tick)",),
+    "dashboard.retain_event_days": ("retention_cleanup (gen config per tick)",),
+    # Upstream read timeout consumed by ``stale_request_finalizer``
+    # which reads it from the current generation's config per tick.
+    "upstream.read_timeout_s": ("stale_request_finalizer (gen config per tick)",),
+    # Metrics flush interval reconfigured via the process supervisor.
+    "metrics.flush_interval_s": ("metrics_flush (process supervisor reconfigure)",),
+    # Backup scheduling fields reconfigured via the process supervisor.
+    "backup.interval_s": ("automatic_backup (process supervisor reconfigure)",),
+    "backup.retain_count": ("automatic_backup (process supervisor reconfigure)",),
+    "backup.startup_delay_s": ("automatic_backup (process supervisor reconfigure)",),
 }
 
 

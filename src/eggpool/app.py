@@ -690,6 +690,7 @@ def register_candidate_tasks(
     runtime_manager: RuntimeManager,
     *,
     effective_model_info: Any = None,  # noqa: ARG001 -- legacy arg, ignored
+    process_supervisor: TaskSupervisor | None = None,
 ) -> None:
     """Backward-compatible wrapper for the unified task registration.
 
@@ -701,6 +702,11 @@ def register_candidate_tasks(
     accepted for backward compatibility but ignored -- the unified
     function acquires the current generation per tick and reads
     ``gen.model_info`` directly.
+
+    When ``process_supervisor`` is provided, process-owned tasks
+    (checkpoint, metrics_flush, update_checker, automatic_backup)
+    register there; otherwise they register on the gen supervisor
+    for backward compatibility.
     """
     from eggpool.runtime_tasks import (  # noqa: PLC0415
         TaskRegistrationContext,
@@ -714,6 +720,7 @@ def register_candidate_tasks(
             runtime_manager=runtime_manager,
             config=config,
             update_checker_outbound=None,
+            process_supervisor=process_supervisor,
         ),
     )
 
@@ -1294,6 +1301,12 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     if patched is not None:
         _mirror_generation_on_app_state(app, patched)
 
+    # 20a. Process-owned task supervisor (survives generation swaps).
+    # Holds process-owned tasks (checkpoint, metrics_flush, update_checker,
+    # automatic_backup) so reloads do not lose them.
+    process_supervisor = TaskSupervisor()
+    process.process_supervisor = process_supervisor
+
     # 20a. Background task monitor for runtime metrics
     from eggpool.background import BackgroundTaskMonitor
 
@@ -1334,6 +1347,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         finalization_retry_queue=getattr(app.state, "finalization_retry_queue", None),
         routing_trace_guard=getattr(app.state, "routing_trace_guard", None),
         runtime_manager=None,  # wired in step 24 below
+        process=process,
     )
 
     # Use the unified register_runtime_tasks helper so the startup and
@@ -1354,10 +1368,13 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             config=config,
             update_checker_outbound=outbound_manager,
             app_state=app.state,
+            process_supervisor=process_supervisor,
         ),
     )
     # 21. Start background tasks
     await supervisor.start_all()
+    # Start process-owned tasks on the process supervisor.
+    await process_supervisor.start_all()
 
     # 22. Transcoding status
     if config.transcoder.enabled is False:
@@ -1390,6 +1407,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # the manager existed; ``runtime_manager=None`` is replaced here.
     runtime_metrics_service = app.state.runtime_metrics
     runtime_metrics_service._runtime_manager = runtime_manager  # pyright: ignore[reportPrivateUsage]
+    runtime_metrics_service._process = process  # pyright: ignore[reportPrivateUsage]
 
     # 24. (moved earlier to step 19b).  The active generation is
     # already installed via install_initial above; the supervisor

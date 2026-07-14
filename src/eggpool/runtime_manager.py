@@ -162,6 +162,9 @@ class ProcessRuntime:
     stats_db: Database
     config_path: str | None = None
     metrics_coalescer: Any = None  # noqa: ANN401
+    process_supervisor: Any = None  # noqa: ANN401 — TaskSupervisor, avoids circular import
+    task_spec_version: int = 0
+    last_task_transition: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------

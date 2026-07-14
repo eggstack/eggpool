@@ -125,6 +125,7 @@ class RuntimeMetricsService:
         routing_trace_guard: Any | None = None,  # noqa: ANN401
         runtime_manager: Any | None = None,  # noqa: ANN401
         reload_manager: Any | None = None,  # noqa: ANN401
+        process: Any | None = None,  # noqa: ANN401 — ProcessRuntime, avoids circular import
     ) -> None:
         self._config = config
         self._db = db
@@ -148,6 +149,7 @@ class RuntimeMetricsService:
         self._routing_trace_guard = routing_trace_guard
         self._runtime_manager = runtime_manager
         self._reload_manager = reload_manager
+        self._process = process
 
     async def snapshot(self) -> dict[str, Any]:
         """Return a best-effort runtime snapshot.
@@ -789,7 +791,18 @@ class RuntimeMetricsService:
         except Exception as exc:
             _append_probe_error(probe_errors, f"Runtime manager snapshot failed: {exc}")
             return {"error": str(exc)}
-        return _runtime_manager_to_dict(diag)
+        result = _runtime_manager_to_dict(diag)
+        # Attach D2 task-reload diagnostics from the process container.
+        process = self._process
+        if process is not None:
+            result["task_spec_version"] = getattr(process, "task_spec_version", 0)
+            result["task_reload_summary"] = getattr(
+                process, "last_task_transition", None
+            )
+        else:
+            result["task_spec_version"] = 0
+            result["task_reload_summary"] = None
+        return result
 
     def _snapshot_dispatch_spans(self, probe_errors: list[str]) -> dict[str, Any]:
         """Best-effort snapshot of the named-span dispatch recorder.

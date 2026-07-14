@@ -59,6 +59,55 @@ candidate builder already constructs as generation-owned objects:
   threaded into the candidate ``RequestCoordinator`` via the
   ``persist_error_detail=`` kwarg.
 
+### Closure pass D2 — background and observability expansion
+
+The D2 milestone adds background-task cadences and retention
+durations as LIVE fields.  It introduces a dual-ownership model
+via ``TaskOwnership`` (``src/eggpool/runtime_task_inventory.py``):
+
+- **Process-owned** tasks (``checkpoint``, ``metrics_flush``,
+  ``update_checker``, ``automatic_backup``) register on
+  ``process.process_supervisor`` and survive generation swaps.
+  Only one instance exists; reconfiguration mutates the schedule
+  in place.
+- **Generation-leased** tasks (``catalog_refresh``,
+  ``model_info_refresh``, ``model_info_canonical_backfill``,
+  ``retention_cleanup``, ``usage_window_refresh``,
+  ``finalization_retry_drain``, ``stale_request_finalizer``,
+  ``health_disabled_models_prune``) acquire a generation lease on
+  every tick and are retired when their generation is retired.
+
+D2 LIVE families:
+
+- **Retention durations**: ``dashboard.retain_request_stats_days``,
+  ``dashboard.retain_event_days``, ``models.ping_retain_days``.
+- **Upstream timeout**: ``upstream.read_timeout_s``.
+- **Metrics flush cadence**: ``metrics.flush_interval_s``.
+- **Backup scheduling**: ``backup.interval_s``,
+  ``backup.retain_count``, ``backup.startup_delay_s``.
+
+The ``_run_periodic_loop`` in ``src/eggpool/background/__init__.py``
+re-reads ``self._interval_s`` and ``self._initial_delay_s`` each
+iteration so live interval changes take effect at the next tick
+boundary without requiring a task restart.  Process-owned task
+resources retain identity across reloads — no duplicated schedules,
+no orphaned tasks.
+
+``ProcessRuntime`` (``src/eggpool/runtime_manager.py``) now carries
+``process_supervisor``, ``task_spec_version``, and
+``last_task_transition`` fields.  Diagnostics are exposed under
+``/api/stats/runtime`` via ``_snapshot_runtime_manager``.
+
+Process-bound storage/deployment fields remain ``RESTART_REQUIRED``
+(database path, backup destination paths that cross permission
+boundaries, control socket).
+
+Tests: ``tests/unit/test_runtime_task_inventory.py`` (35 tests),
+``tests/unit/test_d2_transitions.py`` (15 tests), and
+``tests/unit/test_runtime_tasks.py`` extended with
+``TestProcessSupervisorRouting`` and
+``TestProcessSupervisorSurvival``.
+
 Fields that stay ``RESTART_REQUIRED``:
 
 - ``[upstream]`` — vestigial; only consulted at runtime-task
@@ -262,7 +311,12 @@ and `[cache]` blocks (including `[compression.synthetic_cache_controls]`
 and `[cache.synthetic_cache_controls]`), the runtime-tunable subset
 of `[models]` (`expose_mode`, `collapse_models`, `refresh_interval_s`,
 `stale_after_s`, `allow_stale_catalog`), and
-`security.persist_redacted_error_detail`. Every other field remains
+`security.persist_redacted_error_detail`. The D2 expansion adds
+background-task cadences and retention durations:
+`dashboard.retain_request_stats_days`, `dashboard.retain_event_days`,
+`models.ping_retain_days`, `upstream.read_timeout_s`,
+`metrics.flush_interval_s`, `backup.interval_s`, `backup.retain_count`,
+and `backup.startup_delay_s`. Every other field remains
 `RESTART_REQUIRED` because it is owned by the supervisor process
 (Granian construction, DB connection, middleware, JSON backend,
 deployment paths, `[upstream]` registry, `[model_info]` service

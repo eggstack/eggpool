@@ -47,6 +47,14 @@ uv run ruff check --fix src/
 
 # Type check with errors only
 uv run pyright src/ scripts/ 2>&1 | head -20
+
+# D2 background-and-observability reload tests (live rehash D2):
+uv run pytest \
+    tests/unit/test_runtime_task_inventory.py \
+    tests/unit/test_d2_transitions.py \
+    tests/unit/test_runtime_tasks.py \
+    tests/unit/test_background.py \
+    -v
 ```
 
 ## Linting
