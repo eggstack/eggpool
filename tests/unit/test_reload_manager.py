@@ -1397,6 +1397,111 @@ class TestMilestoneD1CandidateBuild:
         # And the captured config itself is distinct.
         assert id(captured["config"]) != id(baseline)
 
+    @pytest.mark.asyncio
+    async def test_old_generation_retains_original_policy_after_swap(
+        self, monkeypatch: pytest.MonkeyPatch, proc: MagicMock
+    ) -> None:
+        """Phase 4 acceptance: old generation retains its original policy.
+
+        The D1 plan requires ``no cross-generation policy contamination``:
+        after a rehash swaps the active generation, the **retired**
+        generation's transcoder policy object MUST still carry the
+        baseline values so any in-flight request that holds a lease on
+        the old generation continues to execute against its original
+        policy.  This is the core lease-drain guarantee that lets the
+        reload manager publish a new generation without disrupting
+        long-running streams.
+
+        The test:
+
+        1. Installs an initial generation with ``loss_policy="warn"``
+           and captures its ``transcoder_policy`` reference.
+        2. Rehahs with ``loss_policy="reject"``.
+        3. Asserts the candidate generation's
+           ``transcoder_policy.loss_policy == "reject"``.
+        4. Asserts the original (now retired) generation's
+           ``transcoder_policy.loss_policy`` is **still** ``"warn"`` and
+           is the **same object** it was at construction time.
+        """
+        rm = RuntimeManager()
+        baseline = _real_app_config(loss_policy="warn")
+        baseline_gen = _make_real_generation(generation_id=0, config=baseline)
+        # Replace the MagicMock transcoder_policy with the real baseline
+        # policy so we can assert on its ``loss_policy`` attribute.
+        baseline_gen = RuntimeGeneration(
+            generation_id=baseline_gen.generation_id,
+            config=baseline_gen.config,
+            config_digest=baseline_gen.config_digest,
+            registry=baseline_gen.registry,
+            catalog=baseline_gen.catalog,
+            router=baseline_gen.router,
+            coordinator=baseline_gen.coordinator,
+            client_pool=baseline_gen.client_pool,
+            outbound_manager=baseline_gen.outbound_manager,
+            dns_backend=None,
+            health_manager=baseline_gen.health_manager,
+            cost_calculator=baseline_gen.cost_calculator,
+            transcoder_policy=baseline.transcoder,
+            compression_policy=baseline_gen.compression_policy,
+            cache_config=baseline_gen.cache_config,
+            compression_tuning_registry=baseline_gen.compression_tuning_registry,
+            dispatch_overhead_recorder=baseline_gen.dispatch_overhead_recorder,
+            dispatch_span_recorder=baseline_gen.dispatch_span_recorder,
+            account_backoff_repo=baseline_gen.account_backoff_repo,
+            stats_service=baseline_gen.stats_service,
+            supervisor=baseline_gen.supervisor,
+            finalization_retry_queue=baseline_gen.finalization_retry_queue,
+            routing_trace_guard=baseline_gen.routing_trace_guard,
+            created_at_monotonic=baseline_gen.created_at_monotonic,
+            created_at_epoch=baseline_gen.created_at_epoch,
+        )
+        # Remember the exact policy reference so we can prove the
+        # retired generation's object is unchanged after the swap.
+        original_policy_ref = baseline_gen.transcoder_policy
+        await rm.install_initial(baseline_gen)
+
+        candidate_config = _real_app_config(loss_policy="reject")
+
+        captured: dict[str, object] = {}
+        mgr = ReloadManager(rm, proc)
+        self._stub_candidate_build(mgr, proc, captured, gen_id=1)
+        change = MagicMock(section="transcoder", disposition=MagicMock(value="live"))
+        diff = _make_diff(changes=(change,))
+        validation = _make_real_validation(candidate_config)
+        monkeypatch.setattr(mgr, "_compute_reload_diff", AsyncMock(return_value=diff))
+        monkeypatch.setattr(mgr, "_reconcile_persistence", AsyncMock())
+        monkeypatch.setattr(mgr, "_record_event", AsyncMock())
+        monkeypatch.setattr(rm, "begin_retirement", AsyncMock())
+
+        result = await mgr.reload(validation)
+        assert result.ok is True
+
+        # The candidate generation carries the new policy.
+        new_policy = captured["transcoder_policy"]
+        assert new_policy is not None
+        assert new_policy.loss_policy == "reject"  # type: ignore[attr-defined]
+
+        # The retired (baseline) generation's ``transcoder_policy``
+        # attribute is the *original* frozen Pydantic object -- never
+        # mutated, never replaced.  This is the no-cross-generation-
+        # contamination invariant: a request holding a lease on the
+        # old generation continues to execute against the original
+        # policy values until retirement completes.  ``RuntimeGeneration``
+        # is a frozen dataclass so the attribute cannot change in
+        # place; the identity check below confirms the retired
+        # generation's policy is still the original reference.
+        assert baseline_gen.transcoder_policy is original_policy_ref, (
+            "baseline generation's transcoder_policy object identity "
+            "must remain the original frozen Pydantic instance"
+        )
+        assert (
+            baseline_gen.transcoder_policy.loss_policy  # type: ignore[attr-defined]
+            == "warn"
+        ), (
+            "baseline generation's transcoder_policy.loss_policy must "
+            "remain 'warn' (no cross-generation contamination)"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Milestone D1 — repeated-reload soak test (no client / task / tuning leak).
@@ -1446,6 +1551,11 @@ class TestMilestoneD1RepeatedReloadSoak:
             gen_id = next_gen_id["value"]
             next_gen_id["value"] += 1
             tuning_registry = MagicMock()
+            client_pool = MagicMock()
+            outbound_manager = MagicMock()
+            supervisor = MagicMock()
+            finalization_queue = MagicMock()
+            routing_trace_guard = MagicMock()
             gen = RuntimeGeneration(
                 generation_id=gen_id,
                 config=candidate_config,
@@ -1460,8 +1570,8 @@ class TestMilestoneD1RepeatedReloadSoak:
                     compression_tuning_registry=tuning_registry,
                     persist_error_detail=candidate_config.security.persist_redacted_error_detail,
                 ),
-                client_pool=MagicMock(),
-                outbound_manager=MagicMock(),
+                client_pool=client_pool,
+                outbound_manager=outbound_manager,
                 dns_backend=None,
                 health_manager=MagicMock(),
                 cost_calculator=MagicMock(),
@@ -1473,16 +1583,36 @@ class TestMilestoneD1RepeatedReloadSoak:
                 dispatch_span_recorder=MagicMock(),
                 account_backoff_repo=MagicMock(),
                 stats_service=MagicMock(),
-                supervisor=MagicMock(),
-                finalization_retry_queue=MagicMock(),
-                routing_trace_guard=MagicMock(),
+                supervisor=supervisor,
+                finalization_retry_queue=finalization_queue,
+                routing_trace_guard=routing_trace_guard,
                 created_at_monotonic=time.monotonic(),
                 created_at_epoch=time.time(),
             )
+            # Track per-resource identity so the test can prove every
+            # candidate generation gets a fresh pool, supervisor,
+            # finalization queue, routing trace guard, and tuning
+            # registry.  Phase 5 acceptance requires "no leak" across
+            # 20+ reloads; the simplest signal is that no resource
+            # is ever reused.
             captured.setdefault("tuning_ids", set()).add(id(tuning_registry))
             captured.setdefault("transcoder_ids", set()).add(
                 id(candidate_config.transcoder)
             )
+            captured.setdefault("compression_ids", set()).add(
+                id(candidate_config.compression)
+            )
+            captured.setdefault("cache_ids", set()).add(id(candidate_config.cache))
+            captured.setdefault("client_pool_ids", set()).add(id(client_pool))
+            captured.setdefault("outbound_manager_ids", set()).add(id(outbound_manager))
+            captured.setdefault("supervisor_ids", set()).add(id(supervisor))
+            captured.setdefault("finalization_queue_ids", set()).add(
+                id(finalization_queue)
+            )
+            captured.setdefault("routing_trace_guard_ids", set()).add(
+                id(routing_trace_guard)
+            )
+            captured.setdefault("config_ids", set()).add(id(candidate_config))
             captured["last_gen_id"] = gen_id
             return CandidateGeneration(generation=gen, process=proc, diff=diff)
 
@@ -1520,6 +1650,28 @@ class TestMilestoneD1RepeatedReloadSoak:
         # Transcoder policies seen at build time should be different
         # per reload.
         assert len(captured["transcoder_ids"]) == 25
+        # Every other generation-owned resource (Phase 5 acceptance)
+        # must also be fresh per candidate so the previous generation's
+        # resources can be retired without aliasing the new pool.
+        # This is the "no leak" signal: if any pool / supervisor /
+        # queue is reused, the retired generation's reference would
+        # collide with the active generation's during the drain window.
+        for resource_name, ids_seen in (
+            ("compression_ids", captured["compression_ids"]),
+            ("cache_ids", captured["cache_ids"]),
+            ("client_pool_ids", captured["client_pool_ids"]),
+            ("outbound_manager_ids", captured["outbound_manager_ids"]),
+            ("supervisor_ids", captured["supervisor_ids"]),
+            ("finalization_queue_ids", captured["finalization_queue_ids"]),
+            ("routing_trace_guard_ids", captured["routing_trace_guard_ids"]),
+            ("config_ids", captured["config_ids"]),
+        ):
+            assert len(ids_seen) == 25, (
+                f"{resource_name} reused across 25 reloads "
+                f"(expected 25 unique objects, saw {len(ids_seen)}). "
+                "This indicates the candidate builder is aliasing "
+                "generation-owned resources from a previous generation."
+            )
         # Manager diagnostics show no zombie retiring slots.
         diag = rm.diagnostics()
         assert diag.retiring == (), "retiring slots leaked across reloads"

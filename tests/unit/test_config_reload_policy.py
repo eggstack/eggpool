@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
 
 from eggpool.config_reload_policy import (
     _FIELD_DISPOSITION,
@@ -299,6 +302,84 @@ class TestDispositionCoverage:
             ReloadDisposition.RESTART_REQUIRED
         )
 
+    def test_unknown_child_of_live_parent_inherits_live(self) -> None:
+        """D1: children of ``transcoder``/``compression``/``cache`` inherit LIVE.
+
+        The candidate builder in :mod:`eggpool.control.reload_manager`
+        reconstructs the entire ``TranscoderPolicy``/``CompressionConfig``/
+        ``CacheConfig`` object from the candidate config.  Because the
+        entire block is consumed by the candidate ``RequestCoordinator``,
+        any new sub-field under those prefixes is consumed at
+        publication time without a separate code change.  This test
+        pins that prefix-inheritance contract.
+
+        Note: ``providers`` and ``accounts`` also use blanket LIVE
+        inheritance; ``models`` only inherits for the registered
+        sub-paths (the request-path-visible subset), so unknown
+        ``models.*`` keys still default to ``RESTART_REQUIRED`` -- that
+        is intentional because some ``models.*`` fields (e.g.
+        ``startup_refresh``, ``ping_retain_days``) are constructor-owned.
+
+        Truly unknown top-level paths (no known LIVE prefix) still
+        fail closed -- see
+        :meth:`test_unknown_top_level_path_still_fails_closed`.
+        """
+        for path in (
+            "transcoder.brand_new_field_not_yet_in_pydantic",
+            "compression.brand_new_feature",
+            "cache.brand_new_knob",
+            "providers.brand_new_subfield",
+            "accounts.brand_new_subfield",
+        ):
+            assert _disposition_for(path) is ReloadDisposition.LIVE, (
+                f"{path} must inherit LIVE from its known LIVE parent"
+            )
+
+    def test_models_unknown_subpath_stays_restart_required(self) -> None:
+        """``models`` does NOT blanket-inherit; only registered sub-paths are LIVE.
+
+        Unlike ``transcoder``/``compression``/``cache`` (which are
+        consumed wholesale by the candidate ``RequestCoordinator``),
+        the ``models`` block has both LIVE sub-paths and
+        ``RESTART_REQUIRED`` ones (``startup_refresh``,
+        ``ping_retain_days``, ``catalog_withdrawal_policy``).  The
+        prefix-inheritance rule must NOT blanket-promote unknown
+        ``models.*`` sub-paths to LIVE because a stray new toggle
+        could bypass the audit-trail that the explicit
+        ``_FIELD_DISPOSITION`` entries provide.
+
+        This test pins the conservative contract for the ``models.*``
+        namespace.
+        """
+        for path in (
+            "models.brand_new_toggle",
+            "models.unknown_new_field",
+            "models.startup_refresh",
+            "models.ping_retain_days",
+        ):
+            assert _disposition_for(path) is ReloadDisposition.RESTART_REQUIRED, (
+                f"{path} must default to RESTART_REQUIRED "
+                "(explicit disposition required)"
+            )
+
+    def test_unknown_top_level_path_still_fails_closed(self) -> None:
+        """The fail-closed guarantee still holds for unknown top-level paths.
+
+        The prefix-inheritance rule applies only to known LIVE parents.
+        Truly unknown top-level paths (no LIVE prefix, no exact entry)
+        default to ``RESTART_REQUIRED`` so future field additions are
+        rejected live rather than silently published.
+        """
+        for path in (
+            "totally.unknown.field",
+            "never_seen_this_section.anything",
+            "foo",
+            "foo.bar.baz.qux",
+        ):
+            assert _disposition_for(path) is ReloadDisposition.RESTART_REQUIRED, (
+                f"{path} must default to RESTART_REQUIRED (unknown parent)"
+            )
+
 
 class TestComputeDiff:
     def test_no_changes_returns_empty_diff(self) -> None:
@@ -413,6 +494,180 @@ class TestComputeDiff:
         raw = str(change)
         assert "sk-original-12345" not in raw
         assert "sk-rotated-67890" not in raw
+
+    def test_mixed_live_and_restart_required_changes(self) -> None:
+        """Phase 3 (Reload classification) acceptance: a diff that mixes LIVE and
+        ``RESTART_REQUIRED`` changes must surface BOTH so the reload manager can
+        reject the entire transaction atomically.
+
+        This pins the property that the diff never silently drops the LIVE
+        change when a ``RESTART_REQUIRED`` change is also present.  The reload
+        manager's planner (``ReloadManager.reload``) consults
+        ``diff.restart_required`` and rejects the whole op when non-empty, so
+        a mixed diff must produce non-empty ``diff.restart_required`` AND
+        non-empty ``diff.live``.
+        """
+        from eggpool.models.config import AppConfig
+
+        old = AppConfig.from_dict(
+            {
+                "server": {"api_key": SERVER_API_KEY, "port": 11300},
+                "providers": {
+                    "opencode-go": {
+                        "id": "opencode-go",
+                        "base_url": "https://opencode.ai/zen/go/v1",
+                        "protocols": ["openai"],
+                        "models_endpoint": {"method": "GET", "path": "/models"},
+                        "accounts": [
+                            {
+                                "name": "default",
+                                "api_key": ACCOUNT_API_KEY,
+                                "enabled": True,
+                                "weight": 1.0,
+                            }
+                        ],
+                    }
+                },
+                "transcoder": {"loss_policy": "warn"},
+                "routing": {"local_quota_mode": "score_only"},
+            }
+        )
+        # Bump server.port (RESTART_REQUIRED) AND toggle transcoder.loss_policy
+        # (LIVE) AND change routing.local_quota_mode (LIVE) in the same diff.
+        new = old.model_copy(
+            update={
+                "server": old.server.model_copy(update={"port": 11301}),
+                "transcoder": old.transcoder.model_copy(
+                    update={"loss_policy": "reject"}
+                ),
+                "routing": old.routing.model_copy(
+                    update={"local_quota_mode": "hard_cap"}
+                ),
+            }
+        )
+        diff = compute_diff(old, new)
+
+        restart_changes = diff.restart_required
+        live_changes = diff.live
+        assert any(c.path == "server.port" for c in restart_changes), (
+            "server.port must be classified RESTART_REQUIRED"
+        )
+        assert any(c.path == "transcoder.loss_policy" for c in live_changes), (
+            "transcoder.loss_policy must be classified LIVE"
+        )
+        assert any(c.path == "routing.local_quota_mode" for c in live_changes), (
+            "routing.local_quota_mode must be classified LIVE"
+        )
+
+    @pytest.mark.asyncio()
+    async def test_mixed_reload_rejects_entire_transaction(self) -> None:
+        """Phase 3 acceptance: the reload manager rejects a mixed diff atomically.
+
+        When ``compute_diff`` returns both LIVE and ``RESTART_REQUIRED``
+        changes, the reload manager MUST:
+
+        - return ``ok=False``;
+        - return ``stage == ReloadStage.DIFF``;
+        - leave the active generation unchanged;
+        - record every ``RESTART_REQUIRED`` change in
+          ``result.restart_required`` so the operator can see what blocked
+          the reload (rather than silently dropping the LIVE subset).
+
+        This is the contract that prevents a partial reload from
+        publishing a new generation while leaving process-owned state
+        stale.
+        """
+        from eggpool.control.reload_manager import ReloadManager
+        from eggpool.models.config import AppConfig
+        from eggpool.runtime_manager import RuntimeGeneration, RuntimeManager
+
+        rm = RuntimeManager()
+        proc = MagicMock()
+        proc.db = MagicMock()
+        proc.stats_db = MagicMock()
+        proc.metrics_coalescer = MagicMock()
+        mgr = ReloadManager(rm, proc)
+
+        baseline = AppConfig.from_dict(
+            {
+                "server": {"api_key": SERVER_API_KEY, "port": 11300},
+                "providers": {
+                    "opencode-go": {
+                        "id": "opencode-go",
+                        "base_url": "https://opencode.ai/zen/go/v1",
+                        "protocols": ["openai"],
+                        "models_endpoint": {"method": "GET", "path": "/models"},
+                        "accounts": [
+                            {
+                                "name": "default",
+                                "api_key": ACCOUNT_API_KEY,
+                                "enabled": True,
+                                "weight": 1.0,
+                            }
+                        ],
+                    }
+                },
+                "transcoder": {"loss_policy": "warn"},
+            }
+        )
+
+        # Install a real initial generation so the reload manager has a
+        # baseline to compute the diff against.  Without this the
+        # ``_compute_reload_diff`` step would raise on a ``None``
+        # active snapshot.
+        initial_gen = RuntimeGeneration(
+            generation_id=0,
+            config=baseline,
+            config_digest="a" * 64,
+            registry=MagicMock(),
+            catalog=MagicMock(),
+            router=MagicMock(),
+            coordinator=MagicMock(),
+            client_pool=MagicMock(),
+            outbound_manager=MagicMock(),
+            dns_backend=None,
+            health_manager=MagicMock(),
+            cost_calculator=MagicMock(),
+            transcoder_policy=MagicMock(),
+            compression_policy=MagicMock(),
+            cache_config=MagicMock(),
+            compression_tuning_registry=MagicMock(),
+            dispatch_overhead_recorder=MagicMock(),
+            dispatch_span_recorder=MagicMock(),
+            account_backoff_repo=MagicMock(),
+            stats_service=MagicMock(),
+            supervisor=MagicMock(),
+            finalization_retry_queue=MagicMock(),
+            routing_trace_guard=MagicMock(),
+            created_at_monotonic=0.0,
+            created_at_epoch=0.0,
+        )
+        await rm.install_initial(initial_gen)
+
+        candidate = baseline.model_copy(
+            update={
+                "server": baseline.server.model_copy(update={"port": 11301}),
+                "transcoder": baseline.transcoder.model_copy(
+                    update={"loss_policy": "reject"}
+                ),
+            }
+        )
+
+        validation = MagicMock()
+        validation.content_digest = "d" * 64
+        validation.warnings = ()
+        validation.config = candidate
+
+        result = await mgr.reload(validation)
+
+        assert result.ok is False, "mixed diff must reject the entire reload"
+        assert result.stage is ReloadStage.DIFF
+        assert result.generation is None
+        # The full list of restart-required changes is surfaced.
+        assert any(c.path == "server.port" for c in result.restart_required), (
+            "server.port must appear in result.restart_required"
+        )
+        assert "restart-required" in result.message.lower()
 
     def test_deterministic_ordering(self) -> None:
         from eggpool.models.config import AppConfig
@@ -833,3 +1088,137 @@ class TestDiffFromValidation:
         diff = diff_from_validation(baseline_path, candidate)
         paths = [c.path for c in diff.changes]
         assert "server.port" in paths
+
+
+# ---------------------------------------------------------------------------
+# Field-consumer ownership mapping.
+#
+# The D1 plan (Phase 1) requires a coverage test that fails when a
+# proposed LIVE field has no registered consumer proof.  This is the
+# table-driven enforcement of that rule: every LIVE field must appear
+# in ``LIVE_FIELD_CONSUMERS`` together with the runtime class +
+# attribute (or wiring seam) that owns the post-publication value.
+# When a new LIVE field is added to ``_FIELD_DISPOSITION`` without
+# updating this map, the test below fails with a clear message
+# pointing at the missing entry.
+# ---------------------------------------------------------------------------
+
+
+LIVE_FIELD_CONSUMERS: dict[str, tuple[str, ...]] = {
+    # Provider / account collections: candidate builder expands the
+    # per-key rows; consumers are the candidate ``AccountRegistry``
+    # (built from ``provider.accounts``) and ``ProviderClientPool``
+    # (built from ``provider.base_url`` / ``provider.protocols``).
+    "providers": ("AccountRegistry", "ProviderClientPool", "OutboundClientManager"),
+    "accounts": ("AccountRegistry", "ProviderClientPool"),
+    # Routing fields consumed by the candidate ``Router`` /
+    # ``QuotaFairScorer`` / ``RequestCoordinator`` built in
+    # ``control.reload_manager._build_candidate_generation``.
+    "routing.strategy": ("Router",),
+    "routing.near_tie_epsilon": ("QuotaFairScorer",),
+    "routing.max_retries_before_stream": ("RequestCoordinator",),
+    "routing.unknown_request_reservation_microdollars": ("Router.quota_estimator",),
+    "routing.inflight_penalty": ("QuotaFairScorer",),
+    "routing.health_penalty": ("QuotaFairScorer",),
+    "routing.randomize_near_ties": ("QuotaFairScorer",),
+    "routing.quota_exhausted_cooldown_seconds": ("RequestCoordinator",),
+    "routing.local_quota_mode": ("Router",),
+    "routing.fairness_mode": ("Router",),
+    "routing.fairness_epsilon": ("Router",),
+    "routing.fairness_scope": ("Router",),
+    "routing.trace.mode": ("RuntimeMetricsService",),
+    "routing.trace.sample_rate": ("RuntimeMetricsService",),
+    "routing.trace.include_score_components": ("RuntimeMetricsService",),
+    "routing.trace.skip_above_lock_wait_p95_ms": ("RoutingTraceGuard",),
+    # Per-model overrides / capability overrides: consumed by the
+    # candidate ``Router`` (limits), ``CostCalculator`` (prices), and
+    # the capability resolver inside ``RequestCoordinator``.
+    "model_overrides": ("Router.quota_estimator", "CostCalculator"),
+    "model_capabilities": ("RequestCoordinator",),
+    # Milestone D1: request-policy blocks consumed via the
+    # generation-owned policy objects on the candidate
+    # ``RequestCoordinator`` (see ``_build_candidate_generation``).
+    "transcoder": ("RequestCoordinator._transcoder_policy",),
+    "compression": (
+        "RequestCoordinator._compression_policy",
+        "RequestCoordinator._compression_tuning_registry",
+    ),
+    "cache": ("RequestCoordinator._cache_config",),
+    # Milestone D1: request-path-visible models subset.
+    "models.refresh_interval_s": ("CatalogService", "TaskSupervisor"),
+    "models.expose_mode": ("CatalogService",),
+    "models.collapse_models": ("CatalogService",),
+    "models.stale_after_s": ("CatalogService",),
+    "models.allow_stale_catalog": ("CatalogService",),
+    # Milestone D1: persisted error detail toggle is wired via the
+    # candidate ``RequestCoordinator`` (see candidate builder
+    # ``persist_error_detail`` kwarg).
+    "security.persist_redacted_error_detail": ("RequestCoordinator",),
+}
+
+
+class TestFieldConsumerOwnership:
+    """Phase 1 ownership proof.
+
+    Every entry in ``_FIELD_DISPOSITION`` classified as
+    ``ReloadDisposition.LIVE`` MUST appear in
+    :data:`LIVE_FIELD_CONSUMERS` together with the consumer class or
+    attribute that owns the post-publication value.  Adding a new LIVE
+    field without updating this map is a regression -- the field would
+    be classified as live but no candidate builder seam would consume
+    it, leaving the reload effectively a no-op for that field.
+    """
+
+    def test_every_live_field_has_a_registered_consumer(self) -> None:
+        live_paths = {
+            path
+            for path, disposition in _FIELD_DISPOSITION.items()
+            if disposition is ReloadDisposition.LIVE
+        }
+        declared = set(LIVE_FIELD_CONSUMERS)
+        missing = live_paths - declared
+        orphan = declared - live_paths
+        assert not missing, (
+            f"LIVE fields without a registered consumer proof: {sorted(missing)}"
+        )
+        assert not orphan, (
+            f"Stale entries in LIVE_FIELD_CONSUMERS (no longer LIVE): {sorted(orphan)}"
+        )
+
+    def test_every_consumer_entry_is_a_non_empty_tuple(self) -> None:
+        for path, consumers in LIVE_FIELD_CONSUMERS.items():
+            assert isinstance(consumers, tuple) and consumers, (
+                f"LIVE_FIELD_CONSUMERS[{path!r}] must list at least one consumer"
+            )
+            for consumer in consumers:
+                assert isinstance(consumer, str) and consumer.strip(), (
+                    f"LIVE_FIELD_CONSUMERS[{path!r}] contains empty consumer"
+                )
+
+    def test_request_policy_consumers_match_generation_owned_fields(self) -> None:
+        """D1: transcoder/compression/cache consumers are generation-owned.
+
+        The candidate builder in :mod:`eggpool.control.reload_manager`
+        must install the D1 policy objects onto the candidate
+        ``RuntimeGeneration`` so retirement teardown can release them
+        in lockstep with the rest of the generation-owned services.
+        This test pins the contract.
+        """
+        # The D1 policy fields are typed as ``Any`` on the dataclass
+        # but they are first-class fields on every constructed
+        # RuntimeGeneration.  Verify the dataclass exposes them.
+        from dataclasses import fields
+
+        from eggpool.runtime_manager import RuntimeGeneration
+
+        names = {f.name for f in fields(RuntimeGeneration)}
+        for required in (
+            "transcoder_policy",
+            "compression_policy",
+            "cache_config",
+            "compression_tuning_registry",
+        ):
+            assert required in names, (
+                f"RuntimeGeneration must expose {required!r} as a generation-owned "
+                "field so the candidate builder can install it"
+            )

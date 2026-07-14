@@ -1632,6 +1632,7 @@ def _write_d1_config(
     upstream_port: int,
     loss_policy: str = "warn",
     prefer_native: bool = True,
+    transcoder_enabled: bool = True,
     compression_enabled: bool = False,
     compression_mode: str = "observe",
     min_candidate_tokens: int = 2048,
@@ -1659,6 +1660,7 @@ collapse_models = {str(collapse_models).lower()}
 startup_refresh = true
 
 [transcoder]
+enabled = {str(transcoder_enabled).lower()}
 loss_policy = "{loss_policy}"
 prefer_native = {str(prefer_native).lower()}
 
@@ -2267,6 +2269,142 @@ async def test_d1_old_stream_new_request_split_semantics(tmp_path: Any) -> None:
             assert r.status_code == 200
 
         assert proc.pid == original_pid
+    finally:
+        await _terminate_server(proc)
+        upstream.shutdown()
+
+
+@pytest.mark.asyncio()
+async def test_d1_transcoder_enabled_toggle_live_reload(tmp_path: Any) -> None:
+    """``transcoder.enabled`` toggles live without restart.
+
+    Phase 4 (Behavioural E2E tests) requires that toggling
+    ``transcoder.enabled`` via ``eggpool rehash`` swaps the generation
+    without restarting the process.  This test exercises the field
+    end-to-end:
+
+    1. Spawn a server with ``transcoder.enabled = true``.
+    2. Issue a baseline OpenAI-to-OpenAI request (no transcoding
+       required; passes either way).
+    3. Rehash with ``transcoder.enabled = false`` and verify the
+       generation advances, the PID stays stable, and a new request
+       still passes (because no transcoding was needed).
+    4. Rehash back to ``transcoder.enabled = true`` and verify the
+       generation advances again without a PID change.
+
+    This proves the field flows through the candidate
+    ``RequestCoordinator`` at publication time.  The actual
+    transcoding behaviour change for cross-protocol traffic is
+    covered by ``test_transcode_default_e2e``; this test pins the
+    D1 LIVE classification wiring specifically.
+    """
+    state = _MockState()
+    upstream = _make_mock_server(state)
+    upstream_port = upstream.server_address[1]
+
+    server_port = _free_port()
+    config_path = str(tmp_path / "config.toml")
+    _write_d1_config(
+        config_path,
+        server_port=server_port,
+        upstream_port=upstream_port,
+        transcoder_enabled=True,
+    )
+
+    state_dir = str(tmp_path / "state")
+    os.makedirs(state_dir, exist_ok=True)
+    env = os.environ.copy()
+    env["XDG_STATE_HOME"] = state_dir
+
+    proc = await _spawn_server(config_path, env)
+    try:
+        assert await _wait_healthy(server_port), "server did not become healthy"
+        original_pid = proc.pid
+        auth = {"Authorization": "Bearer test-rehash-key"}
+
+        async with httpx.AsyncClient() as client:
+            gen_baseline = await _runtime_generation_id(client, server_port, auth)
+        assert gen_baseline is not None
+
+        # Baseline request succeeds.
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                f"http://127.0.0.1:{server_port}/v1/chat/completions",
+                json={
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "baseline"}],
+                },
+                headers=auth,
+                timeout=10.0,
+            )
+            assert r.status_code == 200, f"baseline request failed: {r.text}"
+
+        # Toggle transcoder.enabled to false and rehash.
+        _write_d1_config(
+            config_path,
+            server_port=server_port,
+            upstream_port=upstream_port,
+            transcoder_enabled=False,
+        )
+        exit_code, stdout, stderr = await _run_rehash(config_path, env)
+        assert exit_code == 0, (
+            f"rehash with transcoder.enabled=false failed: {stdout} {stderr}"
+        )
+        assert proc.pid == original_pid, "PID changed (process restarted)"
+
+        async with httpx.AsyncClient() as client:
+            gen_after_off = await _runtime_generation_id(client, server_port, auth)
+        assert gen_after_off is not None and gen_after_off > gen_baseline, (
+            f"generation did not advance: {gen_baseline} -> {gen_after_off}"
+        )
+
+        # New request on the new generation succeeds (OpenAI-to-OpenAI
+        # does not require transcoding, so disabling it does not break
+        # the request).
+        async with httpx.AsyncClient() as client:
+            r_off = await client.post(
+                f"http://127.0.0.1:{server_port}/v1/chat/completions",
+                json={
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "post-off"}],
+                },
+                headers=auth,
+                timeout=10.0,
+            )
+            assert r_off.status_code == 200, (
+                f"post-rehash request failed: {r_off.status_code} {r_off.text}"
+            )
+
+        # Re-enable transcoder and verify another generation swap.
+        _write_d1_config(
+            config_path,
+            server_port=server_port,
+            upstream_port=upstream_port,
+            transcoder_enabled=True,
+        )
+        exit_code, stdout, stderr = await _run_rehash(config_path, env)
+        assert exit_code == 0, f"re-enable rehash failed: {stdout} {stderr}"
+        assert proc.pid == original_pid, "PID changed after re-enable"
+
+        async with httpx.AsyncClient() as client:
+            gen_after_on = await _runtime_generation_id(client, server_port, auth)
+        assert gen_after_on is not None and gen_after_on > gen_after_off, (
+            f"generation did not advance on re-enable: "
+            f"{gen_after_off} -> {gen_after_on}"
+        )
+
+        async with httpx.AsyncClient() as client:
+            r_on = await client.post(
+                f"http://127.0.0.1:{server_port}/v1/chat/completions",
+                json={
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "post-on"}],
+                },
+                headers=auth,
+                timeout=10.0,
+            )
+            assert r_on.status_code == 200
+
     finally:
         await _terminate_server(proc)
         upstream.shutdown()
