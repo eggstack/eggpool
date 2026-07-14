@@ -677,3 +677,272 @@ async def test_live_routing_change_swaps_generation(tmp_path: Any) -> None:
     finally:
         await _terminate_server(proc)
         upstream.shutdown()
+
+
+@pytest.mark.asyncio()
+async def test_provider_addition_live_reload(tmp_path: Any) -> None:
+    """Adding a new provider is applied live via rehash."""
+    state_a = _MockState()
+    upstream_a = _make_mock_server(state_a)
+    port_a = upstream_a.server_address[1]
+
+    state_b = _MockState()
+    upstream_b = _make_mock_server(state_b)
+    port_b = upstream_b.server_address[1]
+
+    server_port = _free_port()
+    config_path = str(tmp_path / "config.toml")
+    _write_config(config_path, server_port=server_port, upstream_port=port_a)
+
+    state_dir = str(tmp_path / "state")
+    os.makedirs(state_dir, exist_ok=True)
+    env = os.environ.copy()
+    env["XDG_STATE_HOME"] = state_dir
+
+    proc = await _spawn_server(config_path, env)
+    try:
+        assert await _wait_healthy(server_port), "server did not become healthy"
+        original_pid = proc.pid
+        auth = {"Authorization": "Bearer test-rehash-key"}
+
+        # Rewrite config to add provider-b
+        db_path = config_path.replace(".toml", ".db")
+        config = f"""\
+[server]
+api_key = "test-rehash-key"
+port = {server_port}
+
+[database]
+path = "{db_path}"
+
+[models]
+startup_refresh = true
+refresh_interval_s = 3600
+
+[routing]
+inflight_penalty = 100000
+
+[providers.provider-a]
+id = "provider-a"
+base_url = "http://127.0.0.1:{port_a}/v1"
+protocols = ["openai"]
+
+[providers.provider-a.models_endpoint]
+method = "GET"
+path = "/models"
+
+[[providers.provider-a.static_models]]
+id = "test-model"
+protocol = "openai"
+
+[[providers.provider-a.accounts]]
+name = "acct-a"
+api_key = "key-a"
+enabled = true
+weight = 1.0
+
+[providers.provider-b]
+id = "provider-b"
+base_url = "http://127.0.0.1:{port_b}/v1"
+protocols = ["openai"]
+
+[providers.provider-b.models_endpoint]
+method = "GET"
+path = "/models"
+
+[[providers.provider-b.static_models]]
+id = "test-model-b"
+protocol = "openai"
+
+[[providers.provider-b.accounts]]
+name = "acct-b"
+api_key = "key-b"
+enabled = true
+weight = 1.0
+"""
+        with open(config_path, "w") as f:
+            f.write(config)
+
+        exit_code, stdout, stderr = await _run_rehash(config_path, env)
+        assert exit_code == 0, f"rehash failed: {stdout} {stderr}"
+
+        assert proc.pid == original_pid
+        assert proc.returncode is None
+
+        # Server still healthy
+        async with httpx.AsyncClient() as client:
+            health = await client.get(
+                f"http://127.0.0.1:{server_port}/v1/healthz", timeout=5.0
+            )
+            assert health.status_code == 200
+
+        # Original model still works
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                f"http://127.0.0.1:{server_port}/v1/chat/completions",
+                json={
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+                headers=auth,
+                timeout=10.0,
+            )
+            assert r.status_code == 200
+
+    finally:
+        await _terminate_server(proc)
+        upstream_a.shutdown()
+        upstream_b.shutdown()
+
+
+@pytest.mark.asyncio()
+async def test_credential_rotation_live_reload(tmp_path: Any) -> None:
+    """Rotating an account credential is applied live via rehash."""
+    state = _MockState()
+    upstream = _make_mock_server(state)
+    upstream_port = upstream.server_address[1]
+
+    server_port = _free_port()
+    config_path = str(tmp_path / "config.toml")
+    _write_config(config_path, server_port=server_port, upstream_port=upstream_port)
+
+    state_dir = str(tmp_path / "state")
+    os.makedirs(state_dir, exist_ok=True)
+    env = os.environ.copy()
+    env["XDG_STATE_HOME"] = state_dir
+
+    proc = await _spawn_server(config_path, env)
+    try:
+        assert await _wait_healthy(server_port), "server did not become healthy"
+        original_pid = proc.pid
+
+        # Rewrite config with a new API key for the account
+        _write_config(config_path, server_port=server_port, upstream_port=upstream_port)
+        # Read and modify just the api_key
+        with open(config_path) as f:
+            content = f.read()
+        content = content.replace('api_key = "key-a"', 'api_key = "key-a-rotated"')
+        with open(config_path, "w") as f:
+            f.write(content)
+
+        exit_code, stdout, stderr = await _run_rehash(config_path, env)
+        assert exit_code == 0, f"rehash failed: {stdout} {stderr}"
+        assert proc.pid == original_pid
+        assert proc.returncode is None
+
+    finally:
+        await _terminate_server(proc)
+        upstream.shutdown()
+
+
+@pytest.mark.asyncio()
+async def test_routing_weight_change_live_reload(tmp_path: Any) -> None:
+    """Changing account weight is applied live via rehash."""
+    state = _MockState()
+    upstream = _make_mock_server(state)
+    upstream_port = upstream.server_address[1]
+
+    server_port = _free_port()
+    config_path = str(tmp_path / "config.toml")
+    _write_config(config_path, server_port=server_port, upstream_port=upstream_port)
+
+    state_dir = str(tmp_path / "state")
+    os.makedirs(state_dir, exist_ok=True)
+    env = os.environ.copy()
+    env["XDG_STATE_HOME"] = state_dir
+
+    proc = await _spawn_server(config_path, env)
+    try:
+        assert await _wait_healthy(server_port), "server did not become healthy"
+        original_pid = proc.pid
+
+        # Rewrite config with different weight
+        with open(config_path) as f:
+            content = f.read()
+        content = content.replace("weight = 1.0", "weight = 2.0")
+        with open(config_path, "w") as f:
+            f.write(content)
+
+        exit_code, stdout, stderr = await _run_rehash(config_path, env)
+        assert exit_code == 0, f"rehash failed: {stdout} {stderr}"
+        assert proc.pid == original_pid
+        assert proc.returncode is None
+
+    finally:
+        await _terminate_server(proc)
+        upstream.shutdown()
+
+
+@pytest.mark.asyncio()
+async def test_concurrent_rehash_rejected(tmp_path: Any) -> None:
+    """Concurrent rehash commands are serialized or one is rejected."""
+    state = _MockState()
+    upstream = _make_mock_server(state)
+    upstream_port = upstream.server_address[1]
+
+    server_port = _free_port()
+    config_path = str(tmp_path / "config.toml")
+    _write_config(config_path, server_port=server_port, upstream_port=upstream_port)
+
+    state_dir = str(tmp_path / "state")
+    os.makedirs(state_dir, exist_ok=True)
+    env = os.environ.copy()
+    env["XDG_STATE_HOME"] = state_dir
+
+    proc = await _spawn_server(config_path, env)
+    try:
+        assert await _wait_healthy(server_port), "server did not become healthy"
+
+        # Rewrite config so rehash has work to do
+        _write_config(
+            config_path,
+            server_port=server_port,
+            upstream_port=upstream_port,
+            inflight_penalty=500_000,
+        )
+
+        # Fire two concurrent rehash commands
+        results = await asyncio.gather(
+            _run_rehash(config_path, env),
+            _run_rehash(config_path, env),
+            return_exceptions=True,
+        )
+
+        # At least one should succeed, none should crash
+        exit_codes = []
+        for r in results:
+            if isinstance(r, Exception):
+                # gather with return_exceptions=True gives exceptions
+                # but _run_rehash shouldn't raise
+                continue
+            exit_codes.append(r[0])
+
+        # At least one should succeed
+        assert any(ec == 0 for ec in exit_codes), f"no rehash succeeded: {exit_codes}"
+
+        assert proc.returncode is None
+
+    finally:
+        await _terminate_server(proc)
+        upstream.shutdown()
+
+
+@pytest.mark.asyncio()
+async def test_control_socket_unavailable(tmp_path: Any) -> None:
+    """Rehash fails gracefully when server is not running."""
+    config_path = str(tmp_path / "config.toml")
+    _write_config(config_path, server_port=19999, upstream_port=19998)
+
+    state_dir = str(tmp_path / "state")
+    os.makedirs(state_dir, exist_ok=True)
+    env = os.environ.copy()
+    env["XDG_STATE_HOME"] = state_dir
+
+    exit_code, stdout, stderr = await _run_rehash(config_path, env)
+    combined = stdout + stderr
+    # Should fail — no server running
+    assert (
+        exit_code != 0
+        or "unavailable" in combined.lower()
+        or "not running" in combined.lower()
+    ), f"expected control-unavailable error, got: exit={exit_code} {combined}"

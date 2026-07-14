@@ -225,7 +225,17 @@ class ReloadManager:
         restart_required: tuple[Any, ...] = ()
 
         if self._reload_lock.locked():
+            await self._record_event(
+                "reload_publication_conflict",
+                digest_prefix=digest_prefix,
+                error="A reload transaction is already in progress",
+            )
             raise ReloadInProgressError("A reload transaction is already in progress")
+
+        await self._record_event(
+            "reload_requested",
+            digest_prefix=digest_prefix,
+        )
 
         async with self._reload_lock:
             try:

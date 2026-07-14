@@ -485,6 +485,228 @@ class TestReloadResult:
         assert result.stage is ReloadStage.DIFF
 
 
+class TestProcessBoundFieldRejection:
+    """AC#14: Process-bound field changes produce RESTART_REQUIRED changes."""
+
+    def test_server_host_change_is_restart_required(self) -> None:
+        from eggpool.models.config import AppConfig
+
+        old = AppConfig.from_dict({"server": {"api_key": SERVER_API_KEY}})
+        new = old.model_copy(
+            update={"server": old.server.model_copy(update={"host": "10.0.0.1"})}
+        )
+        diff = compute_diff(old, new)
+        assert any(
+            c.path == "server.host"
+            and c.disposition is ReloadDisposition.RESTART_REQUIRED
+            for c in diff.changes
+        )
+
+    def test_server_port_change_is_restart_required(self) -> None:
+        from eggpool.models.config import AppConfig
+
+        old = AppConfig.from_dict({"server": {"api_key": SERVER_API_KEY}})
+        new = old.model_copy(
+            update={"server": old.server.model_copy(update={"port": 9999})}
+        )
+        diff = compute_diff(old, new)
+        assert any(
+            c.path == "server.port"
+            and c.disposition is ReloadDisposition.RESTART_REQUIRED
+            for c in diff.changes
+        )
+
+    def test_database_path_change_is_restart_required(self) -> None:
+        from eggpool.models.config import AppConfig
+
+        old = AppConfig.from_dict({"server": {"api_key": SERVER_API_KEY}})
+        new = old.model_copy(
+            update={
+                "database": old.database.model_copy(
+                    update={"path": "/new/path/db.sqlite3"}
+                )
+            }
+        )
+        diff = compute_diff(old, new)
+        assert any(
+            c.path == "database.path"
+            and c.disposition is ReloadDisposition.RESTART_REQUIRED
+            for c in diff.changes
+        )
+
+    def test_database_worker_threads_change_is_restart_required(self) -> None:
+        from eggpool.models.config import AppConfig
+
+        old = AppConfig.from_dict({"server": {"api_key": SERVER_API_KEY}})
+        # Default worker_threads is 2; change to 1 to trigger a diff.
+        new = old.model_copy(
+            update={"database": old.database.model_copy(update={"worker_threads": 1})}
+        )
+        diff = compute_diff(old, new)
+        assert any(
+            c.path == "database.worker_threads"
+            and c.disposition is ReloadDisposition.RESTART_REQUIRED
+            for c in diff.changes
+        )
+
+    def test_server_threads_change_is_restart_required(self) -> None:
+        from eggpool.models.config import AppConfig
+
+        old = AppConfig.from_dict({"server": {"api_key": SERVER_API_KEY}})
+        new = old.model_copy(
+            update={"server": old.server.model_copy(update={"threads": 8})}
+        )
+        diff = compute_diff(old, new)
+        assert any(
+            c.path == "server.threads"
+            and c.disposition is ReloadDisposition.RESTART_REQUIRED
+            for c in diff.changes
+        )
+
+    def test_security_cors_origins_change_is_restart_required(self) -> None:
+        from eggpool.models.config import AppConfig
+
+        old = AppConfig.from_dict({"server": {"api_key": SERVER_API_KEY}})
+        new = old.model_copy(
+            update={
+                "security": old.security.model_copy(
+                    update={"cors_origins": ["https://example.com"]}
+                )
+            }
+        )
+        diff = compute_diff(old, new)
+        assert any(
+            c.path == "security.cors_origins"
+            and c.disposition is ReloadDisposition.RESTART_REQUIRED
+            for c in diff.changes
+        )
+
+    def test_security_allowed_hosts_change_is_restart_required(self) -> None:
+        from eggpool.models.config import AppConfig
+
+        old = AppConfig.from_dict({"server": {"api_key": SERVER_API_KEY}})
+        new = old.model_copy(
+            update={
+                "security": old.security.model_copy(
+                    update={"allowed_hosts": ["example.com"]}
+                )
+            }
+        )
+        diff = compute_diff(old, new)
+        assert any(
+            c.path == "security.allowed_hosts"
+            and c.disposition is ReloadDisposition.RESTART_REQUIRED
+            for c in diff.changes
+        )
+
+    def test_provider_change_is_live(self) -> None:
+        """Provider changes should be LIVE, not restart-required."""
+        from eggpool.models.config import AppConfig
+
+        old = AppConfig.from_dict(
+            {
+                "server": {"api_key": SERVER_API_KEY},
+                "providers": {
+                    "opencode-go": {
+                        "id": "opencode-go",
+                        "base_url": "https://opencode.ai/zen/go/v1",
+                        "protocols": ["openai"],
+                        "models_endpoint": {"method": "GET", "path": "/models"},
+                        "accounts": [
+                            {
+                                "name": "default",
+                                "api_key": ACCOUNT_API_KEY,
+                                "enabled": True,
+                                "weight": 1.0,
+                            }
+                        ],
+                    }
+                },
+            }
+        )
+        new = AppConfig.from_dict(
+            {
+                "server": {"api_key": SERVER_API_KEY},
+                "providers": {
+                    "opencode-go": {
+                        "id": "opencode-go",
+                        "base_url": "https://opencode.ai/zen/go/v1",
+                        "protocols": ["openai"],
+                        "models_endpoint": {"method": "GET", "path": "/models"},
+                        "accounts": [
+                            {
+                                "name": "default",
+                                "api_key": "sk-new-key-12345",
+                                "enabled": True,
+                                "weight": 1.0,
+                            }
+                        ],
+                    }
+                },
+            }
+        )
+        diff = compute_diff(old, new)
+        # Provider-level changes inherit LIVE disposition
+        provider_changes = [c for c in diff.changes if c.path.startswith("providers.")]
+        assert provider_changes, "Expected provider-level changes"
+        assert all(c.disposition is ReloadDisposition.LIVE for c in provider_changes), (
+            f"Provider changes should be LIVE: {[c.path for c in provider_changes]}"
+        )
+
+    def test_account_change_is_live(self) -> None:
+        """Account changes should be LIVE, not restart-required."""
+        from eggpool.models.config import AppConfig
+
+        old = AppConfig.from_dict(
+            {
+                "server": {"api_key": SERVER_API_KEY},
+                "providers": {
+                    "opencode-go": {
+                        "id": "opencode-go",
+                        "base_url": "https://opencode.ai/zen/go/v1",
+                        "protocols": ["openai"],
+                        "models_endpoint": {"method": "GET", "path": "/models"},
+                        "accounts": [
+                            {
+                                "name": "default",
+                                "api_key": ACCOUNT_API_KEY,
+                                "enabled": True,
+                                "weight": 1.0,
+                            }
+                        ],
+                    }
+                },
+            }
+        )
+        new = AppConfig.from_dict(
+            {
+                "server": {"api_key": SERVER_API_KEY},
+                "providers": {
+                    "opencode-go": {
+                        "id": "opencode-go",
+                        "base_url": "https://opencode.ai/zen/go/v1",
+                        "protocols": ["openai"],
+                        "models_endpoint": {"method": "GET", "path": "/models"},
+                        "accounts": [
+                            {
+                                "name": "default",
+                                "api_key": "sk-new-key-12345",
+                                "enabled": True,
+                                "weight": 1.0,
+                            }
+                        ],
+                    }
+                },
+            }
+        )
+        diff = compute_diff(old, new)
+        account_changes = [c for c in diff.changes if c.path.startswith("accounts.")]
+        assert account_changes, "Expected account-level changes"
+        assert all(c.disposition is ReloadDisposition.LIVE for c in account_changes), (
+            f"Account changes should be LIVE: {[c.path for c in account_changes]}"
+        )
+
+
 class TestDiffFromValidation:
     def test_diff_against_none_baseline(self) -> None:
         from eggpool.models.config import AppConfig

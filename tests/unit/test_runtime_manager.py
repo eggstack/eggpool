@@ -841,3 +841,225 @@ class TestBuilderBuildInitial:
                 registry=MagicMock(),
                 # Missing most services
             )
+
+
+# ---------------------------------------------------------------------------
+# §5.2 AC#10: Multiple retired generations tracked concurrently
+# ---------------------------------------------------------------------------
+
+
+class TestMultiGenerationRetirement:
+    @pytest.mark.asyncio
+    async def test_multiple_retired_generations_tracked(self) -> None:
+        """Multiple retired generations tracked concurrently during drain."""
+        manager = RuntimeManager()
+        gen0 = _fake_generation(0)
+        await manager.install_initial(gen0)
+
+        # Hold a lease on gen0 so retirement cannot complete
+        held_lease = await manager.acquire()
+        assert held_lease.generation_id == 0
+
+        # Publish gen1 as background task — gen0 starts retiring
+        # (drain blocked by held lease)
+        gen1 = _fake_generation(1)
+        task1 = asyncio.create_task(
+            manager.install_candidate(gen1, drain_timeout_s=5.0)
+        )
+        await asyncio.sleep(0.05)
+        assert any(s.generation.generation_id == 0 for s in manager._retiring)
+
+        # Acquire on gen1, then publish gen2 — gen1 starts retiring too
+        lease1 = await manager.acquire()
+        gen2 = _fake_generation(2)
+        task2 = asyncio.create_task(
+            manager.install_candidate(gen2, drain_timeout_s=5.0)
+        )
+        await asyncio.sleep(0.05)
+
+        # Both gen0 and gen1 should be in _retiring simultaneously
+        retiring_ids = {s.generation.generation_id for s in manager._retiring}
+        assert 0 in retiring_ids
+        assert 1 in retiring_ids
+
+        # Release all leases to let retirements complete
+        await held_lease.release()
+        await lease1.release()
+        await asyncio.gather(task1, task2)
+
+        # Active should be gen2, _retiring empty
+        assert manager.active_snapshot().generation_id == 2
+        assert len(manager._retiring) == 0
+
+        await manager.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_retiring_slot_count_accurate(self) -> None:
+        """_retiring list reflects actual retiring slots."""
+        manager = RuntimeManager()
+        await manager.install_initial(_fake_generation(0))
+
+        # No retiring slots yet
+        assert len(manager._retiring) == 0
+
+        # Hold a lease so retirement cannot complete immediately
+        held = await manager.acquire()
+
+        # Publish gen1 as background task
+        task = asyncio.create_task(
+            manager.install_candidate(_fake_generation(1), drain_timeout_s=5.0)
+        )
+        await asyncio.sleep(0.05)
+        assert len(manager._retiring) >= 1
+
+        await held.release()
+        await task
+        assert len(manager._retiring) == 0
+
+        await manager.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# §5.3: Drain timeout forces close
+# ---------------------------------------------------------------------------
+
+
+class TestRetirementTimeout:
+    @pytest.mark.asyncio
+    async def test_drain_timeout_forces_close(self) -> None:
+        """When drain timeout expires, resources are still closed."""
+        manager = RuntimeManager()
+        gen0 = _fake_generation(0)
+        await manager.install_initial(gen0)
+
+        # Hold a lease that we never release
+        _held_lease = await manager.acquire()
+
+        # Publish gen1 with very short drain timeout
+        gen1 = _fake_generation(1)
+        await manager.install_candidate(gen1, drain_timeout_s=0.05)
+
+        # install_candidate awaits retirement; no extra sleep needed
+
+        # gen0's client_pool.aclose() should have been called
+        gen0.client_pool.aclose.assert_called()
+
+        await manager.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_long_drain_timeout_waits_for_lease_release(
+        self,
+    ) -> None:
+        """With generous timeout, retirement waits for lease release."""
+        manager = RuntimeManager()
+        gen0 = _fake_generation(0)
+        await manager.install_initial(gen0)
+
+        lease = await manager.acquire()
+
+        # Publish gen1 with generous timeout
+        gen1 = _fake_generation(1)
+        # install_candidate starts retirement in background
+        await manager.install_candidate(gen1, drain_timeout_s=5.0)
+
+        # Release the lease quickly — retirement should complete cleanly
+        await asyncio.sleep(0.05)
+        await lease.release()
+        await asyncio.sleep(0.1)
+
+        # gen0's client_pool should be closed
+        gen0.client_pool.aclose.assert_called()
+
+        await manager.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# §5.1 AC#12: Concurrent reload guard via expected_active_generation_id
+# ---------------------------------------------------------------------------
+
+
+class TestConcurrentReloadGuard:
+    @pytest.mark.asyncio
+    async def test_stale_candidate_rejected(self) -> None:
+        """install_candidate with wrong expected_active_generation_id raises."""
+        manager = RuntimeManager()
+        gen0 = _fake_generation(0)
+        await manager.install_initial(gen0)
+
+        gen1 = _fake_generation(1)
+        await manager.install_candidate(gen1)
+
+        # Try to publish gen2 expecting gen0 is still active (stale)
+        gen2 = _fake_generation(2)
+        with pytest.raises(RuntimeError, match="Active generation changed"):
+            await manager.install_candidate(gen2, expected_active_generation_id=0)
+
+        # Active should still be gen1
+        assert manager.active_snapshot().generation_id == 1
+
+        await manager.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_concurrent_install_candidate_guarded(self) -> None:
+        """install_candidate with correct expected_active succeeds."""
+        manager = RuntimeManager()
+        gen0 = _fake_generation(0)
+        await manager.install_initial(gen0)
+
+        gen1 = _fake_generation(1)
+        await manager.install_candidate(gen1, expected_active_generation_id=0)
+
+        assert manager.active_snapshot().generation_id == 1
+        await manager.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# AC#9: Old generation client pool closure
+# ---------------------------------------------------------------------------
+
+
+class TestOldGenerationClientPoolClosure:
+    @pytest.mark.asyncio
+    async def test_client_pool_closes_after_lease_drain(self) -> None:
+        """Old gen's client_pool stays open during active lease, closes after."""
+        manager = RuntimeManager()
+        gen0 = _fake_generation(0)
+        await manager.install_initial(gen0)
+
+        lease = await manager.acquire()
+
+        # Publish gen1 as background task — gen0 starts draining
+        gen1 = _fake_generation(1)
+        task = asyncio.create_task(manager.install_candidate(gen1, drain_timeout_s=5.0))
+        await asyncio.sleep(0.05)
+
+        # gen0's client_pool should NOT be closed yet (lease held, drain
+        # in progress)
+        gen0.client_pool.aclose.assert_not_called()
+
+        # Release the lease — drain completes, resources close
+        await lease.release()
+        await task
+
+        # Now gen0's client_pool should be closed
+        gen0.client_pool.aclose.assert_called()
+
+        await manager.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_client_pool_closes_on_timeout_if_lease_held(self) -> None:
+        """Old gen's client_pool closes even with held lease after timeout."""
+        manager = RuntimeManager()
+        gen0 = _fake_generation(0)
+        await manager.install_initial(gen0)
+
+        _held = await manager.acquire()
+
+        gen1 = _fake_generation(1)
+        await manager.install_candidate(gen1, drain_timeout_s=0.05)
+        await asyncio.sleep(0.15)
+
+        # client_pool should be closed despite held lease (timeout forced it)
+        gen0.client_pool.aclose.assert_called()
+
+        await manager.shutdown()

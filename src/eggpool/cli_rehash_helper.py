@@ -112,6 +112,11 @@ def try_live_rehash(
         message = (
             f"Live reload applied: generation={result.generation}, sections={sections}"
         )
+        if result.retirement_pending:
+            message += (
+                "; old generation is draining — active requests will complete "
+                "on their original configuration"
+            )
         if callable(echo):
             echo(message)
         return True, message
