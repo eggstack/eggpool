@@ -43,7 +43,7 @@ See [Deployment](docs/deployment.md) for alternative install methods (pipx, manu
 | `eggpool serve` | Start the proxy server (daemon mode; `--verbose` for foreground) |
 | `eggpool stop` | Stop the running server |
 | `eggpool restart` | Fully restart the server (stop then start) |
-| `eggpool rehash` | Validate and apply supported config changes live (fail-closed; restart-required changes rejected) |
+| `eggpool rehash` | Apply supported config changes live (provider/account/routing/model-override changes apply without restart; `--json` for standardized 9-key output) |
 | `eggpool onboard` | Interactive onboarding wizard |
 | `eggpool connect` | Add a provider account interactively |
 | `eggpool connect list` | List supported providers |

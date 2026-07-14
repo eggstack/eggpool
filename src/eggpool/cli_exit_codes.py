@@ -27,6 +27,10 @@ EXIT_RELOAD_BUSY: Final[int] = 4
 EXIT_PREPARATION_FAILED: Final[int] = 5
 EXIT_DIGEST_MISMATCH: Final[int] = 6
 
+# Shared stage-name constant so the manager, server, and CLI agree
+# on the literal emitted when a concurrent reload is detected.
+STAGE_RELOAD_IN_PROGRESS: Final[str] = "reload_in_progress"
+
 # Stage names emitted by ReloadManager / ControlResponse that map to
 # each exit code.  ``restart_required`` is a sentinel not a stage;
 # any non-ok response whose ``restart_required`` list is non-empty
@@ -38,6 +42,7 @@ _STAGE_TO_EXIT: Final[dict[str, int]] = {
     "reconciliation": EXIT_PREPARATION_FAILED,
     "commit": EXIT_PREPARATION_FAILED,
     "activation": EXIT_PREPARATION_FAILED,
+    STAGE_RELOAD_IN_PROGRESS: EXIT_RELOAD_BUSY,
     "retirement": EXIT_OK,
     "idle": EXIT_OK,
 }
@@ -87,5 +92,6 @@ __all__ = [
     "EXIT_RELOAD_BUSY",
     "EXIT_PREPARATION_FAILED",
     "EXIT_DIGEST_MISMATCH",
+    "STAGE_RELOAD_IN_PROGRESS",
     "exit_code_for_failure",
 ]

@@ -10,7 +10,10 @@ import tomllib
 import tty
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from eggpool.constants import DEFAULT_PROVIDER_ID
 from eggpool.providers.contract import PROVIDER_STATUS_SYMBOLS
@@ -28,6 +31,18 @@ _REGISTRY_METADATA_FIELDS = frozenset(
     }
 )
 
+_CONTROL_UNAVAILABLE_HINT = (
+    "Server is healthy but the control socket is unavailable.\n"
+    "  Check socket permissions, or restart manually with `eggpool restart`."
+)
+
+
+def _format_apply_message(raw_message: str) -> str:
+    """Return a human-friendly rendering of the apply/restart outcome."""
+    if raw_message.startswith("control unavailable"):
+        return _CONTROL_UNAVAILABLE_HINT
+    return raw_message
+
 
 def restart_server(config_path: str, timeout: float = 10.0) -> bool:
     """Stop a running standalone server and start it with fresh configuration.
@@ -38,6 +53,87 @@ def restart_server(config_path: str, timeout: float = 10.0) -> bool:
     return _restart_server(config_path, timeout)
 
 
+def resolve_apply_outcome(
+    config_path: str,
+    *,
+    health_check: Callable[[], bool] | None = None,
+) -> tuple[bool, str]:
+    """Decide whether to apply live, restart, or report CONTROL_UNAVAILABLE.
+
+    The decision tree:
+
+    1. Validate locally. If invalid → return (False, "validation failed").
+    2. Probe the control socket. If successful → apply live rehash.
+    3. If the server is healthy (per *health_check* / healthz probe) BUT
+       the control socket is unavailable → return
+       ``(False, "control unavailable (server healthy)")`` WITHOUT
+       restarting.  The operator must intervene explicitly.
+    4. If the server is NOT running → start or restart per lifecycle.
+    """
+    try:
+        from eggpool.cli_rehash_helper import try_live_rehash
+
+        applied, message = try_live_rehash(config_path)
+        if applied:
+            return True, message
+        # message is either "control socket unavailable …" or
+        # "Restart required for: …" or a generic refusal.
+    except SystemExit:
+        return False, "validation failed"
+
+    # If the server rejected the reload (restart-required), pass that
+    # through directly — the operator must explicitly restart.
+    if message.startswith("Restart required"):
+        return False, message
+
+    # Check whether the server is actually alive so we can distinguish
+    # "server healthy + socket gone" from "server dead + socket gone".
+    server_healthy = _is_server_healthy(health_check)
+
+    if server_healthy:
+        # The server is running but we could not reach the control
+        # socket.  Do NOT silently restart a healthy server.
+        return False, "control unavailable (server healthy)"
+
+    # Server is not running — fall through to a hard restart so the
+    # change still applies.
+    if restart_server(config_path):
+        return True, "Server restarted."
+    return False, "Server is not running."
+
+
+def _is_server_healthy(health_check: Callable[[], bool] | None) -> bool:
+    """Return True if the server process is alive and responding.
+
+    When *health_check* is provided (typically a test double) it is
+    called directly.  Otherwise the function probes the PID file and
+    the ``/v1/healthz`` endpoint.
+    """
+    if health_check is not None:
+        return health_check()
+
+    from eggpool import runtime
+
+    pid = runtime.read_pid()
+    if pid is None:
+        return False
+    if not runtime.is_process_running(pid):
+        return False
+    # Best-effort healthz probe.  If the server is technically alive
+    # but not yet serving, treat it as unhealthy — the operator should
+    # wait or restart manually.
+    from eggpool.models.config import AppConfig
+
+    try:
+        config = AppConfig.from_toml("config.toml")
+        host, port = config.server.host, config.server.port
+    except Exception:  # noqa: BLE001
+        host, port = "127.0.0.1", 11300
+    return runtime.probe_healthz(host, port)
+
+
+# Keep the old name as a thin wrapper for callers that already import
+# ``apply_or_restart``.
 def apply_or_restart(
     config_path: str,
     *,
@@ -56,18 +152,7 @@ def apply_or_restart(
     (or no change was needed).
     """
     if prefer_live:
-        try:
-            from eggpool.cli_rehash_helper import try_live_rehash
-
-            applied, message = try_live_rehash(config_path)
-            if applied:
-                return True, message
-            # Server unreachable or rejected with restart-required.
-            # Fall through to a hard restart so the change still applies.
-        except SystemExit:
-            # try_live_rehash raises SystemExit on validation failure;
-            # the failure has already been reported to stderr.
-            return False, "validation failed"
+        return resolve_apply_outcome(config_path)
 
     if restart_server(config_path):
         return True, "Server restarted."
@@ -983,5 +1068,5 @@ def connect(
     sys.stdout.write(f"  Added {account_name} to {provider_id}.\n")
 
     _applied, message = apply_or_restart(config_path)
-    sys.stdout.write(f"  {message}\n")
+    sys.stdout.write(f"  {_format_apply_message(message)}\n")
     return True

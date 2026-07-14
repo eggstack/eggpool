@@ -107,6 +107,7 @@ Response (one JSON object per line):
   "request_id": "<uuid>",
   "ok": true,
   "stage": "commit",
+  "exit_code": 0,
   "generation": 3,
   "changed_sections": ["routing", "accounts"],
   "warnings": [],
@@ -141,11 +142,13 @@ deployment tooling can rely on:
 | `1` | Validation / configuration failure |
 | `2` | Restart required (one or more fields need a full restart) |
 | `3` | Control socket unavailable (server not running) |
-| `4` | Reload conflict / busy (another reload in progress) |
+| `4` | Reload conflict / busy (`reload_in_progress` stage — another reload in progress) |
 | `5` | Candidate preparation or publication failure |
 | `6` | Digest mismatch between CLI preflight and server read |
 
-The constants are pinned in `src/eggpool/cli_exit_codes.py`.
+The constants are pinned in `src/eggpool/cli_exit_codes.py`. Every
+`--json` response always includes the `exit_code` key so programmatic
+consumers do not need to map stages themselves.
 
 ### JSON output
 
@@ -159,6 +162,25 @@ eggpool --config /etc/eggpool/config.toml rehash --json
 Outputs the structured response as JSON on stdout, suitable for
 `jq` pipelines. Secrets are redacted as `"<changed>"` in any
 displayed fields.
+
+Every outcome (success, failure, busy, no-op) always includes these
+9 keys:
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `ok` | `bool` | Whether the reload succeeded |
+| `stage` | `str` | Server stage at outcome (e.g. `commit`, `validation`, `reload_in_progress`) |
+| `exit_code` | `int` | Stable exit code (0–6); mirrors the process exit code |
+| `generation` | `int \| None` | New generation number on success, `None` on failure |
+| `changed_sections` | `list[str]` | Config sections that changed (e.g. `["routing", "accounts"]`) |
+| `warnings` | `list[str]` | Non-fatal warnings emitted during the reload |
+| `restart_required` | `list[str]` | Fields that need a restart (empty on success) |
+| `retirement_pending` | `bool` | `True` when the old generation is still draining |
+| `message` | `str` | Human-readable summary |
+
+The `format_rehash_json()` function in `src/eggpool/cli_rehash_format.py`
+is the single source of truth; tests in
+`tests/unit/test_cli_rehash_format.py` pin the contract.
 
 ### Error messages
 
@@ -226,6 +248,38 @@ and replace the table.
 - **No secrets in logs** — Secret fields render as `<changed>` in
   diagnostic output.
 
+## Connect and logout fallback policy
+
+`eggpool connect` and `eggpool logout` route through the same
+validate-and-reload helper (`cli_rehash_helper.validate_and_rehash`)
+that `eggpool rehash` uses. The safe-fallback decision tree in
+`resolve_apply_outcome()` (`src/eggpool/providers/connect.py`) is:
+
+1. **Validate locally** — invalid config → return immediately, no
+   restart attempted.
+2. **Probe the control socket** — if the server accepts the reload,
+   apply live.
+3. **Server healthy but socket missing** — return
+   `(False, "control unavailable (server healthy)")` **without
+   restarting**. The operator must intervene explicitly (check file
+   permissions, restart the service, or investigate why the control
+   socket disappeared).
+4. **Server not running** — fall through to `restart_server()` so the
+   change still applies on the next startup.
+
+The old `apply_or_restart()` is now a thin wrapper that delegates
+to `resolve_apply_outcome()` when `prefer_live=True` (the default).
+
+## Operator-safe fallback cases
+
+| Scenario | Behavior | Operator action |
+|----------|----------|-----------------|
+| Stale PID file, server dead | `restart_server()` fires | None — automatic |
+| Server healthy, control socket missing | No restart; `(False, "control unavailable (server healthy)")` | Check socket permissions, restart the service |
+| Server healthy, control socket reachable | Live rehash applied | None — automatic |
+| Server dead, socket missing | `restart_server()` fires | None — automatic |
+| Permission denied on socket | Control client error; exit 3 | Run as the same user as the server |
+
 ## Old generation retirement
 
 After publication, active streams continue on their original
@@ -277,12 +331,34 @@ Stale socket files are automatically cleaned up on server start. If
 you see connection errors after a crash, try `eggpool restart` to
 ensure a clean socket state.
 
+### Server is healthy but socket missing
+
+```
+Control socket unavailable. Is the server running?
+```
+
+If `eggpool rehash` (or `connect`/`logout`) reports this but the
+server is actually running (e.g. `systemctl status eggpool` shows it
+active), the control socket file may have been removed or its
+permissions changed. The safe-fallback policy does **not** auto-restart
+a healthy server — the operator must intervene:
+
+1. Check that `~/.local/state/eggpool/eggpool.sock` exists and is
+   owned by the same user as the server process.
+2. If the socket was accidentally removed, restart the server:
+   `eggpool restart` (or `systemctl restart eggpool`).
+3. Verify permissions: `ls -la ~/.local/state/eggpool/eggpool.sock`
+   should show `srw-------` (socket, owner read/write only).
+
 ## See also
 
 - `architecture/README.md` § Live Configuration Rehash — validation
   contract, diff shape, wire types, and runtime generations
 - `src/eggpool/config_validation.py` — reusable validation contract
 - `src/eggpool/config_reload_policy.py` — typed diff and reload policy
+- `src/eggpool/cli_rehash_format.py` — standardized JSON and human output
+- `src/eggpool/cli_exit_codes.py` — stable exit code constants
 - `src/eggpool/control/server.py` — control socket server
 - `src/eggpool/control/client.py` — control socket client
 - `src/eggpool/control/reload_manager.py` — transactional reload manager
+- `src/eggpool/providers/connect.py` — safe connect/logout fallback policy

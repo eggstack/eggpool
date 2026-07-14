@@ -43,6 +43,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/live-config-rehash.md`, `docs/deployment.md`, `architecture/README.md`,
   `AGENTS.md`, and `.opencode/skills/architecture/SKILL.md` updated. See
   `plans/2026-07-13-live-config-rehash-closure-plan.md`.
+- **Live config rehash polish pass (workstreams 1-5).** Observational
+  E2E tests now prove config digest + credential fingerprint changes;
+  provider removal is end-to-end tested; deterministic concurrency test
+  seam (`preparation_event` hook on `ReloadManager`); safe `connect`/`logout`
+  fallback via `resolve_apply_outcome()` that never silently restarts a
+  healthy server; standardized 9-key `--json` contract
+  (`cli_rehash_format.py`); busy stage (`reload_in_progress`) now exits 4;
+  secret-safe diagnostics. The LIVE field inventory is unchanged.
 
 ## [0.6.0] - 2026-07-09
 

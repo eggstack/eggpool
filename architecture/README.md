@@ -3046,22 +3046,28 @@ result when only one config is available.
 ### Wire types for milestone C
 
 `ReloadStage` and `ReloadResult` are the protocol-neutral types that
-milestone C's control socket will speak directly:
+milestone C's control socket speaks directly:
 
 ```python
-class ReloadStage(StrEnum):
-    VALIDATE = "validate"
+class ReloadStage(Enum):
+    VALIDATION = "validation"
+    DIGEST_CHECK = "digest_check"
     DIFF = "diff"
-    APPLY = "apply"
+    PREPARATION = "preparation"
+    RECONCILIATION = "reconciliation"
+    COMMIT = "commit"
+    RETIREMENT = "retirement"
 
 @dataclass(frozen=True)
 class ReloadResult:
+    ok: bool
     stage: ReloadStage
-    success: bool
-    digest: str | None = None
-    fingerprint: str | None = None
-    changes: list[ConfigChange] | None = None
-    error: str | None = None
+    generation: int | None
+    changed_sections: tuple[str, ...]
+    warnings: tuple[str, ...]
+    restart_required: tuple[str, ...]
+    retirement_pending: bool
+    message: str
 ```
 
 ### CLI surface
@@ -3076,9 +3082,13 @@ Both `check-config` and `rehash` flow through `validate_config_file()`:
   number, retirement status, warnings). Exits zero on success
   (including semantic no-op). On validation failure, the preflight
   exits nonzero with "Live configuration is unchanged. Refusing to
-  apply an invalid config and never invoking restart." All fields are
-  currently `RESTART_REQUIRED`, so any config change is rejected today;
-  the infrastructure is ready for future `LIVE` fields.
+  apply an invalid config and never invoking restart." The closure
+  pass enabled `LIVE` fields (provider/account/routing/model-override
+  families), so supported config changes are applied without
+  restarting. The `--json` output is standardized via
+  `cli_rehash_format.format_rehash_json()` and always includes 9
+  keys: `ok`, `stage`, `exit_code`, `generation`, `changed_sections`,
+  `warnings`, `restart_required`, `retirement_pending`, `message`.
 
 ### Runtime generations and control plane
 
@@ -3105,10 +3115,17 @@ One request per connection, structured response, then close.
 - Request: `{"protocol_version": 1, "request_id": "<uuid>",
   "command": "reload_config", "validated_digest": "<sha-256>"}`
 - Response: `{"protocol_version": 1, "request_id": "<uuid>",
-  "ok": true|false, "stage": "commit"|"validate"|"diff"|"apply"|"parse"|"error"|"timeout",
+  "ok": true|false, "stage": "<stage>", "exit_code": N,
   "generation": N, "changed_sections": [...], "warnings": [...],
   "restart_required": [...], "retirement_pending": bool,
   "message": "..."}`
+
+The `stage` field is one of the `ReloadStage` enum values
+(`validation`, `digest_check`, `diff`, `preparation`,
+`reconciliation`, `commit`, `retirement`) plus the control-plane
+sentinel `reload_in_progress` (busy). The `exit_code` mirrors the
+process exit code and is always present so programmatic consumers
+do not need to map stages themselves.
 
 **Security model**: socket mode `0o600` prevents unprivileged
 clients on shared hosts from issuing reload commands.
@@ -3130,7 +3147,10 @@ which orchestrates the complete reload transaction under a serializing
    building a new generation.
 6. **Candidate preparation** — `_build_candidate_generation()` builds
    a new `RuntimeGeneration` off to the side (router, DB, app state)
-   without touching the active generation.
+   without touching the active generation. If `self.preparation_event`
+   (an `asyncio.Event | None`) is set, the coroutine awaits it before
+   continuing — a test-only seam for deterministically holding a reload
+   while a concurrent one is attempted.
 7. **Persistence reconciliation** — Database state is reconciled in a
    transaction; failures trigger rollback.
 8. **Atomic publication** — `RuntimeManager.install_generation()` swaps
@@ -3152,6 +3172,58 @@ client used by `eggpool rehash`. It connects to the UDS, sends one
 `reload_config` request, reads one response, and disconnects. Error
 classes: `ControlClientConnectionError`, `ControlClientTimeoutError`,
 `ControlClientProtocolError`, `ControlClientError`.
+
+### Connect/logout fallback policy
+
+`src/eggpool/providers/connect.py` implements `resolve_apply_outcome()`,
+the safe-fallback decision tree used by `eggpool connect` and
+`eggpool logout`. The decision tree:
+
+1. **Validate locally** — invalid config → return immediately, no
+   restart attempted.
+2. **Probe the control socket** — if the server accepts the reload,
+   apply live.
+3. **Server healthy but socket missing** — return
+   `(False, "control unavailable (server healthy)")` **without
+   restarting**. The operator must intervene explicitly.
+4. **Server not running** — fall through to `restart_server()` so the
+   change still applies.
+
+The old `apply_or_restart()` is now a thin wrapper that delegates
+to `resolve_apply_outcome()` when `prefer_live=True`. Tests in
+`tests/integration/test_connect_logout_fallback.py` prove that
+rehash exits with code 3 when the control socket is missing and a
+healthy server is running, and that the server PID does not change.
+
+### Polish pass additions (Milestone C follow-up)
+
+The polish pass strengthens the control plane without changing the
+wire protocol or the LIVE field inventory:
+
+- **Standardized JSON contract**: `cli_rehash_format.format_rehash_json()`
+  and `render_rehash_human()` ensure every `--json` response always
+  contains 9 keys (`ok`, `stage`, `exit_code`, `generation`,
+  `changed_sections`, `warnings`, `restart_required`,
+  `retirement_pending`, `message`). Tests in
+  `tests/unit/test_cli_rehash_format.py` pin the contract.
+- **Busy stage exits code 4**: `STAGE_RELOAD_IN_PROGRESS` in
+  `cli_exit_codes.py` is the single source of truth; the
+  `_STAGE_TO_EXIT` table maps it to `EXIT_RELOAD_BUSY`.
+- **Safe connect/logout fallback**: `resolve_apply_outcome()` never
+  silently restarts a healthy server when the control socket is
+  missing. The operator is prompted to intervene explicitly.
+- **Deterministic concurrency test seam**: `ReloadManager` exposes
+  `self.preparation_event: asyncio.Event | None = None`. When set,
+  `_build_candidate_generation` awaits the event before continuing.
+  Tests in `tests/unit/test_reload_manager.py` use this hook to
+  deterministically hold a reload while a concurrent one is attempted.
+- **Observation-strengthened E2E tests**:
+  `tests/integration/test_rehash_streaming_swap.py` now asserts
+  config digest changes, credential fingerprint changes, and routing
+  state re-application. A new test `test_provider_removal_live_reload`
+  proves provider removal end-to-end. Tests in
+  `tests/integration/test_connect_logout_fallback.py` prove the
+  safe-fallback exit code and PID stability.
 
 ### Background task first-run transition (Milestone C-related)
 

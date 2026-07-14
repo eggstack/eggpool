@@ -134,20 +134,26 @@ generation when safe.
 8. Server atomically publishes the new generation.
 9. Old generation retires after active streams drain.
 
-**Currently all fields are `RESTART_REQUIRED`**, so `eggpool rehash`
-will reject any config change today. Use `eggpool restart` for all
-changes. When a future milestone moves a field to `LIVE`, `eggpool
-rehash` will apply it without restarting. The control plane
-infrastructure (control socket, reload manager, candidate generation,
-persistence reconciliation, atomic publication) is fully operational.
+**Provider/account/routing/model-override/model-capability changes
+apply live**; other fields are still `RESTART_REQUIRED`. The control
+plane infrastructure (control socket, reload manager, candidate
+generation, persistence reconciliation, atomic publication) is fully
+operational.
+
+**Connect/logout fallback**: `eggpool connect` and `eggpool logout`
+route through the same validate-and-reload helper. When the server is
+healthy but the control socket is missing, they return
+`(False, "control unavailable (server healthy)")` and do **not**
+auto-restart — the operator must intervene.
 
 **Error cases**:
 
-| Message | Action |
-|---------|--------|
-| "Control socket unavailable" | Server not running — use `eggpool restart` |
-| "Reload transaction already in progress" | Wait and retry |
-| "Restart-required changes: …" | Use `eggpool restart` |
+| Message | Exit code | Action |
+|---------|-----------|--------|
+| "Control socket unavailable" | `3` | Server not running — use `eggpool restart` |
+| "Control unavailable (server healthy)" | `3` | Server is running but socket missing — check permissions, restart manually |
+| "Reload transaction already in progress" | `4` | Wait and retry |
+| "Restart-required changes: …" | `2` | Use `eggpool restart` |
 
 ### Restart (disruptive changes)
 

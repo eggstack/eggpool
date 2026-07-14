@@ -551,7 +551,14 @@ def logout(ctx: click.Context, target: str | None) -> None:
     from eggpool.providers.connect import apply_or_restart
 
     _, message = apply_or_restart(config_path)
-    click.echo(f"  {message}")
+    if message.startswith("control unavailable"):
+        click.echo(
+            "  Server is healthy but the control socket is unavailable.\n"
+            "  Check socket permissions, or restart manually with "
+            "`eggpool restart`.",
+        )
+    else:
+        click.echo(f"  {message}")
 
 
 def _format_validation_failure(exc: ConfigValidationError) -> str:
@@ -2573,14 +2580,18 @@ def rehash(ctx: click.Context, json_output: bool) -> None:
         sys.exit(EXIT_VALIDATION)
 
     for warning in validation.warnings:
-        click.echo(f"  warning: {warning.to_display()}")
+        click.echo(f"  warning: {warning.to_display()}", err=json_output)
     if validation.warnings:
-        click.echo(f"  {len(validation.warnings)} contract warning(s)")
+        click.echo(
+            f"  {len(validation.warnings)} contract warning(s)",
+            err=json_output,
+        )
 
     click.echo(
         f"  Validated config from {validation.source_path} "
         f"(digest={validation.content_digest[:12]}…, "
-        f"runtime_fingerprint={validation.runtime_fingerprint[:12] or 'unavailable'}…)"
+        f"runtime_fingerprint={validation.runtime_fingerprint[:12] or 'unavailable'}…)",
+        err=json_output,
     )
 
     # Step 2: Connect to control socket and request reload
@@ -2620,35 +2631,18 @@ def rehash(ctx: click.Context, json_output: bool) -> None:
         sys.exit(EXIT_CONTROL_UNAVAILABLE)
 
     # Step 3: Render the structured response
+    from eggpool.cli_rehash_format import (  # noqa: PLC0415
+        format_rehash_json,
+        render_rehash_human,
+    )
+
     if result.ok:
+        exit_code = EXIT_OK
         if json_output:
-            click.echo(
-                json.dumps(
-                    {
-                        "ok": True,
-                        "stage": result.stage,
-                        "generation": result.generation,
-                        "changed_sections": list(result.changed_sections),
-                        "warnings": list(result.warnings),
-                        "retirement_pending": result.retirement_pending,
-                        "message": result.message,
-                    },
-                    indent=2,
-                )
-            )
+            click.echo(json.dumps(format_rehash_json(result, exit_code), indent=2))
         else:
-            click.echo(f"\n{result.message}")
-            if result.changed_sections:
-                click.echo(f"  Changed sections: {', '.join(result.changed_sections)}")
-            if result.generation is not None:
-                click.echo(f"  Generation: {result.generation}")
-            if result.retirement_pending:
-                click.echo(
-                    "  Old generation is draining; active requests will complete "
-                    "on their original configuration."
-                )
-            for warning in result.warnings:
-                click.echo(f"  warning: {warning}")
+            stdout_text, _stderr_text = render_rehash_human(result)
+            click.echo(stdout_text)
         sys.exit(EXIT_OK)
     else:
         from eggpool.cli_exit_codes import (  # noqa: PLC0415
@@ -2661,29 +2655,10 @@ def rehash(ctx: click.Context, json_output: bool) -> None:
             message=result.message,
         )
         if json_output:
-            click.echo(
-                json.dumps(
-                    {
-                        "ok": False,
-                        "stage": result.stage,
-                        "generation": result.generation,
-                        "changed_sections": list(result.changed_sections),
-                        "warnings": list(result.warnings),
-                        "restart_required": list(result.restart_required),
-                        "exit_code": exit_code,
-                        "message": result.message,
-                    },
-                    indent=2,
-                )
-            )
+            click.echo(json.dumps(format_rehash_json(result, exit_code), indent=2))
         else:
-            click.echo(f"\n{result.message}", err=True)
-            if result.restart_required:
-                click.echo("  Restart-required changes:", err=True)
-                for field in result.restart_required:
-                    click.echo(f"    - {field}", err=True)
-            for warning in result.warnings:
-                click.echo(f"  warning: {warning}", err=True)
+            _stdout_text, stderr_text = render_rehash_human(result)
+            click.echo(stderr_text, err=True)
         sys.exit(exit_code)
 
 

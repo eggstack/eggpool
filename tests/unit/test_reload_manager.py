@@ -177,6 +177,15 @@ class TestDigestValidation:
 
 
 class TestReloadConcurrency:
+    """Concurrency-guard tests for ReloadManager.
+
+    ``test_rejects_concurrent`` uses a ``patch.object`` side-effect on
+    ``_build_candidate_generation`` to block reload A while reload B
+    attempts to enter.  The alternative ``preparation_event`` hook on the
+    manager (see ``TestDeterministicConcurrency``) is a lighter-weight
+    approach that avoids patching internals.
+    """
+
     @pytest.mark.asyncio
     async def test_rejects_concurrent(self) -> None:
         rm = _make_runtime_manager()
@@ -752,3 +761,225 @@ async def test_snapshot_includes_restart_required_and_warnings(
     assert result is not None
     assert result["ok"] is False
     assert len(result["restart_required"]) > 0
+
+
+# ---------------------------------------------------------------------------
+# Deterministic concurrency tests (preparation_event hook)
+# ---------------------------------------------------------------------------
+
+
+class TestDeterministicConcurrency:
+    """Proves concurrent reload B is rejected while reload A holds inside
+    candidate preparation, using the ``preparation_event`` test hook."""
+
+    @pytest.mark.asyncio
+    async def test_deterministic_busy_when_reload_holds_preparation(
+        self,
+    ) -> None:
+        """Reload A holds inside _build_candidate_generation via
+        preparation_event; reload B gets ReloadInProgressError."""
+        rm = _make_runtime_manager()
+        proc = _make_process()
+        mgr = ReloadManager(rm, proc)
+
+        block_event = asyncio.Event()
+        mgr.preparation_event = block_event
+
+        change = MagicMock(section="routing")
+        diff = _make_diff(changes=(change,))
+        candidate = _make_candidate(generation_id=5)
+
+        async def _build_with_hook(
+            *args: object, **kwargs: object
+        ) -> CandidateGeneration:
+            if mgr.preparation_event is not None:
+                await mgr.preparation_event.wait()
+            return candidate
+
+        validation_a = _make_validation()
+        validation_b = _make_validation(content_digest="c" * 64)
+
+        event_calls: list[tuple[str, dict[str, object]]] = []
+
+        async def _capture_event(event_type: str, **kwargs: object) -> None:
+            event_calls.append((event_type, kwargs))
+
+        with (
+            patch.object(
+                mgr,
+                "_compute_reload_diff",
+                new_callable=AsyncMock,
+                return_value=diff,
+            ),
+            patch.object(
+                mgr,
+                "_build_candidate_generation",
+                side_effect=_build_with_hook,
+            ),
+            patch.object(
+                mgr,
+                "_reconcile_persistence",
+                new_callable=AsyncMock,
+            ),
+            patch.object(mgr, "_record_event", side_effect=_capture_event),
+        ):
+            task_a = asyncio.create_task(mgr.reload(validation_a))
+            await asyncio.sleep(0.05)
+
+            with pytest.raises(ReloadInProgressError):
+                await mgr.reload(validation_b)
+
+            block_event.set()
+            result_a = await task_a
+
+        assert result_a.ok is True
+        assert result_a.generation == 5
+        assert rm.install_candidate.await_count == 1
+
+        conflict_events = [
+            (et, kw) for et, kw in event_calls if et == "reload_publication_conflict"
+        ]
+        assert len(conflict_events) == 1
+
+    @pytest.mark.asyncio
+    async def test_recorded_event_does_not_leak_secrets(self) -> None:
+        """Operational events must not contain secret-shaped values."""
+        rm = _make_runtime_manager()
+        proc = _make_process()
+        mgr = ReloadManager(rm, proc)
+
+        block_event = asyncio.Event()
+        mgr.preparation_event = block_event
+
+        change = MagicMock(section="routing")
+        diff = _make_diff(changes=(change,))
+        candidate = _make_candidate(generation_id=5)
+
+        async def _build_with_hook(
+            *args: object, **kwargs: object
+        ) -> CandidateGeneration:
+            if mgr.preparation_event is not None:
+                await mgr.preparation_event.wait()
+            return candidate
+
+        validation_a = _make_validation()
+        validation_b = _make_validation(content_digest="c" * 64)
+
+        event_calls: list[tuple[str, dict[str, object]]] = []
+
+        async def _capture_event(event_type: str, **kwargs: object) -> None:
+            event_calls.append((event_type, kwargs))
+
+        with (
+            patch.object(
+                mgr,
+                "_compute_reload_diff",
+                new_callable=AsyncMock,
+                return_value=diff,
+            ),
+            patch.object(
+                mgr,
+                "_build_candidate_generation",
+                side_effect=_build_with_hook,
+            ),
+            patch.object(
+                mgr,
+                "_reconcile_persistence",
+                new_callable=AsyncMock,
+            ),
+            patch.object(
+                mgr,
+                "_publish_generation",
+                new_callable=AsyncMock,
+            ),
+            patch.object(mgr, "_record_event", side_effect=_capture_event),
+        ):
+            task_a = asyncio.create_task(mgr.reload(validation_a))
+            await asyncio.sleep(0.05)
+
+            with pytest.raises(ReloadInProgressError):
+                await mgr.reload(validation_b)
+
+            block_event.set()
+            await task_a
+
+        valid_event_types = {
+            "reload_publication_conflict",
+            "reload_requested",
+            "reload_activated",
+            "reload_preparation_failure",
+            "reload_restart_required_rejected",
+            "reload_digest_mismatch",
+            "reload_reconciliation_failure",
+        }
+
+        for event_type, kwargs in event_calls:
+            assert event_type in valid_event_types, (
+                f"unexpected event type {event_type!r}"
+            )
+            for key, value in kwargs.items():
+                if not isinstance(value, str):
+                    continue
+                lower = value.lower()
+                assert not lower.startswith("sk-"), (
+                    f"event {event_type!r} kwarg {key!r} leaks a secret (sk- prefix)"
+                )
+                assert "api_key" not in key.lower(), (
+                    f"event {event_type!r} kwarg {key!r} may carry a secret"
+                )
+                assert not (
+                    len(value) >= 20
+                    and any(c.isdigit() for c in value)
+                    and any(c.isalpha() for c in value)
+                ), (
+                    f"event {event_type!r} kwarg {key!r} looks like a token: "
+                    f"{value[:8]}…"
+                )
+
+
+# ---------------------------------------------------------------------------
+# Stale expected-generation guard (independent of the reload lock)
+# ---------------------------------------------------------------------------
+
+
+class TestStaleExpectedGenerationGuard:
+    """The expected-generation guard runs inside RuntimeManager.install_candidate
+    and is independent of the ReloadManager's reload lock."""
+
+    @pytest.mark.asyncio
+    async def test_stale_expected_generation_guard(self) -> None:
+        """Install gen 0, then gen 1; building gen 2 with expected=0 raises."""
+        rm = RuntimeManager()
+
+        gen0 = _make_real_generation(generation_id=0)
+        await rm.install_initial(gen0)
+
+        gen1 = _make_real_generation(generation_id=1)
+        await rm.install_candidate(gen1)
+
+        gen2 = _make_real_generation(generation_id=2)
+        with pytest.raises(RuntimeError, match="Active generation changed"):
+            await rm.install_candidate(gen2, expected_active_generation_id=0)
+
+    @pytest.mark.asyncio
+    async def test_lock_check_fires_before_digest_check(self) -> None:
+        """When the lock is held, ReloadInProgressError is raised
+        regardless of digest validity, proving the lock guard runs first."""
+        rm = RuntimeManager()
+        proc = _make_process()
+        mgr = ReloadManager(rm, proc)
+
+        await mgr._reload_lock.acquire()
+
+        validation_matching = _make_validation(content_digest="a" * 64)
+        with pytest.raises(ReloadInProgressError):
+            await mgr.reload(validation_matching, expected_digest="a" * 64)
+
+        mgr._reload_lock.release()
+
+        validation_mismatch = _make_validation(content_digest="a" * 64)
+        result = await mgr.reload(validation_mismatch, expected_digest="f" * 64)
+        assert result.ok is False
+        assert (
+            "digest" in result.message.lower() or "mismatch" in result.message.lower()
+        )

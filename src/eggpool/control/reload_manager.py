@@ -140,6 +140,14 @@ class ReloadManager:
 
     One reload at a time.  Concurrent commands are rejected.
     Uses RuntimeManager for generation lifecycle.
+
+    Test hook
+    ---------
+    ``preparation_event`` — when set to an :class:`asyncio.Event` instance,
+    ``_build_candidate_generation`` awaits ``preparation_event.wait()``
+    before constructing the candidate.  This lets tests deterministically
+    hold a reload inside candidate preparation while a second concurrent
+    reload is attempted.  Must be ``None`` in production (the default).
     """
 
     def __init__(
@@ -158,6 +166,8 @@ class ReloadManager:
         self._last_reload_completed_at: float | None = None
         self._reload_count: int = 0
         self._reload_error_count: int = 0
+        #: Test-only hook — see class docstring.
+        self.preparation_event: asyncio.Event | None = None
 
     @property
     def operation_state(self) -> ReloadOperationState | None:
@@ -584,7 +594,13 @@ class ReloadManager:
         Does NOT perform startup-only operations: migrations, crash
         recovery, catalog staleness enforcement, or initial catalog
         refresh.  Those are startup concerns only.
+
+        If ``preparation_event`` is set, awaits it before proceeding so
+        tests can deterministically hold this method mid-flight.
         """
+        if self.preparation_event is not None:
+            await self.preparation_event.wait()
+
         from eggpool.accounts.registry import (  # noqa: PLC0415
             AccountRegistry,
         )

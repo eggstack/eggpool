@@ -28,6 +28,7 @@ from eggpool.background.cleanup import (
 )
 from eggpool.catalog.pricing import CostCalculator, PriceRepository
 from eggpool.catalog.service import CatalogService
+from eggpool.cli_exit_codes import STAGE_RELOAD_IN_PROGRESS
 from eggpool.constants import API_V1_PREFIX, MAX_REQUEST_BODY_BYTES
 from eggpool.control.reload_manager import ReloadInProgressError, ReloadManager
 from eggpool.control.server import (
@@ -1462,7 +1463,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
                 protocol_version=PROTOCOL_VERSION,
                 request_id=request.request_id,
                 ok=False,
-                stage="reload_in_progress",
+                stage=STAGE_RELOAD_IN_PROGRESS,
                 generation=None,
                 changed_sections=(),
                 warnings=(),
