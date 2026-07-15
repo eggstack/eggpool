@@ -131,6 +131,23 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "database.wal": ReloadDisposition.RESTART_REQUIRED,
     "database.synchronous": ReloadDisposition.RESTART_REQUIRED,
     "database.worker_threads": ReloadDisposition.RESTART_REQUIRED,
+    # ---- dispatch writer (process-owned; restart-required until safe
+    # reconfiguration path is implemented and tested) ----
+    "database.dispatch_writer.enabled": ReloadDisposition.RESTART_REQUIRED,
+    "database.dispatch_writer.max_queue_depth": ReloadDisposition.RESTART_REQUIRED,
+    "database.dispatch_writer.max_batch_size": ReloadDisposition.RESTART_REQUIRED,
+    "database.dispatch_writer.max_batch_wait_ms": ReloadDisposition.RESTART_REQUIRED,
+    "database.dispatch_writer.enqueue_timeout_ms": ReloadDisposition.RESTART_REQUIRED,
+    "database.dispatch_writer.shutdown_drain_timeout_s": (
+        ReloadDisposition.RESTART_REQUIRED
+    ),
+    # Also support top-level dispatch_writer shorthand for convenience
+    "dispatch_writer.enabled": ReloadDisposition.RESTART_REQUIRED,
+    "dispatch_writer.max_queue_depth": ReloadDisposition.RESTART_REQUIRED,
+    "dispatch_writer.max_batch_size": ReloadDisposition.RESTART_REQUIRED,
+    "dispatch_writer.max_batch_wait_ms": ReloadDisposition.RESTART_REQUIRED,
+    "dispatch_writer.enqueue_timeout_ms": ReloadDisposition.RESTART_REQUIRED,
+    "dispatch_writer.shutdown_drain_timeout_s": ReloadDisposition.RESTART_REQUIRED,
     # ---- models catalog refresh cadence ----
     # Request-path-visible subset: the candidate builder rebuilds the
     # catalog and re-registers periodic tasks per generation so these

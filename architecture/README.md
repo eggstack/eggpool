@@ -1974,6 +1974,55 @@ context-exit order. Milestone B replaces this with two narrow
 acquisitions of `_selection_claim_lock` so DB I/O never holds the
 coordinator lock at all.
 
+#### Milestone C: durable dispatch write pipeline
+
+Milestone C replaces per-request correctness-critical dispatch
+transactions with a process-owned, bounded in-process persistence
+pipeline.  A `DispatchPersistenceWriter` (attached to
+`ProcessRuntime`, survives generation swaps) collects immutable
+`DispatchIntent` objects from concurrent coordinators and persists
+them in microbatches.
+
+Core flow:
+
+1. Coordinator builds a `DispatchIntent` after routing and selection.
+2. Coordinator enqueues the intent to the process-owned writer via
+   `submit_intent()`, which returns a `Future[PersistedDispatchResult]`.
+3. The writer's single drain task collects intents, forming batches
+   up to `max_batch_size` with a bounded `max_batch_wait_ms` wait.
+4. Batch persistence runs in a single `db.transaction()` via
+   `persist_dispatch_bundles()`.  On failure, the entire batch
+   rolls back.
+5. Each successful intent's future resolves with a
+   `PersistedDispatchResult` carrying durable IDs.
+6. The coordinator receives the result, publishes runtime state,
+   and proceeds with upstream dispatch.
+
+Key invariants:
+- No upstream request is sent before its own dispatch bundle commit
+  is acknowledged.
+- Every accepted intent receives exactly one success or failure
+  outcome.
+- Queue saturation fails closed before upstream dispatch and is
+  visible in diagnostics.
+- Isolated requests do not incur an unconditional batching sleep.
+- Caller cancellation cannot cancel unrelated batch members.
+
+The writer is process-owned (on `ProcessRuntime`, not
+`RuntimeGeneration`) and is not duplicated by live rehash.
+Configuration lives under `[database.dispatch_writer]` with all
+fields restart-required.  Runtime diagnostics are exposed via
+`/api/stats/runtime` `dispatch_writer` (queue depth, batch sizes,
+timing, error counts).
+
+New modules:
+- `src/eggpool/request/dispatch_intent.py` — immutable
+  `DispatchIntent`, `PersistedDispatchResult`, and error classes.
+- `src/eggpool/db/dispatch_repository.py` — repository-level
+  bundle persistence (`persist_dispatch_bundles`).
+- `src/eggpool/request/dispatch_writer.py` — process-owned
+  `DispatchPersistenceWriter` with adaptive microbatching.
+
 ### Score components and eligibility diagnostics
 
 Every persisted `routing_decisions` row carries the per-account score

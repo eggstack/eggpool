@@ -1277,6 +1277,27 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     dispatch_span_recorder = DispatchSpanRecorder(window_size=200)
     app.state.dispatch_span_recorder = dispatch_span_recorder
 
+    # 18d.1. Dispatch persistence writer (Milestone C): process-owned
+    # microbatching writer that persists dispatch bundles in bounded
+    # batches.  Only constructed when the feature is enabled in config.
+    dispatch_writer = None
+    if config.dispatch_writer.enabled:
+        from eggpool.request.dispatch_writer import (  # noqa: PLC0415
+            DispatchPersistenceWriter,
+        )
+
+        dispatch_writer = DispatchPersistenceWriter(
+            db=db,
+            max_queue_depth=config.dispatch_writer.max_queue_depth,
+            max_batch_size=config.dispatch_writer.max_batch_size,
+            max_batch_wait_ms=config.dispatch_writer.max_batch_wait_ms,
+            enqueue_timeout_ms=config.dispatch_writer.enqueue_timeout_ms,
+            shutdown_drain_timeout_s=config.dispatch_writer.shutdown_drain_timeout_s,
+        )
+        dispatch_writer.start()
+    process.dispatch_writer = dispatch_writer
+    app.state.dispatch_writer = dispatch_writer
+
     # 18d. Request coordinator
     coordinator = RequestCoordinator(
         registry=registry,
@@ -1305,6 +1326,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         compression_tuning_registry=app.state.compression_tuning_registry,
         compression_policy=config.compression,
         stream_diagnostics=get_stream_diagnostics(),
+        dispatch_writer=dispatch_writer,
     )
     app.state.coordinator = coordinator
 
@@ -1453,6 +1475,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         routing_trace_guard=getattr(app.state, "routing_trace_guard", None),
         runtime_manager=None,  # wired in step 24 below
         process=process,
+        dispatch_writer=dispatch_writer,
     )
 
     # Use the unified register_runtime_tasks helper so the startup and
@@ -1721,6 +1744,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                 logger.exception(
                     "Error closing outbound client manager during shutdown"
                 )
+
+        # Drain the dispatch writer before closing the database so
+        # committed intents are not lost.
+        dispatch_writer: Any = getattr(app.state, "dispatch_writer", None)
+        if dispatch_writer is not None:
+            try:
+                await dispatch_writer.stop()
+            except Exception:
+                logger.exception("Error stopping dispatch writer during shutdown")
 
         db: Database | None = getattr(app.state, "db", None)
         stats_db: Database | None = getattr(app.state, "stats_db", None)

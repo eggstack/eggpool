@@ -590,6 +590,7 @@ class RequestCoordinator:
         finalization_retry_queue: Any | None = None,  # noqa: ANN401
         routing_trace_guard: Any | None = None,  # noqa: ANN401
         selection_claim_diagnostics: SelectionClaimDiagnostics | None = None,
+        dispatch_writer: Any | None = None,  # noqa: ANN401
     ) -> None:
         self._registry = registry
         self._catalog = catalog
@@ -644,6 +645,7 @@ class RequestCoordinator:
 
             routing_trace_guard = get_routing_trace_guard()
         self._routing_trace_guard = routing_trace_guard
+        self._dispatch_writer = dispatch_writer
 
         # Build the attempt finalizer with all dependencies
         self._attempt_finalizer = AttemptFinalizer(

@@ -165,6 +165,7 @@ class ProcessRuntime:
     process_supervisor: Any = None  # noqa: ANN401 — TaskSupervisor, avoids circular import
     task_spec_version: int = 0
     last_task_transition: dict[str, Any] | None = None
+    dispatch_writer: Any = None  # noqa: ANN401 — DispatchPersistenceWriter
 
 
 # ---------------------------------------------------------------------------
@@ -1071,6 +1072,7 @@ _RUNTIME_OWNED_APP_STATE_ATTRS: frozenset[str] = frozenset(
         "outbound_manager",
         "dns_backend",
         "httpx_client",
+        "dispatch_writer",
     }
 )
 

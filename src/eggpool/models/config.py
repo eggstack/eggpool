@@ -110,6 +110,21 @@ class UpstreamConfig(BaseModel):
         return self
 
 
+class DispatchWriterConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    max_queue_depth: int = Field(default=256, ge=16, le=4096)
+    max_batch_size: int = Field(default=32, ge=1, le=256)
+    max_batch_wait_ms: float = Field(default=50.0, gt=0.0, le=500.0)
+    enqueue_timeout_ms: float = Field(default=5_000.0, gt=0.0, le=60_000.0)
+    shutdown_drain_timeout_s: float = Field(
+        default=5.0,
+        gt=0.0,
+        le=30.0,
+    )
+
+
 class DatabaseConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -122,6 +137,9 @@ class DatabaseConfig(BaseModel):
     # share the data-plane connection lock. Set to 1 for minimum-footprint mode
     # on extremely constrained devices or in-memory test databases.
     worker_threads: int = Field(default=2, ge=1, le=2)
+    dispatch_writer: DispatchWriterConfig = Field(
+        default_factory=DispatchWriterConfig,
+    )
 
 
 class ModelsConfig(BaseModel):
@@ -1004,6 +1022,9 @@ class AppConfig(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     upstream: UpstreamConfig = Field(default_factory=UpstreamConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    dispatch_writer: DispatchWriterConfig = Field(
+        default_factory=DispatchWriterConfig,
+    )
     models: ModelsConfig = Field(default_factory=ModelsConfig)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
