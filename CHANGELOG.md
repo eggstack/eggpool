@@ -129,6 +129,50 @@ Documentation in `architecture/README.md`, `docs/live-config-rehash.md`,
   in `architecture/README.md`, `AGENTS.md`, `.opencode/skills/architecture/SKILL.md`,
   `.opencode/skills/development/SKILL.md`, `docs/deployment.md`,
   `docs/raspberry-pi.md`, and `README.md` updated.
+- **Dispatch stability milestone B (selection-claim lock deconvoying).**
+  `RequestCoordinator._select_and_persist_attempt` now splits selection
+  into three phases around a new `RequestCoordinator._selection_claim_lock`:
+  Phase A claims an account and resolves identity under the lock, Phase B
+  persists the durable rows (`_persist_dispatch_bundle`) OUTSIDE the lock
+  so a SQLite waiter can no longer convoy other selectors, and Phase C
+  re-acquires the lock for runtime publication
+  (`_publish_runtime_state`). Compensation on Phase C failure goes
+  through `_compensate_or_rollback_claim`, which decrements the active
+  count, finalizes the attempt as `PostCommitInterrupted`, releases the
+  circuit-breaker health slot, and tags the context with
+  `post_commit_interrupted`. The plan's acceptance criterion #1 (no DB op
+  under the lock) is pinned by
+  `tests/unit/test_coordinator_claim_lock_scope.py::test_db_io_runs_outside_selection_claim_lock`,
+  which instruments `Database.transaction()` and asserts the transaction
+  window never overlaps the lock-held window. The plan's acceptance
+  criterion #6 (release exactly once) is pinned by
+  `tests/unit/test_selection_claim.py::test_release_health_slot_only_once`,
+  `test_release_health_slot_with_no_holder_is_no_op`, and
+  `test_release_health_slot_with_none_health_manager_is_safe`. A new
+  frozen `SelectionClaim` dataclass and `SelectionClaimTracker` state
+  machine (`PLAN -> CLAIM -> PERSIST -> COMMITTED -> PUBLISHED`, with
+  `ROLLED_BACK` as a terminal divert) live in
+  `src/eggpool/request/selection_claim.py`; process-local counters live on
+  `SelectionClaimDiagnostics` and surface under `/api/stats/runtime`
+  `selection_claims` (`claims_created`, `claims_committed`,
+  `claims_published`, `claims_rolled_back_before_persistence`,
+  `ambiguous_commit_reconciliations`,
+  `post_commit_publication_failures`,
+  `compensation_successes` / `compensation_failures`,
+  `max_concurrent_claims`, and `claim_lock_wait_overflows` /
+  `claim_lock_wait_recent`). Nine new span keys are registered
+  (`SPAN_SELECTION_CLAIM_WAIT`, `SPAN_SELECTION_CLAIM_HELD`,
+  `SPAN_SELECTION_REVALIDATION`, `SPAN_DISPATCH_PERSISTENCE_WAIT`,
+  `SPAN_DISPATCH_PERSISTENCE_TRANSACTION`,
+  `SPAN_DISPATCH_PERSISTENCE_COMMIT`, `SPAN_POST_COMMIT_PUBLICATION`,
+  `SPAN_CLAIM_ROLLBACK`, `SPAN_POST_COMMIT_COMPENSATION`). The legacy
+  `_select_lock` is retained as a back-stop and is unused by the
+  post-milestone-B hot path. Test coverage spans
+  `tests/unit/test_selection_claim.py` (16 unit tests),
+  `tests/unit/test_selection_claim_diagnostics.py` (10 unit tests), and
+  `tests/unit/test_coordinator_claim_lock_scope.py` (4 integration
+  tests). Documentation in `architecture/README.md` § Lock scope and
+  publish ordering and `AGENTS.md` updated.
 
 ## [0.6.0] - 2026-07-09
 

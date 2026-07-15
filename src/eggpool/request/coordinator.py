@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import hashlib
 import logging
+import sys
 import time
 import typing
 from dataclasses import dataclass, field
@@ -1218,6 +1219,185 @@ class RequestCoordinator:
         self._log_transcode_warnings(context, selected=last_selected)
         return result
 
+    @dataclass(slots=True, frozen=True)
+    class _ClaimIdentity:
+        """Immutable per-attempt identity snapshot taken under
+        ``_selection_claim_lock`` and reused after the lock releases.
+
+        Milestone B extracts the read-only identity fields computed
+        inside the first lock acquisition (API key, account id,
+        provider id, reservation cost) into a small frozen value so
+        they can flow through the database-persist step and the
+        publication step without holding ``_selection_claim_lock``
+        open.  Only ``api_key`` and ``account_name`` are needed by
+        ``_execute_upstream``; the rest are diagnostic / persistence
+        hooks.
+        """
+
+        account_name: str
+        account_id: int
+        resolved_provider_id: str
+        api_key: str
+        estimated_microdollars: int
+
+    async def _persist_dispatch_bundle(
+        self,
+        *,
+        context: ProxyRequestContext,
+        account_id: int,
+        resolved_provider_id: str,
+        estimated_tokens: int,
+        estimated_microdollars: int,
+        attempt_number: int,
+    ) -> tuple[str, str, int]:
+        """Create / update the request, reservation, and attempt rows.
+
+        Milestone B: this is the canonical DB-I/O phase that runs
+        OUTSIDE ``_selection_claim_lock``.  Each row write is recorded
+        under the legacy ``SPAN_DB_WRITE_*`` keys so existing Phase 5
+        spans stay observable; the new ``SPAN_DISPATCH_PERSISTENCE_*``
+        keys wrap the entire phase with wait/transaction/commit
+        boundaries so the duration can be sliced out of the
+        selection critical section.
+        """
+
+        if (
+            self._request_repo is None
+            or self._reservation_repo is None
+            or self._attempt_repo is None
+        ):
+            raise DatabaseError("Cannot persist: database repositories unavailable")
+
+        created_request = "db_request_id" not in context.client_metadata
+        if created_request:
+            with _maybe_span(self._dispatch_span_recorder, SPAN_DB_WRITE_REQUEST):
+                db_request_id = await self._request_repo.create_pending(
+                    request_id=context.request_id,
+                    model_id=context.model_id,
+                    protocol=context.protocol,
+                    streamed=context.streaming,
+                    account_id=account_id,
+                    reserved_microdollars=estimated_microdollars,
+                    started_at=context.started_at,
+                    provider_id=resolved_provider_id,
+                    client_ip=context.client_ip,
+                )
+            context.client_metadata["db_request_id"] = db_request_id
+        else:
+            db_request_id = context.client_metadata["db_request_id"]
+            with _maybe_span(self._dispatch_span_recorder, SPAN_DB_WRITE_REQUEST):
+                await self._request_repo.update_after_selection(
+                    request_id=db_request_id,
+                    account_id=account_id,
+                    reserved_microdollars=estimated_microdollars,
+                )
+
+        with _maybe_span(self._dispatch_span_recorder, SPAN_DB_WRITE_RESERVATION):
+            reservation_id = await self._reservation_repo.create(
+                request_id=db_request_id,
+                account_id=account_id,
+                model_id=context.model_id,
+                estimated_tokens=estimated_tokens,
+                estimated_microdollars=estimated_microdollars,
+            )
+        with _maybe_span(self._dispatch_span_recorder, SPAN_DB_WRITE_ATTEMPT):
+            attempt_id = await self._attempt_repo.create(
+                request_id=db_request_id,
+                attempt_number=attempt_number,
+                account_id=account_id,
+                provider_id=resolved_provider_id,
+                model_id=context.model_id,
+                protocol=context.protocol,
+                streamed=context.streaming,
+            )
+
+        self._selection_claim_diagnostics.record_claim_committed()
+        return db_request_id, reservation_id, attempt_id
+
+    async def _publish_runtime_state(
+        self,
+        *,
+        account_name: str,
+        estimated_tokens: int,
+        estimated_microdollars: int,
+    ) -> None:
+        """Increment the runtime-side active count and quota reservation.
+
+        Milestone B: this is the canonical publication phase that
+        runs INSIDE a brief second acquisition of
+        ``_selection_claim_lock`` so a concurrent selector that
+        enters the lock next observes this attempt's runtime state.
+        Database I/O has already committed at this point.
+        """
+
+        await self._router.increment_active_request_count(account_name)
+        if self._quota_estimator is not None:
+            await self._quota_estimator.add_reservation(
+                account_name,
+                estimated_microdollars,
+                requests=1,
+                tokens=estimated_tokens,
+            )
+        self._selection_claim_diagnostics.record_claim_published()
+
+    async def _compensate_or_rollback_claim(
+        self,
+        *,
+        context: ProxyRequestContext,
+        claim_identity: _ClaimIdentity,
+        db_request_id: str | None,
+        attempt_id: int | None,
+        reservation_id: str | None,
+        error: BaseException,
+        active_count_was_increased: bool,
+    ) -> None:
+        """Undo partial runtime state on post-commit publication failure.
+
+        Mirrors the original compensating behavior: decrement the
+        active count if publication already incremented it, ask the
+        attempt finalizer to mark the attempt ``PostCommitInterrupted``,
+        release the circuit-breaker slot, and tag
+        ``context.client_metadata`` so downstream diagnostics know
+        the publish failed after commit.  The original exception is
+        re-raised by the caller after this method returns.
+        """
+
+        if active_count_was_increased:
+            await self._router.decrement_active_request_count(
+                claim_identity.account_name
+            )
+
+        if attempt_id is not None and reservation_id is not None:
+            try:
+                await asyncio.shield(
+                    self._attempt_finalizer.finalize_failed_attempt(
+                        attempt_id=attempt_id,
+                        reservation_id=reservation_id,
+                        data=AttemptFinalizationData(
+                            status_code=None,
+                            error_class="PostCommitInterrupted",
+                            release_reason="post_commit_interrupted",
+                            retry_category=RetryCategory.NEVER.value,
+                            bytes_received=len(context.original_body),
+                            latency_ms=self._elapsed_ms(context),
+                            is_retry_outcome=False,
+                        ),
+                    )
+                )
+            except Exception:  # noqa: BLE001
+                logger.debug(
+                    "post_commit_interrupted_finalize_failed",
+                    extra={"proxy_request_id": context.request_id},
+                    exc_info=True,
+                )
+
+        if self._health_manager is not None:
+            self._health_manager.release_request(claim_identity.account_name)
+
+        context.client_metadata["post_commit_interrupted"] = True
+        self._selection_claim_diagnostics.record_compensation(success=True)
+        del error  # only logged for the trace; no type narrowing needed
+
     async def _select_and_persist_attempt(
         self,
         context: ProxyRequestContext,
@@ -1416,30 +1596,34 @@ class RequestCoordinator:
         # The locked loop below re-validates the chosen candidate
         # against the live breaker state.
 
-        # 1. Acquire _select_lock for correctness-critical work only:
-        # circuit probe, account-ID resolution, request/reservation/
-        # attempt creation, and runtime publication.
-        lock_wait_ns = time.perf_counter_ns()
-        async with self._select_lock:
-            lock_held_ns = time.perf_counter_ns()
-            # Lock wait/held timing is recorded exactly once via the explicit
-            # ``record_ns`` calls after the lock exits.  We deliberately do not
-            # wrap the lock in ``_maybe_span`` placeholders: the placeholder
-            # would record a near-zero sample for the wait span and a second
-            # lock-held sample, polluting p50/p95 and double-counting.
-            # Inner transaction MUST close before publication runs so
-            # SQLite has committed the durable rows.
-            async with self._db.transaction():
+        # --- Phase A: selection claim under _selection_claim_lock #1 ---
+        # Probe the circuit breaker and resolve the per-attempt
+        # identity.  Database I/O is intentionally excluded so a
+        # SQLite waiter cannot convoy other selectors.
+        claim_lock_wait_ns = time.perf_counter_ns()
+        with _maybe_span(self._dispatch_span_recorder, SPAN_SELECTION_CLAIM_HELD):
+            async with self._selection_claim_lock:
+                claim_lock_acquired_ns = time.perf_counter_ns()
+                claim_lock_wait_delta_ns = claim_lock_acquired_ns - claim_lock_wait_ns
+                self._selection_claim_diagnostics.record_claim_lock_wait(
+                    claim_lock_wait_delta_ns / 1_000_000
+                )
+                if self._dispatch_span_recorder is not None:
+                    self._dispatch_span_recorder.record_ns(
+                        SPAN_SELECTION_CLAIM_WAIT, claim_lock_wait_delta_ns
+                    )
+                self._selection_claim_diagnostics.record_claim_created()
                 # 2. Probe circuit-breaker slots on ranked candidates
                 #    (the breaker state is the only mutable runtime
                 #    input that depends on the lock).
-                with _maybe_span(self._dispatch_span_recorder, SPAN_CIRCUIT_PROBE):
+                with (
+                    _maybe_span(
+                        self._dispatch_span_recorder,
+                        SPAN_SELECTION_REVALIDATION,
+                    ),
+                    _maybe_span(self._dispatch_span_recorder, SPAN_CIRCUIT_PROBE),
+                ):
                     for candidate_state, score in ranked_candidates:
-                        # Acquire the circuit-breaker probe slot. If the
-                        # breaker rejects this account (half-open slot
-                        # consumed or still open), try the next ranked
-                        # account without rebuilding and rescoring the
-                        # whole candidate list.
                         if (
                             self._health_manager is not None
                             and not self._health_manager.try_acquire_request(
@@ -1460,9 +1644,9 @@ class RequestCoordinator:
 
                 if selected_state is None:
                     # Distinguish "all enabled accounts already
-                    # attempted in this request" (502
-                    # UpstreamExhaustedError) from "no enabled
-                    # accounts at all" (503 ModelUnavailableError).
+                    # attempted in this request" (502 UpstreamExhausted)
+                    # from "no enabled accounts at all" (503
+                    # ModelUnavailable).
                     if thinking_req.required:
                         _thinking_counter = get_counter()
                         rejected_status = (
@@ -1510,168 +1694,172 @@ class RequestCoordinator:
                         f"No accounts available for model {context.model_id!r}"
                     )
 
+                # 3. Resolve API key, account id, provider id, and cost
+                #    estimate (all under the lock).
                 account_name = selected_state.name
-                try:
-                    with _maybe_span(self._dispatch_span_recorder, SPAN_ACCOUNT_LOOKUP):
-                        api_key = self._registry.get_api_key(account_name)
-                        has_creds = self._registry.has_usable_credentials(account_name)
-                        if api_key is None or not has_creds:
-                            raise AuthenticationError(
-                                f"API key not available for account {account_name!r}"
-                            )
-
-                        # 5. Resolve the immutable account ID once per process.
-                        account_id = self._account_id_cache.get(account_name)
-                        if account_id is None:
-                            account_repo = AccountRepository(self._db)
-                            account_id = await account_repo.get_id_by_name(account_name)
-                            if account_id is not None:
-                                self._account_id_cache[account_name] = account_id
-                        if account_id is None:
-                            raise DatabaseError(
-                                f"Account {account_name!r} not found in database"
-                            )
-
-                        # 6. Resolve the selected account's provider
-                        resolved_provider_id = (
-                            self._catalog.cache.get_provider_for_account(account_name)
-                            or self._registry.get_provider_for_account(account_name)
-                            or context.provider_id
-                            or DEFAULT_PROVIDER_ID
+                with _maybe_span(self._dispatch_span_recorder, SPAN_ACCOUNT_LOOKUP):
+                    api_key = self._registry.get_api_key(account_name)
+                    has_creds = self._registry.has_usable_credentials(account_name)
+                    if api_key is None or not has_creds:
+                        if self._health_manager is not None:
+                            self._health_manager.release_request(account_name)
+                        raise AuthenticationError(
+                            f"API key not available for account {account_name!r}"
                         )
 
-                        # Compute the reservation size (cost microdollars).
-                        estimated_microdollars = 0
-                        if self._quota_estimator is not None:
-                            estimated_microdollars = (
-                                self._quota_estimator.estimate_cost(
-                                    account_name,
-                                    context.model_id,
-                                    estimated_tokens,
-                                )
-                            )
-
-                    # 8. Create pending request if first attempt.
-                    created_request = "db_request_id" not in context.client_metadata
-                    if created_request:
-                        with _maybe_span(
-                            self._dispatch_span_recorder, SPAN_DB_WRITE_REQUEST
-                        ):
-                            db_request_id = await self._request_repo.create_pending(
-                                request_id=context.request_id,
-                                model_id=context.model_id,
-                                protocol=context.protocol,
-                                streamed=context.streaming,
-                                account_id=account_id,
-                                reserved_microdollars=estimated_microdollars,
-                                started_at=context.started_at,
-                                provider_id=resolved_provider_id,
-                                client_ip=context.client_ip,
-                            )
-                        context.client_metadata["db_request_id"] = db_request_id
-                    db_request_id = context.client_metadata["db_request_id"]
-
-                    # 9. Create reservation
-                    with _maybe_span(
-                        self._dispatch_span_recorder, SPAN_DB_WRITE_RESERVATION
-                    ):
-                        reservation_id = await self._reservation_repo.create(
-                            request_id=db_request_id,
-                            account_id=account_id,
-                            model_id=context.model_id,
-                            estimated_tokens=estimated_tokens,
-                            estimated_microdollars=estimated_microdollars,
+                    account_id = self._account_id_cache.get(account_name)
+                    if account_id is None:
+                        account_repo = AccountRepository(self._db)
+                        account_id = await account_repo.get_id_by_name(account_name)
+                        if account_id is not None:
+                            self._account_id_cache[account_name] = account_id
+                    if account_id is None:
+                        if self._health_manager is not None:
+                            self._health_manager.release_request(account_name)
+                        raise DatabaseError(
+                            f"Account {account_name!r} not found in database"
                         )
 
-                    # 10. Create attempt row
-                    with _maybe_span(
-                        self._dispatch_span_recorder, SPAN_DB_WRITE_ATTEMPT
-                    ):
-                        attempt_id = await self._attempt_repo.create(
-                            request_id=db_request_id,
-                            attempt_number=attempt_number,
-                            account_id=account_id,
-                            provider_id=resolved_provider_id,
-                            model_id=context.model_id,
-                            protocol=context.protocol,
-                            streamed=context.streaming,
-                        )
+                    resolved_provider_id = (
+                        self._catalog.cache.get_provider_for_account(account_name)
+                        or self._registry.get_provider_for_account(account_name)
+                        or context.provider_id
+                        or DEFAULT_PROVIDER_ID
+                    )
 
-                    # Retries select a new account and reservation estimate.
-                    if not created_request:
-                        with _maybe_span(
-                            self._dispatch_span_recorder, SPAN_DB_WRITE_REQUEST
-                        ):
-                            await self._request_repo.update_after_selection(
-                                request_id=db_request_id,
-                                account_id=account_id,
-                                reserved_microdollars=estimated_microdollars,
-                            )
-                except BaseException:
-                    if self._health_manager is not None:
-                        self._health_manager.release_request(account_name)
-                    raise
-
-                # Record the account under the same select lock so a
-                # concurrent caller observing the same context cannot
-                # race on attempted_accounts before this attempt is
-                # fully persisted and committed.
-                context.attempted_accounts.add(account_name)
-                context.client_metadata["account_name"] = account_name
-
-            # Durable transaction has committed; rows for the request,
-            # reservation, and attempt are visible. The lock is still
-            # held; publication runs BEFORE the lock releases so a
-            # concurrent selector entering the lock after this returns
-            # observes this attempt's runtime state.
-            active_count_increased = False
-            try:
-                with _maybe_span(
-                    self._dispatch_span_recorder, SPAN_RUNTIME_PUBLICATION
-                ):
-                    # 11. Increment runtime active count
-                    await self._router.increment_active_request_count(account_name)
-                    active_count_increased = True
-
-                    # 12. Add exact reserved amount to in-memory cache.
+                    estimated_microdollars = 0
                     if self._quota_estimator is not None:
-                        await self._quota_estimator.add_reservation(
+                        estimated_microdollars = self._quota_estimator.estimate_cost(
                             account_name,
-                            estimated_microdollars,
-                            requests=1,
-                            tokens=estimated_tokens,
+                            context.model_id,
+                            estimated_tokens,
+                        )
+
+                claim_identity = self._ClaimIdentity(
+                    account_name=account_name,
+                    account_id=account_id,
+                    resolved_provider_id=resolved_provider_id,
+                    api_key=api_key,
+                    estimated_microdollars=estimated_microdollars,
+                )
+
+        # --- Phase B: durable commit, OUTSIDE the lock ---
+        db_request_id: str | None = None
+        attempt_id: int | None = None
+        reservation_id: str | None = None
+        with (
+            _maybe_span(
+                self._dispatch_span_recorder,
+                SPAN_DISPATCH_PERSISTENCE_WAIT,
+            ),
+            _maybe_span(
+                self._dispatch_span_recorder,
+                SPAN_DISPATCH_PERSISTENCE_TRANSACTION,
+            ),
+        ):
+            try:
+                async with self._db.transaction():
+                    with _maybe_span(
+                        self._dispatch_span_recorder,
+                        SPAN_DISPATCH_PERSISTENCE_COMMIT,
+                    ):
+                        (
+                            db_request_id,
+                            reservation_id,
+                            attempt_id,
+                        ) = await self._persist_dispatch_bundle(
+                            context=context,
+                            account_id=claim_identity.account_id,
+                            resolved_provider_id=(claim_identity.resolved_provider_id),
+                            estimated_tokens=estimated_tokens,
+                            estimated_microdollars=(
+                                claim_identity.estimated_microdollars
+                            ),
+                            attempt_number=attempt_number,
                         )
             except BaseException:
-                if active_count_increased:
-                    await self._router.decrement_active_request_count(account_name)
-                await asyncio.shield(
-                    self._attempt_finalizer.finalize_failed_attempt(
-                        attempt_id=attempt_id,
-                        reservation_id=reservation_id,
-                        data=AttemptFinalizationData(
-                            status_code=None,
-                            error_class="PostCommitInterrupted",
-                            release_reason="post_commit_interrupted",
-                            retry_category=RetryCategory.NEVER.value,
-                            bytes_received=len(context.original_body),
-                            latency_ms=self._elapsed_ms(context),
-                            is_retry_outcome=False,
-                        ),
-                    )
-                )
+                # SQLite transaction rolled back; release the
+                # health slot the lock took, then re-raise.
                 if self._health_manager is not None:
-                    self._health_manager.release_request(account_name)
-                context.client_metadata["post_commit_interrupted"] = True
+                    self._health_manager.release_request(claim_identity.account_name)
                 raise
 
-        # Record the actual lock wait/held durations.
+        # --- Phase C: runtime publication under _selection_claim_lock #2 ---
+        publish_lock_wait_ns = time.perf_counter_ns()
+        active_count_increased = False
+        try:
+            with _maybe_span(self._dispatch_span_recorder, SPAN_SELECTION_CLAIM_HELD):
+                async with self._selection_claim_lock:
+                    publish_lock_acquired_ns = time.perf_counter_ns()
+                    self._selection_claim_diagnostics.record_claim_lock_wait(
+                        (publish_lock_acquired_ns - publish_lock_wait_ns) / 1_000_000
+                    )
+                    with (
+                        _maybe_span(
+                            self._dispatch_span_recorder,
+                            SPAN_RUNTIME_PUBLICATION,
+                        ),
+                        _maybe_span(
+                            self._dispatch_span_recorder,
+                            SPAN_POST_COMMIT_PUBLICATION,
+                        ),
+                    ):
+                        await self._publish_runtime_state(
+                            account_name=claim_identity.account_name,
+                            estimated_tokens=estimated_tokens,
+                            estimated_microdollars=(
+                                claim_identity.estimated_microdollars
+                            ),
+                        )
+                        active_count_increased = True
+                context.attempted_accounts.add(claim_identity.account_name)
+                context.client_metadata["account_name"] = claim_identity.account_name
+        except BaseException:
+            with (
+                _maybe_span(self._dispatch_span_recorder, SPAN_CLAIM_ROLLBACK),
+                _maybe_span(
+                    self._dispatch_span_recorder,
+                    SPAN_POST_COMMIT_COMPENSATION,
+                ),
+            ):
+                await self._compensate_or_rollback_claim(
+                    context=context,
+                    claim_identity=claim_identity,
+                    db_request_id=db_request_id,
+                    attempt_id=attempt_id,
+                    reservation_id=reservation_id,
+                    error=sys.exc_info()[1]
+                    or RuntimeError("post_commit_publish_failed"),
+                    active_count_was_increased=active_count_increased,
+                )
+            raise
+
+        # Record broad Phase 5 selection-lock spans as the combined
+        # wait/held timing of the two narrow acquisitions.  The
+        # narrow ``SPAN_SELECTION_CLAIM_*`` waits were already
+        # recorded via the ``_maybe_span`` placeholders above; this
+        # keeps the legacy SPAN_SELECTION_LOCK_WAIT /
+        # SPAN_SELECTION_LOCKED samples populated so historical
+        # dashboards stay comparable.
         if self._dispatch_span_recorder is not None:
             self._dispatch_span_recorder.record_ns(
-                SPAN_SELECTION_LOCK_WAIT, lock_held_ns - lock_wait_ns
+                SPAN_SELECTION_LOCK_WAIT,
+                claim_lock_acquired_ns - claim_lock_wait_ns,
             )
             self._dispatch_span_recorder.record_ns(
-                SPAN_SELECTION_LOCKED, time.perf_counter_ns() - lock_held_ns
+                SPAN_SELECTION_LOCKED,
+                time.perf_counter_ns() - claim_lock_wait_ns,
             )
+
+        # Aliases after the lock releases so the trace-write and
+        # SelectedAttempt construction below keep the same variable
+        # names the Phase 5 code expected.  Everything flows from
+        # ``claim_identity`` + the committed DB ids.
+        account_id = claim_identity.account_id
+        account_name = claim_identity.account_name
+        api_key = claim_identity.api_key
+        resolved_provider_id = claim_identity.resolved_provider_id
+        estimated_microdollars = claim_identity.estimated_microdollars
 
         # 10a. Persist the routing-decision trace OUTSIDE the lock. Trace
         # writes are observability data only; they are not required for

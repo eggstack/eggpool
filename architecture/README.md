@@ -1886,36 +1886,93 @@ Interpretation:
 
 ### Lock scope and publish ordering
 
-The `RequestCoordinator._select_and_persist_attempt()` method holds
-`_select_lock` across both the durable transaction (`request_attempts`
-+ `routing_decisions` INSERT inside `async with self._db.transaction():`)
-AND the runtime publication step (`Router.increment_active_request_count`
-+ `QuotaEstimator.add_reservation`). The publication runs AFTER the
-transaction commits but BEFORE the lock releases, so a concurrent
-selector that enters the lock next observes this attempt's runtime
-state. The publish is fast (in-process counter + cache mutation), so
-the lock-hold stays tight while still closing the burst-skew race
+#### Milestone B: selection-claim lock deconvoying
+
+`RequestCoordinator._select_and_persist_attempt()` is split into three
+phases so database I/O can never convoy other selectors through the
+selection critical section. The narrow
+`RequestCoordinator._selection_claim_lock` (added in dispatch-stability
+milestone B) replaces the previous broad `_select_lock` with two
+acquisitions per attempt:
+
+1. **Phase A** — first acquisition of `_selection_claim_lock`. The
+   coordinator probes the circuit breaker (`SPAN_CIRCUIT_PROBE`) and
+   resolves the per-attempt identity
+   (`SPAN_ACCOUNT_LOOKUP`): API key, account id, provider id,
+   reservation cost. The result is captured into a frozen
+   `_ClaimIdentity` dataclass and the lock releases.
+2. **Phase B** — durable commit, OUTSIDE the lock.
+   `_persist_dispatch_bundle` opens its own
+   `async with self._db.transaction():` and inserts the request,
+   reservation, and attempt rows. Because the coordinator lock is
+   not held here, a SQLite waiter can no longer convoy other
+   selectors; the broader `_select_lock` (if any concurrent reader
+   uses it) stays free. The helper reports
+   `SPAN_DISPATCH_PERSISTENCE_WAIT` /
+   `SPAN_DISPATCH_PERSISTENCE_TRANSACTION` /
+   `SPAN_DISPATCH_PERSISTENCE_COMMIT`.
+3. **Phase C** — second acquisition of `_selection_claim_lock`. The
+   coordinator publishes runtime state
+   (`_publish_runtime_state` → `Router.increment_active_request_count`
+   + `QuotaEstimator.add_reservation`, wrapping
+   `SPAN_RUNTIME_PUBLICATION` and the new
+   `SPAN_POST_COMMIT_PUBLICATION`) and the lock releases. The
+   `attempted_accounts` set is recorded while the lock is held so a
+   concurrent selector entering Phase A next observes this attempt's
+   runtime state and the freshly-stamped attempted-account history.
+
+`SPAN_SELECTION_CLAIM_HELD` is recorded once per acquisition via the
+`_maybe_span` placeholder. The legacy `SPAN_SELECTION_LOCK_WAIT` /
+`SPAN_SELECTION_LOCKED` spans continue to fire (recorded once at the
+end of the call) so historical dashboards stay comparable, but the
+new selection-claim spans are the authoritative timing source for
+operators looking to spot a contended lock on a hot path.
+
+The compensation chain (`_compensate_or_rollback_claim` →
+`decrement` → finalize-as-cancelled → release health slot →
+set `client_metadata["post_commit_interrupted"]` → re-raise) wraps
+Phase C and catches `BaseException` (including `CancelledError` /
+`SystemExit` / `KeyboardInterrupt`, re-raised without swallowing).
+
+Process-local diagnostics live on `SelectionClaimDiagnostics`
+(`/api/stats/runtime` `selection_claims`) and track
+`claims_created`, `claims_committed`, `claims_published`,
+`claims_rolled_back_before_persistence`,
+`ambiguous_commit_reconciliations`,
+`post_commit_publication_failures`,
+`compensation_successes` / `compensation_failures`,
+`max_concurrent_claims`, and
+`claim_lock_wait_overflows` / `claim_lock_wait_recent`
+(`{sample_count, p50_ms, p95_ms, p99_ms, max_ms}`).
+
+#### Pre-milestone-B ordering (Phase 5 reference)
+
+The pre-milestone-B lock held `_select_lock` across BOTH the durable
+transaction (`request_attempts` + `routing_decisions` INSERT inside
+`async with self._db.transaction():`) AND the runtime publication
+step (`Router.increment_active_request_count` +
+`QuotaEstimator.add_reservation`). The publication ran AFTER the
+transaction committed but BEFORE the lock released, so a concurrent
+selector that entered the lock next observed this attempt's runtime
+state. The publish was fast (in-process counter + cache mutation),
+so the lock-hold stayed tight while still closing the burst-skew race
 previously caused by publishing inside the transaction body.
 
-Note: the two contexts are written as explicit nested `async with`
-blocks (outer `_select_lock`, inner `_db.transaction()`) — NOT as a
-compound `async with self._select_lock, self._db.transaction():`. A
-compound form would still exit right-to-left (transaction commits
-before the lock releases), so context-exit order alone is not the
-invariant. The actual bug was that the runtime publication block lived
-INSIDE the transaction body; active-count and reserved-cost state were
+The two contexts were written as explicit nested `async with` blocks
+(outer `_select_lock`, inner `_db.transaction()`) — NOT as a compound
+`async with self._select_lock, self._db.transaction():`. A compound
+form would still exit right-to-left (transaction commits before the
+lock releases), so context-exit order alone was not the invariant.
+The actual bug was that the runtime publication block lived INSIDE
+the transaction body; active-count and reserved-cost state were
 therefore published before the transaction committed. The explicit
-nested form makes it hard to accidentally place publication inside the
-transaction while still keeping publication under `_select_lock`. The
-key invariant is block placement (publication must be outside the DB
-transaction body but still inside `_select_lock`), not context-exit
-order.
-
-The compensation chain (`decrement` → finalize-as-cancelled → release
-health slot → set `client_metadata["post_commit_interrupted"]` →
-re-raise) wraps the publish step and catches `BaseException` (including
-`CancelledError` / `SystemExit` / `KeyboardInterrupt`, re-raised
-without swallowing).
+nested form made it hard to accidentally place publication inside
+the transaction while still keeping publication under `_select_lock`.
+The key invariant was block placement (publication must be outside
+the DB transaction body but still inside `_select_lock`), not
+context-exit order. Milestone B replaces this with two narrow
+acquisitions of `_selection_claim_lock` so DB I/O never holds the
+coordinator lock at all.
 
 ### Score components and eligibility diagnostics
 
