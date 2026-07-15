@@ -3077,9 +3077,15 @@ D2 LIVE families and their consumers:
   outbound HTTPX clients via `OutboundClientManager`.
 - **Metrics flush cadence**: `metrics.flush_interval_s` — mutates
   the process-owned `metrics_flush` schedule in place.
-- **Backup scheduling**: `backup.interval_s`, `backup.retain_count`,
-  `backup.startup_delay_s` — mutates the process-owned
-  `automatic_backup` schedule in place.
+- **Backup scheduling**: `backup.enabled`, `backup.interval_s`,
+  `backup.retain_count`, `backup.startup_delay_s` — mutates the
+  process-owned `automatic_backup` schedule in place.  Toggling
+  `enabled` adds/removes the task.
+- **Model-info scheduling**: `model_info.enabled`,
+  `model_info.refresh_interval_s` — mutates the generation-leased
+  `model_info_refresh` and `model_info_canonical_backfill` tasks.
+  Toggling `enabled` adds/removes the tasks; changing
+  `refresh_interval_s` replaces the schedule with the new cadence.
 
 The `_run_periodic_loop` in `src/eggpool/background/__init__.py`
 re-reads `self._interval_s` and `self._initial_delay_s` each

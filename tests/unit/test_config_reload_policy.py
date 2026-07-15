@@ -124,10 +124,16 @@ class TestPolicyDefaults:
             "upstream.read_timeout_s",
             # Metrics flush interval reconfigured via process supervisor.
             "metrics.flush_interval_s",
-            # Backup scheduling fields reconfigured via process supervisor.
+            # Backup enabled state and scheduling fields reconfigured
+            # via process supervisor.
+            "backup.enabled",
             "backup.interval_s",
             "backup.retain_count",
             "backup.startup_delay_s",
+            # Model-info scheduling fields reconfigured via process
+            # supervisor; toggling enabled adds/removes the task.
+            "model_info.enabled",
+            "model_info.refresh_interval_s",
         }
         actual_live = {
             path
@@ -241,9 +247,7 @@ class TestDispositionCoverage:
             "dashboard.enabled",
             "dashboard.public",
             "dns_cache.enabled",
-            "backup.enabled",
             "proxies",
-            "model_info.enabled",
             "models.startup_refresh",
             "models.catalog_withdrawal_policy",
             # Milestone D2: dashboard retention fields moved to LIVE
@@ -251,6 +255,8 @@ class TestDispositionCoverage:
             # dashboard.theme and dashboard.themes_dir remain
             # RESTART_REQUIRED because they are read from
             # app.state.config which is process-owned and not swapped.
+            # backup.enabled and model_info.enabled moved to LIVE
+            # (task scheduling reconfigured via process supervisor).
         }
         for path in must_be_restart:
             assert _disposition_for(path) is ReloadDisposition.RESTART_REQUIRED, (
@@ -1186,7 +1192,19 @@ LIVE_FIELD_CONSUMERS: dict[str, tuple[str, ...]] = {
     "upstream.read_timeout_s": ("stale_request_finalizer (gen config per tick)",),
     # Metrics flush interval reconfigured via the process supervisor.
     "metrics.flush_interval_s": ("metrics_flush (process supervisor reconfigure)",),
-    # Backup scheduling fields reconfigured via the process supervisor.
+    # Milestone D2: model-info scheduling fields reconfigured via the
+    # process supervisor; toggling ``enabled`` adds/removes the task,
+    # changing ``refresh_interval_s`` replaces it with the new cadence.
+    "model_info.enabled": (
+        "model_info_refresh (process supervisor reconfigure)",
+        "model_info_canonical_backfill (process supervisor reconfigure)",
+    ),
+    "model_info.refresh_interval_s": (
+        "model_info_refresh (process supervisor reconfigure)",
+    ),
+    # Backup enabled state and scheduling fields reconfigured via the
+    # process supervisor.
+    "backup.enabled": ("automatic_backup (process supervisor reconfigure)",),
     "backup.interval_s": ("automatic_backup (process supervisor reconfigure)",),
     "backup.retain_count": ("automatic_backup (process supervisor reconfigure)",),
     "backup.startup_delay_s": ("automatic_backup (process supervisor reconfigure)",),

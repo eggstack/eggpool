@@ -406,6 +406,219 @@ def build_task_specs(context: TaskRegistrationContext) -> tuple[RuntimeTaskSpec,
     )
 
 
+def build_callback_factories_for_specs(
+    specs: tuple[RuntimeTaskSpec, ...],
+    *,
+    process: Any,
+    runtime_manager: Any,
+    config: Any,
+) -> dict[str, Callable[[], Coroutine[Any, Any, None]]]:
+    """Build callback factories for the given task specs.
+
+    Returns a dict mapping task name → coroutine factory suitable for
+    :meth:`~eggpool.background.TaskSupervisor.apply_spec_diff`.  Handles
+    both process-owned and generation-leased task types.
+    """
+    import asyncio as _asyncio  # noqa: PLC0415
+    from pathlib import Path as _Path  # noqa: PLC0415
+
+    from eggpool.background.backup import run_backup_once  # noqa: PLC0415
+    from eggpool.background.cleanup import (  # noqa: PLC0415
+        checkpoint_database,
+        cleanup_old_events,
+        cleanup_old_requests,
+        reconcile_expired_reservations,
+    )
+    from eggpool.db.repositories import PingRepository  # noqa: PLC0415
+
+    factories: dict[str, Callable[[], Coroutine[Any, Any, None]]] = {}
+    db = process.db
+
+    raw_config_path: str | None = getattr(process, "config_path", None)
+    resolved_config_path = _Path(raw_config_path) if raw_config_path else None
+    resolved_env_path: _Path | None = None
+    if resolved_config_path is not None:
+        candidate_env = resolved_config_path.parent / ".env"
+        if candidate_env.exists():
+            resolved_env_path = candidate_env
+
+    for spec in specs:
+        name = spec.name
+        if name == "catalog_refresh":
+
+            async def _catalog_refresh_factory() -> None:
+                from eggpool.runtime_manager import (  # noqa: PLC0415
+                    leased_runtime,
+                )
+
+                async with leased_runtime(runtime_manager) as gen:
+                    await gen.catalog.refresh()
+
+            factories[name] = _catalog_refresh_factory
+
+        elif name == "model_info_refresh":
+
+            async def _model_info_refresh_factory() -> None:
+                from eggpool.runtime_manager import (  # noqa: PLC0415
+                    leased_runtime,
+                )
+
+                async with leased_runtime(runtime_manager) as gen:
+                    mi = getattr(gen, "model_info", None)
+                    if mi is None:
+                        return
+                    result = await mi.refresh_due_models(force=False)
+                    mi.log_refresh_result(result)
+
+            factories[name] = _model_info_refresh_factory
+
+        elif name == "model_info_canonical_backfill":
+
+            async def _model_info_backfill_factory() -> None:
+                from eggpool.runtime_manager import (  # noqa: PLC0415
+                    leased_runtime,
+                )
+
+                async with leased_runtime(runtime_manager) as gen:
+                    mi = getattr(gen, "model_info", None)
+                    if mi is None:
+                        return
+                    result = await mi.backfill_missing_canonical()
+                    if result.get("backfilled", 0) > 0:
+                        logger.info("Model info canonical backfill: %s", result)
+
+            factories[name] = _model_info_backfill_factory
+
+        elif name == "retention_cleanup":
+
+            async def _retention_cleanup_factory() -> None:
+                from eggpool.runtime_manager import (  # noqa: PLC0415
+                    leased_runtime,
+                )
+
+                async with leased_runtime(runtime_manager) as gen:
+                    gen_config = gen.config
+                    ping_repo = PingRepository(db)
+                    await cleanup_old_requests(
+                        db, gen_config.dashboard.retain_request_stats_days
+                    )
+                    await cleanup_old_events(db, gen_config.dashboard.retain_event_days)
+                    await ping_repo.cleanup_old_pings(
+                        gen_config.models.ping_retain_days
+                    )
+                    await reconcile_expired_reservations(
+                        db,
+                        quota_estimator=gen.router.quota_estimator,
+                        router=gen.router,
+                    )
+
+            factories[name] = _retention_cleanup_factory
+
+        elif name == "checkpoint":
+
+            async def _checkpoint_factory() -> None:
+                await checkpoint_database(db)
+
+            factories[name] = _checkpoint_factory
+
+        elif name == "usage_window_refresh":
+
+            async def _usage_window_refresh_factory() -> None:
+                from eggpool.runtime_manager import (  # noqa: PLC0415
+                    leased_runtime,
+                )
+
+                async with leased_runtime(runtime_manager) as gen:
+                    await gen.router.quota_estimator.load_persisted_windows()
+
+            factories[name] = _usage_window_refresh_factory
+
+        elif name == "finalization_retry_drain":
+
+            async def _finalization_retry_factory() -> None:
+                from eggpool.runtime_manager import (  # noqa: PLC0415
+                    leased_runtime,
+                )
+
+                async with leased_runtime(runtime_manager) as gen:
+                    await gen.finalization_retry_queue.drain_once()
+
+            factories[name] = _finalization_retry_factory
+
+        elif name == "stale_request_finalizer":
+
+            async def _stale_request_factory() -> None:
+                from eggpool.app import (  # noqa: PLC0415
+                    finalize_stale_requests_once,
+                )
+                from eggpool.runtime_manager import (  # noqa: PLC0415
+                    leased_runtime,
+                )
+
+                async with leased_runtime(runtime_manager) as gen:
+                    await finalize_stale_requests_once(
+                        db=db,
+                        router=gen.router,
+                        quota_estimator=gen.router.quota_estimator,
+                        max_pending_seconds=gen.config.upstream.read_timeout_s,
+                    )
+
+            factories[name] = _stale_request_factory
+
+        elif name == "health_disabled_models_prune":
+
+            async def _health_prune_factory() -> None:
+                from eggpool.app import (  # noqa: PLC0415
+                    prune_health_disabled_models_once,
+                )
+                from eggpool.runtime_manager import (  # noqa: PLC0415
+                    leased_runtime,
+                )
+
+                async with leased_runtime(runtime_manager) as gen:
+                    await prune_health_disabled_models_once(gen)
+
+            factories[name] = _health_prune_factory
+
+        elif name == "metrics_flush":
+            coalescer = process.metrics_coalescer
+
+            async def _metrics_flush_factory(
+                _coalescer: Any = coalescer,
+            ) -> None:
+                await _coalescer.flush(reason="periodic")
+
+            factories[name] = _metrics_flush_factory
+
+        elif name == "update_checker":
+            # update_checker is only reconfigured at startup, not on
+            # reload.  Provide a no-op factory so the spec diff can
+            # proceed without error.
+            async def _update_checker_factory() -> None:
+                pass
+
+            factories[name] = _update_checker_factory
+
+        elif name == "automatic_backup":
+
+            async def _automatic_backup_factory() -> None:
+                try:
+                    await run_backup_once(
+                        config=config,
+                        db=db,
+                        config_path=resolved_config_path,
+                        env_path=resolved_env_path,
+                    )
+                except _asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("Automatic backup tick failed")
+
+            factories[name] = _automatic_backup_factory
+
+    return factories
+
+
 def compute_spec_diff(
     active: tuple[RuntimeTaskSpec, ...],
     candidate: tuple[RuntimeTaskSpec, ...],

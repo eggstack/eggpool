@@ -737,6 +737,31 @@ class TaskSupervisor:
             duplicates_rejected=tuple(duplicates_rejected),
         )
 
+        # Operational event logging for task transitions.
+        if added_names:
+            logger.info(
+                "Task transition: added %s",
+                ", ".join(added_names),
+            )
+        if removed_names:
+            logger.info(
+                "Task transition: removed %s",
+                ", ".join(removed_names),
+            )
+        if changed_details:
+            for task_name, (old_int, new_int) in changed_details:
+                logger.info(
+                    "Task transition: %s schedule updated %.1fs -> %.1fs",
+                    task_name,
+                    old_int,
+                    new_int,
+                )
+        if duplicates_rejected:
+            logger.warning(
+                "Task transition: duplicate schedule prevented for %s",
+                ", ".join(duplicates_rejected),
+            )
+
         if process is not None:
             process.task_spec_version += 1  # pyright: ignore[reportOptionalMemberAccess]
             process.last_task_transition = {  # pyright: ignore[reportOptionalMemberAccess]

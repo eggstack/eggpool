@@ -204,10 +204,10 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "metrics.rollup_retain_days": ReloadDisposition.RESTART_REQUIRED,
     "metrics.cleanup_interval_s": ReloadDisposition.RESTART_REQUIRED,
     "metrics.cleanup_max_rows_per_pass": ReloadDisposition.RESTART_REQUIRED,
-    "backup.enabled": ReloadDisposition.RESTART_REQUIRED,
-    # Milestone D2: backup scheduling and retention fields are consumed
-    # by the ``automatic_backup`` task; the process supervisor
-    # reconfigures the task with the candidate config on reload.
+    # Milestone D2: backup enabled state, scheduling, and retention
+    # fields are consumed by the ``automatic_backup`` task; the process
+    # supervisor reconfigures the task with the candidate config on reload.
+    "backup.enabled": ReloadDisposition.LIVE,
     "backup.interval_s": ReloadDisposition.LIVE,
     "backup.retain_count": ReloadDisposition.LIVE,
     "backup.startup_delay_s": ReloadDisposition.LIVE,
@@ -249,9 +249,13 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     # synthetic-cache knobs (enabled, dry_run, breakpoints, TTL, etc.)
     # take effect on the next generation.
     "cache": ReloadDisposition.LIVE,
-    "model_info.enabled": ReloadDisposition.RESTART_REQUIRED,
+    # Milestone D2: model-info scheduling fields consumed by the
+    # ``model_info_refresh`` and ``model_info_canonical_backfill``
+    # tasks; the process supervisor reconfigures the tasks with the
+    # candidate config on reload.
+    "model_info.enabled": ReloadDisposition.LIVE,
     "model_info.startup_refresh": ReloadDisposition.RESTART_REQUIRED,
-    "model_info.refresh_interval_s": ReloadDisposition.RESTART_REQUIRED,
+    "model_info.refresh_interval_s": ReloadDisposition.LIVE,
     "model_info.known_ttl_s": ReloadDisposition.RESTART_REQUIRED,
     "model_info.partial_ttl_s": ReloadDisposition.RESTART_REQUIRED,
     "model_info.sparse_new_initial_ttl_s": ReloadDisposition.RESTART_REQUIRED,

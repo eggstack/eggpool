@@ -55,7 +55,7 @@ class TestIncrementalUTF8Decoder:
         """A 4-byte UTF-8 character split across chunks decodes correctly."""
         observer = IncrementalSSEObserver(protocol="openai")
         # U+1F600 = grinning face = 4 bytes
-        char_bytes = "\U0001f600".encode("utf-8")
+        char_bytes = "\U0001f600".encode()
         assert len(char_bytes) == 4
 
         for i in range(len(char_bytes)):

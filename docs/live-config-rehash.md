@@ -83,14 +83,22 @@ D2 LIVE families:
   ``dashboard.retain_event_days``, ``models.ping_retain_days``.
 - **Upstream timeout**: ``upstream.read_timeout_s``.
 - **Metrics flush cadence**: ``metrics.flush_interval_s``.
-- **Backup scheduling**: ``backup.interval_s``,
-  ``backup.retain_count``, ``backup.startup_delay_s``.
+- **Backup scheduling**: ``backup.enabled``, ``backup.interval_s``,
+  ``backup.retain_count``, ``backup.startup_delay_s``.  Toggling
+  ``enabled`` adds/removes the task.
+- **Model-info scheduling**: ``model_info.enabled``,
+  ``model_info.refresh_interval_s``.  Toggling ``enabled`` adds/removes
+  the tasks; changing ``refresh_interval_s`` replaces the schedule.
 
 The ``_run_periodic_loop`` in ``src/eggpool/background/__init__.py``
 re-reads ``self._interval_s`` and ``self._initial_delay_s`` each
 iteration so live interval changes take effect at the next tick
-boundary without requiring a task restart.  Process-owned task
-resources retain identity across reloads — no duplicated schedules,
+boundary — not from the last completion time.  For tasks changed via
+``apply_spec_diff``, the old task is stopped and a new one is started
+immediately with the new interval.  Toggling ``model_info.enabled`` or
+``backup.enabled`` adds/removes the corresponding task; ``apply_spec_diff``
+logs the transition (added/removed/changed) at INFO level.  Process-owned
+task resources retain identity across reloads — no duplicated schedules,
 no orphaned tasks.
 
 ``ProcessRuntime`` (``src/eggpool/runtime_manager.py``) now carries

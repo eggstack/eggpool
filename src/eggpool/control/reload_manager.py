@@ -133,94 +133,6 @@ class CandidateGeneration:
 # ---------------------------------------------------------------------------
 
 
-def _build_process_callback_factories(
-    specs: tuple[Any, ...],
-    *,
-    process: ProcessRuntime,
-    runtime_manager: Any,
-    config: AppConfig,
-) -> dict[str, Any]:
-    """Build callback factories for process-owned tasks during reload.
-
-    Returns a dict mapping task name → coroutine factory.  Each factory
-    captures the candidate ``config`` so the task uses updated values
-    after the reload.  Only process-owned task names are accepted;
-    generation-leased tasks are not built here.
-    """
-    import asyncio as _asyncio
-    from pathlib import Path as _Path
-
-    from eggpool.background.backup import (  # noqa: PLC0415
-        run_backup_once,
-    )
-    from eggpool.background.cleanup import (  # noqa: PLC0415
-        checkpoint_database,
-    )
-
-    factories: dict[str, Any] = {}
-    db = process.db
-
-    for spec in specs:
-        name = spec.name
-        if name == "checkpoint":
-
-            async def _checkpoint_once() -> None:
-                await checkpoint_database(db)
-
-            factories[name] = _checkpoint_once
-
-        elif name == "metrics_flush":
-            coalescer = process.metrics_coalescer
-
-            async def _metrics_flush_once(
-                _coalescer: Any = coalescer,
-            ) -> None:
-                await _coalescer.flush(reason="periodic")
-
-            factories[name] = _metrics_flush_once
-
-        elif name == "update_checker":
-            # update_checker is only reconfigured at startup, not on
-            # reload (the outbound manager is process-owned and the
-            # checker persists).  Provide a no-op factory so the spec
-            # diff can proceed without error.
-            async def _update_checker_noop() -> None:
-                pass
-
-            factories[name] = _update_checker_noop
-
-        elif name == "automatic_backup":
-            raw_config_path: str | None = getattr(process, "config_path", None)
-            resolved_config_path = _Path(raw_config_path) if raw_config_path else None
-            resolved_env_path: _Path | None = None
-            if resolved_config_path is not None:
-                candidate_env = resolved_config_path.parent / ".env"
-                if candidate_env.exists():
-                    resolved_env_path = candidate_env
-
-            async def _automatic_backup_once(
-                _config: AppConfig = config,
-                _db: Any = db,
-                _config_path: _Path | None = resolved_config_path,
-                _env_path: _Path | None = resolved_env_path,
-            ) -> None:
-                try:
-                    await run_backup_once(
-                        config=_config,
-                        db=_db,
-                        config_path=_config_path,
-                        env_path=_env_path,
-                    )
-                except _asyncio.CancelledError:
-                    raise
-                except Exception:
-                    logger.exception("Automatic backup tick failed")
-
-            factories[name] = _automatic_backup_once
-
-    return factories
-
-
 # ---------------------------------------------------------------------------
 # Reload manager
 # ---------------------------------------------------------------------------
@@ -1074,19 +986,21 @@ class ReloadManager:
                 routing_trace_guard=routing_trace_guard,
             )
 
-            # -- Reconfigure process-owned tasks on the process supervisor
+            # -- Reconfigure tasks on the process supervisor
             # Process-owned tasks (checkpoint, metrics_flush, update_checker,
-            # automatic_backup) survive generation swaps.  Apply the spec
-            # diff so their intervals and callback factories reflect the
-            # candidate config.
+            # automatic_backup) survive generation swaps.  Generation-leased
+            # tasks (catalog_refresh, model_info_refresh, etc.) are also
+            # managed by the process supervisor.  Apply the spec diff so all
+            # task intervals and callback factories reflect the candidate
+            # config.
             process_supervisor = process.process_supervisor
             if process_supervisor is not None:
                 from eggpool.runtime_tasks import (  # noqa: PLC0415
                     TaskRegistrationContext,
+                    build_callback_factories_for_specs,
                     build_task_specs,
                 )
 
-                # Build candidate specs for process-owned tasks only.
                 candidate_specs = build_task_specs(
                     TaskRegistrationContext(
                         process=process,
@@ -1096,24 +1010,16 @@ class ReloadManager:
                         process_supervisor=process_supervisor,
                     )
                 )
-                from eggpool.runtime_task_inventory import (  # noqa: PLC0415
-                    TaskOwnership,
-                )
-
-                process_specs = tuple(
-                    s
-                    for s in candidate_specs
-                    if s.ownership == TaskOwnership.PROCESS and s.enabled
-                )
-                # Build callback factories for process-owned tasks.
-                callback_factories = _build_process_callback_factories(
-                    process_specs,
+                # Build callback factories for all candidate tasks
+                # (process-owned and generation-leased).
+                callback_factories = build_callback_factories_for_specs(
+                    candidate_specs,
                     process=process,
                     runtime_manager=runtime_manager,  # type: ignore[arg-type]
                     config=candidate_config,
                 )
                 await process_supervisor.apply_spec_diff(
-                    process_specs,
+                    candidate_specs,
                     callback_factories=callback_factories,
                     process=process,
                 )
