@@ -82,6 +82,17 @@ from eggpool.request.finalizer import (
     RequestFinalizer,
 )
 from eggpool.request.limits import estimate_reservation_tokens
+from eggpool.request.selection_claim import (  # noqa: F401  (Milestone B scaffolding)
+    SelectionClaim,  # type: ignore[reportUnusedImport]
+    SelectionClaimError,  # type: ignore[reportUnusedImport]
+    SelectionClaimState,  # type: ignore[reportUnusedImport]
+    SelectionClaimTracker,  # type: ignore[reportUnusedImport]
+)
+from eggpool.request.selection_claim_diagnostics import (  # noqa: F401  (Milestone B scaffolding)
+    SelectionClaimDiagnostics,
+    get_selection_claim_diagnostics,
+    set_selection_claim_diagnostics,  # type: ignore[reportUnusedImport]
+)
 from eggpool.request.stream_diagnostics import (
     STREAM_OUTCOME_CLIENT_CANCELLED,
     STREAM_OUTCOME_COMPLETED,
@@ -97,16 +108,25 @@ from eggpool.routing.router import RoutingDecisionTrace, RoutingExclusion
 from eggpool.runtime_dispatch import (
     SPAN_ACCOUNT_LOOKUP,
     SPAN_CIRCUIT_PROBE,
+    SPAN_CLAIM_ROLLBACK,  # type: ignore[reportUnusedImport]  # noqa: F401  (Milestone B scaffolding)
     SPAN_DB_WRITE_ATTEMPT,
     SPAN_DB_WRITE_REQUEST,
     SPAN_DB_WRITE_RESERVATION,
+    SPAN_DISPATCH_PERSISTENCE_COMMIT,  # type: ignore[reportUnusedImport]  # noqa: F401
+    SPAN_DISPATCH_PERSISTENCE_TRANSACTION,  # type: ignore[reportUnusedImport]  # noqa: F401
+    SPAN_DISPATCH_PERSISTENCE_WAIT,  # type: ignore[reportUnusedImport]  # noqa: F401
+    SPAN_POST_COMMIT_COMPENSATION,  # type: ignore[reportUnusedImport]  # noqa: F401
+    SPAN_POST_COMMIT_PUBLICATION,  # type: ignore[reportUnusedImport]  # noqa: F401
     SPAN_RESERVATION_ESTIMATE,
     SPAN_ROUTING_PLAN,
     SPAN_ROUTING_TRACE_BUILD,
     SPAN_ROUTING_TRACE_WRITE,
     SPAN_RUNTIME_PUBLICATION,
+    SPAN_SELECTION_CLAIM_HELD,  # type: ignore[reportUnusedImport]  # noqa: F401
+    SPAN_SELECTION_CLAIM_WAIT,  # type: ignore[reportUnusedImport]  # noqa: F401
     SPAN_SELECTION_LOCK_WAIT,
     SPAN_SELECTION_LOCKED,
+    SPAN_SELECTION_REVALIDATION,  # type: ignore[reportUnusedImport]  # noqa: F401
     SPAN_THINKING_CLASSIFICATION,
     DispatchSpanRecorder,
     DispatchSpanTimer,
@@ -568,6 +588,7 @@ class RequestCoordinator:
         stream_diagnostics: StreamDiagnostics | None = None,
         finalization_retry_queue: Any | None = None,  # noqa: ANN401
         routing_trace_guard: Any | None = None,  # noqa: ANN401
+        selection_claim_diagnostics: SelectionClaimDiagnostics | None = None,
     ) -> None:
         self._registry = registry
         self._catalog = catalog
@@ -589,6 +610,12 @@ class RequestCoordinator:
         self._quota_estimator = quota_estimator
         self._classifier = RetryClassifier()
         self._select_lock = asyncio.Lock()
+        self._selection_claim_lock = asyncio.Lock()
+        self._selection_claim_diagnostics = (
+            selection_claim_diagnostics
+            if selection_claim_diagnostics is not None
+            else get_selection_claim_diagnostics()
+        )
         self._account_id_cache: dict[str, int] = {}
         self._max_retry_attempts = max_retry_attempts
         self._quota_exhausted_cooldown_seconds = quota_exhausted_cooldown_seconds
