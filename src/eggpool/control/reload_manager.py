@@ -173,6 +173,15 @@ class ReloadManager:
         self._reload_error_count: int = 0
         #: Test-only hook — see class docstring.
         self.preparation_event: asyncio.Event | None = None
+        #: Test-only seam — when set to an exception instance,
+        #: ``_build_candidate_generation`` raises it at entry.
+        self.TEST_INJECT_BUILD_FAILURE: Exception | None = None
+        #: Test-only seam — when set to an exception instance,
+        #: ``_reconcile_persistence`` raises it at entry.
+        self.TEST_INJECT_RECONCILE_FAILURE: Exception | None = None
+        #: Test-only seam — when set to an exception instance,
+        #: ``_publish_generation`` raises it at entry.
+        self.TEST_INJECT_PUBLISH_FAILURE: Exception | None = None
 
     @property
     def operation_state(self) -> ReloadOperationState | None:
@@ -240,14 +249,14 @@ class ReloadManager:
         restart_required: tuple[Any, ...] = ()
 
         if self._reload_lock.locked():
-            await self._record_event(
+            await self._safe_record_event(
                 "reload_publication_conflict",
                 digest_prefix=digest_prefix,
                 error="A reload transaction is already in progress",
             )
             raise ReloadInProgressError("A reload transaction is already in progress")
 
-        await self._record_event(
+        await self._safe_record_event(
             "reload_requested",
             digest_prefix=digest_prefix,
         )
@@ -276,7 +285,7 @@ class ReloadManager:
                 restart_required = tuple(diff.restart_required)
                 if restart_required:
                     sections = tuple(sorted({c.section for c in restart_required}))
-                    await self._record_event(
+                    await self._safe_record_event(
                         "reload_restart_required_rejected",
                         digest_prefix=digest_prefix,
                         changed_sections=sections,
@@ -423,7 +432,7 @@ class ReloadManager:
                     duration_s=duration,
                 )
                 self._last_reload_completed_at = time.time()
-                await self._record_event(
+                await self._safe_record_event(
                     "reload_activated",
                     generation_id=generation_id,
                     digest_prefix=digest_prefix,
@@ -458,7 +467,7 @@ class ReloadManager:
                     duration_s=duration,
                 )
                 self._last_reload_completed_at = time.time()
-                await self._record_event(
+                await self._safe_record_event(
                     event_type,
                     generation_id=generation_id,
                     digest_prefix=digest_prefix,
@@ -499,7 +508,7 @@ class ReloadManager:
                 event_type = "reload_preparation_failure"
                 if error_stage == ReloadOperationStage.RECONCILIATION:
                     event_type = "reload_reconciliation_failure"
-                await self._record_event(
+                await self._safe_record_event(
                     event_type,
                     generation_id=generation_id,
                     digest_prefix=digest_prefix,
@@ -545,7 +554,12 @@ class ReloadManager:
         error: str | None = None,
     ) -> None:
         """Record an operational event for reload lifecycle tracking."""
-        from eggpool.db.repositories import OperationalEventRepository  # noqa: PLC0415
+        from eggpool.config_reload_policy import (
+            sanitize_text_for_audit,  # noqa: PLC0415
+        )
+        from eggpool.db.repositories import (  # noqa: PLC0415
+            OperationalEventRepository,
+        )
 
         details: dict[str, Any] = {}
         if generation_id is not None:
@@ -555,13 +569,30 @@ class ReloadManager:
         if changed_sections:
             details["changed_sections"] = list(changed_sections)
         if error:
-            details["error"] = error
+            details["error"] = sanitize_text_for_audit(error)
         try:
             repo = OperationalEventRepository(self._process.db)
             await repo.record(event_type, details)
         except Exception:
             logger.debug(
                 "Failed to record operational event %s", event_type, exc_info=True
+            )
+
+    async def _safe_record_event(
+        self,
+        event_type: str,
+        **kwargs: Any,
+    ) -> None:
+        """Record an event, swallowing failures so they never break reload.
+
+        Event-recording failures are logged at DEBUG level and are
+        non-fatal — the reload transaction must proceed regardless.
+        """
+        try:
+            await self._record_event(event_type, **kwargs)
+        except Exception:
+            logger.debug(
+                "Event recording failed for %s (non-fatal)", event_type, exc_info=True
             )
 
     # -- step implementations ----------------------------------------------
@@ -603,6 +634,8 @@ class ReloadManager:
         If ``preparation_event`` is set, awaits it before proceeding so
         tests can deterministically hold this method mid-flight.
         """
+        if self.TEST_INJECT_BUILD_FAILURE is not None:
+            raise self.TEST_INJECT_BUILD_FAILURE
         if self.preparation_event is not None:
             await self.preparation_event.wait()
 
@@ -1060,6 +1093,8 @@ class ReloadManager:
         layer is atomically consistent with the candidate config after
         this returns.
         """
+        if self.TEST_INJECT_RECONCILE_FAILURE is not None:
+            raise self.TEST_INJECT_RECONCILE_FAILURE
         from eggpool.accounts.registry import (  # noqa: PLC0415
             account_config_rows,
         )
@@ -1102,6 +1137,8 @@ class ReloadManager:
         the active slot and begins retirement of the old generation.
         """
         try:
+            if self.TEST_INJECT_PUBLISH_FAILURE is not None:
+                raise self.TEST_INJECT_PUBLISH_FAILURE
             active = self._runtime_manager.active_snapshot()
             await self._runtime_manager.install_candidate(
                 candidate.generation,

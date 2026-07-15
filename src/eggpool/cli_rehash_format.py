@@ -69,15 +69,20 @@ def _redact_message(message: str) -> str:
     - ``api_key: <old> -> <new>``
     - ``api_key: sk-xxx → sk-yyy``
     - Field display strings containing ``<old>`` / ``<new>`` tokens
+    - Raw credential-shaped values (Bearer, sk-, key-, etc.) that may
+      have leaked into an error message — the broader sanitizer lives in
+      :func:`eggpool.config_reload_policy.sanitize_text_for_audit` and
+      runs unconditionally here so CLI output never leaks secrets.
     """
+    from eggpool.config_reload_policy import sanitize_text_for_audit
+
+    sanitized = sanitize_text_for_audit(message) or message
     import re
 
-    lower = message.lower()
+    lower = sanitized.lower()
     if not any(p in lower for p in _SECRET_PATTERNS):
-        return message
-    # Replace ``<old>`` / ``<new>`` tokens
-    redacted = message.replace("<old>", "<redacted>").replace("<new>", "<redacted>")
-    # Collapse the ``->`` / ``→`` arrow pattern into a single redacted block
+        return sanitized
+    redacted = sanitized.replace("<old>", "<redacted>").replace("<new>", "<redacted>")
     redacted = re.sub(
         r"<redacted>\s*(?:->|→)\s*<redacted>",
         "<redacted>",

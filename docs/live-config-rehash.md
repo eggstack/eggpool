@@ -116,6 +116,67 @@ Tests: ``tests/unit/test_runtime_task_inventory.py`` (35 tests),
 ``TestProcessSupervisorRouting`` and
 ``TestProcessSupervisorSurvival``.
 
+### Closure pass D3 — release validation and closure
+
+D3 is a release-hardening milestone with no new LIVE fields.  It
+closes security gaps in operational-event and CLI output redaction,
+adds failure-injection and inventory-audit tests, and establishes
+performance baselines.
+
+**Security hardening** — ``_record_event`` (``src/eggpool/control/reload_manager.py:547``)
+now passes the ``error`` payload through
+``sanitize_text_for_audit()`` (``src/eggpool/config_reload_policy.py:348``)
+before persisting to ``operational_events``.  The helper scrubs
+secret-shaped substrings (``sk-*``, ``Bearer *``, ``key-*``, etc.)
+via a compiled regex.  ``_redact_message``
+(``src/eggpool/cli_rehash_format.py:65``) calls the same helper on
+CLI output so human-readable messages never leak raw credential
+values.  Previously only ``<old>``/``<new>`` placeholder tokens
+were redacted; raw secret-shaped error text passed through.
+
+**Test-only seams** — three instance attributes on
+``ReloadManager`` (``src/eggpool/control/reload_manager.py:178-184``)
+allow tests to inject deterministic failures at the start of a
+named phase:
+
+- ``TEST_INJECT_BUILD_FAILURE`` — raised at the start of
+  ``_build_candidate_generation`` (line 635).
+- ``TEST_INJECT_RECONCILE_FAILURE`` — raised at the start of
+  ``_reconcile_persistence`` (line 1094).
+- ``TEST_INJECT_PUBLISH_FAILURE`` — raised at the start of
+  ``_publish_generation`` (line 1138).
+
+Set the attribute on the ``ReloadManager`` instance before
+triggering a reload; the exception is raised unconditionally at
+the top of the named phase.
+
+**Release-validation tests**:
+
+| File | Count | Scope |
+|------|-------|-------|
+| ``tests/integration/test_rehash_d3_acceptance.py`` | 10 | end-to-end acceptance (invalid TOML, server-side validation, digest mismatch, background convergence, provider removal under active stream, mixed diff rejection, concurrent burst, retirement timeout, lease drain, pending-request leak) |
+| ``tests/unit/test_reload_failure_injection.py`` | 12 | build/reconcile/publish failure injection via the three seams |
+| ``tests/unit/test_reload_security.py`` | 35 | secret redaction in events, CLI output, ``<old>``/``<new>`` tokens, raw credential patterns, ``sanitize_text_for_audit`` edge cases |
+| ``tests/unit/test_reload_inventory_audit.py`` | 5 | exhaustive audit of ``_FIELD_DISPOSITION`` coverage — caught and fixed ``dns_cache.ttl_seconds`` → ``network.dns_cache.positive_ttl_seconds`` and added 14 ``pricing.catalogs.*`` entries |
+| ``tests/integration/test_rehash_d3_soak.py`` | 1 | 25 alternating reloads asserting fresh per-resource identity |
+| ``tests/perf/test_rehash_d3_performance.py`` | 3 | reload latency (p50 ≈ 480 ms, p95 ≈ 750 ms), memory-delta (skipped when ``psutil`` absent), concurrent-traffic p95 < 750 ms |
+| ``tests/integration/test_rehash_d3_operator_workflow.py`` | 6 | operator happy-path, restart-required reject, JSON contract, no-op, dead-server exit 3, concurrent busy |
+
+**Policy inventory audit** — the exhaustive field-by-field audit in
+``tests/unit/test_reload_inventory_audit.py`` discovered two gaps
+closed in D3:
+
+1. ``dns_cache.ttl_seconds`` was missing from the inventory; the
+   actual config path is ``network.dns_cache.positive_ttl_seconds``
+   (plus six sibling fields under ``network.dns_cache``).
+2. ``pricing.catalogs`` was missing 14 sub-path entries
+   (``pricing.catalogs.<provider>.*`` for ``opencode_zen`` and
+   ``openrouter``).  Both are ``RESTART_REQUIRED``.
+
+The ``--json`` contract remains pinned at 9 keys (no new keys added
+in D3); ``tests/unit/test_cli_rehash_format.py`` continues to lock
+the contract.
+
 Fields that stay ``RESTART_REQUIRED``:
 
 - ``[upstream]`` — vestigial; only consulted at runtime-task

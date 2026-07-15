@@ -28,6 +28,7 @@ introduces the swap path.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
@@ -172,6 +173,27 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "limits.weekly_microdollars": ReloadDisposition.RESTART_REQUIRED,
     "limits.monthly_microdollars": ReloadDisposition.RESTART_REQUIRED,
     "pricing.fallback": ReloadDisposition.RESTART_REQUIRED,
+    # ``pricing.catalogs`` is built at startup by the pricing catalog
+    # registry and read once during lifespan construction; the
+    # authoritative external-id source for catalog entries is
+    # constructed in the FastAPI lifespan, not by the candidate manager.
+    # All entries stay RESTART_REQUIRED until a generation-owned pricing
+    # resolver is wired. ``api_key`` is tagged in ``_SECRET_FIELD_NAMES``
+    # so the rendered diff is redacted.
+    "pricing.catalogs.openrouter.enabled": ReloadDisposition.RESTART_REQUIRED,
+    "pricing.catalogs.openrouter.priority": ReloadDisposition.RESTART_REQUIRED,
+    "pricing.catalogs.openrouter.ttl_seconds": ReloadDisposition.RESTART_REQUIRED,
+    "pricing.catalogs.openrouter.max_entries": ReloadDisposition.RESTART_REQUIRED,
+    "pricing.catalogs.openrouter.base_url": ReloadDisposition.RESTART_REQUIRED,
+    "pricing.catalogs.openrouter.api_key": ReloadDisposition.RESTART_REQUIRED,
+    "pricing.catalogs.openrouter.options": ReloadDisposition.RESTART_REQUIRED,
+    "pricing.catalogs.opencode_zen.enabled": ReloadDisposition.RESTART_REQUIRED,
+    "pricing.catalogs.opencode_zen.priority": ReloadDisposition.RESTART_REQUIRED,
+    "pricing.catalogs.opencode_zen.ttl_seconds": ReloadDisposition.RESTART_REQUIRED,
+    "pricing.catalogs.opencode_zen.max_entries": ReloadDisposition.RESTART_REQUIRED,
+    "pricing.catalogs.opencode_zen.base_url": ReloadDisposition.RESTART_REQUIRED,
+    "pricing.catalogs.opencode_zen.api_key": ReloadDisposition.RESTART_REQUIRED,
+    "pricing.catalogs.opencode_zen.options": ReloadDisposition.RESTART_REQUIRED,
     "dashboard.enabled": ReloadDisposition.RESTART_REQUIRED,
     "dashboard.public": ReloadDisposition.RESTART_REQUIRED,
     "dashboard.theme": ReloadDisposition.RESTART_REQUIRED,
@@ -213,8 +235,26 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "backup.startup_delay_s": ReloadDisposition.LIVE,
     "backup.directory": ReloadDisposition.RESTART_REQUIRED,
     "backup.include_env": ReloadDisposition.RESTART_REQUIRED,
+    # ``dns_cache`` lives at ``NetworkConfig.dns_cache`` (consumed at
+    # client-pool build in app._lifespan_runtime and the candidate
+    # builder). The earlier top-level ``dns_cache.*`` entries with a
+    # ``ttl_seconds`` typo were unreachable dead code; the correct paths
+    # below are reached via the AppConfig schema walk and the
+    # ``dns_cache_enabled`` key in the runtime state.
+    "network.dns_cache.enabled": ReloadDisposition.RESTART_REQUIRED,
+    "network.dns_cache.positive_ttl_seconds": ReloadDisposition.RESTART_REQUIRED,
+    "network.dns_cache.max_entries": ReloadDisposition.RESTART_REQUIRED,
+    "network.dns_cache.negative_ttl_seconds": ReloadDisposition.RESTART_REQUIRED,
+    "network.dns_cache.stale_if_error_seconds": ReloadDisposition.RESTART_REQUIRED,
+    "network.dns_cache.prefer_ipv6": ReloadDisposition.RESTART_REQUIRED,
+    "network.dns_cache.lookup_timeout_seconds": ReloadDisposition.RESTART_REQUIRED,
+    # The top-level ``dns_cache`` field on ``AppConfig`` is vestigial —
+    # it shadows the real ``network.dns_cache`` block used by the
+    # candidate builder. All live access goes through ``network.dns_cache``;
+    # these top-level entries exist only to keep the schema walk in
+    # parity with the policy map.
     "dns_cache.enabled": ReloadDisposition.RESTART_REQUIRED,
-    "dns_cache.ttl_seconds": ReloadDisposition.RESTART_REQUIRED,
+    "dns_cache.positive_ttl_seconds": ReloadDisposition.RESTART_REQUIRED,
     "dns_cache.max_entries": ReloadDisposition.RESTART_REQUIRED,
     "dns_cache.negative_ttl_seconds": ReloadDisposition.RESTART_REQUIRED,
     "dns_cache.stale_if_error_seconds": ReloadDisposition.RESTART_REQUIRED,
@@ -280,6 +320,46 @@ _SECRET_FIELD_NAMES: Final = frozenset(
         "api_key_env",
     }
 )
+
+
+_SECRET_TEXT_PATTERNS: Final[tuple[str, ...]] = (
+    r"\bsk-[A-Za-z0-9_\-]{16,}",
+    r"\bsk-or-[A-Za-z0-9_\-]{16,}",
+    r"\bsk-ant-[A-Za-z0-9_\-]{16,}",
+    r"\bsk-proj-[A-Za-z0-9_\-]{16,}",
+    r"\bkey-[A-Za-z0-9_\-]{16,}",
+    r"\bglpat-[A-Za-z0-9_\-]{16,}",
+    r"\bghp_[A-Za-z0-9]{16,}",
+    r"\bxai-[A-Za-z0-9_\-]{16,}",
+    r"\bBearer\s+[A-Za-z0-9_\-\.]{16,}",
+    r"\bBasic\s+[A-Za-z0-9+/=]{16,}",
+    r"\bsecret\s*[:=]\s*['\"]?[A-Za-z0-9_\-\.]{8,}",
+    r"\btoken\s*[:=]\s*['\"]?[A-Za-z0-9_\-\.]{8,}",
+    r"\bpassword\s*[:=]\s*['\"]?[A-Za-z0-9_\-\.]{8,}",
+    r"\bapi[_-]?key\s*[:=]\s*['\"]?[A-Za-z0-9_\-\.]{8,}",
+)
+
+_SECRET_TEXT_REGEX: Final[re.Pattern[str]] = re.compile(
+    "|".join(_SECRET_TEXT_PATTERNS),
+    flags=re.IGNORECASE,
+)
+
+
+def sanitize_text_for_audit(text: str | None) -> str | None:
+    """Return ``text`` with secret-shaped substrings replaced by ``<redacted>``.
+
+    Used by the reload manager and CLI to scrub free-form text — error
+    reprs, exception messages, and human-readable output — before it is
+    persisted to operational events or rendered to the CLI.  The
+    surrounding context (field name, exception type) is preserved for
+    debugging; only the credential value is replaced.
+
+    Returns ``None`` for ``None`` input so callers can pass through
+    optional fields without a None-check.
+    """
+    if text is None:
+        return None
+    return _SECRET_TEXT_REGEX.sub("<redacted>", text)
 
 
 def _is_secret_field(path: str) -> bool:

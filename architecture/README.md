@@ -3125,6 +3125,24 @@ extended with `TestProcessSupervisorRouting` and
 `plans/2026-07-14-live-config-rehash-final-milestone-d2-background-observability-expansion.md`
 for the rollout plan.
 
+#### Closure pass D3 — release validation and security
+
+D3 is a release-hardening milestone with no new LIVE fields.  It
+closes secret-redaction gaps: `_record_event`
+(`src/eggpool/control/reload_manager.py:547`) passes error text
+through `sanitize_text_for_audit()` (`src/eggpool/config_reload_policy.py:348`)
+before persisting to operational events, and `_redact_message`
+(`src/eggpool/cli_rehash_format.py:65`) applies the same helper
+to CLI output.  Three test-only seams (`TEST_INJECT_BUILD_FAILURE`,
+`TEST_INJECT_RECONCILE_FAILURE`, `TEST_INJECT_PUBLISH_FAILURE` on
+`ReloadManager`) enable deterministic failure injection.  The
+exhaustive inventory audit (`tests/unit/test_reload_inventory_audit.py`)
+caught two gaps: `dns_cache.ttl_seconds` (actual path is
+`network.dns_cache.positive_ttl_seconds`) and 14 missing
+`pricing.catalogs.*` entries.  Performance baseline: reload p50
+≈ 480 ms, p95 ≈ 750 ms; concurrent-traffic p95 < 750 ms.
+See `plans/2026-07-14-live-config-rehash-final-milestone-d3-release-validation-and-security.md`.
+
 ### Validation contract
 
 `src/eggpool/config_validation.py` owns the reusable, Click-free
