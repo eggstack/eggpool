@@ -150,3 +150,10 @@ loads are expected.
 | Slow perf | CPU temp, use Ethernet, increase `busy_timeout_ms` |
 | DB locked | `pgrep -f eggpool` — ensure only one instance |
 | SD full | `df -h /var/lib/eggpool`, check retention config |
+
+The startup log includes a structured operational profile line (Milestone
+A6) with effective config: workers, threads, database connections, WAL
+mode, routing trace settings, and background task counts. Use it to
+confirm the recommended profile is active. Background task cadence
+diagnostics (`last_tick_drift_s`, `configured_interval_s`) are visible
+via `eggpool runtime-status --json` under each task's snapshot fields.

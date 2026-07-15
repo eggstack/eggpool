@@ -55,6 +55,9 @@ uv run pytest \
     tests/unit/test_runtime_tasks.py \
     tests/unit/test_background.py \
     -v
+
+# Dispatch-stability baseline (Milestone A5)
+uv run pytest tests/perf/test_dispatch_baseline.py -m performance -v
 ```
 
 ## Linting

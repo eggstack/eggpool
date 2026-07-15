@@ -279,6 +279,17 @@ async def handle_proxy_request(
     endpoint: ProxyEndpointConfig,
 ) -> Response:
     """Validate and dispatch one OpenAI- or Anthropic-compatible request."""
+    # Milestone A4 timing boundary: capture the earliest ASGI handler
+    # entry after auth / body-limit middleware.  Stored on the request
+    # state so ``_handle_proxy_request_inner`` can propagate it onto
+    # the ``ProxyRequestContext`` and ``_send_upstream_request`` can
+    # compute ``local_pre_upstream_ms`` from this anchor.
+    request_received_monotonic_ns = time.perf_counter_ns()
+    request_state = getattr(request, "state", None)
+    if request_state is not None:
+        with contextlib.suppress(AttributeError):
+            # Some test doubles disallow attribute assignment; ignore.
+            request_state.request_received_monotonic_ns = request_received_monotonic_ns
     # Acquire a generation lease so the active generation cannot be
     # retired while this request is in flight.  For streaming responses
     # the lease is transferred to ``wrap_stream_with_lease`` which
@@ -303,7 +314,19 @@ async def handle_proxy_request(
 
     try:
         return await _handle_proxy_request_inner(
-            request, endpoint, coordinator, span_recorder, lease
+            request,
+            endpoint,
+            coordinator,
+            span_recorder,
+            lease,
+            request_received_monotonic_ns=(
+                getattr(
+                    getattr(request, "state", None),
+                    "request_received_monotonic_ns",
+                    None,
+                )
+                or request_received_monotonic_ns
+            ),
         )
     finally:
         # For non-streaming error paths the lease is still held here.
@@ -318,6 +341,8 @@ async def _handle_proxy_request_inner(
     coordinator: RequestCoordinator,
     span_recorder: DispatchSpanRecorder | None,
     lease: GenerationLease | None,
+    *,
+    request_received_monotonic_ns: int | None = None,
 ) -> Response:
     """Inner handler body; called within the lease's try/finally."""
     with _span(span_recorder, SPAN_AUTH):
@@ -709,6 +734,9 @@ async def _handle_proxy_request_inner(
             original_body=body,
             incoming_headers=dict(request.headers),
             started_at=time.time(),
+            # Milestone A4: propagate the ASGI handler-entry anchor so
+            # ``_send_upstream_request`` can compute ``local_pre_upstream_ms``.
+            request_received_monotonic_ns=request_received_monotonic_ns,
             provider_id=provider_id,
             client_ip=get_client_ip(request),
             upstream_body=_rewrite_upstream_model(payload_for_rewrite, model_id),

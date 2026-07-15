@@ -83,9 +83,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   repeated-reload soak test (`TestMilestoneD1RepeatedReloadSoak`)
   exercises 25 alternating loss-policy reloads and asserts no
   retiring-slot leaks and per-generation identity separation.
-  Documentation in `architecture/README.md`, `docs/live-config-rehash.md`,
-  and `AGENTS.md` updated. See
-  `plans/2026-07-14-live-config-rehash-final-milestone-d1-request-policy-expansion.md`.
+Documentation in `architecture/README.md`, `docs/live-config-rehash.md`,
+   and `AGENTS.md` updated. See
+   `plans/2026-07-14-live-config-rehash-final-milestone-d1-request-policy-expansion.md`.
+- **Dispatch stability milestone A** (`plans/2026-07-15-dispatch-stability-milestone-a-scheduler-and-baseline.md`).
+  Four coordinated fixes: (A1) `SupervisedTask._run_periodic_loop()` now
+  resolves the initial delay ONCE before the loop and switches to
+  `interval_s` after the first tick — previously `initial_delay_s` was
+  re-applied on every iteration, so tasks with a short `initial_delay_s`
+  and longer `interval_s` ticked at the initial-delay cadence forever.
+  (A3) `SupervisedTask.snapshot()` exposes new cadence diagnostics —
+  `configured_interval_s`, `configured_initial_delay_s`,
+  `initial_delay_consumed` (true after the one-time initial delay is
+  waited out), `previous_tick_started_at`, `observed_last_interval_s`
+  (time between the last two tick starts), `last_tick_drift_s` (actual
+  tick start minus scheduled tick start), and `tick_in_progress` —
+  surfaced under `/api/stats/runtime`. (A4) New `LocalPreUpstreamRecorder`
+  in `src/eggpool/runtime_dispatch.py` measures the full EggPool-side
+  window from ASGI handler entry (`request_received_monotonic_ns`,
+  captured at the top of `handle_proxy_request`) to just before
+  `httpx.AsyncClient.send()`; distinct from the existing
+  `DispatchOverheadRecorder`, which covers only the coordinator-internal
+  slice from `ProxyRequestContext.started_monotonic_ns`. Exposed via
+  `runtime_metrics.local_pre_upstream`. (A5) New deterministic baseline
+  harness `tests/perf/test_dispatch_baseline.py` exercises serial and
+  concurrent native dispatches, cancellation under load, database
+  contention snapshot shape, background-task cadence drift, and runtime
+  metrics surface — pinned under the `performance` marker so the harness
+  can be re-run from CI without slowing the unit suite. (A6) New
+  `_log_operational_profile()` in `src/eggpool/app.py` emits a single
+  structured startup log (`Operational profile: ...`) with workers,
+  runtime_threads, database_worker_threads, stats_db_separate,
+  WAL/synchronous/busy_timeout, routing_trace_mode/sample_rate,
+  metrics_write_mode/flush_interval_s, transcoder/compression/cache
+  enabled flags, and background task counts split by ownership
+  (`task_total`, `task_process_owned`, `task_generation_leased`). The
+  scheduler is fixed-delay: the next interval begins after the previous
+  tick completes, preventing overlapping ticks. A failing first tick
+  does not reset the initial-delay state; only `stop()`/`start()`
+  reapplies it. Cadence semantics and inventory are pinned by
+  `tests/unit/test_periodic_cadence.py` (13 tests),
+  `tests/unit/test_dispatch_timing_boundaries.py` (6 tests),
+  `tests/unit/test_operational_profile.py` (3 tests), and the existing
+  `tests/unit/test_runtime_task_inventory.py` (35 tests). Documentation
+  in `architecture/README.md`, `AGENTS.md`, `.opencode/skills/architecture/SKILL.md`,
+  `.opencode/skills/development/SKILL.md`, `docs/deployment.md`,
+  `docs/raspberry-pi.md`, and `README.md` updated.
 
 ## [0.6.0] - 2026-07-09
 

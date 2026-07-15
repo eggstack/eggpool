@@ -665,6 +665,10 @@ The output covers:
 - **Memory** — RSS, VMS, open FD count, thread count.
 - **Background tasks** — per-task running/done/cancelled state,
   iteration count, restart count, last error class and timestamp.
+  Cadence diagnostics include `configured_interval_s`,
+  `observed_last_interval_s`, `last_tick_drift_s`, and
+  `initial_delay_consumed` so operators can spot scheduler drift or
+  stuck tasks directly from the snapshot.
 - **Database** — path, WAL mode, file/WAL/SHM sizes, contention
   counters (cumulative lock wait, max lock wait, write/read ops).
 - **Routing** — active requests, pending count, active reservations,
@@ -683,6 +687,15 @@ causing the command to fail. Probe diagnostics are exposed in the JSON
 payload as `probe_errors`, capped at 16 entries with each message
 truncated, so repeated host or permissions failures cannot produce an
 unbounded response.
+
+At startup, `_log_operational_profile()` emits a single structured log
+line (INFO level) containing workers, runtime_threads,
+database_worker_threads, stats_db_separate, WAL/synchronous/busy_timeout,
+routing_trace_mode/sample_rate, metrics_write_mode/flush_interval_s,
+transcoder/compression/cache enabled flags, and background task counts
+split by process ownership vs generation-leased. This line appears in
+`~/.local/state/eggpool/eggpool.log` (or `journalctl -u eggpool`) and
+is useful for confirming the effective configuration at a glance.
 
 ### Checking from cron
 

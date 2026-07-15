@@ -77,6 +77,7 @@ from eggpool.routing.router import Router
 from eggpool.runtime_dispatch import (
     DispatchOverheadRecorder,
     DispatchSpanRecorder,
+    LocalPreUpstreamRecorder,
 )
 from eggpool.runtime_manager import (
     ProcessRuntime,
@@ -683,6 +684,101 @@ async def cleanup_partial_generation(process: ProcessRuntime) -> None:
     return None
 
 
+def _log_operational_profile(
+    *,
+    config: AppConfig,
+    db: Database,
+    stats_db: Database | None,
+    process: ProcessRuntime,
+    supervisor: TaskSupervisor,
+    process_supervisor: TaskSupervisor | None,
+    model_info_enabled: bool,
+) -> None:
+    """Emit a single structured startup profile log (Milestone A6).
+
+    Captures the runtime knobs that influence timing / database /
+    observability measurements so the operator can interpret any
+    baseline run captured from this process.  The log deliberately
+    excludes secrets, request content, and provider keys.
+
+    Fields:
+
+    - ``workers`` / ``runtime_threads``: Granian process model.
+    - ``database_worker_threads``: stats-connection isolation knob.
+    - ``stats_db_separate``: ``True`` when stats_db is a separate
+      read-only connection.
+    - ``wal`` / ``wal_mode`` / ``synchronous``: SQLite durability knobs.
+    - ``busy_timeout_ms``: contention timeout.
+    - ``routing_trace_mode`` / ``routing_trace_sample_rate``: trace
+      write-pressure controls.
+    - ``metrics_write_mode`` / ``metrics_flush_interval_s``: metrics
+      coalescer knobs.
+    - ``transcoder_enabled`` / ``compression_enabled`` /
+      ``compression_mode`` / ``cache_enabled``: pre-upstream
+      observability / transformation modes.
+    - ``task_total`` / ``task_process_owned`` /
+      ``task_generation_leased``: background-task ownership counts.
+    - ``model_info_enabled``: whether the model-info service is
+      active.
+    """
+    stats_db_separate = stats_db is not None and stats_db is not db
+    gen_tasks = list(supervisor._tasks.keys())  # pyright: ignore[reportPrivateUsage]
+    proc_tasks: list[str] = []
+    if process_supervisor is not None:
+        proc_tasks = list(
+            process_supervisor._tasks.keys()  # pyright: ignore[reportPrivateUsage]
+        )
+    process_owned = {
+        "checkpoint",
+        "metrics_flush",
+        "update_checker",
+        "automatic_backup",
+    }
+    proc_owned_count = sum(1 for n in proc_tasks if n in process_owned)
+    gen_leased_count = sum(1 for n in gen_tasks if n not in process_owned)
+
+    trace_mode = getattr(getattr(config.routing, "trace", None), "mode", "sampled")
+    trace_sample_rate = getattr(
+        getattr(config.routing, "trace", None), "sample_rate", 0.05
+    )
+    transcoder_enabled = bool(getattr(config.transcoder, "enabled", True))
+    compression_enabled = bool(getattr(config.compression, "enabled", False))
+    compression_mode = str(getattr(config.compression, "mode", "off"))
+    cache_enabled = bool(getattr(config.cache, "enabled", False))
+
+    profile = {
+        "workers": 1,
+        "runtime_threads": config.server.threads,
+        "database_worker_threads": config.database.worker_threads,
+        "stats_db_separate": stats_db_separate,
+        "wal": config.database.wal,
+        "synchronous": config.database.synchronous,
+        "busy_timeout_ms": config.database.busy_timeout_ms,
+        "routing_trace_mode": trace_mode,
+        "routing_trace_sample_rate": trace_sample_rate,
+        "metrics_write_mode": config.metrics.write_mode,
+        "metrics_flush_interval_s": config.metrics.flush_interval_s,
+        "transcoder_enabled": transcoder_enabled,
+        "compression_enabled": compression_enabled,
+        "compression_mode": compression_mode,
+        "cache_enabled": cache_enabled,
+        "model_info_enabled": model_info_enabled,
+        "task_total": len(gen_tasks) + len(proc_tasks),
+        "task_process_owned": proc_owned_count,
+        "task_generation_leased": gen_leased_count,
+        "process_task_spec_version": getattr(process, "task_spec_version", 0),
+    }
+    # ``extra={"profile": ...}`` lets structured-log consumers parse
+    # the dict directly without scraping the rendered message.  The
+    # human-readable summary is still rendered into ``msg`` for the
+    # plain-text log path.
+    logger.info(
+        "Operational profile: %s",
+        profile,
+        extra={"profile": profile},
+    )
+
+
 def register_candidate_tasks(
     supervisor: TaskSupervisor,
     config: AppConfig,
@@ -1166,6 +1262,13 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     dispatch_overhead_recorder = DispatchOverheadRecorder(window_size=100)
     app.state.dispatch_overhead_recorder = dispatch_overhead_recorder
 
+    # 18c.1. Local pre-upstream recorder (Milestone A4): total
+    # EggPool-side latency from ASGI handler entry to dispatch.  Distinct
+    # from the coarse ``dispatch_overhead`` above which only covers the
+    # coordinator-internal slice.
+    local_pre_upstream_recorder = LocalPreUpstreamRecorder(window_size=100)
+    app.state.local_pre_upstream_recorder = local_pre_upstream_recorder
+
     # 18c.1. Dispatch-span recorder for fine-grained per-region latency
     # (Phase 1 hot-path dispatch optimization).  Tracks named spans
     # such as ``body_read``, ``json_parse``, ``routing_plan``,
@@ -1195,6 +1298,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         account_backoff_repo=account_backoff_repo,
         metrics_coalescer=metrics_coalescer,
         dispatch_overhead_recorder=dispatch_overhead_recorder,
+        local_pre_upstream_recorder=local_pre_upstream_recorder,
         dispatch_span_recorder=dispatch_span_recorder,
         transcoder_policy=config.transcoder,
         cache_config=config.cache,
@@ -1340,6 +1444,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         dns_backend=dns_backend,
         provider_client_pool=client_pool,
         dispatch_overhead_recorder=dispatch_overhead_recorder,
+        local_pre_upstream_recorder=local_pre_upstream_recorder,
         dispatch_span_recorder=dispatch_span_recorder,
         model_info=model_info,
         dashboard_telemetry=app.state.dashboard_telemetry,
@@ -1400,6 +1505,23 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         "Restart the process to apply configuration changes.",
         len(config.all_accounts()),
         catalog.cache.model_count,
+    )
+
+    # 23a. Operational profile (Milestone A6).  Single structured log
+    # line summarizing the runtime knobs that influence timing /
+    # database / observability measurements so operators can interpret
+    # any captured baseline (see tests/perf/test_dispatch_baseline.py).
+    # The log is intentionally free of secrets, request content, and
+    # provider keys.  Counts come from the live registries so the
+    # numbers always reflect the post-startup state.
+    _log_operational_profile(
+        config=config,
+        db=db,
+        stats_db=stats_db,
+        process=process,
+        supervisor=supervisor,
+        process_supervisor=process_supervisor,
+        model_info_enabled=model_info is not None,
     )
 
     # 23b. Wire the runtime metrics service so its snapshot includes

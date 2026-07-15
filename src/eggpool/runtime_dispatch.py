@@ -94,6 +94,105 @@ class DispatchOverheadRecorder:
 
 
 @dataclass(frozen=True, slots=True)
+class LocalPreUpstreamSnapshot:
+    """Frozen summary of the local-pre-upstream recorder state.
+
+    Distinct from :class:`DispatchOverheadSnapshot`:
+    - ``local_pre_upstream_ms`` covers the entire EggPool-side window
+      from the earliest ASGI handler entry (after auth / body-limit
+      middleware) to the dispatch boundary just before ``client.send``.
+    - ``dispatch_overhead`` (coarse recorder) covers only the slice
+      from :class:`ProxyRequestContext` construction to dispatch.
+    """
+
+    window_size: int
+    sample_count: int
+    avg_ms: float | None
+    min_ms: float | None
+    max_ms: float | None
+    p50_ms: float | None
+    p95_ms: float | None
+    p99_ms: float | None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "window_size": self.window_size,
+            "sample_count": self.sample_count,
+            "avg_ms": self.avg_ms,
+            "min_ms": self.min_ms,
+            "max_ms": self.max_ms,
+            "p50_ms": self.p50_ms,
+            "p95_ms": self.p95_ms,
+            "p99_ms": self.p99_ms,
+        }
+
+
+class LocalPreUpstreamRecorder:
+    """Bounded rolling-window recorder for total local pre-upstream latency.
+
+    Records the full EggPool-side window from ASGI handler entry (after
+    auth / body-limit middleware) to the dispatch boundary
+    (``_send_upstream_request`` immediately before ``client.send``).
+    Sample units are milliseconds; the recorder is process-local and
+    thread-safe.  Negative values are ignored so callers can pass
+    through uninitialised timers without scrubbing.
+
+    Distinct from :class:`DispatchOverheadRecorder` which covers only
+    the coordinator-internal slice (context build -> dispatch).
+    """
+
+    def __init__(self, window_size: int = 100) -> None:
+        if window_size < 1:
+            raise ValueError("window_size must be at least 1")
+        self._samples_ms: deque[float] = deque(maxlen=window_size)
+        self._lock = threading.Lock()
+        self._window_size = window_size
+
+    @property
+    def window_size(self) -> int:
+        return self._window_size
+
+    def record_ms(self, elapsed_ms: int | float) -> None:
+        if elapsed_ms < 0:
+            return
+        with self._lock:
+            self._samples_ms.append(float(elapsed_ms))
+
+    def snapshot(self) -> LocalPreUpstreamSnapshot:
+        with self._lock:
+            samples = list(self._samples_ms)
+        if not samples:
+            return LocalPreUpstreamSnapshot(
+                window_size=self._window_size,
+                sample_count=0,
+                avg_ms=None,
+                min_ms=None,
+                max_ms=None,
+                p50_ms=None,
+                p95_ms=None,
+                p99_ms=None,
+            )
+        samples.sort()
+        count = len(samples)
+        avg_ms = sum(samples) / count
+
+        def percentile(p: float) -> float:
+            index = min(count - 1, max(0, int(round((count - 1) * p))))
+            return float(samples[index])
+
+        return LocalPreUpstreamSnapshot(
+            window_size=self._window_size,
+            sample_count=count,
+            avg_ms=float(avg_ms),
+            min_ms=float(samples[0]),
+            max_ms=float(samples[-1]),
+            p50_ms=percentile(0.50),
+            p95_ms=percentile(0.95),
+            p99_ms=percentile(0.99),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class _DispatchSpanStats:
     """Bounded rolling-window stats for a single named dispatch span."""
 
@@ -356,6 +455,8 @@ __all__ = [
     "DispatchOverheadSnapshot",
     "DispatchSpanRecorder",
     "DispatchSpanTimer",
+    "LocalPreUpstreamRecorder",
+    "LocalPreUpstreamSnapshot",
     "SPAN_ACCOUNT_LOOKUP",
     "SPAN_AUTH",
     "SPAN_BODY_READ",

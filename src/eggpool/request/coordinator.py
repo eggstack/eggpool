@@ -436,6 +436,19 @@ class ProxyRequestContext:
     started_at: float = field(default_factory=time.time)
     started_monotonic: float = field(default_factory=time.monotonic)
     started_monotonic_ns: int = field(default_factory=time.perf_counter_ns)
+    # Milestone A4: earliest ASGI handler entry after auth / body-limit
+    # middleware.  Set by ``handle_proxy_request`` to a monotonic ns
+    # timestamp so the total local pre-upstream latency (this field to
+    # ``_send_upstream_request``) can be computed.  ``started_monotonic_ns``
+    # is set later during context build (after auth, body_read, json_parse,
+    # model_parse, context_limit, transcode_preflight, compression policy,
+    # segmentation, compression apply, context_build), so the two
+    # timestamps together bound all dispatch-prep work.
+    request_received_monotonic_ns: int | None = None
+    # Total local pre-upstream latency in milliseconds, set just
+    # before ``client.send`` in ``_send_upstream_request``.  Distinct
+    # from ``dispatch_overhead`` (the coordinator-internal slice).
+    local_pre_upstream_ms: int | None = None
     client_metadata: dict[str, Any] = field(default_factory=dict[str, Any])
     attempted_accounts: set[str] = field(default_factory=set[str])
     provider_id: str | None = None
@@ -546,6 +559,7 @@ class RequestCoordinator:
         routing_decision_repo: RoutingDecisionRepository | None = None,
         metrics_coalescer: Any | None = None,  # noqa: ANN401
         dispatch_overhead_recorder: Any | None = None,  # noqa: ANN401
+        local_pre_upstream_recorder: Any | None = None,  # noqa: ANN401
         dispatch_span_recorder: Any | None = None,  # noqa: ANN401
         transcoder_policy: TranscoderPolicy | None = None,
         cache_config: Any | None = None,  # noqa: ANN401
@@ -587,6 +601,7 @@ class RequestCoordinator:
         )
         self._metrics_coalescer = metrics_coalescer
         self._dispatch_overhead_recorder = dispatch_overhead_recorder
+        self._local_pre_upstream_recorder = local_pre_upstream_recorder
         self._dispatch_span_recorder = dispatch_span_recorder
         self._transcoder_policy = transcoder_policy
         self._cache_config = cache_config
@@ -2894,7 +2909,44 @@ class RequestCoordinator:
         request: httpx.Request,
         context: ProxyRequestContext,
     ) -> httpx.Response:
-        """Send an upstream request and capture shared dispatch timing."""
+        """Send an upstream request and capture shared dispatch timing.
+
+        Timing boundaries (Milestone A4):
+
+        - ``context.request_received_monotonic_ns``: earliest ASGI
+          handler entry after auth / body-limit middleware.  Set by
+          ``handle_proxy_request``.
+        - ``context.started_monotonic_ns``: captured when the
+          ``ProxyRequestContext`` is built (after auth, body_read,
+          json_parse, model_parse, context_limit, transcode_preflight,
+          compression policy, segmentation, compression apply,
+          context_build).  ``context.local_pre_upstream_ms`` and the
+          coordinator ``DispatchOverheadRecorder`` use this as their
+          origin.
+        - this function: the dispatch boundary.  ``local_pre_upstream_ms``
+          is computed from ``request_received_monotonic_ns`` so the
+          operator can see the full EggPool-side window; the existing
+          coarse ``dispatch_overhead`` recorder still reflects only the
+          coordinator-internal slice (preserved for backward compatibility).
+
+        ``DispatchOverheadRecorder`` is recorded immediately before
+        ``client.send`` so the rolling-window distribution reflects
+        coordinator-side latency only.  Operators who need a total
+        local pre-upstream metric should read ``context.local_pre_upstream_ms``
+        instead.
+        """
+        if context.request_received_monotonic_ns is not None:
+            context.local_pre_upstream_ms = max(
+                0,
+                int(
+                    (time.perf_counter_ns() - context.request_received_monotonic_ns)
+                    // 1_000_000
+                ),
+            )
+            if self._local_pre_upstream_recorder is not None:
+                self._local_pre_upstream_recorder.record_ms(
+                    context.local_pre_upstream_ms
+                )
         if self._dispatch_overhead_recorder is not None:
             self._dispatch_overhead_recorder.record_ns(
                 time.perf_counter_ns() - context.started_monotonic_ns

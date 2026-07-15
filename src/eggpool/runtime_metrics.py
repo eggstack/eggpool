@@ -117,6 +117,7 @@ class RuntimeMetricsService:
         dns_backend: Any | None = None,  # noqa: ANN401
         provider_client_pool: Any | None = None,  # noqa: ANN401
         dispatch_overhead_recorder: Any | None = None,  # noqa: ANN401
+        local_pre_upstream_recorder: Any | None = None,  # noqa: ANN401
         dispatch_span_recorder: Any | None = None,  # noqa: ANN401
         model_info: Any | None = None,  # noqa: ANN401
         dashboard_telemetry: Any | None = None,  # noqa: ANN401
@@ -141,6 +142,7 @@ class RuntimeMetricsService:
         self._dns_backend = dns_backend
         self._provider_client_pool = provider_client_pool
         self._dispatch_overhead_recorder = dispatch_overhead_recorder
+        self._local_pre_upstream_recorder = local_pre_upstream_recorder
         self._dispatch_span_recorder = dispatch_span_recorder
         self._model_info = model_info
         self._dashboard_telemetry = dashboard_telemetry
@@ -178,6 +180,12 @@ class RuntimeMetricsService:
 
         # Dispatch-overhead recorder (in-memory rolling window)
         result["dispatch_overhead"] = self._snapshot_dispatch_overhead(probe_errors)
+
+        # Milestone A4: total local pre-upstream latency (handler entry
+        # -> dispatch) per-span summary.  Distinct from the
+        # ``dispatch_overhead`` recorder above, which only covers the
+        # coordinator-internal slice (context build -> dispatch).
+        result["local_pre_upstream"] = self._snapshot_local_pre_upstream(probe_errors)
 
         # Runtime manager snapshot (milestone B): active and retiring
         # generation counts, digests, lease counts, and shutdown state
@@ -770,6 +778,35 @@ class RuntimeMetricsService:
         except Exception as exc:
             _append_probe_error(
                 probe_errors, f"Dispatch overhead snapshot failed: {exc}"
+            )
+            return {"error": str(exc)}
+
+    def _snapshot_local_pre_upstream(self, probe_errors: list[str]) -> dict[str, Any]:
+        """Best-effort snapshot of the local pre-upstream latency recorder.
+
+        Distinct from :meth:`_snapshot_dispatch_overhead`: this
+        recorder measures the full EggPool-side window from ASGI
+        handler entry to the dispatch boundary.  See Milestone A4
+        timing-boundary clarification for the exact origin and end
+        timestamps.
+        """
+        if self._local_pre_upstream_recorder is None:
+            return {
+                "window_size": 100,
+                "sample_count": 0,
+                "avg_ms": None,
+                "min_ms": None,
+                "max_ms": None,
+                "p50_ms": None,
+                "p95_ms": None,
+                "p99_ms": None,
+            }
+        try:
+            return self._local_pre_upstream_recorder.snapshot().as_dict()
+        except Exception as exc:
+            _append_probe_error(
+                probe_errors,
+                f"Local pre-upstream snapshot failed: {exc}",
             )
             return {"error": str(exc)}
 

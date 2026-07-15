@@ -132,6 +132,20 @@ class SupervisedTask:
       and delegates the per-tick work to ``tick_factory``.  The task
       records explicit per-tick heartbeat fields so the dashboard can
       distinguish running ticks from a healthy sleeping schedule.
+
+    Cadence diagnostics (Milestone A3):
+    - ``_configured_interval_s`` / ``_configured_initial_delay_s``:
+      mirrors of the schedule values as last applied; useful for
+      comparing the live ``_interval_s`` to the original configuration.
+    - ``_initial_delay_consumed``: ``True`` once the one-time initial
+      delay (if any) has been waited out before the first tick.
+    - ``_previous_tick_started_at`` / ``_last_tick_started_at``: two
+      consecutive tick-start timestamps so callers can compute the
+      observed interval between ticks.
+    - ``_last_tick_drift_s``: ``actual_tick_start - scheduled_tick_start``
+      for the most recent tick; positive drift means the scheduler
+      began late (event-loop starvation), negative drift means it
+      began early.  Drift does NOT conflate tick duration.
     """
 
     name: str
@@ -165,6 +179,12 @@ class SupervisedTask:
     _initial_delay_s: float | None = None
     _last_tick_duration_ms: float | None = None
     _timeout_s: float | None = None
+    # Milestone A3 cadence diagnostics
+    _configured_interval_s: float | None = None
+    _configured_initial_delay_s: float | None = None
+    _initial_delay_consumed: bool = False
+    _previous_tick_started_at: float = 0.0
+    _last_tick_drift_s: float | None = None
 
     async def start(self) -> None:
         """Start the supervised task."""
@@ -258,32 +278,95 @@ class SupervisedTask:
         so dashboards stop confusing outer-coroutine startup time
         with tick completion time.
 
-        When ``_initial_delay_s`` is set, the first sleep uses that
-        value instead of ``_interval_s`` so that startup-delayed
-        periodic tasks (e.g. automatic backups) honour their
-        configured delay before the first tick fires.
+        Initial-delay semantics (Milestone A1): the initial sleep
+        before the very first tick is resolved ONCE before the loop
+        and is consumed exactly once.  After the first tick completes
+        (success or failure) the loop switches to ``_interval_s`` for
+        every subsequent sleep, regardless of how many times the
+        per-tick body fails.  The state machine is::
+
+            registered
+              -> optional one-time initial delay
+              -> tick 1
+              -> interval delay
+              -> tick 2
+              -> interval delay
+              -> ...
+
+        The interval is re-read each iteration from
+        ``self._interval_s`` so live reloads via ``update_task_spec``
+        or ``apply_spec_diff`` take effect at the next tick boundary
+        without a task restart.  Mutating ``self._initial_delay_s``
+        after the first tick has fired has no effect (the initial
+        delay is already consumed); ``stop()`` followed by ``start()``
+        re-applies the initial delay because that is a new supervisor
+        lifecycle.
+
+        The scheduler is fixed-delay: the next interval begins after
+        the previous tick completes.  This prevents overlapping ticks
+        on database maintenance tasks and is the documented policy.
         """
         assert self._tick_factory is not None
         self._last_started_at = time.time()
+        # Resolve the one-time initial delay BEFORE the loop.  Re-reading
+        # ``self._initial_delay_s`` on every iteration was the original
+        # defect: tasks with a short initial delay kept running at that
+        # delay forever instead of their configured interval.  The
+        # effective first sleep is resolved once:
+        #   * ``run_immediately=True`` or ``initial_delay_s == 0`` -> 0
+        #     (the loop yields once via ``asyncio.sleep(0)`` so the
+        #     event loop can service other tasks before the first tick)
+        #   * ``initial_delay_s > 0`` -> the configured delay
+        #   * ``initial_delay_s is None`` -> ``interval_s`` (legacy
+        #     sleep-first semantics; the first tick fires one interval
+        #     after start)
+        # After this single sleep the loop always uses ``interval_s``.
+        initial_delay_explicit = (
+            float(self._initial_delay_s) if self._initial_delay_s is not None else None
+        )
+        first_sleep_consumed = False
         try:
             while self._running:
-                # Re-read schedule attributes each iteration so live
-                # reloads via ``update_task_spec`` and ``apply_spec_diff``
-                # take effect at the next tick boundary without a task
-                # restart.
+                # Re-read the interval each iteration so live reloads
+                # take effect at the next tick boundary.  The initial
+                # delay is intentionally NOT re-read here.
                 interval_s = float(self._interval_s) if self._interval_s else 0.0
-                first_sleep = (
-                    float(self._initial_delay_s)
-                    if self._initial_delay_s is not None
-                    else interval_s
-                )
+                if not first_sleep_consumed:
+                    if initial_delay_explicit is None:
+                        first_sleep_s = interval_s
+                    elif initial_delay_explicit <= 0.0:
+                        first_sleep_s = 0.0
+                    else:
+                        first_sleep_s = initial_delay_explicit
+                    first_sleep_consumed = True
+                    sleep_s = first_sleep_s
+                else:
+                    sleep_s = interval_s
+                # Project the scheduled tick start time so we can
+                # compute drift on resume.  Drift is defined as
+                # ``actual_tick_start - scheduled_tick_start``; it
+                # measures event-loop latency / scheduler delay, not
+                # tick duration.
+                scheduled_tick_start = time.time() + sleep_s
                 try:
-                    await asyncio.sleep(first_sleep)
+                    await asyncio.sleep(sleep_s)
                 except asyncio.CancelledError:
                     break
-                first_sleep = interval_s  # subsequent sleeps use the regular interval
+                # The one-time initial delay is now behind us.  Mark
+                # it consumed so the dashboard can distinguish
+                # healthy startup-deferred tasks from never-run tasks.
+                self._initial_delay_consumed = True
                 self._tick_in_progress = True
                 tick_started = time.time()
+                # Drift = actual start - scheduled start.  Sleep may
+                # return slightly early or late depending on event
+                # loop scheduling; both are surfaced for the operator.
+                self._last_tick_drift_s = tick_started - scheduled_tick_start
+                # Preserve the previous tick-start timestamp so the
+                # snapshot can compute the observed interval between
+                # ticks (configured_interval_s vs observed interval).
+                if self._last_tick_started_at > 0:
+                    self._previous_tick_started_at = self._last_tick_started_at
                 self._last_tick_started_at = tick_started
                 tick_duration_ms: float | None = None
                 try:
@@ -354,6 +437,20 @@ class SupervisedTask:
                     interval_s=self._interval_s,
                 )
         first_run_state = _first_run_state(self)
+        # Milestone A3: surface observed interval and drift so
+        # operators can compare the live schedule to the
+        # configured cadence.  Drift is sign-preserving (positive
+        # = scheduler began late, negative = began early); the
+        # caller decides what counts as an actionable excursion.
+        observed_last_interval_s: float | None = None
+        if (
+            self._previous_tick_started_at > 0
+            and self._last_tick_started_at > 0
+            and self._last_tick_started_at > self._previous_tick_started_at
+        ):
+            observed_last_interval_s = (
+                self._last_tick_started_at - self._previous_tick_started_at
+            )
         return {
             "name": self.name,
             "registered": True,
@@ -368,6 +465,12 @@ class SupervisedTask:
             "restart_count": self._restart_count,
             "max_restarts": self._max_restarts,
             "interval_s": self._interval_s,
+            "configured_interval_s": self._configured_interval_s,
+            "configured_initial_delay_s": self._configured_initial_delay_s,
+            "initial_delay_consumed": self._initial_delay_consumed,
+            "previous_tick_started_at": self._previous_tick_started_at or None,
+            "observed_last_interval_s": observed_last_interval_s,
+            "last_tick_drift_s": self._last_tick_drift_s,
             "last_started_at": self._last_started_at or None,
             "last_completed_at": self._last_completed_at or None,
             "last_failure_at": self._last_failure or None,
@@ -376,6 +479,7 @@ class SupervisedTask:
             "last_tick_duration_ms": self._last_tick_duration_ms,
             "next_run_at": next_run_at,
             "overdue_seconds": overdue_seconds,
+            "tick_in_progress": self._tick_in_progress,
             "last_error_at": self._last_error_at or None,
             "last_error_class": self._last_error_class,
             "first_run_state": first_run_state,
@@ -508,6 +612,16 @@ class TaskSupervisor:
             _interval_s=float(interval_s),
             _initial_delay_s=first_delay_s,
             _timeout_s=float(timeout_s) if timeout_s is not None else None,
+            # Milestone A3: snapshot the schedule as-configured so
+            # operators can compare the live ``interval_s`` /
+            # ``initial_delay_s`` to the original configuration.  A
+            # live reload that mutates these fields leaves the
+            # ``_configured_*`` snapshot intact; the operator can
+            # tell "what was applied" from "what is currently live".
+            _configured_interval_s=float(interval_s),
+            _configured_initial_delay_s=(
+                float(initial_delay_s) if initial_delay_s is not None else None
+            ),
         )
         # Prime the first next-run window so the dashboard can show
         # "in <interval>" before the very first tick lands.  Same

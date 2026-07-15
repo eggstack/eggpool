@@ -19,6 +19,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Provider-neutral request shaping: cache reporting, safe suffix compression, policy-scoped overrides, optional synthetic cache controls, and advisory threshold tuning
 - Thinking/reasoning capability-aware routing with configurable budget mapping
 - High-concurrency stream stability: bounded retry queue, lock-contention diagnostics, and an OpenCode-specific operator playbook for sustained coding-agent streaming loads
+- Dispatch timing: distinct `local_pre_upstream` (full EggPool-side) and `dispatch_overhead` (coordinator-internal) metrics with cadence drift diagnostics for background tasks
 - Designed for lightweight deployments (Raspberry Pi, SBCs)
 
 ## Quick Start
@@ -220,7 +221,8 @@ uv sync --extra fast     # or: uv pip install 'eggpool[fast]'
 uv run python scripts/repro_high_concurrency_streams.py --concurrency 50 --cancel-rate 0.25
 ```
 
-See `AGENTS.md` for focused test subset commands.
+See `AGENTS.md` for focused test subset commands including the
+dispatch-stability baseline (`tests/perf/test_dispatch_baseline.py`).
 
 ## Agent Configuration
 
