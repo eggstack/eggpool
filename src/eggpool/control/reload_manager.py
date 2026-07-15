@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
@@ -140,6 +141,35 @@ class CandidateGeneration:
 DEFAULT_DRAIN_TIMEOUT_S: Final[float] = 300.0
 
 
+def _resolve_drain_timeout_s() -> float:
+    """Read ``$EGGPOOL_RELOAD_DRAIN_TIMEOUT_S`` if set, else default.
+
+    Operators and tests can shorten the drain timeout (the time the
+    runtime manager waits for in-flight leases to release before
+    forcibly closing a retired generation) without touching config.
+    """
+    raw = os.environ.get("EGGPOOL_RELOAD_DRAIN_TIMEOUT_S", "").strip()
+    if not raw:
+        return DEFAULT_DRAIN_TIMEOUT_S
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid EGGPOOL_RELOAD_DRAIN_TIMEOUT_S=%r; using default %.0fs",
+            raw,
+            DEFAULT_DRAIN_TIMEOUT_S,
+        )
+        return DEFAULT_DRAIN_TIMEOUT_S
+    if value <= 0:
+        logger.warning(
+            "Non-positive EGGPOOL_RELOAD_DRAIN_TIMEOUT_S=%r; using default %.0fs",
+            raw,
+            DEFAULT_DRAIN_TIMEOUT_S,
+        )
+        return DEFAULT_DRAIN_TIMEOUT_S
+    return value
+
+
 class ReloadManager:
     """Manages serialized live-reload transactions.
 
@@ -160,10 +190,12 @@ class ReloadManager:
         runtime_manager: RuntimeManager,
         process: ProcessRuntime,
         *,
-        drain_timeout_s: float = DEFAULT_DRAIN_TIMEOUT_S,
+        drain_timeout_s: float | None = None,
     ) -> None:
         self._runtime_manager = runtime_manager
         self._process = process
+        if drain_timeout_s is None:
+            drain_timeout_s = _resolve_drain_timeout_s()
         self._drain_timeout_s = drain_timeout_s
         self._reload_lock = asyncio.Lock()
         self._operation_state: ReloadOperationState | None = None

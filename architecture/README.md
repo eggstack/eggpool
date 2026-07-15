@@ -3141,7 +3141,7 @@ caught two gaps: `dns_cache.ttl_seconds` (actual path is
 `network.dns_cache.positive_ttl_seconds`) and 14 missing
 `pricing.catalogs.*` entries.  Performance baseline: reload p50
 ≈ 480 ms, p95 ≈ 750 ms; concurrent-traffic p95 < 750 ms.
-See `plans/2026-07-14-live-config-rehash-final-milestone-d3-release-validation-and-security.md`.
+See `plans/2026-07-14-live-config-rehash-final-milestone-d3-release-validation-and-closure.md`.
 
 ### Validation contract
 

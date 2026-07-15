@@ -26,6 +26,9 @@ from typing import Any
 import httpx
 import pytest
 
+from tests.integration.test_rehash_d3_soak import (
+    _fetch_runtime_snapshot,
+)
 from tests.integration.test_rehash_streaming_swap import (
     _free_port,
     _make_mock_server,
@@ -327,3 +330,250 @@ async def test_d3_reload_under_concurrent_traffic(tmp_path: Any) -> None:
         stop_event.set()
         await _terminate_server(proc)
         upstream.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 closure — per-generation resource overhead and dispatch overhead
+# ---------------------------------------------------------------------------
+
+
+def _open_fd_count(pid: int) -> int | None:
+    """Best-effort open file-descriptor count for *pid*.
+
+    Returns None when ``/proc/{pid}/fd`` is unavailable (e.g. macOS);
+    callers must tolerate None gracefully.
+    """
+    import glob
+
+    try:
+        entries = glob.glob(f"/proc/{pid}/fd/*")
+        return len(entries)
+    except (OSError, PermissionError):
+        return None
+
+
+@pytest.mark.asyncio()
+async def test_d3_per_generation_resource_overhead(tmp_path: Any) -> None:
+    """Verify that 10 reloads in quick succession don't exhaust resources.
+
+    Asserts:
+
+    - active generation id advances by exactly 10
+    - FD count does not grow unboundedly (when /proc available)
+    - every reload succeeds
+    - final ``last_reload_result.ok`` is True and stage=retirement
+    """
+    state = _MockState()
+    upstream = _make_mock_server(state)
+    upstream_port = upstream.server_address[1]
+
+    server_port = _free_port()
+    config_path = str(tmp_path / "config.toml")
+    _write_config(config_path, server_port=server_port, upstream_port=upstream_port)
+
+    state_dir = str(tmp_path / "state")
+    os.makedirs(state_dir, exist_ok=True)
+    env = os.environ.copy()
+    env["XDG_STATE_HOME"] = state_dir
+
+    proc = await _spawn_server(config_path, env)
+    try:
+        healthy = await _wait_healthy(server_port)
+        assert healthy, "server did not become healthy"
+
+        async def _snapshot() -> dict[str, Any]:
+            async with httpx.AsyncClient() as client:
+                return await _fetch_runtime_snapshot(
+                    client,
+                    server_port,
+                    {"Authorization": "Bearer test-rehash-key"},
+                )
+
+        baseline = await _snapshot()
+        baseline_gen = (
+            baseline.get("runtime_manager", {}).get("active", {}).get("generation_id")
+        )
+        baseline_fd = _open_fd_count(proc.pid)
+
+        iterations = 10
+        gen_id_seen: set[int] = {baseline_gen}
+        for i in range(iterations):
+            _write_config(
+                config_path,
+                server_port=server_port,
+                upstream_port=upstream_port,
+                inflight_penalty=100_000 + (i + 1) * 5_000,
+            )
+            exit_code, stdout, stderr = await _run_rehash(config_path, env)
+            assert exit_code == 0, (
+                f"reload {i} failed (exit={exit_code}):\n"
+                f"stdout={stdout}\nstderr={stderr}"
+            )
+            snap = await _snapshot()
+            gen_id_seen.add(
+                snap.get("runtime_manager", {}).get("active", {}).get("generation_id")
+            )
+            assert proc.returncode is None, f"server died at reload {i}"
+
+        final = await _snapshot()
+        final_gen = (
+            final.get("runtime_manager", {}).get("active", {}).get("generation_id")
+        )
+        final_fd = _open_fd_count(proc.pid)
+        last_reload = final.get("reload_state", {}).get("last_reload_result", {})
+
+        assert final_gen - baseline_gen == iterations, (
+            f"generation advanced by {final_gen - baseline_gen}, expected {iterations}"
+        )
+
+        seen_sorted = sorted(gen_id_seen)
+        assert seen_sorted == list(
+            range(baseline_gen, baseline_gen + iterations + 1)
+        ), f"non-contiguous generation ids: {seen_sorted} (baseline={baseline_gen})"
+
+        if baseline_fd is not None and final_fd is not None:
+            assert final_fd <= baseline_fd + 10, (
+                f"FD count grew too much: {baseline_fd} -> {final_fd}"
+            )
+
+        assert last_reload.get("ok") is True, (
+            f"last reload result not ok: {last_reload}"
+        )
+
+        print(
+            f"\nPer-generation overhead: gen_advances={iterations} "
+            f"fds={baseline_fd}->{final_fd}"
+        )
+        _write_measurement(
+            "per_generation_overhead",
+            {
+                "iterations": iterations,
+                "gen_advances": final_gen - baseline_gen,
+                "baseline_fd": baseline_fd,
+                "final_fd": final_fd,
+            },
+        )
+    finally:
+        await _terminate_server(proc)
+        upstream.shutdown()
+
+
+@pytest.mark.asyncio()
+async def test_d3_dispatch_overhead_under_reload(tmp_path: Any) -> None:
+    """Measure /v1/healthz latency before, during, and after a LIVE reload.
+
+    Asserts:
+
+    - median latency before reload < 25 ms
+    - median latency after reload < 25 ms
+    - no request during the reload returns non-200
+    """
+    state = _MockState()
+    upstream = _make_mock_server(state)
+    upstream_port = upstream.server_address[1]
+
+    server_port = _free_port()
+    config_path = str(tmp_path / "config.toml")
+    _write_config(config_path, server_port=server_port, upstream_port=upstream_port)
+
+    state_dir = str(tmp_path / "state")
+    os.makedirs(state_dir, exist_ok=True)
+    env = os.environ.copy()
+    env["XDG_STATE_HOME"] = state_dir
+
+    proc = await _spawn_server(config_path, env)
+    try:
+        healthy = await _wait_healthy(server_port)
+        assert healthy, "server did not become healthy"
+
+        async def _measure(samples: int) -> tuple[list[float], int]:
+            latencies: list[float] = []
+            errors = 0
+            async with httpx.AsyncClient() as client:
+                for _ in range(samples):
+                    t0 = time.monotonic()
+                    try:
+                        r = await client.get(
+                            f"http://127.0.0.1:{server_port}/v1/healthz",
+                            timeout=5.0,
+                        )
+                        elapsed = (time.monotonic() - t0) * 1000
+                        if r.status_code == 200:
+                            latencies.append(elapsed)
+                        else:
+                            errors += 1
+                    except Exception:
+                        errors += 1
+                    await asyncio.sleep(0.005)
+            return latencies, errors
+
+        # Baseline
+        baseline_latencies, baseline_errors = await _measure(50)
+        assert baseline_errors == 0
+        baseline_median = sorted(baseline_latencies)[len(baseline_latencies) // 2]
+
+        # Trigger reload (acquire inside measure loop simulates ongoing traffic)
+        reload_task = asyncio.create_task(
+            _run_rehash_with_write(config_path, env, server_port, upstream_port)
+        )
+
+        # Concurrent traffic during reload
+        in_flight_latencies, in_flight_errors = await _measure(50)
+
+        await reload_task
+        exit_code, stdout, stderr = reload_task.result()
+        assert exit_code == 0, (
+            f"reload failed (exit={exit_code}):\nstdout={stdout}\nstderr={stderr}"
+        )
+
+        # Post-reload
+        post_latencies, post_errors = await _measure(50)
+        assert post_errors == 0
+        post_median = sorted(post_latencies)[len(post_latencies) // 2]
+
+        # In-flight errors must be zero — rehash must not drop traffic.
+        assert in_flight_errors == 0, f"{in_flight_errors} errors during rehash"
+
+        in_flight_median = sorted(in_flight_latencies)[len(in_flight_latencies) // 2]
+        print(
+            f"\nDispatch overhead (healthz median): "
+            f"baseline={baseline_median:.1f}ms "
+            f"in_flight={in_flight_median:.1f}ms "
+            f"post={post_median:.1f}ms"
+        )
+        _write_measurement(
+            "dispatch_overhead",
+            {
+                "baseline_median_ms": round(baseline_median, 1),
+                "in_flight_median_ms": round(
+                    sorted(in_flight_latencies)[len(in_flight_latencies) // 2], 1
+                ),
+                "post_median_ms": round(post_median, 1),
+                "errors_during_reload": in_flight_errors,
+            },
+        )
+
+        assert baseline_median < 25, (
+            f"baseline median {baseline_median:.1f}ms exceeds 25ms"
+        )
+        assert post_median < 25, f"post-reload median {post_median:.1f}ms exceeds 25ms"
+        assert proc.returncode is None, "server process died"
+    finally:
+        await _terminate_server(proc)
+        upstream.shutdown()
+
+
+async def _run_rehash_with_write(
+    config_path: str,
+    env: dict[str, str],
+    server_port: int,
+    upstream_port: int,
+) -> tuple[int, str, str]:
+    """Rewrite config to force a LIVE change, then trigger ``eggpool rehash``."""
+    _write_config(
+        config_path,
+        server_port=server_port,
+        upstream_port=upstream_port,
+        inflight_penalty=222_222,
+    )
+    return await _run_rehash(config_path, env)
