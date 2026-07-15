@@ -15,7 +15,7 @@ from __future__ import annotations
 import datetime as _dt
 import logging
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from eggpool.db.repositories import (
     AttemptRepository,
@@ -24,6 +24,7 @@ from eggpool.db.repositories import (
 )
 from eggpool.errors import DatabaseError
 from eggpool.request.dispatch_intent import (
+    DispatchAmbiguousCommitError,
     DispatchTransactionError,
     PersistedDispatchResult,
 )
@@ -261,3 +262,79 @@ async def persist_dispatch_bundles(
         )
         for r in results
     ]
+
+
+async def reconcile_ambiguous_commit(
+    db: Database,
+    *,
+    proxy_request_id: str,
+    attempt_number: int,
+) -> PersistedDispatchResult:
+    """Reconcile an ambiguous commit by querying durable state.
+
+    After a connection error during commit, the outcome is unknown.
+    This function queries the database to determine whether the intent
+    was actually committed:
+
+    - If request, reservation, and attempt all exist consistently,
+      treat as committed and return the result.
+    - If no rows exist, raise :class:`DispatchAmbiguousCommitError`.
+    - If partial/inconsistent rows exist, raise
+      :class:`DispatchAmbiguousCommitError` (fail closed).
+    """
+    attempt_repo = AttemptRepository(db)
+
+    # Query by proxy_request_id (the client-supplied request ID), not
+    # by the auto-generated rowid.
+    request_row_raw = await db.fetch_one(
+        "SELECT * FROM requests WHERE proxy_request_id = ?",
+        (proxy_request_id,),
+    )
+    request_row = dict(request_row_raw) if request_row_raw is not None else None
+    if request_row is None:
+        raise DispatchAmbiguousCommitError(
+            f"No request row for proxy_request_id={proxy_request_id!r}; "
+            f"intent was not committed"
+        )
+
+    db_request_id = str(request_row["id"])
+
+    # Query attempts for this request
+    attempt_rows = await attempt_repo.get_for_request(db_request_id)
+    matching_attempt: dict[str, Any] | None = None
+    for row in attempt_rows:
+        if int(row["attempt_number"]) == attempt_number:
+            matching_attempt = row
+            break
+
+    if matching_attempt is None:
+        raise DispatchAmbiguousCommitError(
+            f"Request {proxy_request_id!r} exists but attempt_number="
+            f"{attempt_number} not found; partial commit"
+        )
+
+    # Query reservations for this request via raw SQL
+    reservation_rows = await db.fetch_all(
+        "SELECT * FROM reservations WHERE request_id = ? ORDER BY id",
+        (db_request_id,),
+    )
+    if not reservation_rows:
+        raise DispatchAmbiguousCommitError(
+            f"Request {proxy_request_id!r} and attempt exist but no "
+            f"reservation found; partial commit"
+        )
+
+    # Use the most recent reservation (the one we just created)
+    latest_reservation: dict[str, Any] = dict(reservation_rows[-1])
+
+    return PersistedDispatchResult(
+        db_request_id=db_request_id,
+        reservation_id=str(latest_reservation["id"]),
+        attempt_id=int(matching_attempt["id"]),
+        attempt_number=attempt_number,
+        batch_id=0,
+        batch_size=1,
+        commit_timestamp=str(request_row.get("started_at", "")),
+        queue_wait_ms=0.0,
+        transaction_ms=0.0,
+    )

@@ -2062,6 +2062,20 @@ def create_app(
                 media_type="application/json",
             )
 
+        dispatch_writer: Any = getattr(request.app.state, "dispatch_writer", None)
+        if dispatch_writer is not None:
+            writer_state = getattr(dispatch_writer, "state", None)
+            if writer_state in ("closed", "draining"):
+                return Response(
+                    content=(
+                        '{"status":"degraded",'
+                        f'"reason":"dispatch writer {writer_state}"'
+                        "}"
+                    ),
+                    status_code=503,
+                    media_type="application/json",
+                )
+
         return Response(
             content='{"status":"ok"}',
             status_code=200,

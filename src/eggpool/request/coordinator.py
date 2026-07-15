@@ -147,6 +147,7 @@ if TYPE_CHECKING:
     from eggpool.health.health_manager import HealthManager
     from eggpool.models.config import AppConfig
     from eggpool.quota.estimation import QuotaEstimator
+    from eggpool.request.dispatch_intent import DispatchIntent
     from eggpool.routing.router import Router
     from eggpool.transcoder.policy import TranscoderPolicy
     from eggpool.transcoder.prepared import PreparedTranscode
@@ -591,6 +592,7 @@ class RequestCoordinator:
         routing_trace_guard: Any | None = None,  # noqa: ANN401
         selection_claim_diagnostics: SelectionClaimDiagnostics | None = None,
         dispatch_writer: Any | None = None,  # noqa: ANN401
+        use_dispatch_writer: bool = False,
     ) -> None:
         self._registry = registry
         self._catalog = catalog
@@ -646,6 +648,7 @@ class RequestCoordinator:
             routing_trace_guard = get_routing_trace_guard()
         self._routing_trace_guard = routing_trace_guard
         self._dispatch_writer = dispatch_writer
+        self._use_dispatch_writer = use_dispatch_writer and dispatch_writer is not None
 
         # Build the attempt finalizer with all dependencies
         self._attempt_finalizer = AttemptFinalizer(
@@ -1316,6 +1319,80 @@ class RequestCoordinator:
         self._selection_claim_diagnostics.record_claim_committed()
         return db_request_id, reservation_id, attempt_id
 
+    def _build_dispatch_intent(
+        self,
+        *,
+        context: ProxyRequestContext,
+        claim_identity: _ClaimIdentity,
+        estimated_tokens: int,
+        attempt_number: int,
+    ) -> DispatchIntent:
+        """Build an immutable :class:`DispatchIntent` from the coordinator context.
+
+        Called by the writer-delegated Phase B path to construct the
+        persistence intent that flows through the microbatching pipeline.
+        """
+        from eggpool.request.dispatch_intent import (  # noqa: PLC0415
+            DispatchIntent,
+        )
+
+        return DispatchIntent(
+            proxy_request_id=context.request_id,
+            attempt_number=attempt_number,
+            account_id=claim_identity.account_id,
+            account_name=claim_identity.account_name,
+            provider_id=claim_identity.resolved_provider_id,
+            model_id=context.model_id,
+            protocol=context.protocol,
+            streamed=context.streaming,
+            estimated_tokens=estimated_tokens,
+            estimated_microdollars=claim_identity.estimated_microdollars,
+            started_at=str(context.started_at),
+            client_ip=context.client_ip or None,
+            existing_db_request_id=context.client_metadata.get("db_request_id"),
+        )
+
+    async def _persist_dispatch_bundle_via_writer(
+        self,
+        *,
+        context: ProxyRequestContext,
+        claim_identity: _ClaimIdentity,
+        estimated_tokens: int,
+        attempt_number: int,
+    ) -> tuple[str, str, int]:
+        """Delegate Phase B persistence to the process-owned writer.
+
+        Builds a :class:`DispatchIntent`, submits it to the writer, and
+        awaits the committed result.  The writer owns the transaction;
+        this method blocks until durability is acknowledged.
+        """
+        from concurrent.futures import InvalidStateError  # noqa: PLC0415
+
+        from eggpool.request.dispatch_intent import (  # noqa: PLC0415
+            DispatchAmbiguousCommitError,
+            DispatchWriterError,
+        )
+
+        intent = self._build_dispatch_intent(
+            context=context,
+            claim_identity=claim_identity,
+            estimated_tokens=estimated_tokens,
+            attempt_number=attempt_number,
+        )
+        assert self._dispatch_writer is not None
+        future = self._dispatch_writer.submit_intent(intent)
+        try:
+            result = await asyncio.wrap_future(future)
+        except DispatchWriterError:
+            raise
+        except InvalidStateError as exc:
+            raise DispatchAmbiguousCommitError(
+                f"Writer future in unexpected state for "
+                f"intent {intent.proxy_request_id}"
+            ) from exc
+
+        return result.db_request_id, result.reservation_id, result.attempt_id
+
     async def _publish_runtime_state(
         self,
         *,
@@ -1749,18 +1826,18 @@ class RequestCoordinator:
         db_request_id: str | None = None
         attempt_id: int | None = None
         reservation_id: str | None = None
-        with (
-            _maybe_span(
-                self._dispatch_span_recorder,
-                SPAN_DISPATCH_PERSISTENCE_WAIT,
-            ),
-            _maybe_span(
-                self._dispatch_span_recorder,
-                SPAN_DISPATCH_PERSISTENCE_TRANSACTION,
-            ),
-        ):
-            try:
-                async with self._db.transaction():
+        if self._use_dispatch_writer:
+            with (
+                _maybe_span(
+                    self._dispatch_span_recorder,
+                    SPAN_DISPATCH_PERSISTENCE_WAIT,
+                ),
+                _maybe_span(
+                    self._dispatch_span_recorder,
+                    SPAN_DISPATCH_PERSISTENCE_TRANSACTION,
+                ),
+            ):
+                try:
                     with _maybe_span(
                         self._dispatch_span_recorder,
                         SPAN_DISPATCH_PERSISTENCE_COMMIT,
@@ -1769,22 +1846,59 @@ class RequestCoordinator:
                             db_request_id,
                             reservation_id,
                             attempt_id,
-                        ) = await self._persist_dispatch_bundle(
+                        ) = await self._persist_dispatch_bundle_via_writer(
                             context=context,
-                            account_id=claim_identity.account_id,
-                            resolved_provider_id=(claim_identity.resolved_provider_id),
+                            claim_identity=claim_identity,
                             estimated_tokens=estimated_tokens,
-                            estimated_microdollars=(
-                                claim_identity.estimated_microdollars
-                            ),
                             attempt_number=attempt_number,
                         )
-            except BaseException:
-                # SQLite transaction rolled back; release the
-                # health slot the lock took, then re-raise.
-                if self._health_manager is not None:
-                    self._health_manager.release_request(claim_identity.account_name)
-                raise
+                except BaseException:
+                    if self._health_manager is not None:
+                        self._health_manager.release_request(
+                            claim_identity.account_name
+                        )
+                    raise
+        else:
+            with (
+                _maybe_span(
+                    self._dispatch_span_recorder,
+                    SPAN_DISPATCH_PERSISTENCE_WAIT,
+                ),
+                _maybe_span(
+                    self._dispatch_span_recorder,
+                    SPAN_DISPATCH_PERSISTENCE_TRANSACTION,
+                ),
+            ):
+                try:
+                    async with self._db.transaction():
+                        with _maybe_span(
+                            self._dispatch_span_recorder,
+                            SPAN_DISPATCH_PERSISTENCE_COMMIT,
+                        ):
+                            (
+                                db_request_id,
+                                reservation_id,
+                                attempt_id,
+                            ) = await self._persist_dispatch_bundle(
+                                context=context,
+                                account_id=claim_identity.account_id,
+                                resolved_provider_id=(
+                                    claim_identity.resolved_provider_id
+                                ),
+                                estimated_tokens=estimated_tokens,
+                                estimated_microdollars=(
+                                    claim_identity.estimated_microdollars
+                                ),
+                                attempt_number=attempt_number,
+                            )
+                except BaseException:
+                    # SQLite transaction rolled back; release the
+                    # health slot the lock took, then re-raise.
+                    if self._health_manager is not None:
+                        self._health_manager.release_request(
+                            claim_identity.account_name
+                        )
+                    raise
 
         # --- Phase C: runtime publication under _selection_claim_lock #2 ---
         publish_lock_wait_ns = time.perf_counter_ns()

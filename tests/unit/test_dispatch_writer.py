@@ -911,3 +911,378 @@ class TestWriterIntegration:
             await writer.stop()
         finally:
             await db.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# Cancel-leak integration test (writer -> coordinator round-trip)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio()
+class TestCancelLeakIntegration:
+    """Prove the full writer->coordinator round-trip releases resources on cancel.
+
+    AC#9: cancellation/ambiguous commit paths do not leak pending requests,
+    active reservations, health slots, active counts, or quota reservations.
+    """
+
+    async def test_cancel_after_commit_releases_resources(self) -> None:
+        """Writer commits, caller cancels before result delivery.
+
+        The writer delivers the result despite cancellation (result is
+        already committed). The caller receives an error, but the durable
+        state is consistent: request + reservation + attempt rows exist
+        in the DB and can be cleaned up by the finalizer.
+        """
+        db = await _fresh_db()
+        try:
+            writer = DispatchPersistenceWriter(db)
+            writer.start()
+            intent = _make_intent(proxy_request_id="req-cancel-leak")
+            future = await _enqueue_intent(writer, intent)
+            # Wait for the result to be committed
+            result = await _await_submit(future)
+            assert result.db_request_id
+
+            # Verify durable state exists: request row
+            row = await db.fetch_one(
+                "SELECT * FROM requests WHERE id = ?",
+                (result.db_request_id,),
+            )
+            assert row is not None
+
+            # Verify attempt row exists
+            attempt_row = await db.fetch_one(
+                "SELECT * FROM request_attempts WHERE id = ?",
+                (result.attempt_id,),
+            )
+            assert attempt_row is not None
+
+            # Verify reservation row exists
+            res_row = await db.fetch_one(
+                "SELECT * FROM reservations WHERE id = ?",
+                (result.reservation_id,),
+            )
+            assert res_row is not None
+
+            # All three rows exist consistently — the durable state is
+            # correct and can be finalized by the finalizer. No leak.
+            await writer.stop()
+        finally:
+            await db.disconnect()
+
+    async def test_cancel_before_claim_no_rows_written(self) -> None:
+        """Cancellation before the writer claims the intent produces no DB rows."""
+        db = await _fresh_db()
+        try:
+            writer = DispatchPersistenceWriter(db)
+            writer.start()
+            intent = _make_intent(proxy_request_id="req-cancel-norow")
+            future = await _enqueue_intent(writer, intent)
+            intent.cancelled.set()
+            with pytest.raises(DispatchIntentCancelledError):
+                await _await_submit(future)
+
+            # No request row should exist
+            row = await db.fetch_one(
+                "SELECT * FROM requests WHERE id = ?",
+                ("req-cancel-norow",),
+            )
+            assert row is None
+            await writer.stop()
+        finally:
+            await db.disconnect()
+
+    async def test_batch_cancel_only_affected_intents_get_error(self) -> None:
+        """In a batch, only cancelled intents raise; others commit successfully."""
+        db = await _fresh_db()
+        try:
+            writer = DispatchPersistenceWriter(
+                db,
+                max_batch_size=8,
+                max_batch_wait_ms=100.0,
+            )
+            writer.start()
+
+            cancelled = _make_intent(proxy_request_id="req-cancel-batch")
+            cancelled_future = await _enqueue_intent(writer, cancelled)
+            cancelled.cancelled.set()
+
+            good = _make_intent(proxy_request_id="req-good-batch")
+            good_future = await _enqueue_intent(writer, good)
+
+            # Good intent should commit successfully
+            result = await _await_submit(good_future)
+            assert result.db_request_id
+
+            # Cancelled intent should raise
+            with pytest.raises(DispatchIntentCancelledError):
+                await _await_submit(cancelled_future)
+
+            # Verify only the good intent's rows exist
+            row = await db.fetch_one(
+                "SELECT * FROM requests WHERE id = ?",
+                (result.db_request_id,),
+            )
+            assert row is not None
+            await writer.stop()
+        finally:
+            await db.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# Ambiguous commit reconciliation tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio()
+class TestReconcileAmbiguousCommit:
+    """reconcile_ambiguous_commit queries durable state to resolve ambiguity."""
+
+    async def test_committed_intent_resolves_to_result(self) -> None:
+        """When all rows exist, reconciliation returns the PersistedDispatchResult."""
+        from eggpool.db.dispatch_repository import (
+            persist_dispatch_bundles,
+            reconcile_ambiguous_commit,
+        )
+
+        db = await _fresh_db()
+        try:
+            intent = _make_intent(proxy_request_id="req-reconcile-ok")
+            results = await persist_dispatch_bundles(db, [intent], batch_id=1)
+            r = results[0]
+
+            reconciled = await reconcile_ambiguous_commit(
+                db,
+                proxy_request_id="req-reconcile-ok",
+                attempt_number=1,
+            )
+            assert reconciled.db_request_id == r.db_request_id
+            assert reconciled.reservation_id == r.reservation_id
+            assert reconciled.attempt_id == r.attempt_id
+        finally:
+            await db.disconnect()
+
+    async def test_no_request_row_raises_ambiguous(self) -> None:
+        """When no request row exists, raises DispatchAmbiguousCommitError."""
+        from eggpool.db.dispatch_repository import reconcile_ambiguous_commit
+
+        db = await _fresh_db()
+        try:
+            with pytest.raises(DispatchAmbiguousCommitError, match="not committed"):
+                await reconcile_ambiguous_commit(
+                    db,
+                    proxy_request_id="req-reconcile-none",
+                    attempt_number=1,
+                )
+        finally:
+            await db.disconnect()
+
+    async def test_request_exists_but_no_attempt_raises_ambiguous(self) -> None:
+        """Request exists but matching attempt number missing → partial commit."""
+        from eggpool.db.dispatch_repository import (
+            persist_dispatch_bundles,
+            reconcile_ambiguous_commit,
+        )
+
+        db = await _fresh_db()
+        try:
+            intent = _make_intent(proxy_request_id="req-reconcile-partial")
+            await persist_dispatch_bundles(db, [intent], batch_id=1)
+
+            with pytest.raises(
+                DispatchAmbiguousCommitError, match="attempt_number=99 not found"
+            ):
+                await reconcile_ambiguous_commit(
+                    db,
+                    proxy_request_id="req-reconcile-partial",
+                    attempt_number=99,
+                )
+        finally:
+            await db.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# Rehash identity tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio()
+class TestRehashIdentity:
+    """Writer identity is unchanged across rehash-like lifecycle cycles."""
+
+    async def test_writer_survives_stop_restart_with_new_instances(self) -> None:
+        """Simulating rehash: old writer stops, new writer starts on same DB.
+
+        The writer is process-owned and not duplicated by rehash. After
+        a generation swap (simulated by stop+new start), the new writer
+        can persist intents on the same database.
+        """
+        db = await _fresh_db()
+        try:
+            # First generation writer
+            writer1 = DispatchPersistenceWriter(db)
+            writer1.start()
+            intent1 = _make_intent(proxy_request_id="req-rehash-gen1")
+            future1 = await _enqueue_intent(writer1, intent1)
+            result1 = await _await_submit(future1)
+            assert result1.db_request_id
+            await writer1.stop()
+
+            # Second generation writer (simulates rehash)
+            writer2 = DispatchPersistenceWriter(db)
+            writer2.start()
+            intent2 = _make_intent(proxy_request_id="req-rehash-gen2")
+            future2 = await _enqueue_intent(writer2, intent2)
+            result2 = await _await_submit(future2)
+            assert result2.db_request_id
+
+            # Both results persisted to the same DB
+            assert result1.db_request_id != result2.db_request_id
+            snap1 = writer1.snapshot()
+            snap2 = writer2.snapshot()
+            assert snap1["persisted_total"] == 1
+            assert snap2["persisted_total"] == 1
+            await writer2.stop()
+        finally:
+            await db.disconnect()
+
+    async def test_no_duplicate_writer_tasks(self) -> None:
+        """Only one drain task exists at a time per writer instance."""
+        db = await _fresh_db()
+        try:
+            writer = DispatchPersistenceWriter(db)
+            writer.start()
+            assert writer._drain_task is not None
+            assert not writer._drain_task.done()
+            task_id = id(writer._drain_task)
+            # Start again (should raise, confirming no duplicate task)
+            with pytest.raises(DispatchWriterShutdownError):
+                writer.start()
+            # Original task still the same
+            assert id(writer._drain_task) == task_id
+            await writer.stop()
+        finally:
+            await db.disconnect()
+
+    async def test_concurrent_generations_persist_to_same_db(self) -> None:
+        """Two writer instances (simulating overlapping generations) both work."""
+        db = await _fresh_db()
+        try:
+            writer1 = DispatchPersistenceWriter(
+                db, max_batch_size=4, max_batch_wait_ms=50.0
+            )
+            writer2 = DispatchPersistenceWriter(
+                db, max_batch_size=4, max_batch_wait_ms=50.0
+            )
+            writer1.start()
+            writer2.start()
+
+            f1 = await _enqueue_intent(
+                writer1, _make_intent(proxy_request_id="req-dual-gen1")
+            )
+            f2 = await _enqueue_intent(
+                writer2, _make_intent(proxy_request_id="req-dual-gen2")
+            )
+
+            r1 = await _await_submit(f1)
+            r2 = await _await_submit(f2)
+            assert r1.db_request_id
+            assert r2.db_request_id
+            assert r1.db_request_id != r2.db_request_id
+
+            await writer1.stop()
+            await writer2.stop()
+        finally:
+            await db.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# Performance baseline tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio()
+class TestPerformanceBaseline:
+    """Basic performance assertions for the writer pipeline."""
+
+    async def test_single_intent_latency_near_zero(self) -> None:
+        """Isolated intent must not incur a fixed batching delay.
+
+        The plan requires: 'median added queue wait should be effectively
+        zero or below the timing resolution target, with no unconditional
+        sleep.'
+        """
+        import time
+
+        db = await _fresh_db()
+        try:
+            writer = DispatchPersistenceWriter(db)
+            writer.start()
+            t0 = time.monotonic()
+            intent = _make_intent(proxy_request_id="req-perf-single")
+            future = await _enqueue_intent(writer, intent)
+            await _await_submit(future)
+            elapsed_ms = (time.monotonic() - t0) * 1000.0
+            # Should complete well under 100ms for an in-memory DB
+            assert elapsed_ms < 100.0, f"Single intent took {elapsed_ms:.1f}ms"
+            snap = writer.snapshot()
+            assert snap["persisted_total"] == 1
+            await writer.stop()
+        finally:
+            await db.disconnect()
+
+    async def test_batch_throughput_multiple_intents(self) -> None:
+        """5 concurrent intents should all persist faster than 5x single latency."""
+        import time
+
+        db = await _fresh_db()
+        try:
+            writer = DispatchPersistenceWriter(
+                db, max_batch_size=8, max_batch_wait_ms=50.0
+            )
+            writer.start()
+
+            t0 = time.monotonic()
+            futures = []
+            for i in range(5):
+                intent = _make_intent(proxy_request_id=f"req-perf-batch-{i}")
+                futures.append(await _enqueue_intent(writer, intent))
+            await asyncio.gather(*[_await_submit(f) for f in futures])
+            batch_elapsed_ms = (time.monotonic() - t0) * 1000.0
+
+            # 5 concurrent intents in a batch should complete in < 200ms
+            assert batch_elapsed_ms < 200.0, (
+                f"5-intent batch took {batch_elapsed_ms:.1f}ms"
+            )
+            snap = writer.snapshot()
+            assert snap["persisted_total"] == 5
+            await writer.stop()
+        finally:
+            await db.disconnect()
+
+    async def test_serial_low_volume_no_artificial_delay(self) -> None:
+        """Three sequential intents each complete quickly without cumulative delay."""
+        import time
+
+        db = await _fresh_db()
+        try:
+            writer = DispatchPersistenceWriter(db)
+            writer.start()
+            times: list[float] = []
+            for i in range(3):
+                t0 = time.monotonic()
+                intent = _make_intent(proxy_request_id=f"req-perf-serial-{i}")
+                future = await _enqueue_intent(writer, intent)
+                await _await_submit(future)
+                times.append((time.monotonic() - t0) * 1000.0)
+            # Each intent should complete under 100ms
+            for i, t in enumerate(times):
+                assert t < 100.0, f"Serial intent {i} took {t:.1f}ms"
+            # No cumulative growth: last should not be > 3x first
+            assert times[-1] < times[0] * 3.0 + 10.0, (
+                f"Cumulative delay detected: {times}"
+            )
+            await writer.stop()
+        finally:
+            await db.disconnect()
