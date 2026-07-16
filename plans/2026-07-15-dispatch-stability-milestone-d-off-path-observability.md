@@ -1,7 +1,7 @@
 # Dispatch Stability Milestone D — Off-Path Observability and Trace Pressure Control
 
 Date: 2026-07-15
-Status: detailed handoff plan
+Status: complete
 Roadmap: `plans/2026-07-15-long-running-dispatch-overhead-stability-roadmap.md`
 Milestone: D of G
 Depends on: Milestone B; integrate against milestone C ownership model when available

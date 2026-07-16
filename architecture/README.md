@@ -3145,6 +3145,71 @@ CLI reproducer.
   `read_timeout_s=900`, `pool_timeout_s=60`), and diagnostic
   low-noise (`routing.trace.mode = "off"`, `read_timeout_s=1800`).
 
+## Dispatch Stability Milestone D — Off-Path Observability
+
+Milestone D completes the routing-trace persistence path by moving
+trace writes fully off the synchronous dispatch path. The
+implementation spans `RoutingTraceEvent`, `RoutingTraceWriter`,
+`RoutingTraceGuard`, and coordinator integration.
+
+**RoutingTraceEvent** (`src/eggpool/observability/routing_trace_writer.py`):
+frozen dataclass carrying the trace payload — request identity, selected
+account, attempt number, outcome label, timing, and optional score
+components. Content-free by design: no request body, no response body,
+no auth headers, no secrets.
+
+**RoutingTraceWriter** (`src/eggpool/observability/routing_trace_writer.py`):
+process-owned, single-drain-task async writer. Uses a bounded
+`deque(maxlen=queue_capacity)` (default 1000) and a `threading.Lock`
+for thread-safe submission from any event loop. The drain loop batches
+up to `max_batch_size` (default 50) events per `flush_interval_s`
+(default 1.0 s) interval. Queue overflow drops the newest event
+(`dropped_queue_full`). The writer is on `ProcessRuntime`, not
+`RuntimeGeneration`, so it survives generation swaps without
+duplication. Runtime diagnostics exposed via `/api/stats/runtime`
+`routing_trace_writer` (queue depth, accepted/written/dropped counters,
+oldest event age).
+
+**RoutingTraceGuard** (`src/eggpool/request/routing_trace_guard.py`):
+pre-enqueue pressure gate consulted *before* the event enters the
+writer's queue. Skips trace submission when any of: DB lock-wait p95
+exceeds `skip_above_lock_wait_p95_ms` (default 200 ms, ≥ 8 samples),
+queue occupancy exceeds `guard_queue_occupancy_threshold` (default 0.8),
+oldest queued event exceeds `guard_oldest_event_age_s` (default 30 s),
+or the writer reports recent flush errors. A hysteresis
+`guard_cooldown_s` (default 5.0 s) prevents flapping. All skip reasons
+are classified (`db_pressure`, `queue_pressure`, `oldest_event_stale`,
+`flush_failure`, `cooldown`) and surfaced in snapshot counters.
+
+**Coordinator integration**: trace write is Step 10 in
+`_select_and_persist_attempt`, executed *after* DB persistence and
+*outside* all locks (`_selection_claim_lock` was released after
+Phase C publication). The guard is consulted first; on skip, the
+coordinator records the skip reason and moves on. On acceptance, the
+event is submitted to the writer via non-blocking `submit()`. Trace
+writes never delay dispatch, even under contention or queue pressure.
+
+**Configuration** (`[routing.trace]` in `RoutingTraceConfig`):
+
+| Field | Default | Reload |
+|-------|---------|--------|
+| `mode` | `sampled` | LIVE |
+| `sample_rate` | `0.05` | LIVE |
+| `include_score_components` | `False` | LIVE |
+| `skip_above_lock_wait_p95_ms` | `200.0` | LIVE |
+| `guard_queue_occupancy_threshold` | `0.8` | LIVE |
+| `guard_oldest_event_age_s` | `30.0` | LIVE |
+| `guard_cooldown_s` | `5.0` | LIVE |
+| `queue_capacity` | `1000` | RESTART_REQUIRED |
+| `flush_interval_s` | `1.0` | RESTART_REQUIRED |
+| `max_batch_size` | `50` | RESTART_REQUIRED |
+| `shutdown_flush_timeout_s` | `5.0` | RESTART_REQUIRED |
+
+Tests: `tests/unit/test_routing_trace_writer.py`,
+`tests/unit/test_routing_trace_guard.py`,
+`tests/unit/test_routing_trace_mode.py`,
+`tests/perf/test_trace_mode_perf.py`.
+
 ## Live Configuration Rehash — Validation, Diffing, and Fail-Closed CLI
 
 Milestone A ships a shared validation contract, a typed configuration
