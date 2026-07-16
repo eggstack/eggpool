@@ -3253,6 +3253,27 @@ The async primitive audit (`docs/async_primitive_audit.md`) documents every long
 - `tests/unit/test_granian_topology.py`: verifies single-process, single-loop model
 - `tests/unit/test_header_forwarding.py`: exhaustive header pass/drop tests
 - `tests/unit/test_resource_plateau.py`: DNS cache, client pool, and stream diagnostics boundedness
+- `tests/unit/test_parsed_payload.py`: ParsedRequestPayload parse caching and derived state
+- `tests/unit/test_payload_utils.py`: estimate_padded_size arithmetic-only API
+- `tests/unit/test_immutable_request_state.py`: ImmutableRequestState frozen dataclass and generation swap
+- `tests/unit/test_metrics_coalescer_invariants.py`: concurrency invariants (total accounting, no negative counters, no lost updates, cancellation restore)
+- `tests/unit/test_telemetry_bounded_growth.py`: bounded deque/histogram growth for all telemetry recorders
+- `tests/perf/test_hot_path_performance.py`: before/after measurements for parse, allocation, header, span, and lag monitor
+
+### Residual Constraints for Milestone G
+
+Milestone G (soak validation and rollout) inherits these constraints from F:
+
+1. **Single event-loop thread is canonical.** `server.threads=1` is the supported data-plane profile. All `asyncio.Lock` objects are loop-bound. Milestone G soak tests must not exercise multi-loop paths without the thread-safety bridge documented in `docs/async_primitive_audit.md`.
+2. **Process-owned writers survive generation swaps.** `DispatchPersistenceWriter` and `RoutingTraceWriter` are process-owned and use `threading.Lock` for thread-safe submission. Milestone G must verify no duplicate writers or orphaned drain tasks after rehash sequences.
+3. **Metrics coalescer is dual-locked.** `record_usage()` acquires `_thread_lock`; `flush()` acquires `_async_lock` then `_thread_lock`. Soak tests must verify the invariant `total_received == total_flushed + pending + dropped` survives multi-hour operation.
+4. **Event-loop lag monitor is bounded.** The 200-sample rolling window does not grow. Lag p95 > 100ms is an operator signal, not a correctness failure. Soak tests should assert lag stays within SBC-appropriate bounds.
+5. **ParsedRequestPayload caches one parse per request.** Downstream transformations (transcode/compress) must call `invalidate_transformed()` to reset derived state. Soak tests must not observe stale model/streaming values after body mutation.
+6. **estimate_padded_size is arithmetic-only.** No synthetic `b"\x00"*padding` allocation exists on the hot path. Context-limit checks must use the function, not raw allocation.
+7. **ImmutableRequestState is generation-scoped.** Frozensets are rebuilt on generation swap. Soak tests must verify that rehash produces fresh provider/account/header sets matching the new config.
+8. **Header forwarding is exact.** `build_upstream_headers()` filters hop-by-hop, credentials, connection-nominated, and framing headers in one pass. Soak tests must not observe credential leakage to upstream.
+9. **Resource plateaus are monitored.** DNS cache, client pool, and stream diagnostics are exposed via `/api/stats/runtime`. Soak tests should assert bounded growth over extended operation.
+10. **DispatchSpanRecorder is thread-safe.** Per-span bounded deques are protected by a single `threading.Lock`. Snapshot copies sample lists under the lock. Soak tests must not observe deque overflow beyond `window_size`.
 
 ## Live Configuration Rehash — Validation, Diffing, and Fail-Closed CLI
 
