@@ -185,6 +185,12 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "routing.trace.sample_rate": ReloadDisposition.LIVE,
     "routing.trace.include_score_components": ReloadDisposition.LIVE,
     "routing.trace.skip_above_lock_wait_p95_ms": ReloadDisposition.LIVE,
+    # Writer configuration is process-owned; queue/batch/shutdown
+    # settings require a restart to take effect on the writer.
+    "routing.trace.queue_capacity": ReloadDisposition.RESTART_REQUIRED,
+    "routing.trace.flush_interval_s": ReloadDisposition.RESTART_REQUIRED,
+    "routing.trace.max_batch_size": ReloadDisposition.RESTART_REQUIRED,
+    "routing.trace.shutdown_flush_timeout_s": ReloadDisposition.RESTART_REQUIRED,
     # ---- limits / pricing / dashboard / security ----
     "limits.five_hour_microdollars": ReloadDisposition.RESTART_REQUIRED,
     "limits.weekly_microdollars": ReloadDisposition.RESTART_REQUIRED,
@@ -236,6 +242,7 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     # ``metrics_flush`` task; the process supervisor reconfigures the
     # task with the candidate config's interval on reload.
     "metrics.flush_interval_s": ReloadDisposition.LIVE,
+    "metrics.detailed_span_sample_rate": ReloadDisposition.LIVE,
     "metrics.max_buffered_events": ReloadDisposition.RESTART_REQUIRED,
     "metrics.timeseries_bucket_s": ReloadDisposition.RESTART_REQUIRED,
     "metrics.trace_sample_rate": ReloadDisposition.RESTART_REQUIRED,

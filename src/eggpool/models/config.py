@@ -162,8 +162,7 @@ class ModelsConfig(BaseModel):
 class RoutingTraceConfig(BaseModel):
     """Controls routing decision trace write pressure.
 
-    Routing traces are diagnostic rows written on every attempt inside
-    the same transaction as the request/reservation/attempt rows.
+    Routing traces are diagnostic rows written by a background writer.
     Reducing write volume here has no effect on billing, retry, or
     crash-recovery semantics.
     """
@@ -194,10 +193,37 @@ class RoutingTraceConfig(BaseModel):
         ge=0.0,
         description=(
             "When the SQLite lock-wait p95 (rolling) exceeds this value, "
-            "routing trace writes are skipped to avoid amplifying "
-            "contention. Traces are diagnostic; their absence must never "
-            "fail dispatch. Set to 0 to disable the guardrail."
+            "routing trace events are dropped before enqueueing to avoid "
+            "amplifying contention. Traces are diagnostic; their absence "
+            "must never fail dispatch. Set to 0 to disable the guardrail."
         ),
+    )
+    queue_capacity: int = Field(
+        default=1000,
+        ge=100,
+        le=100_000,
+        description=(
+            "Bounded queue capacity for the async trace writer. "
+            "Newest events are dropped when the queue is full."
+        ),
+    )
+    flush_interval_s: float = Field(
+        default=1.0,
+        ge=0.1,
+        le=60.0,
+        description="Maximum seconds between background trace flushes.",
+    )
+    max_batch_size: int = Field(
+        default=50,
+        ge=1,
+        le=500,
+        description="Maximum events per database flush batch.",
+    )
+    shutdown_flush_timeout_s: float = Field(
+        default=5.0,
+        ge=1.0,
+        le=30.0,
+        description="Seconds to flush remaining traces on shutdown.",
     )
 
 
@@ -315,6 +341,16 @@ class MetricsConfig(BaseModel):
     rollup_retain_days: int = Field(default=90, gt=0)
     cleanup_interval_s: int = Field(default=86_400, gt=0)
     cleanup_max_rows_per_pass: int = Field(default=5000, gt=0)
+    detailed_span_sample_rate: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Fraction of detailed dispatch spans to record (0.0-1.0). "
+            "1.0 = full detail; 0.0 = coarse dispatch only. "
+            "Deterministic by request ID."
+        ),
+    )
 
 
 class DashboardConfig(BaseModel):

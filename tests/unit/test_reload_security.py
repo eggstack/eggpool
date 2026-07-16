@@ -260,6 +260,7 @@ class TestRecordedEventSecretSafety:
             supervisor=AsyncMock(),
             finalization_retry_queue=AsyncMock(),
             routing_trace_guard=AsyncMock(),
+            routing_trace_writer=None,
             created_at_monotonic=time.monotonic(),
             created_at_epoch=time.time(),
         )
@@ -344,6 +345,7 @@ class TestRecordedEventSecretSafety:
             supervisor=AsyncMock(),
             finalization_retry_queue=AsyncMock(),
             routing_trace_guard=AsyncMock(),
+            routing_trace_writer=None,
             created_at_monotonic=time.monotonic(),
             created_at_epoch=time.time(),
         )
@@ -433,6 +435,7 @@ class TestRecordedEventSecretSafety:
             supervisor=AsyncMock(),
             finalization_retry_queue=AsyncMock(),
             routing_trace_guard=AsyncMock(),
+            routing_trace_writer=None,
             created_at_monotonic=time.monotonic(),
             created_at_epoch=time.time(),
         )

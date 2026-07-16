@@ -232,6 +232,16 @@ async def _build_coordinator_fixture(
     attempt_repo = AttemptRepository(db)
     routing_decision_repo = RoutingDecisionRepository(db)
 
+    from eggpool.observability.routing_trace_writer import RoutingTraceWriter
+
+    trace_writer = RoutingTraceWriter(
+        db=db,
+        routing_decision_repo=routing_decision_repo,
+        queue_capacity=100,
+        flush_interval_s=0.05,
+    )
+    trace_writer.start()
+
     coordinator = RequestCoordinator(
         registry=registry,
         catalog=catalog,  # type: ignore[arg-type]
@@ -244,6 +254,7 @@ async def _build_coordinator_fixture(
         routing_decision_repo=routing_decision_repo,
         quota_estimator=quota_estimator,
         health_manager=None,
+        routing_trace_writer=trace_writer,
     )
 
     return _CoordinatorFixture(
@@ -567,6 +578,8 @@ class TestRoutingDecisionScoreComponents:
     @pytest.mark.asyncio()
     async def test_routing_decision_records_score_components_json(self) -> None:
         """A successful selection persists the score component breakdown."""
+        import asyncio
+
         names = ["alpha", "bravo"]
         fixture = await _build_coordinator_fixture(names)
 
@@ -574,6 +587,9 @@ class TestRoutingDecisionScoreComponents:
             ctx = _make_context("req-score-components")
             selected = await fixture.coordinator._select_and_persist_attempt(ctx, 1)
             assert selected.account_name in names
+
+            # Wait for async writer to flush.
+            await asyncio.sleep(0.15)
 
             # Look up the routing_decisions row.
             row = await fixture.db.fetch_one(
@@ -966,6 +982,9 @@ class TestPublishOrdering:
 
             # Phase 5: the trace row is written AFTER publication.
             # Confirm it is visible once the call returns.
+            import asyncio
+
+            await asyncio.sleep(0.15)
             post_decision_row = await db.fetch_one(
                 "SELECT id, selected_account_name FROM routing_decisions "
                 "ORDER BY id DESC LIMIT 1"

@@ -279,6 +279,8 @@ CLI repro harness:
 - `tests/unit/test_routing_trace_guard.py` — guard disabled /
   threshold-zero / record_written / db-pressure skip / below
   threshold allow / insufficient-samples / configure / singleton.
+- `tests/unit/test_routing_trace_mode.py` — sampled-default and
+  `include_score_components = false` defaults, mode transitions.
 - `tests/integration/test_high_concurrency_streaming.py` — 50-stream
   burst with configurable cancel rate, asserting the closure
   validation matrix (no leaked pending rows, no active reservations,
@@ -293,6 +295,7 @@ Acceptance:
 uv run pytest tests/unit/test_stream_diagnostics.py \
     tests/unit/test_stream_finalization_queue.py \
     tests/unit/test_routing_trace_guard.py \
+    tests/unit/test_routing_trace_mode.py \
     tests/integration/test_high_concurrency_streaming.py -v
 ```
 
@@ -302,6 +305,12 @@ local triage:
 ```bash
 uv run python scripts/repro_high_concurrency_streams.py \
     --concurrency 50 --cancel-rate 0.25 --cancel-offset 2
+```
+
+Routing trace guard and mode tests can also be run independently:
+
+```bash
+uv run pytest tests/unit/test_routing_trace_guard.py tests/unit/test_routing_trace_mode.py -v
 ```
 
 ### Replay fixtures & regression harness

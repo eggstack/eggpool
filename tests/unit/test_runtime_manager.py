@@ -68,6 +68,7 @@ def _fake_generation(generation_id: int = 0) -> RuntimeGeneration:
         supervisor=MagicMock(),
         finalization_retry_queue=MagicMock(),
         routing_trace_guard=MagicMock(),
+        routing_trace_writer=MagicMock(),
         created_at_monotonic=time.monotonic(),
         created_at_epoch=time.time(),
     )

@@ -166,6 +166,7 @@ class ProcessRuntime:
     task_spec_version: int = 0
     last_task_transition: dict[str, Any] | None = None
     dispatch_writer: Any = None  # noqa: ANN401 — DispatchPersistenceWriter
+    routing_trace_writer: Any = None  # noqa: ANN401 — RoutingTraceWriter
 
 
 # ---------------------------------------------------------------------------
@@ -232,6 +233,7 @@ class RuntimeGeneration:
     supervisor: Any
     finalization_retry_queue: Any
     routing_trace_guard: Any
+    routing_trace_writer: Any
     created_at_monotonic: float
     created_at_epoch: float
 
@@ -953,6 +955,7 @@ class RuntimeGenerationBuilder:
             supervisor=services["supervisor"],
             finalization_retry_queue=services.get("finalization_retry_queue"),
             routing_trace_guard=services.get("routing_trace_guard"),
+            routing_trace_writer=services.get("routing_trace_writer"),
             created_at_monotonic=services.get("created_at_monotonic", now_mono),
             created_at_epoch=services.get("created_at_epoch", now_epoch),
         )

@@ -248,12 +248,18 @@ class DispatchSpanRecorder:
     short-circuit).
     """
 
-    def __init__(self, window_size: int = 200) -> None:
+    def __init__(
+        self, window_size: int = 200, detailed_span_sample_rate: float = 1.0
+    ) -> None:
         if window_size < 1:
             raise ValueError("window_size must be at least 1")
+        if not 0.0 <= detailed_span_sample_rate <= 1.0:
+            raise ValueError("detailed_span_sample_rate must be between 0.0 and 1.0")
         self._spans: dict[str, _PerSpanState] = {}
         self._lock = threading.Lock()
         self._window_size = window_size
+        self._detailed_span_sample_rate = detailed_span_sample_rate
+        self._sample_counter = 0
 
     @property
     def window_size(self) -> int:
@@ -263,10 +269,18 @@ class DispatchSpanRecorder:
         """Record an elapsed duration in nanoseconds for ``span``.
 
         Negative or zero values are ignored so callers can pass through
-        uninitialised timers without scrubbing.
+        uninitialised timers without scrubbing.  When
+        ``detailed_span_sample_rate`` < 1.0, records are
+        deterministically sampled via a counter-based check.
         """
         if elapsed_ns <= 0:
             return
+        if self._detailed_span_sample_rate < 1.0:
+            self._sample_counter += 1
+            if (
+                self._sample_counter % 1000
+            ) / 1000.0 >= self._detailed_span_sample_rate:
+                return
         with self._lock:
             state = self._spans.get(span)
             if state is None:
@@ -292,16 +306,21 @@ class DispatchSpanRecorder:
 
         Spans with no recorded samples in the current window appear
         with all numeric fields ``None``.  Span order is sorted for
-        deterministic output.
+        deterministic output.  All sample lists are copied under the
+        lock so concurrent appends/evictions cannot mutate the
+        snapshot during percentile computation.
         """
         with self._lock:
             keys = sorted(self._spans.keys())
-            captured: list[tuple[_SpanKey, _PerSpanState]] = [
-                (key, self._spans[key]) for key in keys
-            ]
+            copied: list[tuple[str, list[int]]] = []
+            for key in keys:
+                state = self._spans[key]
+                copied.append((key, list(state.samples)))
         rows: list[dict[str, Any]] = []
-        for key, state in captured:
-            rows.append(_summarize(key, state).as_dict())
+        for key, samples in copied:
+            rows.append(
+                _summarize_from_samples(key, self._window_size, samples).as_dict()
+            )
         return {"window_size": self._window_size, "spans": rows}
 
     def snapshot_for_spans(self, spans: list[str]) -> dict[str, Any]:
@@ -309,41 +328,33 @@ class DispatchSpanRecorder:
 
         Spans not present in the recorder appear with all numeric
         fields ``None`` and ``sample_count == 0`` so the caller can
-        rely on every requested key being represented.
+        rely on every requested key being represented.  All sample
+        lists are copied under the lock.
         """
         with self._lock:
-            captured: list[tuple[_SpanKey, _PerSpanState]] = []
+            copied: dict[str, list[int]] = {}
             for key in sorted(set(spans)):
                 state = self._spans.get(key)
-                if state is None:
-                    captured.append((key, _PerSpanState(window_size=self._window_size)))
+                if state is not None:
+                    copied[key] = list(state.samples)
                 else:
-                    captured.append((key, state))
-            copied: dict[_SpanKey, _PerSpanState | None] = {}
-            for key, state in captured:
-                copied[key] = (
-                    _PerSpanState(
-                        window_size=state.window_size,
-                        samples=deque(state.samples, maxlen=state.window_size),
-                    )
-                    if state.samples
-                    else state
-                )
+                    copied[key] = []
         rows: list[dict[str, Any]] = []
-        for key, state in copied.items():
-            if state is None:
-                continue
-            rows.append(_summarize(key, state).as_dict())
+        for key, samples in copied.items():
+            rows.append(
+                _summarize_from_samples(key, self._window_size, samples).as_dict()
+            )
         return {"window_size": self._window_size, "spans": rows}
 
 
-def _summarize(span: str, state: _PerSpanState) -> _DispatchSpanStats:
-    """Compute per-span percentile summary without mutating the buffer."""
-    samples = list(state.samples)
+def _summarize_from_samples(
+    span: str, window_size: int, samples: list[int]
+) -> _DispatchSpanStats:
+    """Compute per-span percentile summary from a pre-copied sample list."""
     if not samples:
         return _DispatchSpanStats(
             span=span,
-            window_size=state.window_size,
+            window_size=window_size,
             sample_count=0,
             avg_ms=None,
             min_ms=None,
@@ -362,7 +373,7 @@ def _summarize(span: str, state: _PerSpanState) -> _DispatchSpanStats:
 
     return _DispatchSpanStats(
         span=span,
-        window_size=state.window_size,
+        window_size=window_size,
         sample_count=count,
         avg_ms=avg_ns / 1_000_000,
         min_ms=samples[0] / 1_000_000,

@@ -19,6 +19,8 @@ from eggpool.constants import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from eggpool.db.connection import Database
 
 logger = logging.getLogger(__name__)
@@ -987,6 +989,37 @@ class RoutingDecisionRepository:
                 score_components_json if score_components_json is not None else "{}",
             ),
         )
+
+    async def create_many(self, rows: Sequence[tuple[Any, ...]]) -> int:
+        """Persist a batch of routing decision rows in one transaction.
+
+        Returns the number of rows successfully inserted.  Rows that
+        violate foreign-key constraints (e.g. stale parent request
+        deleted by retention) are silently skipped.
+        """
+        if not rows:
+            return 0
+        sql = (
+            "INSERT INTO routing_decisions ("
+            "request_id, attempt_number, model_id, provider_id, protocol,"
+            " selected_account_id, selected_account_name,"
+            " selected_tier, selected_score,"
+            " eligible_count, scored_count, attempted_excluded_count,"
+            " top_score, top_score_account_name,"
+            " exclude_reasons_json, score_components_json"
+            ") VALUES ("
+            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
+            ")"
+        )
+        inserted = 0
+        async with self._db.transaction():
+            for row in rows:
+                try:
+                    await self._db.execute_insert(sql, row)
+                    inserted += 1
+                except Exception:  # noqa: BLE001
+                    pass
+        return inserted
 
     async def get_for_request(self, request_id: int) -> list[dict[str, Any]]:
         """Get all routing decisions for one request, ordered by attempt."""

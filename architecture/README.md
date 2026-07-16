@@ -2788,6 +2788,21 @@ Default `mode = "sampled"` keeps write pressure low on default installs (Raspber
 - **Log level**: `transcoded_request` log moved from `logger.info` to `logger.debug` (fires on every transcoded request — routine diagnostic data). Loss warnings remain at `logger.info`.
 - **JSON body encoding**: `encode_json_body()` (`src/eggpool/request/body.py`) is the single serialization point using compact separators.
 
+### Phase 5a — Dispatch Span Recorder Hardening
+
+`DispatchSpanRecorder` (`src/eggpool/runtime_dispatch.py`) snapshots now
+copy sample lists under the lock so concurrent appends/evictions cannot
+mutate the snapshot during percentile computation. The recorder accepts
+a `detailed_span_sample_rate` parameter (default `1.0`; range
+`0.0–1.0`) that deterministically samples records via a counter-based
+check — when `< 1.0`, only every Nth record is kept, reducing
+instrumentation pressure on high-throughput installs. The field is
+configurable under `[metrics]` as `detailed_span_sample_rate` and is
+marked `LIVE` so `eggpool rehash` can adjust it without a restart.
+Spans with no recorded samples appear in the snapshot with all numeric
+fields `None` so callers can distinguish "span did not run" from "span
+ran in zero nanoseconds".
+
 ### Phase 6 — Low-Power Dashboard Performance Optimization
 
 Default installs target Raspberry Pi and other SBC hardware where dashboard responsiveness under request load is a real operator pain point. The optimization is deliberately constrained: process workers stay at exactly one (multi-worker mode would duplicate FastAPI app state, background task supervisors, catalog refresh, provider client pools, in-memory health/routing state, and model-info services). Only intra-worker knobs and write-pressure defaults change.
@@ -2995,14 +3010,34 @@ coroutine leaks or fallback errors.
 
 ### Routing-trace pressure guard
 
-`RoutingTraceGuard` (`src/eggpool/request/routing_trace_guard.py`) is a
-tiny stdlib-only guard that consults `db.contention_snapshot()` before
-a routing trace write and skips the write when the rolling p95 lock
-wait exceeds `routing.trace.skip_above_lock_wait_p95_ms` (default
+`RoutingTraceGuard` (`src/eggpool/request/routing_trace_guard.py`) acts as
+a pre-enqueue pressure signal: it consults `db.contention_snapshot()`
+before a routing trace write and skips the write when the rolling p95
+lock wait exceeds `routing.trace.skip_above_lock_wait_p95_ms` (default
 `200.0` ms). Skips require `>= 8` samples to avoid tripping on cold-
 start spikes. Skips are counted under `skipped_db_pressure`; written
 rows under `written`. The guard never raises — trace rows are
 diagnostic, so their absence must never affect dispatch.
+
+### Routing-trace async writer
+
+`RoutingTraceWriter` (`src/eggpool/observability/routing_trace_writer.py`)
+is a process-owned, single-drain-task async writer that collects
+immutable `RoutingTraceEvent` objects via a non-blocking `submit()`
+and persists them in micro-batches using `RoutingDecisionRepository`.
+The writer owns a bounded `deque(maxlen=queue_capacity)` queue (default
+1000) and a single drain coroutine. Thread-safe submission uses a
+`threading.Lock` so callers from any thread or event loop can safely
+enqueue. The drain loop batches up to `max_batch_size` (default 50)
+events per flush interval (`flush_interval_s`, default 1.0s). Queue
+overflow drops the newest event and increments `dropped_queue_full`.
+The writer is process-owned (on `ProcessRuntime`, not
+`RuntimeGeneration`) and is not duplicated by live rehash. Runtime
+diagnostics are exposed via `/api/stats/runtime` `routing_trace_writer`
+(queue depth, accepted/written/dropped counters, oldest event age).
+The `RoutingTraceGuard` pressure signal is consulted *before* the event
+enters the writer's queue, so under DB contention the guard filters
+trace writes at the coordinator level without incurring queue overhead.
 
 ### HTTPX error classification
 

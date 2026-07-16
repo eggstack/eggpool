@@ -137,6 +137,17 @@ async def _build_fixture(account_names: list[str]) -> dict[str, Any]:
     attempt_repo = AttemptRepository(db)
     routing_decision_repo = RoutingDecisionRepository(db)
     recorder = DispatchSpanRecorder()
+
+    from eggpool.observability.routing_trace_writer import RoutingTraceWriter
+
+    trace_writer = RoutingTraceWriter(
+        db=db,
+        routing_decision_repo=routing_decision_repo,
+        queue_capacity=100,
+        flush_interval_s=0.05,
+    )
+    trace_writer.start()
+
     coordinator = RequestCoordinator(
         registry=registry,
         catalog=catalog,  # type: ignore[arg-type]
@@ -150,12 +161,14 @@ async def _build_fixture(account_names: list[str]) -> dict[str, Any]:
         quota_estimator=quota_estimator,
         health_manager=None,
         dispatch_span_recorder=recorder,
+        routing_trace_writer=trace_writer,
     )
     return {
         "coordinator": coordinator,
         "db": db,
         "router": router,
         "recorder": recorder,
+        "trace_writer": trace_writer,
     }
 
 

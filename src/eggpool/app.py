@@ -741,6 +741,9 @@ def _log_operational_profile(
     trace_sample_rate = getattr(
         getattr(config.routing, "trace", None), "sample_rate", 0.05
     )
+    trace_queue_capacity = getattr(
+        getattr(config.routing, "trace", None), "queue_capacity", 1000
+    )
     transcoder_enabled = bool(getattr(config.transcoder, "enabled", True))
     compression_enabled = bool(getattr(config.compression, "enabled", False))
     compression_mode = str(getattr(config.compression, "mode", "off"))
@@ -756,6 +759,7 @@ def _log_operational_profile(
         "busy_timeout_ms": config.database.busy_timeout_ms,
         "routing_trace_mode": trace_mode,
         "routing_trace_sample_rate": trace_sample_rate,
+        "routing_trace_queue_capacity": trace_queue_capacity,
         "metrics_write_mode": config.metrics.write_mode,
         "metrics_flush_interval_s": config.metrics.flush_interval_s,
         "transcoder_enabled": transcoder_enabled,
@@ -1274,7 +1278,10 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # such as ``body_read``, ``json_parse``, ``routing_plan``,
     # ``selection_lock_wait`` and ``compression_apply`` so operators
     # can identify dispatch hotspots without re-reading source code.
-    dispatch_span_recorder = DispatchSpanRecorder(window_size=200)
+    dispatch_span_recorder = DispatchSpanRecorder(
+        window_size=200,
+        detailed_span_sample_rate=config.metrics.detailed_span_sample_rate,
+    )
     app.state.dispatch_span_recorder = dispatch_span_recorder
 
     # 18d.1. Dispatch persistence writer (Milestone C): process-owned
@@ -1297,6 +1304,30 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         dispatch_writer.start()
     process.dispatch_writer = dispatch_writer
     app.state.dispatch_writer = dispatch_writer
+
+    # 18d.2. Routing trace writer (Milestone D): process-owned async
+    # writer that persists routing-decision traces in background
+    # batches, removing trace writes from the synchronous request path.
+    from eggpool.db.repositories import RoutingDecisionRepository  # noqa: PLC0415
+    from eggpool.observability.routing_trace_writer import (  # noqa: PLC0415
+        RoutingTraceWriter,
+    )
+
+    routing_trace_writer = RoutingTraceWriter(
+        db=db,
+        routing_decision_repo=RoutingDecisionRepository(db),
+        queue_capacity=config.routing.trace.queue_capacity,
+        flush_interval_s=config.routing.trace.flush_interval_s,
+        max_batch_size=config.routing.trace.max_batch_size,
+        shutdown_flush_timeout_s=config.routing.trace.shutdown_flush_timeout_s,
+    )
+    routing_trace_writer.configure(
+        mode=config.routing.trace.mode,
+        sample_rate=config.routing.trace.sample_rate,
+    )
+    routing_trace_writer.start()
+    process.routing_trace_writer = routing_trace_writer
+    app.state.routing_trace_writer = routing_trace_writer
 
     # 18d. Request coordinator
     coordinator = RequestCoordinator(
@@ -1327,6 +1358,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         compression_policy=config.compression,
         stream_diagnostics=get_stream_diagnostics(),
         dispatch_writer=dispatch_writer,
+        routing_trace_writer=routing_trace_writer,
     )
     app.state.coordinator = coordinator
 
@@ -1406,6 +1438,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         supervisor=None,  # patched in step 20 via attach_supervisor_to_active
         finalization_retry_queue=app.state.finalization_retry_queue,
         routing_trace_guard=app.state.routing_trace_guard,
+        routing_trace_writer=routing_trace_writer,
         created_at_monotonic=app.state.started_monotonic,
         created_at_epoch=app.state.started_epoch,
     )
@@ -1476,6 +1509,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         runtime_manager=None,  # wired in step 24 below
         process=process,
         dispatch_writer=dispatch_writer,
+        routing_trace_writer=routing_trace_writer,
     )
 
     # Use the unified register_runtime_tasks helper so the startup and
@@ -1753,6 +1787,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                 await dispatch_writer.stop()
             except Exception:
                 logger.exception("Error stopping dispatch writer during shutdown")
+
+        routing_trace_writer: Any = getattr(app.state, "routing_trace_writer", None)
+        if routing_trace_writer is not None:
+            try:
+                await routing_trace_writer.stop()
+            except Exception:
+                logger.exception("Error stopping routing trace writer during shutdown")
 
         db: Database | None = getattr(app.state, "db", None)
         stats_db: Database | None = getattr(app.state, "stats_db", None)

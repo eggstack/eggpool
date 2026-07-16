@@ -626,6 +626,7 @@ def _make_real_generation(
         supervisor=MagicMock(),
         finalization_retry_queue=MagicMock(),
         routing_trace_guard=MagicMock(),
+        routing_trace_writer=MagicMock(),
         created_at_monotonic=time.monotonic(),
         created_at_epoch=time.time(),
     )
@@ -1149,6 +1150,7 @@ class TestMilestoneD1CandidateBuild:
                 supervisor=gen.supervisor,
                 finalization_retry_queue=gen.finalization_retry_queue,
                 routing_trace_guard=gen.routing_trace_guard,
+                routing_trace_writer=gen.routing_trace_writer,
                 created_at_monotonic=gen.created_at_monotonic,
                 created_at_epoch=gen.created_at_epoch,
             )
@@ -1452,6 +1454,7 @@ class TestMilestoneD1CandidateBuild:
             supervisor=baseline_gen.supervisor,
             finalization_retry_queue=baseline_gen.finalization_retry_queue,
             routing_trace_guard=baseline_gen.routing_trace_guard,
+            routing_trace_writer=baseline_gen.routing_trace_writer,
             created_at_monotonic=baseline_gen.created_at_monotonic,
             created_at_epoch=baseline_gen.created_at_epoch,
         )
@@ -1586,6 +1589,7 @@ class TestMilestoneD1RepeatedReloadSoak:
                 supervisor=supervisor,
                 finalization_retry_queue=finalization_queue,
                 routing_trace_guard=routing_trace_guard,
+                routing_trace_writer=MagicMock(),
                 created_at_monotonic=time.monotonic(),
                 created_at_epoch=time.time(),
             )

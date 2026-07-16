@@ -590,6 +590,7 @@ class RequestCoordinator:
         stream_diagnostics: StreamDiagnostics | None = None,
         finalization_retry_queue: Any | None = None,  # noqa: ANN401
         routing_trace_guard: Any | None = None,  # noqa: ANN401
+        routing_trace_writer: Any | None = None,  # noqa: ANN401
         selection_claim_diagnostics: SelectionClaimDiagnostics | None = None,
         dispatch_writer: Any | None = None,  # noqa: ANN401
         use_dispatch_writer: bool = False,
@@ -647,6 +648,7 @@ class RequestCoordinator:
 
             routing_trace_guard = get_routing_trace_guard()
         self._routing_trace_guard = routing_trace_guard
+        self._routing_trace_writer = routing_trace_writer
         self._dispatch_writer = dispatch_writer
         self._use_dispatch_writer = use_dispatch_writer and dispatch_writer is not None
 
@@ -1977,10 +1979,12 @@ class RequestCoordinator:
         resolved_provider_id = claim_identity.resolved_provider_id
         estimated_microdollars = claim_identity.estimated_microdollars
 
-        # 10a. Persist the routing-decision trace OUTSIDE the lock. Trace
-        # writes are observability data only; they are not required for
-        # reservation correctness, so a trace-write failure cannot fail
-        # the dispatch.
+        # 10a. Submit the routing-decision trace to the async writer.
+        # Trace writes are observability data only; they are not
+        # required for reservation correctness, so a trace-write
+        # failure cannot fail the dispatch.  The guard acts as a
+        # pre-enqueue pressure signal to avoid adding trace pressure
+        # while the DB is contended.
         with _maybe_span(self._dispatch_span_recorder, SPAN_ROUTING_TRACE_BUILD):
             trace_cfg = self._config.routing.trace if self._config is not None else None
             trace_mode = trace_cfg.mode if trace_cfg is not None else "all"
@@ -1991,93 +1995,91 @@ class RequestCoordinator:
                     int.from_bytes(h[:8], "big") / ((1 << 64) - 1)
                 ) < trace_cfg.sample_rate  # type: ignore[union-attr]
 
-            trace: RoutingDecisionTrace | None = None
+            trace_event: RoutingTraceEvent | None = None
             if should_write_trace:
-                top_score_value: float | None = None
-                top_score_account_name: str | None = None
-                if ranked_candidates:
-                    top_state, top_score_obj = ranked_candidates[0]
-                    top_score_value = float(top_score_obj.final_score)
-                    top_score_account_name = top_state.name
-                include_sc = (
-                    trace_cfg.include_score_components  # type: ignore[union-attr]
-                    if trace_cfg is not None
-                    else True
+                skip_trace, skip_reason = self._routing_trace_guard.should_skip(
+                    self._db
                 )
-                score_components = (
-                    self._build_score_components(
-                        ranked_candidates=ranked_candidates,
-                        selected_account_name=account_name,
-                        selected_state=selected_state,
-                        selected_score=selected_score,
-                        selected_tier=selected_tier,
-                        fairness_decision=plan.fairness_decision,
-                        fairness_band_names=plan.fairness_band_names,
+                if skip_trace:
+                    self._routing_trace_guard.record_skip(reason=skip_reason)
+                else:
+                    top_score_value: float | None = None
+                    top_score_account_name: str | None = None
+                    if ranked_candidates:
+                        top_state, top_score_obj = ranked_candidates[0]
+                        top_score_value = float(top_score_obj.final_score)
+                        top_score_account_name = top_state.name
+                    include_sc = (
+                        trace_cfg.include_score_components  # type: ignore[union-attr]
+                        if trace_cfg is not None
+                        else True
                     )
-                    if include_sc
-                    else None
-                )
-                trace = RoutingDecisionTrace(
-                    model_id=context.model_id,
-                    provider_id=resolved_provider_id,
-                    protocol=context.protocol,
-                    selected_account_name=account_name,
-                    selected_account_id=account_id,
-                    selected_tier=selected_tier,
-                    selected_score=selected_score,
-                    eligible_count=len(eligible_account_names),
-                    scored_count=len(ranked_candidates),
-                    attempted_excluded_count=len(exclude),
-                    top_score=top_score_value,
-                    top_score_account_name=top_score_account_name,
-                    exclusions=tuple(exclusions),
-                    score_components=score_components,
-                )
-        if trace is not None:
-            skip_trace, skip_reason = self._routing_trace_guard.should_skip(self._db)
-            if skip_trace:
-                self._routing_trace_guard.record_skip(reason=skip_reason)
-            else:
-                with _maybe_span(
-                    self._dispatch_span_recorder, SPAN_ROUTING_TRACE_WRITE
-                ):
-                    # The trace write needs its own transaction because it
-                    # runs OUTSIDE ``_select_lock`` (and therefore outside
-                    # the request/reservation/attempt transaction).  Trace
-                    # writes are best-effort observability data; a write
-                    # failure must never fail the dispatch.
-                    try:
-                        async with self._db.transaction():
-                            await self._routing_decision_repo.create(
-                                request_id=int(db_request_id),
-                                attempt_number=attempt_number,
-                                model_id=trace.model_id,
-                                provider_id=trace.provider_id,
-                                protocol=trace.protocol,
-                                selected_account_id=trace.selected_account_id,
-                                selected_account_name=trace.selected_account_name,
-                                selected_tier=trace.selected_tier,
-                                selected_score=trace.selected_score,
-                                eligible_count=trace.eligible_count,
-                                scored_count=trace.scored_count,
-                                attempted_excluded_count=trace.attempted_excluded_count,
-                                top_score=trace.top_score,
-                                top_score_account_name=trace.top_score_account_name,
-                                exclude_reasons_json=trace.to_exclude_reasons_json(),
-                                score_components_json=(
-                                    trace.to_score_components_json()
-                                    if trace.score_components is not None
-                                    else None
-                                ),
-                            )
-                        self._routing_trace_guard.record_written()
-                    except Exception:  # noqa: BLE001
-                        # Trace writes are best-effort. Log and continue.
-                        logger.debug(
-                            "routing_trace_write_failed",
-                            extra={"proxy_request_id": context.request_id},
-                            exc_info=True,
+                    score_components = (
+                        self._build_score_components(
+                            ranked_candidates=ranked_candidates,
+                            selected_account_name=account_name,
+                            selected_state=selected_state,
+                            selected_score=selected_score,
+                            selected_tier=selected_tier,
+                            fairness_decision=plan.fairness_decision,
+                            fairness_band_names=plan.fairness_band_names,
                         )
+                        if include_sc
+                        else None
+                    )
+                    trace = RoutingDecisionTrace(
+                        model_id=context.model_id,
+                        provider_id=resolved_provider_id,
+                        protocol=context.protocol,
+                        selected_account_name=account_name,
+                        selected_account_id=account_id,
+                        selected_tier=selected_tier,
+                        selected_score=selected_score,
+                        eligible_count=len(eligible_account_names),
+                        scored_count=len(ranked_candidates),
+                        attempted_excluded_count=len(exclude),
+                        top_score=top_score_value,
+                        top_score_account_name=top_score_account_name,
+                        exclusions=tuple(exclusions),
+                        score_components=score_components,
+                    )
+                    from eggpool.observability.routing_trace_writer import (
+                        RoutingTraceEvent,
+                    )
+
+                    trace_event = RoutingTraceEvent(
+                        request_id=context.request_id,
+                        db_request_id=int(db_request_id),
+                        attempt_number=attempt_number,
+                        model_id=trace.model_id,
+                        provider_id=trace.provider_id,
+                        protocol=trace.protocol,
+                        selected_account_name=trace.selected_account_name,
+                        selected_account_id=trace.selected_account_id,
+                        selected_tier=trace.selected_tier,
+                        selected_score=trace.selected_score,
+                        eligible_count=trace.eligible_count,
+                        scored_count=trace.scored_count,
+                        attempted_excluded_count=trace.attempted_excluded_count,
+                        top_score=trace.top_score,
+                        top_score_account_name=trace.top_score_account_name,
+                        exclude_reasons_json=trace.to_exclude_reasons_json(),
+                        score_components_json=(
+                            trace.to_score_components_json()
+                            if trace.score_components is not None
+                            else None
+                        ),
+                        created_at_mono_ns=time.monotonic_ns(),
+                        created_at_epoch=time.time(),
+                        generation_id=None,
+                    )
+        if trace_event is not None and self._routing_trace_writer is not None:
+            with _maybe_span(self._dispatch_span_recorder, SPAN_ROUTING_TRACE_WRITE):
+                result = self._routing_trace_writer.submit(trace_event)
+                if result == "accepted":
+                    self._routing_trace_guard.record_written()
+                else:
+                    self._routing_trace_guard.record_skip(reason=result)
 
         return SelectedAttempt(
             proxy_request_id=context.request_id,

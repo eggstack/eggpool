@@ -23,6 +23,7 @@ from eggpool.db.repositories import (
     RoutingDecisionRepository,
 )
 from eggpool.models.config import AppConfig, RoutingTraceConfig
+from eggpool.observability.routing_trace_writer import RoutingTraceWriter
 from eggpool.request.coordinator import ProxyRequestContext, RequestCoordinator
 from eggpool.routing.router import Router
 
@@ -111,6 +112,7 @@ async def _build_coordinator(
     db: Database,
     routing_decision_repo: RoutingDecisionRepository | None = None,
     health_manager: HealthManager | None = None,
+    routing_trace_writer: Any | None = None,
 ) -> RequestCoordinator:
     registry = AccountRegistry(config)
     httpx_client = httpx.AsyncClient(
@@ -151,6 +153,7 @@ async def _build_coordinator(
         quota_estimator=None,
         health_manager=health_manager,
         config=config,
+        routing_trace_writer=routing_trace_writer,
     )
 
 
@@ -169,6 +172,39 @@ async def _count_routing_traces(db: Database) -> int:
     row = await db.fetch_one("SELECT COUNT(*) AS cnt FROM routing_decisions")
     assert row is not None
     return int(row["cnt"])
+
+
+async def _create_test_writer(
+    db: Database,
+    routing_decision_repo: RoutingDecisionRepository | None = None,
+) -> RoutingTraceWriter:
+    """Create and start a routing trace writer for testing."""
+    writer = RoutingTraceWriter(
+        db=db,
+        routing_decision_repo=routing_decision_repo or RoutingDecisionRepository(db),
+        queue_capacity=1000,
+        flush_interval_s=0.05,
+        max_batch_size=50,
+    )
+    writer.start()
+    return writer
+
+
+async def _seed_request_row(db: Database, request_id: int) -> None:
+    """Insert a minimal request row for FK compliance."""
+    await db.execute_insert(
+        "INSERT OR IGNORE INTO requests (id, account_id, model_id, started_at) "
+        "VALUES (?, 1, 'gpt-4', datetime('now'))",
+        (request_id,),
+    )
+
+
+async def _flush_writer(writer: RoutingTraceWriter) -> None:
+    """Wait for the writer to drain its queue."""
+    import asyncio
+
+    # Give the drain task time to process
+    await asyncio.sleep(0.15)
 
 
 async def _get_trace(
@@ -195,14 +231,21 @@ async def test_all_mode_writes_trace_every_attempt() -> None:
     try:
         await MigrationRunner(db).run()
         await _seed_accounts(db, ["trace-acct-a", "trace-acct-b"])
-        coordinator = await _build_coordinator(config, db)
+        writer = await _create_test_writer(db)
+        try:
+            coordinator = await _build_coordinator(
+                config, db, routing_trace_writer=writer
+            )
 
-        for i in range(5):
-            ctx = _make_context(f"req-all-{i}")
-            await coordinator._select_and_persist_attempt(ctx, 1)
+            for i in range(5):
+                ctx = _make_context(f"req-all-{i}")
+                await coordinator._select_and_persist_attempt(ctx, 1)
+                await _flush_writer(writer)
 
-        count = await _count_routing_traces(db)
-        assert count == 5, f"Expected 5 traces, got {count}"
+            count = await _count_routing_traces(db)
+            assert count == 5, f"Expected 5 traces, got {count}"
+        finally:
+            await writer.stop()
     finally:
         await db.disconnect()
 
@@ -216,14 +259,21 @@ async def test_off_mode_skips_all_traces() -> None:
     try:
         await MigrationRunner(db).run()
         await _seed_accounts(db, ["trace-acct-a", "trace-acct-b"])
-        coordinator = await _build_coordinator(config, db)
+        writer = await _create_test_writer(db)
+        try:
+            coordinator = await _build_coordinator(
+                config, db, routing_trace_writer=writer
+            )
 
-        for i in range(5):
-            ctx = _make_context(f"req-off-{i}")
-            await coordinator._select_and_persist_attempt(ctx, 1)
+            for i in range(5):
+                ctx = _make_context(f"req-off-{i}")
+                await coordinator._select_and_persist_attempt(ctx, 1)
+                await _flush_writer(writer)
 
-        count = await _count_routing_traces(db)
-        assert count == 0, f"Expected 0 traces in off mode, got {count}"
+            count = await _count_routing_traces(db)
+            assert count == 0, f"Expected 0 traces in off mode, got {count}"
+        finally:
+            await writer.stop()
     finally:
         await db.disconnect()
 
@@ -237,15 +287,21 @@ async def test_sampled_mode_deterministic() -> None:
     try:
         await MigrationRunner(db).run()
         await _seed_accounts(db, ["trace-acct-a", "trace-acct-b"])
-        coordinator = await _build_coordinator(config, db, health_manager=None)
+        writer = await _create_test_writer(db)
+        try:
+            coordinator = await _build_coordinator(
+                config, db, health_manager=None, routing_trace_writer=writer
+            )
 
-        # Run the same set of request IDs twice and collect which get traces
-        written_first: list[bool] = []
-        for i in range(20):
-            ctx = _make_context(f"req-sampled-{i}")
-            await coordinator._select_and_persist_attempt(ctx, 1)
-            count = await _count_routing_traces(db)
-            written_first.append(count > (i if i == 0 else written_first[i - 1]))  # type: ignore[index]
+            written_first: list[bool] = []
+            for i in range(20):
+                ctx = _make_context(f"req-sampled-{i}")
+                await coordinator._select_and_persist_attempt(ctx, 1)
+                await _flush_writer(writer)
+                count = await _count_routing_traces(db)
+                written_first.append(count > (i if i == 0 else written_first[i - 1]))  # type: ignore[index]
+        finally:
+            await writer.stop()
 
         # Clear all traces and run again with a fresh DB to avoid PK conflicts
         await db.disconnect()
@@ -253,13 +309,20 @@ async def test_sampled_mode_deterministic() -> None:
         await db.connect()
         await MigrationRunner(db).run()
         await _seed_accounts(db, ["trace-acct-a", "trace-acct-b"])
-        coordinator = await _build_coordinator(config, db, health_manager=None)
-        written_second: list[bool] = []
-        for i in range(20):
-            ctx = _make_context(f"req-sampled-{i}")
-            await coordinator._select_and_persist_attempt(ctx, 1)
-            count = await _count_routing_traces(db)
-            written_second.append(count > (i if i == 0 else written_second[i - 1]))  # type: ignore[index]
+        writer2 = await _create_test_writer(db)
+        try:
+            coordinator = await _build_coordinator(
+                config, db, health_manager=None, routing_trace_writer=writer2
+            )
+            written_second: list[bool] = []
+            for i in range(20):
+                ctx = _make_context(f"req-sampled-{i}")
+                await coordinator._select_and_persist_attempt(ctx, 1)
+                await _flush_writer(writer2)
+                count = await _count_routing_traces(db)
+                written_second.append(count > (i if i == 0 else written_second[i - 1]))  # type: ignore[index]
+        finally:
+            await writer2.stop()
 
         # Same request_ids produce same sampling decisions
         assert written_first == written_second, (
@@ -278,14 +341,21 @@ async def test_sampled_mode_respects_sample_rate() -> None:
     try:
         await MigrationRunner(db).run()
         await _seed_accounts(db, ["trace-acct-a", "trace-acct-b"])
-        coordinator = await _build_coordinator(config, db)
+        writer = await _create_test_writer(db)
+        try:
+            coordinator = await _build_coordinator(
+                config, db, routing_trace_writer=writer
+            )
 
-        for i in range(10):
-            ctx = _make_context(f"req-sr0-{i}")
-            await coordinator._select_and_persist_attempt(ctx, 1)
+            for i in range(10):
+                ctx = _make_context(f"req-sr0-{i}")
+                await coordinator._select_and_persist_attempt(ctx, 1)
+                await _flush_writer(writer)
 
-        count = await _count_routing_traces(db)
-        assert count == 0, f"Expected 0 traces with sample_rate=0, got {count}"
+            count = await _count_routing_traces(db)
+            assert count == 0, f"Expected 0 traces with sample_rate=0, got {count}"
+        finally:
+            await writer.stop()
     finally:
         await db.disconnect()
 
@@ -299,14 +369,21 @@ async def test_sampled_mode_rate_1_writes_all() -> None:
     try:
         await MigrationRunner(db).run()
         await _seed_accounts(db, ["trace-acct-a", "trace-acct-b"])
-        coordinator = await _build_coordinator(config, db)
+        writer = await _create_test_writer(db)
+        try:
+            coordinator = await _build_coordinator(
+                config, db, routing_trace_writer=writer
+            )
 
-        for i in range(10):
-            ctx = _make_context(f"req-sr1-{i}")
-            await coordinator._select_and_persist_attempt(ctx, 1)
+            for i in range(10):
+                ctx = _make_context(f"req-sr1-{i}")
+                await coordinator._select_and_persist_attempt(ctx, 1)
+                await _flush_writer(writer)
 
-        count = await _count_routing_traces(db)
-        assert count == 10, f"Expected 10 traces with sample_rate=1.0, got {count}"
+            count = await _count_routing_traces(db)
+            assert count == 10, f"Expected 10 traces with sample_rate=1.0, got {count}"
+        finally:
+            await writer.stop()
     finally:
         await db.disconnect()
 
@@ -331,18 +408,25 @@ async def test_include_score_components_false_omits_components() -> None:
     try:
         await MigrationRunner(db).run()
         await _seed_accounts(db, ["trace-acct-a", "trace-acct-b"])
-        coordinator = await _build_coordinator(config, db)
+        writer = await _create_test_writer(db)
+        try:
+            coordinator = await _build_coordinator(
+                config, db, routing_trace_writer=writer
+            )
 
-        ctx = _make_context("req-nosc-1")
-        selected = await coordinator._select_and_persist_attempt(ctx, 1)
-        db_request_id = ctx.client_metadata["db_request_id"]
+            ctx = _make_context("req-nosc-1")
+            selected = await coordinator._select_and_persist_attempt(ctx, 1)
+            await _flush_writer(writer)
+            db_request_id = ctx.client_metadata["db_request_id"]
 
-        trace = await _get_trace(db, int(db_request_id), selected.attempt_number)
-        assert trace is not None
-        # score_components_json column is NOT NULL with DEFAULT '{}';
-        # when include_score_components=false the coordinator passes
-        # None which the DB coerces to the default '{}'.
-        assert trace["score_components_json"] == "{}"
+            trace = await _get_trace(db, int(db_request_id), selected.attempt_number)
+            assert trace is not None
+            # score_components_json column is NOT NULL with DEFAULT '{}';
+            # when include_score_components=false the coordinator passes
+            # None which the DB coerces to the default '{}'.
+            assert trace["score_components_json"] == "{}"
+        finally:
+            await writer.stop()
     finally:
         await db.disconnect()
 
@@ -359,15 +443,22 @@ async def test_include_score_components_true_preserves_components() -> None:
     try:
         await MigrationRunner(db).run()
         await _seed_accounts(db, ["trace-acct-a", "trace-acct-b"])
-        coordinator = await _build_coordinator(config, db)
+        writer = await _create_test_writer(db)
+        try:
+            coordinator = await _build_coordinator(
+                config, db, routing_trace_writer=writer
+            )
 
-        ctx = _make_context("req-yesc-1")
-        selected = await coordinator._select_and_persist_attempt(ctx, 1)
-        db_request_id = ctx.client_metadata["db_request_id"]
+            ctx = _make_context("req-yesc-1")
+            selected = await coordinator._select_and_persist_attempt(ctx, 1)
+            await _flush_writer(writer)
+            db_request_id = ctx.client_metadata["db_request_id"]
 
-        trace = await _get_trace(db, int(db_request_id), selected.attempt_number)
-        assert trace is not None
-        assert trace["score_components_json"] is not None
+            trace = await _get_trace(db, int(db_request_id), selected.attempt_number)
+            assert trace is not None
+            assert trace["score_components_json"] is not None
+        finally:
+            await writer.stop()
     finally:
         await db.disconnect()
 
@@ -379,6 +470,10 @@ async def test_default_mode_is_sampled() -> None:
     assert cfg.mode == "sampled"
     assert cfg.sample_rate == 0.05
     assert cfg.include_score_components is False
+    assert cfg.queue_capacity == 1000
+    assert cfg.flush_interval_s == 1.0
+    assert cfg.max_batch_size == 50
+    assert cfg.shutdown_flush_timeout_s == 5.0
 
 
 @pytest.mark.asyncio()
@@ -391,14 +486,21 @@ async def test_all_mode_writes_traces_when_overridden() -> None:
     try:
         await MigrationRunner(db).run()
         await _seed_accounts(db, ["trace-acct-a", "trace-acct-b"])
-        coordinator = await _build_coordinator(config, db)
+        writer = await _create_test_writer(db)
+        try:
+            coordinator = await _build_coordinator(
+                config, db, routing_trace_writer=writer
+            )
 
-        for i in range(3):
-            ctx = _make_context(f"req-nocfg-{i}")
-            await coordinator._select_and_persist_attempt(ctx, 1)
+            for i in range(3):
+                ctx = _make_context(f"req-nocfg-{i}")
+                await coordinator._select_and_persist_attempt(ctx, 1)
+                await _flush_writer(writer)
 
-        count = await _count_routing_traces(db)
-        assert count == 3, f"Expected 3 traces with mode='all', got {count}"
+            count = await _count_routing_traces(db)
+            assert count == 3, f"Expected 3 traces with mode='all', got {count}"
+        finally:
+            await writer.stop()
     finally:
         await db.disconnect()
 

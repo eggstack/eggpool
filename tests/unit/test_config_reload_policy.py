@@ -124,6 +124,8 @@ class TestPolicyDefaults:
             "upstream.read_timeout_s",
             # Metrics flush interval reconfigured via process supervisor.
             "metrics.flush_interval_s",
+            # Detailed span sample rate reconfigured via generation rebuild.
+            "metrics.detailed_span_sample_rate",
             # Backup enabled state and scheduling fields reconfigured
             # via process supervisor.
             "backup.enabled",
@@ -666,6 +668,7 @@ class TestComputeDiff:
             supervisor=MagicMock(),
             finalization_retry_queue=MagicMock(),
             routing_trace_guard=MagicMock(),
+            routing_trace_writer=MagicMock(),
             created_at_monotonic=0.0,
             created_at_epoch=0.0,
         )
@@ -1192,6 +1195,9 @@ LIVE_FIELD_CONSUMERS: dict[str, tuple[str, ...]] = {
     "upstream.read_timeout_s": ("stale_request_finalizer (gen config per tick)",),
     # Metrics flush interval reconfigured via the process supervisor.
     "metrics.flush_interval_s": ("metrics_flush (process supervisor reconfigure)",),
+    # Detailed span sample rate consumed by the generation-owned
+    # ``DispatchSpanRecorder`` rebuilt on config change.
+    "metrics.detailed_span_sample_rate": ("DispatchSpanRecorder",),
     # Milestone D2: model-info scheduling fields reconfigured via the
     # process supervisor; toggling ``enabled`` adds/removes the task,
     # changing ``refresh_interval_s`` replaces it with the new cadence.

@@ -1189,6 +1189,18 @@ class TestCoordinatorTraceMetadata:
                         (int(row["id"]), "test-model"),
                     )
 
+            from eggpool.observability.routing_trace_writer import (
+                RoutingTraceWriter,
+            )
+
+            trace_writer = RoutingTraceWriter(
+                db=db,
+                routing_decision_repo=RoutingDecisionRepository(db),
+                queue_capacity=100,
+                flush_interval_s=0.05,
+            )
+            trace_writer.start()
+
             coordinator = RequestCoordinator(
                 registry=registry,
                 catalog=_MockCatalog(cache),  # type: ignore[arg-type]
@@ -1201,6 +1213,7 @@ class TestCoordinatorTraceMetadata:
                 routing_decision_repo=RoutingDecisionRepository(db),
                 quota_estimator=quota_estimator,
                 health_manager=None,
+                routing_trace_writer=trace_writer,
             )
 
             for i in range(300):
