@@ -372,14 +372,17 @@ Rollback may disable trace writing entirely while preserving correctness; it mus
 
 Provide:
 
-- trace event schema and redaction review;
-- writer lifecycle/ownership proof;
-- before/after coordinator span showing removal of trace DB wait;
-- queue overload behavior;
-- dashboard sample/drop screenshots or test payloads;
-- recorder concurrency tests;
-- rehash transition results;
-- performance comparison for all/sampled/off.
+- [x] trace event schema and redaction review — `RoutingTraceEvent` frozen dataclass, `test_trace_event_json_no_secrets`, `test_event_to_json_bytes_omits_secrets`;
+- [x] writer lifecycle/ownership proof — `ProcessRuntime.routing_trace_writer`, survives generation swaps, `test_writer_survives_ten_rehashes_without_duplication`;
+- [x] before/after coordinator span showing removal of trace DB wait — `test_trace_db_delay_does_not_block_dispatch` (200ms injected DB delay, dispatch p95 < 100ms);
+- [x] queue overload behavior — `test_submit_dropped_queue_full`, `test_queue_near_capacity_no_dispatch_regression`;
+- [x] dashboard sample/drop snapshots — `TestDashboardTraceDiagnostics` (5 tests in `test_milestone_d_integration.py`);
+- [x] recorder concurrency tests — `DispatchSpanRecorder` snapshot copies under lock, `detailed_span_sample_rate` parametrized;
+- [x] rehash transition results — `test_routing_trace_rehash.py` (7 tests: all→sampled, sampled→off, off→sampled, score_components toggle, configure preserves counters, writer survives rehash);
+- [x] performance comparison for all/sampled/off — `test_trace_mode_perf.py` (6 tests: all baseline, off baseline, off vs all regression, score components on/off, queue near capacity, slow DB flush);
+- [x] D9 rehash fix — writer `configure()` called during rehash for mode/sample_rate; `coordinator._routing_trace_writer` set from `process.routing_trace_writer`;
+- [x] stale parent FK silently skipped — `test_stale_parent_row_silently_skipped`;
+- [x] writer crash resilience — `test_writer_crash_does_not_fail_dispatch`.
 
 ## Exit condition
 

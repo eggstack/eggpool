@@ -985,6 +985,17 @@ class ReloadManager:
                 routing_trace_guard
             )
 
+            # -- Routing trace writer (process-owned, reconfigure in place)
+            routing_trace_writer = getattr(process, "routing_trace_writer", None)
+            if routing_trace_writer is not None:
+                routing_trace_writer.configure(
+                    mode=candidate_config.routing.trace.mode,
+                    sample_rate=candidate_config.routing.trace.sample_rate,
+                )
+            coordinator._routing_trace_writer = (  # pyright: ignore[reportPrivateUsage]
+                routing_trace_writer
+            )
+
             # -- Stats service (generation-owned) --------------------------
             stats_db = process.stats_db
             stats_account_backoff_repo = (
@@ -1056,6 +1067,7 @@ class ReloadManager:
                 supervisor=supervisor,
                 finalization_retry_queue=finalization_retry_queue,
                 routing_trace_guard=routing_trace_guard,
+                routing_trace_writer=routing_trace_writer,
             )
 
             # -- Reconfigure tasks on the process supervisor

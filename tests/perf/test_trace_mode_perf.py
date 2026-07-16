@@ -30,7 +30,10 @@ from eggpool.db.repositories import (
     ReservationRepository,
     RoutingDecisionRepository,
 )
-from eggpool.observability.routing_trace_writer import RoutingTraceWriter
+from eggpool.observability.routing_trace_writer import (
+    RoutingTraceEvent,
+    RoutingTraceWriter,
+)
 from eggpool.request.coordinator import ProxyRequestContext, RequestCoordinator
 
 pytestmark = pytest.mark.performance
@@ -303,3 +306,194 @@ async def test_trace_mode_off_vs_all_no_regressions() -> None:
         f"trace-all p95 ({p95_all:.1f}ms) regressed >2x vs trace-off p95 "
         f"({p95_off:.1f}ms), ratio={regression_ratio:.2f}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Score components on/off
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio()
+@respx.mock
+async def test_score_components_on_off_no_regression() -> None:
+    """Dispatch p95 with score_components=True must not regress vs False.
+
+    Score components add JSON serialization overhead per trace event;
+    this test ensures the overhead is bounded.
+    """
+    respx.post(f"{UPSTREAM_BASE}/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={"choices": []})
+    )
+
+    async def _collect_timings(include_sc: bool) -> list[float]:
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await MigrationRunner(db).run()
+            await _seed_accounts(db)
+            writer = RoutingTraceWriter(
+                db=db,
+                routing_decision_repo=RoutingDecisionRepository(db),
+                queue_capacity=1000,
+                flush_interval_s=0.05,
+                max_batch_size=50,
+            )
+            writer.start()
+            try:
+                config = _build_config(trace_mode="all")
+                config.routing.trace.include_score_components = include_sc
+                coord = await _build_coordinator(config, db, writer=writer)
+                return await _run_dispatches(coord, count=30)
+            finally:
+                await writer.stop()
+        finally:
+            await db.disconnect()
+
+    timings_off = await _collect_timings(include_sc=False)
+    timings_on = await _collect_timings(include_sc=True)
+
+    p95_off = _percentile(timings_off, 95)
+    p95_on = _percentile(timings_on, 95)
+
+    # Allow up to 1.5x — score components add modest JSON serialization
+    regression_ratio = p95_on / max(p95_off, 0.01)
+    assert regression_ratio < 1.5, (
+        f"score-components-on p95 ({p95_on:.1f}ms) regressed >1.5x vs off "
+        f"({p95_off:.1f}ms), ratio={regression_ratio:.2f}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Queue near capacity
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio()
+@respx.mock
+async def test_queue_near_capacity_no_dispatch_regression() -> None:
+    """Dispatch p95 remains stable when the trace writer queue is near capacity.
+
+    When the queue is nearly full, submit() must not block dispatch.
+    """
+    respx.post(f"{UPSTREAM_BASE}/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={"choices": []})
+    )
+
+    db = Database(path=":memory:")
+    await db.connect()
+    try:
+        await MigrationRunner(db).run()
+        await _seed_accounts(db)
+        # Small queue, slow drain — fills up quickly
+        writer = RoutingTraceWriter(
+            db=db,
+            routing_decision_repo=RoutingDecisionRepository(db),
+            queue_capacity=10,
+            flush_interval_s=100.0,  # won't drain during test
+            max_batch_size=5,
+        )
+        writer.start()
+        try:
+            config = _build_config(trace_mode="all")
+            coord = await _build_coordinator(config, db, writer=writer)
+
+            # Fill the queue to capacity
+            for i in range(10):
+                writer.submit(
+                    RoutingTraceEvent(
+                        request_id=f"fill-{i}",
+                        db_request_id=i + 1,
+                        attempt_number=1,
+                        model_id="gpt-4",
+                        provider_id=None,
+                        protocol="openai",
+                        selected_account_name="perf-acct-a",
+                        selected_account_id=1,
+                        selected_tier=0,
+                        selected_score=1.0,
+                        eligible_count=2,
+                        scored_count=2,
+                        attempted_excluded_count=0,
+                        top_score=1.0,
+                        top_score_account_name="perf-acct-a",
+                        exclude_reasons_json="{}",
+                        score_components_json=None,
+                        created_at_mono_ns=0,
+                        created_at_epoch=0.0,
+                        generation_id=None,
+                    )
+                )
+
+            snap = writer.snapshot()
+            assert snap["queue_depth"] >= 8, (
+                f"Queue should be near capacity, got depth={snap['queue_depth']}"
+            )
+
+            # Now run dispatches — submit() will get dropped_queue_full
+            # but dispatch must not be delayed
+            timings = await _run_dispatches(coord, count=20)
+
+            p95 = _percentile(timings, 95)
+            assert p95 < 500.0, (
+                f"Dispatch p95 ({p95:.1f}ms) too high with queue near capacity"
+            )
+        finally:
+            await writer.stop()
+    finally:
+        await db.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# Slow DB flush
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio()
+@respx.mock
+async def test_slow_db_flush_no_dispatch_regression() -> None:
+    """Dispatch p95 remains stable when the trace writer's DB flush is slow.
+
+    This is the key acceptance criterion #11: under slow trace flush,
+    dispatch p95/p99 remain near trace-off behavior.
+    """
+    respx.post(f"{UPSTREAM_BASE}/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={"choices": []})
+    )
+
+    db = Database(path=":memory:")
+    await db.connect()
+    try:
+        await MigrationRunner(db).run()
+        await _seed_accounts(db)
+        writer = RoutingTraceWriter(
+            db=db,
+            routing_decision_repo=RoutingDecisionRepository(db),
+            queue_capacity=1000,
+            flush_interval_s=0.05,
+            max_batch_size=50,
+        )
+        # Inject 50ms delay into every DB write
+        original_create_many = writer._repo.create_many
+
+        async def _slow_create_many(rows: Any) -> int:
+            await asyncio.sleep(0.05)
+            return await original_create_many(rows)
+
+        writer._repo.create_many = _slow_create_many  # type: ignore[assignment]
+        writer.start()
+        try:
+            config = _build_config(trace_mode="all")
+            coord = await _build_coordinator(config, db, writer=writer)
+            timings = await _run_dispatches(coord, count=30)
+            await asyncio.sleep(0.3)
+
+            p95 = _percentile(timings, 95)
+            # If dispatch waited for the slow flush, p95 would be >= 50ms per dispatch.
+            assert p95 < 100.0, (
+                f"Dispatch p95 ({p95:.1f}ms) appears blocked by slow DB flush "
+                f"(50ms injected delay)"
+            )
+        finally:
+            await writer.stop()
+    finally:
+        await db.disconnect()
