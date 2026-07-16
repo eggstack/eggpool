@@ -114,7 +114,10 @@ class DispatchPersistenceWriter:
         self._submitted_total = 0
         self._persisted_total = 0
         self._cancelled_total = 0
+        self._cancelled_before_claim_total = 0
+        self._cancelled_after_commit_total = 0
         self._failed_total = 0
+        self._reconciliation_total = 0
         self._batch_sizes: list[int] = []
         self._batch_wait_ms_samples: list[float] = []
         self._transaction_ms_samples: list[float] = []
@@ -230,6 +233,7 @@ class DispatchPersistenceWriter:
 
             if first.intent.cancelled.is_set():
                 self._cancelled_total += 1
+                self._cancelled_before_claim_total += 1
                 first.future.set_exception(
                     DispatchIntentCancelledError(
                         f"Intent {first.intent.proxy_request_id} cancelled before claim"
@@ -255,6 +259,7 @@ class DispatchPersistenceWriter:
                 break
             if qi.intent.cancelled.is_set():
                 self._cancelled_total += 1
+                self._cancelled_before_claim_total += 1
                 qi.future.set_exception(
                     DispatchIntentCancelledError(
                         f"Intent {qi.intent.proxy_request_id} cancelled before claim"
@@ -279,6 +284,7 @@ class DispatchPersistenceWriter:
                     break
                 if qi.intent.cancelled.is_set():
                     self._cancelled_total += 1
+                    self._cancelled_before_claim_total += 1
                     qi.future.set_exception(
                         DispatchIntentCancelledError(
                             f"Intent {qi.intent.proxy_request_id} "
@@ -326,6 +332,7 @@ class DispatchPersistenceWriter:
         for qi, result in zip(batch, results, strict=True):
             if qi.intent.cancelled.is_set():
                 self._cancelled_total += 1
+                self._cancelled_after_commit_total += 1
                 qi.future.set_exception(
                     DispatchIntentCancelledError(
                         f"Intent {qi.intent.proxy_request_id} cancelled after commit"
@@ -353,6 +360,10 @@ class DispatchPersistenceWriter:
     def _record_queue_depth(self) -> None:
         self._queue_depth_samples.append(self._queue.qsize())
 
+    def record_reconciliation(self) -> None:
+        """Record that an ambiguous commit reconciliation was attempted."""
+        self._reconciliation_total += 1
+
     def snapshot(self) -> dict[str, Any]:
         """Return a diagnostics snapshot of the writer state."""
         batch_sizes = self._batch_sizes
@@ -365,7 +376,10 @@ class DispatchPersistenceWriter:
             "submitted_total": self._submitted_total,
             "persisted_total": self._persisted_total,
             "cancelled_total": self._cancelled_total,
+            "cancelled_before_claim_total": self._cancelled_before_claim_total,
+            "cancelled_after_commit_total": self._cancelled_after_commit_total,
             "failed_total": self._failed_total,
+            "reconciliation_total": self._reconciliation_total,
             "batch_count": len(batch_sizes),
             "batch_size_p50": (_percentile(batch_sizes, 0.50) if batch_sizes else None),
             "batch_size_p95": (_percentile(batch_sizes, 0.95) if batch_sizes else None),

@@ -736,3 +736,474 @@ class TestDispatchWriterBaseline:
         assert snap["batch_count"] >= 1
 
         await writer.stop()
+
+
+# ---------------------------------------------------------------------------
+# Milestone C: higher concurrency writer benchmarks
+# ---------------------------------------------------------------------------
+
+
+class TestDispatchWriterHigherConcurrency:
+    """Writer benchmarks at 25 and 50 concurrent dispatches.
+
+    AC#11: Under concurrent benchmark, SQLite transactions/commits per
+    dispatch are materially reduced.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_writer_25_concurrent_dispatches(
+        self,
+        perf_db: Any,
+    ) -> None:
+        """25 concurrent dispatches batch into fewer transactions."""
+        from concurrent.futures import Future as CFuture
+
+        from eggpool.request.dispatch_intent import (
+            DispatchIntent,
+            PersistedDispatchResult,
+        )
+        from eggpool.request.dispatch_writer import (
+            DispatchPersistenceWriter,
+            _QueuedIntent,
+        )
+
+        count = 25
+        writer = DispatchPersistenceWriter(
+            perf_db,
+            max_batch_size=32,
+            max_batch_wait_ms=50.0,
+        )
+        writer.start()
+
+        snap_before = perf_db.contention_snapshot()
+        txns_before = snap_before["total_transactions"]
+
+        futures: list[CFuture[PersistedDispatchResult]] = []
+        for i in range(count):
+            intent = DispatchIntent(
+                proxy_request_id=f"writer-25concur-{i}",
+                attempt_number=1,
+                account_id=1,
+                account_name="perf-acct",
+                provider_id="openai",
+                model_id="gpt-4",
+                protocol="openai",
+                streamed=False,
+                estimated_tokens=100,
+                estimated_microdollars=1_000,
+                started_at="2026-01-01T00:00:00Z",
+            )
+            future: CFuture[PersistedDispatchResult] = CFuture()
+            qi = _QueuedIntent(intent=intent, future=future)
+            writer._submitted_total += 1
+            await writer._enqueue_from_event_loop(qi)
+            futures.append(future)
+
+        results = await asyncio.gather(
+            *[asyncio.wait_for(asyncio.wrap_future(f), timeout=5.0) for f in futures]
+        )
+
+        snap_after = perf_db.contention_snapshot()
+        txns_used = snap_after["total_transactions"] - txns_before
+
+        for r in results:
+            assert r.db_request_id
+
+        assert txns_used < count, (
+            f"25 dispatches used {txns_used} txns; expected fewer than {count}"
+        )
+
+        snap = writer.snapshot()
+        assert snap["persisted_total"] == count
+        assert snap["batch_size_max"] is not None
+        assert snap["batch_size_max"] > 1
+
+        await writer.stop()
+
+    @pytest.mark.asyncio()
+    async def test_writer_50_concurrent_dispatches(
+        self,
+        perf_db: Any,
+    ) -> None:
+        """50 concurrent dispatches batch into fewer transactions."""
+        from concurrent.futures import Future as CFuture
+
+        from eggpool.request.dispatch_intent import (
+            DispatchIntent,
+            PersistedDispatchResult,
+        )
+        from eggpool.request.dispatch_writer import (
+            DispatchPersistenceWriter,
+            _QueuedIntent,
+        )
+
+        count = 50
+        writer = DispatchPersistenceWriter(
+            perf_db,
+            max_batch_size=64,
+            max_batch_wait_ms=50.0,
+        )
+        writer.start()
+
+        snap_before = perf_db.contention_snapshot()
+        txns_before = snap_before["total_transactions"]
+
+        futures: list[CFuture[PersistedDispatchResult]] = []
+        for i in range(count):
+            intent = DispatchIntent(
+                proxy_request_id=f"writer-50concur-{i}",
+                attempt_number=1,
+                account_id=1,
+                account_name="perf-acct",
+                provider_id="openai",
+                model_id="gpt-4",
+                protocol="openai",
+                streamed=False,
+                estimated_tokens=100,
+                estimated_microdollars=1_000,
+                started_at="2026-01-01T00:00:00Z",
+            )
+            future: CFuture[PersistedDispatchResult] = CFuture()
+            qi = _QueuedIntent(intent=intent, future=future)
+            writer._submitted_total += 1
+            await writer._enqueue_from_event_loop(qi)
+            futures.append(future)
+
+        results = await asyncio.gather(
+            *[asyncio.wait_for(asyncio.wrap_future(f), timeout=10.0) for f in futures]
+        )
+
+        snap_after = perf_db.contention_snapshot()
+        txns_used = snap_after["total_transactions"] - txns_before
+
+        for r in results:
+            assert r.db_request_id
+
+        assert txns_used < count, (
+            f"50 dispatches used {txns_used} txns; expected fewer than {count}"
+        )
+
+        snap = writer.snapshot()
+        assert snap["persisted_total"] == count
+        assert snap["batch_size_max"] is not None
+        assert snap["batch_size_max"] > 1
+
+        await writer.stop()
+
+
+# ---------------------------------------------------------------------------
+# Milestone C: transcoded request through writer
+# ---------------------------------------------------------------------------
+
+
+class TestDispatchWriterTranscoded:
+    """Writer persists transcoded (Anthropic protocol) requests correctly."""
+
+    @pytest.mark.asyncio()
+    async def test_transcoded_request_through_writer(
+        self,
+        perf_db: Any,
+    ) -> None:
+        """An Anthropic-protocol intent persists with correct fields."""
+        from concurrent.futures import Future as CFuture
+
+        from eggpool.request.dispatch_intent import (
+            DispatchIntent,
+            PersistedDispatchResult,
+        )
+        from eggpool.request.dispatch_writer import (
+            DispatchPersistenceWriter,
+            _QueuedIntent,
+        )
+
+        # Create an account for anthropic provider
+        async with perf_db.transaction():
+            await perf_db.execute_write(
+                "INSERT INTO accounts "
+                "(name, api_key_env, enabled, weight, provider_id) "
+                "VALUES (?, ?, 1, 1.0, ?)",
+                ("perf-anthropic", "TEST_KEY", "anthropic"),
+            )
+            await perf_db.execute_write(
+                "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+                ("claude-3-opus", "anthropic"),
+            )
+
+        writer = DispatchPersistenceWriter(perf_db)
+        writer.start()
+
+        intent = DispatchIntent(
+            proxy_request_id="writer-transcoded-1",
+            attempt_number=1,
+            account_id=2,
+            account_name="perf-anthropic",
+            provider_id="anthropic",
+            model_id="claude-3-opus",
+            protocol="anthropic",
+            streamed=True,
+            estimated_tokens=200,
+            estimated_microdollars=2_000,
+            started_at="2026-01-01T00:00:00Z",
+        )
+
+        future: CFuture[PersistedDispatchResult] = CFuture()
+        qi = _QueuedIntent(intent=intent, future=future)
+        writer._submitted_total += 1
+        await writer._enqueue_from_event_loop(qi)
+        result = await asyncio.wait_for(asyncio.wrap_future(future), timeout=5.0)
+
+        assert result.db_request_id
+        # Verify the persisted row has the correct protocol
+        row = await perf_db.fetch_one(
+            "SELECT protocol FROM requests WHERE id = ?",
+            (result.db_request_id,),
+        )
+        assert row is not None
+        assert row["protocol"] == "anthropic"
+
+        await writer.stop()
+
+
+# ---------------------------------------------------------------------------
+# Milestone C: streaming start burst through writer
+# ---------------------------------------------------------------------------
+
+
+class TestDispatchWriterStreamingBurst:
+    """Writer handles a burst of streaming request intents."""
+
+    @pytest.mark.asyncio()
+    async def test_streaming_burst_all_persist(
+        self,
+        perf_db: Any,
+    ) -> None:
+        """10 streaming intents submitted rapidly all persist."""
+        from concurrent.futures import Future as CFuture
+
+        from eggpool.request.dispatch_intent import (
+            DispatchIntent,
+            PersistedDispatchResult,
+        )
+        from eggpool.request.dispatch_writer import (
+            DispatchPersistenceWriter,
+            _QueuedIntent,
+        )
+
+        count = 10
+        writer = DispatchPersistenceWriter(
+            perf_db,
+            max_batch_size=16,
+            max_batch_wait_ms=50.0,
+        )
+        writer.start()
+
+        futures: list[CFuture[PersistedDispatchResult]] = []
+        for i in range(count):
+            intent = DispatchIntent(
+                proxy_request_id=f"writer-stream-{i}",
+                attempt_number=1,
+                account_id=1,
+                account_name="perf-acct",
+                provider_id="openai",
+                model_id="gpt-4",
+                protocol="openai",
+                streamed=True,
+                estimated_tokens=500,
+                estimated_microdollars=5_000,
+                started_at="2026-01-01T00:00:00Z",
+            )
+            future: CFuture[PersistedDispatchResult] = CFuture()
+            qi = _QueuedIntent(intent=intent, future=future)
+            writer._submitted_total += 1
+            await writer._enqueue_from_event_loop(qi)
+            futures.append(future)
+
+        results = await asyncio.gather(
+            *[asyncio.wait_for(asyncio.wrap_future(f), timeout=5.0) for f in futures]
+        )
+
+        for r in results:
+            assert r.db_request_id
+            # Verify streamed flag
+            row = await perf_db.fetch_one(
+                "SELECT streamed FROM requests WHERE id = ?",
+                (r.db_request_id,),
+            )
+            assert row is not None
+            assert row["streamed"] == 1
+
+        snap = writer.snapshot()
+        assert snap["persisted_total"] == count
+
+        await writer.stop()
+
+
+# ---------------------------------------------------------------------------
+# Milestone C: primary DB contention under writer load
+# ---------------------------------------------------------------------------
+
+
+class TestDispatchWriterDBContention:
+    """Writer maintains low contention under concurrent persistence load."""
+
+    @pytest.mark.asyncio()
+    async def test_writer_under_contention_stable(
+        self,
+        perf_db: Any,
+    ) -> None:
+        """20 concurrent dispatches through the writer produce bounded contention."""
+        from concurrent.futures import Future as CFuture
+
+        from eggpool.request.dispatch_intent import (
+            DispatchIntent,
+            PersistedDispatchResult,
+        )
+        from eggpool.request.dispatch_writer import (
+            DispatchPersistenceWriter,
+            _QueuedIntent,
+        )
+
+        count = 20
+        writer = DispatchPersistenceWriter(
+            perf_db,
+            max_batch_size=32,
+            max_batch_wait_ms=50.0,
+        )
+        writer.start()
+
+        futures: list[CFuture[PersistedDispatchResult]] = []
+        for i in range(count):
+            intent = DispatchIntent(
+                proxy_request_id=f"writer-contention-{i}",
+                attempt_number=1,
+                account_id=1,
+                account_name="perf-acct",
+                provider_id="openai",
+                model_id="gpt-4",
+                protocol="openai",
+                streamed=False,
+                estimated_tokens=100,
+                estimated_microdollars=1_000,
+                started_at="2026-01-01T00:00:00Z",
+            )
+            future: CFuture[PersistedDispatchResult] = CFuture()
+            qi = _QueuedIntent(intent=intent, future=future)
+            writer._submitted_total += 1
+            await writer._enqueue_from_event_loop(qi)
+            futures.append(future)
+
+        results = await asyncio.gather(
+            *[asyncio.wait_for(asyncio.wrap_future(f), timeout=10.0) for f in futures]
+        )
+
+        for r in results:
+            assert r.db_request_id
+
+        snap_after = perf_db.contention_snapshot()
+        # Lock wait should be bounded — the writer serializes DB access
+        lock_wait_p95 = snap_after.get("lock_wait_p95_ms", 0.0)
+        assert lock_wait_p95 < 100.0, (
+            f"Lock wait p95 under contention: {lock_wait_p95:.1f}ms"
+        )
+
+        snap = writer.snapshot()
+        assert snap["persisted_total"] == count
+
+        await writer.stop()
+
+
+# ---------------------------------------------------------------------------
+# Milestone C: SBC/slow-storage simulation
+# ---------------------------------------------------------------------------
+
+
+class TestDispatchWriterSBCSimulation:
+    """Writer behaviour under simulated SBC/slow-storage conditions.
+
+    Uses a mock persist_dispatch_bundles to simulate slow writes and
+    verifies the writer still completes within reasonable bounds.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_slow_write_completes_within_timeout(
+        self,
+        perf_db: Any,
+    ) -> None:
+        """Writer batch completes even when persistence is slow."""
+        from concurrent.futures import Future as CFuture
+        from unittest.mock import patch
+
+        from eggpool.request.dispatch_intent import (
+            DispatchIntent,
+            PersistedDispatchResult,
+        )
+        from eggpool.request.dispatch_writer import (
+            DispatchPersistenceWriter,
+            _QueuedIntent,
+        )
+
+        async def _slow_persist(
+            *args: Any, **kwargs: Any
+        ) -> list[PersistedDispatchResult]:
+            await asyncio.sleep(0.05)  # simulate 50ms write latency
+            return [
+                PersistedDispatchResult(
+                    db_request_id=f"slow-{i}",
+                    reservation_id=f"res-{i}",
+                    attempt_id=i + 1,
+                    attempt_number=1,
+                    batch_id=1,
+                    batch_size=1,
+                )
+                for i in range(len(args[1]))
+            ]
+
+        writer = DispatchPersistenceWriter(
+            perf_db,
+            max_batch_size=4,
+            max_batch_wait_ms=50.0,
+            shutdown_drain_timeout_s=5.0,
+        )
+        writer.start()
+
+        with patch(
+            "eggpool.request.dispatch_writer.persist_dispatch_bundles",
+            side_effect=_slow_persist,
+        ):
+            futures: list[CFuture[PersistedDispatchResult]] = []
+            for i in range(5):
+                intent = DispatchIntent(
+                    proxy_request_id=f"writer-sbc-{i}",
+                    attempt_number=1,
+                    account_id=1,
+                    account_name="perf-acct",
+                    provider_id="openai",
+                    model_id="gpt-4",
+                    protocol="openai",
+                    streamed=False,
+                    estimated_tokens=100,
+                    estimated_microdollars=1_000,
+                    started_at="2026-01-01T00:00:00Z",
+                )
+                future: CFuture[PersistedDispatchResult] = CFuture()
+                qi = _QueuedIntent(intent=intent, future=future)
+                writer._submitted_total += 1
+                await writer._enqueue_from_event_loop(qi)
+                futures.append(future)
+
+            t0 = time.monotonic()
+            results = await asyncio.gather(
+                *[
+                    asyncio.wait_for(asyncio.wrap_future(f), timeout=10.0)
+                    for f in futures
+                ]
+            )
+            elapsed_ms = (time.monotonic() - t0) * 1000.0
+
+        for r in results:
+            assert r.db_request_id
+
+        # Should complete within 5s (shutdown_drain_timeout) even with slow writes
+        assert elapsed_ms < 5000.0, f"SBC simulation took {elapsed_ms:.0f}ms"
+
+        await writer.stop()

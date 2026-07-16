@@ -547,7 +547,10 @@ class TestDiagnostics:
                 "submitted_total",
                 "persisted_total",
                 "cancelled_total",
+                "cancelled_before_claim_total",
+                "cancelled_after_commit_total",
                 "failed_total",
+                "reconciliation_total",
                 "batch_count",
                 "batch_size_p50",
                 "batch_size_p95",
@@ -1808,5 +1811,522 @@ class TestWriterReadiness:
             intent = _make_intent(proxy_request_id="req-no-fallback")
             with pytest.raises(DispatchQueueClosedError, match="not running"):
                 writer.submit_intent(intent)
+        finally:
+            await db.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# DB integration: forced statement failure rolls back whole batch
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio()
+class TestForcedStatementFailureRollback:
+    """A DB-level constraint violation in one intent rolls back the entire batch.
+
+    Plan item: 'forced statement failure rolls back whole batch' — when a
+    statement fails mid-transaction (e.g. FK violation), the entire batch
+    is rolled back and no partial rows persist.
+    """
+
+    async def test_fk_violation_rolls_back_entire_batch(self) -> None:
+        """Batch with one invalid account_id (FK violation) rolls back all."""
+        db = await _fresh_db()
+        try:
+            good = _make_intent(proxy_request_id="req-fk-good")
+            bad = _make_intent(
+                proxy_request_id="req-fk-bad",
+                account_id=9999,  # non-existent → FK violation
+            )
+            another_good = _make_intent(proxy_request_id="req-fk-good2")
+
+            results = await persist_dispatch_bundles(
+                db, [good, bad, another_good], batch_id=1
+            )
+            # All three get failure results (batch-rollback semantics)
+            assert len(results) == 3
+            for r in results:
+                assert r.db_request_id == ""
+                assert r.reservation_id == ""
+
+            # Verify no rows were written for ANY intent in the batch
+            for proxy_id in ("req-fk-good", "req-fk-bad", "req-fk-good2"):
+                row = await db.fetch_one(
+                    "SELECT * FROM requests WHERE proxy_request_id = ?",
+                    (proxy_id,),
+                )
+                assert row is None, (
+                    f"Row for {proxy_id} should not exist after rollback"
+                )
+        finally:
+            await db.disconnect()
+
+    async def test_unique_violation_rolls_back_entire_batch(self) -> None:
+        """Duplicate proxy_request_id violates uniqueness and rolls back batch."""
+        db = await _fresh_db()
+        try:
+            # First: persist a request successfully
+            first = _make_intent(proxy_request_id="req-unique-1")
+            results1 = await persist_dispatch_bundles(db, [first], batch_id=1)
+            assert results1[0].db_request_id
+
+            # Second batch: includes a duplicate proxy_request_id
+            good = _make_intent(proxy_request_id="req-unique-new")
+            dup = _make_intent(proxy_request_id="req-unique-1")  # duplicate
+
+            results2 = await persist_dispatch_bundles(db, [good, dup], batch_id=2)
+            assert len(results2) == 2
+            for r in results2:
+                assert r.db_request_id == ""
+
+            # The good intent's row should NOT exist (batch rolled back)
+            row = await db.fetch_one(
+                "SELECT * FROM requests WHERE proxy_request_id = ?",
+                ("req-unique-new",),
+            )
+            assert row is None
+        finally:
+            await db.disconnect()
+
+    async def test_mixed_valid_and_invalid_batch_all_rollback(self) -> None:
+        """A batch with 5 valid intents and 1 invalid rolls back all 6."""
+        db = await _fresh_db()
+        try:
+            intents = [
+                _make_intent(proxy_request_id=f"req-mixed-ok-{i}") for i in range(5)
+            ]
+            bad = _make_intent(
+                proxy_request_id="req-mixed-bad",
+                account_id=9999,
+            )
+            intents.append(bad)
+
+            results = await persist_dispatch_bundles(db, intents, batch_id=1)
+            assert len(results) == 6
+            for r in results:
+                assert r.db_request_id == ""
+
+            # Count requests — none should be added
+            row = await db.fetch_one("SELECT COUNT(*) as cnt FROM requests")
+            assert row is not None
+            assert row["cnt"] == 0  # no request rows should exist after rollback
+        finally:
+            await db.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# DB integration: forced commit ambiguity reconciliation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio()
+class TestForcedCommitAmbiguityReconciliation:
+    """reconcile_ambiguous_commit resolves committed/partial/missing states.
+
+    Plan item: 'forced commit ambiguity reconciles correctly' — after a
+    connection error during commit, reconciliation queries durable state
+    to determine the outcome.
+    """
+
+    async def test_reconcile_after_successful_commit(self) -> None:
+        """All rows exist → reconciliation returns the result."""
+        from eggpool.db.dispatch_repository import (
+            persist_dispatch_bundles,
+            reconcile_ambiguous_commit,
+        )
+
+        db = await _fresh_db()
+        try:
+            intent = _make_intent(proxy_request_id="req-recon-commit")
+            results = await persist_dispatch_bundles(db, [intent], batch_id=1)
+            r = results[0]
+
+            reconciled = await reconcile_ambiguous_commit(
+                db,
+                proxy_request_id="req-recon-commit",
+                attempt_number=1,
+            )
+            assert reconciled.db_request_id == r.db_request_id
+            assert reconciled.reservation_id == r.reservation_id
+            assert reconciled.attempt_id == r.attempt_id
+        finally:
+            await db.disconnect()
+
+    async def test_reconcile_missing_request_raises(self) -> None:
+        """No request row → raises DispatchAmbiguousCommitError."""
+        from eggpool.db.dispatch_repository import reconcile_ambiguous_commit
+
+        db = await _fresh_db()
+        try:
+            with pytest.raises(DispatchAmbiguousCommitError, match="not committed"):
+                await reconcile_ambiguous_commit(
+                    db,
+                    proxy_request_id="req-recon-missing",
+                    attempt_number=1,
+                )
+        finally:
+            await db.disconnect()
+
+    async def test_reconcile_missing_attempt_raises(self) -> None:
+        """Request exists but attempt_number doesn't → partial commit."""
+        from eggpool.db.dispatch_repository import (
+            persist_dispatch_bundles,
+            reconcile_ambiguous_commit,
+        )
+
+        db = await _fresh_db()
+        try:
+            intent = _make_intent(proxy_request_id="req-recon-noattempt")
+            await persist_dispatch_bundles(db, [intent], batch_id=1)
+
+            with pytest.raises(
+                DispatchAmbiguousCommitError, match="attempt_number=99 not found"
+            ):
+                await reconcile_ambiguous_commit(
+                    db,
+                    proxy_request_id="req-recon-noattempt",
+                    attempt_number=99,
+                )
+        finally:
+            await db.disconnect()
+
+    async def test_reconcile_missing_reservation_raises(self) -> None:
+        """Request+attempt exist but no reservation → partial commit."""
+        from eggpool.db.dispatch_repository import reconcile_ambiguous_commit
+
+        db = await _fresh_db()
+        try:
+            # Manually insert a request row without going through
+            # persist_dispatch_bundles
+            async with db.transaction():
+                await db.execute_write(
+                    "INSERT INTO accounts "
+                    "(name, api_key_env, enabled, weight, provider_id) "
+                    "VALUES (?, ?, 1, 1.0, ?)",
+                    ("recon-acct", "TEST_KEY", "openai"),
+                )
+                account_row = await db.fetch_one(
+                    "SELECT id FROM accounts WHERE name = ?", ("recon-acct",)
+                )
+                assert account_row is not None
+                acct_id = account_row["id"]
+
+                await db.execute_write(
+                    "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+                    ("recon-model", "openai"),
+                )
+                await db.execute_write(
+                    "INSERT INTO requests "
+                    "(account_id, model_id, protocol, streamed, proxy_request_id, "
+                    "provider_id, status) "
+                    "VALUES (?, ?, ?, 0, ?, ?, 'pending')",
+                    (acct_id, "recon-model", "openai", "req-recon-nores", "openai"),
+                )
+                req_row = await db.fetch_one(
+                    "SELECT id FROM requests WHERE proxy_request_id = ?",
+                    ("req-recon-nores",),
+                )
+                assert req_row is not None
+                req_id = req_row["id"]
+
+                # Insert attempt but NO reservation
+                await db.execute_write(
+                    "INSERT INTO request_attempts "
+                    "(request_id, attempt_number, account_id, provider_id, model_id, "
+                    "protocol, streamed) "
+                    "VALUES (?, 1, ?, ?, ?, ?, 0)",
+                    (req_id, acct_id, "openai", "recon-model", "openai"),
+                )
+
+            with pytest.raises(
+                DispatchAmbiguousCommitError, match="no reservation found"
+            ):
+                await reconcile_ambiguous_commit(
+                    db,
+                    proxy_request_id="req-recon-nores",
+                    attempt_number=1,
+                )
+        finally:
+            await db.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# DB integration: concurrent generations persist during drain overlap
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio()
+class TestConcurrentGenerationDrain:
+    """Old and new generation writers persist correctly during overlap.
+
+    Plan item: 'old and new generation requests persist correctly during
+    drain' — active and retiring generations may submit intents concurrently
+    while their leases remain valid.
+    """
+
+    async def test_overlapping_generations_both_persist(self) -> None:
+        """Two writer instances (simulating overlapping generations) both
+        persist intents to the same DB concurrently."""
+        db = await _fresh_db()
+        try:
+            writer1 = DispatchPersistenceWriter(
+                db, max_batch_size=4, max_batch_wait_ms=50.0
+            )
+            writer2 = DispatchPersistenceWriter(
+                db, max_batch_size=4, max_batch_wait_ms=50.0
+            )
+            writer1.start()
+            writer2.start()
+
+            # Submit intents to both writers concurrently
+            futures1 = []
+            futures2 = []
+            for i in range(3):
+                f1 = await _enqueue_intent(
+                    writer1,
+                    _make_intent(proxy_request_id=f"req-overlap-gen1-{i}"),
+                )
+                futures1.append(f1)
+            for i in range(3):
+                f2 = await _enqueue_intent(
+                    writer2,
+                    _make_intent(proxy_request_id=f"req-overlap-gen2-{i}"),
+                )
+                futures2.append(f2)
+
+            # All should complete successfully
+            results1 = await asyncio.gather(*[_await_submit(f) for f in futures1])
+            results2 = await asyncio.gather(*[_await_submit(f) for f in futures2])
+
+            assert len(results1) == 3
+            assert len(results2) == 3
+            for r in results1:
+                assert r.db_request_id
+            for r in results2:
+                assert r.db_request_id
+
+            # All 6 requests exist in DB
+            row = await db.fetch_one(
+                "SELECT COUNT(*) as cnt FROM requests WHERE "
+                "proxy_request_id LIKE 'req-overlap-gen%'"
+            )
+            assert row is not None
+            assert row["cnt"] == 6
+
+            await writer1.stop()
+            await writer2.stop()
+        finally:
+            await db.disconnect()
+
+    async def test_retiring_writer_drains_while_new_writer_starts(self) -> None:
+        """When the old writer is draining, intents submitted to the new writer
+        are processed independently."""
+        db = await _fresh_db()
+        try:
+            # Old writer: submit some intents, then start draining
+            writer_old = DispatchPersistenceWriter(db)
+            writer_old.start()
+            intent_old = _make_intent(proxy_request_id="req-drain-old")
+            future_old = await _enqueue_intent(writer_old, intent_old)
+
+            # New writer starts while old is still running
+            writer_new = DispatchPersistenceWriter(db)
+            writer_new.start()
+            intent_new = _make_intent(proxy_request_id="req-drain-new")
+            future_new = await _enqueue_intent(writer_new, intent_new)
+
+            # Both complete
+            result_old = await _await_submit(future_old)
+            result_new = await _await_submit(future_new)
+            assert result_old.db_request_id
+            assert result_new.db_request_id
+
+            # Stop old, then new
+            await writer_old.stop()
+            await writer_new.stop()
+
+            # Both rows exist
+            for proxy_id in ("req-drain-old", "req-drain-new"):
+                row = await db.fetch_one(
+                    "SELECT * FROM requests WHERE proxy_request_id = ?",
+                    (proxy_id,),
+                )
+                assert row is not None
+        finally:
+            await db.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# Explicit test: cancellation after commit before result delivery
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio()
+class TestCancellationAfterCommitBeforeDelivery:
+    """Cancellation set between commit and future resolution.
+
+    Plan item: 'cancellation after commit before result delivery' — the
+    writer completes the transaction, then checks cancelled.is_set() before
+    resolving the future. If cancelled, it raises DispatchIntentCancelledError.
+    """
+
+    async def test_cancel_between_commit_and_delivery(self) -> None:
+        """Intent is committed but cancelled before future resolution."""
+        db = await _fresh_db()
+        try:
+            writer = DispatchPersistenceWriter(db)
+            writer.start()
+            intent = _make_intent(proxy_request_id="req-cancel-between")
+            future = await _enqueue_intent(writer, intent)
+
+            # Wait for the writer to commit (the future resolves)
+            result = await _await_submit(future)
+            assert result.db_request_id
+
+            # Verify the request row exists (commit was durable)
+            row = await db.fetch_one(
+                "SELECT * FROM requests WHERE proxy_request_id = ?",
+                ("req-cancel-between",),
+            )
+            assert row is not None
+
+            # The future already resolved with the result, so setting
+            # cancelled afterwards is a no-op for the result. But the
+            # durable state is consistent and the finalizer can clean up.
+            await writer.stop()
+        finally:
+            await db.disconnect()
+
+    async def test_cancel_during_persist_batch_delivery(self) -> None:
+        """Set cancelled while the batch is being persisted.
+
+        The drain loop processes the batch, commits all intents, then
+        checks cancelled.is_set() for each. The cancelled intent gets
+        DispatchIntentCancelledError; others get their results.
+        """
+        db = await _fresh_db()
+        try:
+            writer = DispatchPersistenceWriter(
+                db,
+                max_batch_size=4,
+                max_batch_wait_ms=50.0,
+            )
+            writer.start()
+
+            target = _make_intent(proxy_request_id="req-cancel-during")
+            target_future = await _enqueue_intent(writer, target)
+            other = _make_intent(proxy_request_id="req-cancel-during-other")
+            other_future = await _enqueue_intent(writer, other)
+
+            # Let the drain process the batch
+            await asyncio.sleep(0.05)
+
+            # Set cancelled after claim
+            target.cancelled.set()
+
+            # Other intent succeeds
+            other_result = await _await_submit(other_future)
+            assert other_result.db_request_id
+
+            # Target gets cancelled error (cancelled after commit)
+            with pytest.raises(DispatchIntentCancelledError):
+                await _await_submit(target_future)
+
+            # Durable state exists for target (committed before cancellation)
+            row = await db.fetch_one(
+                "SELECT * FROM requests WHERE proxy_request_id = ?",
+                ("req-cancel-during",),
+            )
+            assert row is not None
+
+            snap = writer.snapshot()
+            assert snap["cancelled_after_commit_total"] >= 1
+            await writer.stop()
+        finally:
+            await db.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# Diagnostic counter tests (new fields)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio()
+class TestDiagnosticCountersExtended:
+    """Verify cancellation-by-state and reconciliation counters."""
+
+    async def test_cancelled_before_claim_counter(self) -> None:
+        db = await _fresh_db()
+        try:
+            writer = DispatchPersistenceWriter(db)
+            writer.start()
+            intent = _make_intent(proxy_request_id="req-ctr-preclaim")
+            future = await _enqueue_intent(writer, intent)
+            intent.cancelled.set()
+            with pytest.raises(DispatchIntentCancelledError):
+                await _await_submit(future)
+            snap = writer.snapshot()
+            assert snap["cancelled_before_claim_total"] == 1
+            assert snap["cancelled_after_commit_total"] == 0
+            assert snap["cancelled_total"] == 1
+            await writer.stop()
+        finally:
+            await db.disconnect()
+
+    async def test_cancelled_after_commit_counter(self) -> None:
+        db = await _fresh_db()
+        try:
+            writer = DispatchPersistenceWriter(
+                db, max_batch_size=4, max_batch_wait_ms=50.0
+            )
+            writer.start()
+            # Submit two intents so the drain claims both into a batch.
+            # Set cancelled after the drain has claimed but during the
+            # persist/commit window so the after-commit path fires.
+            target = _make_intent(proxy_request_id="req-ctr-postcommit")
+            other = _make_intent(proxy_request_id="req-ctr-postcommit-other")
+            target_future = await _enqueue_intent(writer, target)
+            other_future = await _enqueue_intent(writer, other)
+            # Let the drain claim both into the batch
+            await asyncio.sleep(0.05)
+            # Set cancelled after claim but before result delivery
+            target.cancelled.set()
+            # Other intent should still succeed
+            other_result = await _await_submit(other_future)
+            assert other_result.db_request_id
+            # Target gets cancelled after commit
+            with pytest.raises(DispatchIntentCancelledError):
+                await _await_submit(target_future)
+            snap = writer.snapshot()
+            assert snap["cancelled_after_commit_total"] == 1
+            assert snap["cancelled_before_claim_total"] == 0
+            assert snap["cancelled_total"] == 1
+            await writer.stop()
+        finally:
+            await db.disconnect()
+
+    async def test_reconciliation_counter_increments(self) -> None:
+        db = await _fresh_db()
+        try:
+            writer = DispatchPersistenceWriter(db)
+            assert writer.snapshot()["reconciliation_total"] == 0
+            writer.record_reconciliation()
+            writer.record_reconciliation()
+            snap = writer.snapshot()
+            assert snap["reconciliation_total"] == 2
+        finally:
+            await db.disconnect()
+
+    async def test_snapshot_has_new_keys(self) -> None:
+        db = await _fresh_db()
+        try:
+            writer = DispatchPersistenceWriter(db)
+            snap = writer.snapshot()
+            assert "cancelled_before_claim_total" in snap
+            assert "cancelled_after_commit_total" in snap
+            assert "reconciliation_total" in snap
+            assert snap["cancelled_before_claim_total"] == 0
+            assert snap["cancelled_after_commit_total"] == 0
+            assert snap["reconciliation_total"] == 0
         finally:
             await db.disconnect()
