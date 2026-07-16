@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -152,11 +153,24 @@ class MetricsBufferSnapshot:
 class MetricsWriteCoalescer:
     """Buffers analytics events in memory and flushes to usage_rollups.
 
-    Thread-safety: ``record_usage()`` is safe to call from any async task.
-    It acquires a lock only to update the in-memory buffer (no I/O).
-    ``flush()`` acquires the lock briefly to snapshot and clear the buffer,
-    then performs database I/O outside the lock so ``record_usage()`` is
-    never blocked by slow writes.
+    Thread-safety strategy
+    ----------------------
+    The coalescer is used under Granian's multi-thread runtime where
+    ``record_usage()`` may be called from any runtime thread (not
+    bound to the event loop), while ``flush()`` is always an async
+    coroutine on the event loop.  Two locks protect disjoint state:
+
+    * ``_thread_lock`` (``threading.Lock``): acquired briefly by
+      ``record_usage()`` to mutate ``_buffer`` and counters, and by
+      ``flush()`` to snapshot and clear the buffer before releasing.
+      This is a regular OS-level lock, safe across threads.
+    * ``_async_lock`` (``asyncio.Lock``): serialises the async flush
+      path so two concurrent flush coroutines cannot both snapshot
+      the same buffer.
+
+    ``record_usage()`` never performs I/O; ``flush()`` performs I/O
+    outside both locks so ``record_usage()`` is never blocked by
+    slow writes.
     """
 
     def __init__(
@@ -176,7 +190,8 @@ class MetricsWriteCoalescer:
 
         self._buffer: dict[_RollupKey, _AggregatedDelta] = {}
         self._pending_events = 0
-        self._lock = asyncio.Lock()
+        self._thread_lock = threading.Lock()
+        self._async_lock = asyncio.Lock()
 
         # Diagnostics
         self._total_received = 0
@@ -194,8 +209,10 @@ class MetricsWriteCoalescer:
     def record_usage(self, event: UsageMetricEvent) -> None:
         """Record an analytics event into the in-memory buffer.
 
-        This is non-blocking and never awaits database I/O. If the buffer
-        is full, the event is dropped and counted in diagnostics.
+        This is non-blocking and never awaits database I/O.  If the
+        buffer is full, the event is dropped and counted in diagnostics.
+        Thread-safe: acquires ``_thread_lock`` briefly for the buffer
+        mutation.
         """
         if self._write_mode == "immediate":
             return
@@ -212,23 +229,23 @@ class MetricsWriteCoalescer:
             status=event.status,
         )
 
-        # Use a simple non-blocking check: if buffer is oversized, drop.
-        # The lock is only held briefly for the dict update.
-        if len(self._buffer) >= self._max_buffered and key not in self._buffer:
-            self._total_dropped += 1
-            logger.debug(
-                "Metrics buffer full (%d keys), dropping event for %s/%s",
-                len(self._buffer),
-                event.provider_id,
-                event.model_id,
-            )
-            return
+        with self._thread_lock:
+            # Use a simple non-blocking check: if buffer is oversized, drop.
+            if len(self._buffer) >= self._max_buffered and key not in self._buffer:
+                self._total_dropped += 1
+                logger.debug(
+                    "Metrics buffer full (%d keys), dropping event for %s/%s",
+                    len(self._buffer),
+                    event.provider_id,
+                    event.model_id,
+                )
+                return
 
-        if key not in self._buffer:
-            self._buffer[key] = _AggregatedDelta()
-        self._buffer[key].merge(event)
-        self._pending_events += 1
-        self._total_received += 1
+            if key not in self._buffer:
+                self._buffer[key] = _AggregatedDelta()
+            self._buffer[key].merge(event)
+            self._pending_events += 1
+            self._total_received += 1
 
     async def flush(self, reason: str = "periodic") -> FlushResult:
         """Flush buffered analytics to the database.
@@ -240,16 +257,24 @@ class MetricsWriteCoalescer:
         Cancellation safety: if the DB write is interrupted by
         ``CancelledError``, the unsaved snapshot is merged back into
         the buffer so no events are silently dropped.
+
+        Uses ``_thread_lock`` to snapshot the buffer (protecting
+        against concurrent ``record_usage()`` calls from other threads)
+        and ``_async_lock`` to serialise against other flush
+        coroutines.
         """
         if not self._buffer:
             return FlushResult()
 
-        # Snapshot and clear the buffer under the lock
-        async with self._lock:
-            buffer_snapshot = self._buffer
-            event_count = self._pending_events
-            self._buffer = {}
-            self._pending_events = 0
+        # Snapshot and clear the buffer under both locks:
+        # _thread_lock protects against concurrent record_usage() callers;
+        # _async_lock serialises against other flush coroutines.
+        async with self._async_lock:
+            with self._thread_lock:
+                buffer_snapshot = self._buffer
+                event_count = self._pending_events
+                self._buffer = {}
+                self._pending_events = 0
 
         start = time.monotonic()
         try:
@@ -276,7 +301,7 @@ class MetricsWriteCoalescer:
         except asyncio.CancelledError:
             # Restore the snapshot into the buffer so events are not
             # silently dropped when the caller is cancelled mid-flush.
-            async with self._lock:
+            with self._thread_lock:
                 for key, delta in buffer_snapshot.items():
                     if key in self._buffer:
                         existing = self._buffer[key]
@@ -347,12 +372,15 @@ class MetricsWriteCoalescer:
 
     def snapshot(self) -> dict[str, object]:
         """Return a diagnostic snapshot of the coalescer's state."""
+        with self._thread_lock:
+            buffered_keys = len(self._buffer)
+            buffered_events = self._pending_events
         return {
             "write_mode": self._write_mode,
             "flush_interval_s": self._flush_interval_s,
             "aggregate_only": self._aggregate_only,
-            "buffered_keys": len(self._buffer),
-            "buffered_events": self._pending_events,
+            "buffered_keys": buffered_keys,
+            "buffered_events": buffered_events,
             "total_events_received": self._total_received,
             "total_events_flushed": self._total_flushed,
             "total_events_dropped": self._total_dropped,

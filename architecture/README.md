@@ -3210,6 +3210,50 @@ Tests: `tests/unit/test_routing_trace_writer.py`,
 `tests/unit/test_routing_trace_mode.py`,
 `tests/perf/test_trace_mode_perf.py`.
 
+## Dispatch Stability Milestone F — Runtime Concurrency and Hot-Path Hardening
+
+### Supported Runtime Model
+
+EggPool uses **Model 1: Single runtime loop is canonical**. The `server.threads` default is `1`; values > 1 emit a startup warning. This decision is based on:
+
+- All `asyncio.Lock` objects are loop-bound and would fail under multi-loop access
+- SQLite serialization is the actual concurrency bottleneck, not Python GIL
+- Making everything thread-safe would be disproportionate complexity for minimal benefit
+
+The async primitive audit (`docs/async_primitive_audit.md`) documents every long-lived primitive's loop ownership and cross-loop safety strategy.
+
+### Event-Loop Lag Monitor
+
+`EventLoopLagMonitor` (`src/eggpool/event_loop_lag.py`) measures event-loop starvation via periodic callback drift. It uses `loop.call_later()` to schedule a callback at a configurable cadence (default 1.0s, suitable for SBCs). Each callback records the drift between expected and actual wake time. The monitor is process-owned, uses a bounded rolling window (200 samples), and exposes p50/p95/p99/max lag in milliseconds via `/api/stats/runtime`.
+
+### Metrics Coalescer Thread Safety
+
+`MetricsWriteCoalescer` (`src/eggpool/metrics/buffer.py`) uses dual locks:
+- `threading.Lock` for buffer mutation (safe from any thread)
+- `asyncio.Lock` for async flush serialization
+
+`record_usage()` acquires only the thread lock (never blocks on I/O). `flush()` acquires the async lock first, then the thread lock to snapshot the buffer, then releases both before performing I/O. Cancellation-safe restore uses the thread lock.
+
+### Hot-Path Optimizations
+
+- **ParsedRequestPayload** (`src/eggpool/request/parsed_payload.py`): caches the original JSON parse and derived state (model, streaming, thinking requirement) to avoid repeated parsing per request
+- **estimate_padded_size()** (`src/eggpool/request/payload_utils.py`): replaces synthetic `b"\x00"*padding` allocation with a length-based API
+- **ImmutableRequestState** (`src/eggpool/runtime_manager.py`): precomputes provider/account/header frozensets per generation, invalidated naturally through generation swap
+- **build_upstream_headers()** (`src/eggpool/proxy/client.py`): combines header sanitization + auth injection in a single pass
+
+### Resource Plateau Diagnostics
+
+`/api/stats/runtime` now exposes resource plateau diagnostics:
+- DNS cache: max entries, current size, utilisation %, evictions total
+- Provider client pool: provider count, per-provider details
+- Stream diagnostics: histogram capacities and sample counts
+
+### Tests
+
+- `tests/unit/test_granian_topology.py`: verifies single-process, single-loop model
+- `tests/unit/test_header_forwarding.py`: exhaustive header pass/drop tests
+- `tests/unit/test_resource_plateau.py`: DNS cache, client pool, and stream diagnostics boundedness
+
 ## Live Configuration Rehash — Validation, Diffing, and Fail-Closed CLI
 
 Milestone A ships a shared validation contract, a typed configuration

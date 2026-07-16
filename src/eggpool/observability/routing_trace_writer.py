@@ -143,6 +143,39 @@ class RoutingTraceWriter:
     Constructed with a :class:`Database` and a
     :class:`RoutingDecisionRepository`.  Call :meth:`start` on the
     running event loop to launch the drain task.
+
+    Thread-safety strategy (Milestone F)
+    -------------------------------------
+    The writer uses a ``threading.Lock``-protected ``collections.deque``
+    for the submission queue and a ``threading.Event`` for shutdown
+    signalling.  Both are thread-safe by construction.
+
+    ``submit()`` is safe to call from any thread or event loop — it
+    acquires the ``threading.Lock`` only for the brief deque append.
+    The drain task runs on the event loop where ``start()`` was called.
+
+    Single-loop assumption
+    ----------------------
+    Under Model 1 (single Granian worker, ``runtime_threads=1``),
+    the drain task runs on the single event loop.  The
+    ``threading.Lock`` protects against concurrent ``submit()`` calls
+    from Granian's runtime threads (e.g. the coordinator's
+    ``call_soon_threadsafe`` path).
+
+    When ``runtime_threads > 1``, the drain task still runs on one
+    specific loop; ``submit()`` remains safe from any thread because
+    it only touches the lock-protected deque (no asyncio primitives
+    in the submission path).
+
+    Shutdown behavior
+    -----------------
+    1. ``stop()`` sets the shutdown flag and wakes the drain task.
+    2. The drain task finishes its current batch, then exits.
+    3. Any remaining events are flushed with a bounded timeout.
+    4. Events that cannot be flushed within the timeout are dropped
+       and counted in ``_dropped_shutdown_timeout``.
+    5. The state transitions to CLOSED; further submissions return
+       ``'dropped_writer_unavailable'`` without raising.
     """
 
     def __init__(

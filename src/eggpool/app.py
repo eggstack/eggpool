@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from importlib.metadata import version as _get_version
@@ -60,6 +61,7 @@ from eggpool.errors import (
     NoEligibleAccountError,
     RequestTooLargeError,
 )
+from eggpool.event_loop_lag import EventLoopLagMonitor
 from eggpool.health.health_manager import HealthManager
 from eggpool.jsonx import dumps_bytes as jsonx_dumps_bytes
 from eggpool.logging import configure_logging
@@ -751,6 +753,14 @@ def _log_operational_profile(
     compression_mode = str(getattr(config.compression, "mode", "off"))
     cache_enabled = bool(getattr(config.cache, "enabled", False))
 
+    # Runtime topology (Milestone F): process identity and asyncio
+    # loop identity so operators can verify the single-loop model.
+    try:
+        loop = asyncio.get_running_loop()
+        loop_id = id(loop)
+    except RuntimeError:
+        loop_id = None
+
     profile = {
         "workers": 1,
         "runtime_threads": config.server.threads,
@@ -773,6 +783,8 @@ def _log_operational_profile(
         "task_process_owned": proc_owned_count,
         "task_generation_leased": gen_leased_count,
         "process_task_spec_version": getattr(process, "task_spec_version", 0),
+        "pid": os.getpid(),
+        "asyncio_loop_id": loop_id,
     }
     # ``extra={"profile": ...}`` lets structured-log consumers parse
     # the dict directly without scraping the rendered message.  The
@@ -782,6 +794,15 @@ def _log_operational_profile(
         "Operational profile: %s",
         profile,
         extra={"profile": profile},
+    )
+
+    # Runtime topology (Milestone F): explicit topology summary so
+    # operators can verify the single-loop model at a glance.
+    logger.info(
+        "Runtime topology: pid=%d threads=%d asyncio_loop_id=%s",
+        os.getpid(),
+        config.server.threads,
+        loop_id,
     )
 
 
@@ -1404,6 +1425,14 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         routing_trace_guard
     )
 
+    # 18e. Event-loop lag monitor (process-owned, Milestone F6).
+    # Measures event-loop starvation via periodic callback drift.
+    event_loop_lag_monitor = EventLoopLagMonitor(
+        cadence_s=1.0,
+        window_size=200,
+    )
+    app.state.event_loop_lag_monitor = event_loop_lag_monitor
+
     # 19. Reconcile expired reservations at startup so dashboard counts
     # and in-memory quota state are accurate before readiness reports OK.
     await reconcile_expired_reservations(
@@ -1521,6 +1550,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         dispatch_writer=dispatch_writer,
         routing_trace_writer=routing_trace_writer,
         maintenance_state=app.state.maintenance_state,
+        event_loop_lag_monitor=event_loop_lag_monitor,
     )
 
     # Use the unified register_runtime_tasks helper so the startup and
@@ -1548,6 +1578,9 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     await supervisor.start_all()
     # Start process-owned tasks on the process supervisor.
     await process_supervisor.start_all()
+
+    # 21b. Start the event-loop lag monitor (process-owned, F6).
+    event_loop_lag_monitor.start()
 
     # 22. Transcoding status
     if config.transcoder.enabled is False:
@@ -1758,6 +1791,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                 await runtime_manager.shutdown()
             except Exception:
                 logger.exception("Error shutting down runtime manager")
+
+        # Stop the event-loop lag monitor before flushing metrics.
+        event_loop_lag_monitor: EventLoopLagMonitor | None = getattr(
+            app.state, "event_loop_lag_monitor", None
+        )
+        if event_loop_lag_monitor is not None:
+            try:
+                await event_loop_lag_monitor.stop()
+            except Exception:
+                logger.exception(
+                    "Error stopping event-loop lag monitor during shutdown"
+                )
 
         # Flush buffered metrics — process-owned; the manager's
         # shutdown only handles generation-owned resources.

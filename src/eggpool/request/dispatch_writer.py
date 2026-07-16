@@ -86,6 +86,38 @@ class DispatchPersistenceWriter:
 
     Constructed with a :class:`Database` reference (process-owned).
     The drain task runs on the event loop where :meth:`start` is called.
+
+    Thread-safety strategy (Milestone F)
+    -------------------------------------
+    The writer is designed for the **single-loop model** (Model 1).
+    The drain task runs on the single event loop; the ``asyncio.Queue``
+    is bound to that loop.  Submission from other threads is bridged
+    via ``loop.call_soon_threadsafe`` which is thread-safe by design.
+
+    The writer does NOT use any ``threading.Lock`` — all internal
+    state mutations happen on the event loop via ``call_soon_threadsafe``.
+    The ``concurrent.futures.Future`` returned by ``submit_intent``
+    is thread-safe per the ``concurrent.futures`` contract.
+
+    Single-loop assumption
+    ----------------------
+    The drain task, queue, and all async machinery are bound to the
+    event loop where ``start()`` is called.  Under Model 1 (single
+    Granian worker, ``runtime_threads=1``), this is the only loop
+    in the process.  If ``runtime_threads > 1``, the drain task
+    runs on whichever loop called ``start()``; submissions from
+    other loops still work because ``call_soon_threadsafe`` is
+    loop-agnostic.
+
+    Shutdown behavior
+    -----------------
+    1. ``stop()`` sets state to DRAINING and awaits the drain task
+       with a configurable timeout (default 5s).
+    2. If the drain task does not complete, it is cancelled.
+    3. All remaining queued intents are failed with
+       ``DispatchWriterShutdownError``.
+    4. The state transitions to CLOSED; further submissions raise
+       ``DispatchQueueClosedError``.
     """
 
     def __init__(

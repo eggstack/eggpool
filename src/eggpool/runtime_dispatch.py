@@ -246,6 +246,18 @@ class DispatchSpanRecorder:
     Hot-path additions use a single lock to append, and snapshots
     avoid copying buffers that were never touched (cheap empty
     short-circuit).
+
+    Thread-safety strategy:
+
+    - ``_lock`` serialises append / snapshot to prevent concurrent
+      deque mutation.  The lock is held only for the brief append
+      (``deque.append``) or the snapshot copy (``list(state.samples)``).
+    - ``_sample_counter`` is incremented *outside* the lock.  A benign
+      race (two threads incrementing simultaneously) slightly overshoots
+      the target sample rate but cannot cause double-counting or data
+      corruption — the counter is purely advisory.
+    - Per-span state is lazily created under the lock so concurrent
+      first-touch for different span keys does not leak.
     """
 
     def __init__(

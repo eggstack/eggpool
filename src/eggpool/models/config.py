@@ -74,11 +74,27 @@ class ServerConfig(BaseModel):
     api_key_env: str = "SERVER_API_KEY"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     access_log: bool = True
-    # Number of Granian runtime (event-loop) threads. 4 is the recommended
-    # default for installs that serve dashboard traffic during active proxy
-    # use. 1 is minimum footprint. Granian keeps
-    # ``workers=1`` so the process count remains small.
-    threads: int = Field(default=4, ge=1, le=64)
+    # Number of Granian runtime (event-loop) threads.  The supported
+    # single-loop model (Model 1, Milestone F) uses ``threads=1``.
+    # Values > 1 enable Granian's multi-thread runtime which may
+    # cause ``asyncio.Lock`` cross-loop failures; use only when the
+    # operator has verified that all long-lived asyncio primitives
+    # tolerate multiple event loops.
+    threads: int = Field(default=1, ge=1, le=64)
+
+    @model_validator(mode="after")
+    def _warn_multi_thread(self) -> ServerConfig:
+        if self.threads > 1:
+            import warnings  # noqa: PLC0415
+
+            warnings.warn(
+                f"threads={self.threads} enables Granian multi-thread "
+                "runtime; asyncio.Lock primitives are loop-bound and "
+                "may fail under multi-loop access (Milestone F). "
+                "threads=1 is the supported single-loop default.",
+                stacklevel=1,
+            )
+        return self
 
     @property
     def resolved_api_key(self) -> str | None:

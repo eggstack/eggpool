@@ -1525,7 +1525,7 @@ class TestGranianServe:
         from eggpool.models.config import ServerConfig
 
         cfg = ServerConfig()
-        assert cfg.threads == 4
+        assert cfg.threads == 1  # Milestone F: single-loop default
 
     def test_server_config_threads_zero_rejected(self) -> None:
         """``threads`` must be >= 1 to keep the event loop usable."""
@@ -1603,7 +1603,7 @@ class TestGranianServe:
         assert result.exit_code == 0, result.output
         kwargs = observed["kwargs"]
         assert kwargs.get("workers") == 1
-        assert kwargs.get("runtime_threads") == 4
+        assert kwargs.get("runtime_threads") == 1  # Milestone F: single-loop default
         assert kwargs.get("process_name") == "eggpool"
         assert not pid_file.exists(), "PID file must be cleared after Granian returns"
 
@@ -1729,7 +1729,7 @@ class TestGranianServe:
         )
 
         assert result.exit_code == 0, result.output
-        assert captured.get("runtime_threads") == 4
+        assert captured.get("runtime_threads") == 4  # explicit threads=4 in config
         assert captured.get("workers") == 1
 
 

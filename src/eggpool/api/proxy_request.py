@@ -47,6 +47,8 @@ from eggpool.request.limits import (
 from eggpool.request.limits import (
     check_context_limits as _check_context_limits,
 )
+from eggpool.request.parsed_payload import ParsedRequestPayload
+from eggpool.request.payload_utils import estimate_padded_size
 from eggpool.routing.provider import parse_model_provider
 from eggpool.runtime_dispatch import (
     SPAN_AUTH,
@@ -376,6 +378,11 @@ async def _handle_proxy_request_inner(
             )
     payload = cast("dict[str, Any]", payload_obj)
 
+    # F7: create parsed-payload cache once, seed with the already-parsed
+    # dict so downstream accesses skip json.loads entirely.
+    parsed_payload = ParsedRequestPayload(original_bytes=body)
+    parsed_payload._parsed_dict = payload  # type: ignore[assignment]
+
     model_value = payload.get("model")
     if not isinstance(model_value, str) or not model_value.strip():
         return endpoint.error_response(
@@ -439,9 +446,13 @@ async def _handle_proxy_request_inner(
                     )
                     limit_check_body = encoded_translated_body
                     if preflight.tool_token_padding > 0:
-                        limit_check_body += b"\x00" * (
+                        padded_len = estimate_padded_size(
+                            len(encoded_translated_body),
                             preflight.tool_token_padding
-                            * ESTIMATED_CONTEXT_BYTES_PER_TOKEN_FLOOR
+                            * ESTIMATED_CONTEXT_BYTES_PER_TOKEN_FLOOR,
+                        )
+                        limit_check_body = encoded_translated_body + (
+                            b"\x00" * (padded_len - len(encoded_translated_body))
                         )
                     _check_context_limits(
                         model_id=model_id,
@@ -753,6 +764,7 @@ async def _handle_proxy_request_inner(
             estimated_reservation_tokens=precomputed_reservation_tokens,
             thinking_requirement=precomputed_thinking_req,
             estimated_context_input_tokens=precomputed_context_input_tokens,
+            parsed_payload=parsed_payload,
         )
 
     if segmentation_result is not None:

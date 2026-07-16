@@ -130,6 +130,7 @@ class RuntimeMetricsService:
         dispatch_writer: Any | None = None,  # noqa: ANN401
         routing_trace_writer: Any | None = None,  # noqa: ANN401
         maintenance_state: Any | None = None,  # noqa: ANN401
+        event_loop_lag_monitor: Any | None = None,  # noqa: ANN401
     ) -> None:
         self._config = config
         self._db = db
@@ -158,6 +159,7 @@ class RuntimeMetricsService:
         self._dispatch_writer = dispatch_writer
         self._routing_trace_writer = routing_trace_writer
         self._maintenance_state = maintenance_state
+        self._event_loop_lag_monitor = event_loop_lag_monitor
 
     async def snapshot(self) -> dict[str, Any]:
         """Return a best-effort runtime snapshot.
@@ -259,6 +261,10 @@ class RuntimeMetricsService:
         )
 
         result["maintenance"] = self._snapshot_maintenance(probe_errors)
+
+        result["event_loop_lag"] = self._snapshot_event_loop_lag(probe_errors)
+
+        result["resource_plateaus"] = self._snapshot_resource_plateaus(probe_errors)
 
         return result
 
@@ -1165,6 +1171,110 @@ class RuntimeMetricsService:
                 f"Maintenance state snapshot failed: {exc}",
             )
             return {"enabled": True, "error": str(exc)}
+
+    def _snapshot_event_loop_lag(self, probe_errors: list[str]) -> dict[str, Any]:
+        """Best-effort snapshot of the event-loop lag monitor.
+
+        Returns lag statistics (p50, p95, p99, max in ms) measured by
+        periodic callback drift.  The monitor is process-owned and
+        survives generation swaps.  Returns ``{"enabled": False}``
+        when no monitor is wired.
+        """
+        monitor = self._event_loop_lag_monitor
+        if monitor is None:
+            return {"enabled": False}
+        try:
+            return {"enabled": True, **monitor.to_dict()}
+        except Exception as exc:
+            _append_probe_error(
+                probe_errors,
+                f"Event-loop lag snapshot failed: {exc}",
+            )
+            return {"enabled": True, "error": str(exc)}
+
+    def _snapshot_resource_plateaus(self, probe_errors: list[str]) -> dict[str, Any]:
+        """Best-effort boundedness checks for long-lived resources.
+
+        Surfaces DNS cache capacity, client pool provider counts, and
+        stream diagnostic ring-buffer sizes so operators can verify that
+        bounded resources remain within expected limits.
+        """
+        dns_plateau: dict[str, Any] = {"enabled": False}
+        client_pool_plateau: dict[str, Any] = {"enabled": False}
+        stream_diag_plateau: dict[str, Any] = {"enabled": False}
+
+        # DNS cache
+        if self._dns_backend is not None:
+            try:
+                cache = self._dns_backend.cache
+                snap = cache.snapshot()
+                max_entries = snap.get("max_entries")
+                current_size = snap.get("size", 0)
+                dns_plateau = {
+                    "enabled": True,
+                    "max_entries": max_entries,
+                    "current_size": current_size,
+                    "utilisation_pct": (
+                        round(current_size / max_entries * 100, 1)
+                        if max_entries
+                        else None
+                    ),
+                    "evictions_total": snap.get("evictions", 0),
+                }
+            except Exception as exc:
+                _append_probe_error(
+                    probe_errors,
+                    f"DNS cache plateau snapshot failed: {exc}",
+                )
+                dns_plateau = {"enabled": True, "error": str(exc)}
+
+        # Provider client pool
+        if self._provider_client_pool is not None:
+            try:
+                pool_snap = self._provider_client_pool.snapshot()
+                providers = pool_snap.get("providers", {})
+                client_pool_plateau = {
+                    "enabled": True,
+                    "provider_count": len(providers),
+                    "providers": list(providers.keys()),
+                }
+            except Exception as exc:
+                _append_probe_error(
+                    probe_errors,
+                    f"Client pool plateau snapshot failed: {exc}",
+                )
+                client_pool_plateau = {"enabled": True, "error": str(exc)}
+
+        # Stream diagnostics ring buffers
+        if self._stream_diagnostics is not None:
+            try:
+                sd_snap = self._stream_diagnostics.snapshot()
+                completed = sd_snap.get("completed_ms", {})
+                cancel = sd_snap.get("client_cancel_ms", {})
+                finalizer = sd_snap.get("finalizer_timeout_ms", {})
+                stream_diag_plateau = {
+                    "enabled": True,
+                    "completed_histogram_capacity": 256,
+                    "completed_histogram_samples": completed.get("sample_count", 0),
+                    "client_cancel_histogram_capacity": 256,
+                    "client_cancel_histogram_samples": cancel.get("sample_count", 0),
+                    "finalizer_timeout_histogram_capacity": 256,
+                    "finalizer_timeout_histogram_samples": finalizer.get(
+                        "sample_count", 0
+                    ),
+                }
+            except Exception as exc:
+                _append_probe_error(
+                    probe_errors,
+                    f"Stream diagnostics plateau snapshot failed: {exc}",
+                )
+                stream_diag_plateau = {"enabled": True, "error": str(exc)}
+
+        return {
+            "dns_cache": dns_plateau,
+            "provider_client_pool": client_pool_plateau,
+            "stream_diagnostics": stream_diag_plateau,
+        }
 
 
 # -- Helpers ----------------------------------------------------------------

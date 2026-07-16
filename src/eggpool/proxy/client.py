@@ -49,28 +49,56 @@ def build_upstream_auth_headers(
     return {"Authorization": f"Bearer {upstream_api_key}"}
 
 
+_EXTRA_DROP_HEADERS = frozenset({"host", "content-length"})
+
+
 def sanitize_request_headers(headers: dict[str, str]) -> dict[str, str]:
     """Strip local credentials, hop-by-hop, and framing headers.
 
     This does NOT inject upstream auth. Use
-    :func:`eggpool.providers.contract.build_upstream_headers` to compose
-    the final upstream header set after sanitization.
+    :func:`build_upstream_headers` to compose the final upstream header
+    set after sanitization.
     """
     connection_headers = _connection_header_tokens(
         value for key, value in headers.items() if key.casefold() == "connection"
     )
-    filtered: dict[str, str] = {}
-    for key, value in headers.items():
-        lower_key = key.lower()
-        if lower_key in LOCAL_CREDENTIAL_HEADERS:
-            continue
-        if lower_key in HOP_BY_HOP_HEADERS:
-            continue
-        if lower_key in connection_headers:
-            continue
-        if lower_key in ("host", "content-length"):
-            continue
-        filtered[key] = value
+    drop = (
+        HOP_BY_HOP_HEADERS
+        | LOCAL_CREDENTIAL_HEADERS
+        | connection_headers
+        | _EXTRA_DROP_HEADERS
+    )
+    return {key: value for key, value in headers.items() if key.lower() not in drop}
+
+
+def build_upstream_headers(
+    headers: dict[str, str],
+    upstream_api_key: str,
+    *,
+    extra_drop: frozenset[str] | None = None,
+) -> dict[str, str]:
+    """Build the final upstream header set in a single pass.
+
+    Combines sanitization (strip credentials, hop-by-hop,
+    connection-nominated) with auth header injection.  More efficient
+    than calling :func:`sanitize_request_headers` followed by
+    :meth:`dict.update`.
+    """
+    connection_headers = _connection_header_tokens(
+        value for key, value in headers.items() if key.casefold() == "connection"
+    )
+    drop = (
+        HOP_BY_HOP_HEADERS
+        | LOCAL_CREDENTIAL_HEADERS
+        | connection_headers
+        | _EXTRA_DROP_HEADERS
+    )
+    if extra_drop:
+        drop = drop | extra_drop
+    filtered: dict[str, str] = {
+        key: value for key, value in headers.items() if key.lower() not in drop
+    }
+    filtered["Authorization"] = f"Bearer {upstream_api_key}"
     return filtered
 
 
@@ -83,15 +111,11 @@ def filter_request_headers(
     - Strip every local credential-bearing header
       (``Authorization``, ``X-Api-Key``, ``Proxy-Authorization``)
       before forwarding. The selected account's credential is then
-      injected via :func:`build_upstream_auth_headers`.
+      injected via :func:`build_upstream_headers`.
     - Remove hop-by-hop headers
     - Remove host and content-length (recalculated by httpx)
     """
-    filtered = sanitize_request_headers(headers)
-    filtered.update(
-        build_upstream_auth_headers(protocol="", upstream_api_key=upstream_api_key)
-    )
-    return filtered
+    return build_upstream_headers(headers, upstream_api_key)
 
 
 def filter_response_headers(

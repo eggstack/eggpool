@@ -83,6 +83,7 @@ from eggpool.request.finalizer import (
     RequestFinalizer,
 )
 from eggpool.request.limits import estimate_reservation_tokens
+from eggpool.request.parsed_payload import ParsedRequestPayload  # noqa: TC001
 from eggpool.request.selection_claim import (  # noqa: F401  (Milestone B scaffolding)
     SelectionClaim,  # type: ignore[reportUnusedImport]
     SelectionClaimError,  # type: ignore[reportUnusedImport]
@@ -288,10 +289,15 @@ def _extract_original_thinking_budget_inputs(
     Returns ``(None, None)`` when the body cannot be parsed as a JSON
     object or when no thinking controls are present.
     """
-    try:
-        original_body_obj: object = jsonx_loads(context.original_body)
-    except ValueError:
-        return (None, None)
+    # F7: prefer cached parsed dict from ParsedRequestPayload.
+    payload_cache = context.parsed_payload
+    if payload_cache is not None:
+        original_body_obj: object | None = payload_cache.parsed_dict
+    else:
+        try:
+            original_body_obj = jsonx_loads(context.original_body)
+        except ValueError:
+            return (None, None)
     if not isinstance(original_body_obj, dict):
         return (None, None)
     original_body: dict[str, object] = original_body_obj  # pyright: ignore[reportUnknownVariableType]
@@ -495,6 +501,8 @@ class ProxyRequestContext:
     estimated_reservation_tokens: int | None = None
     thinking_requirement: Any | None = None  # ThinkingRequestRequirement | None
     estimated_context_input_tokens: int | None = None
+    # F7: parsed payload cache — created once, avoids repeated json.loads.
+    parsed_payload: ParsedRequestPayload | None = None
 
     def __post_init__(self) -> None:
         if not self.upstream_protocol:
@@ -822,6 +830,7 @@ class RequestCoordinator:
                 _client_has_thinking = self._client_has_thinking_controls(
                     context.original_body,
                     context.protocol,
+                    parsed_payload=context.parsed_payload,
                 )
                 if (
                     _prepared is not None
@@ -1535,9 +1544,14 @@ class RequestCoordinator:
                 thinking_req = context.thinking_requirement
             else:
                 # Fallback for tests/legacy callers that bypass
-                # handle_proxy_request precomputation.
+                # handle_proxy_request precomputation.  Use the cached
+                # parsed dict when available to avoid re-parsing.
                 body_dict: dict[str, object] = {}
-                if context.original_body:
+                if context.parsed_payload is not None:
+                    parsed_obj = context.parsed_payload.parsed_dict
+                    if isinstance(parsed_obj, dict):
+                        body_dict = parsed_obj  # type: ignore[assignment]
+                elif context.original_body:
                     try:
                         parsed: object = jsonx_loads(context.original_body)
                         if isinstance(parsed, dict):
@@ -4287,6 +4301,8 @@ class RequestCoordinator:
         self,
         original_body: bytes,
         protocol: str,
+        *,
+        parsed_payload: ParsedRequestPayload | None = None,
     ) -> bool:
         """Return True when the client request contains thinking/reasoning controls.
 
@@ -4297,10 +4313,14 @@ class RequestCoordinator:
         on provider-specific capability lookup, which is not available
         during preflight.
         """
-        try:
-            body_obj: object = jsonx_loads(original_body)
-        except ValueError:
-            return False
+        # F7: prefer cached parsed dict from ParsedRequestPayload.
+        if parsed_payload is not None:
+            body_obj: object | None = parsed_payload.parsed_dict
+        else:
+            try:
+                body_obj = jsonx_loads(original_body)
+            except ValueError:
+                return False
         if not isinstance(body_obj, dict):
             return False
         body: dict[str, object] = body_obj  # pyright: ignore[reportUnknownVariableType]

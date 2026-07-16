@@ -134,6 +134,26 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Precomputed immutable request state
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ImmutableRequestState:
+    """Precomputed immutable lookup state for the request hot path.
+
+    Built once during generation construction and invalidated naturally
+    through generation swap.  Avoids repeated set/dict construction on
+    every request.
+    """
+
+    provider_ids: frozenset[str]
+    account_names: frozenset[str]
+    hop_by_hop_headers: frozenset[str]
+    local_credential_headers: frozenset[str]
+
+
+# ---------------------------------------------------------------------------
 # Process-owned runtime container
 # ---------------------------------------------------------------------------
 
@@ -168,6 +188,7 @@ class ProcessRuntime:
     dispatch_writer: Any = None  # noqa: ANN401 — DispatchPersistenceWriter
     routing_trace_writer: Any = None  # noqa: ANN401 — RoutingTraceWriter
     maintenance_state: Any = None  # noqa: ANN401 — MaintenanceState
+    event_loop_lag_monitor: Any = None  # noqa: ANN401 — EventLoopLagMonitor
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +258,14 @@ class RuntimeGeneration:
     routing_trace_writer: Any
     created_at_monotonic: float
     created_at_epoch: float
+    immutable_request_state: ImmutableRequestState = field(
+        default_factory=lambda: ImmutableRequestState(
+            provider_ids=frozenset(),
+            account_names=frozenset(),
+            hop_by_hop_headers=frozenset(),
+            local_credential_headers=frozenset(),
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -932,6 +961,23 @@ class RuntimeGenerationBuilder:
 
         now_mono = time.monotonic()
         now_epoch = time.time()
+
+        # F9: build precomputed immutable request state from registry.
+        from eggpool.proxy.client import (  # noqa: PLC0415
+            HOP_BY_HOP_HEADERS,
+            LOCAL_CREDENTIAL_HEADERS,
+        )
+
+        registry = services["registry"]
+        immutable_request_state = ImmutableRequestState(
+            provider_ids=frozenset(registry.get_provider_ids()),
+            account_names=frozenset(
+                state.name for state in registry.get_enabled_states()
+            ),
+            hop_by_hop_headers=HOP_BY_HOP_HEADERS,
+            local_credential_headers=LOCAL_CREDENTIAL_HEADERS,
+        )
+
         generation = RuntimeGeneration(
             generation_id=generation_id,
             config=config,
@@ -959,6 +1005,7 @@ class RuntimeGenerationBuilder:
             routing_trace_writer=services.get("routing_trace_writer"),
             created_at_monotonic=services.get("created_at_monotonic", now_mono),
             created_at_epoch=services.get("created_at_epoch", now_epoch),
+            immutable_request_state=immutable_request_state,
         )
         return GenerationBuildResult(
             generation=generation,
