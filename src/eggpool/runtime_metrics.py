@@ -570,6 +570,22 @@ class RuntimeMetricsService:
         except Exception:
             pass
 
+        # Oldest retained row timestamps for retention diagnostics.
+        oldest_request_at: str | None = None
+        oldest_event_at: str | None = None
+        try:
+            row = await self._db.fetch_one("SELECT MIN(started_at) FROM requests")
+            if row and row[0] is not None:
+                oldest_request_at = str(row[0])
+        except Exception:
+            pass
+        try:
+            row = await self._db.fetch_one("SELECT MIN(created_at) FROM account_events")
+            if row and row[0] is not None:
+                oldest_event_at = str(row[0])
+        except Exception:
+            pass
+
         return {
             "path": db_path,
             "is_memory_db": is_memory_db,
@@ -589,6 +605,8 @@ class RuntimeMetricsService:
             "db_page_size": db_page_size,
             "freelist_count": freelist_count,
             "contention": self._db.contention_snapshot(),
+            "oldest_retained_request_at": oldest_request_at,
+            "oldest_retained_event_at": oldest_event_at,
         }
 
     # -- Routing / in-flight ------------------------------------------------

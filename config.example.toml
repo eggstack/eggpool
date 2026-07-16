@@ -28,6 +28,21 @@ synchronous = "NORMAL"
 # minimum-footprint mode on extremely constrained devices or in-memory tests.
 worker_threads = 2
 
+# ─── Maintenance Budgets ────────────────────────────────────────────
+# Bounds for periodic database maintenance tasks (retention cleanup,
+# stale request finalization, reservation reconciliation). These limits
+# prevent any single maintenance pass from monopolising the SQLite writer
+# connection.  Changes require a restart (not live-reloadable).
+# [maintenance]
+# max_rows_per_batch = 500        # max rows per cleanup batch (50–10000)
+# max_batches_per_tick = 4        # max batches per maintenance tick (1–20)
+# max_tick_duration_ms = 500      # wall-clock ceiling per tick in ms (50–10000)
+# contention_defer_above_lock_wait_p95_ms = 200  # defer P1/P2 when p95 exceeds this (0–5000)
+# max_deferral_age_s = 3600       # force execution after this many seconds of deferral (60–86400)
+# p0_max_rows_per_batch = 1000    # P0 (stale finalizer) row budget (100–20000)
+# p0_max_batches_per_tick = 2     # P0 batch budget (1–10)
+# p0_max_tick_duration_ms = 1000  # P0 wall-clock ceiling in ms (100–30000)
+
 [models]
 # How often to refresh the model catalog from upstream providers (seconds).
 # Also serves as the provider ping interval — each GET /models call measures

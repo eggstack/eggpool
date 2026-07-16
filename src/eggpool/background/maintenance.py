@@ -375,11 +375,20 @@ class MaintenanceState:
     reference to the active :class:`ContentionGuard` so
     :class:`~eggpool.runtime_metrics.RuntimeMetricsService` can expose
     per-task diagnostics through ``/api/stats/runtime``.
+
+    Tracks per-task cumulative ``rows_changed`` across ticks and
+    ``last_success_at`` / ``last_error_at`` timestamps so operators can
+    distinguish a freshly started task from one that is failing
+    repeatedly.
     """
 
     def __init__(self) -> None:
         self._last_results: dict[str, MaintenancePassResult] = {}
         self._contention_guard: ContentionGuard | None = None
+        self._cumulative_rows: dict[str, int] = {}
+        self._last_success_at: dict[str, float] = {}
+        self._last_error_at: dict[str, float] = {}
+        self._configured_budgets: dict[str, dict[str, Any]] = {}
 
     def set_contention_guard(self, guard: ContentionGuard) -> None:
         """Bind the contention guard for diagnostics."""
@@ -388,12 +397,25 @@ class MaintenanceState:
     def record_result(self, result: MaintenancePassResult) -> None:
         """Store the latest pass result for a task."""
         self._last_results[result.task_name] = result
+        name = result.task_name
+        self._cumulative_rows[name] = (
+            self._cumulative_rows.get(name, 0) + result.rows_changed
+        )
+        now = time.monotonic()
+        if result.stopped_reason == "error":
+            self._last_error_at[name] = now
+        elif result.batches_completed > 0:
+            self._last_success_at[name] = now
+
+    def set_configured_budget(self, task_name: str, budget: dict[str, Any]) -> None:
+        """Store the configured budget for a task."""
+        self._configured_budgets[task_name] = budget
 
     def snapshot(self) -> dict[str, Any]:
         """Return the full diagnostics snapshot for runtime metrics."""
         tasks: dict[str, Any] = {}
         for name, result in self._last_results.items():
-            tasks[name] = {
+            snap: dict[str, Any] = {
                 "rows_changed": result.rows_changed,
                 "rows_scanned": result.rows_scanned,
                 "batches_completed": result.batches_completed,
@@ -403,7 +425,15 @@ class MaintenanceState:
                 "contention_deferrals": result.contention_deferrals,
                 "budget_exhausted": result.budget_exhausted,
                 "error_class": result.error_class,
+                "cumulative_rows_changed": self._cumulative_rows.get(name, 0),
             }
+            if name in self._last_success_at:
+                snap["last_success_at"] = round(self._last_success_at[name], 3)
+            if name in self._last_error_at:
+                snap["last_error_at"] = round(self._last_error_at[name], 3)
+            if name in self._configured_budgets:
+                snap["configured_budget"] = self._configured_budgets[name]
+            tasks[name] = snap
         contention = (
             self._contention_guard.snapshot()
             if self._contention_guard is not None
