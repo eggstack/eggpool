@@ -167,6 +167,7 @@ class ProcessRuntime:
     last_task_transition: dict[str, Any] | None = None
     dispatch_writer: Any = None  # noqa: ANN401 — DispatchPersistenceWriter
     routing_trace_writer: Any = None  # noqa: ANN401 — RoutingTraceWriter
+    maintenance_state: Any = None  # noqa: ANN401 — MaintenanceState
 
 
 # ---------------------------------------------------------------------------

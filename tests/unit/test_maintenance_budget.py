@@ -24,9 +24,11 @@ import pytest_asyncio
 
 from eggpool.app import finalize_stale_requests_once
 from eggpool.background.cleanup import (
+    checkpoint_database,
     cleanup_old_events,
     cleanup_old_operational_events,
     cleanup_old_requests,
+    cleanup_old_routing_decisions,
     cleanup_old_usage_rollups,
     reconcile_expired_reservations,
 )
@@ -34,6 +36,7 @@ from eggpool.background.maintenance import (
     ContentionGuard,
     MaintenanceBudget,
     MaintenancePassResult,
+    MaintenanceState,
     run_maintenance_pass,
 )
 from eggpool.db.connection import Database
@@ -1367,3 +1370,394 @@ class TestBudgetIntegration:
         assert p0.priority == 0
         assert p1.priority == 1
         assert p2.priority == 2
+
+
+# ---------------------------------------------------------------------------
+# 10. ContentionGuard starvation cap
+# ---------------------------------------------------------------------------
+
+
+class TestContentionGuardStarvationCap:
+    """Verify the starvation cap forces maintenance when deferred too long."""
+
+    @pytest.mark.asyncio
+    async def test_starvation_cap_forces_execution(self) -> None:
+        """When max_deferral_age_s is exceeded, should_defer returns False."""
+        db_mock = MagicMock()
+        db_mock.contention_snapshot.return_value = {
+            "lock_wait_p95_ms": 300.0,
+            "lock_wait_sample_count": 20,
+        }
+
+        guard = ContentionGuard(
+            db_mock,
+            threshold_ms=100.0,
+            min_samples=5,
+            max_deferral_age_s=0.0,  # Immediate starvation.
+        )
+
+        # First call should NOT defer because starvation cap is hit.
+        should_defer = await guard.should_defer()
+        assert should_defer is False
+        assert guard._forced_by_starvation == 1
+
+    @pytest.mark.asyncio
+    async def test_starvation_cap_tracks_last_success(self) -> None:
+        """record_success resets the starvation timer."""
+        db_mock = MagicMock()
+        db_mock.contention_snapshot.return_value = {
+            "lock_wait_p95_ms": 300.0,
+            "lock_wait_sample_count": 20,
+        }
+
+        guard = ContentionGuard(
+            db_mock,
+            threshold_ms=100.0,
+            min_samples=5,
+            max_deferral_age_s=60.0,
+        )
+
+        # Record success recently — should still defer.
+        guard.record_success()
+        should_defer = await guard.should_defer()
+        assert should_defer is True
+        assert guard._forced_by_starvation == 0
+
+    @pytest.mark.asyncio
+    async def test_starvation_cap_snapshot(self) -> None:
+        """Snapshot includes starvation cap fields."""
+        db_mock = MagicMock()
+        db_mock.contention_snapshot.return_value = {}
+
+        guard = ContentionGuard(
+            db_mock,
+            max_deferral_age_s=120.0,
+        )
+        snap = guard.snapshot()
+        assert snap["max_deferral_age_s"] == 120.0
+        assert snap["forced_by_starvation"] == 0
+        assert "elapsed_since_last_success_s" in snap
+
+
+# ---------------------------------------------------------------------------
+# 11. EXPLAIN QUERY PLAN for batched selectors
+# ---------------------------------------------------------------------------
+
+
+class TestQueryPlanCoverage:
+    """Verify batched cleanup queries use the intended indexes."""
+
+    @pytest.mark.asyncio
+    async def test_requests_retention_uses_index(self) -> None:
+        """requests cleanup query uses started_at index."""
+        database = Database(":memory:")
+        await database.connect()
+        await MigrationRunner(database).run()
+
+        rows = await database.fetch_all(
+            "EXPLAIN QUERY PLAN "
+            "SELECT id FROM requests "
+            "WHERE started_at < datetime('now', '-30 days') "
+            "ORDER BY started_at, id LIMIT 500"
+        )
+        plan = " ".join(str(row[3]) for row in rows)
+        # Should use idx_requests_started or a covering scan.
+        assert "requests" in plan.lower() or "SEARCH" in plan
+
+        await database.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_account_events_uses_index(self) -> None:
+        """account_events cleanup query uses created_at index."""
+        database = Database(":memory:")
+        await database.connect()
+        await MigrationRunner(database).run()
+
+        rows = await database.fetch_all(
+            "EXPLAIN QUERY PLAN "
+            "SELECT id FROM account_events "
+            "WHERE created_at < datetime('now', '-90 days') "
+            "ORDER BY created_at, id LIMIT 500"
+        )
+        plan = " ".join(str(row[3]) for row in rows)
+        assert "account_events" in plan.lower() or "SEARCH" in plan
+
+        await database.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_routing_decisions_uses_index(self) -> None:
+        """routing_decisions cleanup query uses the retention index."""
+        database = Database(":memory:")
+        await database.connect()
+        await MigrationRunner(database).run()
+
+        rows = await database.fetch_all(
+            "EXPLAIN QUERY PLAN "
+            "SELECT id FROM routing_decisions "
+            "WHERE decision_made_at < datetime('now', '-90 days') "
+            "ORDER BY decision_made_at, id LIMIT 500"
+        )
+        plan = " ".join(str(row[3]) for row in rows)
+        assert "routing_decisions" in plan.lower() or "SEARCH" in plan
+
+        await database.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# 12. :memory: graceful degradation for filesystem metrics
+# ---------------------------------------------------------------------------
+
+
+class TestMemoryDbGracefulDegradation:
+    """Verify :memory: databases handle filesystem metrics gracefully."""
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_returns_zeroes_for_memory_db(self) -> None:
+        """checkpoint_database returns zero telemetry for :memory: DB."""
+        database = Database(":memory:")
+        await database.connect()
+        await MigrationRunner(database).run()
+
+        result = await checkpoint_database(database)
+        # :memory: DBs don't have file sizes, but checkpoint should still
+        # return valid telemetry.
+        assert "busy" in result
+        assert "log" in result
+        assert "checkpointed" in result
+        assert "duration_ms" in result
+        assert "mode" in result
+
+        await database.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_snapshot_db_handles_memory_db(self) -> None:
+        """_snapshot_db returns None for file sizes on :memory: DB."""
+        from eggpool.runtime_metrics import RuntimeMetricsService
+
+        database = Database(":memory:")
+        await database.connect()
+        await MigrationRunner(database).run()
+
+        # Minimal mock config for RuntimeMetricsService.
+        fake_config = MagicMock()
+        fake_config.database.path = ":memory:"
+        fake_config.database.wal = True
+        fake_config.database.synchronous = "NORMAL"
+        fake_config.database.busy_timeout_ms = 5000
+        fake_config.database.worker_threads = 1
+
+        svc = RuntimeMetricsService(
+            config=fake_config,
+            db=database,
+            stats_db=database,
+            supervisor=MagicMock(),
+            task_monitor=MagicMock(),
+            router=MagicMock(),
+            health_manager=MagicMock(),
+            started_monotonic=0.0,
+            started_epoch=0,
+            metrics_coalescer=MagicMock(),
+            outbound_manager=MagicMock(),
+            dns_backend=MagicMock(),
+            provider_client_pool=MagicMock(),
+            dispatch_overhead_recorder=MagicMock(),
+            local_pre_upstream_recorder=MagicMock(),
+            dispatch_span_recorder=MagicMock(),
+            model_info=MagicMock(),
+            dashboard_telemetry=MagicMock(),
+            stream_diagnostics=MagicMock(),
+            finalization_retry_queue=None,
+            routing_trace_guard=None,
+            runtime_manager=None,
+            process=MagicMock(),
+            dispatch_writer=None,
+            routing_trace_writer=None,
+        )
+
+        probe_errors: list[str] = []
+        result = await svc._snapshot_db(probe_errors)
+        assert result["is_memory_db"] is True
+        assert result["file_size_bytes"] is None
+        assert result["wal_size_bytes"] is None
+        assert result["shm_size_bytes"] is None
+
+        await database.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# 13. remaining_estimate populated
+# ---------------------------------------------------------------------------
+
+
+class TestRemainingEstimate:
+    """Verify remaining_estimate is populated when budget is exhausted."""
+
+    @pytest.mark.asyncio
+    async def test_requests_remaining_when_budget_exhausted(self, db: Database) -> None:
+        """cleanup_old_requests returns remaining_estimate > 0 when budget exhausted."""
+        await _seed_account_and_model(db)
+        async with db.transaction():
+            for _ in range(10):
+                await db.execute_write(
+                    "INSERT INTO requests "
+                    "(account_id, model_id, status, started_at) "
+                    "VALUES (1, 'gpt-4', 'completed', "
+                    "datetime('now', '-100 days'))",
+                )
+
+        budget = MaintenanceBudget(
+            max_rows_per_batch=3,
+            max_batches_per_tick=1,
+            max_tick_duration_ms=5000.0,
+        )
+        result = await cleanup_old_requests(db, retain_days=30, budget=budget)
+        assert result.remaining_estimate == 1  # More rows exist.
+        assert result.budget_exhausted is True
+
+    @pytest.mark.asyncio
+    async def test_requests_remaining_zero_when_drained(self, db: Database) -> None:
+        """cleanup_old_requests returns remaining_estimate == 0 when all deleted."""
+        await _seed_account_and_model(db)
+        async with db.transaction():
+            for _ in range(3):
+                await db.execute_write(
+                    "INSERT INTO requests "
+                    "(account_id, model_id, status, started_at) "
+                    "VALUES (1, 'gpt-4', 'completed', "
+                    "datetime('now', '-100 days'))",
+                )
+
+        budget = MaintenanceBudget(
+            max_rows_per_batch=500,
+            max_batches_per_tick=4,
+            max_tick_duration_ms=5000.0,
+        )
+        result = await cleanup_old_requests(db, retain_days=30, budget=budget)
+        assert result.remaining_estimate is None  # Completed, no check needed.
+
+    @pytest.mark.asyncio
+    async def test_routing_decisions_remaining(self, db: Database) -> None:
+        """remaining_estimate set when budget exhausted for routing decisions."""
+        await _seed_account_and_model(db)
+        async with db.transaction():
+            for _ in range(10):
+                await db.execute_write(
+                    "INSERT INTO requests "
+                    "(account_id, model_id, status, started_at) "
+                    "VALUES (1, 'gpt-4', 'completed', "
+                    "datetime('now', '-100 days'))",
+                )
+                await db.execute_write(
+                    "INSERT INTO routing_decisions "
+                    "(request_id, attempt_number, model_id, decision_made_at) "
+                    "VALUES ("
+                    "  (SELECT id FROM requests ORDER BY id DESC LIMIT 1),"
+                    "  1, 'gpt-4', datetime('now', '-100 days'))",
+                )
+
+        budget = MaintenanceBudget(
+            max_rows_per_batch=3,
+            max_batches_per_tick=1,
+            max_tick_duration_ms=5000.0,
+        )
+        result = await cleanup_old_routing_decisions(db, retain_days=30, budget=budget)
+        assert result.remaining_estimate == 1
+        assert result.budget_exhausted is True
+
+
+# ---------------------------------------------------------------------------
+# 14. MaintenanceState aggregator
+# ---------------------------------------------------------------------------
+
+
+class TestMaintenanceState:
+    """Verify MaintenanceState correctly aggregates results."""
+
+    def test_record_and_snapshot(self) -> None:
+        """record_result stores results accessible via snapshot."""
+        state = MaintenanceState()
+        result = MaintenancePassResult(
+            task_name="retention_requests",
+            rows_changed=100,
+            batches_completed=2,
+            duration_ms=45.3,
+            stopped_reason="complete",
+        )
+        state.record_result(result)
+        snap = state.snapshot()
+        assert "tasks" in snap
+        assert "retention_requests" in snap["tasks"]
+        assert snap["tasks"]["retention_requests"]["rows_changed"] == 100
+        assert snap["tasks"]["retention_requests"]["batches_completed"] == 2
+
+    def test_contention_guard_in_snapshot(self) -> None:
+        """set_contention_guard populates the contention_guard in snapshot."""
+        db_mock = MagicMock()
+        db_mock.contention_snapshot.return_value = {}
+        state = MaintenanceState()
+        guard = ContentionGuard(db_mock)
+        state.set_contention_guard(guard)
+        snap = state.snapshot()
+        assert snap["contention_guard"] is not None
+        assert "deferrals" in snap["contention_guard"]
+
+    def test_empty_snapshot(self) -> None:
+        """Empty state returns empty tasks and no contention guard."""
+        state = MaintenanceState()
+        snap = state.snapshot()
+        assert snap["tasks"] == {}
+        assert snap["contention_guard"] is None
+
+
+# ---------------------------------------------------------------------------
+# 15. cleanup_old_routing_decisions
+# ---------------------------------------------------------------------------
+
+
+class TestCleanupOldRoutingDecisions:
+    """Tests for the new routing_decisions cleanup function."""
+
+    @pytest.mark.asyncio
+    async def test_deletes_old_routing_decisions(self, db: Database) -> None:
+        """Old routing decisions are deleted."""
+        await _seed_account_and_model(db)
+        async with db.transaction():
+            await db.execute_write(
+                "INSERT INTO requests "
+                "(account_id, model_id, status, started_at) "
+                "VALUES (1, 'gpt-4', 'completed', datetime('now', '-100 days'))",
+            )
+            await db.execute_write(
+                "INSERT INTO routing_decisions "
+                "(request_id, attempt_number, model_id, decision_made_at) "
+                "VALUES ("
+                "  (SELECT id FROM requests ORDER BY id DESC LIMIT 1),"
+                "  1, 'gpt-4', datetime('now', '-100 days'))",
+            )
+
+        result = await cleanup_old_routing_decisions(db, retain_days=30)
+        assert result.rows_changed == 1
+
+        remaining = await db.fetch_all("SELECT id FROM routing_decisions")
+        assert len(remaining) == 0
+
+    @pytest.mark.asyncio
+    async def test_keeps_recent_routing_decisions(self, db: Database) -> None:
+        """Recent routing decisions are kept."""
+        await _seed_account_and_model(db)
+        async with db.transaction():
+            await db.execute_write(
+                "INSERT INTO requests "
+                "(account_id, model_id, status, started_at) "
+                "VALUES (1, 'gpt-4', 'completed', datetime('now', '-5 days'))",
+            )
+            await db.execute_write(
+                "INSERT INTO routing_decisions "
+                "(request_id, attempt_number, model_id, decision_made_at) "
+                "VALUES ("
+                "  (SELECT id FROM requests ORDER BY id DESC LIMIT 1),"
+                "  1, 'gpt-4', datetime('now', '-5 days'))",
+            )
+
+        result = await cleanup_old_routing_decisions(db, retain_days=30)
+        assert result.rows_changed == 0

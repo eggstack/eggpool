@@ -158,6 +158,8 @@ class ContentionGuard:
 
     Consults :meth:`Database.contention_snapshot` and compares the
     rolling ``lock_wait_p95_ms`` against a configurable threshold.
+    A starvation cap (``max_deferral_age_s``) ensures P1/P2 tasks are
+    not deferred indefinitely when contention is persistently elevated.
 
     Args:
         db: Database connection to monitor.
@@ -167,6 +169,9 @@ class ContentionGuard:
         min_samples: Minimum sample count required before the
             threshold is evaluated.  Fewer samples means not enough
             data to make a deferral decision (returns ``False``).
+        max_deferral_age_s: Maximum seconds since last successful
+            (non-deferred) check before forcing execution regardless
+            of contention.  ``None`` disables the starvation cap.
     """
 
     def __init__(
@@ -175,18 +180,30 @@ class ContentionGuard:
         *,
         threshold_ms: float = 200.0,
         min_samples: int = 8,
+        max_deferral_age_s: float | None = None,
     ) -> None:
         self._db = db
         self._threshold_ms = threshold_ms
         self._min_samples = min_samples
+        self._max_deferral_age_s = max_deferral_age_s
         self._deferrals: int = 0
+        self._forced_by_starvation: int = 0
         self._last_p95_ms: float | None = None
         self._last_sample_count: int = 0
+        self._last_successful_time: float = time.monotonic()
 
     @property
     def deferrals(self) -> int:
         """Total deferral count since construction."""
         return self._deferrals
+
+    def record_success(self) -> None:
+        """Record that maintenance actually ran (not deferred).
+
+        Call after a successful non-deferred batch so the starvation
+        cap resets.
+        """
+        self._last_successful_time = time.monotonic()
 
     async def should_defer(self) -> bool:
         """Return ``True`` when maintenance should be deferred.
@@ -194,6 +211,10 @@ class ContentionGuard:
         Checks the database contention snapshot for lock-wait pressure.
         If the rolling p95 exceeds the threshold with enough samples,
         the caller should skip the maintenance batch and try again later.
+
+        When the starvation cap (``max_deferral_age_s``) is set and the
+        time since last successful run exceeds it, deferral is bypassed
+        to prevent indefinite starvation.
         """
         snapshot = self._db.contention_snapshot()
         p95 = snapshot.get("lock_wait_p95_ms")
@@ -205,6 +226,20 @@ class ContentionGuard:
             return False
 
         if float(p95) > self._threshold_ms:
+            # Check starvation cap before deferring.
+            if self._max_deferral_age_s is not None:
+                elapsed = time.monotonic() - self._last_successful_time
+                if elapsed >= self._max_deferral_age_s:
+                    self._forced_by_starvation += 1
+                    logger.warning(
+                        "ContentionGuard: starvation cap hit (%.1fs >= %.1fs), "
+                        "forcing maintenance despite p95=%.1fms",
+                        elapsed,
+                        self._max_deferral_age_s,
+                        float(p95),
+                    )
+                    return False
+
             self._deferrals += 1
             logger.debug(
                 "ContentionGuard: deferring (p95=%.1fms > %.1fms threshold)",
@@ -217,10 +252,14 @@ class ContentionGuard:
 
     def snapshot(self) -> dict[str, Any]:
         """Return diagnostic counters for runtime metrics."""
+        elapsed_since_success = time.monotonic() - self._last_successful_time
         return {
             "threshold_ms": self._threshold_ms,
             "min_samples": self._min_samples,
+            "max_deferral_age_s": self._max_deferral_age_s,
             "deferrals": self._deferrals,
+            "forced_by_starvation": self._forced_by_starvation,
+            "elapsed_since_last_success_s": round(elapsed_since_success, 3),
             "last_lock_wait_p95_ms": self._last_p95_ms,
             "last_lock_wait_sample_count": self._last_sample_count,
         }
@@ -327,3 +366,50 @@ async def run_maintenance_pass(
         error_class=error_class,
         contention_deferrals=total_deferrals,
     )
+
+
+class MaintenanceState:
+    """Process-wide aggregator for maintenance task diagnostics.
+
+    Holds the latest :class:`MaintenancePassResult` per task and a
+    reference to the active :class:`ContentionGuard` so
+    :class:`~eggpool.runtime_metrics.RuntimeMetricsService` can expose
+    per-task diagnostics through ``/api/stats/runtime``.
+    """
+
+    def __init__(self) -> None:
+        self._last_results: dict[str, MaintenancePassResult] = {}
+        self._contention_guard: ContentionGuard | None = None
+
+    def set_contention_guard(self, guard: ContentionGuard) -> None:
+        """Bind the contention guard for diagnostics."""
+        self._contention_guard = guard
+
+    def record_result(self, result: MaintenancePassResult) -> None:
+        """Store the latest pass result for a task."""
+        self._last_results[result.task_name] = result
+
+    def snapshot(self) -> dict[str, Any]:
+        """Return the full diagnostics snapshot for runtime metrics."""
+        tasks: dict[str, Any] = {}
+        for name, result in self._last_results.items():
+            tasks[name] = {
+                "rows_changed": result.rows_changed,
+                "rows_scanned": result.rows_scanned,
+                "batches_completed": result.batches_completed,
+                "duration_ms": result.duration_ms,
+                "stopped_reason": result.stopped_reason,
+                "remaining_estimate": result.remaining_estimate,
+                "contention_deferrals": result.contention_deferrals,
+                "budget_exhausted": result.budget_exhausted,
+                "error_class": result.error_class,
+            }
+        contention = (
+            self._contention_guard.snapshot()
+            if self._contention_guard is not None
+            else None
+        )
+        return {
+            "tasks": tasks,
+            "contention_guard": contention,
+        }

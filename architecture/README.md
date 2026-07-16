@@ -2747,13 +2747,14 @@ Milestone E converts all periodic database maintenance into bounded, resumable b
 
 **Maintenance budget contract** (`src/eggpool/background/maintenance.py`):
 - `MaintenanceBudget` — per-task row/batch/time limits (default: 500 rows/batch, 4 batches/tick, 500ms budget)
-- `MaintenancePassResult` — frozen dataclass tracking `rows_changed`, `batches_completed`, `duration_ms`, `stopped_reason`, `contention_deferrals`
-- `ContentionGuard` — consults `Database.contention_snapshot()` lock-wait p95; defers P1/P2 tasks when write pressure exceeds `maintenance.contention_defer_above_lock_wait_p95_ms`
+- `MaintenancePassResult` — frozen dataclass tracking `rows_changed`, `batches_completed`, `duration_ms`, `stopped_reason`, `contention_deferrals`, `remaining_estimate`
+- `ContentionGuard` — consults `Database.contention_snapshot()` lock-wait p95; defers P1/P2 tasks when write pressure exceeds `maintenance.contention_defer_above_lock_wait_p95_ms`; enforces `max_deferral_age_s` starvation cap that forces execution after the configured delay
+- `MaintenanceState` — process-wide aggregator for per-task results and contention guard snapshots, wired into `RuntimeMetricsService` for `/api/stats/runtime` exposure
 - `run_maintenance_pass()` — bounded batch loop with `await asyncio.sleep(0)` yields between transactions
 
 **Task priority classes**:
-- P0 (correctness recovery): expired reservation reconciliation — runs unconditionally, higher budgets (1000 rows/batch)
-- P1 (storage safety): request/event/ping/rollup/price retention — may defer under contention
+- P0 (correctness recovery): expired reservation reconciliation, stale request finalization — runs unconditionally, higher budgets (1000 rows/batch), task-level timeouts via `p0_max_tick_duration_ms`
+- P1 (storage safety): request/event/routing-decisions/ping/rollup/price retention — may defer under contention
 - P2 (metadata repair): model-info observation cleanup — may defer under contention
 
 **Chunked cleanup functions** (`src/eggpool/background/cleanup.py`):
@@ -2761,17 +2762,20 @@ Milestone E converts all periodic database maintenance into bounded, resumable b
 - `cleanup_old_events()` — LIMIT-based pagination on `(created_at, id)`
 - `cleanup_old_pings()` — chunked DELETE on `provider_pings`
 - `cleanup_old_operational_events()` — chunked DELETE on `operational_events`
+- `cleanup_old_routing_decisions()` — LIMIT-based pagination on `(decision_made_at, id)` via dedicated index
 - `cleanup_old_usage_rollups()` — chunked DELETE on `usage_rollups`
 - `cleanup_old_price_snapshots()` — chunked DELETE on `model_price_snapshots`
 - `cleanup_old_model_info_observations()` — chunked DELETE on `model_info_observations`
 - `reconcile_expired_reservations()` — bounded UPDATE with `WHERE id IN (SELECT ... LIMIT ?)`
-- `finalize_stale_requests_once()` — bounded by `batch_size` parameter (default 500)
+- `finalize_stale_requests_once()` — bounded by `batch_size` parameter (default 500), task-level timeout
+
+All cleanup functions populate `remaining_estimate` (1 when budget exhausted and more rows exist, 0 when fully drained, None when completed within budget) so the dashboard can signal backlog status.
 
 **WAL checkpoint telemetry** (`checkpoint_database()` returns `{"busy", "log", "checkpointed", "duration_ms", "mode"}`).
 
 **Runtime diagnostics** exposed via `/api/stats/runtime`:
-- `db` section: WAL page count, DB page count/page size/freelist count
-- `maintenance` section: per-task last result, budget config, contention deferral count
+- `db` section: WAL page count, DB page count/page size/freelist count, WAL/DB/SHM file sizes
+- `maintenance` section: per-task last result (rows changed/scanned, batches, duration, stopped reason, remaining estimate, contention deferrals), contention guard state (threshold, deferrals, forced-by-starvation, elapsed since last success)
 
 **Configuration** (`[maintenance]` in `config.toml`):
 ```toml
@@ -2785,6 +2789,8 @@ p0_max_rows_per_batch = 1000
 p0_max_batches_per_tick = 2
 p0_max_tick_duration_ms = 1000.0
 ```
+
+**Schema**: migration 0050 adds `idx_routing_decisions_retention` on `(decision_made_at, id)` for the batched routing_decisions cleanup query.
 
 All cleanup functions yield to the event loop between batches (`await asyncio.sleep(0)`) so dispatch persistence is never blocked for longer than one batch's transaction duration. Committed progress survives cancellation and resumes on later ticks.
 

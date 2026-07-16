@@ -186,6 +186,7 @@ def register_runtime_tasks(
             cleanup_old_operational_events,
             cleanup_old_price_snapshots,
             cleanup_old_requests,
+            cleanup_old_routing_decisions,
             cleanup_old_usage_rollups,
             reconcile_expired_reservations,
         )
@@ -203,7 +204,11 @@ def register_runtime_tasks(
                 max_batches_per_tick=gen_config.maintenance.max_batches_per_tick,
                 max_tick_duration_ms=gen_config.maintenance.max_tick_duration_ms,
             )
-            guard = ContentionGuard(db)
+            guard = ContentionGuard(
+                db,
+                threshold_ms=gen_config.maintenance.contention_defer_above_lock_wait_p95_ms,
+                max_deferral_age_s=gen_config.maintenance.max_deferral_age_s,
+            )
             should_defer = await guard.should_defer()
 
             results: dict[str, object] = {}
@@ -218,6 +223,7 @@ def register_runtime_tasks(
                 )
                 return
 
+            guard.record_success()
             ping_repo = PingRepository(db)
             results["requests"] = await cleanup_old_requests(
                 db, gen_config.dashboard.retain_request_stats_days, budget=budget
@@ -229,6 +235,9 @@ def register_runtime_tasks(
                 gen_config.models.ping_retain_days, budget=budget
             )
             results["operational_events"] = await cleanup_old_operational_events(
+                db, retain_days=90, budget=budget
+            )
+            results["routing_decisions"] = await cleanup_old_routing_decisions(
                 db, retain_days=90, budget=budget
             )
             results["rollups"] = await cleanup_old_usage_rollups(
@@ -248,6 +257,31 @@ def register_runtime_tasks(
                 router=gen.router,
                 budget=budget,
             )
+
+            # Record results into MaintenanceState for runtime diagnostics.
+            from eggpool.background.maintenance import (  # noqa: PLC0415
+                MaintenancePassResult,
+            )
+
+            state = getattr(process, "maintenance_state", None)
+            if state is not None:
+                state.set_contention_guard(guard)
+                for task_name, r in results.items():
+                    if isinstance(r, MaintenancePassResult):
+                        tagged = MaintenancePassResult(
+                            task_name=f"retention_{task_name}",
+                            rows_scanned=r.rows_scanned,
+                            rows_changed=r.rows_changed,
+                            batches_completed=r.batches_completed,
+                            duration_ms=r.duration_ms,
+                            remaining_estimate=r.remaining_estimate,
+                            stopped_reason=r.stopped_reason,
+                            last_cursor=r.last_cursor,
+                            error_class=r.error_class,
+                            contention_deferrals=r.contention_deferrals,
+                            budget_exhausted=r.budget_exhausted,
+                        )
+                        state.record_result(tagged)
 
             total_rows = sum(
                 getattr(r, "rows_changed", 0) for r in results.values() if r is not None
@@ -316,11 +350,15 @@ def register_runtime_tasks(
         from eggpool.runtime_manager import leased_runtime  # noqa: PLC0415
 
         async with leased_runtime(runtime_manager) as gen:
-            await finalize_stale_requests_once(
-                db=db,
-                router=gen.router,
-                quota_estimator=gen.router.quota_estimator,
-                max_pending_seconds=gen.config.upstream.read_timeout_s,
+            timeout_s = gen.config.maintenance.p0_max_tick_duration_ms / 1000.0
+            await asyncio.wait_for(
+                finalize_stale_requests_once(
+                    db=db,
+                    router=gen.router,
+                    quota_estimator=gen.router.quota_estimator,
+                    max_pending_seconds=gen.config.upstream.read_timeout_s,
+                ),
+                timeout=timeout_s,
             )
 
     supervisor.register_periodic(
@@ -553,11 +591,13 @@ def build_callback_factories_for_specs(
                     cleanup_old_model_info_observations,
                     cleanup_old_operational_events,
                     cleanup_old_price_snapshots,
+                    cleanup_old_routing_decisions,
                     cleanup_old_usage_rollups,
                 )
                 from eggpool.background.maintenance import (  # noqa: PLC0415
                     ContentionGuard,
                     MaintenanceBudget,
+                    MaintenancePassResult,
                 )
                 from eggpool.runtime_manager import (  # noqa: PLC0415
                     leased_runtime,
@@ -570,7 +610,11 @@ def build_callback_factories_for_specs(
                         max_batches_per_tick=gen_config.maintenance.max_batches_per_tick,
                         max_tick_duration_ms=gen_config.maintenance.max_tick_duration_ms,
                     )
-                    guard = ContentionGuard(db)
+                    guard = ContentionGuard(
+                        db,
+                        threshold_ms=gen_config.maintenance.contention_defer_above_lock_wait_p95_ms,
+                        max_deferral_age_s=gen_config.maintenance.max_deferral_age_s,
+                    )
                     should_defer = await guard.should_defer()
 
                     results: dict[str, object] = {}
@@ -589,6 +633,7 @@ def build_callback_factories_for_specs(
                         )
                         return
 
+                    guard.record_success()
                     ping_repo = PingRepository(db)
                     results["requests"] = await cleanup_old_requests(
                         db,
@@ -604,6 +649,9 @@ def build_callback_factories_for_specs(
                     results[
                         "operational_events"
                     ] = await cleanup_old_operational_events(
+                        db, retain_days=90, budget=budget
+                    )
+                    results["routing_decisions"] = await cleanup_old_routing_decisions(
                         db, retain_days=90, budget=budget
                     )
                     results["rollups"] = await cleanup_old_usage_rollups(
@@ -625,6 +673,27 @@ def build_callback_factories_for_specs(
                         router=gen.router,
                         budget=budget,
                     )
+
+                    # Record results into MaintenanceState for runtime diagnostics.
+                    maintenance_state = getattr(process, "maintenance_state", None)
+                    if maintenance_state is not None:
+                        maintenance_state.set_contention_guard(guard)
+                        for task_name, r in results.items():
+                            if isinstance(r, MaintenancePassResult):
+                                tagged = MaintenancePassResult(
+                                    task_name=f"retention_{task_name}",
+                                    rows_scanned=r.rows_scanned,
+                                    rows_changed=r.rows_changed,
+                                    batches_completed=r.batches_completed,
+                                    duration_ms=r.duration_ms,
+                                    remaining_estimate=r.remaining_estimate,
+                                    stopped_reason=r.stopped_reason,
+                                    last_cursor=r.last_cursor,
+                                    error_class=r.error_class,
+                                    contention_deferrals=r.contention_deferrals,
+                                    budget_exhausted=r.budget_exhausted,
+                                )
+                                maintenance_state.record_result(tagged)
 
                     total_rows = sum(
                         getattr(r, "rows_changed", 0)
@@ -684,11 +753,17 @@ def build_callback_factories_for_specs(
                 )
 
                 async with leased_runtime(runtime_manager) as gen:
-                    await finalize_stale_requests_once(
-                        db=db,
-                        router=gen.router,
-                        quota_estimator=gen.router.quota_estimator,
-                        max_pending_seconds=gen.config.upstream.read_timeout_s,
+                    # Task-level timeout: p0 budget converted to seconds,
+                    # with margin for the single-batch call.
+                    timeout_s = gen.config.maintenance.p0_max_tick_duration_ms / 1000.0
+                    await asyncio.wait_for(
+                        finalize_stale_requests_once(
+                            db=db,
+                            router=gen.router,
+                            quota_estimator=gen.router.quota_estimator,
+                            max_pending_seconds=gen.config.upstream.read_timeout_s,
+                        ),
+                        timeout=timeout_s,
                     )
 
             factories[name] = _stale_request_factory

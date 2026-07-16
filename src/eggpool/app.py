@@ -1479,6 +1479,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
 
     # 20b. Runtime metrics service (for /api/stats/runtime)
     # 20c. Dashboard performance telemetry (low-overhead render timing)
+    from eggpool.background.maintenance import MaintenanceState
     from eggpool.dashboard.telemetry import DashboardTelemetry
     from eggpool.runtime_metrics import RuntimeMetricsService
 
@@ -1488,6 +1489,10 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # Stream outcome diagnostics service (process-wide singleton so the
     # coordinator and runtime-metrics paths see the same counters).
     app.state.stream_diagnostics = get_stream_diagnostics()
+
+    # Maintenance state aggregator for /api/stats/runtime diagnostics.
+    app.state.maintenance_state = MaintenanceState()
+    process.maintenance_state = app.state.maintenance_state
 
     app.state.runtime_metrics = RuntimeMetricsService(
         config=config,
@@ -1515,6 +1520,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         process=process,
         dispatch_writer=dispatch_writer,
         routing_trace_writer=routing_trace_writer,
+        maintenance_state=app.state.maintenance_state,
     )
 
     # Use the unified register_runtime_tasks helper so the startup and

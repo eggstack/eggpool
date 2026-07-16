@@ -19,6 +19,18 @@ _DEFAULT_BUDGET = MaintenanceBudget()
 logger = logging.getLogger(__name__)
 
 
+async def _has_remaining_rows(
+    db: Database, query: str, params: tuple[object, ...]
+) -> bool:
+    """Check if at least one row matches the given query (fast existence check).
+
+    Uses :meth:`~eggpool.db.connection.Database.fetch_all` so the check
+    can run outside an explicit transaction boundary.
+    """
+    rows = await db.fetch_all(query, params)
+    return len(rows) > 0
+
+
 async def cleanup_stale_reservations(
     db: Database,
     max_age_seconds: float = 600.0,
@@ -116,6 +128,20 @@ async def cleanup_old_requests(
         batches += 1
         await asyncio.sleep(0)
 
+    # Check if more rows remain beyond the budget.
+    remaining: int | None = None
+    if b.expired(start_time=start, batches_done=batches):
+        has_more = await _has_remaining_rows(
+            db,
+            (
+                "SELECT 1 FROM requests"
+                " WHERE started_at < datetime('now', ? || ' days')"
+                " LIMIT 1"
+            ),
+            (cutoff,),
+        )
+        remaining = 1 if has_more else 0
+
     if total_deleted > 0:
         logger.info(
             "Deleted %d old request records (retention=%d days)",
@@ -125,6 +151,7 @@ async def cleanup_old_requests(
     return MaintenancePassResult(
         rows_changed=total_deleted,
         batches_completed=batches,
+        remaining_estimate=remaining,
         budget_exhausted=b.expired(start_time=start, batches_done=batches),
     )
 
@@ -166,11 +193,25 @@ async def cleanup_old_events(
         batches += 1
         await asyncio.sleep(0)
 
+    remaining: int | None = None
+    if b.expired(start_time=start, batches_done=batches):
+        has_more = await _has_remaining_rows(
+            db,
+            (
+                "SELECT 1 FROM account_events"
+                " WHERE created_at < datetime('now', ? || ' days')"
+                " LIMIT 1"
+            ),
+            (cutoff,),
+        )
+        remaining = 1 if has_more else 0
+
     if total_deleted > 0:
         logger.info("Deleted %d old account events", total_deleted)
     return MaintenancePassResult(
         rows_changed=total_deleted,
         batches_completed=batches,
+        remaining_estimate=remaining,
         budget_exhausted=b.expired(start_time=start, batches_done=batches),
     )
 
@@ -249,11 +290,30 @@ async def reconcile_expired_reservations(
         logger.exception("Failed to reconcile expired reservations")
         raise
 
+    remaining: int | None = None
+    if b.expired(start_time=start, batches_done=batches):
+        has_more = await _has_remaining_rows(
+            db,
+            """SELECT 1 FROM reservations
+               WHERE status = 'active'
+                 AND expires_at IS NOT NULL
+                 AND expires_at <= CURRENT_TIMESTAMP
+                 AND NOT EXISTS (
+                     SELECT 1 FROM requests
+                     WHERE requests.id = reservations.request_id
+                       AND requests.status = 'pending'
+                 )
+               LIMIT 1""",
+            (),
+        )
+        remaining = 1 if has_more else 0
+
     if total_reconciled > 0:
         logger.info("Reconciled %d expired reservations", total_reconciled)
     return MaintenancePassResult(
         rows_changed=total_reconciled,
         batches_completed=batches,
+        remaining_estimate=remaining,
         budget_exhausted=b.expired(start_time=start, batches_done=batches),
     )
 
@@ -328,6 +388,19 @@ async def cleanup_old_operational_events(
         batches += 1
         await asyncio.sleep(0)
 
+    remaining: int | None = None
+    if b.expired(start_time=start, batches_done=batches):
+        has_more = await _has_remaining_rows(
+            db,
+            (
+                "SELECT 1 FROM operational_events"
+                " WHERE occurred_at < datetime('now', ? || ' days')"
+                " LIMIT 1"
+            ),
+            (cutoff,),
+        )
+        remaining = 1 if has_more else 0
+
     if total_deleted > 0:
         logger.info(
             "Deleted %d old operational events (retention=%d days)",
@@ -337,6 +410,7 @@ async def cleanup_old_operational_events(
     return MaintenancePassResult(
         rows_changed=total_deleted,
         batches_completed=batches,
+        remaining_estimate=remaining,
         budget_exhausted=b.expired(start_time=start, batches_done=batches),
     )
 
@@ -378,6 +452,19 @@ async def cleanup_old_usage_rollups(
         batches += 1
         await asyncio.sleep(0)
 
+    remaining: int | None = None
+    if b.expired(start_time=start, batches_done=batches):
+        has_more = await _has_remaining_rows(
+            db,
+            (
+                "SELECT 1 FROM usage_rollups"
+                " WHERE bucket_start < datetime('now', ? || ' days')"
+                " LIMIT 1"
+            ),
+            (cutoff,),
+        )
+        remaining = 1 if has_more else 0
+
     if total_deleted > 0:
         logger.info(
             "Deleted %d old usage_rollups rows (retention=%d days)",
@@ -387,6 +474,7 @@ async def cleanup_old_usage_rollups(
     return MaintenancePassResult(
         rows_changed=total_deleted,
         batches_completed=batches,
+        remaining_estimate=remaining,
         budget_exhausted=b.expired(start_time=start, batches_done=batches),
     )
 
@@ -428,6 +516,19 @@ async def cleanup_old_price_snapshots(
         batches += 1
         await asyncio.sleep(0)
 
+    remaining: int | None = None
+    if b.expired(start_time=start, batches_done=batches):
+        has_more = await _has_remaining_rows(
+            db,
+            (
+                "SELECT 1 FROM model_price_snapshots"
+                " WHERE captured_at < datetime('now', ? || ' days')"
+                " LIMIT 1"
+            ),
+            (cutoff,),
+        )
+        remaining = 1 if has_more else 0
+
     if total_deleted > 0:
         logger.info(
             "Deleted %d old model price snapshots (retention=%d days)",
@@ -437,6 +538,7 @@ async def cleanup_old_price_snapshots(
     return MaintenancePassResult(
         rows_changed=total_deleted,
         batches_completed=batches,
+        remaining_estimate=remaining,
         budget_exhausted=b.expired(start_time=start, batches_done=batches),
     )
 
@@ -478,6 +580,19 @@ async def cleanup_old_model_info_observations(
         batches += 1
         await asyncio.sleep(0)
 
+    remaining: int | None = None
+    if b.expired(start_time=start, batches_done=batches):
+        has_more = await _has_remaining_rows(
+            db,
+            (
+                "SELECT 1 FROM model_info_observations"
+                " WHERE observed_at < datetime('now', ? || ' days')"
+                " LIMIT 1"
+            ),
+            (cutoff,),
+        )
+        remaining = 1 if has_more else 0
+
     if total_deleted > 0:
         logger.info(
             "Deleted %d old model info observations (retention=%d days)",
@@ -487,6 +602,71 @@ async def cleanup_old_model_info_observations(
     return MaintenancePassResult(
         rows_changed=total_deleted,
         batches_completed=batches,
+        remaining_estimate=remaining,
+        budget_exhausted=b.expired(start_time=start, batches_done=batches),
+    )
+
+
+async def cleanup_old_routing_decisions(
+    db: Database,
+    retain_days: int = 90,
+    budget: MaintenanceBudget | None = None,
+) -> MaintenancePassResult:
+    """Delete routing decisions older than the retention period."""
+    b = budget or _DEFAULT_BUDGET
+    cutoff = f"-{retain_days}"
+    total_deleted = 0
+    batches = 0
+    start = time.monotonic()
+
+    while not b.expired(start_time=start, batches_done=batches):
+        async with db.transaction():
+            rows = await db.execute_returning(
+                """
+                SELECT id FROM routing_decisions
+                WHERE decision_made_at < datetime('now', ? || ' days')
+                ORDER BY decision_made_at, id
+                LIMIT ?
+                """,
+                (cutoff, b.max_rows_per_batch),
+            )
+            if not rows:
+                break
+
+            ids = [row["id"] for row in rows]
+            placeholders = ",".join("?" for _ in ids)
+            count = await db.execute_write(
+                f"DELETE FROM routing_decisions WHERE id IN ({placeholders})",
+                ids,
+            )
+
+        total_deleted += count
+        batches += 1
+        await asyncio.sleep(0)
+
+    remaining: int | None = None
+    if b.expired(start_time=start, batches_done=batches):
+        has_more = await _has_remaining_rows(
+            db,
+            (
+                "SELECT 1 FROM routing_decisions"
+                " WHERE decision_made_at < datetime('now', ? || ' days')"
+                " LIMIT 1"
+            ),
+            (cutoff,),
+        )
+        remaining = 1 if has_more else 0
+
+    if total_deleted > 0:
+        logger.info(
+            "Deleted %d old routing decisions (retention=%d days)",
+            total_deleted,
+            retain_days,
+        )
+    return MaintenancePassResult(
+        rows_changed=total_deleted,
+        batches_completed=batches,
+        remaining_estimate=remaining,
         budget_exhausted=b.expired(start_time=start, batches_done=batches),
     )
 

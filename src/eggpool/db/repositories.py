@@ -1523,6 +1523,18 @@ class PingRepository:
             batches += 1
             await asyncio.sleep(0)
 
+        remaining: int | None = None
+        if b.expired(start_time=start, batches_done=batches):
+            rows = await self._db.fetch_all(
+                (
+                    "SELECT 1 FROM provider_pings"
+                    " WHERE probed_at < datetime('now', ? || ' days')"
+                    " LIMIT 1"
+                ),
+                (cutoff,),
+            )
+            remaining = 1 if rows else 0
+
         if total_deleted > 0:
             logger.info(
                 "Deleted %d old provider pings (retention=%d days)",
@@ -1532,6 +1544,7 @@ class PingRepository:
         return MaintenancePassResult(
             rows_changed=total_deleted,
             batches_completed=batches,
+            remaining_estimate=remaining,
             budget_exhausted=b.expired(start_time=start, batches_done=batches),
         )
 
