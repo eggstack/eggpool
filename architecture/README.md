@@ -2739,6 +2739,55 @@ All tasks are registered in `app.py` during lifespan setup. Periodic registratio
 
 Tasks that the operator depends on for live health signalling (`update_checker`, `checkpoint`, `model_info_refresh`) use `run_immediately=True` so a freshly started process reports real state on the first dashboard paint rather than appearing as `never_run` for the entire first interval. Tasks that intentionally stagger (`stale_request_finalizer`, `health_disabled_models_prune`, `usage_window_refresh`, `metrics_flush`, `retention_cleanup`, `model_info_canonical_backfill`) keep their deterministic `initial_delay_s` offsets so first ticks never cluster on the same wall-clock second.
 
+### Bounded maintenance and SQLite hygiene (Milestone E)
+
+EggPool uses one process-owned primary SQLite connection with `BEGIN IMMEDIATE` transactions for predictable write serialization. Several periodic maintenance tasks (retention cleanup, stale request finalization, expired reservation reconciliation, WAL checkpoint) previously operated on unbounded row sets in single transactions, which could monopolize the writer and block dispatch persistence under sustained load.
+
+Milestone E converts all periodic database maintenance into bounded, resumable batches:
+
+**Maintenance budget contract** (`src/eggpool/background/maintenance.py`):
+- `MaintenanceBudget` — per-task row/batch/time limits (default: 500 rows/batch, 4 batches/tick, 500ms budget)
+- `MaintenancePassResult` — frozen dataclass tracking `rows_changed`, `batches_completed`, `duration_ms`, `stopped_reason`, `contention_deferrals`
+- `ContentionGuard` — consults `Database.contention_snapshot()` lock-wait p95; defers P1/P2 tasks when write pressure exceeds `maintenance.contention_defer_above_lock_wait_p95_ms`
+- `run_maintenance_pass()` — bounded batch loop with `await asyncio.sleep(0)` yields between transactions
+
+**Task priority classes**:
+- P0 (correctness recovery): expired reservation reconciliation — runs unconditionally, higher budgets (1000 rows/batch)
+- P1 (storage safety): request/event/ping/rollup/price retention — may defer under contention
+- P2 (metadata repair): model-info observation cleanup — may defer under contention
+
+**Chunked cleanup functions** (`src/eggpool/background/cleanup.py`):
+- `cleanup_old_requests()` — keyset pagination on `(started_at, id)`, deletes reservations+requests per batch
+- `cleanup_old_events()` — LIMIT-based pagination on `(created_at, id)`
+- `cleanup_old_pings()` — chunked DELETE on `provider_pings`
+- `cleanup_old_operational_events()` — chunked DELETE on `operational_events`
+- `cleanup_old_usage_rollups()` — chunked DELETE on `usage_rollups`
+- `cleanup_old_price_snapshots()` — chunked DELETE on `model_price_snapshots`
+- `cleanup_old_model_info_observations()` — chunked DELETE on `model_info_observations`
+- `reconcile_expired_reservations()` — bounded UPDATE with `WHERE id IN (SELECT ... LIMIT ?)`
+- `finalize_stale_requests_once()` — bounded by `batch_size` parameter (default 500)
+
+**WAL checkpoint telemetry** (`checkpoint_database()` returns `{"busy", "log", "checkpointed", "duration_ms", "mode"}`).
+
+**Runtime diagnostics** exposed via `/api/stats/runtime`:
+- `db` section: WAL page count, DB page count/page size/freelist count
+- `maintenance` section: per-task last result, budget config, contention deferral count
+
+**Configuration** (`[maintenance]` in `config.toml`):
+```toml
+[maintenance]
+max_rows_per_batch = 500
+max_batches_per_tick = 4
+max_tick_duration_ms = 500.0
+contention_defer_above_lock_wait_p95_ms = 200.0
+max_deferral_age_s = 3600.0
+p0_max_rows_per_batch = 1000
+p0_max_batches_per_tick = 2
+p0_max_tick_duration_ms = 1000.0
+```
+
+All cleanup functions yield to the event loop between batches (`await asyncio.sleep(0)`) so dispatch persistence is never blocked for longer than one batch's transaction duration. Committed progress survives cancellation and resumes on later ticks.
+
 ### Operational profile logging (Milestone A6)
 
 `_log_operational_profile()` (`src/eggpool/app.py`) emits a single structured startup log with: workers, runtime_threads, database_worker_threads, stats_db_separate, WAL/synchronous/busy_timeout, routing_trace_mode/sample_rate, metrics_write_mode/flush_interval_s, transcoder/compression/cache enabled flags, and background task counts split by process ownership vs generation-leased ownership. The log must not include secrets, provider keys, or request content. Operators find this line at INFO level during startup in the log file (`~/.local/state/eggpool/eggpool.log`).

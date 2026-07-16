@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as _dt
 import logging
 import time
 from typing import TYPE_CHECKING, Any
 
+from eggpool.background.maintenance import MaintenanceBudget, MaintenancePassResult
 from eggpool.catalog.pricing import (
     parse_microdollars_per_million,
     parse_price_per_1k,
@@ -1481,23 +1483,57 @@ class PingRepository:
         rows = await self._db.fetch_all(sql, tuple(params))
         return [dict(row) for row in rows]
 
-    async def cleanup_old_pings(self, retain_days: int = 7) -> int:
-        """Delete pings older than the retention period."""
-        async with self._db.transaction():
-            count = await self._db.execute_write(
-                """
-                DELETE FROM provider_pings
-                WHERE probed_at < datetime('now', ? || ' days')
-                """,
-                (f"-{retain_days}",),
-            )
-        if count > 0:
+    async def cleanup_old_pings(
+        self,
+        retain_days: int = 7,
+        budget: MaintenanceBudget | None = None,
+    ) -> MaintenancePassResult:
+        """Delete pings older than the retention period.
+
+        Uses bounded, chunked deletion to avoid long-running transactions.
+        """
+        b = budget or MaintenanceBudget()
+        cutoff = f"-{retain_days}"
+        total_deleted = 0
+        batches = 0
+        start = time.monotonic()
+
+        while not b.expired(start_time=start, batches_done=batches):
+            async with self._db.transaction():
+                rows = await self._db.execute_returning(
+                    """
+                    SELECT id FROM provider_pings
+                    WHERE probed_at < datetime('now', ? || ' days')
+                    ORDER BY probed_at, id
+                    LIMIT ?
+                    """,
+                    (cutoff, b.max_rows_per_batch),
+                )
+                if not rows:
+                    break
+
+                ids = [row["id"] for row in rows]
+                placeholders = ",".join("?" for _ in ids)
+                count = await self._db.execute_write(
+                    f"DELETE FROM provider_pings WHERE id IN ({placeholders})",
+                    ids,
+                )
+
+            total_deleted += count
+            batches += 1
+            await asyncio.sleep(0)
+
+        if total_deleted > 0:
             logger.info(
                 "Deleted %d old provider pings (retention=%d days)",
-                count,
+                total_deleted,
                 retain_days,
             )
-        return count
+        return MaintenancePassResult(
+            rows_changed=total_deleted,
+            batches_completed=batches,
+            budget_exhausted=b.expired(start_time=start, batches_done=batches),
+        )
 
 
 class CatalogReconciliationRepository:

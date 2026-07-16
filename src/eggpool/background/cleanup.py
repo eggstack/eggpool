@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING
+
+from eggpool.background.maintenance import MaintenanceBudget, MaintenancePassResult
 
 if TYPE_CHECKING:
     from eggpool.db.connection import Database
     from eggpool.quota.estimation import QuotaEstimator
     from eggpool.routing.router import Router
+
+_DEFAULT_BUDGET = MaintenanceBudget()
 
 logger = logging.getLogger(__name__)
 
@@ -64,119 +70,192 @@ async def cleanup_stale_reservations(
 async def cleanup_old_requests(
     db: Database,
     retain_days: int = 30,
-) -> int:
+    budget: MaintenanceBudget | None = None,
+) -> MaintenancePassResult:
     """Delete request records older than the retention period.
 
-    Also deletes associated reservations.
-    Returns the number of requests deleted.
+    Also deletes associated reservations.  Uses keyset pagination bounded
+    by *budget* to avoid long-running transactions.  The result has a
+    ``.rows_changed`` attribute for backward compatibility.
     """
-    async with db.transaction():
-        # First delete reservations for old requests
-        await db.execute_write(
-            """
-            DELETE FROM reservations
-            WHERE request_id IN (
+    b = budget or _DEFAULT_BUDGET
+    cutoff = f"-{retain_days}"
+    total_deleted = 0
+    batches = 0
+    start = time.monotonic()
+
+    while not b.expired(start_time=start, batches_done=batches):
+        async with db.transaction():
+            # Select a batch of candidate request IDs ordered for
+            # stable keyset pagination.
+            rows = await db.execute_returning(
+                """
                 SELECT id FROM requests
                 WHERE started_at < datetime('now', ? || ' days')
+                ORDER BY started_at, id
+                LIMIT ?
+                """,
+                (cutoff, b.max_rows_per_batch),
             )
-            """,
-            (-retain_days,),
-        )
+            if not rows:
+                break
 
-        count = await db.execute_write(
-            """
-            DELETE FROM requests
-            WHERE started_at < datetime('now', ? || ' days')
-            """,
-            (-retain_days,),
-        )
-    if count > 0:
+            ids = [row["id"] for row in rows]
+            placeholders = ",".join("?" for _ in ids)
+
+            await db.execute_write(
+                f"DELETE FROM reservations WHERE request_id IN ({placeholders})",
+                ids,
+            )
+            await db.execute_write(
+                f"DELETE FROM requests WHERE id IN ({placeholders})",
+                ids,
+            )
+
+        total_deleted += len(ids)
+        batches += 1
+        await asyncio.sleep(0)
+
+    if total_deleted > 0:
         logger.info(
             "Deleted %d old request records (retention=%d days)",
-            count,
+            total_deleted,
             retain_days,
         )
-    return count
+    return MaintenancePassResult(
+        rows_changed=total_deleted,
+        batches_completed=batches,
+        budget_exhausted=b.expired(start_time=start, batches_done=batches),
+    )
 
 
 async def cleanup_old_events(
     db: Database,
     retain_days: int = 90,
-) -> int:
+    budget: MaintenanceBudget | None = None,
+) -> MaintenancePassResult:
     """Delete account events older than the retention period."""
-    async with db.transaction():
-        count = await db.execute_write(
-            """
-            DELETE FROM account_events
-            WHERE created_at < datetime('now', ? || ' days')
-            """,
-            (-retain_days,),
-        )
-    if count > 0:
-        logger.info("Deleted %d old account events", count)
-    return count
+    b = budget or _DEFAULT_BUDGET
+    cutoff = f"-{retain_days}"
+    total_deleted = 0
+    batches = 0
+    start = time.monotonic()
+
+    while not b.expired(start_time=start, batches_done=batches):
+        async with db.transaction():
+            rows = await db.execute_returning(
+                """
+                SELECT id FROM account_events
+                WHERE created_at < datetime('now', ? || ' days')
+                ORDER BY created_at, id
+                LIMIT ?
+                """,
+                (cutoff, b.max_rows_per_batch),
+            )
+            if not rows:
+                break
+
+            ids = [row["id"] for row in rows]
+            placeholders = ",".join("?" for _ in ids)
+            count = await db.execute_write(
+                f"DELETE FROM account_events WHERE id IN ({placeholders})",
+                ids,
+            )
+
+        total_deleted += count
+        batches += 1
+        await asyncio.sleep(0)
+
+    if total_deleted > 0:
+        logger.info("Deleted %d old account events", total_deleted)
+    return MaintenancePassResult(
+        rows_changed=total_deleted,
+        batches_completed=batches,
+        budget_exhausted=b.expired(start_time=start, batches_done=batches),
+    )
 
 
 async def reconcile_expired_reservations(
     db: Database,
     quota_estimator: QuotaEstimator | None = None,
     router: Router | None = None,
-) -> int:
+    budget: MaintenanceBudget | None = None,
+) -> MaintenancePassResult:
     """Release reservations past their expiry atomically.
 
-    Uses UPDATE ... RETURNING inside a single transaction so that only
+    Uses UPDATE ... RETURNING inside bounded transactions so that only
     rows actually transitioned by this call are reconciled.  No other
-    task can race the same rows.
-
-    Returns the number of reservations reconciled.
+    task can race the same rows.  The result has a ``.rows_changed``
+    attribute for backward compatibility.
     """
-    try:
-        async with db.transaction():
-            rows = await db.execute_returning(
-                """
-                UPDATE reservations
-                SET status = 'expired',
-                    released_at = CURRENT_TIMESTAMP,
-                    release_reason = 'expired'
-                WHERE status = 'active'
-                  AND expires_at IS NOT NULL
-                  AND expires_at <= CURRENT_TIMESTAMP
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM requests
-                      WHERE requests.id = reservations.request_id
-                        AND requests.status = 'pending'
-                  )
-                  RETURNING id, account_id, reserved_microdollars, estimated_tokens,
-                    (SELECT name FROM accounts WHERE id = reservations.account_id)
-                    AS account_name
-                """,
-            )
-            transitioned_rows = [dict(row) for row in rows]
-            if transitioned_rows:
-                from eggpool.db.repositories import OperationalEventRepository
+    b = budget or _DEFAULT_BUDGET
+    total_reconciled = 0
+    batches = 0
+    start = time.monotonic()
 
-                await OperationalEventRepository(db).record(
-                    event_type="reservation_reconcile",
-                    details={
-                        "expired_reservations": len(transitioned_rows),
-                    },
+    try:
+        while not b.expired(start_time=start, batches_done=batches):
+            async with db.transaction():
+                rows = await db.execute_returning(
+                    """
+                    UPDATE reservations
+                    SET status = 'expired',
+                        released_at = CURRENT_TIMESTAMP,
+                        release_reason = 'expired'
+                    WHERE id IN (
+                        SELECT id FROM reservations
+                        WHERE status = 'active'
+                          AND expires_at IS NOT NULL
+                          AND expires_at <= CURRENT_TIMESTAMP
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM requests
+                              WHERE requests.id = reservations.request_id
+                                AND requests.status = 'pending'
+                          )
+                        ORDER BY expires_at, id
+                        LIMIT ?
+                    )
+                    RETURNING id, account_id, reserved_microdollars, estimated_tokens,
+                      (SELECT name FROM accounts WHERE id = reservations.account_id)
+                      AS account_name
+                    """,
+                    (b.max_rows_per_batch,),
                 )
+                transitioned_rows = [dict(row) for row in rows]
+                if transitioned_rows:
+                    from eggpool.db.repositories import OperationalEventRepository
+
+                    await OperationalEventRepository(db).record(
+                        event_type="reservation_reconcile",
+                        details={
+                            "expired_reservations": len(transitioned_rows),
+                        },
+                    )
+
+            total_reconciled += len(transitioned_rows)
+            batches += 1
+
+            await _reconcile_runtime_reservations(
+                transitioned_rows,
+                quota_estimator=quota_estimator,
+                router=router,
+            )
+
+            if not transitioned_rows:
+                break
+            await asyncio.sleep(0)
     except Exception:
         logger.exception("Failed to reconcile expired reservations")
         raise
 
-    count = len(transitioned_rows)
-
-    await _reconcile_runtime_reservations(
-        transitioned_rows,
-        quota_estimator=quota_estimator,
-        router=router,
+    if total_reconciled > 0:
+        logger.info("Reconciled %d expired reservations", total_reconciled)
+    return MaintenancePassResult(
+        rows_changed=total_reconciled,
+        batches_completed=batches,
+        budget_exhausted=b.expired(start_time=start, batches_done=batches),
     )
-
-    if count > 0:
-        logger.info("Reconciled %d expired reservations", count)
-    return count
 
 
 async def _reconcile_runtime_reservations(
@@ -212,10 +291,250 @@ async def _reconcile_runtime_reservations(
             await router.decrement_active_request_count(account_name_value)
 
 
-async def checkpoint_database(db: Database) -> None:
-    """Force a WAL checkpoint to reclaim disk space."""
+async def cleanup_old_operational_events(
+    db: Database,
+    retain_days: int = 90,
+    budget: MaintenanceBudget | None = None,
+) -> MaintenancePassResult:
+    """Delete operational events older than the retention period."""
+    b = budget or _DEFAULT_BUDGET
+    cutoff = f"-{retain_days}"
+    total_deleted = 0
+    batches = 0
+    start = time.monotonic()
+
+    while not b.expired(start_time=start, batches_done=batches):
+        async with db.transaction():
+            rows = await db.execute_returning(
+                """
+                SELECT id FROM operational_events
+                WHERE occurred_at < datetime('now', ? || ' days')
+                ORDER BY occurred_at, id
+                LIMIT ?
+                """,
+                (cutoff, b.max_rows_per_batch),
+            )
+            if not rows:
+                break
+
+            ids = [row["id"] for row in rows]
+            placeholders = ",".join("?" for _ in ids)
+            count = await db.execute_write(
+                f"DELETE FROM operational_events WHERE id IN ({placeholders})",
+                ids,
+            )
+
+        total_deleted += count
+        batches += 1
+        await asyncio.sleep(0)
+
+    if total_deleted > 0:
+        logger.info(
+            "Deleted %d old operational events (retention=%d days)",
+            total_deleted,
+            retain_days,
+        )
+    return MaintenancePassResult(
+        rows_changed=total_deleted,
+        batches_completed=batches,
+        budget_exhausted=b.expired(start_time=start, batches_done=batches),
+    )
+
+
+async def cleanup_old_usage_rollups(
+    db: Database,
+    retain_days: int = 90,
+    budget: MaintenanceBudget | None = None,
+) -> MaintenancePassResult:
+    """Delete usage rollups older than the retention period."""
+    b = budget or _DEFAULT_BUDGET
+    cutoff = f"-{retain_days}"
+    total_deleted = 0
+    batches = 0
+    start = time.monotonic()
+
+    while not b.expired(start_time=start, batches_done=batches):
+        async with db.transaction():
+            rows = await db.execute_returning(
+                """
+                SELECT rowid FROM usage_rollups
+                WHERE bucket_start < datetime('now', ? || ' days')
+                ORDER BY bucket_start, rowid
+                LIMIT ?
+                """,
+                (cutoff, b.max_rows_per_batch),
+            )
+            if not rows:
+                break
+
+            ids = [row["rowid"] for row in rows]
+            placeholders = ",".join("?" for _ in ids)
+            count = await db.execute_write(
+                f"DELETE FROM usage_rollups WHERE rowid IN ({placeholders})",
+                ids,
+            )
+
+        total_deleted += count
+        batches += 1
+        await asyncio.sleep(0)
+
+    if total_deleted > 0:
+        logger.info(
+            "Deleted %d old usage_rollups rows (retention=%d days)",
+            total_deleted,
+            retain_days,
+        )
+    return MaintenancePassResult(
+        rows_changed=total_deleted,
+        batches_completed=batches,
+        budget_exhausted=b.expired(start_time=start, batches_done=batches),
+    )
+
+
+async def cleanup_old_price_snapshots(
+    db: Database,
+    retain_days: int = 180,
+    budget: MaintenanceBudget | None = None,
+) -> MaintenancePassResult:
+    """Delete model price snapshots older than the retention period."""
+    b = budget or _DEFAULT_BUDGET
+    cutoff = f"-{retain_days}"
+    total_deleted = 0
+    batches = 0
+    start = time.monotonic()
+
+    while not b.expired(start_time=start, batches_done=batches):
+        async with db.transaction():
+            rows = await db.execute_returning(
+                """
+                SELECT id FROM model_price_snapshots
+                WHERE captured_at < datetime('now', ? || ' days')
+                ORDER BY captured_at, id
+                LIMIT ?
+                """,
+                (cutoff, b.max_rows_per_batch),
+            )
+            if not rows:
+                break
+
+            ids = [row["id"] for row in rows]
+            placeholders = ",".join("?" for _ in ids)
+            count = await db.execute_write(
+                f"DELETE FROM model_price_snapshots WHERE id IN ({placeholders})",
+                ids,
+            )
+
+        total_deleted += count
+        batches += 1
+        await asyncio.sleep(0)
+
+    if total_deleted > 0:
+        logger.info(
+            "Deleted %d old model price snapshots (retention=%d days)",
+            total_deleted,
+            retain_days,
+        )
+    return MaintenancePassResult(
+        rows_changed=total_deleted,
+        batches_completed=batches,
+        budget_exhausted=b.expired(start_time=start, batches_done=batches),
+    )
+
+
+async def cleanup_old_model_info_observations(
+    db: Database,
+    retain_days: int = 90,
+    budget: MaintenanceBudget | None = None,
+) -> MaintenancePassResult:
+    """Delete model info observations older than the retention period."""
+    b = budget or _DEFAULT_BUDGET
+    cutoff = f"-{retain_days}"
+    total_deleted = 0
+    batches = 0
+    start = time.monotonic()
+
+    while not b.expired(start_time=start, batches_done=batches):
+        async with db.transaction():
+            rows = await db.execute_returning(
+                """
+                SELECT id FROM model_info_observations
+                WHERE observed_at < datetime('now', ? || ' days')
+                ORDER BY observed_at, id
+                LIMIT ?
+                """,
+                (cutoff, b.max_rows_per_batch),
+            )
+            if not rows:
+                break
+
+            ids = [row["id"] for row in rows]
+            placeholders = ",".join("?" for _ in ids)
+            count = await db.execute_write(
+                f"DELETE FROM model_info_observations WHERE id IN ({placeholders})",
+                ids,
+            )
+
+        total_deleted += count
+        batches += 1
+        await asyncio.sleep(0)
+
+    if total_deleted > 0:
+        logger.info(
+            "Deleted %d old model info observations (retention=%d days)",
+            total_deleted,
+            retain_days,
+        )
+    return MaintenancePassResult(
+        rows_changed=total_deleted,
+        batches_completed=batches,
+        budget_exhausted=b.expired(start_time=start, batches_done=batches),
+    )
+
+
+async def checkpoint_database(db: Database) -> dict[str, object]:
+    """Force a WAL checkpoint to reclaim disk space.
+
+    Returns a dict with checkpoint telemetry: ``busy``, ``log``,
+    ``checkpointed`` frame counts, ``duration_ms``, and ``mode``.
+    """
     if db.read_only:
         logger.debug("Skipping WAL checkpoint on read-only database")
-        return
-    await db.execute_pragma("PRAGMA wal_checkpoint(PASSIVE)")
-    logger.debug("Database WAL checkpoint completed")
+        return {
+            "busy": 0,
+            "log": 0,
+            "checkpointed": 0,
+            "duration_ms": 0.0,
+            "mode": "PASSIVE",
+        }
+    start = time.monotonic()
+    try:
+        rows = await db.execute_pragma("PRAGMA wal_checkpoint(PASSIVE)")
+        busy = int(rows[0][0]) if rows else 0
+        log = int(rows[0][1]) if rows else 0
+        checkpointed = int(rows[0][2]) if rows else 0
+    except Exception:
+        logger.exception("WAL checkpoint failed")
+        duration_ms = (time.monotonic() - start) * 1000
+        return {
+            "busy": 0,
+            "log": 0,
+            "checkpointed": 0,
+            "duration_ms": duration_ms,
+            "mode": "PASSIVE",
+        }
+    duration_ms = (time.monotonic() - start) * 1000
+    logger.debug(
+        "Database WAL checkpoint completed: busy=%d log=%d"
+        " checkpointed=%d duration_ms=%.1f",
+        busy,
+        log,
+        checkpointed,
+        duration_ms,
+    )
+    return {
+        "busy": busy,
+        "log": log,
+        "checkpointed": checkpointed,
+        "duration_ms": duration_ms,
+        "mode": "PASSIVE",
+    }

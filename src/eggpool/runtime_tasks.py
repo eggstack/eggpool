@@ -182,25 +182,82 @@ def register_runtime_tasks(
     async def _retention_cleanup_once() -> None:
         from eggpool.background.cleanup import (  # noqa: PLC0415
             cleanup_old_events,
+            cleanup_old_model_info_observations,
+            cleanup_old_operational_events,
+            cleanup_old_price_snapshots,
             cleanup_old_requests,
+            cleanup_old_usage_rollups,
             reconcile_expired_reservations,
+        )
+        from eggpool.background.maintenance import (  # noqa: PLC0415
+            ContentionGuard,
+            MaintenanceBudget,
         )
         from eggpool.db.repositories import PingRepository  # noqa: PLC0415
         from eggpool.runtime_manager import leased_runtime  # noqa: PLC0415
 
         async with leased_runtime(runtime_manager) as gen:
             gen_config = gen.config
-            ping_repo = PingRepository(db)
-            await cleanup_old_requests(
-                db, gen_config.dashboard.retain_request_stats_days
+            budget = MaintenanceBudget(
+                max_rows_per_batch=gen_config.maintenance.max_rows_per_batch,
+                max_batches_per_tick=gen_config.maintenance.max_batches_per_tick,
+                max_tick_duration_ms=gen_config.maintenance.max_tick_duration_ms,
             )
-            await cleanup_old_events(db, gen_config.dashboard.retain_event_days)
-            await ping_repo.cleanup_old_pings(gen_config.models.ping_retain_days)
-            await reconcile_expired_reservations(
+            guard = ContentionGuard(db)
+            should_defer = await guard.should_defer()
+
+            results: dict[str, object] = {}
+
+            if should_defer:
+                logger.debug("Contention guard active, deferring P1/P2 retention tasks")
+                results["expired_reservations"] = await reconcile_expired_reservations(
+                    db,
+                    quota_estimator=gen.router.quota_estimator,
+                    router=gen.router,
+                    budget=budget,
+                )
+                return
+
+            ping_repo = PingRepository(db)
+            results["requests"] = await cleanup_old_requests(
+                db, gen_config.dashboard.retain_request_stats_days, budget=budget
+            )
+            results["events"] = await cleanup_old_events(
+                db, gen_config.dashboard.retain_event_days, budget=budget
+            )
+            results["pings"] = await ping_repo.cleanup_old_pings(
+                gen_config.models.ping_retain_days, budget=budget
+            )
+            results["operational_events"] = await cleanup_old_operational_events(
+                db, retain_days=90, budget=budget
+            )
+            results["rollups"] = await cleanup_old_usage_rollups(
+                db,
+                retain_days=gen_config.metrics.rollup_retain_days,
+                budget=budget,
+            )
+            results["price_snapshots"] = await cleanup_old_price_snapshots(
+                db, budget=budget
+            )
+            results["model_info_obs"] = await cleanup_old_model_info_observations(
+                db, budget=budget
+            )
+            results["expired_reservations"] = await reconcile_expired_reservations(
                 db,
                 quota_estimator=gen.router.quota_estimator,
                 router=gen.router,
+                budget=budget,
             )
+
+            total_rows = sum(
+                getattr(r, "rows_changed", 0) for r in results.values() if r is not None
+            )
+            if total_rows > 0:
+                logger.info(
+                    "Retention cleanup: %d total rows changed across %d tasks",
+                    total_rows,
+                    len(results),
+                )
 
     supervisor.register_periodic(
         "retention_cleanup",
@@ -210,11 +267,11 @@ def register_runtime_tasks(
 
     # ----- checkpoint -----------------------------------------------------
     async def _checkpoint_once() -> None:
-        from eggpool.background.cleanup import (  # noqa: PLC0415
-            checkpoint_database,
-        )
+        from eggpool.background.cleanup import checkpoint_database  # noqa: PLC0415
 
-        await checkpoint_database(db)
+        result = await checkpoint_database(db)
+        if result.get("checkpointed"):
+            logger.info("WAL checkpoint: %s", result)
 
     _process_target.register_periodic(
         "checkpoint",
@@ -492,32 +549,103 @@ def build_callback_factories_for_specs(
         elif name == "retention_cleanup":
 
             async def _retention_cleanup_factory() -> None:
+                from eggpool.background.cleanup import (  # noqa: PLC0415
+                    cleanup_old_model_info_observations,
+                    cleanup_old_operational_events,
+                    cleanup_old_price_snapshots,
+                    cleanup_old_usage_rollups,
+                )
+                from eggpool.background.maintenance import (  # noqa: PLC0415
+                    ContentionGuard,
+                    MaintenanceBudget,
+                )
                 from eggpool.runtime_manager import (  # noqa: PLC0415
                     leased_runtime,
                 )
 
                 async with leased_runtime(runtime_manager) as gen:
                     gen_config = gen.config
+                    budget = MaintenanceBudget(
+                        max_rows_per_batch=gen_config.maintenance.max_rows_per_batch,
+                        max_batches_per_tick=gen_config.maintenance.max_batches_per_tick,
+                        max_tick_duration_ms=gen_config.maintenance.max_tick_duration_ms,
+                    )
+                    guard = ContentionGuard(db)
+                    should_defer = await guard.should_defer()
+
+                    results: dict[str, object] = {}
+
+                    if should_defer:
+                        logger.debug(
+                            "Contention guard active, deferring P1/P2 retention tasks"
+                        )
+                        results[
+                            "expired_reservations"
+                        ] = await reconcile_expired_reservations(
+                            db,
+                            quota_estimator=gen.router.quota_estimator,
+                            router=gen.router,
+                            budget=budget,
+                        )
+                        return
+
                     ping_repo = PingRepository(db)
-                    await cleanup_old_requests(
-                        db, gen_config.dashboard.retain_request_stats_days
+                    results["requests"] = await cleanup_old_requests(
+                        db,
+                        gen_config.dashboard.retain_request_stats_days,
+                        budget=budget,
                     )
-                    await cleanup_old_events(db, gen_config.dashboard.retain_event_days)
-                    await ping_repo.cleanup_old_pings(
-                        gen_config.models.ping_retain_days
+                    results["events"] = await cleanup_old_events(
+                        db, gen_config.dashboard.retain_event_days, budget=budget
                     )
-                    await reconcile_expired_reservations(
+                    results["pings"] = await ping_repo.cleanup_old_pings(
+                        gen_config.models.ping_retain_days, budget=budget
+                    )
+                    results[
+                        "operational_events"
+                    ] = await cleanup_old_operational_events(
+                        db, retain_days=90, budget=budget
+                    )
+                    results["rollups"] = await cleanup_old_usage_rollups(
+                        db,
+                        retain_days=gen_config.metrics.rollup_retain_days,
+                        budget=budget,
+                    )
+                    results["price_snapshots"] = await cleanup_old_price_snapshots(
+                        db, budget=budget
+                    )
+                    results[
+                        "model_info_obs"
+                    ] = await cleanup_old_model_info_observations(db, budget=budget)
+                    results[
+                        "expired_reservations"
+                    ] = await reconcile_expired_reservations(
                         db,
                         quota_estimator=gen.router.quota_estimator,
                         router=gen.router,
+                        budget=budget,
                     )
+
+                    total_rows = sum(
+                        getattr(r, "rows_changed", 0)
+                        for r in results.values()
+                        if r is not None
+                    )
+                    if total_rows > 0:
+                        logger.info(
+                            "Retention cleanup: %d total rows changed across %d tasks",
+                            total_rows,
+                            len(results),
+                        )
 
             factories[name] = _retention_cleanup_factory
 
         elif name == "checkpoint":
 
             async def _checkpoint_factory() -> None:
-                await checkpoint_database(db)
+                result = await checkpoint_database(db)
+                if result.get("checkpointed"):
+                    logger.info("WAL checkpoint: %s", result)
 
             factories[name] = _checkpoint_factory
 

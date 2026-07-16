@@ -968,6 +968,37 @@ class NetworkConfig(BaseModel):
         return self
 
 
+class MaintenanceBudgetConfig(BaseModel):
+    """Budgets for periodic database maintenance tasks.
+
+    Controls how many rows, batches, and how much wall-clock time each
+    maintenance tick may use.  Conservative defaults protect SBC
+    deployments from write-lock monopolization.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_rows_per_batch: int = Field(default=500, ge=50, le=10000)
+    max_batches_per_tick: int = Field(default=4, ge=1, le=20)
+    max_tick_duration_ms: float = Field(default=500.0, ge=50.0, le=10000.0)
+    contention_defer_above_lock_wait_p95_ms: float = Field(
+        default=200.0,
+        ge=0.0,
+        le=5000.0,
+        description="Defer P1/P2 maintenance when SQLite lock-wait p95 exceeds this.",
+    )
+    max_deferral_age_s: float = Field(
+        default=3600.0,
+        ge=60.0,
+        le=86400.0,
+        description="Maximum seconds a P1/P2 task may defer before forcing execution.",
+    )
+    # P0 tasks get higher budgets for correctness recovery
+    p0_max_rows_per_batch: int = Field(default=1000, ge=100, le=20000)
+    p0_max_batches_per_tick: int = Field(default=2, ge=1, le=10)
+    p0_max_tick_duration_ms: float = Field(default=1000.0, ge=100.0, le=30000.0)
+
+
 class BackupConfig(BaseModel):
     """Automatic backup configuration.
 
@@ -1096,6 +1127,9 @@ class AppConfig(BaseModel):
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)
+    maintenance: MaintenanceBudgetConfig = Field(
+        default_factory=MaintenanceBudgetConfig,
+    )
     backup: BackupConfig = Field(default_factory=BackupConfig)
     dns_cache: DnsCacheConfig = Field(default_factory=DnsCacheConfig)
     network: NetworkConfig = Field(default_factory=NetworkConfig)

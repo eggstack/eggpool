@@ -129,6 +129,7 @@ class RuntimeMetricsService:
         process: Any | None = None,  # noqa: ANN401 — ProcessRuntime, avoids circular import
         dispatch_writer: Any | None = None,  # noqa: ANN401
         routing_trace_writer: Any | None = None,  # noqa: ANN401
+        maintenance_state: Any | None = None,  # noqa: ANN401
     ) -> None:
         self._config = config
         self._db = db
@@ -156,6 +157,7 @@ class RuntimeMetricsService:
         self._process = process
         self._dispatch_writer = dispatch_writer
         self._routing_trace_writer = routing_trace_writer
+        self._maintenance_state = maintenance_state
 
     async def snapshot(self) -> dict[str, Any]:
         """Return a best-effort runtime snapshot.
@@ -255,6 +257,8 @@ class RuntimeMetricsService:
         result["routing_trace_writer"] = self._snapshot_routing_trace_writer(
             probe_errors
         )
+
+        result["maintenance"] = self._snapshot_maintenance(probe_errors)
 
         return result
 
@@ -535,6 +539,37 @@ class RuntimeMetricsService:
         except Exception:
             pass
 
+        # Additional page-level telemetry
+        wal_page_count: int | None = None
+        db_page_count: int | None = None
+        db_page_size: int | None = None
+        freelist_count: int | None = None
+
+        try:
+            rows = await self._db.execute_pragma("PRAGMA wal_page_count")
+            if rows:
+                wal_page_count = _safe_int(rows[0][0])
+        except Exception:
+            pass
+        try:
+            rows = await self._db.execute_pragma("PRAGMA page_count")
+            if rows:
+                db_page_count = _safe_int(rows[0][0])
+        except Exception:
+            pass
+        try:
+            rows = await self._db.execute_pragma("PRAGMA page_size")
+            if rows:
+                db_page_size = _safe_int(rows[0][0])
+        except Exception:
+            pass
+        try:
+            rows = await self._db.execute_pragma("PRAGMA freelist_count")
+            if rows:
+                freelist_count = _safe_int(rows[0][0])
+        except Exception:
+            pass
+
         return {
             "path": db_path,
             "is_memory_db": is_memory_db,
@@ -549,6 +584,10 @@ class RuntimeMetricsService:
             "file_size_bytes": file_size_bytes,
             "wal_size_bytes": wal_size_bytes,
             "shm_size_bytes": shm_size_bytes,
+            "wal_page_count": wal_page_count,
+            "db_page_count": db_page_count,
+            "db_page_size": db_page_size,
+            "freelist_count": freelist_count,
             "contention": self._db.contention_snapshot(),
         }
 
@@ -1086,6 +1125,26 @@ class RuntimeMetricsService:
             _append_probe_error(
                 probe_errors,
                 f"Routing trace writer snapshot failed: {exc}",
+            )
+            return {"enabled": True, "error": str(exc)}
+
+    def _snapshot_maintenance(self, probe_errors: list[str]) -> dict[str, Any]:
+        """Best-effort snapshot of maintenance task diagnostics.
+
+        Returns per-task diagnostics (last result, budget, contention
+        deferrals) when a ``_maintenance_state`` object has been set by
+        the runtime tasks.  Returns ``{"enabled": False}`` when no
+        maintenance state is available.
+        """
+        state = self._maintenance_state
+        if state is None:
+            return {"enabled": False}
+        try:
+            return {"enabled": True, **state.snapshot()}
+        except Exception as exc:
+            _append_probe_error(
+                probe_errors,
+                f"Maintenance state snapshot failed: {exc}",
             )
             return {"enabled": True, "error": str(exc)}
 

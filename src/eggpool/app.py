@@ -307,6 +307,7 @@ async def finalize_stale_requests_once(
     router: Router,
     quota_estimator: QuotaEstimator | None,
     max_pending_seconds: float,
+    batch_size: int = 500,
 ) -> int:
     """Run a single sweep of the stale-request finalizer.
 
@@ -330,8 +331,9 @@ async def finalize_stale_requests_once(
             "LEFT JOIN reservations res "
             "    ON res.request_id = r.id AND res.status = 'active' "
             "WHERE r.status = 'pending' "
-            "  AND r.started_at < datetime('now', ?)",
-            (threshold,),
+            "  AND r.started_at < datetime('now', ?)"
+            " LIMIT ?",
+            (threshold, batch_size),
         )
         transitioned = [dict(row) for row in rows]
         if not transitioned:
