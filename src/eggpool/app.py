@@ -1393,6 +1393,9 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     routing_trace_guard = get_routing_trace_guard()
     routing_trace_guard.configure(
         threshold_ms=config.routing.trace.skip_above_lock_wait_p95_ms,
+        queue_occupancy_threshold=config.routing.trace.guard_queue_occupancy_threshold,
+        oldest_event_age_s=config.routing.trace.guard_oldest_event_age_s,
+        cooldown_s=config.routing.trace.guard_cooldown_s,
     )
     app.state.routing_trace_guard = routing_trace_guard
     coordinator._routing_trace_guard = (  # pyright: ignore[reportPrivateUsage]

@@ -96,6 +96,9 @@ class TestPolicyDefaults:
             "routing.trace.sample_rate",
             "routing.trace.include_score_components",
             "routing.trace.skip_above_lock_wait_p95_ms",
+            "routing.trace.guard_queue_occupancy_threshold",
+            "routing.trace.guard_oldest_event_age_s",
+            "routing.trace.guard_cooldown_s",
             # Model overrides and per-model capability overrides:
             "model_overrides",
             "model_capabilities",
@@ -1160,6 +1163,9 @@ LIVE_FIELD_CONSUMERS: dict[str, tuple[str, ...]] = {
     "routing.trace.sample_rate": ("RuntimeMetricsService",),
     "routing.trace.include_score_components": ("RuntimeMetricsService",),
     "routing.trace.skip_above_lock_wait_p95_ms": ("RoutingTraceGuard",),
+    "routing.trace.guard_queue_occupancy_threshold": ("RoutingTraceGuard",),
+    "routing.trace.guard_oldest_event_age_s": ("RoutingTraceGuard",),
+    "routing.trace.guard_cooldown_s": ("RoutingTraceGuard",),
     # Per-model overrides / capability overrides: consumed by the
     # candidate ``Router`` (limits), ``CostCalculator`` (prices), and
     # the capability resolver inside ``RequestCoordinator``.

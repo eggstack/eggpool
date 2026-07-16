@@ -76,6 +76,20 @@ _RoutingPayload = tuple[
     dict[str, Any],
     "ModelInfoDashboardState",
 ]
+_RoutingPayloadWithRuntime = tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[str, Any],
+    "ModelInfoDashboardState",
+    dict[str, Any],
+]
+
+
+async def _empty_dict() -> dict[str, Any]:
+    """Return an empty dict for asyncio.gather when a probe is disabled."""
+    return {}
+
 
 logger = logging.getLogger(__name__)
 _DashboardStageResult = TypeVar("_DashboardStageResult")
@@ -1847,23 +1861,35 @@ async def handle_routing(
     time_range = resolve_time_range(period)
     stats = request.app.state.stats
     model_info_service = getattr(request.app.state, "model_info", None)
+    runtime_metrics = getattr(request.app.state, "runtime_metrics", None)
+    trace_mode = getattr(request.app.state.config.routing.trace, "mode", "off")  # type: ignore[union-attr]
+    trace_sample_rate = getattr(
+        request.app.state.config.routing.trace, "sample_rate", 0.0
+    )  # type: ignore[union-attr]
     (
         routing_distribution,
         routing_selection_breakdown,
         routing_exclusion_breakdown,
         routing_skew_summary,
         model_info_state,
+        runtime_snapshot,
     ) = cast(
-        "_RoutingPayload",
+        "_RoutingPayloadWithRuntime",
         await asyncio.gather(
             stats.get_routing_distribution(time_range, use_cache=True),
             stats.get_routing_selection_breakdown(time_range, use_cache=True),
             stats.get_routing_exclusion_breakdown(time_range, use_cache=True),
             stats.get_routing_skew_summary(time_range, use_cache=True),
             _get_model_info_summary_state(model_info_service),
+            runtime_metrics.snapshot()
+            if runtime_metrics is not None
+            else _empty_dict(),
         ),
     )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
+    trace_writer = cast(
+        "dict[str, Any]", (runtime_snapshot or {}).get("routing_trace_writer") or {}
+    )
     return HTMLResponse(
         content=render_routing(
             period=time_range.label,
@@ -1876,6 +1902,9 @@ async def handle_routing(
             current_theme=current_theme,
             update_info=_get_update_info(request),
             model_info_map=model_info_state.summaries,
+            trace_mode=trace_mode,
+            trace_sample_rate=trace_sample_rate,
+            trace_writer=trace_writer,
         )
     )
 

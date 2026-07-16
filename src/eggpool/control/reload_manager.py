@@ -973,6 +973,13 @@ class ReloadManager:
                 threshold_ms=(
                     candidate_config.routing.trace.skip_above_lock_wait_p95_ms
                 ),
+                queue_occupancy_threshold=(
+                    candidate_config.routing.trace.guard_queue_occupancy_threshold
+                ),
+                oldest_event_age_s=(
+                    candidate_config.routing.trace.guard_oldest_event_age_s
+                ),
+                cooldown_s=(candidate_config.routing.trace.guard_cooldown_s),
             )
             coordinator._routing_trace_guard = (  # pyright: ignore[reportPrivateUsage]
                 routing_trace_guard

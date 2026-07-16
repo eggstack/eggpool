@@ -7478,6 +7478,109 @@ def _render_operational_events_table(
 """
 
 
+def _render_trace_diagnostics_panel(
+    trace_mode: str,
+    trace_sample_rate: float,
+    trace_writer: dict[str, Any] | None,
+) -> str:
+    """Render a diagnostics panel for routing trace write pressure."""
+    writer = trace_writer or {}
+
+    enabled = writer.get("enabled", False)
+    accepted = int(writer.get("accepted", 0) or 0)
+    written = int(writer.get("written", 0) or 0)
+    dropped_total = sum(
+        int(writer.get(k, 0) or 0)
+        for k in (
+            "dropped_queue_full",
+            "dropped_writer_unavailable",
+            "dropped_flush_error",
+            "dropped_shutdown_timeout",
+            "dropped_serialization",
+            "dropped_stale_parent",
+        )
+    )
+    queue_depth = int(writer.get("queue_depth", 0) or 0)
+    queue_capacity = int(writer.get("queue_capacity", 0) or 0)
+    oldest_age_s = writer.get("oldest_event_age_s")
+    mode_label = escape(trace_mode)
+    sample_pct = f"{trace_sample_rate * 100:.1f}%"
+
+    if trace_mode == "off":
+        status_text = "Off"
+    elif dropped_total > 0:
+        status_text = "Degraded"
+    elif not enabled:
+        status_text = "Unavailable"
+    else:
+        status_text = "Active"
+
+    cards_html = "".join(
+        [
+            _render_metric_card(
+                title="Trace mode",
+                metric=mode_label,
+                sub=f"sample rate {sample_pct}",
+            ),
+            _render_metric_card(
+                title="Trace status",
+                metric=status_text,
+                sub=f"{accepted:,} accepted, {written:,} written",
+            ),
+            _render_metric_card(
+                title="Dropped traces",
+                metric=_format_int(dropped_total),
+                sub="across all drop reasons",
+                warning=dropped_total > 0,
+            ),
+            _render_metric_card(
+                title="Queue depth",
+                metric=f"{queue_depth:,}/{queue_capacity:,}",
+                sub="current / capacity",
+                warning=queue_capacity > 0 and queue_depth / queue_capacity > 0.8,
+            ),
+        ]
+    )
+
+    oldest_info = ""
+    if oldest_age_s is not None:
+        oldest_info = f"<li>Oldest queued event age: {oldest_age_s:.1f}s</li>"
+
+    queue_full = int(writer.get("dropped_queue_full", 0) or 0)
+    flush_errs = int(writer.get("dropped_flush_error", 0) or 0)
+    drop_details = ""
+    if queue_full or flush_errs:
+        drop_details = f"""
+<ul>
+  {f"<li>Queue full drops: {queue_full:,}</li>" if queue_full else ""}
+  {f"<li>Flush errors: {flush_errs:,}</li>" if flush_errs else ""}
+</ul>
+"""
+
+    sampled_note = ""
+    if trace_mode == "sampled":
+        sampled_note = (
+            '<p class="sub" style="margin-top:0.5rem">'
+            "Displayed routing distributions are derived from sampled "
+            "trace data and may not represent exact request volume. "
+            "Use the request stats for exact totals.</p>"
+        )
+
+    return f"""
+<section class="panel">
+  <h3>Routing trace observability</h3>
+  <p class="sub">
+    Diagnostic traces are written by a background writer off the request
+    path. Queue overload or writer failure never delays dispatch.
+  </p>
+  <section class="cards">
+    {cards_html}
+  </section>
+  {oldest_info}{drop_details}{sampled_note}
+</section>
+"""
+
+
 def render_routing(
     *,
     period: str,
@@ -7490,6 +7593,9 @@ def render_routing(
     current_theme: str = "",
     update_info: Any | None = None,
     model_info_map: Mapping[str, dict[str, Any]] | None = None,
+    trace_mode: str = "off",
+    trace_sample_rate: float = 0.0,
+    trace_writer: dict[str, Any] | None = None,
 ) -> str:
     """Render the Routing page.
 
@@ -7581,6 +7687,8 @@ def render_routing(
 {_render_period_selector(period, current_theme)}
 
 {summary_cards}
+
+{_render_trace_diagnostics_panel(trace_mode, trace_sample_rate, trace_writer)}
 
 <section class="panel">
   <h3>Exclusion taxonomy</h3>

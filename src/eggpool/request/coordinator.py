@@ -1997,8 +1997,13 @@ class RequestCoordinator:
 
             trace_event: RoutingTraceEvent | None = None
             if should_write_trace:
+                writer_snap = (
+                    self._routing_trace_writer.snapshot()
+                    if self._routing_trace_writer is not None
+                    else None
+                )
                 skip_trace, skip_reason = self._routing_trace_guard.should_skip(
-                    self._db
+                    self._db, writer_snap
                 )
                 if skip_trace:
                     self._routing_trace_guard.record_skip(reason=skip_reason)

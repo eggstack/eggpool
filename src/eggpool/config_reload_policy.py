@@ -185,6 +185,9 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "routing.trace.sample_rate": ReloadDisposition.LIVE,
     "routing.trace.include_score_components": ReloadDisposition.LIVE,
     "routing.trace.skip_above_lock_wait_p95_ms": ReloadDisposition.LIVE,
+    "routing.trace.guard_queue_occupancy_threshold": ReloadDisposition.LIVE,
+    "routing.trace.guard_oldest_event_age_s": ReloadDisposition.LIVE,
+    "routing.trace.guard_cooldown_s": ReloadDisposition.LIVE,
     # Writer configuration is process-owned; queue/batch/shutdown
     # settings require a restart to take effect on the writer.
     "routing.trace.queue_capacity": ReloadDisposition.RESTART_REQUIRED,

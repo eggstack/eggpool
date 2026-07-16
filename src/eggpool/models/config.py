@@ -225,6 +225,34 @@ class RoutingTraceConfig(BaseModel):
         le=30.0,
         description="Seconds to flush remaining traces on shutdown.",
     )
+    guard_queue_occupancy_threshold: float = Field(
+        default=0.8,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "When the writer queue occupancy (depth/capacity) exceeds "
+            "this fraction, the guard skips trace submission to avoid "
+            "amplifying backpressure.  Set to 1.0 to disable."
+        ),
+    )
+    guard_oldest_event_age_s: float = Field(
+        default=30.0,
+        ge=0.0,
+        le=600.0,
+        description=(
+            "When the oldest queued event is older than this, the "
+            "guard skips submission (the drain is falling behind)."
+        ),
+    )
+    guard_cooldown_s: float = Field(
+        default=5.0,
+        ge=0.0,
+        le=60.0,
+        description=(
+            "After the guard triggers a skip, it continues skipping "
+            "for this many seconds to avoid oscillation."
+        ),
+    )
 
 
 class RoutingConfig(BaseModel):
