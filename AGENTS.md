@@ -116,6 +116,21 @@ uv run pytest tests/unit/test_runtime_manager.py -v
 # Control plane and live reload tests
 uv run pytest tests/unit/test_control_server.py tests/unit/test_reload_manager.py tests/unit/test_cli_rehash_preflight.py -v
 
+# Soak validation and workload profiles (Milestone G)
+uv run pytest tests/soak/ -v
+
+# Soak workload profiles only
+uv run pytest tests/soak/test_workload_profiles.py -v
+
+# Stability assertions (early/late window comparison)
+uv run pytest tests/soak/test_stability_assertions.py -v
+
+# Resource plateau validation
+uv run pytest tests/soak/test_resource_plateau.py -v
+
+# Database consistency audit
+uv run pytest tests/soak/test_db_consistency_audit.py -v
+
 # Lint auto-fix
 uv run ruff check --fix src/
 
@@ -149,6 +164,7 @@ CI sets `PYTHONHASHSEED=0` and `TZ=UTC`; reproduce locally for deterministic res
 - respx for HTTPX upstream mocking
 - Tests in `tests/unit/`, `tests/integration/`, `tests/contract/`, `tests/perf/`
 - Provider contract tests: `uv run pytest tests/unit/test_contract.py tests/unit/test_contract_urls.py -v`
+- Soak tests in `tests/soak/` for long-running stability validation (Milestone G)
 
 ## File Organization
 
@@ -206,6 +222,7 @@ CI sets `PYTHONHASHSEED=0` and `TZ=UTC`; reproduce locally for deterministic res
 - **Runtime generations (Milestone B)**: `src/eggpool/runtime_manager.py` implements an immutable-generation pattern for process-wide app-state ownership. `RuntimeGeneration` is a frozen dataclass holding the active generation's database connections and app-state. `RuntimeManager` owns the active/retiring generation slots, lease accounting, and shutdown coordination. Request-path code obtains a `GenerationLease` (async context manager with idempotent release) via `wrap_stream_with_lease` or `leased_runtime` to safely access generation-owned resources without holding the global lock. `ProcessRuntime` holds process-owned containers (e.g. database connections) that outlive any single generation. `RuntimeGenerationBuilder` assembles a generation before installation. The app-state mirror pattern (`_mirror_generation_on_app_state`) populates `app.state.router`, `app.state.db`, etc. from the active generation for backward compatibility with existing reads. Generation diagnostics are exposed under `/api/stats/runtime` via `_snapshot_runtime_manager`.
 - **High-concurrency stream stability (OpenCode hardening)**: incident-grade diagnostics and bounded retry/reconciliation for sustained coding-agent streaming loads. `StreamDiagnostics` (`src/eggpool/request/stream_diagnostics.py`) records stream outcomes (`stream_completed`, `client_cancelled`, `upstream_midstream_error`, `stream_finalizer_timeout`, `stream_finalizer_failed`) with bounded ring histograms (`completed_ms`, `client_cancel_ms`, `finalizer_timeout_ms`) and is exposed under `/api/stats/runtime`. `FinalizationRetryQueue` (`src/eggpool/request/finalization_queue.py`) drains cancellation finalizations that escaped the 10s shielded path; the supervisor owns the periodic task (active cadence 1.5s, idle 15s, `initial_delay_s=5.0`). `RoutingTraceGuard` (`src/eggpool/request/routing_trace_guard.py`) acts as a pre-enqueue pressure signal: it consults `Database.contention_snapshot()` before a routing trace write and skips the write when the rolling SQLite lock-wait p95 exceeds `routing.trace.skip_above_lock_wait_p95_ms` (default 200ms) — traces are diagnostic and their absence must never fail dispatch. `RoutingTraceWriter` (`src/eggpool/observability/routing_trace_writer.py`) is a process-owned, single-drain-task async writer that collects immutable `RoutingTraceEvent` objects via a non-blocking `submit()` and persists them in micro-batches; it owns a bounded deque queue and a single drain coroutine, and is exposed under `/api/stats/runtime` `routing_trace_writer`. `_finalize_stale_requests_once` (`src/eggpool/app.py`) reconciles per-account runtime state (router active counts, quota estimator reservations) and emits per-account structured diagnostics. HTTPX error classification in `coordinator.py` distinguishes `PoolTimeout`, `ReadTimeout`, `ConnectTimeout`, `WriteTimeout`, `RemoteProtocolError`, `ReadError`, and `WriteError` from the generic `TimeoutException` so logs show which layer failed. First-class HTTPX diagnostic outcome labels (`upstream_pool_timeout`, `upstream_read_timeout`, `upstream_connect_timeout`, `upstream_write_timeout`, `upstream_protocol_error`, `upstream_connect_error`, `upstream_transport_error`) are exposed in `StreamDiagnostics` and surfaced under `/api/stats/runtime` `stream_diagnostics`. The shared test harness (`tests/helpers/stream_stability_harness.py`) provides canonical scenario names (`slow-stream` as primary, `slow-token-cadence` as alias), SSE helpers, cancellation logic, and the scenario-to-response builder used by both the integration test and the CLI reproducer. The high-concurrency reproducer (`tests/integration/test_high_concurrency_streaming.py`, 50 streams, configurable cancel rate) and the CLI mirror (`scripts/repro_high_concurrency_streams.py`) validate that no requests leak as `pending` after a burst. Operator playbook lives in `docs/opencode-stream-stability.md`; high-concurrency HTTPX profiles in `docs/providers.md`. `Database.contention_snapshot()` surfaces `lock_wait_p50_ms`, `p95_ms`, `p99_ms`, `max_ms`, `sample_count` so the routing trace guardrail and dashboard share a consistent lock-pressure view. The `RuntimeMetricsService` async `_snapshot_finalization_retry_queue()` correctly awaits the queue snapshot without coroutine leaks.
 - **Dispatch Stability Milestone D — Off-Path Observability**: completes the routing-trace persistence path by moving trace writes fully off the synchronous dispatch path. `RoutingTraceEvent` (frozen dataclass, content-free, no secrets) is submitted via non-blocking `submit()` to the process-owned `RoutingTraceWriter` (`src/eggpool/observability/routing_trace_writer.py`), which persists events in bounded micro-batches via a single drain coroutine. `RoutingTraceGuard` (`src/eggpool/request/routing_trace_guard.py`) acts as a multi-signal pre-enqueue pressure gate (DB lock-wait p95, queue occupancy, oldest event age, flush failure rate, hysteresis cooldown) and classifies all skip reasons for snapshot counters. The coordinator integration (Step 10 in `_select_and_persist_attempt`) executes outside all locks, so trace writes never delay dispatch even under contention. Writer is on `ProcessRuntime` and survives generation swaps. Tests: `tests/unit/test_routing_trace_writer.py`, `tests/unit/test_routing_trace_guard.py`, `tests/unit/test_routing_trace_mode.py`, `tests/perf/test_trace_mode_perf.py`.
+- **Dispatch Stability Milestone G — Soak Validation, Rollout, and Operational Closure**: proves long-running dispatch stability via eight canonical workload profiles, early/late window comparison, stability ratio gates, resource plateau validation, and database consistency audit. Configuration profiles (`docs/config-profiles.md`) and operator runbook (`docs/operations/dispatch-stability.md`) provide evidence-based deployment guidance. Tests: `tests/soak/`.
 
 ## Gotchas
 

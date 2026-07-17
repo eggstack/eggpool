@@ -3793,3 +3793,25 @@ per-label counters.
 - HTTPX exception class names are stable operator-facing tokens — do
   not rename them without a coordinated update to the dashboard,
   the runtime JSON contract, and the playbook.
+
+## Dispatch Stability Milestone G — Soak Validation, Rollout, and Operational Closure
+
+Proves that dispatch latency, database queues, background tasks, runtime
+generations, memory, file descriptors, threads, HTTP clients, and WAL/storage
+behavior remain stable over long-running operation. `ConsistencyAuditor`
+(`src/eggpool/db/consistency_audit.py`) performs read-only lifecycle invariant
+checks (pending-without-attempt, active-reservation-for-non-terminal,
+incomplete-attempt-for-terminal, duplicate-attempt-numbers,
+orphan-routing-traces) without mutating the database. Soak tests
+(`tests/soak/`) define eight canonical workload profiles (low-volume steady,
+moderate sustained, burst/recovery, retry/churn, cancellation-heavy,
+maintenance backlog, rehash churn, slow-storage) with early/late window
+comparison, stability ratio gates (dispatch p95 ≤ 1.20x, p99 ≤ 1.50x,
+throughput decline ≤ 10%), and resource plateau validation. Configuration
+profiles (`docs/config-profiles.md`) provide evidence-based settings for
+balanced-default, minimum-footprint SBC, full-diagnostics, and
+high-concurrency general host deployments. Operator runbook
+(`docs/operations/dispatch-stability.md`) documents the 10-step diagnostic
+sequence and safe mitigation priorities. Tests:
+`tests/soak/test_workload_profiles.py`, `tests/soak/test_stability_assertions.py`,
+`tests/soak/test_resource_plateau.py`, `tests/soak/test_db_consistency_audit.py`.

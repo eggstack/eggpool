@@ -174,6 +174,15 @@ Documentation in `architecture/README.md`, `docs/live-config-rehash.md`,
   tests). Documentation in `architecture/README.md` § Lock scope and
   publish ordering and `AGENTS.md` updated.
 
+### Dispatch Stability Milestone G — Soak Validation, Rollout, and Operational Closure
+
+- Added `ConsistencyAuditor` (`src/eggpool/db/consistency_audit.py`) for read-only database lifecycle invariant checks
+- Added soak test suite (`tests/soak/`) with eight canonical workload profiles
+- Added early/late window stability ratio gates (dispatch p95 ≤ 1.20x, p99 ≤ 1.50x)
+- Added resource plateau validation (RSS, thread count, reservation cleanup)
+- Added configuration profiles documentation (`docs/config-profiles.md`)
+- Added operator runbook for dispatch stability diagnostics (`docs/operations/dispatch-stability.md`)
+
 ## [0.6.0] - 2026-07-09
 
 ### Fixed
