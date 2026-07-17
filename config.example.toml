@@ -5,7 +5,12 @@ port = 11300
 log_level = "INFO"
 access_log = true
 # Granian runtime threads inside the single worker process. Keep workers=1.
-threads = 4
+# Supported default: 1 (single event-loop thread). Values > 1 are
+# experimental — all asyncio.Lock objects are loop-bound and may fail
+# under multi-loop access. High concurrency is handled by asyncio tasks,
+# HTTP connection-pool sizing, and bounded writers, not by multiplying
+# event loops.
+threads = 1
 
 [upstream]
 base_url = "https://opencode.ai/zen/go/v1"

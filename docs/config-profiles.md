@@ -1,16 +1,21 @@
 # Configuration Profiles
 
-Evidence-based configuration profiles for different deployment targets.
-These profiles are validated by Milestone G soak testing.
+Configuration profiles for different deployment targets. All profiles
+use the supported single-event-loop default (`threads = 1`). High
+concurrency is achieved through asyncio task concurrency, HTTP
+connection-pool sizing, and bounded writers — not by multiplying event
+loops. The `[server].threads` field is `RESTART_REQUIRED` for live
+rehash.
 
 ## Balanced Default
 
-Recommended for Raspberry Pi 4/5 and similar SBC hardware. Tuned for
-dashboard responsiveness under request load with moderate write pressure.
+Recommended for Raspberry Pi 4/5, general-purpose hosts, and similar
+hardware. Tuned for dashboard responsiveness under request load with
+moderate write pressure.
 
 ```toml
 [server]
-threads = 4
+threads = 1
 access_log = false
 
 [database]
@@ -57,7 +62,7 @@ retain_count = 14
 ```
 
 **Characteristics:**
-- One Granian worker with four runtime threads
+- Single Granian event-loop thread (supported default)
 - Two database connections (primary + read-only stats)
 - WAL mode with NORMAL synchronous
 - Sampled routing traces (5% sample rate)
@@ -127,7 +132,7 @@ SBC deployments.
 
 ```toml
 [server]
-threads = 4
+threads = 1
 access_log = true
 
 [database]
@@ -166,11 +171,12 @@ max_tick_duration_ms = 2000
 
 For capable general-purpose hosts handling sustained high-concurrency
 workloads (e.g., coding agent traffic). Requires adequate CPU, memory,
-and fast storage.
+and fast storage. Uses a single event-loop thread with increased
+connection pool and maintenance budgets.
 
 ```toml
 [server]
-threads = 8
+threads = 1
 access_log = false
 
 [database]
@@ -201,8 +207,7 @@ max_tick_duration_ms = 1000
 ```
 
 **Characteristics:**
-- Higher runtime thread count for concurrent stream handling
-- Larger upstream connection pool
+- Single event-loop thread with larger upstream connection pool
 - Higher maintenance budgets
 - 10% trace sample rate for better visibility
 - Requires SSD or NVMe storage for sustained write performance
@@ -229,16 +234,14 @@ max_tick_duration_ms = 1000
 The `[server].threads` setting controls Granian `runtime_threads` —
 the number of event-loop threads in the worker process.
 
-- **1 thread**: Minimum footprint. Dashboard may be slow under load.
-  Suitable for very constrained devices.
-- **4 threads** (default): Balanced. Handles concurrent streaming
-  proxy traffic + dashboard requests without starvation.
-- **8 threads**: High concurrency. For capable hosts with sustained
-  multi-session workloads.
-
-Values above the supported maximum emit a startup warning. All
-`asyncio.Lock` objects are loop-bound; unsupported thread counts
-may cause cross-loop affinity failures.
+- **1 thread** (default, supported): Single event-loop thread. High
+  concurrency is achieved through asyncio tasks, connection-pool
+  sizing, and bounded writers. All `asyncio.Lock` objects are
+  loop-bound and safe under single-loop execution.
+- **Greater than 1**: Experimental. Values > 1 emit a startup warning.
+  Multi-loop topology has not been proven safe for all process-owned
+  async primitives. Use at your own risk with explicit validation of
+  your specific workload and configuration.
 
 ## Database Worker Threads
 

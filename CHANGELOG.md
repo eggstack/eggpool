@@ -182,6 +182,30 @@ Documentation in `architecture/README.md`, `docs/live-config-rehash.md`,
 - Added resource plateau validation (RSS, thread count, reservation cleanup)
 - Added configuration profiles documentation (`docs/config-profiles.md`)
 - Added operator runbook for dispatch stability diagnostics (`docs/operations/dispatch-stability.md`)
+- **Runtime-thread policy correction.** `server.threads` defaults to `1`
+  (single event-loop thread is canonical). Values > 1 emit a startup
+  warning; the supported default is `threads=1`. Documentation across
+  `architecture/README.md`, `AGENTS.md`, and operator runbooks updated to
+  reflect the corrected default. The `threads=4` guidance was
+  retired — `asyncio.Lock` primitives are loop-bound and multi-loop
+  access is unsupported without operator verification.
+- **Slow-writer burst fairness tests** (`tests/unit/test_slow_writer_burst_fairness.py`).
+  Validates that dispatch latency remains bounded when concurrent slow
+  upstream writers share the dispatch pipeline. Part of the dispatch
+  stability closure pass.
+- **Extended soak runner** (`scripts/run_dispatch_stability_soak.py`).
+  Canonical long-running dispatch stability validation with `smoke`,
+  `extended`, and `ci` modes, configurable workload profiles, and
+  artifact output (stability gates, resource plateau, DB consistency).
+- **Extended stability gates** (`tests/soak/test_extended_stability_gates.py`).
+  Long-duration validation of dispatch latency stability, resource
+  plateau, and database consistency under sustained load. Gated behind
+  the `extended_soak` pytest marker.
+- **Dispatch stability closure pass.** Documentation and operational
+  claims corrected across `AGENTS.md`, `architecture/README.md`,
+  `docs/operations/dispatch-stability.md`, and `CHANGELOG.md`. Test
+  command inventory updated with slow-writer, extended soak, and soak
+  runner commands.
 
 ## [0.6.0] - 2026-07-09
 

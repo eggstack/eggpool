@@ -336,7 +336,8 @@ production installation is documented below.
 
 EggPool ships with three documented performance profiles. The default
 install uses the **balanced** profile, which is tuned for Raspberry Pi
-4/5 and similar SBC hardware.
+4/5 and similar SBC hardware. All profiles use the supported
+single-event-loop default (`threads = 1`).
 
 ### Balanced (default)
 
@@ -345,7 +346,7 @@ dashboard responsiveness under request load.
 
 ```toml
 [server]
-threads = 4
+threads = 1
 access_log = false
 
 [database]
@@ -431,7 +432,7 @@ and restart. Revert to `"sampled"` or `"off"` when done.
 | Symptom | Likely cause | Knob to adjust |
 |---|---|---|
 | Dashboard loads slowly under request load | DB lock contention | Set `database.worker_threads = 2` |
-| Dashboard still slow | Runtime thread starvation | Check dashboard telemetry, then tune `server.threads` above 4 only on capable hardware |
+| Dashboard still slow | Insufficient concurrency | Check dashboard telemetry; ensure connection pool and maintenance budgets are adequate for your workload |
 | High write volume / microSD wear | Routing trace writes | Set `routing.trace.mode = "sampled"` |
 | Background tasks cluster at minute boundaries | Task scheduling | Default is staggered; check `initial_delay_s` |
 | Stale dashboard data | Cache TTL | Wait 30s or check dashboard cache settings |
@@ -593,17 +594,17 @@ address for the probe). Either a live PID or a 200 from the probe
 causes the new `serve` to exit non-zero so a stale PID file is
 never silently overwritten.
 
-The primary tuning knob is `[server].threads` (int, default `4`,
+The primary tuning knob is `[server].threads` (int, default `1`,
 min `1`, max `64`), which sets Granian `runtime_threads` — the
-number of event-loop threads in the worker. The default of four
-threads lets the single Granian worker multiplex streaming proxy
-traffic + dashboard requests
-without single-event-loop starvation. Set `threads = 1` for
-extremely constrained devices, or raise it on capable hardware:
+number of event-loop threads in the worker. The supported default of
+one thread uses asyncio task concurrency for high-throughput streaming
+proxy traffic. Values greater than one are experimental — all
+`asyncio.Lock` objects are loop-bound and may fail under multi-loop
+access:
 
 ```toml
 [server]
-threads = 4
+threads = 1
 ```
 
 `eggpool restart` delegates to `runtime.restart_server`, which calls

@@ -279,6 +279,67 @@ eggpool restart
 See [config-profiles.md](../config-profiles.md) for evidence-based
 configuration profiles for different deployment targets.
 
+## Soak Runner
+
+The dispatch stability soak runner (`scripts/run_dispatch_stability_soak.py`)
+validates long-running dispatch stability across canonical workload profiles.
+
+### Run modes
+
+- **`smoke`** — quick validation (~5 minutes). Runs the
+  `balanced-file-backed` profile and asserts stability ratio gates.
+- **`extended`** — longer validation (~30+ minutes). Runs multiple
+  profiles with extended stability gates.
+- **`ci`** — fast gate for CI pipelines. Runs a minimal subset.
+
+### Running a soak
+
+```bash
+# Smoke test (default profile)
+uv run python scripts/run_dispatch_stability_soak.py \
+  --profile balanced-file-backed \
+  --mode smoke \
+  --output artifacts/dispatch-soak/smoke
+
+# Extended validation
+uv run python scripts/run_dispatch_stability_soak.py \
+  --profile balanced-file-backed \
+  --mode extended \
+  --output artifacts/dispatch-soak/extended
+```
+
+### Interpreting artifacts
+
+Soak runner output goes to the `--output` directory. Key artifacts:
+
+- `summary.json` — aggregated stability metrics (dispatch p95/p99,
+  early/late window comparison, stability ratios)
+- `stability_gates.json` — pass/fail for each gate (dispatch p95
+  ≤ 1.20x, p99 ≤ 1.50x early vs late)
+- `resource_plateau.json` — RSS, thread count, reservation cleanup
+  validation
+- `db_consistency.json` — database lifecycle invariant checks
+
+A soak passes when all stability gates report `pass` and no resource
+plateau violations are detected.
+
+## Extended Stability Gates
+
+Extended stability gates (`tests/soak/test_extended_stability_gates.py`)
+run only in `extended_soak` mode and validate long-duration behavior
+that cannot be caught in short tests:
+
+- Dispatch latency stability over extended windows
+- Resource plateau validation (memory, threads, file descriptors)
+- Database consistency under sustained load
+- Background task cadence drift under load
+
+Run directly with pytest:
+
+```bash
+uv run pytest tests/soak/test_extended_stability_gates.py -m extended_soak -v
+```
+
 ## Related Documentation
 
 - [deployment.md](../deployment.md) — installation and systemd setup

@@ -1,0 +1,80 @@
+name: Extended Dispatch Stability Soak
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "Soak profile"
+        required: false
+        default: "balanced-file-backed"
+        type: choice
+        options:
+          - balanced-file-backed
+          - burst-recovery
+          - cancellation-maintenance
+          - rehash-churn
+          - slow-storage
+          - sbc-reference
+      seed:
+        description: "Random seed"
+        required: false
+        default: "42"
+        type: string
+  schedule:
+    # Sundays at 02:00 UTC
+    - cron: "0 2 * * 0"
+
+env:
+  PYTHONHASHSEED: "0"
+  TZ: UTC
+
+# Manual/scheduled only — never blocks PRs from external runners.
+concurrency:
+  group: extended-soak
+  cancel-in-progress: true
+
+jobs:
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Record runner hardware metadata
+        run: |
+          echo "## Runner hardware" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "CPU:     $(nproc) cores" >> "$GITHUB_STEP_SUMMARY"
+          echo "Memory:  $(free -h 2>/dev/null | awk '/^Mem:/{print $2}' || echo 'unknown')" >> "$GITHUB_STEP_SUMMARY"
+          echo "Kernel:  $(uname -r)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Arch:    $(uname -m)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Disk df:" >> "$GITHUB_STEP_SUMMARY"
+          df -h / >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Run dispatch stability soak
+        run: |
+          uv run python scripts/run_dispatch_stability_soak.py \
+            --profile "${{ inputs.profile || 'balanced-file-backed' }}" \
+            --mode nightly \
+            --output artifacts/dispatch-soak/nightly \
+            --seed "${{ inputs.seed || '42' }}"
+
+      - name: Upload soak artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dispatch-soak-nightly
+          path: artifacts/dispatch-soak/nightly/
+          retention-days: 90
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -rf artifacts/dispatch-soak/nightly/
+          find /tmp -maxdepth 1 -name 'eggpool-soak-*' -exec rm -rf {} + 2>/dev/null || true

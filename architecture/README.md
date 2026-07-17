@@ -2876,14 +2876,14 @@ Granular dashboard handlers touched: `handle_runtime`, `handle_cache`, `handle_t
 
 #### Granian Runtime Threads
 
-`ServerConfig.threads` defaults to `4` (was `2`). The default config example now exposes the knob:
+`ServerConfig.threads` defaults to `1` (single event-loop thread is canonical; values > 1 emit a startup warning). The default config example exposes the knob:
 
 ```toml
 [server]
-threads = 4
+threads = 1
 ```
 
-Granian still passes `workers=1`. Four runtime threads let a single worker multiplex streaming proxy traffic, dashboard requests, and lightweight background work without the single-event-loop starvation that becomes visible when long-lived SSE streams block the loop. `1` remains the documented minimum-footprint override for extremely constrained devices. Startup logs the effective profile:
+Granian still passes `workers=1`. A single runtime thread keeps all `asyncio.Lock` objects on one event loop, avoiding cross-loop contention. Values > 1 enable Granian multi-thread mode but require the operator to verify all long-lived asyncio primitives tolerate multiple event loops; a startup warning is emitted. `1` remains the documented canonical default. Startup logs the effective profile:
 
 ```text
 Granian profile: workers=1 runtime_threads=N database_worker_threads=M access_log=...
@@ -3777,7 +3777,7 @@ per-label counters.
 ### Critical rules
 
 - Do not raise `server.threads` or `workers` to "fix" high-concurrency
-  stream instability. Granian runs `workers=1` and `threads=4`; raising
+  stream instability. Granian runs `workers=1` and `threads=1`; raising
   `threads` does not improve HTTPX concurrency and raising `workers`
   multiplies the SQLite connection budget.
 - Keep `database.worker_threads = 2` (default) so the dashboard

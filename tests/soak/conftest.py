@@ -57,6 +57,13 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "resource_plateau: resource plateau validation",
     )
+    config.addinivalue_line(
+        "markers",
+        (
+            "extended_soak: strict early-vs-late stability gates "
+            "(extended-soak mode only; excluded from normal CI)"
+        ),
+    )
 
 
 def _build_config() -> AppConfig:

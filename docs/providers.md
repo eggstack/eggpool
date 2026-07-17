@@ -450,7 +450,7 @@ state:
 
 ```toml
 [server]
-threads = 4
+threads = 1
 
 [database]
 worker_threads = 2
@@ -473,7 +473,7 @@ read timeout to absorb slow model first-token latencies:
 
 ```toml
 [server]
-threads = 4
+threads = 1
 
 [database]
 worker_threads = 2

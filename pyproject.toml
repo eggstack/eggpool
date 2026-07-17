@@ -129,4 +129,5 @@ markers = [
     "dashboard: dashboard and cache-page rendering tests",
     "performance: performance baseline and regression tests",
     "live: opt-in live external-source verification tests",
+    "extended_soak: strict early-vs-late stability gates (extended-soak mode only)",
 ]
