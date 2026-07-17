@@ -280,7 +280,11 @@ async def test_d3_operator_dead_server_exit3(tmp_path: Any) -> None:
 
 @pytest.mark.asyncio()
 async def test_d3_operator_concurrent_busy(tmp_path: Any) -> None:
-    """Four concurrent rehash calls: at least one returns exit 4 (BUSY)."""
+    """Four concurrent rehash calls: at least one returns exit 4 (BUSY).
+
+    Uses ControlClient directly for true asyncio concurrency instead of
+    subprocesses, which may serialize on fast hosts.
+    """
     state = _MockState()
     upstream = _make_mock_server(state)
     upstream_port = upstream.server_address[1]
@@ -302,12 +306,30 @@ async def test_d3_operator_concurrent_busy(tmp_path: Any) -> None:
             inflight_penalty=400_000,
         )
 
-        # Fire 4 concurrent rehash commands
+        from eggpool.cli_exit_codes import EXIT_OK, exit_code_for_failure
+        from eggpool.config_validation import validate_config_file
+        from eggpool.control.client import ControlClient
+
+        validation = validate_config_file(config_path)
+        assert validation.content_digest is not None
+
+        client = ControlClient()
+
+        async def _rehash_one() -> int:
+            try:
+                resp = await client.reload(validation.content_digest)
+                if resp.ok:
+                    return EXIT_OK
+                return exit_code_for_failure(
+                    stage=resp.stage,
+                    restart_required=list(resp.restart_required),
+                    message=resp.message,
+                )
+            except Exception:  # noqa: BLE001
+                return -1
+
         results = await asyncio.gather(
-            _run_rehash(config_path, env),
-            _run_rehash(config_path, env),
-            _run_rehash(config_path, env),
-            _run_rehash(config_path, env),
+            *[_rehash_one() for _ in range(4)],
             return_exceptions=True,
         )
 
@@ -315,7 +337,7 @@ async def test_d3_operator_concurrent_busy(tmp_path: Any) -> None:
         for r in results:
             if isinstance(r, Exception):
                 continue
-            exit_codes.append(r[0])
+            exit_codes.append(r)
 
         assert len(exit_codes) == 4, (
             f"expected 4 results, got {len(exit_codes)}: {exit_codes}"
