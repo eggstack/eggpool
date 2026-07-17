@@ -170,8 +170,11 @@ class TestApplicationStartup:
 
             async with app.router.lifespan_context(app):
                 assert isinstance(app.state.update_checker, UpdateChecker)
-                supervisor = app.state.supervisor
-                assert supervisor.get_task("update_checker") is not None
+                # update_checker is a process-owned task registered on the
+                # process supervisor (survives generation swaps), not the
+                # generation supervisor.
+                process_supervisor = app.state.process.process_supervisor
+                assert process_supervisor.get_task("update_checker") is not None
 
     @pytest.mark.asyncio
     async def test_worker_threads_two_opens_separate_stats_connection(
@@ -400,6 +403,9 @@ def _backup_config(
 ) -> AppConfig:
     """Build a minimal config for backup wiring tests."""
     actual_db = db_path or str(tmp_path / "backup_test.sqlite3")
+    # Write a stub config.toml so the backup task can include it in
+    # the archive (it reads the file at ``config_path`` during backup).
+    (tmp_path / "config.toml").write_text("# test config\n")
     return AppConfig.from_dict(
         {
             "server": {"api_key_env": "", "host": "127.0.0.1", "port": 0},
@@ -433,8 +439,10 @@ class TestAutomaticBackupRegistration:
                 return_value=httpx.Response(200, json={"info": {"version": "0.0.0"}})
             )
             async with app.router.lifespan_context(app):
-                task = app.state.supervisor.get_task("automatic_backup")
-                assert task is not None
+                # automatic_backup is a process-owned task registered on
+                # the process supervisor (survives generation swaps).
+                psup = app.state.process.process_supervisor
+                assert psup.get_task("automatic_backup") is not None
 
     @pytest.mark.asyncio
     async def test_not_registered_when_disabled(self, tmp_path) -> None:
@@ -449,7 +457,8 @@ class TestAutomaticBackupRegistration:
                 return_value=httpx.Response(200, json={"info": {"version": "0.0.0"}})
             )
             async with app.router.lifespan_context(app):
-                assert app.state.supervisor.get_task("automatic_backup") is None
+                psup = app.state.process.process_supervisor
+                assert psup.get_task("automatic_backup") is None
 
     @pytest.mark.asyncio
     async def test_not_registered_when_interval_zero(self, tmp_path) -> None:
@@ -464,7 +473,8 @@ class TestAutomaticBackupRegistration:
                 return_value=httpx.Response(200, json={"info": {"version": "0.0.0"}})
             )
             async with app.router.lifespan_context(app):
-                assert app.state.supervisor.get_task("automatic_backup") is None
+                psup = app.state.process.process_supervisor
+                assert psup.get_task("automatic_backup") is None
 
     @pytest.mark.asyncio
     async def test_in_memory_db_does_not_crash_startup(self, tmp_path) -> None:
@@ -479,10 +489,10 @@ class TestAutomaticBackupRegistration:
                 return_value=httpx.Response(200, json={"info": {"version": "0.0.0"}})
             )
             async with app.router.lifespan_context(app):
-                task = app.state.supervisor.get_task("automatic_backup")
-                assert task is not None
-                # Existing tasks still registered.
-                assert app.state.supervisor.get_task("update_checker") is not None
+                psup = app.state.process.process_supervisor
+                assert psup.get_task("automatic_backup") is not None
+                # Existing process-owned tasks still registered.
+                assert psup.get_task("update_checker") is not None
 
     @pytest.mark.asyncio
     async def test_existing_tasks_still_register(self, tmp_path) -> None:
@@ -497,7 +507,7 @@ class TestAutomaticBackupRegistration:
                 return_value=httpx.Response(200, json={"info": {"version": "0.0.0"}})
             )
             async with app.router.lifespan_context(app):
-                supervisor = app.state.supervisor
-                # Update checker and backup both registered.
-                assert supervisor.get_task("update_checker") is not None
-                assert supervisor.get_task("automatic_backup") is not None
+                psup = app.state.process.process_supervisor
+                # Update checker and backup both registered on process supervisor.
+                assert psup.get_task("update_checker") is not None
+                assert psup.get_task("automatic_backup") is not None
