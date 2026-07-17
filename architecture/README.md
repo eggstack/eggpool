@@ -3250,15 +3250,19 @@ The async primitive audit (`docs/async_primitive_audit.md`) documents every long
 
 ### Tests
 
-- `tests/unit/test_granian_topology.py`: verifies single-process, single-loop model
+- `tests/unit/test_granian_topology.py`: verifies single-process, single-loop model; task supervisor count; writer identity; generation identity; shutdown behaviour
 - `tests/unit/test_header_forwarding.py`: exhaustive header pass/drop tests
 - `tests/unit/test_resource_plateau.py`: DNS cache, client pool, and stream diagnostics boundedness
+- `tests/unit/test_resource_plateau_extended.py`: DNS singleflight lifecycle, HTTPX connection lifecycle, stream diagnostics error classification, FD/socket boundedness
 - `tests/unit/test_parsed_payload.py`: ParsedRequestPayload parse caching and derived state
 - `tests/unit/test_payload_utils.py`: estimate_padded_size arithmetic-only API
 - `tests/unit/test_immutable_request_state.py`: ImmutableRequestState frozen dataclass and generation swap
 - `tests/unit/test_metrics_coalescer_invariants.py`: concurrency invariants (total accounting, no negative counters, no lost updates, cancellation restore)
 - `tests/unit/test_telemetry_bounded_growth.py`: bounded deque/histogram growth for all telemetry recorders
+- `tests/unit/test_hotpath_equivalence.py`: consolidated 10-scenario hot-path regression (OpenAI/Anthropic native, streaming, large tools, invalid JSON, header security, payload caching, allocation-free estimation)
+- `tests/unit/test_synchronization_hardening.py`: RuntimeManager concurrency, DNS singleflight cancellation, telemetry shard bounds, metrics coalescer rapid cycling
 - `tests/perf/test_hot_path_performance.py`: before/after measurements for parse, allocation, header, span, and lag monitor
+- `tests/perf/test_concurrent_workload_matrix.py`: end-to-end performance matrix — serial, 10/25/50 concurrent, streaming, large body, mixed workloads with dispatch overhead and span recorder metrics
 
 ### Residual Constraints for Milestone G
 

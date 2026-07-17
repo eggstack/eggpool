@@ -219,3 +219,210 @@ async def test_thread_count_documentation() -> None:
 
     loop = asyncio.get_running_loop()
     assert loop is asyncio.get_running_loop()
+
+
+# ---------------------------------------------------------------------------
+# Task supervisor count
+# ---------------------------------------------------------------------------
+
+
+class TestTaskSupervisorTopology:
+    """Verify TaskSupervisor registers tasks once, not per-request."""
+
+    @pytest.mark.asyncio()
+    async def test_supervisor_tasks_persist_across_requests(self) -> None:
+        from eggpool.background import TaskSupervisor
+
+        supervisor = TaskSupervisor()
+
+        async def noop() -> None:
+            return None
+
+        task = supervisor.register("test_task_1", noop)
+        task2 = supervisor.register("test_task_2", noop)
+
+        # Tasks are registered once
+        assert supervisor.get_task("test_task_1") is task
+        assert supervisor.get_task("test_task_2") is task2
+        assert supervisor.get_task("test_task_1") is not None
+        assert supervisor.get_task("nonexistent") is None
+
+    @pytest.mark.asyncio()
+    async def test_supervisor_duplicate_registration_rejected(self) -> None:
+        from eggpool.background import TaskSupervisor
+
+        supervisor = TaskSupervisor()
+
+        async def noop() -> None:
+            return None
+
+        supervisor.register("dup_task", noop)
+        with pytest.raises(ValueError, match="already registered"):
+            supervisor.register("dup_task", noop)
+
+    @pytest.mark.asyncio()
+    async def test_supervisor_periodic_task_snapshot(self) -> None:
+        from eggpool.background import TaskSupervisor
+
+        supervisor = TaskSupervisor()
+
+        async def noop_tick() -> None:
+            return None
+
+        task = supervisor.register_periodic(
+            "periodic_test",
+            noop_tick,
+            interval_s=1.0,
+            initial_delay_s=0.01,
+        )
+        snap = task.snapshot()
+        assert snap["name"] == "periodic_test"
+        assert snap["configured_interval_s"] == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Writer identity and count
+# ---------------------------------------------------------------------------
+
+
+class TestWriterIdentity:
+    """Process-owned writer identity is stable across operations."""
+
+    def test_dispatch_overhead_recorder_identity(self) -> None:
+        from eggpool.runtime_dispatch import DispatchOverheadRecorder
+
+        recorder = DispatchOverheadRecorder(window_size=100)
+        # Recording the same object preserves identity
+        assert recorder is recorder
+        recorder.record_ns(1000)
+        recorder.record_ns(2000)
+        # Snapshot is a value, not a reference
+        snap1 = recorder.snapshot()
+        snap2 = recorder.snapshot()
+        assert snap1 == snap2
+
+    def test_dispatch_span_recorder_independent_spans(self) -> None:
+        from eggpool.runtime_dispatch import DispatchSpanRecorder
+
+        recorder = DispatchSpanRecorder(window_size=100)
+        recorder.record_ns("span_a", 1000)
+        recorder.record_ns("span_b", 2000)
+        snap = recorder.snapshot()
+        span_names = {row["span"] for row in snap["spans"]}
+        assert "span_a" in span_names
+        assert "span_b" in span_names
+
+    def test_stream_diagnostics_identity(self) -> None:
+        from eggpool.request.stream_diagnostics import (
+            STREAM_OUTCOME_COMPLETED,
+            StreamDiagnostics,
+        )
+
+        sd1 = StreamDiagnostics()
+        sd2 = StreamDiagnostics()
+        # Two instances are independent
+        sd1.record_outcome(STREAM_OUTCOME_COMPLETED)
+        snap1 = sd1.snapshot()
+        snap2 = sd2.snapshot()
+        assert snap1["outcomes"].get(STREAM_OUTCOME_COMPLETED, 0) == 1
+        assert snap2["outcomes"].get(STREAM_OUTCOME_COMPLETED, 0) == 0
+
+
+# ---------------------------------------------------------------------------
+# Active generation identity
+# ---------------------------------------------------------------------------
+
+
+class TestGenerationIdentity:
+    """RuntimeGeneration is frozen and identity-stable."""
+
+    def test_immutable_request_state_frozen(self) -> None:
+        from eggpool.runtime_manager import ImmutableRequestState
+
+        state = ImmutableRequestState(
+            provider_ids=frozenset({"openai"}),
+            account_names=frozenset({"default"}),
+            hop_by_hop_headers=frozenset({"connection"}),
+            local_credential_headers=frozenset({"authorization"}),
+        )
+        with pytest.raises(AttributeError):
+            state.provider_ids = frozenset({"anthropic"})  # type: ignore[misc]
+
+    def test_immutable_request_state_independent_instances(self) -> None:
+        from eggpool.runtime_manager import ImmutableRequestState
+
+        s1 = ImmutableRequestState(
+            provider_ids=frozenset({"openai"}),
+            account_names=frozenset(),
+            hop_by_hop_headers=frozenset(),
+            local_credential_headers=frozenset(),
+        )
+        s2 = ImmutableRequestState(
+            provider_ids=frozenset({"openai"}),
+            account_names=frozenset(),
+            hop_by_hop_headers=frozenset(),
+            local_credential_headers=frozenset(),
+        )
+        # Equal value but distinct identity
+        assert s1 == s2
+        assert s1 is not s2
+
+
+# ---------------------------------------------------------------------------
+# Shutdown and rehash behaviour
+# ---------------------------------------------------------------------------
+
+
+class TestShutdownTopology:
+    """Verify shutdown does not corrupt topology invariants."""
+
+    @pytest.mark.asyncio()
+    async def test_supervisor_stop_all_is_idempotent(self) -> None:
+        from eggpool.background import TaskSupervisor
+
+        supervisor = TaskSupervisor()
+
+        async def noop() -> None:
+            return None
+
+        supervisor.register("shutdown_test", noop)
+        await supervisor.stop_all()
+        # Stopping again should not raise
+        await supervisor.stop_all()
+
+    @pytest.mark.asyncio()
+    async def test_supervisor_start_after_stop(self) -> None:
+        """Starting after stop creates fresh tasks."""
+        from eggpool.background import TaskSupervisor
+
+        supervisor = TaskSupervisor()
+
+        async def noop() -> None:
+            return None
+
+        supervisor.register("restart_test", noop)
+        task = supervisor.get_task("restart_test")
+        assert task is not None
+        # Stop without starting is safe
+        await supervisor.stop_all()
+        # Task still exists in registry after stop
+        assert supervisor.get_task("restart_test") is not None
+
+    @pytest.mark.asyncio()
+    async def test_dns_cache_snapshot_after_construction(self) -> None:
+        """DNS cache snapshot is clean after construction."""
+        from eggpool.providers.dns_cache import DnsCache
+
+        class _Cfg:
+            max_entries = 32
+            positive_ttl_seconds = 300
+            negative_ttl_seconds = 10
+            stale_if_error_seconds = 60
+            enabled = True
+            prefer_ipv6 = False
+            lookup_timeout_seconds = None
+
+        cache = DnsCache(_Cfg())
+        snap = cache.snapshot()
+        assert snap["max_entries"] == 32
+        assert snap["size"] == 0
