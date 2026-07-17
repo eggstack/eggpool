@@ -1005,10 +1005,36 @@ async def test_d3_concurrent_reload_burst_rejects_busy(tmp_path: Any) -> None:
             inflight_penalty=750_000,
         )
 
-        # Fire a burst of 8 concurrent rehash commands.
+        # Fire a burst of concurrent rehash commands via the control
+        # socket.  Using ControlClient directly (instead of subprocesses)
+        # gives true asyncio concurrency within the same event loop,
+        # guaranteeing overlap even on fast hosts.
+        from eggpool.cli_exit_codes import EXIT_OK, exit_code_for_failure
+        from eggpool.config_validation import validate_config_file
+        from eggpool.control.client import ControlClient
+
+        validation = validate_config_file(config_path)
+        assert validation.content_digest is not None
+
+        client = ControlClient()
+
         burst = 8
+
+        async def _rehash_one() -> int:
+            try:
+                resp = await client.reload(validation.content_digest)
+                if resp.ok:
+                    return EXIT_OK
+                return exit_code_for_failure(
+                    stage=resp.stage,
+                    restart_required=list(resp.restart_required),
+                    message=resp.message,
+                )
+            except Exception:  # noqa: BLE001
+                return -1
+
         results = await asyncio.gather(
-            *[_run_rehash(config_path, env) for _ in range(burst)],
+            *[_rehash_one() for _ in range(burst)],
             return_exceptions=True,
         )
 
@@ -1016,7 +1042,7 @@ async def test_d3_concurrent_reload_burst_rejects_busy(tmp_path: Any) -> None:
         for r in results:
             if isinstance(r, Exception):
                 continue
-            exit_codes.append(r[0])
+            exit_codes.append(r)
 
         assert len(exit_codes) == burst, (
             f"expected {burst} exit codes, got {len(exit_codes)}: {exit_codes}"
