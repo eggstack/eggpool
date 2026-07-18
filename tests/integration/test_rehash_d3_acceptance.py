@@ -146,8 +146,12 @@ async def _send_raw_control_message(
             await writer.wait_closed()
 
 
-def _get_control_socket_path() -> str:
-    """Return the control socket path (~/.local/state/eggpool/eggpool.sock)."""
+def _get_control_socket_path(xdg_state_home: str | None = None) -> str:
+    """Return the control socket path (~/.local/state/eggpool/eggpool.sock).
+
+    Args:
+        xdg_state_home: Ignored (kept for backward compatibility).
+    """
     from pathlib import Path
 
     return str(Path.home() / ".local" / "state" / "eggpool" / "eggpool.sock")
