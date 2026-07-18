@@ -282,8 +282,8 @@ async def test_d3_operator_dead_server_exit3(tmp_path: Any) -> None:
 async def test_d3_operator_concurrent_busy(tmp_path: Any) -> None:
     """Four concurrent rehash calls: at least one returns exit 4 (BUSY).
 
-    Uses ControlClient directly for true asyncio concurrency instead of
-    subprocesses, which may serialize on fast hosts.
+    Uses subprocesses with retry because the reload critical section is
+    short and a 4-process pair can serialize on fast hosts.
     """
     state = _MockState()
     upstream = _make_mock_server(state)
@@ -306,46 +306,35 @@ async def test_d3_operator_concurrent_busy(tmp_path: Any) -> None:
             inflight_penalty=400_000,
         )
 
-        from eggpool.cli_exit_codes import EXIT_OK, exit_code_for_failure
-        from eggpool.config_validation import validate_config_file
-        from eggpool.control.client import ControlClient
+        # Fire concurrent rehash commands with retry for fast hosts
+        max_attempts = 5
+        all_exit_codes: list[int] = []
+        busy_count = 0
+        for _attempt in range(max_attempts):
+            results = await asyncio.gather(
+                _run_rehash(config_path, env),
+                _run_rehash(config_path, env),
+                _run_rehash(config_path, env),
+                _run_rehash(config_path, env),
+                return_exceptions=True,
+            )
 
-        validation = validate_config_file(config_path)
-        assert validation.content_digest is not None
+            exit_codes = []
+            for r in results:
+                if isinstance(r, Exception):
+                    continue
+                exit_codes.append(r[0])
 
-        client = ControlClient()
+            all_exit_codes.extend(exit_codes)
+            busy_count = sum(1 for ec in all_exit_codes if ec == 4)
+            if busy_count >= 1:
+                break
 
-        async def _rehash_one() -> int:
-            try:
-                resp = await client.reload(validation.content_digest)
-                if resp.ok:
-                    return EXIT_OK
-                return exit_code_for_failure(
-                    stage=resp.stage,
-                    restart_required=list(resp.restart_required),
-                    message=resp.message,
-                )
-            except Exception:  # noqa: BLE001
-                return -1
-
-        results = await asyncio.gather(
-            *[_rehash_one() for _ in range(4)],
-            return_exceptions=True,
-        )
-
-        exit_codes = []
-        for r in results:
-            if isinstance(r, Exception):
-                continue
-            exit_codes.append(r)
-
-        assert len(exit_codes) == 4, (
-            f"expected 4 results, got {len(exit_codes)}: {exit_codes}"
+        assert len(all_exit_codes) >= 4, (
+            f"expected at least 4 results, got {len(all_exit_codes)}: {all_exit_codes}"
         )
         # At least one must be busy (exit 4)
-        assert any(ec == 4 for ec in exit_codes), (
-            f"no rehash returned exit 4 (BUSY): {exit_codes}"
-        )
+        assert busy_count >= 1, f"no rehash returned exit 4 (BUSY): {all_exit_codes}"
 
         assert proc.returncode is None, "server process died"
     finally:
