@@ -53,16 +53,20 @@ _SOCKET_DIR = Path(os.environ.get("TMPDIR", "/tmp")) / "ep-sec-test"
 
 
 @pytest.fixture()
-def socket_dir(tmp_path: Path, request: pytest.FixtureRequest) -> Path:
-    """Short-path temporary directory for socket tests.
-
-    Uses a unique subdirectory per test to avoid socket address
-    collisions between tests.
-    """
-    test_id = request.node.name[:20].replace("/", "_")
-    d = _SOCKET_DIR / test_id
+def socket_dir(tmp_path: Path) -> Path:
+    """Short-path temporary directory for socket tests."""
+    d = _SOCKET_DIR
     d.mkdir(parents=True, exist_ok=True)
+    # Remove stale sockets from prior test runs.
+    for f in d.iterdir():
+        if f.suffix == ".sock":
+            f.unlink(missing_ok=True)
     yield d
+    # Clean up: remove sockets then directory.
+    for f in d.iterdir():
+        if f.suffix == ".sock":
+            with contextlib.suppress(OSError):
+                f.unlink()
     shutil.rmtree(d, ignore_errors=True)
 
 
