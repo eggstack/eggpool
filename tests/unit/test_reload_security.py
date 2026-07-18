@@ -57,12 +57,18 @@ def socket_dir(tmp_path: Path) -> Path:
     """Short-path temporary directory for socket tests.
 
     Each test invocation gets a unique subdirectory to avoid socket
-    address collisions.  The subdirectory name is kept short to stay
-    under macOS's ~104-byte Unix socket path limit.
+    address collisions.  On setup, all stale sockets from the parent
+    directory are cleaned to handle leftover state from prior CI runs.
     """
-    import random
+    from uuid import uuid4
 
-    d = _SOCKET_DIR / f"s{random.randint(0, 99999)}"
+    # Clean all stale sockets from prior runs (CI runners are reused).
+    if _SOCKET_DIR.exists():
+        for f in _SOCKET_DIR.iterdir():
+            if f.suffix == ".sock":
+                with contextlib.suppress(OSError):
+                    f.unlink()
+    d = _SOCKET_DIR / uuid4().hex[:8]
     d.mkdir(parents=True, exist_ok=True)
     yield d
     shutil.rmtree(d, ignore_errors=True)
