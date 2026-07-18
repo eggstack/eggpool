@@ -33,7 +33,6 @@ from eggpool.control.server import (
     ControlRequest,
     ControlResponse,
     ControlServer,
-    ControlServerError,
 )
 
 # ---------------------------------------------------------------------------
@@ -67,8 +66,8 @@ def socket_dir(tmp_path: Path, request: pytest.FixtureRequest) -> Path:
     shutil.rmtree(d, ignore_errors=True)
 
 
-def _sock(directory: Path) -> Path:
-    return directory / "test.sock"
+def _sock(directory: Path, name: str = "test") -> Path:
+    return directory / f"{name}.sock"
 
 
 async def _noop_handler(request: ControlRequest) -> ControlResponse:
@@ -765,7 +764,7 @@ class TestSymlinkSocketRejection:
         """
         target = socket_dir / "target.txt"
         target.write_text("not a socket", encoding="utf-8")
-        path = _sock(socket_dir)
+        path = _sock(socket_dir, "prevent")
         os.symlink(str(target), str(path))
 
         srv = ControlServer(_noop_handler, path=path)
@@ -781,21 +780,11 @@ class TestSymlinkSocketRejection:
         successfully.  This is safe because the server always creates
         a fresh socket."""
         target = socket_dir / "nonexistent_target"
-        path = _sock(socket_dir)
+        path = _sock(socket_dir, "symlink")
         os.symlink(str(target), str(path))
 
-        # Retry to handle lingering socket address from prior test.
-        for attempt in range(3):
-            srv = ControlServer(_noop_handler, path=path)
-            try:
-                await srv.start()
-                break
-            except ControlServerError:
-                if attempt == 2:
-                    raise
-                await asyncio.sleep(0.2)
-                path.unlink(missing_ok=True)
-                os.symlink(str(target), str(path))
+        srv = ControlServer(_noop_handler, path=path)
+        await srv.start()
         try:
             assert path.exists()
             assert stat.S_ISSOCK(os.stat(path).st_mode)
