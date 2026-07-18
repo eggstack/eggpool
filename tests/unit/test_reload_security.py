@@ -781,12 +781,20 @@ class TestSymlinkSocketRejection:
         a fresh socket."""
         target = socket_dir / "nonexistent_target"
         path = _sock(socket_dir)
-        # Remove any stale socket from a prior test run.
-        path.unlink(missing_ok=True)
         os.symlink(str(target), str(path))
 
-        srv = ControlServer(_noop_handler, path=path)
-        await srv.start()
+        # Retry to handle lingering socket address from prior test.
+        for attempt in range(3):
+            srv = ControlServer(_noop_handler, path=path)
+            try:
+                await srv.start()
+                break
+            except ControlServerError:
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(0.2)
+                path.unlink(missing_ok=True)
+                os.symlink(str(target), str(path))
         try:
             assert path.exists()
             assert stat.S_ISSOCK(os.stat(path).st_mode)
