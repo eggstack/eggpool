@@ -779,6 +779,8 @@ class TestSymlinkSocketRejection:
         a fresh socket."""
         target = socket_dir / "nonexistent_target"
         path = _sock(socket_dir)
+        # Remove any stale socket from a prior test run.
+        path.unlink(missing_ok=True)
         os.symlink(str(target), str(path))
 
         srv = ControlServer(_noop_handler, path=path)

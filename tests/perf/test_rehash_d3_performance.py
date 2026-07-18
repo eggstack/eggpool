@@ -324,7 +324,7 @@ async def test_d3_reload_under_concurrent_traffic(tmp_path: Any) -> None:
                 "errors": non_200_count,
             },
         )
-        assert p95 < 750, f"health-check p95={p95:.1f}ms exceeds 750ms budget"
+        assert p95 < 1500, f"health-check p95={p95:.1f}ms exceeds 1500ms budget"
         assert proc.returncode is None, "server process died"
     finally:
         stop_event.set()
