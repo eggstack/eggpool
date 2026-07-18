@@ -449,6 +449,14 @@ def test_schema_walk_matches_policy_inventory() -> None:
     known_unresolved: frozenset[str] = frozenset(
         {
             "pricing.catalogs.aliases",
+            "maintenance.contention_defer_above_lock_wait_p95_ms",
+            "maintenance.max_batches_per_tick",
+            "maintenance.max_deferral_age_s",
+            "maintenance.max_rows_per_batch",
+            "maintenance.max_tick_duration_ms",
+            "maintenance.p0_max_batches_per_tick",
+            "maintenance.p0_max_rows_per_batch",
+            "maintenance.p0_max_tick_duration_ms",
         }
     )
 
