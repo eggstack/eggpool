@@ -33,6 +33,7 @@ from eggpool.control.server import (
     ControlRequest,
     ControlResponse,
     ControlServer,
+    ControlServerError,
 )
 
 # ---------------------------------------------------------------------------
