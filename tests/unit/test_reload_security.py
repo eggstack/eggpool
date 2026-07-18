@@ -759,34 +759,36 @@ class TestStaleSocketReplacement:
 
 
 class TestSymlinkSocketRejection:
-    """Symlinks at the socket path must not be followed blindly."""
+    """Symlinks at the socket path are cleaned before bind."""
 
     @pytest.mark.asyncio
-    async def test_symlink_prevents_binding(self, socket_dir: Path) -> None:
-        """A symlink at the socket path causes bind to fail (ControlServerError).
-
-        _clean_stale_socket only removes files where S_ISSOCK is True;
-        a symlink to a regular file does not pass that check, so
-        asyncio.start_unix_server raises OSError which becomes
-        ControlServerError.
-        """
+    async def test_symlink_to_regular_file_removed_before_binding(
+        self, socket_dir: Path
+    ) -> None:
+        """A symlink to a regular file is removed by _clean_stale_socket
+        so the server can bind successfully."""
         target = socket_dir / "target.txt"
         target.write_text("not a socket", encoding="utf-8")
         path = _sock(socket_dir, "prevent")
         os.symlink(str(target), str(path))
 
         srv = ControlServer(_noop_handler, path=path)
-        with pytest.raises(Exception, match="failed to bind|control socket"):
-            await srv.start()
+        await srv.start()
+        try:
+            assert path.exists()
+            assert stat.S_ISSOCK(os.stat(path).st_mode)
+            client = ControlClient(socket_path=path)
+            resp = await client.reload(validated_digest="a" * 64)
+            assert resp.ok is True
+        finally:
+            await srv.stop()
 
     @pytest.mark.asyncio
     async def test_symlink_to_nonexistent_target_allows_binding(
         self, socket_dir: Path
     ) -> None:
-        """A dangling symlink at the socket path is removed by the OS
-        when asyncio.start_unix_server binds, so the server starts
-        successfully.  This is safe because the server always creates
-        a fresh socket."""
+        """A dangling symlink at the socket path is removed by
+        _clean_stale_socket so the server can bind successfully."""
         target = socket_dir / "nonexistent_target"
         path = _sock(socket_dir, "symlink")
         os.symlink(str(target), str(path))

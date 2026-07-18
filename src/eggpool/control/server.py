@@ -288,9 +288,20 @@ def _error_response(
 
 
 def _clean_stale_socket(path: Path) -> None:
-    """Remove a stale socket file if it exists and is a socket."""
+    """Remove a stale socket file or symlink at *path*.
+
+    The function handles three cases:
+    * Regular socket file (``S_ISSOCK``) – removed.
+    * Dangling symlink (target missing) – removed so ``bind()`` can
+      reclaim the path.
+    * Symlink to a socket file – removed to avoid following a stale
+      reference.
+    """
     try:
-        if path.exists() and stat.S_ISSOCK(path.stat().st_mode):
+        if path.is_symlink():
+            path.unlink()
+            logger.info("removed stale symlink %s", path)
+        elif path.exists() and stat.S_ISSOCK(path.stat().st_mode):
             path.unlink()
             logger.info("removed stale control socket %s", path)
     except OSError as exc:
