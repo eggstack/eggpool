@@ -174,7 +174,7 @@ CI sets `PYTHONHASHSEED=0` and `TZ=UTC`; reproduce locally for deterministic res
 
 - pytest with `asyncio_mode = "strict"` (from `pyproject.toml`)
 - respx for HTTPX upstream mocking
-- Tests in `tests/unit/`, `tests/integration/`, `tests/contract/`, `tests/perf/`
+- Tests in `tests/unit/`, `tests/integration/`, `tests/contract/`, `tests/perf/`, `tests/soak/`, `tests/live/`
 - Provider contract tests: `uv run pytest tests/unit/test_contract.py tests/unit/test_contract_urls.py -v`
 - Soak tests in `tests/soak/` for long-running stability validation (Milestone G)
 

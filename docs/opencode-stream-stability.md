@@ -23,7 +23,7 @@ spike in pending requests, walk through this list in order:
    Non-zero depth means the shielded finalizer timed out. The retry
    queue will drain on its own cadence; if depth keeps growing, the
    upstream is the problem, not the local finalizer.
-4. **Per-account health** (`/api/health` or the health tab). Repeated
+4. **Per-account health** (`/v1/healthz` or the health tab). Repeated
    `consecutive_failures` on a single account points at an upstream
    issue, not a code regression.
 

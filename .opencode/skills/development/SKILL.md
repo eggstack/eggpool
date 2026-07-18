@@ -95,7 +95,7 @@ uv run pyright src/ scripts/
 
 - **pytest** with pytest-asyncio (strict mode)
 - **respx** for HTTPX upstream mocking
-- Tests in `tests/unit/`, `tests/integration/`, `tests/contract/`, `tests/perf/`
+- Tests in `tests/unit/`, `tests/integration/`, `tests/contract/`, `tests/perf/`, `tests/soak/`, `tests/live/`
 
 ```bash
 # Run all tests
@@ -115,12 +115,16 @@ Defined in `pyproject.toml` and applied at the module level via `pytestmark`:
 - **`performance`** — performance baseline and regression guards. Covers `tests/perf/test_perf_baseline.py` and `tests/perf/test_perf_regression.py`.
 - **`slow`** — marks tests as slow (run in nightly CI, deselect in PR CI).
 - **`cache_compression_replay_full`** — full matrix replay for cache/compression fixtures.
+- **`live`** — opt-in live external-source tests (requires network access to real APIs).
+- **`extended_soak`** — extended-soak mode only tests (stability gates for long-running validation).
 
 ```bash
 uv run pytest -m request_path -v     # routing/transcoding/finalization only
 uv run pytest -m dashboard -v        # dashboard and cache-page only
 uv run pytest -m performance -v      # performance baseline only
 uv run pytest -m "not slow" -v       # skip slow tests
+uv run pytest tests/soak/ -v         # soak validation and workload profiles
+uv run pytest -m extended_soak -v    # extended-soak mode only
 ```
 
 ### Provider Contract Tests

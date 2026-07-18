@@ -10,12 +10,16 @@ src/eggpool/
 ├── api/               # API endpoint handlers (chat completions, messages, stats)
 ├── background/        # TaskSupervisor, retention cleanup, periodic tasks
 ├── catalog/           # Model catalog, pricing, protocols, fetcher, normalizer, limits
+├── control/           # Control plane (Unix socket, live reload)
 ├── model_info/        # Model information sidecar: persistent metadata, observations, summaries, source adapters
 ├── dashboard/         # Self-updating server-rendered HTML dashboard
 ├── db/                # SQLite connection, migrations, repositories, schema
 ├── health/            # Circuit breaker and health tracking
 ├── integrations/      # External tool configuration generation (OpenCode, Claude Code, Aider, Codex, Qwen Code, Kilo, Continue, Cline, Roo Code, Goose, OpenHands)
+├── lifecycle/         # Backup and uninstall orchestration
+├── metrics/           # Metrics buffering and thinking observability
 ├── models/            # Pydantic config, domain, API, and database models
+├── observability/     # Routing trace writer
 ├── providers/         # ProviderClientPool, pproxy transport, connect CLI
 ├── proxy/             # Transparent proxy, SSE observer, usage extraction
 ├── transcoder/        # Protocol transcoding (OpenAI ↔ Anthropic, body + streaming)
@@ -25,7 +29,6 @@ src/eggpool/
 ├── routing/           # Quota-aware routing, eligibility, provider parsing
 ├── security/          # Header redaction, security utilities
 ├── stats/             # Statistics queries and service
-├── lifecycle/         # Backup and uninstall orchestration
 ├── deploy/            # Bundled systemd/logrotate/cron snippets for CLI output
 ├── _share/            # Bundled config examples and assets for pipx installs
 ├── auth.py            # Local API key authentication (constant-time)
@@ -1692,7 +1695,7 @@ SQLite via aiosqlite with WAL mode. Single-connection serialization via a lock +
 
 ### Schema Migrations
 
-Ordered SQL migrations in `db/schema/` (0001 through 0048). Checksums tracked in `checksums.json`.
+Ordered SQL migrations in `db/schema/` (0001 through 0050). Checksums tracked in `checksums.json`.
 
 ### Repositories
 
@@ -1706,6 +1709,10 @@ Ordered SQL migrations in `db/schema/` (0001 through 0048). Checksums tracked in
 | `PriceSnapshotRepository` | Model price snapshots |
 | `ProviderRepository` | Provider CRUD and config sync |
 | `PingRepository` | Provider health ping results |
+| `AccountBackoffRepository` | Upstream-derived backoff persistence |
+| `AccountEventRepository` | Account event logging |
+| `OperationalEventRepository` | Safety-net task event logging |
+| `RoutingDecisionRepository` | Routing decision persistence |
 
 ## Quota and Routing
 

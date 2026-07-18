@@ -7,7 +7,7 @@ single-loop model (**Model 1**).
 ## Runtime Model Summary
 
 EggPool runs as a **single Granian worker** (`workers=1`) with
-configurable event-loop threads (`runtime_threads`, default `4`).
+configurable event-loop threads (`runtime_threads`, default `1`).
 All `asyncio.Lock` instances are bound to the event loop where they
 are created.  Under Model 1, there is exactly **one event loop** per
 process, so all asyncio locks are safe.

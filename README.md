@@ -108,6 +108,7 @@ Use `eggpool connect` for interactive provider setup. See [docs/providers.md](do
 | `[transcoder]` | Protocol transcoding between OpenAI and Anthropic formats |
 | `[compression]` | Request shaping: `observe`/`safe`, stable thresholds, transform toggles, advanced policy overrides |
 | `[cache]` | Synthetic cache controls (post-route, disabled by default, dry-run first) |
+| `[maintenance]` | Bounded maintenance budget, SQLite hygiene, contention guard |
 
 The catalog refresh is **non-destructive by default**: failed, empty, or partial upstream responses never silently de-pool a healthy account. Set `[models].catalog_withdrawal_policy` (`preserve_until_health` default, `confirmed_once`, `confirmed_twice`) to opt into destructive behavior on authoritative refreshes. See `architecture/README.md` § Catalog Refresh Semantics.
 
@@ -176,6 +177,13 @@ The stack covers provider cache counters, request segmentation, native cache pre
 | `GET` | `/api/stats/compression-tuning` | Threshold tuning recommendations |
 | `GET` | `/api/stats/request-shaping` | Operator-facing request-shaping summary |
 | `GET` | `/api/stats/runtime` | Runtime metrics, routing guardrails, background task summaries, stream diagnostics |
+| `GET` | `/api/stats/summary` | Aggregate request stats (counts, tokens, cost, latency) |
+| `GET` | `/api/stats/thinking` | Thinking/reasoning decision counter snapshot |
+| `GET` | `/api/stats/update` | PyPI update check status |
+| `GET` | `/api/stats/routing/eligibility` | Per-account routing eligibility diagnostics |
+| `GET` | `/api/events` | Operational event log |
+| `GET` | `/api/model-info/{model_id}/matches` | Match evidence diagnostics for one model |
+| `GET` | `/api/network/diagnostics` | Network and DNS diagnostics |
 
 When `[dashboard].enabled = true`, a multi-page dashboard is served at `/` with request stats, latency metrics, provider health, model-info detail pages, and more. Stats API available under `/api/stats/*`.
 

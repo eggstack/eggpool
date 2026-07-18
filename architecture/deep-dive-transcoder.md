@@ -50,11 +50,19 @@ Phase 9 optimization: synchronous `feed()`/`flush()` (no per-chunk `await`), com
 
 ### `transcoder/policy.py`
 
-`TranscoderPolicy`, `TranscodeContext` — configuration and per-request state:
+`TranscoderPolicy` — configuration and per-request state:
 - Feature flags per transcoding capability
 - Reasoning field names for OpenAI compatibility
 - Loss policy (warn/reject)
 - Budget resolution settings
+
+### `transcoder/context.py`
+
+`TranscodeContext` — per-request transcoding state dataclass carrying loss warnings, cache boundary tracker, tool-call ID map, and upstream protocol.
+
+### `transcoder/static_headers.py`
+
+Protocol-required static headers for cross-protocol transcoding (e.g. `anthropic-version` for Anthropic upstreams).
 
 ### `transcoder/prepared.py`
 

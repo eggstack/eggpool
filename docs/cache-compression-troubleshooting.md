@@ -361,7 +361,7 @@ Cards under `/cache` render but show empty / `0` counts.
 
 **Check:**
 
-1. The cache-compression stack runs only on data-plane requests (`/v1/chat/completions`, `/v1/messages`, `/v1/responses`). Health checks and dashboard fetches do not produce request records.
+1. The cache-compression stack runs only on data-plane requests (`/v1/chat/completions`, `/v1/messages`). Health checks and dashboard fetches do not produce request records.
 2. Confirm via `GET /api/stats/cache-observability` — `total_requests` should be non-zero.
 3. If `[dashboard] public = true`, the dashboard still requires an API key header (`Authorization: Bearer ...` or `x-api-key: ...`) for runtime metrics (always auth-gated regardless of public / private). Query-string authentication (`?api_key=...`) is **not** supported.
 4. Time window — the cards render the live snapshot, not a rolling period. Use the JSON endpoints with the `?period=` parameter for historical rollups.
