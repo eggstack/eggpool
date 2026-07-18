@@ -54,19 +54,17 @@ _SOCKET_DIR = Path(os.environ.get("TMPDIR", "/tmp")) / "ep-sec-test"
 
 @pytest.fixture()
 def socket_dir(tmp_path: Path) -> Path:
-    """Short-path temporary directory for socket tests."""
-    d = _SOCKET_DIR
+    """Short-path temporary directory for socket tests.
+
+    Each test invocation gets a unique subdirectory to avoid socket
+    address collisions.  The subdirectory name is kept short to stay
+    under macOS's ~104-byte Unix socket path limit.
+    """
+    import random
+
+    d = _SOCKET_DIR / f"s{random.randint(0, 99999)}"
     d.mkdir(parents=True, exist_ok=True)
-    # Remove stale sockets from prior test runs.
-    for f in d.iterdir():
-        if f.suffix == ".sock":
-            f.unlink(missing_ok=True)
     yield d
-    # Clean up: remove sockets then directory.
-    for f in d.iterdir():
-        if f.suffix == ".sock":
-            with contextlib.suppress(OSError):
-                f.unlink()
     shutil.rmtree(d, ignore_errors=True)
 
 
