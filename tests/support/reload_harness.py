@@ -29,6 +29,27 @@ def _config_digest(config: AppConfig) -> str:
     ).hexdigest()
 
 
+class _AsyncAclosingMagicMock(MagicMock):
+    """MagicMock whose ``aclose`` is an awaitable coroutine.
+
+    The runtime manager's retirement path calls ``await obj.aclose()``
+    on every generation-owned resource. Plain ``MagicMock`` returns a
+    non-awaitable, which raises ``TypeError`` and pollutes test logs
+    with stack traces. This subclass makes the close path a real
+    coroutine that returns ``None``.
+    """
+
+    async def aclose(self) -> None:  # type: ignore[override]
+        return None
+
+
+class _NoOpSupervisorMock(MagicMock):
+    """MagicMock supervisor whose ``stop_all`` is an awaitable coroutine."""
+
+    async def stop_all(self) -> None:  # type: ignore[override]
+        return None
+
+
 def make_initial_config() -> AppConfig:
     """Config A: single provider, two accounts, default routing.
 
@@ -124,6 +145,32 @@ class ReloadHarness:
         self._initial_config = make_initial_config()
         self._candidate_config = make_candidate_config()
 
+        # Sync the initial config to the DB so persistence comparisons
+        # in tests start from the same baseline as a real startup.
+        from eggpool.accounts.registry import (
+            account_config_rows,  # noqa: PLC0415
+        )
+        from eggpool.db.repositories import (  # noqa: PLC0415
+            AccountRepository,
+            ProviderRepository,
+        )
+
+        async with self._db.transaction():
+            provider_repo = ProviderRepository(self._db)
+            await provider_repo.sync_from_config(
+                {
+                    pid: {
+                        "base_url": pcfg.base_url,
+                        "protocols": pcfg.protocols,
+                    }
+                    for pid, pcfg in self._initial_config.providers.items()
+                }
+            )
+            account_repo = AccountRepository(self._db)
+            await account_repo.sync_from_config(
+                account_config_rows(self._initial_config)
+            )
+
         # Wire production managers
         self._runtime_manager = RuntimeManager()
         self._process = ProcessRuntime(db=self._db, stats_db=self._db)
@@ -143,13 +190,15 @@ class ReloadHarness:
             self._process,
             generation_id=0,
             config_digest=initial_digest,
-            # Use MagicMock for all services in the initial generation
+            # Use MagicMock for all services in the initial generation,
+            # but wire a real no-op supervisor so the retirement path
+            # can call ``await supervisor.stop_all()`` without raising.
             registry=MagicMock(),
             catalog=MagicMock(),
             router=MagicMock(),
             coordinator=MagicMock(),
-            client_pool=MagicMock(),
-            outbound_manager=MagicMock(),
+            client_pool=_AsyncAclosingMagicMock(),
+            outbound_manager=_AsyncAclosingMagicMock(),
             dns_backend=None,
             health_manager=MagicMock(),
             cost_calculator=MagicMock(),
@@ -161,7 +210,7 @@ class ReloadHarness:
             dispatch_span_recorder=MagicMock(),
             account_backoff_repo=MagicMock(),
             stats_service=MagicMock(),
-            supervisor=MagicMock(),
+            supervisor=_NoOpSupervisorMock(),
             finalization_retry_queue=MagicMock(),
             routing_trace_guard=MagicMock(),
             routing_trace_writer=MagicMock(),

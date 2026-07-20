@@ -126,6 +126,23 @@ uv run pytest tests/integration/reload/ -v
 # Reload correctness baseline — single file
 uv run pytest tests/integration/reload/test_reload_admission.py -v
 
+# Reload correctness baseline — by concern
+uv run pytest tests/integration/reload/test_reload_admission.py -v
+uv run pytest tests/integration/reload/test_reload_atomicity.py -v
+uv run pytest tests/integration/reload/test_reload_resources.py -v
+uv run pytest tests/integration/reload/test_reload_retirement.py -v
+uv run pytest tests/integration/reload/test_reload_parity.py -v
+uv run pytest tests/integration/reload/test_persistence_publication_split.py -v
+uv run pytest tests/integration/reload/test_process_mutation_timing.py -v
+uv run pytest tests/integration/reload/test_stale_app_state.py -v
+uv run pytest tests/integration/reload/test_lease_acquisition_fallback.py -v
+uv run pytest tests/integration/reload/test_diagnostics_contract.py -v
+
+# Reload admission race stress (100 runs) — for the Phase 1 acceptance
+# criterion "concurrent admission coverage passes or fails consistently
+# for at least 100 repeated runs".
+uv run python scripts/admission_race_stress.py 100
+
 # Soak validation and workload profiles (Milestone G)
 uv run pytest tests/soak/ -v
 
