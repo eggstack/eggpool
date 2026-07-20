@@ -318,7 +318,10 @@ class ReloadManager:
         if drain_timeout_s is None:
             drain_timeout_s = _resolve_drain_timeout_s()
         self._drain_timeout_s = drain_timeout_s
-        self._reload_lock = asyncio.Lock()
+        self._claim_mutex = asyncio.Lock()
+        self._reload_claimed: bool = False
+        self._admitted_request_id: str | None = None
+        self._admitted_at: float | None = None
         self._operation_state: ReloadOperationState | None = None
         self._last_reload_result: ReloadOperationResult | None = None
         self._last_reload_completed_at: float | None = None
@@ -371,6 +374,9 @@ class ReloadManager:
             "last_reload_completed_at": self._last_reload_completed_at,
             "reload_count": self._reload_count,
             "reload_error_count": self._reload_error_count,
+            "admitted": self._reload_claimed,
+            "admitted_at": self._admitted_at,
+            "admitted_request_id": self._admitted_request_id,
         }
 
     # -- public entry point ------------------------------------------------
@@ -403,343 +409,348 @@ class ReloadManager:
         warnings: tuple[ConfigValidationWarning, ...] = validation.warnings
         restart_required: tuple[Any, ...] = ()
 
-        if self._reload_lock.locked():
+        # Atomic admission claim — no TOCTOU window.
+        async with self._claim_mutex:
+            if self._reload_claimed:
+                raise ReloadInProgressError(
+                    "A reload transaction is already in progress"
+                )
+            self._reload_claimed = True
+            self._admitted_at = time.monotonic()
+
+        try:
+            # Record reload_requested event after claim succeeds.
             await self._safe_record_event(
-                "reload_publication_conflict",
+                "reload_requested",
                 digest_prefix=digest_prefix,
-                error="A reload transaction is already in progress",
             )
-            raise ReloadInProgressError("A reload transaction is already in progress")
 
-        await self._safe_record_event(
-            "reload_requested",
-            digest_prefix=digest_prefix,
-        )
+            # Observer: admission claimed
+            await self._observer.on_admission_claimed(
+                generation_id=generation_id,
+                digest_prefix=digest_prefix,
+            )
 
-        async with self._reload_lock:
-            try:
-                # Observer: admission claimed
-                await self._observer.on_admission_claimed(
-                    generation_id=generation_id,
+            # Stage 1: Validate digest
+            self._set_stage(
+                ReloadOperationStage.VALIDATION,
+                started_at,
+                generation_id,
+                digest_prefix,
+            )
+            await self._validate_digest(validation, expected_digest)
+
+            # Observer: validation complete
+            await self._observer.on_validation_complete(
+                generation_id=generation_id,
+                digest_prefix=digest_prefix,
+            )
+
+            # Stage 2: Compute diff
+            self._set_stage(
+                ReloadOperationStage.DIFF,
+                started_at,
+                generation_id,
+                digest_prefix,
+            )
+            diff = await self._compute_reload_diff(validation.config)
+
+            # Observer: diff computed
+            await self._observer.on_diff_computed(
+                generation_id=generation_id,
+                digest_prefix=digest_prefix,
+                change_count=len(diff.changes),
+                has_restart_required=bool(diff.restart_required),
+            )
+
+            # Stage 3: Check restart-required changes
+            restart_required = tuple(diff.restart_required)
+            if restart_required:
+                sections = tuple(sorted({c.section for c in restart_required}))
+                await self._safe_record_event(
+                    "reload_restart_required_rejected",
                     digest_prefix=digest_prefix,
+                    changed_sections=sections,
                 )
-
-                # Stage 1: Validate digest
-                self._set_stage(
-                    ReloadOperationStage.VALIDATION,
-                    started_at,
-                    generation_id,
-                    digest_prefix,
-                )
-                await self._validate_digest(validation, expected_digest)
-
-                # Observer: validation complete
-                await self._observer.on_validation_complete(
-                    generation_id=generation_id,
-                    digest_prefix=digest_prefix,
-                )
-
-                # Stage 2: Compute diff
-                self._set_stage(
-                    ReloadOperationStage.DIFF,
-                    started_at,
-                    generation_id,
-                    digest_prefix,
-                )
-                diff = await self._compute_reload_diff(validation.config)
-
-                # Observer: diff computed
-                await self._observer.on_diff_computed(
-                    generation_id=generation_id,
-                    digest_prefix=digest_prefix,
-                    change_count=len(diff.changes),
-                    has_restart_required=bool(diff.restart_required),
-                )
-
-                # Stage 3: Check restart-required changes
-                restart_required = tuple(diff.restart_required)
-                if restart_required:
-                    sections = tuple(sorted({c.section for c in restart_required}))
-                    await self._safe_record_event(
-                        "reload_restart_required_rejected",
-                        digest_prefix=digest_prefix,
-                        changed_sections=sections,
-                    )
-                    duration = time.monotonic() - started_at
-                    self._reload_count += 1
-                    self._reload_error_count += 1
-                    self._last_reload_result = ReloadOperationResult(
-                        ok=False,
-                        stage=ReloadStage.DIFF.value,
-                        generation=None,
-                        changed_sections=sections,
-                        warnings=warnings,
-                        restart_required=tuple(restart_required),
-                        retirement_pending=False,
-                        message=(
-                            f"Reload rejected: {len(restart_required)} "
-                            "restart-required field(s) changed"
-                        ),
-                        duration_s=duration,
-                    )
-                    self._last_reload_completed_at = time.time()
-                    return ReloadResult(
-                        ok=False,
-                        stage=ReloadStage.DIFF,
-                        generation=None,
-                        changed_sections=sections,
-                        warnings=warnings,
-                        restart_required=tuple(restart_required),
-                        message=(
-                            f"Reload rejected: {len(restart_required)} "
-                            "restart-required field(s) changed"
-                        ),
-                    )
-
-                # Stage 4: Semantic no-op
-                if not diff.changes:
-                    active = self._runtime_manager.active_snapshot()
-                    return ReloadResult(
-                        ok=True,
-                        stage=ReloadStage.COMMIT,
-                        generation=active.generation_id,
-                        changed_sections=(),
-                        warnings=warnings,
-                        restart_required=(),
-                        message="No configuration changes detected",
-                    )
-
-                # All changes are IGNORED (no LIVE changes) — success with explanation
-                if not diff.live:
-                    active = self._runtime_manager.active_snapshot()
-                    ignored_sections = tuple(sorted({c.section for c in diff.changes}))
-                    return ReloadResult(
-                        ok=True,
-                        stage=ReloadStage.DIFF,
-                        generation=active.generation_id,
-                        changed_sections=ignored_sections,
-                        warnings=warnings,
-                        restart_required=(),
-                        message="Configuration changes detected but all are ignored",
-                    )
-
-                changed_sections = tuple(sorted({c.section for c in diff.changes}))
-
-                # Stage 5: Build candidate generation
-                self._set_stage(
-                    ReloadOperationStage.PREPARATION,
-                    started_at,
-                    generation_id,
-                    digest_prefix,
-                )
-                # Observer: candidate started
-                await self._observer.on_candidate_started(
-                    generation_id=generation_id,
-                    digest_prefix=digest_prefix,
-                )
-                candidate = await self._build_candidate_generation(
-                    validation,
-                    diff,
-                    runtime_manager=self._runtime_manager,
-                )
-                generation_id = candidate.generation.generation_id
-                digest_prefix = candidate.generation.config_digest[:12]
-
-                # Observer: candidate complete
-                await self._observer.on_candidate_complete(
-                    generation_id=generation_id,
-                    digest_prefix=digest_prefix,
-                )
-
-                # Stage 6: Reconcile persistence
-                self._set_stage(
-                    ReloadOperationStage.RECONCILIATION,
-                    started_at,
-                    generation_id,
-                    digest_prefix,
-                )
-                # Observer: reconcile started
-                await self._observer.on_reconcile_started(
-                    generation_id=generation_id,
-                    digest_prefix=digest_prefix,
-                )
-                await self._reconcile_persistence(
-                    validation.config,
-                    self._runtime_manager.active_snapshot().config,
-                )
-                # Observer: reconcile prepared
-                await self._observer.on_reconcile_prepared(
-                    generation_id=generation_id,
-                    digest_prefix=digest_prefix,
-                )
-
-                # Stage 7: Atomic publication
-                self._set_stage(
-                    ReloadOperationStage.COMMIT,
-                    started_at,
-                    generation_id,
-                    digest_prefix,
-                )
-                # Capture old generation ID before publication swaps it
-                old_generation_id = (
-                    self._runtime_manager.active_snapshot().generation_id
-                )
-                # Observer: publish started
-                await self._observer.on_publish_started(
-                    generation_id=generation_id,
-                    digest_prefix=digest_prefix,
-                )
-                await self._publish_generation(candidate, diff)
-                # Observer: publish complete
-                await self._observer.on_publish_complete(
-                    generation_id=generation_id,
-                    digest_prefix=digest_prefix,
-                )
-
-                # Stage 8: Begin retirement (non-blocking)
-                self._set_stage(
-                    ReloadOperationStage.RETIREMENT,
-                    started_at,
-                    generation_id,
-                    digest_prefix,
-                )
-                # Observer: retirement started
-                await self._observer.on_retirement_started(
-                    generation_id=generation_id,
-                    digest_prefix=digest_prefix,
-                    old_generation_id=old_generation_id,
-                )
-                self._set_stage(
-                    ReloadOperationStage.IDLE,
-                    started_at,
-                    generation_id,
-                    digest_prefix,
-                )
-
                 duration = time.monotonic() - started_at
-                logger.info(
-                    "Reload committed: generation=%d duration=%.3fs sections=%s",
-                    generation_id,
-                    duration,
-                    ",".join(changed_sections) or "(none)",
-                )
-                result = ReloadResult(
-                    ok=True,
-                    stage=ReloadStage.RETIREMENT,
-                    generation=generation_id,
-                    changed_sections=changed_sections,
+                self._reload_count += 1
+                self._reload_error_count += 1
+                self._last_reload_result = ReloadOperationResult(
+                    ok=False,
+                    stage=ReloadStage.DIFF.value,
+                    generation=None,
+                    changed_sections=sections,
                     warnings=warnings,
-                    restart_required=(),
+                    restart_required=tuple(restart_required),
+                    retirement_pending=False,
                     message=(
-                        f"Reload applied: generation {generation_id}, "
-                        f"{len(changed_sections)} section(s) changed"
+                        f"Reload rejected: {len(restart_required)} "
+                        "restart-required field(s) changed"
+                    ),
+                    duration_s=duration,
+                )
+                self._last_reload_completed_at = time.time()
+                return ReloadResult(
+                    ok=False,
+                    stage=ReloadStage.DIFF,
+                    generation=None,
+                    changed_sections=sections,
+                    warnings=warnings,
+                    restart_required=tuple(restart_required),
+                    message=(
+                        f"Reload rejected: {len(restart_required)} "
+                        "restart-required field(s) changed"
                     ),
                 )
-                self._reload_count += 1
-                self._last_reload_result = ReloadOperationResult(
-                    ok=True,
-                    stage=ReloadStage.RETIREMENT.value,
-                    generation=generation_id,
-                    changed_sections=changed_sections,
-                    warnings=warnings,
-                    restart_required=(),
-                    retirement_pending=True,
-                    message=result.message,
-                    duration_s=duration,
-                )
-                self._last_reload_completed_at = time.time()
-                await self._safe_record_event(
-                    "reload_activated",
-                    generation_id=generation_id,
-                    digest_prefix=digest_prefix,
-                    changed_sections=changed_sections,
-                )
-                return result
 
-            except ReloadInProgressError:
-                raise
-            except ReloadPreparationError as exc:
-                duration = time.monotonic() - started_at
-                error_stage = (
-                    self._operation_state.stage
-                    if self._operation_state
-                    else ReloadOperationStage.IDLE
-                )
-                logger.exception("Reload failed at stage %s", error_stage)
-                self._reload_count += 1
-                self._reload_error_count += 1
-                event_type = "reload_preparation_failure"
-                if "digest mismatch" in str(exc).lower():
-                    event_type = "reload_digest_mismatch"
-                self._last_reload_result = ReloadOperationResult(
-                    ok=False,
-                    stage=error_stage,
-                    generation=generation_id,
-                    changed_sections=changed_sections,
-                    warnings=warnings,
-                    restart_required=restart_required,
-                    retirement_pending=False,
-                    message=f"Reload failed: {exc!r}",
-                    duration_s=duration,
-                )
-                self._last_reload_completed_at = time.time()
-                await self._safe_record_event(
-                    event_type,
-                    generation_id=generation_id,
-                    digest_prefix=digest_prefix,
-                    changed_sections=changed_sections,
-                    error=f"{exc!r}",
-                )
+            # Stage 4: Semantic no-op
+            if not diff.changes:
+                active = self._runtime_manager.active_snapshot()
                 return ReloadResult(
-                    ok=False,
-                    stage=ReloadStage.VALIDATION,
-                    generation=None,
+                    ok=True,
+                    stage=ReloadStage.COMMIT,
+                    generation=active.generation_id,
                     changed_sections=(),
                     warnings=warnings,
                     restart_required=(),
-                    message=f"Reload failed: {exc!r}",
+                    message="No configuration changes detected",
                 )
-            except Exception as exc:
-                duration = time.monotonic() - started_at
-                error_stage = (
-                    self._operation_state.stage
-                    if self._operation_state
-                    else ReloadOperationStage.IDLE
-                )
-                logger.exception("Reload failed at stage %s", error_stage)
-                self._reload_count += 1
-                self._reload_error_count += 1
-                self._last_reload_result = ReloadOperationResult(
-                    ok=False,
-                    stage=error_stage,
-                    generation=generation_id,
-                    changed_sections=changed_sections,
-                    warnings=warnings,
-                    restart_required=restart_required,
-                    retirement_pending=False,
-                    message=f"Reload failed: {exc!r}",
-                    duration_s=duration,
-                )
-                self._last_reload_completed_at = time.time()
-                event_type = "reload_preparation_failure"
-                if error_stage == ReloadOperationStage.RECONCILIATION:
-                    event_type = "reload_reconciliation_failure"
-                await self._safe_record_event(
-                    event_type,
-                    generation_id=generation_id,
-                    digest_prefix=digest_prefix,
-                    changed_sections=changed_sections,
-                    error=f"{exc!r}",
-                )
+
+            # All changes are IGNORED (no LIVE changes) — success with explanation
+            if not diff.live:
+                active = self._runtime_manager.active_snapshot()
+                ignored_sections = tuple(sorted({c.section for c in diff.changes}))
                 return ReloadResult(
-                    ok=False,
-                    stage=ReloadStage.VALIDATION,
-                    generation=None,
-                    changed_sections=(),
+                    ok=True,
+                    stage=ReloadStage.DIFF,
+                    generation=active.generation_id,
+                    changed_sections=ignored_sections,
                     warnings=warnings,
                     restart_required=(),
-                    message=f"Reload failed: {exc!r}",
+                    message="Configuration changes detected but all are ignored",
                 )
+
+            changed_sections = tuple(sorted({c.section for c in diff.changes}))
+
+            # Stage 5: Build candidate generation
+            self._set_stage(
+                ReloadOperationStage.PREPARATION,
+                started_at,
+                generation_id,
+                digest_prefix,
+            )
+            # Observer: candidate started
+            await self._observer.on_candidate_started(
+                generation_id=generation_id,
+                digest_prefix=digest_prefix,
+            )
+            candidate = await self._build_candidate_generation(
+                validation,
+                diff,
+                runtime_manager=self._runtime_manager,
+            )
+            generation_id = candidate.generation.generation_id
+            digest_prefix = candidate.generation.config_digest[:12]
+
+            # Observer: candidate complete
+            await self._observer.on_candidate_complete(
+                generation_id=generation_id,
+                digest_prefix=digest_prefix,
+            )
+
+            # Stage 6: Reconcile persistence
+            self._set_stage(
+                ReloadOperationStage.RECONCILIATION,
+                started_at,
+                generation_id,
+                digest_prefix,
+            )
+            # Observer: reconcile started
+            await self._observer.on_reconcile_started(
+                generation_id=generation_id,
+                digest_prefix=digest_prefix,
+            )
+            await self._reconcile_persistence(
+                validation.config,
+                self._runtime_manager.active_snapshot().config,
+            )
+            # Observer: reconcile prepared
+            await self._observer.on_reconcile_prepared(
+                generation_id=generation_id,
+                digest_prefix=digest_prefix,
+            )
+
+            # Stage 7: Atomic publication
+            self._set_stage(
+                ReloadOperationStage.COMMIT,
+                started_at,
+                generation_id,
+                digest_prefix,
+            )
+            # Capture old generation ID before publication swaps it
+            old_generation_id = self._runtime_manager.active_snapshot().generation_id
+            # Observer: publish started
+            await self._observer.on_publish_started(
+                generation_id=generation_id,
+                digest_prefix=digest_prefix,
+            )
+            await self._publish_generation(candidate, diff)
+            # Observer: publish complete
+            await self._observer.on_publish_complete(
+                generation_id=generation_id,
+                digest_prefix=digest_prefix,
+            )
+
+            # Stage 8: Begin retirement (non-blocking)
+            self._set_stage(
+                ReloadOperationStage.RETIREMENT,
+                started_at,
+                generation_id,
+                digest_prefix,
+            )
+            # Observer: retirement started
+            await self._observer.on_retirement_started(
+                generation_id=generation_id,
+                digest_prefix=digest_prefix,
+                old_generation_id=old_generation_id,
+            )
+            self._set_stage(
+                ReloadOperationStage.IDLE,
+                started_at,
+                generation_id,
+                digest_prefix,
+            )
+
+            duration = time.monotonic() - started_at
+            logger.info(
+                "Reload committed: generation=%d duration=%.3fs sections=%s",
+                generation_id,
+                duration,
+                ",".join(changed_sections) or "(none)",
+            )
+            result = ReloadResult(
+                ok=True,
+                stage=ReloadStage.RETIREMENT,
+                generation=generation_id,
+                changed_sections=changed_sections,
+                warnings=warnings,
+                restart_required=(),
+                message=(
+                    f"Reload applied: generation {generation_id}, "
+                    f"{len(changed_sections)} section(s) changed"
+                ),
+            )
+            self._reload_count += 1
+            self._last_reload_result = ReloadOperationResult(
+                ok=True,
+                stage=ReloadStage.RETIREMENT.value,
+                generation=generation_id,
+                changed_sections=changed_sections,
+                warnings=warnings,
+                restart_required=(),
+                retirement_pending=True,
+                message=result.message,
+                duration_s=duration,
+            )
+            self._last_reload_completed_at = time.time()
+            await self._safe_record_event(
+                "reload_activated",
+                generation_id=generation_id,
+                digest_prefix=digest_prefix,
+                changed_sections=changed_sections,
+            )
+            return result
+
+        except ReloadInProgressError:
+            raise
+        except ReloadPreparationError as exc:
+            duration = time.monotonic() - started_at
+            error_stage = (
+                self._operation_state.stage
+                if self._operation_state
+                else ReloadOperationStage.IDLE
+            )
+            logger.exception("Reload failed at stage %s", error_stage)
+            self._reload_count += 1
+            self._reload_error_count += 1
+            event_type = "reload_preparation_failure"
+            if "digest mismatch" in str(exc).lower():
+                event_type = "reload_digest_mismatch"
+            self._last_reload_result = ReloadOperationResult(
+                ok=False,
+                stage=error_stage,
+                generation=generation_id,
+                changed_sections=changed_sections,
+                warnings=warnings,
+                restart_required=restart_required,
+                retirement_pending=False,
+                message=f"Reload failed: {exc!r}",
+                duration_s=duration,
+            )
+            self._last_reload_completed_at = time.time()
+            await self._safe_record_event(
+                event_type,
+                generation_id=generation_id,
+                digest_prefix=digest_prefix,
+                changed_sections=changed_sections,
+                error=f"{exc!r}",
+            )
+            return ReloadResult(
+                ok=False,
+                stage=ReloadStage.VALIDATION,
+                generation=None,
+                changed_sections=(),
+                warnings=warnings,
+                restart_required=(),
+                message=f"Reload failed: {exc!r}",
+            )
+        except Exception as exc:
+            duration = time.monotonic() - started_at
+            error_stage = (
+                self._operation_state.stage
+                if self._operation_state
+                else ReloadOperationStage.IDLE
+            )
+            logger.exception("Reload failed at stage %s", error_stage)
+            self._reload_count += 1
+            self._reload_error_count += 1
+            self._last_reload_result = ReloadOperationResult(
+                ok=False,
+                stage=error_stage,
+                generation=generation_id,
+                changed_sections=changed_sections,
+                warnings=warnings,
+                restart_required=restart_required,
+                retirement_pending=False,
+                message=f"Reload failed: {exc!r}",
+                duration_s=duration,
+            )
+            self._last_reload_completed_at = time.time()
+            event_type = "reload_preparation_failure"
+            if error_stage == ReloadOperationStage.RECONCILIATION:
+                event_type = "reload_reconciliation_failure"
+            await self._safe_record_event(
+                event_type,
+                generation_id=generation_id,
+                digest_prefix=digest_prefix,
+                changed_sections=changed_sections,
+                error=f"{exc!r}",
+            )
+            return ReloadResult(
+                ok=False,
+                stage=ReloadStage.VALIDATION,
+                generation=None,
+                changed_sections=(),
+                warnings=warnings,
+                restart_required=(),
+                message=f"Reload failed: {exc!r}",
+            )
+        finally:
+            # Release admission claim on every terminal path.
+            async with self._claim_mutex:
+                self._reload_claimed = False
+                self._admitted_at = None
+                self._admitted_request_id = None
 
     # -- stage helpers -----------------------------------------------------
 

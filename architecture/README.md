@@ -3639,7 +3639,12 @@ clients on shared hosts from issuing reload commands.
 which orchestrates the complete reload transaction under a serializing
 `asyncio.Lock`:
 
-1. **Lock** — Reject concurrent reloads (`ReloadInProgressError`).
+1. **Atomic admission claim** — `_claim_mutex` + `_reload_claimed`
+   eliminate the TOCTOU race on concurrent reload attempts. The claim
+   is acquired and released under `_claim_mutex`; concurrent callers
+   see `_reload_claimed == True` and raise `ReloadInProgressError`.
+   The claim state is exposed via `ReloadManager.snapshot()` diagnostics
+   (`admitted`, `admitted_at`, `admitted_request_id`).
 2. **Digest validation** — Verify the content digest matches the
    CLI-validated bytes (prevents TOCTOU races).
 3. **Diff** — `compute_diff(old_config, new_config)` produces a
@@ -3664,7 +3669,8 @@ which orchestrates the complete reload transaction under a serializing
    (timeout: 300s default).
 
 The manager exposes `snapshot()` for runtime diagnostics, including
-`reload_count`, `reload_error_count`, `last_reload_result`, and
+`reload_count`, `reload_error_count`, `last_reload_result`, `admitted`
+(claim state), `admitted_at`, `admitted_request_id`, and
 `operation_state` (current stage, started_at, generation_id,
 digest_prefix).
 
@@ -3673,6 +3679,8 @@ digest_prefix).
 `ReloadObserver` (defined in `src/eggpool/control/reload_manager.py`) provides a no-op base class with async stage callbacks. Tests subclass it to intercept specific reload stages without modifying production code. Every method is a no-op by default, so attaching an observer has zero runtime cost when no overrides are provided.
 
 Stage order: `on_admission_claimed` → `on_validation_complete` → `on_diff_computed` → `on_candidate_started` → `on_candidate_complete` → `on_reconcile_started` → `on_reconcile_prepared` → `on_publish_started` → `on_publish_complete` → `on_retirement_started`.
+
+Concurrent reload tests no longer need `xfail` markers — the atomic admission fix (`_claim_mutex` + `_reload_claimed`) works correctly in single-process tests.
 
 Test support modules in `tests/support/`:
 - `reload_harness.py` — `ReloadHarness` with temporary dirs, in-memory DB, real managers

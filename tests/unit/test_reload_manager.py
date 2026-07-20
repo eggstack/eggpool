@@ -844,10 +844,14 @@ class TestDeterministicConcurrency:
         assert result_a.generation == 5
         assert rm.install_candidate.await_count == 1
 
+        # With atomic admission, the rejected caller is rejected before
+        # any event recording, so no reload_publication_conflict event
+        # is emitted.  The busy decision is immediate and does not
+        # depend on event persistence.
         conflict_events = [
             (et, kw) for et, kw in event_calls if et == "reload_publication_conflict"
         ]
-        assert len(conflict_events) == 1
+        assert len(conflict_events) == 0
 
     @pytest.mark.asyncio
     async def test_recorded_event_does_not_leak_secrets(self) -> None:
@@ -971,19 +975,23 @@ class TestStaleExpectedGenerationGuard:
 
     @pytest.mark.asyncio
     async def test_lock_check_fires_before_digest_check(self) -> None:
-        """When the lock is held, ReloadInProgressError is raised
-        regardless of digest validity, proving the lock guard runs first."""
+        """When a reload claim is active, ReloadInProgressError is raised
+        regardless of digest validity, proving the admission guard runs first."""
         rm = RuntimeManager()
         proc = _make_process()
         mgr = ReloadManager(rm, proc)
 
-        await mgr._reload_lock.acquire()
+        # Simulate an active claim by directly setting the flag.
+        async with mgr._claim_mutex:
+            mgr._reload_claimed = True
 
-        validation_matching = _make_validation(content_digest="a" * 64)
-        with pytest.raises(ReloadInProgressError):
-            await mgr.reload(validation_matching, expected_digest="a" * 64)
-
-        mgr._reload_lock.release()
+        try:
+            validation_matching = _make_validation(content_digest="a" * 64)
+            with pytest.raises(ReloadInProgressError):
+                await mgr.reload(validation_matching, expected_digest="a" * 64)
+        finally:
+            async with mgr._claim_mutex:
+                mgr._reload_claimed = False
 
         validation_mismatch = _make_validation(content_digest="a" * 64)
         result = await mgr.reload(validation_mismatch, expected_digest="f" * 64)

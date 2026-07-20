@@ -531,10 +531,14 @@ class TestConcurrentReloadBusy:
             block_event.set()
             await task_a
 
+        # With atomic admission, the rejected caller is rejected before
+        # any event recording, so no reload_publication_conflict event
+        # is emitted.  The busy decision is immediate and does not
+        # depend on event persistence.
         conflict_events = [
             (et, kw) for et, kw in event_calls if et == "reload_publication_conflict"
         ]
-        assert len(conflict_events) == 1
+        assert len(conflict_events) == 0
 
 
 # ---------------------------------------------------------------------------

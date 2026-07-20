@@ -280,9 +280,10 @@ async def test_d3_operator_dead_server_exit3(tmp_path: Any) -> None:
 
 @pytest.mark.xfail(
     reason=(
-        "Race condition: subprocess-based concurrent rehashes serialize on "
-        "fast CI runners without ever hitting the reload lock.  Covered by "
-        "test_reload_manager.py for the busy-reject code path."
+        "Subprocess-based concurrent rehashes serialize on fast CI "
+        "runners without reliably hitting the admission guard.  The "
+        "single-process test_reload_manager.py proves the busy-reject "
+        "code path deterministically."
     ),
     strict=False,
 )

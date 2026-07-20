@@ -972,11 +972,10 @@ async def test_d3_mixed_live_plus_restart_rejected_atomically(
 
 @pytest.mark.xfail(
     reason=(
-        "Race condition: subprocess-based concurrent rehashes serialize on "
-        "fast CI runners without ever hitting the reload lock.  The "
-        "ControlClient alternative causes server hangs under 8 concurrent "
-        "Unix socket connections.  This test proves the busy-reject code "
-        "path exists via single-process tests in test_reload_manager.py."
+        "Subprocess-based concurrent rehashes serialize on fast CI "
+        "runners without reliably hitting the admission guard.  The "
+        "single-process test_reload_manager.py proves the busy-reject "
+        "code path deterministically."
     ),
     strict=False,
 )

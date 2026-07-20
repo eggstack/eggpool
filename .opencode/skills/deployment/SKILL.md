@@ -126,13 +126,14 @@ generation when safe.
 
 1. CLI validates the config (fail-closed on invalid config).
 2. CLI sends the validated content digest to the control socket.
-3. Server re-validates the config (prevents TOCTOU races).
-4. Server computes a diff against the active generation.
-5. Restart-required changes reject the entire operation.
-6. Server builds a candidate generation (router, DB, app state).
-7. Server reconciles persistence in a transaction.
-8. Server atomically publishes the new generation.
-9. Old generation retires after active streams drain.
+3. Server atomically claims admission (rejects concurrent reloads via `_claim_mutex`).
+4. Server re-validates the config (prevents TOCTOU races).
+5. Server computes a diff against the active generation.
+6. Restart-required changes reject the entire operation.
+7. Server builds a candidate generation (router, DB, app state).
+8. Server reconciles persistence in a transaction.
+9. Server atomically publishes the new generation.
+10. Old generation retires after active streams drain.
 
 **Provider/account/routing/model-override/model-capability changes
 apply live**; other fields are still `RESTART_REQUIRED`. The control
@@ -152,7 +153,7 @@ auto-restart — the operator must intervene.
 |---------|-----------|--------|
 | "Control socket unavailable" | `3` | Server not running — use `eggpool restart` |
 | "Control unavailable (server healthy)" | `3` | Server is running but socket missing — check permissions, restart manually |
-| "Reload transaction already in progress" | `4` | Wait and retry |
+| "Reload transaction already in progress" | `4` | Atomic admission claim held by another reload — wait and retry. The claim is non-TOCTOU (`_claim_mutex` + `_reload_claimed`); concurrent reloads are rejected immediately |
 | "Restart-required changes: …" | `2` | Use `eggpool restart` |
 
 ### Restart (disruptive changes)

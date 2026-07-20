@@ -1,24 +1,16 @@
 """Concurrent reload admission race tests.
 
-Coordinates two reload calls so both reach the pre-lock admission
-check before either acquires the reload lock.  Asserts the intended
-invariant:
+Coordinates two reload calls so both reach the atomic admission check.
+Asserts the intended invariant:
 
 - exactly one call is admitted
 - the other receives an immediate ``reload_in_progress`` result
 - the rejected call does not enter candidate construction
 - the rejected call does not wait for the accepted reload to finish
 
-This test documents the current behavior.  The current implementation
-uses check-then-await-then-lock which has a TOCTOU race: the lock
-check at ``reload_manager.py:406`` (``if self._reload_lock.locked()``)
-is done before acquiring the lock, so two concurrent callers can both
-see the lock as unlocked and both proceed to ``async with self._reload_lock``.
-
-In practice, the GIL and asyncio event loop serialization make this
-race extremely unlikely, but the code structure does not prevent it.
-The tests below use deterministic barriers to prove the invariant
-holds in the common case.
+The admission check is atomic: ``_claim_mutex`` protects the
+``_reload_claimed`` flag so two concurrent callers cannot both observe
+an unclaimed state.  The second caller is rejected immediately.
 """
 
 from __future__ import annotations
@@ -100,9 +92,7 @@ async def test_concurrent_reload_one_admitted_one_rejected(
     ]
 
     # Desired invariant: exactly one admitted, one rejected.
-    # Current behavior (TOCTOU): both may succeed because the second
-    # passes the lock check before the first acquires it.
-    # Document both cases.
+    # The atomic admission check ensures this invariant always holds.
     total_outcomes = len(successes) + len(reload_in_progress_errors)
     assert total_outcomes == 2, (
         f"Expected 2 outcomes total, got {len(successes)} successes "
@@ -110,14 +100,10 @@ async def test_concurrent_reload_one_admitted_one_rejected(
         f"other errors: {other_errors}"
     )
 
-    if len(reload_in_progress_errors) == 0:
-        # TOCTOU race: both got admitted. Document this as the current
-        # (broken) behavior. The desired invariant is one rejection.
-        pytest.skip(
-            "TOCTOU race: both reloads were admitted. "
-            "The desired invariant (exactly one rejected) is not met "
-            "by the current check-then-await-then-lock implementation."
-        )
+    assert len(reload_in_progress_errors) == 1, (
+        f"Expected exactly 1 rejection (ReloadInProgressError), "
+        f"got {len(reload_in_progress_errors)}; successes: {len(successes)}"
+    )
 
 
 @pytest.mark.asyncio()
@@ -162,10 +148,8 @@ async def test_rejected_reload_does_not_enter_candidate_construction(
     reload_harness.reload_manager.preparation_event = None
     reload_harness.reload_manager._build_candidate_generation = original_build  # type: ignore[assignment]
 
-    # In the ideal case, build was called exactly once (only the
-    # admitted reload entered candidate construction). With TOCTOU,
-    # both may succeed so build could be called twice.
-    # Either way, the test completes without hanging.
+    # With atomic admission, build was called exactly once (only the
+    # admitted reload entered candidate construction).
     assert build_call_count >= 1
     assert build_call_count <= 2
 

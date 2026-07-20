@@ -301,13 +301,33 @@ async def handle_proxy_request(
     if runtime_manager is not None:
         try:
             lease = await runtime_manager.acquire()
-        except Exception:  # noqa: BLE001 — fall back to app.state
-            lease = None
-
-    if lease is not None:
+        except Exception as exc:
+            request_state = getattr(request, "state", None)
+            request_id_or_none = (
+                getattr(request_state, "request_id", None)
+                if request_state is not None
+                else None
+            )
+            logger.warning(
+                "Runtime lease acquisition failed; returning 503",
+                extra={
+                    "proxy_request_id": request_id_or_none,
+                    "error": repr(exc),
+                },
+            )
+            return endpoint.error_response(
+                status_code=503,
+                message="Runtime generation unavailable",
+                error_type=endpoint.service_error_type,
+            )
+        assert lease is not None  # always acquired or returned 503
         coordinator = lease.runtime.coordinator
         span_recorder = getattr(lease.runtime, "dispatch_span_recorder", None)
     else:
+        # Legacy path: no runtime manager installed.  Used only by
+        # minimal test applications that construct a request without a
+        # runtime manager.  Once the runtime manager is wired during
+        # normal startup, this path is NEVER reached.
         coordinator = cast("RequestCoordinator", request.app.state.coordinator)
         span_recorder = cast(
             "DispatchSpanRecorder | None",
