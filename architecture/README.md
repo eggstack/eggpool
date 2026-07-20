@@ -3668,6 +3668,18 @@ The manager exposes `snapshot()` for runtime diagnostics, including
 `operation_state` (current stage, started_at, generation_id,
 digest_prefix).
 
+### Reload observer protocol
+
+`ReloadObserver` (defined in `src/eggpool/control/reload_manager.py`) provides a no-op base class with async stage callbacks. Tests subclass it to intercept specific reload stages without modifying production code. Every method is a no-op by default, so attaching an observer has zero runtime cost when no overrides are provided.
+
+Stage order: `on_admission_claimed` → `on_validation_complete` → `on_diff_computed` → `on_candidate_started` → `on_candidate_complete` → `on_reconcile_started` → `on_reconcile_prepared` → `on_publish_started` → `on_publish_complete` → `on_retirement_started`.
+
+Test support modules in `tests/support/`:
+- `reload_harness.py` — `ReloadHarness` with temporary dirs, in-memory DB, real managers
+- `reload_faults.py` — `ReloadFaultInjector` observer for deterministic fault injection
+- `runtime_snapshot.py` — `RuntimeSnapshot` for state comparison
+- `closeable_resources.py` — `InstrumentedCloseable` for use-after-close detection
+
 ### Control client (Milestone C)
 
 `src/eggpool/control/client.py` implements `ControlClient`, the async

@@ -119,6 +119,13 @@ uv run pytest tests/unit/test_runtime_manager.py -v
 # Control plane and live reload tests
 uv run pytest tests/unit/test_control_server.py tests/unit/test_reload_manager.py tests/unit/test_cli_rehash_preflight.py -v
 
+# Reload correctness baseline (Phase 1) — admission, atomicity,
+# resources, retirement, and construction parity
+uv run pytest tests/integration/reload/ -v
+
+# Reload correctness baseline — single file
+uv run pytest tests/integration/reload/test_reload_admission.py -v
+
 # Soak validation and workload profiles (Milestone G)
 uv run pytest tests/soak/ -v
 
@@ -217,6 +224,7 @@ CI sets `PYTHONHASHSEED=0` and `TZ=UTC`; reproduce locally for deterministic res
 
 - **`fastcli` and `runtime_paths` are stdlib-only**: do not add transitive imports. They must stay lightweight for the Raspberry Pi watchdog contract.
 - **`eggpool rehash` serializes reload transactions**: only one reload in progress at a time. Concurrent rejections with `reload_in_progress`.
+- **`ReloadObserver` is inert in production**: the observer protocol has no-op defaults; attaching an observer with no overrides has zero cost. Tests use it for deterministic stage barriers.
 - **`eggpool connect`/`logout` don't silently restart**: if the server is healthy but control socket is missing, they return `(False, "control unavailable (server healthy)")`.
 - **`eggpool update` must make a live PyPI lookup**: the CLI helper MUST NOT consult `UpdateChecker.snapshot()`. Use `is_newer_version()` for version comparison, never raw string equality.
 - **No pre-commit hooks configured**: CI runs ruff, pyright, and pytest via GitHub Actions.

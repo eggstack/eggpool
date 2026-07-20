@@ -58,6 +58,9 @@ uv run pytest \
 
 # Dispatch-stability baseline (Milestone A5)
 uv run pytest tests/perf/test_dispatch_baseline.py -m performance -v
+
+# Reload correctness baseline (Phase 1)
+uv run pytest tests/integration/reload/ -v
 ```
 
 ## Linting

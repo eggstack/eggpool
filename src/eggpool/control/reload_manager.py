@@ -72,6 +72,126 @@ class ReloadCommitError(Exception):
 
 
 # ---------------------------------------------------------------------------
+# Reload observer (test-stage-barrier hook)
+# ---------------------------------------------------------------------------
+
+
+class ReloadObserver:
+    """No-op observer for reload pipeline stages.
+
+    Subclass and override individual methods to intercept specific stages
+    without modifying production code paths.  Every method is a no-op by
+    default so attaching an observer has zero cost when no overrides are
+    provided.
+
+    Recommended stage order for barrier-based tests:
+
+    1. ``on_admission_claimed``  — lock acquired
+    2. ``on_validation_complete`` — digest validated
+    3. ``on_diff_computed``      — config diff available
+    4. ``on_candidate_started``  — before candidate construction
+    5. ``on_candidate_complete`` — candidate ready
+    6. ``on_reconcile_started``  — before DB reconciliation
+    7. ``on_reconcile_prepared`` — DB transaction staged
+    8. ``on_publish_started``    — before atomic publication
+    9. ``on_publish_complete``   — generation published
+    10. ``on_retirement_started`` — old generation draining
+    11. ``on_retirement_complete`` — old generation closed
+    """
+
+    async def on_admission_claimed(
+        self,
+        *,
+        generation_id: int | None,
+        digest_prefix: str,
+    ) -> None:
+        """Called after the reload lock is acquired."""
+
+    async def on_validation_complete(
+        self,
+        *,
+        generation_id: int | None,
+        digest_prefix: str,
+    ) -> None:
+        """Called after digest validation succeeds."""
+
+    async def on_diff_computed(
+        self,
+        *,
+        generation_id: int | None,
+        digest_prefix: str,
+        change_count: int,
+        has_restart_required: bool,
+    ) -> None:
+        """Called after the config diff is computed."""
+
+    async def on_candidate_started(
+        self,
+        *,
+        generation_id: int | None,
+        digest_prefix: str,
+    ) -> None:
+        """Called before candidate generation construction begins."""
+
+    async def on_candidate_complete(
+        self,
+        *,
+        generation_id: int,
+        digest_prefix: str,
+    ) -> None:
+        """Called after candidate generation construction succeeds."""
+
+    async def on_reconcile_started(
+        self,
+        *,
+        generation_id: int,
+        digest_prefix: str,
+    ) -> None:
+        """Called before persistence reconciliation."""
+
+    async def on_reconcile_prepared(
+        self,
+        *,
+        generation_id: int,
+        digest_prefix: str,
+    ) -> None:
+        """Called after the DB transaction is staged (before commit)."""
+
+    async def on_publish_started(
+        self,
+        *,
+        generation_id: int,
+        digest_prefix: str,
+    ) -> None:
+        """Called before atomic publication."""
+
+    async def on_publish_complete(
+        self,
+        *,
+        generation_id: int,
+        digest_prefix: str,
+    ) -> None:
+        """Called after generation publication succeeds."""
+
+    async def on_retirement_started(
+        self,
+        *,
+        generation_id: int,
+        digest_prefix: str,
+        old_generation_id: int,
+    ) -> None:
+        """Called when old generation retirement begins."""
+
+    async def on_retirement_complete(
+        self,
+        *,
+        generation_id: int,
+        old_generation_id: int,
+    ) -> None:
+        """Called when old generation retirement finishes."""
+
+
+# ---------------------------------------------------------------------------
 # Operation tracking
 # ---------------------------------------------------------------------------
 
@@ -191,6 +311,7 @@ class ReloadManager:
         process: ProcessRuntime,
         *,
         drain_timeout_s: float | None = None,
+        observer: ReloadObserver | None = None,
     ) -> None:
         self._runtime_manager = runtime_manager
         self._process = process
@@ -203,6 +324,8 @@ class ReloadManager:
         self._last_reload_completed_at: float | None = None
         self._reload_count: int = 0
         self._reload_error_count: int = 0
+        #: Stage observer for test barriers — inert when ``None``.
+        self._observer: ReloadObserver = observer or ReloadObserver()
         #: Test-only hook — see class docstring.
         self.preparation_event: asyncio.Event | None = None
         #: Test-only seam — when set to an exception instance,
@@ -295,6 +418,12 @@ class ReloadManager:
 
         async with self._reload_lock:
             try:
+                # Observer: admission claimed
+                await self._observer.on_admission_claimed(
+                    generation_id=generation_id,
+                    digest_prefix=digest_prefix,
+                )
+
                 # Stage 1: Validate digest
                 self._set_stage(
                     ReloadOperationStage.VALIDATION,
@@ -304,6 +433,12 @@ class ReloadManager:
                 )
                 await self._validate_digest(validation, expected_digest)
 
+                # Observer: validation complete
+                await self._observer.on_validation_complete(
+                    generation_id=generation_id,
+                    digest_prefix=digest_prefix,
+                )
+
                 # Stage 2: Compute diff
                 self._set_stage(
                     ReloadOperationStage.DIFF,
@@ -312,6 +447,14 @@ class ReloadManager:
                     digest_prefix,
                 )
                 diff = await self._compute_reload_diff(validation.config)
+
+                # Observer: diff computed
+                await self._observer.on_diff_computed(
+                    generation_id=generation_id,
+                    digest_prefix=digest_prefix,
+                    change_count=len(diff.changes),
+                    has_restart_required=bool(diff.restart_required),
+                )
 
                 # Stage 3: Check restart-required changes
                 restart_required = tuple(diff.restart_required)
@@ -389,6 +532,11 @@ class ReloadManager:
                     generation_id,
                     digest_prefix,
                 )
+                # Observer: candidate started
+                await self._observer.on_candidate_started(
+                    generation_id=generation_id,
+                    digest_prefix=digest_prefix,
+                )
                 candidate = await self._build_candidate_generation(
                     validation,
                     diff,
@@ -397,6 +545,12 @@ class ReloadManager:
                 generation_id = candidate.generation.generation_id
                 digest_prefix = candidate.generation.config_digest[:12]
 
+                # Observer: candidate complete
+                await self._observer.on_candidate_complete(
+                    generation_id=generation_id,
+                    digest_prefix=digest_prefix,
+                )
+
                 # Stage 6: Reconcile persistence
                 self._set_stage(
                     ReloadOperationStage.RECONCILIATION,
@@ -404,9 +558,19 @@ class ReloadManager:
                     generation_id,
                     digest_prefix,
                 )
+                # Observer: reconcile started
+                await self._observer.on_reconcile_started(
+                    generation_id=generation_id,
+                    digest_prefix=digest_prefix,
+                )
                 await self._reconcile_persistence(
                     validation.config,
                     self._runtime_manager.active_snapshot().config,
+                )
+                # Observer: reconcile prepared
+                await self._observer.on_reconcile_prepared(
+                    generation_id=generation_id,
+                    digest_prefix=digest_prefix,
                 )
 
                 # Stage 7: Atomic publication
@@ -416,7 +580,21 @@ class ReloadManager:
                     generation_id,
                     digest_prefix,
                 )
+                # Capture old generation ID before publication swaps it
+                old_generation_id = (
+                    self._runtime_manager.active_snapshot().generation_id
+                )
+                # Observer: publish started
+                await self._observer.on_publish_started(
+                    generation_id=generation_id,
+                    digest_prefix=digest_prefix,
+                )
                 await self._publish_generation(candidate, diff)
+                # Observer: publish complete
+                await self._observer.on_publish_complete(
+                    generation_id=generation_id,
+                    digest_prefix=digest_prefix,
+                )
 
                 # Stage 8: Begin retirement (non-blocking)
                 self._set_stage(
@@ -424,6 +602,12 @@ class ReloadManager:
                     started_at,
                     generation_id,
                     digest_prefix,
+                )
+                # Observer: retirement started
+                await self._observer.on_retirement_started(
+                    generation_id=generation_id,
+                    digest_prefix=digest_prefix,
+                    old_generation_id=old_generation_id,
                 )
                 self._set_stage(
                     ReloadOperationStage.IDLE,
@@ -1206,6 +1390,7 @@ __all__ = [
     "ReloadCommitError",
     "ReloadInProgressError",
     "ReloadManager",
+    "ReloadObserver",
     "ReloadOperationResult",
     "ReloadOperationStage",
     "ReloadOperationState",
