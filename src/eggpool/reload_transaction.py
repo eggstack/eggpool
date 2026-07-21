@@ -184,18 +184,132 @@ class PersistenceDelta:
     config_accounts: tuple[dict[str, Any], ...]
 
 
-@dataclass(frozen=True)
 class ProcessTransition:
     """A single reversible process-owned transition.
 
     Each transition supports ``preflight()``, ``apply()``, and
     ``rollback()``.  Transitions that cannot be safely preflighted
-    and rolled back are classified ``RESTART_REQUIRED``.
+    and rolled back should be classified ``RESTART_REQUIRED`` in the
+    config reload policy.
+
+    The base class provides no-op defaults; subclasses override the
+    methods to perform actual work.  The current implementation has
+    one concrete subclass: :class:`TaskSpecTransition`.
     """
 
-    name: str
-    description: str
-    reversible: bool = True
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        *,
+        reversible: bool = True,
+    ) -> None:
+        self.name = name
+        self.description = description
+        self.reversible = reversible
+
+    async def preflight(self) -> None:
+        """Verify that the transition can be safely applied.
+
+        Must not perform any mutation.  Raises if preconditions are
+        not met (e.g. process supervisor unavailable, specs invalid).
+        """
+
+    async def apply(self) -> None:
+        """Apply the transition.
+
+        Called after publication so the process supervisor is only
+        reconfigured when the new generation is already live.
+        """
+
+    async def rollback(self) -> None:
+        """Roll back the transition if it was partially applied.
+
+        Called only when a failure occurs between ``apply()`` and
+        commit completion.  For the current commit ordering (process
+        transitions applied AFTER publication), rollback is not needed
+        because compensation retries the transition instead.  This
+        method exists for forward-compatibility if the ordering changes.
+        """
+
+    def __repr__(self) -> str:
+        return (
+            f"<{type(self).__name__} name={self.name!r} reversible={self.reversible}>"
+        )
+
+
+class TaskSpecTransition(ProcessTransition):
+    """Concrete transition for process-supervisor task spec reconfiguration.
+
+    Applies ``apply_spec_diff()`` with the candidate task specs and
+    callback factories.  Rollback re-applies with the old specs
+    captured at preflight time.
+
+    The transition stores references to the process supervisor and the
+    candidate/old specs so ``apply()`` and ``rollback()`` can perform
+    the actual reconfiguration.
+    """
+
+    def __init__(
+        self,
+        *,
+        process_supervisor: Any,
+        candidate_specs: tuple[Any, ...],
+        callback_factories: dict[str, Any],
+        process: Any,
+    ) -> None:
+        super().__init__(
+            name="task_spec_diff",
+            description="Reconfigure process supervisor task specs",
+            reversible=True,
+        )
+        self._process_supervisor = process_supervisor
+        self._candidate_specs = candidate_specs
+        self._callback_factories = callback_factories
+        self._process = process
+        self._old_specs: tuple[Any, ...] | None = None
+        self._applied = False
+
+    async def preflight(self) -> None:
+        """Verify the process supervisor is available."""
+        if self._process_supervisor is None:
+            raise RuntimeError("Process supervisor is not available")
+
+    async def apply(self) -> None:
+        """Apply task spec diff with candidate specs."""
+        if self._process_supervisor is None:
+            raise RuntimeError("Process supervisor is not available")
+
+        # Capture old specs for potential rollback.
+        self._old_specs = tuple(getattr(self._process_supervisor, "_task_specs", ()))
+
+        await self._process_supervisor.apply_spec_diff(
+            self._candidate_specs,
+            callback_factories=self._callback_factories,
+            process=self._process,
+        )
+        self._applied = True
+
+    async def rollback(self) -> None:
+        """Roll back by re-applying the old specs."""
+        if not self._applied:
+            return
+        if self._process_supervisor is None or self._old_specs is None:
+            return
+
+        try:
+            await self._process_supervisor.apply_spec_diff(
+                self._old_specs,
+                callback_factories={},
+                process=self._process,
+            )
+        except Exception:
+            logger.warning(
+                "TaskSpecTransition rollback failed; "
+                "process supervisor may be in intermediate state"
+            )
+        finally:
+            self._applied = False
 
 
 @dataclass(frozen=True)
@@ -565,6 +679,7 @@ __all__ = [
     "ProcessTransition",
     "ProcessTransitionPlan",
     "ReloadTransaction",
+    "TaskSpecTransition",
     "TransactionState",
     "TransactionStateError",
 ]

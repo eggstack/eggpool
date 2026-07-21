@@ -41,9 +41,9 @@ from eggpool.config_reload_policy import (
 )
 from eggpool.reload_transaction import (
     PersistenceDelta,
-    ProcessTransition,
     ProcessTransitionPlan,
     ReloadTransaction,
+    TaskSpecTransition,
     TransactionState,
 )
 
@@ -346,6 +346,11 @@ class ReloadManager:
         self._observer: ReloadObserver = observer or ReloadObserver()
         #: Test-only hook — see class docstring.
         self.preparation_event: asyncio.Event | None = None
+        #: Signaled when a reload transaction reaches a terminal state
+        #: (completed, aborted, or compensation_failed).  Shutdown uses
+        #: this to wait for an in-flight transaction before closing
+        #: process-owned dependencies.
+        self._transaction_complete_event: asyncio.Event = asyncio.Event()
         #: Test-only seam — when set to an exception instance,
         #: ``_build_candidate_generation`` raises it at entry.
         self.TEST_INJECT_BUILD_FAILURE: Exception | None = None
@@ -369,6 +374,34 @@ class ReloadManager:
     def active_transaction(self) -> ReloadTransaction | None:
         """Return the current reload transaction for diagnostics."""
         return self._current_transaction
+
+    async def wait_for_transaction_completion(
+        self,
+        *,
+        timeout_s: float = 30.0,
+    ) -> bool:
+        """Wait for an active reload transaction to reach a terminal state.
+
+        Called by shutdown to ensure no in-flight commit is interrupted
+        before closing process-owned dependencies.
+
+        Returns ``True`` if a transaction completed within the timeout,
+        ``False`` if no transaction was active or the timeout elapsed.
+        """
+        if self._current_transaction is None:
+            return True
+        try:
+            await asyncio.wait_for(
+                self._transaction_complete_event.wait(),
+                timeout=timeout_s,
+            )
+            return True
+        except TimeoutError:
+            logger.warning(
+                "Timed out waiting for reload transaction completion (timeout=%.1fs)",
+                timeout_s,
+            )
+            return False
 
     def snapshot(self) -> dict[str, Any]:
         """Return reload state for diagnostics."""
@@ -460,6 +493,7 @@ class ReloadManager:
         warnings: tuple[ConfigValidationWarning, ...] = validation.warnings
         restart_required: tuple[Any, ...] = ()
         candidate: RuntimeGenerationCandidate | None = None
+        process_transition_plan: ProcessTransitionPlan | None = None
 
         # Phase 6: create the transaction to track state.
         txn = ReloadTransaction(
@@ -478,6 +512,9 @@ class ReloadManager:
                 )
             self._reload_claimed = True
             self._admitted_at = time.monotonic()
+            # Reset the completion event so shutdown waiters see a fresh
+            # signal for this new transaction.
+            self._transaction_complete_event.clear()
 
         try:
             # Record reload_requested event after claim succeeds.
@@ -682,8 +719,17 @@ class ReloadManager:
             )
             txn.mark_process_transitions_prepared(process_transition_plan)
 
+            # Capture pre-commit snapshot for revalidation
+            pre_commit_active = self._runtime_manager.active_snapshot()
+            expected_gen_id = pre_commit_active.generation_id
+            expected_digest = pre_commit_active.config_digest
+
             # Stage 8: Pre-commit verification
-            await self._pre_commit_verification(txn)
+            await self._pre_commit_verification(
+                txn,
+                expected_generation_id=expected_gen_id,
+                expected_digest=expected_digest,
+            )
 
             # Stage 9: Commit (narrow commit guard)
             self._set_stage(
@@ -693,7 +739,7 @@ class ReloadManager:
                 digest_prefix,
             )
             # Capture old generation ID before publication swaps it
-            old_generation_id = self._runtime_manager.active_snapshot().generation_id
+            old_generation_id = expected_gen_id
             txn.mark_commit_started(old_generation_id)
 
             # Observer: publish started
@@ -940,13 +986,18 @@ class ReloadManager:
             # If we have published, attempt compensation.
             if txn.state == TransactionState.RUNTIME_PUBLISHED:
                 # Publication succeeded but a post-publication step failed.
-                # Compensate by accepting the new generation.
+                # Compensate by accepting the new generation and retrying
+                # process transitions if needed.
                 logger.warning(
                     "Post-publication failure for generation %d; "
                     "attempting compensation",
                     generation_id,
                 )
-                compensation_ok = await self._compensate_post_publication(txn, exc)
+                compensation_ok = await self._compensate_post_publication(
+                    txn,
+                    exc,
+                    process_transition_plan=process_transition_plan,
+                )
                 if compensation_ok:
                     txn.mark_process_transitions_applied()
                     txn.mark_persistence_committed()
@@ -954,6 +1005,7 @@ class ReloadManager:
                     txn.mark_retirement_scheduled()
                     txn.mark_completed()
                 else:
+                    txn.mark_aborting(exc)
                     txn.mark_compensation_failed()
             elif txn.state in (
                 TransactionState.COMMIT_STARTED,
@@ -969,7 +1021,13 @@ class ReloadManager:
             # Abort the candidate if it exists and hasn't been
             # transferred to the runtime manager.  Shield the abort
             # so bounded cleanup completes even under cancellation.
-            if candidate is not None and not txn.is_committing:
+            # Skip when compensation succeeded (candidate was transferred).
+            compensation_succeeded = txn.state == TransactionState.COMPLETED
+            if (
+                candidate is not None
+                and not txn.is_committing
+                and not compensation_succeeded
+            ):
                 candidate_abort = getattr(candidate, "abort", None)
                 if candidate_abort is not None:
                     candidate_state = getattr(candidate, "ownership_state", None)
@@ -1050,6 +1108,10 @@ class ReloadManager:
                 message="Reload compensated after post-publication failure",
             )
         finally:
+            # Signal transaction completion before clearing the reference
+            # so shutdown waiters are notified while the transaction is
+            # still accessible for diagnostics.
+            self._transaction_complete_event.set()
             # Release admission claim on every terminal path.
             self._current_transaction = None
             async with self._claim_mutex:
@@ -1299,10 +1361,11 @@ class ReloadManager:
             task_specs=candidate_specs,
             callback_factories=callback_factories,
             transitions=(
-                ProcessTransition(
-                    name="task_spec_diff",
-                    description="Reconfigure process supervisor task specs",
-                    reversible=True,
+                TaskSpecTransition(
+                    process_supervisor=process_supervisor,
+                    candidate_specs=candidate_specs,
+                    callback_factories=callback_factories,
+                    process=process,
                 ),
             ),
         )
@@ -1336,29 +1399,63 @@ class ReloadManager:
 
         Called after publication so the process supervisor is only
         reconfigured when the new generation is already live.
+        Each transition's ``apply()`` method is called in order.
         """
         process_supervisor = self._process.process_supervisor
         if process_supervisor is None or not plan.task_specs:
             return
 
-        await process_supervisor.apply_spec_diff(
-            plan.task_specs,
-            callback_factories=plan.callback_factories,
-            process=self._process,
-        )
+        for transition in plan.transitions:
+            await transition.apply()
 
-    async def _pre_commit_verification(self, txn: ReloadTransaction) -> None:
+    async def _pre_commit_verification(
+        self,
+        txn: ReloadTransaction,
+        *,
+        expected_generation_id: int,
+        expected_digest: str | None,
+    ) -> None:
         """Verify preconditions immediately before commit.
 
         Checks that:
-        - The active generation still matches the expected ID.
+        - The active generation still matches the expected ID and digest.
         - The process is not shutting down.
         - The candidate remains prepared and open.
         - No restart-required change slipped through.
+
+        This is the pre-commit gate described in the plan: if the active
+        generation changed during candidate preparation (e.g. a
+        concurrent reload completed), the commit must not proceed because
+        our persistence delta and process-transition plan are based on
+        stale state.
         """
         if self._runtime_manager._shutdown_in_progress:  # pyright: ignore[reportPrivateUsage]
             raise ReloadPreparationError(
                 "Process is shutting down; reload cannot proceed"
+            )
+
+        # Revalidate the active generation ID — a concurrent reload
+        # may have advanced it during candidate construction.
+        try:
+            active = self._runtime_manager.active_snapshot()
+        except Exception:
+            raise ReloadPreparationError(
+                "No active runtime generation; cannot verify pre-commit state"
+            ) from None
+
+        if active.generation_id != expected_generation_id:
+            raise ReloadPreparationError(
+                "Active generation changed during candidate preparation; "
+                f"expected {expected_generation_id}, "
+                f"found {active.generation_id}"
+            )
+
+        # Digest verification (when caller supplies an expected digest).
+        if expected_digest is not None and active.config_digest != expected_digest:
+            raise ReloadPreparationError(
+                "Active generation digest changed during candidate preparation; "
+                f"expected {expected_digest[:12]}\u2026, "
+                f"found {active.config_digest[:12]}\u2026"
             )
 
         candidate = txn.candidate
@@ -1385,35 +1482,67 @@ class ReloadManager:
         self,
         txn: ReloadTransaction,
         exc: Exception,
+        *,
+        process_transition_plan: ProcessTransitionPlan | None = None,
     ) -> bool:
         """Attempt to compensate for a post-publication failure.
 
-        After publication, the new generation is live.  If subsequent
-        steps (process transitions, observable-state update) fail, we
-        log the failure and accept that the new generation is active.
-        The persistence delta is idempotent so the next reload will
-        re-sync.
+        After publication, the new generation is live and accepting
+        leases.  We cannot roll it back.  The compensation strategy is:
+
+        1. If the failure was in process transitions, retry applying
+           them — the process supervisor can safely reconfigure after
+           publication.
+        2. Accept the new generation regardless — the persistence delta
+           is idempotent and will be re-synced on the next reload.
 
         Returns ``True`` if compensation succeeded (new generation is
-        accepted as the current state), ``False`` if compensation failed
-        (operator intervention required).
+        accepted as the current state and process transitions were
+        applied), ``False`` if compensation itself failed (operator
+        intervention required but the new generation is still live).
         """
         logger.warning(
             "Post-publication compensation for generation %d: %s",
             txn.generation_id,
             exc,
         )
-        # The new generation is already published and accepting leases.
-        # We cannot roll it back safely.  Accept it as the current state.
-        # The persistence delta is idempotent and will be re-applied on
-        # the next successful reload.
+
+        compensation_ok = True
+
+        # Retry process transitions if they haven't been applied yet.
+        if (
+            process_transition_plan is not None
+            and txn.state == TransactionState.RUNTIME_PUBLISHED
+        ):
+            try:
+                await self._apply_process_transitions(process_transition_plan)
+                logger.info(
+                    "Post-publication compensation: process transitions "
+                    "applied successfully for generation %d",
+                    txn.generation_id,
+                )
+            except Exception as retry_exc:
+                logger.exception(
+                    "Post-publication compensation: process transition "
+                    "retry failed for generation %d",
+                    txn.generation_id,
+                )
+                compensation_ok = False
+                await self._safe_record_event(
+                    "reload_post_publication_compensation_failure",
+                    generation_id=txn.generation_id,
+                    digest_prefix=txn.digest_prefix,
+                    error=f"{retry_exc!r}",
+                )
+
         await self._safe_record_event(
             "reload_post_publication_compensation",
             generation_id=txn.generation_id,
             digest_prefix=txn.digest_prefix,
             error=f"{exc!r}",
+            compensation_ok=compensation_ok,
         )
-        return True
+        return compensation_ok
 
     # -- backward-compatible persistence reconciliation ---------------------
 

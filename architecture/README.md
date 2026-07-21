@@ -3665,8 +3665,10 @@ monotonic state machine, prepared deltas, and a narrow commit point.
    sync without applying them.  Returns an immutable `PersistenceDelta`.
 8. **Prepare process transitions** — Calculate task specs and callback
    factories without applying them.  Returns a `ProcessTransitionPlan`.
-9. **Pre-commit verification** — Revalidate shutdown state and
-   candidate ownership before entering the commit guard.
+9. **Pre-commit verification** — Revalidate shutdown state, active
+   generation ID/digest, and candidate ownership before entering
+   the commit guard.  A concurrent reload that advanced the
+   generation causes commit rejection.
 10. **Commit** (narrow commit guard):
     a. Apply persistence delta in a SQLite transaction.
     b. Publish candidate generation atomically via `RuntimeManager.install_candidate()`.
@@ -3684,8 +3686,21 @@ persistence_committed → observable_state_updated →
 retirement_scheduled → completed`.
 
 Post-publication failures are compensated by accepting the new
-generation (the persistence delta is idempotent).  Cancellation
-after publication is shielded to prevent mixed state.
+generation and retrying process transitions (the persistence delta
+is idempotent).  Compensation failure transitions through
+`ABORTING → COMPENSATION_FAILED`.  Cancellation after publication
+is shielded to prevent mixed state.
+
+Shutdown coordination: `ReloadManager.wait_for_transaction_completion()`
+allows shutdown to wait for an in-flight transaction before closing
+process-owned dependencies.  The `_transaction_complete_event` is
+signaled in the `finally` block of `reload()`.
+
+Process-transition behavioral methods: `ProcessTransition` is a base
+class with `preflight()`, `apply()`, and `rollback()` methods.
+`TaskSpecTransition` implements the actual task-spec reconfiguration
+via `apply_spec_diff()`.  Rollback stores old specs at preflight
+time and re-applies them if needed.
 
 The manager exposes `snapshot()` for runtime diagnostics, including
 `reload_count`, `reload_error_count`, `last_reload_result`, `admitted`

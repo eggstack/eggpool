@@ -280,4 +280,67 @@ Use Phase 1 snapshots to verify:
 
 ## Handoff evidence
 
-Provide a transaction-state diagram, chosen commit ordering, rationale for SQLite/publication ordering, fault-matrix results, cancellation/shutdown tests, and snapshots proving no mixed state at each injected failure.
+### Chosen commit ordering
+
+SQLite commit BEFORE publication (option 2 from the plan's three alternatives):
+
+1. Prepare persistence delta (calculate, don't commit)
+2. Prepare process transitions (calculate, don't apply)
+3. Pre-commit verification (revalidate active generation, shutdown state)
+4. Apply persistence delta in SQLite transaction (stage AND commit)
+5. Publish candidate generation atomically through RuntimeManager
+6. Apply process transitions (after publication)
+7. Mark transaction completed
+
+### Rationale for SQLite/publication ordering
+
+The implementation chose "commit before publication" because:
+
+- **Smallest irrecoverable window**: If SQLite commit fails, the runtime is untouched (no generation swap). If publication fails after SQLite commit, the persistence delta is idempotent and will be re-synced on the next reload.
+- **No runtime rollback needed**: The alternative (commit after publication) requires a tested runtime rollback or durable intent record if SQLite commit fails post-publication. The chosen ordering avoids this complexity.
+- **No durable intent record needed**: Since commit happens before publication, a process crash during commit leaves either no change (commit failed) or a persisted delta that the next startup will reconcile.
+
+### Transaction state machine
+
+16 monotonic states: `CREATED → VALIDATED → DIFFED → CANDIDATE_PREPARED → PERSISTENCE_PREPARED → PROCESS_TRANSITIONS_PREPARED → COMMIT_STARTED → RUNTIME_PUBLISHED → PROCESS_TRANSITIONS_APPLIED → PERSISTENCE_COMMITTED → OBSERVABLE_STATE_UPDATED → RETIREMENT_SCHEDULED → COMPLETED`
+
+Terminal states: `COMPLETED`, `ABORTED`, `COMPENSATION_FAILED`
+
+All transitions are asserted in code via `_VALID_TRANSITIONS` dict.
+
+### Fault-matrix results
+
+Every stage has a tested failure path:
+
+| Stage | Test | Active unchanged? | State |
+|-------|------|-------------------|-------|
+| Digest mismatch | `TestDigestMismatchInjection` | Yes | ABORTED |
+| Diff computation | `TestDiffComputationFailure` | Yes | ABORTED |
+| Candidate build | `TestCandidateBuildFailure` | Yes | ABORTED |
+| Persistence delta prepare | `TestReconciliationFailure` | Yes | ABORTED |
+| Process transition apply | `TestProcessTransitionApplyFailure.test_process_transition_failure_compensates` | No (new gen live) | COMPLETED (compensated) |
+| Process transition compensation | `TestProcessTransitionApplyFailure.test_process_transition_compensation_failure` | No (new gen live) | COMPENSATION_FAILED |
+| Publication | `TestPublishFailure` | Yes | ABORTED |
+| Post-publication retirement | `TestPostPublicationFailureVisible` | No (new gen live) | COMPLETED (compensated) |
+| Provider client construction | `TestProviderClientConstructionFailure` | Yes | ABORTED |
+| Catalog construction | `TestCatalogConstructionFailure` | Yes | ABORTED |
+| Task-spec construction | `TestTaskSpecConstructionFailure` | Yes | ABORTED |
+| Client pool close | `TestClientPoolCloseFailure` | No (retirement) | Retired OK |
+| Outbound manager close | `TestOutboundManagerCloseFailure` | No (retirement) | Retired OK |
+| Supervisor stop | `TestSupervisorStopFailure` | No (retirement) | Retired OK |
+| Retirement timeout | `TestRetirementTimeoutHeldLease` | No (forced close) | Retired OK |
+| Shutdown during pre-commit | `TestShutdownDuringTransaction` | Yes | ABORTED |
+
+### Cancellation/shutdown tests
+
+- `TestPhase6FaultInjection.test_pre_commit_transaction_aborts_on_shutdown`: Shutdown during candidate build aborts the transaction.
+- `TestPhase6FaultInjection.test_wait_for_transaction_completion_returns_when_idle`: Shutdown wait returns immediately when no transaction active.
+- `TestPhase6FaultInjection.test_wait_for_transaction_completion_signals_on_finish`: Shutdown wait returns after transaction completes.
+- `test_cancelled_error_shields_commit`: Cancellation after publication shields remaining commit work (from existing test suite).
+
+### Key implementation details
+
+- **Active generation revalidation**: `_pre_commit_verification` checks that the active generation ID and digest still match the expected values from before candidate construction. A concurrent reload that advanced the generation causes commit rejection.
+- **Post-publication compensation**: `_compensate_post_publication` retries process transitions if they failed. The new generation is always accepted (cannot be rolled back). Compensation failure is operator-visible via `COMPENSATION_FAILED` state.
+- **Shutdown-wait mechanism**: `ReloadManager.wait_for_transaction_completion()` allows shutdown to wait for an in-flight transaction before closing process-owned dependencies. The `_transaction_complete_event` is signaled in the `finally` block of `reload()`.
+- **Process-transition behavioral methods**: `ProcessTransition` is now a base class with `preflight()`, `apply()`, and `rollback()` methods. `TaskSpecTransition` implements the actual task-spec reconfiguration via `apply_spec_diff()`.

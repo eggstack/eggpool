@@ -95,7 +95,7 @@ uv run pytest tests/unit/test_generation_factory.py -v
 
 # Phase 6 transactional rehash tests (transaction state machine, commit
 # protocol, compensation, cancellation shielding, fault injection)
-uv run pytest tests/unit/test_reload_manager.py tests/unit/test_reload_failure_injection.py tests/unit/test_rehash_d3_failure_injection_closure.py -v
+uv run pytest tests/unit/test_reload_manager.py tests/unit/test_reload_failure_injection.py tests/unit/test_rehash_d3_failure_injection_closure.py tests/unit/test_phase6_fault_injection.py -v
 
 # Model-info identity subset (tiered matching, fresh-DB service, evidence API,
 # safety, migration 0049, OpenRouter contract, deployment-suffix tier, source
