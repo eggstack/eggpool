@@ -11,6 +11,11 @@ Covers:
 - Diagnostics snapshot and counters
 - DB integration (uniqueness, transaction reduction, multi-provider batches)
 - Rehash identity (config rejection, generation-swap survival, drain ordering)
+- Semantic equivalence between singular and plural persistence paths
+- Backpressure saturation (DispatchQueueSaturatedError)
+- Shutdown drain timeout behavior
+- Real DB constraint failure and batch rollback
+- Config field classification (all RESTART_REQUIRED)
 """
 
 from __future__ import annotations
@@ -23,7 +28,10 @@ from unittest.mock import patch
 import pytest
 
 from eggpool.db.connection import Database
-from eggpool.db.dispatch_repository import persist_dispatch_bundles
+from eggpool.db.dispatch_repository import (
+    persist_dispatch_bundle,
+    persist_dispatch_bundles,
+)
 from eggpool.db.migrations import MigrationRunner
 from eggpool.request.dispatch_intent import (
     DispatchAmbiguousCommitError,
@@ -2330,3 +2338,499 @@ class TestDiagnosticCountersExtended:
             assert snap["reconciliation_total"] == 0
         finally:
             await db.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# Semantic equivalence: singular vs plural persistence paths
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio()
+class TestSemanticEquivalence:
+    """Prove that persist_dispatch_bundle and persist_dispatch_bundles
+    (single-intent batch) produce identical durable DB state."""
+
+    async def test_singular_and_plural_produce_identical_request_rows(
+        self,
+    ) -> None:
+        """Same intent through both paths yields identical request rows."""
+        db = await _fresh_db()
+        try:
+            intent_a = _make_intent(proxy_request_id="req-equiv-a")
+            intent_b = _make_intent(proxy_request_id="req-equiv-b")
+
+            result_a = await persist_dispatch_bundle(db, intent_a, batch_id=1)
+            results_b = await persist_dispatch_bundles(db, [intent_b], batch_id=2)
+            result_b = results_b[0]
+
+            # Both produce valid IDs
+            assert result_a.db_request_id
+            assert result_b.db_request_id
+            assert result_a.reservation_id
+            assert result_b.reservation_id
+            assert result_a.attempt_id > 0
+            assert result_b.attempt_id > 0
+
+            # Verify DB rows exist and have matching structure
+            row_a = await db.fetch_one(
+                "SELECT * FROM requests WHERE id = ?",
+                (result_a.db_request_id,),
+            )
+            row_b = await db.fetch_one(
+                "SELECT * FROM requests WHERE id = ?",
+                (result_b.db_request_id,),
+            )
+            assert row_a is not None
+            assert row_b is not None
+
+            # Core fields should match (excluding id, timestamps)
+            for field_name in ("model_id", "protocol", "status"):
+                assert dict(row_a)[field_name] == dict(row_b)[field_name], (
+                    f"Field {field_name} differs: "
+                    f"{dict(row_a)[field_name]!r} vs {dict(row_b)[field_name]!r}"
+                )
+
+            # Both should have exactly one reservation and one attempt
+            reservations_a = await db.fetch_all(
+                "SELECT * FROM reservations WHERE request_id = ?",
+                (result_a.db_request_id,),
+            )
+            reservations_b = await db.fetch_all(
+                "SELECT * FROM reservations WHERE request_id = ?",
+                (result_b.db_request_id,),
+            )
+            assert len(reservations_a) == 1
+            assert len(reservations_b) == 1
+
+            attempts_a = await db.fetch_all(
+                "SELECT * FROM request_attempts WHERE request_id = ?",
+                (result_a.db_request_id,),
+            )
+            attempts_b = await db.fetch_all(
+                "SELECT * FROM request_attempts WHERE request_id = ?",
+                (result_b.db_request_id,),
+            )
+            assert len(attempts_a) == 1
+            assert len(attempts_b) == 1
+
+            # Attempt fields should match
+            for field_name in (
+                "attempt_number",
+                "account_id",
+                "provider_id",
+                "model_id",
+                "protocol",
+            ):
+                assert (
+                    dict(attempts_a[0])[field_name] == dict(attempts_b[0])[field_name]
+                ), f"Attempt field {field_name} differs"
+        finally:
+            await db.disconnect()
+
+    async def test_retry_attempt_equivalence(self) -> None:
+        """Retry (attempt_number > 1) through both paths produces identical state."""
+        db = await _fresh_db()
+        try:
+            # First attempt via singular path
+            first_a = _make_intent(
+                proxy_request_id="req-equiv-retry-a", attempt_number=1
+            )
+            result_first_a = await persist_dispatch_bundle(db, first_a, batch_id=1)
+
+            # First attempt via plural path
+            first_b = _make_intent(
+                proxy_request_id="req-equiv-retry-b", attempt_number=1
+            )
+            results_first_b = await persist_dispatch_bundles(db, [first_b], batch_id=2)
+            result_first_b = results_first_b[0]
+
+            # Second attempt via singular path
+            second_a = _make_intent(
+                proxy_request_id="req-equiv-retry-a",
+                attempt_number=2,
+                existing_db_request_id=result_first_a.db_request_id,
+            )
+            result_second_a = await persist_dispatch_bundle(db, second_a, batch_id=3)
+
+            # Second attempt via plural path
+            second_b = _make_intent(
+                proxy_request_id="req-equiv-retry-b",
+                attempt_number=2,
+                existing_db_request_id=result_first_b.db_request_id,
+            )
+            results_second_b = await persist_dispatch_bundles(
+                db, [second_b], batch_id=4
+            )
+            result_second_b = results_second_b[0]
+
+            # Both should reference the same request ID (update, not insert)
+            assert result_second_a.db_request_id == result_first_a.db_request_id
+            assert result_second_b.db_request_id == result_first_b.db_request_id
+
+            # Both should have 2 attempts now
+            attempts_a = await db.fetch_all(
+                "SELECT * FROM request_attempts"
+                " WHERE request_id = ? ORDER BY attempt_number",
+                (result_first_a.db_request_id,),
+            )
+            attempts_b = await db.fetch_all(
+                "SELECT * FROM request_attempts"
+                " WHERE request_id = ? ORDER BY attempt_number",
+                (result_first_b.db_request_id,),
+            )
+            assert len(attempts_a) == 2
+            assert len(attempts_b) == 2
+
+            # Both should have 2 reservations
+            reservations_a = await db.fetch_all(
+                "SELECT * FROM reservations WHERE request_id = ?",
+                (result_first_a.db_request_id,),
+            )
+            reservations_b = await db.fetch_all(
+                "SELECT * FROM reservations WHERE request_id = ?",
+                (result_first_b.db_request_id,),
+            )
+            assert len(reservations_a) == 2
+            assert len(reservations_b) == 2
+        finally:
+            await db.disconnect()
+
+    async def test_streamed_flag_equivalence(self) -> None:
+        """streamed=True persists identically through both paths."""
+        db = await _fresh_db()
+        try:
+            intent_a = _make_intent(
+                proxy_request_id="req-equiv-stream-a", streamed=True
+            )
+            intent_b = _make_intent(
+                proxy_request_id="req-equiv-stream-b", streamed=True
+            )
+
+            result_a = await persist_dispatch_bundle(db, intent_a, batch_id=1)
+            results_b = await persist_dispatch_bundles(db, [intent_b], batch_id=2)
+            result_b = results_b[0]
+
+            row_a = await db.fetch_one(
+                "SELECT streamed FROM request_attempts WHERE id = ?",
+                (result_a.attempt_id,),
+            )
+            row_b = await db.fetch_one(
+                "SELECT streamed FROM request_attempts WHERE id = ?",
+                (result_b.attempt_id,),
+            )
+            assert row_a is not None
+            assert row_b is not None
+            assert dict(row_a)["streamed"] == dict(row_b)["streamed"]
+        finally:
+            await db.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# Backpressure saturation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio()
+class TestBackpressureSaturated:
+    """DispatchQueueSaturatedError when queue is full and timeout expires."""
+
+    async def test_enqueue_timeout_raises_saturated(self) -> None:
+        """Full queue + zero timeout → DispatchQueueSaturatedError."""
+        db = await _fresh_db()
+        try:
+            writer = DispatchPersistenceWriter(
+                db,
+                max_queue_depth=2,
+                enqueue_timeout_ms=0.0,
+                max_batch_wait_ms=50.0,
+            )
+            writer.start()
+            # Fill the queue directly (bypasses submit_intent timeout)
+            for i in range(2):
+                intent = _make_intent(proxy_request_id=f"req-sat-fill-{i}")
+                future: CFuture[PersistedDispatchResult] = CFuture()
+                qi = _QueuedIntent(intent=intent, future=future)
+                await writer._enqueue_from_event_loop(qi)
+
+            # Now try to enqueue one more — queue is full, timeout=0 → immediate error
+            intent = _make_intent(proxy_request_id="req-sat-overflow")
+            future: CFuture[PersistedDispatchResult] = CFuture()
+            qi = _QueuedIntent(intent=intent, future=future)
+            await writer._enqueue_from_event_loop(qi)
+
+            with pytest.raises(DispatchQueueSaturatedError):
+                await _await_submit(future)
+
+            snap = writer.snapshot()
+            assert snap["failed_total"] >= 1
+            await writer.stop()
+        finally:
+            await db.disconnect()
+
+    async def test_saturated_counter_increments(self) -> None:
+        """_failed_total increments on saturation."""
+        db = await _fresh_db()
+        try:
+            writer = DispatchPersistenceWriter(
+                db,
+                max_queue_depth=1,
+                enqueue_timeout_ms=0.0,
+            )
+            writer.start()
+            # Fill queue
+            intent = _make_intent(proxy_request_id="req-sat-counter-fill")
+            future: CFuture[PersistedDispatchResult] = CFuture()
+            qi = _QueuedIntent(intent=intent, future=future)
+            await writer._enqueue_from_event_loop(qi)
+
+            # Overflow
+            intent2 = _make_intent(proxy_request_id="req-sat-counter-overflow")
+            future2: CFuture[PersistedDispatchResult] = CFuture()
+            qi2 = _QueuedIntent(intent=intent2, future=future2)
+            await writer._enqueue_from_event_loop(qi2)
+
+            with pytest.raises(DispatchQueueSaturatedError):
+                await _await_submit(future2)
+
+            assert writer._failed_total >= 1
+            await writer.stop()
+        finally:
+            await db.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# Shutdown drain timeout
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio()
+class TestShutdownDrainTimeout:
+    """Shutdown cancels drain task on timeout and fails remaining intents."""
+
+    async def test_shutdown_drain_timeout_cancels_task(self) -> None:
+        """When drain task exceeds shutdown_drain_timeout_s, it is cancelled.
+
+        The drain loop processes intents one batch at a time.  When
+        ``stop()`` is called while the drain is blocked on a slow
+        persist, the timeout expires, the drain task is cancelled,
+        and all *remaining queued* intents receive
+        ``DispatchWriterShutdownError``.
+        """
+        db = await _fresh_db()
+        try:
+            writer = DispatchPersistenceWriter(
+                db,
+                max_queue_depth=16,
+                shutdown_drain_timeout_s=0.1,  # very short timeout
+            )
+            writer.start()
+
+            # Slow down persist_dispatch_bundles so the drain takes too long
+            async def _slow_persist(*args: Any, **kwargs: Any) -> NoReturn:
+                await asyncio.sleep(10)  # way longer than shutdown timeout
+                raise RuntimeError("should not reach here")
+
+            with patch(
+                "eggpool.request.dispatch_writer.persist_dispatch_bundles",
+                side_effect=_slow_persist,
+            ):
+                # Enqueue only intent1 — the drain loop will pick it up
+                # and block in _persist_batch on _slow_persist.
+                intent1 = _make_intent(proxy_request_id="req-drain-timeout-1")
+                future1: CFuture[PersistedDispatchResult] = CFuture()
+                qi1 = _QueuedIntent(intent=intent1, future=future1)
+                writer._queue.put_nowait(qi1)
+                writer._submitted_total += 1
+
+                # Wait for the drain to claim intent1 and block on persist
+                await asyncio.sleep(0.1)
+
+                # Now enqueue intent2 and intent3 — they sit in the queue
+                # because the drain is blocked in _persist_batch.
+                intent2 = _make_intent(proxy_request_id="req-drain-timeout-2")
+                intent3 = _make_intent(proxy_request_id="req-drain-timeout-3")
+                future2: CFuture[PersistedDispatchResult] = CFuture()
+                future3: CFuture[PersistedDispatchResult] = CFuture()
+                qi2 = _QueuedIntent(intent=intent2, future=future2)
+                qi3 = _QueuedIntent(intent=intent3, future=future3)
+                writer._queue.put_nowait(qi2)
+                writer._queue.put_nowait(qi3)
+                writer._submitted_total += 2
+
+                # Stop should timeout on drain and cancel the task.
+                # _fail_all_queued will fail intent2 and intent3.
+                await writer.stop()
+
+            # After stop, state should be closed
+            assert writer.state == "closed"
+
+            # Remaining queued intents (2 and 3) should fail with shutdown error
+            with pytest.raises(DispatchWriterShutdownError):
+                await _await_submit(future2)
+            with pytest.raises(DispatchWriterShutdownError):
+                await _await_submit(future3)
+        finally:
+            await db.disconnect()
+
+    async def test_shutdown_drains_within_timeout(self) -> None:
+        """When drain completes within timeout, no cancellation occurs."""
+        db = await _fresh_db()
+        try:
+            writer = DispatchPersistenceWriter(
+                db,
+                shutdown_drain_timeout_s=5.0,
+            )
+            writer.start()
+
+            # Enqueue one intent that will persist quickly
+            intent = _make_intent(proxy_request_id="req-drain-ok")
+            future = await _enqueue_intent(writer, intent)
+
+            # Let the drain process it
+            result = await _await_submit(future)
+            assert result.db_request_id
+
+            # Stop should complete cleanly (no timeout)
+            await writer.stop()
+            assert writer.state == "closed"
+        finally:
+            await db.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# Real DB constraint failure and batch rollback
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio()
+class TestWriterFailureRealDB:
+    """Real DB constraint violations cause batch rollback."""
+
+    async def test_duplicate_proxy_request_id_rolls_back_batch(self) -> None:
+        """Duplicate proxy_request_id violates UNIQUE constraint → full rollback."""
+        db = await _fresh_db()
+        try:
+            # Persist first intent successfully
+            intent1 = _make_intent(proxy_request_id="req-dup-original")
+            results1 = await persist_dispatch_bundles(db, [intent1], batch_id=1)
+            assert results1[0].db_request_id
+
+            # Try to persist a batch with the same proxy_request_id —
+            # the second intent will fail on INSERT, rolling back the whole batch
+            intent2a = _make_intent(proxy_request_id="req-dup-new")
+            intent2b = _make_intent(proxy_request_id="req-dup-original")  # duplicate
+            results2 = await persist_dispatch_bundles(
+                db, [intent2a, intent2b], batch_id=2
+            )
+
+            # Both should fail (atomic rollback)
+            assert len(results2) == 2
+            for r in results2:
+                assert r.db_request_id == ""
+                assert r.attempt_id == 0
+
+            # Original intent should still exist (rollback didn't affect it)
+            row = await db.fetch_one(
+                "SELECT * FROM requests WHERE proxy_request_id = ?",
+                ("req-dup-original",),
+            )
+            assert row is not None
+        finally:
+            await db.disconnect()
+
+    async def test_single_intent_db_failure_returns_failure_result(self) -> None:
+        """Single intent with invalid account_id → failure result."""
+        db = await _fresh_db()
+        try:
+            intent = _make_intent(proxy_request_id="req-fail-single", account_id=99999)
+            results = await persist_dispatch_bundles(db, [intent], batch_id=1)
+            assert len(results) == 1
+            assert results[0].db_request_id == ""
+            assert results[0].attempt_id == 0
+        finally:
+            await db.disconnect()
+
+    async def test_writer_batch_failure_propagates_to_all_futures(
+        self,
+    ) -> None:
+        """Writer's _persist_batch failure propagates to all futures."""
+        db = await _fresh_db()
+        try:
+            writer = DispatchPersistenceWriter(
+                db, max_batch_size=4, max_batch_wait_ms=50.0
+            )
+            writer.start()
+
+            async def _raise(*args: Any, **kwargs: Any) -> NoReturn:
+                raise RuntimeError("disk full")
+
+            with patch(
+                "eggpool.request.dispatch_writer.persist_dispatch_bundles",
+                side_effect=_raise,
+            ):
+                futures: list[CFuture[PersistedDispatchResult]] = []
+                for i in range(2):
+                    intent = _make_intent(proxy_request_id=f"req-writer-fail-{i}")
+                    futures.append(await _enqueue_intent(writer, intent))
+
+                for f in futures:
+                    with pytest.raises(DispatchTransactionError, match="disk full"):
+                        await _await_submit(f)
+
+            snap = writer.snapshot()
+            assert snap["failed_total"] == 2
+            await writer.stop()
+        finally:
+            await db.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# Config field classification
+# ---------------------------------------------------------------------------
+
+
+class TestConfigFieldClassification:
+    """All dispatch_writer config fields are classified as RESTART_REQUIRED."""
+
+    def test_all_dispatch_writer_fields_are_restart_required(self) -> None:
+        """Every dispatch_writer field in _FIELD_DISPOSITION is RESTART_REQUIRED."""
+        from eggpool.config_reload_policy import _FIELD_DISPOSITION, ReloadDisposition
+
+        dispatch_writer_fields = {
+            k: v for k, v in _FIELD_DISPOSITION.items() if "dispatch_writer" in k
+        }
+        assert len(dispatch_writer_fields) == 12  # 6 fields × 2 paths
+
+        for field_path, disposition in dispatch_writer_fields.items():
+            assert disposition == ReloadDisposition.RESTART_REQUIRED, (
+                f"Field {field_path!r} has disposition {disposition!r}, "
+                f"expected RESTART_REQUIRED"
+            )
+
+    def test_dispatch_writer_fields_cover_all_config_fields(self) -> None:
+        """Every field in DispatchWriterConfig has a reload policy entry."""
+        from eggpool.config_reload_policy import _FIELD_DISPOSITION
+        from eggpool.models.config import DispatchWriterConfig
+
+        config_fields = set(DispatchWriterConfig.model_fields.keys())
+        # Check both paths (database.dispatch_writer.* and dispatch_writer.*)
+        policy_fields_db = {
+            k.split("database.dispatch_writer.")[-1]
+            for k in _FIELD_DISPOSITION
+            if k.startswith("database.dispatch_writer.")
+        }
+        policy_fields_top = {
+            k.split("dispatch_writer.")[-1]
+            for k in _FIELD_DISPOSITION
+            if k.startswith("dispatch_writer.") and "database." not in k
+        }
+        # Every config field should appear in both paths
+        for field_name in config_fields:
+            assert field_name in policy_fields_db, (
+                f"DispatchWriterConfig.{field_name} missing from "
+                f"database.dispatch_writer.* reload policy"
+            )
+            assert field_name in policy_fields_top, (
+                f"DispatchWriterConfig.{field_name} missing from "
+                f"dispatch_writer.* reload policy"
+            )
