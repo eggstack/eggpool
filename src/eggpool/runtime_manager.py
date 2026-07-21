@@ -12,6 +12,9 @@ milestone B of the live-configuration-rehash plan.  It owns:
   generation slot, retiring generations, and lease accounting.
 - :class:`RuntimeGenerationBuilder` -- the single construction site
   milestone C will reuse for candidate generation preparation.
+- :class:`RuntimeGenerationCandidate` -- a typed container that makes
+  ownership of reload-created resources explicit from the moment each
+  resource is constructed (Phase 4).
 
 Design principles
 -----------------
@@ -26,6 +29,10 @@ Design principles
 - Generation teardown is idempotent and closes each owned resource
   exactly once.
 - No request path reads a mixture of old and new generation services.
+- Any failure before successful publication must close the complete
+  candidate graph (Phase 4 abort contract).
+- Successful publication must transfer ownership exactly once to the
+  runtime manager (Phase 4 transfer contract).
 
 The runtime manager never assumes that milestone C has landed; it
 ships a fully working ``install_initial()``/``acquire()``/``shutdown()``
@@ -108,6 +115,7 @@ import time
 from collections.abc import (  # noqa: TC003 - used at runtime
     AsyncGenerator,
     AsyncIterator,
+    Callable,
 )
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
@@ -132,6 +140,244 @@ if TYPE_CHECKING:
     from eggpool.stats import StatsService
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Candidate resource ownership (Phase 4)
+# ---------------------------------------------------------------------------
+
+
+class CandidateOwnershipState(enum.Enum):
+    """Lifecycle state of a :class:`RuntimeGenerationCandidate`.
+
+    Transitions::
+
+        building → prepared → transferred
+        building → aborted
+        prepared → aborted
+
+    ``building`` is the initial state while resources are being
+    constructed and registered.  ``prepared`` means all resources are
+    registered and the candidate is ready for publication.
+    ``transferred`` means ownership has been handed to the runtime
+    manager.  ``aborted`` means the candidate closed all registered
+    resources.
+    """
+
+    BUILDING = "building"
+    PREPARED = "prepared"
+    TRANSFERRED = "transferred"
+    ABORTED = "aborted"
+
+
+@dataclass(frozen=True)
+class CleanupDiagnostics:
+    """Structured diagnostics captured during candidate abort.
+
+    Emitted by :meth:`RuntimeGenerationCandidate.abort` so operators
+    and tests can verify cleanup completed without inspecting logs.
+    Never includes API keys, provider tokens, full URLs, or config
+    secrets.
+    """
+
+    generation_id: int
+    ownership_state: str
+    resource_types_registered: tuple[str, ...]
+    resource_types_closed: tuple[str, ...]
+    close_duration_s: float
+    close_errors: tuple[str, ...]
+    timed_out: bool
+    primary_failure: str
+
+
+@dataclass
+class _RegisteredResource:
+    """A closeable resource tracked by the candidate container.
+
+    ``name`` is a human-readable label for diagnostics (e.g.
+    ``"client_pool"``).  ``close_callback`` is an async callable that
+    closes the resource; called once during abort in reverse
+    registration order.
+    """
+
+    name: str
+    close_callback: Callable[[], Any]
+
+
+class RuntimeGenerationCandidate:
+    """Typed container for a candidate generation under construction.
+
+    Makes ownership of reload-created resources explicit from the
+    moment each resource is constructed.  Any failure before
+    successful publication must close the complete candidate graph.
+
+    Usage::
+
+        candidate = RuntimeGenerationCandidate(generation_id=42)
+        candidate.register_resource("client_pool", pool.close)
+        candidate.register_resource("outbound_manager", manager.aclose)
+        # ... build the generation ...
+        candidate.mark_prepared()
+        # ... publish ...
+        candidate.transfer_to_runtime_manager()
+
+    If any step raises before ``transfer_to_runtime_manager()``::
+
+        await candidate.abort(cause=exc)
+
+    Abort closes all registered resources in reverse registration
+    order, collects close errors without masking the primary error,
+    and emits :class:`CleanupDiagnostics`.
+    """
+
+    def __init__(self, generation_id: int) -> None:
+        self._generation_id = generation_id
+        self._state = CandidateOwnershipState.BUILDING
+        self._resources: list[_RegisteredResource] = []
+        self._close_count = 0
+        self._abort_lock = asyncio.Lock()
+        self._diagnostics: CleanupDiagnostics | None = None
+        #: Stored after build_initial completes; set by the reload builder.
+        self._built_generation: RuntimeGeneration | None = None
+        #: Stored after build_initial completes; set by the reload builder.
+        self._process_ref: ProcessRuntime | None = None
+        #: Stored after build_initial completes; set by the reload builder.
+        self._diff_ref: Any = None
+
+    @property
+    def generation_id(self) -> int:
+        return self._generation_id
+
+    @property
+    def ownership_state(self) -> CandidateOwnershipState:
+        return self._state
+
+    @property
+    def diagnostics(self) -> CleanupDiagnostics | None:
+        """Return cleanup diagnostics after abort, or ``None``."""
+        return self._diagnostics
+
+    def register_resource(
+        self,
+        name: str,
+        close_callback: Callable[[], Any],
+    ) -> None:
+        """Register a closeable resource immediately after construction.
+
+        Must be called before the next await that could fail.  The
+        callback may be sync or async; the candidate will handle both.
+        """
+        if self._state is not CandidateOwnershipState.BUILDING:
+            raise RuntimeError(f"Cannot register resource in state {self._state.value}")
+        self._resources.append(
+            _RegisteredResource(name=name, close_callback=close_callback)
+        )
+
+    def mark_prepared(self) -> None:
+        """Mark the candidate as ready for publication."""
+        if self._state is not CandidateOwnershipState.BUILDING:
+            raise RuntimeError(f"Cannot mark prepared in state {self._state.value}")
+        self._state = CandidateOwnershipState.PREPARED
+
+    def transfer_to_runtime_manager(self) -> None:
+        """Detach candidate cleanup after successful publication.
+
+        Must be called exactly once after the runtime manager has
+        accepted the candidate generation.  After transfer, calling
+        :meth:`abort` is a no-op.
+        """
+        if self._state is not CandidateOwnershipState.PREPARED:
+            raise RuntimeError(f"Cannot transfer in state {self._state.value}")
+        self._state = CandidateOwnershipState.TRANSFERRED
+        self._resources.clear()
+
+    async def abort(
+        self,
+        cause: BaseException,
+    ) -> CleanupDiagnostics:
+        """Close all registered resources in reverse registration order.
+
+        Idempotent: a second call returns the same diagnostics.
+        Collects close errors without masking the primary error.
+        Leaves process-owned resources untouched.
+        """
+        async with self._abort_lock:
+            if self._state is CandidateOwnershipState.ABORTED:
+                return self._diagnostics or CleanupDiagnostics(
+                    generation_id=self._generation_id,
+                    ownership_state=self._state.value,
+                    resource_types_registered=(),
+                    resource_types_closed=(),
+                    close_duration_s=0.0,
+                    close_errors=(),
+                    timed_out=False,
+                    primary_failure=str(cause),
+                )
+
+            registered_names = tuple(r.name for r in self._resources)
+            closed_names: list[str] = []
+            close_errors: list[str] = []
+            close_start = time.monotonic()
+            timed_out = False
+
+            # Close in reverse registration order.
+            for resource in reversed(self._resources):
+                try:
+                    result = resource.close_callback()
+                    if asyncio.iscoroutine(result):
+                        try:
+                            await asyncio.wait_for(result, timeout=5.0)
+                        except TimeoutError:
+                            timed_out = True
+                            close_errors.append(
+                                f"{resource.name}: close timed out after 5s"
+                            )
+                            continue
+                except Exception as exc:  # noqa: BLE001 -- close path must not raise
+                    close_errors.append(f"{resource.name}: {exc!r}")
+                    logger.warning(
+                        "Candidate %d resource %s close failed: %r",
+                        self._generation_id,
+                        resource.name,
+                        exc,
+                    )
+                else:
+                    closed_names.append(resource.name)
+
+            close_duration = time.monotonic() - close_start
+            self._resources.clear()
+            self._state = CandidateOwnershipState.ABORTED
+
+            self._diagnostics = CleanupDiagnostics(
+                generation_id=self._generation_id,
+                ownership_state=self._state.value,
+                resource_types_registered=registered_names,
+                resource_types_closed=tuple(closed_names),
+                close_duration_s=close_duration,
+                close_errors=tuple(close_errors),
+                timed_out=timed_out,
+                primary_failure=str(cause),
+            )
+
+            if close_errors:
+                logger.warning(
+                    "Candidate %d abort: %d/%d resources closed, "
+                    "%d close error(s), duration=%.3fs",
+                    self._generation_id,
+                    len(closed_names),
+                    len(registered_names),
+                    len(close_errors),
+                    close_duration,
+                )
+            else:
+                logger.info(
+                    "Candidate %d abort: %d resources closed in %.3fs",
+                    self._generation_id,
+                    len(closed_names),
+                    close_duration,
+                )
+
+            return self._diagnostics
 
 
 # ---------------------------------------------------------------------------
@@ -1135,6 +1381,12 @@ class RuntimeGenerationBuilder:
     async def cleanup_partial(self, process: ProcessRuntime) -> None:
         """Best-effort cleanup after a partial build failure.
 
+        .. deprecated::
+            Superseded by :class:`RuntimeGenerationCandidate.abort` (Phase 4).
+            The candidate container now tracks and closes resources in reverse
+            registration order.  This method is retained for backward
+            compatibility.
+
         Delegates to :func:`eggpool.app.cleanup_partial_generation`
         which closes any generation-owned resources that were
         constructed before the failure.  Tolerates partially
@@ -1295,6 +1547,8 @@ async def wrap_stream_with_lease(
 
 
 __all__ = [
+    "CandidateOwnershipState",
+    "CleanupDiagnostics",
     "GenerationBuildResult",
     "GenerationDiagnostics",
     "GenerationLease",
@@ -1302,6 +1556,7 @@ __all__ = [
     "RuntimeDiagnostics",
     "RuntimeGeneration",
     "RuntimeGenerationBuilder",
+    "RuntimeGenerationCandidate",
     "RuntimeManager",
     "RuntimeManagerLeaseExhaustedError",
     "RuntimeManagerShutdownError",

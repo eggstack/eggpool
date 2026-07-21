@@ -1,7 +1,7 @@
 # Phase 4 — Candidate Resource Ownership and Abort Cleanup
 
 Date: 2026-07-19
-Status: implementation handoff
+Status: implemented
 Roadmap: `plans/001-reload-correctness-performance-roadmap.md`
 Prerequisites: Phases 1–3.
 

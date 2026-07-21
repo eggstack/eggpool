@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from eggpool.runtime_manager import (
         ProcessRuntime,
         RuntimeGeneration,
+        RuntimeGenerationCandidate,
         RuntimeManager,
     )
 
@@ -404,7 +405,7 @@ class ReloadManager:
         digest_prefix = (
             validation.content_digest[:12] if validation.content_digest else "<empty>"
         )
-        generation_id: int | None = None
+        generation_id: int = 0
         changed_sections: tuple[str, ...] = ()
         warnings: tuple[ConfigValidationWarning, ...] = validation.warnings
         restart_required: tuple[Any, ...] = ()
@@ -549,8 +550,19 @@ class ReloadManager:
                 diff,
                 runtime_manager=self._runtime_manager,
             )
-            generation_id = candidate.generation.generation_id
-            digest_prefix = candidate.generation.config_digest[:12]
+            # Extract generation metadata from the candidate.
+            # RuntimeGenerationCandidate stores it on _built_generation;
+            # CandidateGeneration (backward compat) stores it on .generation.
+            _gen = getattr(candidate, "_built_generation", None) or getattr(  # pyright: ignore[reportPrivateUsage]
+                candidate, "generation", None
+            )
+            generation_id = (
+                _gen.generation_id if _gen is not None else candidate.generation_id
+            )
+            if _gen is not None:
+                digest_prefix = (
+                    _gen.config_digest[:12] if _gen.config_digest else "<empty>"
+                )
 
             # Observer: candidate complete
             await self._observer.on_candidate_complete(
@@ -847,7 +859,7 @@ class ReloadManager:
         diff: ConfigDiff,
         *,
         runtime_manager: RuntimeManager | None = None,
-    ) -> CandidateGeneration:
+    ) -> RuntimeGenerationCandidate:
         """Construct all generation-owned services for the candidate config.
 
         Mirrors the service construction from ``app._lifespan_runtime``
@@ -858,13 +870,13 @@ class ReloadManager:
         recovery, catalog staleness enforcement, or initial catalog
         refresh.  Those are startup concerns only.
 
+        Each resource is registered on the candidate container
+        immediately after construction.  Any failure aborts the
+        candidate, closing all registered resources in reverse order.
+
         If ``preparation_event`` is set, awaits it before proceeding so
         tests can deterministically hold this method mid-flight.
         """
-        if self.TEST_INJECT_BUILD_FAILURE is not None:
-            raise self.TEST_INJECT_BUILD_FAILURE
-        if self.preparation_event is not None:
-            await self.preparation_event.wait()
 
         from eggpool.accounts.registry import (  # noqa: PLC0415
             AccountRegistry,
@@ -899,6 +911,7 @@ class ReloadManager:
         )
         from eggpool.runtime_manager import (  # noqa: PLC0415
             RuntimeGenerationBuilder,
+            RuntimeGenerationCandidate,
         )
         from eggpool.stats import StatsService  # noqa: PLC0415
         from eggpool.transcoder.compression.tuning import (  # noqa: PLC0415
@@ -910,24 +923,36 @@ class ReloadManager:
         process = self._process
         generation_id = self._runtime_manager.reserve_next_generation_id()
 
+        candidate = RuntimeGenerationCandidate(generation_id=generation_id)
+
+        if self.preparation_event is not None:
+            await self.preparation_event.wait()
+
         try:
-            # -- Network (generation-owned) --------------------------------
+            if self.TEST_INJECT_BUILD_FAILURE is not None:
+                raise self.TEST_INJECT_BUILD_FAILURE
+
             dns_backend: httpcore.AsyncNetworkBackend | None = None
             if candidate_config.network.dns_cache.enabled:
                 dns_backend = DnsNetworkBackend(
                     candidate_config.network.dns_cache,
                     default_network_backend(),
                 )
+                _dns_close = getattr(dns_backend, "aclose", None)
+                if _dns_close is not None:
+                    candidate.register_resource("dns_backend", _dns_close)
 
             client_pool = ProviderClientPool.from_app_config(
                 candidate_config,
                 network_backend=dns_backend,
             )
+            candidate.register_resource("client_pool", client_pool.close)
 
             outbound_manager = OutboundClientManager(
                 config=candidate_config.network,
                 network_backend=dns_backend,
             )
+            candidate.register_resource("outbound_manager", outbound_manager.aclose)
             outbound_client = await outbound_manager.get_client()
 
             # -- Account registry ------------------------------------------
@@ -1213,6 +1238,7 @@ class ReloadManager:
 
             # -- Task supervisor (tasks registered for candidate generation)
             supervisor = TaskSupervisor()
+            candidate.register_resource("supervisor", supervisor.stop_all)
 
             # Register background tasks on the candidate supervisor so
             # periodic work (catalog refresh, etc.) continues after the
@@ -1303,27 +1329,22 @@ class ReloadManager:
                     process=process,
                 )
 
-            return CandidateGeneration(
-                generation=build_result.generation,
-                process=process,
-                diff=diff,
-            )
+            # Mark candidate prepared and store the generation + process
+            # for later transfer.
+            candidate.mark_prepared()
+            candidate._built_generation = build_result.generation  # pyright: ignore[reportPrivateUsage]
+            candidate._process_ref = process  # pyright: ignore[reportPrivateUsage]
+            candidate._diff_ref = diff  # pyright: ignore[reportPrivateUsage]
+
+            return candidate
 
         except Exception:
             logger.exception(
                 "Candidate generation construction failed; aborting reload"
             )
-            # Clean up any partially constructed network resources.
-            # The builder's cleanup_partial delegates to app.cleanup_partial_generation.
-            try:
-                from eggpool.runtime_manager import (  # noqa: PLC0415
-                    RuntimeGenerationBuilder,
-                )
-
-                builder_cleanup = RuntimeGenerationBuilder()
-                await builder_cleanup.cleanup_partial(process)
-            except Exception:
-                logger.debug("Partial generation cleanup failed", exc_info=True)
+            await candidate.abort(
+                cause=RuntimeError("Candidate generation construction failed")
+            )
             raise ReloadPreparationError(
                 "Failed to construct candidate generation"
             ) from None
@@ -1374,23 +1395,40 @@ class ReloadManager:
 
     async def _publish_generation(
         self,
-        candidate: CandidateGeneration,
+        candidate: CandidateGeneration | RuntimeGenerationCandidate,
         diff: ConfigDiff,
     ) -> None:
         """Atomically publish the candidate generation.
 
         Delegates to ``RuntimeManager.install_candidate`` which swaps
         the active slot and begins retirement of the old generation.
+        After successful publication, transfers ownership from the
+        candidate to the runtime manager.
         """
         try:
             if self.TEST_INJECT_PUBLISH_FAILURE is not None:
                 raise self.TEST_INJECT_PUBLISH_FAILURE
+            # Support both old CandidateGeneration.generation and
+            # new RuntimeGenerationCandidate._built_generation.
+            generation = getattr(candidate, "generation", None) or getattr(
+                candidate,
+                "_built_generation",
+                None,  # pyright: ignore[reportPrivateUsage]
+            )
+            if generation is None:
+                raise ReloadCommitError(
+                    "Candidate has no generation; was mark_prepared() called?"
+                )
             active = self._runtime_manager.active_snapshot()
             await self._runtime_manager.install_candidate(
-                candidate.generation,
+                generation,
                 drain_timeout_s=self._drain_timeout_s,
                 expected_active_generation_id=active.generation_id,
             )
+            # Transfer ownership: candidate abort is now a no-op.
+            transfer_fn = getattr(candidate, "transfer_to_runtime_manager", None)
+            if transfer_fn is not None:
+                transfer_fn()
         except Exception as exc:
             logger.exception("Generation publication failed")
             raise ReloadCommitError(f"Failed to publish generation: {exc!r}") from exc

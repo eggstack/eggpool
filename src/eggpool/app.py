@@ -662,6 +662,13 @@ def _mirror_generation_on_app_state(
 async def cleanup_partial_generation(process: ProcessRuntime) -> None:
     """Best-effort cleanup for a partially constructed generation.
 
+    .. deprecated::
+        Superseded by :class:`RuntimeGenerationCandidate.abort` (Phase 4).
+        The candidate container now tracks and closes resources in reverse
+        registration order.  This function is retained for backward
+        compatibility with code that still calls
+        :meth:`RuntimeGenerationBuilder.cleanup_partial` directly.
+
     Called by :class:`RuntimeGenerationBuilder.cleanup_partial` when a
     build raises before completion.  Mirrors the deterministic
     retirement order documented for :meth:`RuntimeManager.shutdown`
@@ -673,17 +680,11 @@ async def cleanup_partial_generation(process: ProcessRuntime) -> None:
     (not underscore-prefixed) because
     :class:`eggpool.runtime_manager.RuntimeGenerationBuilder` calls it
     from a sibling module.
-
-    During milestone B the initial build is done inline in
-    ``_lifespan_runtime`` and the manager is only installed after the
-    full build succeeds, so this path is currently a no-op for the
-    inline lifespan.  Milestone C's reload builder will populate the
-    process container with candidate-generation resources before
-    calling this helper on failure.
     """
     logger.warning(
-        "Partial runtime generation cleanup: closing any constructed "
-        "network clients and supervisor"
+        "Partial runtime generation cleanup: "
+        "cleanup_partial_generation is a no-op; "
+        "use RuntimeGenerationCandidate.abort for explicit cleanup"
     )
     return None
 
