@@ -34,8 +34,6 @@ from eggpool.config_reload_policy import (
 )
 
 if TYPE_CHECKING:
-    import httpcore
-
     from eggpool.config_validation import (
         ConfigValidationResult,
         ConfigValidationWarning,
@@ -45,9 +43,10 @@ if TYPE_CHECKING:
         CleanupDiagnostics,
         ProcessRuntime,
         RuntimeGeneration,
-        RuntimeGenerationCandidate,
         RuntimeManager,
     )
+
+from eggpool.runtime_manager import RuntimeGenerationCandidate
 
 logger = logging.getLogger(__name__)
 
@@ -989,48 +988,7 @@ class ReloadManager:
         tests can deterministically hold this method mid-flight.
         """
 
-        from eggpool.accounts.registry import (  # noqa: PLC0415
-            AccountRegistry,
-        )
-        from eggpool.background import TaskSupervisor  # noqa: PLC0415
-        from eggpool.catalog.pricing import (  # noqa: PLC0415
-            CostCalculator,
-            PriceRepository,
-        )
-        from eggpool.catalog.service import CatalogService  # noqa: PLC0415
-        from eggpool.db.repositories import (  # noqa: PLC0415
-            AccountBackoffRepository,
-            AttemptRepository,
-            PingRepository,
-            RequestRepository,
-            ReservationRepository,
-            UsageWindowRepository,
-        )
-        from eggpool.health.health_manager import HealthManager  # noqa: PLC0415
-        from eggpool.providers.client_pool import ProviderClientPool  # noqa: PLC0415
-        from eggpool.providers.dns_cache import DnsNetworkBackend  # noqa: PLC0415
-        from eggpool.providers.outbound import (  # noqa: PLC0415
-            OutboundClientManager,
-            default_network_backend,
-        )
-        from eggpool.request.coordinator import RequestCoordinator  # noqa: PLC0415
-        from eggpool.routing.config import routing_stale_after_s  # noqa: PLC0415
-        from eggpool.routing.router import Router  # noqa: PLC0415
-        from eggpool.runtime_dispatch import (  # noqa: PLC0415
-            DispatchOverheadRecorder,
-            DispatchSpanRecorder,
-        )
-        from eggpool.runtime_manager import (  # noqa: PLC0415
-            RuntimeGenerationBuilder,
-            RuntimeGenerationCandidate,
-        )
-        from eggpool.stats import StatsService  # noqa: PLC0415
-        from eggpool.transcoder.compression.tuning import (  # noqa: PLC0415
-            RuntimeCompressionPolicyOverrideRegistry,
-        )
-
         candidate_config = validation.config
-        db = self._process.db
         process = self._process
         generation_id = self._runtime_manager.reserve_next_generation_id()
 
@@ -1043,372 +1001,21 @@ class ReloadManager:
             if self.TEST_INJECT_BUILD_FAILURE is not None:
                 raise self.TEST_INJECT_BUILD_FAILURE
 
-            dns_backend: httpcore.AsyncNetworkBackend | None = None
-            if candidate_config.network.dns_cache.enabled:
-                dns_backend = DnsNetworkBackend(
-                    candidate_config.network.dns_cache,
-                    default_network_backend(),
-                )
-                _dns_close = getattr(dns_backend, "aclose", None)
-                if _dns_close is not None:
-                    candidate.register_resource("dns_backend", _dns_close)
-
-            client_pool = ProviderClientPool.from_app_config(
-                candidate_config,
-                network_backend=dns_backend,
-            )
-            candidate.register_resource("client_pool", client_pool.close)
-
-            outbound_manager = OutboundClientManager(
-                config=candidate_config.network,
-                network_backend=dns_backend,
-            )
-            candidate.register_resource("outbound_manager", outbound_manager.aclose)
-            outbound_client = await outbound_manager.get_client()
-
-            # -- Account registry ------------------------------------------
-            registry = AccountRegistry(candidate_config)
-
-            # -- Transcoder / compression policy snapshots -----------------
-            transcoder_policy = candidate_config.transcoder
-            compression_policy = candidate_config.compression
-            cache_config = candidate_config.cache
-            compression_tuning_registry = RuntimeCompressionPolicyOverrideRegistry()
-
-            # -- Health manager --------------------------------------------
-            health_manager = HealthManager()
-
-            # -- Persistent backoff repository -----------------------------
-            account_backoff_repo = AccountBackoffRepository(db)
-
-            # -- Catalog service -------------------------------------------
-            ping_repo = PingRepository(db)
-            catalog = CatalogService(
-                candidate_config,
-                registry,
-                db,
-                client_pool,
-                ping_repo=ping_repo,
-                outbound_client=outbound_client,
-            )
-            await catalog.attach_pricing_resolvers()
-            await catalog._load_cached_models()  # pyright: ignore[reportPrivateUsage]
-
-            # -- Cost calculator -------------------------------------------
-            price_repo = PriceRepository(db)
-            cost_calculator = CostCalculator(price_repo)
-            catalog.set_price_change_callback(cost_calculator.invalidate_price)
-
-            # -- Router ----------------------------------------------------
-            def _schedule_missing_account_recovery(
-                account_name: str,
-            ) -> None:
-                async def _run() -> None:
-                    try:
-                        await catalog.refresh_one_account(account_name)
-                    except Exception:
-                        logger.exception(
-                            "One-shot catalog recovery failed for %r",
-                            account_name,
-                        )
-
-                try:
-                    loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    return
-                loop.create_task(_run())
-
-            router = Router(
-                registry,
-                catalog,
-                health_manager=health_manager,
-                stale_after_s=routing_stale_after_s(candidate_config),
-                local_quota_mode=candidate_config.routing.local_quota_mode,
-                fairness_mode=candidate_config.routing.fairness_mode,
-                fairness_epsilon=candidate_config.routing.fairness_epsilon,
-                fairness_scope=candidate_config.routing.fairness_scope,
-                missing_account_recovery_callback=(_schedule_missing_account_recovery),
-                missing_account_recovery_min_interval_s=float(
-                    candidate_config.models.refresh_interval_s,
-                )
-                / 2.0,
+            from eggpool.generation_factory import (
+                RuntimeGenerationFactory,  # noqa: PLC0415
             )
 
-            # Wire routing config into scorer and estimator
-            five_hour_capacity = float(
-                candidate_config.limits.five_hour_microdollars,
-            )
-            router._scorer.tiebreaker_range = (  # pyright: ignore[reportPrivateUsage]
-                candidate_config.routing.near_tie_epsilon
-            )
-            if not candidate_config.routing.randomize_near_ties:
-                router._scorer.tiebreaker_range = 0.0  # pyright: ignore[reportPrivateUsage]
-            if five_hour_capacity > 0:
-                router._scorer.inflight_penalty_per_request = (  # pyright: ignore[reportPrivateUsage]
-                    candidate_config.routing.inflight_penalty / five_hour_capacity
-                )
-                router._scorer.health_penalty_value = (  # pyright: ignore[reportPrivateUsage]
-                    candidate_config.routing.health_penalty / five_hour_capacity
-                )
-            router.quota_estimator.default_unknown_reservation_microdollars = (
-                candidate_config.routing.unknown_request_reservation_microdollars
-            )
-            router._scorer.prefer_native = (  # pyright: ignore[reportPrivateUsage]
-                candidate_config.transcoder.prefer_native
-            )
-
-            # Load configured model price overrides into estimator
-            for model_id, override in candidate_config.model_overrides.items():
-                input_price = override.input_price_per_1k
-                output_price = override.output_price_per_1k
-                if input_price is not None and output_price is not None:
-                    router.quota_estimator.set_model_override(
-                        model_id,
-                        input_price * 1000,
-                        output_price * 1000,
-                    )
-            for provider in candidate_config.providers.values():
-                for model_id, override in provider.model_overrides.items():
-                    global_override = candidate_config.model_overrides.get(
-                        model_id,
-                    )
-                    input_price = (
-                        override.input_price_per_1k
-                        if override.input_price_per_1k is not None
-                        else (
-                            global_override.input_price_per_1k
-                            if global_override is not None
-                            else None
-                        )
-                    )
-                    output_price = (
-                        override.output_price_per_1k
-                        if override.output_price_per_1k is not None
-                        else (
-                            global_override.output_price_per_1k
-                            if global_override is not None
-                            else None
-                        )
-                    )
-                    if input_price is None or output_price is None:
-                        continue
-                    for account in provider.accounts:
-                        router.quota_estimator.set_account_model_override(
-                            account.name,
-                            model_id,
-                            input_price * 1000,
-                            output_price * 1000,
-                        )
-
-            # Load persisted usage windows and set account weights/offsets
-            usage_window_repo = UsageWindowRepository(db)
-            router.quota_estimator.set_usage_window_repo(usage_window_repo)
-            config_offsets: dict[str, dict[str, int]] = {}
-            for acct_cfg in candidate_config.all_accounts():
-                config_offsets[acct_cfg.name] = {
-                    "five_hour": acct_cfg.five_hour_offset_microdollars,
-                    "weekly": acct_cfg.weekly_offset_microdollars,
-                    "monthly": acct_cfg.monthly_offset_microdollars,
-                }
-            await router.quota_estimator.load_persisted_windows(
-                offsets=config_offsets,
-            )
-            for acct_cfg in candidate_config.all_accounts():
-                router.set_account_weight(acct_cfg.name, acct_cfg.weight)
-            for acct_cfg in candidate_config.all_accounts():
-                router.configure_account_policy(
-                    account_name=acct_cfg.name,
-                    weight=acct_cfg.weight,
-                    capacity_5h_microdollars=int(
-                        candidate_config.limits.five_hour_microdollars
-                        * acct_cfg.weight,
-                    ),
-                    capacity_7d_microdollars=int(
-                        candidate_config.limits.weekly_microdollars * acct_cfg.weight,
-                    ),
-                    capacity_30d_microdollars=int(
-                        candidate_config.limits.monthly_microdollars * acct_cfg.weight,
-                    ),
-                    offset_5h_microdollars=(acct_cfg.five_hour_offset_microdollars),
-                    offset_7d_microdollars=(acct_cfg.weekly_offset_microdollars),
-                    offset_30d_microdollars=(acct_cfg.monthly_offset_microdollars),
-                )
-
-            # -- Repositories (generation-owned) ---------------------------
-            request_repo = RequestRepository(db)
-            reservation_repo = ReservationRepository(db)
-            attempt_repo = AttemptRepository(db)
-
-            # -- Dispatch recorders ----------------------------------------
-            dispatch_overhead_recorder = DispatchOverheadRecorder(
-                window_size=100,
-            )
-            dispatch_span_recorder = DispatchSpanRecorder(window_size=200)
-
-            # -- Request coordinator ----------------------------------------
-            coordinator = RequestCoordinator(
-                registry=registry,
-                catalog=catalog,
-                router=router,
-                db=db,
-                client_pool=client_pool,
-                request_repo=request_repo,
-                reservation_repo=reservation_repo,
-                attempt_repo=attempt_repo,
-                usage_window_repo=usage_window_repo,
-                health_manager=health_manager,
-                cost_calculator=cost_calculator,
-                quota_estimator=router.quota_estimator,
-                max_retry_attempts=(
-                    1 + candidate_config.routing.max_retries_before_stream
-                ),
-                quota_exhausted_cooldown_seconds=(
-                    candidate_config.routing.quota_exhausted_cooldown_seconds
-                ),
-                persist_error_detail=(
-                    candidate_config.security.persist_redacted_error_detail
-                ),
+            factory = RuntimeGenerationFactory()
+            gen_result = await factory.prepare(
                 config=candidate_config,
-                account_backoff_repo=account_backoff_repo,
-                metrics_coalescer=process.metrics_coalescer,
-                dispatch_overhead_recorder=dispatch_overhead_recorder,
-                dispatch_span_recorder=dispatch_span_recorder,
-                transcoder_policy=transcoder_policy,
-                cache_config=cache_config,
-                compression_tuning_registry=compression_tuning_registry,
-                compression_policy=compression_policy,
-            )
-
-            # -- Finalization retry queue ----------------------------------
-            from eggpool.request.finalization_queue import (  # noqa: PLC0415
-                FinalizationRetryQueue,
-            )
-
-            finalization_retry_queue = FinalizationRetryQueue(
-                db=db,
-                finalizer=coordinator._finalizer,  # pyright: ignore[reportPrivateUsage]
-                router=router,
-                quota_estimator=router.quota_estimator,
-            )
-            coordinator._finalization_retry_queue = (  # pyright: ignore[reportPrivateUsage]
-                finalization_retry_queue
-            )
-
-            # -- Routing trace guard ---------------------------------------
-            from eggpool.request.routing_trace_guard import (  # noqa: PLC0415
-                get_routing_trace_guard,
-            )
-
-            routing_trace_guard = get_routing_trace_guard()
-            routing_trace_guard.configure(
-                threshold_ms=(
-                    candidate_config.routing.trace.skip_above_lock_wait_p95_ms
-                ),
-                queue_occupancy_threshold=(
-                    candidate_config.routing.trace.guard_queue_occupancy_threshold
-                ),
-                oldest_event_age_s=(
-                    candidate_config.routing.trace.guard_oldest_event_age_s
-                ),
-                cooldown_s=(candidate_config.routing.trace.guard_cooldown_s),
-            )
-            coordinator._routing_trace_guard = (  # pyright: ignore[reportPrivateUsage]
-                routing_trace_guard
-            )
-
-            # -- Routing trace writer (process-owned, reconfigure in place)
-            routing_trace_writer = getattr(process, "routing_trace_writer", None)
-            if routing_trace_writer is not None:
-                routing_trace_writer.configure(
-                    mode=candidate_config.routing.trace.mode,
-                    sample_rate=candidate_config.routing.trace.sample_rate,
-                )
-            coordinator._routing_trace_writer = (  # pyright: ignore[reportPrivateUsage]
-                routing_trace_writer
-            )
-
-            # -- Stats service (generation-owned) --------------------------
-            stats_db = process.stats_db
-            stats_account_backoff_repo = (
-                account_backoff_repo
-                if stats_db is db
-                else AccountBackoffRepository(stats_db)
-            )
-            from eggpool.db.rollup_repository import (  # noqa: PLC0415
-                UsageRollupRepository,
-            )
-
-            stats_rollup_repo = UsageRollupRepository(stats_db)
-            stats_service = StatsService(
-                stats_db,
-                health_manager=health_manager,
-                ping_repo=PingRepository(stats_db),
-                account_backoff_repo=stats_account_backoff_repo,
-                rollup_repo=stats_rollup_repo,
-            )
-
-            # -- Task supervisor (tasks registered for candidate generation)
-            supervisor = TaskSupervisor()
-            candidate.register_resource("supervisor", supervisor.stop_all)
-
-            # Register background tasks on the candidate supervisor so
-            # periodic work (catalog refresh, etc.) continues after the
-            # old generation is retired.  Process-owned tasks register
-            # on the process supervisor when available.
-            if runtime_manager is not None:
-                from eggpool.app import register_candidate_tasks  # noqa: PLC0415
-
-                # Register candidate tasks on the gen supervisor only.
-                # Process-owned tasks (checkpoint, metrics_flush,
-                # update_checker, automatic_backup) persist on the
-                # process_supervisor and are reconfigured via
-                # apply_spec_diff below — passing process_supervisor
-                # here would try to re-register them and fail with
-                # ValueError.
-                register_candidate_tasks(
-                    supervisor,
-                    candidate_config,
-                    process,
-                    runtime_manager,
-                )
-
-            # -- Assemble generation via builder ---------------------------
-            builder = RuntimeGenerationBuilder()
-            build_result = await builder.build_initial(
-                candidate_config,
-                process,
-                generation_id=generation_id,
                 config_digest=validation.content_digest,
-                registry=registry,
-                catalog=catalog,
-                router=router,
-                coordinator=coordinator,
-                client_pool=client_pool,
-                outbound_manager=outbound_manager,
-                dns_backend=dns_backend,
-                health_manager=health_manager,
-                cost_calculator=cost_calculator,
-                transcoder_policy=transcoder_policy,
-                compression_policy=compression_policy,
-                cache_config=cache_config,
-                compression_tuning_registry=compression_tuning_registry,
-                dispatch_overhead_recorder=dispatch_overhead_recorder,
-                dispatch_span_recorder=dispatch_span_recorder,
-                account_backoff_repo=account_backoff_repo,
-                stats_service=stats_service,
-                supervisor=supervisor,
-                finalization_retry_queue=finalization_retry_queue,
-                routing_trace_guard=routing_trace_guard,
-                routing_trace_writer=routing_trace_writer,
+                generation_id=generation_id,
+                process=process,
+                candidate=candidate,
+                runtime_manager=runtime_manager,
             )
 
             # -- Reconfigure tasks on the process supervisor
-            # Process-owned tasks (checkpoint, metrics_flush, update_checker,
-            # automatic_backup) survive generation swaps.  Generation-leased
-            # tasks (catalog_refresh, model_info_refresh, etc.) are also
-            # managed by the process supervisor.  Apply the spec diff so all
-            # task intervals and callback factories reflect the candidate
-            # config.
             process_supervisor = process.process_supervisor
             if process_supervisor is not None:
                 from eggpool.runtime_tasks import (  # noqa: PLC0415
@@ -1426,12 +1033,10 @@ class ReloadManager:
                         process_supervisor=process_supervisor,
                     )
                 )
-                # Build callback factories for all candidate tasks
-                # (process-owned and generation-leased).
                 callback_factories = build_callback_factories_for_specs(
                     candidate_specs,
                     process=process,
-                    runtime_manager=runtime_manager,  # type: ignore[arg-type]
+                    runtime_manager=runtime_manager,
                     config=candidate_config,
                 )
                 await process_supervisor.apply_spec_diff(
@@ -1441,9 +1046,8 @@ class ReloadManager:
                 )
 
             # Mark candidate prepared and store the generation + process
-            # for later transfer.
             candidate.mark_prepared()
-            candidate._built_generation = build_result.generation  # pyright: ignore[reportPrivateUsage]
+            candidate._built_generation = gen_result.generation  # pyright: ignore[reportPrivateUsage]
             candidate._process_ref = process  # pyright: ignore[reportPrivateUsage]
             candidate._diff_ref = diff  # pyright: ignore[reportPrivateUsage]
 

@@ -10,11 +10,15 @@ milestone B of the live-configuration-rehash plan.  It owns:
   stream.
 - :class:`RuntimeManager` -- the process-wide owner of the active
   generation slot, retiring generations, and lease accounting.
-- :class:`RuntimeGenerationBuilder` -- the single construction site
-  milestone C will reuse for candidate generation preparation.
+- :class:`RuntimeGenerationBuilder` -- wraps pre-built services into
+  a :class:`RuntimeGeneration`.  Used by the factory (Phase 5).
 - :class:`RuntimeGenerationCandidate` -- a typed container that makes
   ownership of reload-created resources explicit from the moment each
   resource is constructed (Phase 4).
+
+The shared runtime-generation factory (:mod:`eggpool.generation_factory`)
+eliminates behavior drift between startup and reload by constructing
+all generation-owned services through a single authoritative path.
 
 Design principles
 -----------------

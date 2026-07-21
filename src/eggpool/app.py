@@ -27,8 +27,6 @@ from eggpool.background import TaskSupervisor
 from eggpool.background.cleanup import (
     reconcile_expired_reservations,
 )
-from eggpool.catalog.pricing import CostCalculator, PriceRepository
-from eggpool.catalog.service import CatalogService
 from eggpool.cli_exit_codes import STAGE_RELOAD_IN_PROGRESS
 from eggpool.constants import API_V1_PREFIX, MAX_REQUEST_BODY_BYTES
 from eggpool.control.reload_manager import ReloadInProgressError, ReloadManager
@@ -42,16 +40,10 @@ from eggpool.dashboard.routes import register_dashboard_routes
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
 from eggpool.db.repositories import (
-    AccountBackoffRepository,
     AccountEventRepository,
     AccountRepository,
-    AttemptRepository,
     OperationalEventRepository,
-    PingRepository,
     ProviderRepository,
-    RequestRepository,
-    ReservationRepository,
-    UsageWindowRepository,
 )
 from eggpool.db.rollup_repository import UsageRollupRepository
 from eggpool.errors import (
@@ -62,39 +54,28 @@ from eggpool.errors import (
     RequestTooLargeError,
 )
 from eggpool.event_loop_lag import EventLoopLagMonitor
-from eggpool.health.health_manager import HealthManager
 from eggpool.jsonx import dumps_bytes as jsonx_dumps_bytes
 from eggpool.logging import configure_logging
 from eggpool.metrics.buffer import MetricsWriteCoalescer
 from eggpool.model_info.presentation import compact_model_info_summary
 from eggpool.models.api import HealthResponse
 from eggpool.models.config import AppConfig
-from eggpool.providers.client_pool import ProviderClientPool
-from eggpool.providers.dns_cache import DnsNetworkBackend
-from eggpool.providers.outbound import OutboundClientManager, default_network_backend
-from eggpool.request.coordinator import RequestCoordinator
-from eggpool.request.stream_diagnostics import get_stream_diagnostics
-from eggpool.routing.config import routing_stale_after_s
-from eggpool.routing.router import Router
-from eggpool.runtime_dispatch import (
-    DispatchOverheadRecorder,
-    DispatchSpanRecorder,
-    LocalPreUpstreamRecorder,
-)
 from eggpool.runtime_manager import (
     ProcessRuntime,
     RuntimeGeneration,
     RuntimeManager,
     attach_runtime_manager,
 )
-from eggpool.stats import StatsService
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
-    import httpcore
-
+    from eggpool.catalog.service import CatalogService
+    from eggpool.health.health_manager import HealthManager
+    from eggpool.providers.client_pool import ProviderClientPool
+    from eggpool.providers.outbound import OutboundClientManager
     from eggpool.quota.estimation import QuotaEstimator
+    from eggpool.routing.router import Router
 
 logger = logging.getLogger(__name__)
 
@@ -518,70 +499,6 @@ async def prune_health_disabled_models_once(app_state: Any) -> int:
     return total
 
 
-async def _hydrate_health_from_backoffs(
-    repo: AccountBackoffRepository,
-    health_manager: HealthManager,
-) -> None:
-    """Reapply persisted upstream backoffs onto the in-memory health manager.
-
-    Called once at startup after account sync so a 429/402/5xx sequence
-    that ended just before the previous shutdown continues to
-    suppress the same account (or account/model pair) until the
-    recorded deadline expires. ``model_unavailable`` rows with a NULL
-    ``backoff_until`` are re-applied as indefinite model disables.
-
-    Errors are surfaced to the caller; the lifespan wraps this call
-    in ``try/except`` so a corrupted row cannot block startup.
-    """
-    account_repo = AccountRepository(repo._db)  # type: ignore[arg-type]  # noqa: SLF001 -- private access by design
-    active = await repo.list_active()
-    if not active:
-        return
-    logger.info(
-        "Hydrating %d persisted upstream backoffs into HealthManager",
-        len(active),
-    )
-    for row in active:
-        account_name = await account_repo.get_name_by_id(int(row["account_id"]))
-        if account_name is None:
-            continue
-        reason = str(row.get("reason") or "")
-        model_id = row.get("model_id")
-        backoff_until_epoch = row.get("backoff_until_epoch")
-        consecutive_failures = int(row.get("consecutive_failures") or 1)
-        if reason == "model_unavailable" and backoff_until_epoch is None:
-            if model_id:
-                health_manager.disable_model(account_name, str(model_id))
-            continue
-        if backoff_until_epoch is None:
-            # Terminal row with unknown handling: skip to avoid
-            # creating an infinite-cooldown that the operator did
-            # not ask for.
-            continue
-        remaining = max(0.0, float(backoff_until_epoch) - time.time())
-        if remaining <= 0:
-            # Already expired; the next periodic ``expire_old`` call
-            # will prune it. No need to set a zero-second cooldown.
-            continue
-        if reason == "quota_exhausted":
-            health_manager.record_quota_exhausted(account_name, remaining)
-        elif reason == "rate_limited":
-            health_manager.record_rate_limit(account_name, remaining)
-        elif reason == "authentication_failed":
-            health_manager.disable_account(
-                account_name, reason="authentication_failed", duration_seconds=remaining
-            )
-        else:
-            # Unknown / transient reason: set a generic cooldown so
-            # the account is not selected until the deadline passes.
-            health = health_manager.get_account_health(account_name)
-            health.cooldown_until = time.time() + remaining
-            health.health_state = "cooldown"
-            health.is_healthy = False
-            health.consecutive_failures = consecutive_failures
-            health.last_check = time.time()
-
-
 def _default_client(generation: RuntimeGeneration) -> Any:
     """Return the provider client pool's default client for ``app.state``.
 
@@ -940,105 +857,119 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             config.database.worker_threads,
         )
 
-    # 7. Initialize repositories
-    request_repo = RequestRepository(db)
-    reservation_repo = ReservationRepository(db)
-    attempt_repo = AttemptRepository(db)
-    usage_window_repo = UsageWindowRepository(db)
-    ping_repo = PingRepository(db)
+    # 7. Process-owned MetricsWriteCoalescer for buffered analytics.
+    # Created before the factory so process.metrics_coalescer is
+    # available for the coordinator's metrics wiring.
+    rollup_repo = UsageRollupRepository(db)
 
-    # 7. HTTPX client pool
-    dns_backend: httpcore.AsyncNetworkBackend | None = None
-    if config.network.dns_cache.enabled:
-        dns_backend = DnsNetworkBackend(
-            config.network.dns_cache, default_network_backend()
-        )
-        app.state.dns_backend = dns_backend
-    client_pool = ProviderClientPool.from_app_config(
-        config, network_backend=dns_backend
+    metrics_coalescer = MetricsWriteCoalescer(
+        config=config.metrics,
+        db=db,
+        rollup_repo=rollup_repo,
     )
-    app.state.client_pool = client_pool
-    # Keep backward-compatible alias during transition
-    legacy_client = client_pool.get_default_client()
+    app.state.metrics_coalescer = metrics_coalescer
+    process.metrics_coalescer = metrics_coalescer
+
+    # 8. Process-owned DispatchPersistenceWriter (Milestone C).
+    # Created before the factory so process.dispatch_writer is
+    # available for the coordinator's dispatch wiring.
+    dispatch_writer = None
+    if config.dispatch_writer.enabled:
+        from eggpool.request.dispatch_writer import (  # noqa: PLC0415
+            DispatchPersistenceWriter,
+        )
+
+        dispatch_writer = DispatchPersistenceWriter(
+            db=db,
+            max_queue_depth=config.dispatch_writer.max_queue_depth,
+            max_batch_size=config.dispatch_writer.max_batch_size,
+            max_batch_wait_ms=config.dispatch_writer.max_batch_wait_ms,
+            enqueue_timeout_ms=config.dispatch_writer.enqueue_timeout_ms,
+            shutdown_drain_timeout_s=config.dispatch_writer.shutdown_drain_timeout_s,
+        )
+        dispatch_writer.start()
+    process.dispatch_writer = dispatch_writer
+    app.state.dispatch_writer = dispatch_writer
+
+    # 9. Process-owned RoutingTraceWriter (Milestone D).
+    # Created before the factory so process.routing_trace_writer is
+    # available for the coordinator's trace wiring.
+    from eggpool.db.repositories import RoutingDecisionRepository  # noqa: PLC0415
+    from eggpool.observability.routing_trace_writer import (  # noqa: PLC0415
+        RoutingTraceWriter,
+    )
+
+    routing_trace_writer = RoutingTraceWriter(
+        db=db,
+        routing_decision_repo=RoutingDecisionRepository(db),
+        queue_capacity=config.routing.trace.queue_capacity,
+        flush_interval_s=config.routing.trace.flush_interval_s,
+        max_batch_size=config.routing.trace.max_batch_size,
+        shutdown_flush_timeout_s=config.routing.trace.shutdown_flush_timeout_s,
+    )
+    routing_trace_writer.configure(
+        mode=config.routing.trace.mode,
+        sample_rate=config.routing.trace.sample_rate,
+    )
+    routing_trace_writer.start()
+    process.routing_trace_writer = routing_trace_writer
+    app.state.routing_trace_writer = routing_trace_writer
+
+    # 10. RuntimeManager — must exist before factory call so we can
+    #     reserve a generation_id for the initial generation.
+    runtime_manager = RuntimeManager()
+
+    # 11. Build the complete generation-owned service graph via the
+    #     shared factory.  This replaces the inline construction of
+    #     repositories, client pool, outbound manager, registry,
+    #     catalog, health manager, router, coordinator, finalization
+    #     queue, routing trace guard, stats service, and supervisor.
+    from eggpool.generation_factory import RuntimeGenerationFactory  # noqa: PLC0415
+
+    factory = RuntimeGenerationFactory()
+    gen_result = await factory.prepare(
+        config=config,
+        config_digest=getattr(app.state, "config_digest", ""),
+        generation_id=runtime_manager.reserve_next_generation_id(),
+        process=process,
+    )
+
+    # 12. Mirror factory results onto app.state for dashboard routes,
+    #     readyz probes, and request handlers.
+    app.state.registry = gen_result.registry
+    app.state.catalog = gen_result.catalog
+    app.state.router = gen_result.router
+    app.state.coordinator = gen_result.coordinator
+    app.state.client_pool = gen_result.client_pool
+    app.state.outbound_manager = gen_result.outbound_manager
+    if gen_result.dns_backend is not None:
+        app.state.dns_backend = gen_result.dns_backend
+    # Keep backward-compat alias
+    legacy_client = gen_result.client_pool.get_default_client()
     if legacy_client is not None:
         app.state.httpx_client = legacy_client
+    app.state.health_manager = gen_result.health_manager
+    app.state.account_backoff_repo = gen_result.account_backoff_repo
+    app.state.cost_calculator = gen_result.cost_calculator
+    app.state.transcoder_policy = gen_result.transcoder_policy
+    app.state.compression_policy = gen_result.compression_policy
+    app.state.cache_config = gen_result.cache_config
+    app.state.compression_tuning_registry = gen_result.compression_tuning_registry
+    app.state.dispatch_overhead_recorder = gen_result.dispatch_overhead_recorder
+    app.state.dispatch_span_recorder = gen_result.dispatch_span_recorder
+    app.state.stats = gen_result.stats_service
+    app.state.supervisor = gen_result.supervisor
+    app.state.finalization_retry_queue = gen_result.finalization_retry_queue
+    app.state.routing_trace_guard = gen_result.routing_trace_guard
+    app.state.stream_diagnostics = gen_result.stream_diagnostics
+    app.state.local_pre_upstream_recorder = gen_result.local_pre_upstream_recorder
 
-    # 7b. Outbound client manager (shared client for background/CLI network paths)
-    outbound_manager = OutboundClientManager(
-        config=config.network, network_backend=dns_backend
-    )
-    app.state.outbound_manager = outbound_manager
-    # Pre-initialize the shared client so it's ready for catalog resolvers
-    outbound_client = await outbound_manager.get_client()
-
-    # 8. Account registry (runtime state)
-    registry = AccountRegistry(config)
-    app.state.registry = registry
-
-    # 8b. Transcoder policy (protocol transcoding configuration)
-    app.state.transcoder_policy = config.transcoder
-    # 8c. Compression policy (Phase 4 observe-mode compression
-    # accounting).  Disabled by default; the proxy_request
-    # handler reads this from app.state and short-circuits the
-    # analyzer when ``enabled = false``.
-    app.state.compression_policy = config.compression
-    # 8c.b Phase 10 closed-loop threshold tuning.  The registry holds
-    # at most one runtime override per policy.  The proxy_request
-    # resolver looks up the registry by resolved policy name and
-    # overlays the tunable thresholds (min_candidate_tokens,
-    # min_savings_tokens, max_compression_latency_ms) onto the
-    # request's effective config.  All other knobs (enabled, mode,
-    # placement, transforms, static-prefix, synthetic cache knobs)
-    # are immutable from the registry.  Operators populate entries
-    # by setting ``[compression.tuning] mode = "apply"`` (advisory
-    # dashboards only fire in ``recommend`` mode).
-    from eggpool.transcoder.compression.tuning import (
-        RuntimeCompressionPolicyOverrideRegistry,
-    )
-
-    app.state.compression_tuning_registry = RuntimeCompressionPolicyOverrideRegistry()
-    # 8d. Phase 9 synthetic cache-controls config.  Disabled by
-    # default; the proxy_request handler reads this from app.state
-    # and short-circuits the selector when ``enabled = false``.
-    app.state.cache_config = config.cache
-
-    # 9. Health manager
-    health_manager = HealthManager()
-    app.state.health_manager = health_manager
-
-    # 9b. Persistent backoff repository and hydration from SQLite.
-    # Phase 4 ensures that real upstream-derived backoffs survive
-    # restarts; local-estimate quota overage is never persisted.
-    account_backoff_repo = AccountBackoffRepository(db)
-    app.state.account_backoff_repo = account_backoff_repo
-    try:
-        await _hydrate_health_from_backoffs(account_backoff_repo, health_manager)
-    except Exception:
-        # A corrupted database must not prevent startup; log and
-        # continue with the in-memory health manager only.
-        logger.exception(
-            "Failed to hydrate health manager from persisted backoffs; "
-            "continuing without historical suppression state"
-        )
-
-    # 10. Catalog service
-    catalog = CatalogService(
-        config,
-        registry,
-        db,
-        client_pool,
-        ping_repo=ping_repo,
-        outbound_client=outbound_client,
-    )
-    app.state.catalog = catalog
-
-    # 11. Attach external pricing resolvers before refresh/persistence
-    await catalog.attach_pricing_resolvers()
-
-    # 12. Load cached catalog
-    await catalog._load_cached_models()  # pyright: ignore[reportPrivateUsage]
+    # Local aliases for sections below that still reference these by name.
+    supervisor = gen_result.supervisor
+    outbound_manager = gen_result.outbound_manager
 
     # 13. Refresh catalog from enabled accounts
+    catalog = gen_result.catalog
     if config.models.startup_refresh:
         try:
             await catalog.refresh()
@@ -1060,7 +991,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             config.models.stale_after_s,
         )
 
-    # 14b. Model info service
+    # 15. Model info service
     model_info = None
     if config.model_info.enabled:
         from eggpool.model_info.service import ModelInfoService
@@ -1070,7 +1001,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
                 config=config.model_info,
                 db=db,
                 catalog=catalog.cache,
-                outbound_client=outbound_client,
+                outbound_client=await gen_result.outbound_manager.get_client(),
             )
             app.state.model_info = model_info
             await model_info.load_cache()
@@ -1112,321 +1043,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             logger.exception("Failed to initialize model info service")
             model_info = None
 
-    # 15. Price repository and cost calculator
-    price_repo = PriceRepository(db)
-    cost_calculator = CostCalculator(price_repo)
-    catalog.set_price_change_callback(cost_calculator.invalidate_price)
-    app.state.cost_calculator = cost_calculator
-
-    # 16. Router (with health manager for circuit breaker integration)
-    def _schedule_missing_account_recovery(account_name: str) -> None:
-        """Fire-and-forget one-shot catalog refresh for an account that
-        is configured+healthy but missing from ``_account_support``.
-
-        A transient per-account refresh failure can age a sibling's
-        ``_account_last_refresh`` past ``stale_after_s`` and silently
-        de-pool the account from routing. The router detects this
-        condition and asks the catalog service to refresh a single
-        account so traffic can re-spread across configured siblings.
-        """
-
-        async def _run() -> None:
-            try:
-                await catalog.refresh_one_account(account_name)
-            except Exception:
-                logger.exception(
-                    "One-shot catalog recovery failed for %r", account_name
-                )
-
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return
-        loop.create_task(_run())
-
-    router = Router(
-        registry,
-        catalog,
-        health_manager=health_manager,
-        stale_after_s=routing_stale_after_s(config),
-        local_quota_mode=config.routing.local_quota_mode,
-        fairness_mode=config.routing.fairness_mode,
-        fairness_epsilon=config.routing.fairness_epsilon,
-        fairness_scope=config.routing.fairness_scope,
-        missing_account_recovery_callback=_schedule_missing_account_recovery,
-        missing_account_recovery_min_interval_s=float(config.models.refresh_interval_s)
-        / 2.0,
-    )
-    app.state.router = router
-
-    # 17. Wire routing config into scorer and estimator
-    five_hour_capacity = float(config.limits.five_hour_microdollars)
-    router._scorer.tiebreaker_range = config.routing.near_tie_epsilon  # pyright: ignore[reportPrivateUsage]
-    if not config.routing.randomize_near_ties:
-        router._scorer.tiebreaker_range = 0.0  # pyright: ignore[reportPrivateUsage]
-    if five_hour_capacity > 0:
-        router._scorer.inflight_penalty_per_request = (  # pyright: ignore[reportPrivateUsage]
-            config.routing.inflight_penalty / five_hour_capacity
-        )
-        router._scorer.health_penalty_value = (  # pyright: ignore[reportPrivateUsage]
-            config.routing.health_penalty / five_hour_capacity
-        )
-    router.quota_estimator.default_unknown_reservation_microdollars = (
-        config.routing.unknown_request_reservation_microdollars
-    )
-    router._scorer.prefer_native = config.transcoder.prefer_native  # pyright: ignore[reportPrivateUsage]
-
-    # 18. Load configured model price overrides into estimator
-    for model_id, override in config.model_overrides.items():
-        input_price = override.input_price_per_1k
-        output_price = override.output_price_per_1k
-        if input_price is not None and output_price is not None:
-            # Convert dollars/1K → dollars/1M (estimator Tier 4 units)
-            router.quota_estimator.set_model_override(
-                model_id,
-                input_price * 1000,
-                output_price * 1000,
-            )
-    for provider in config.providers.values():
-        for model_id, override in provider.model_overrides.items():
-            global_override = config.model_overrides.get(model_id)
-            input_price = (
-                override.input_price_per_1k
-                if override.input_price_per_1k is not None
-                else (
-                    global_override.input_price_per_1k
-                    if global_override is not None
-                    else None
-                )
-            )
-            output_price = (
-                override.output_price_per_1k
-                if override.output_price_per_1k is not None
-                else (
-                    global_override.output_price_per_1k
-                    if global_override is not None
-                    else None
-                )
-            )
-            if input_price is None or output_price is None:
-                continue
-            for account in provider.accounts:
-                router.quota_estimator.set_account_model_override(
-                    account.name,
-                    model_id,
-                    input_price * 1000,
-                    output_price * 1000,
-                )
-
-    # 19. Load persisted usage windows and set account weights/offsets
-    router.quota_estimator.set_usage_window_repo(usage_window_repo)
-    config_offsets: dict[str, dict[str, int]] = {}
-    for acct_cfg in config.all_accounts():
-        config_offsets[acct_cfg.name] = {
-            "five_hour": acct_cfg.five_hour_offset_microdollars,
-            "weekly": acct_cfg.weekly_offset_microdollars,
-            "monthly": acct_cfg.monthly_offset_microdollars,
-        }
-    await router.quota_estimator.load_persisted_windows(
-        offsets=config_offsets,
-    )
-    # Set account weights from config
-    for acct_cfg in config.all_accounts():
-        router.set_account_weight(acct_cfg.name, acct_cfg.weight)
-
-    # Configure explicit quota policies from config
-    for acct_cfg in config.all_accounts():
-        router.configure_account_policy(
-            account_name=acct_cfg.name,
-            weight=acct_cfg.weight,
-            capacity_5h_microdollars=int(
-                config.limits.five_hour_microdollars * acct_cfg.weight
-            ),
-            capacity_7d_microdollars=int(
-                config.limits.weekly_microdollars * acct_cfg.weight
-            ),
-            capacity_30d_microdollars=int(
-                config.limits.monthly_microdollars * acct_cfg.weight
-            ),
-            offset_5h_microdollars=acct_cfg.five_hour_offset_microdollars,
-            offset_7d_microdollars=acct_cfg.weekly_offset_microdollars,
-            offset_30d_microdollars=acct_cfg.monthly_offset_microdollars,
-        )
-
-    # 20. Metrics write coalescer for buffered analytics.  Writes stay on the
-    # primary connection; dashboard rollup reads use the same dedicated
-    # read-only stats connection as the rest of StatsService when available.
-    rollup_repo = UsageRollupRepository(db)
-    stats_rollup_repo = UsageRollupRepository(stats_db)
-    stats_account_backoff_repo = (
-        account_backoff_repo if stats_db is db else AccountBackoffRepository(stats_db)
-    )
-
-    # 21. Statistics service
-    app.state.stats = StatsService(
-        stats_db,
-        health_manager=health_manager,
-        ping_repo=PingRepository(stats_db),
-        account_backoff_repo=stats_account_backoff_repo,
-        rollup_repo=stats_rollup_repo,
-    )
-    if config.dashboard.enabled and stats_db is db:
-        logger.warning(
-            "stats_db_fallback_to_primary: stats_db is the same connection as "
-            "the primary db; dashboard reads will queue behind the request "
-            "path. Set database.worker_threads=2 for a dedicated read-only "
-            "stats connection."
-        )
-
-    metrics_coalescer = MetricsWriteCoalescer(
-        config=config.metrics,
-        db=db,
-        rollup_repo=rollup_repo,
-    )
-    app.state.metrics_coalescer = metrics_coalescer
-    process.metrics_coalescer = metrics_coalescer
-
-    # 18c. Dispatch-overhead recorder (shared between coordinator and runtime metrics)
-    dispatch_overhead_recorder = DispatchOverheadRecorder(window_size=100)
-    app.state.dispatch_overhead_recorder = dispatch_overhead_recorder
-
-    # 18c.1. Local pre-upstream recorder (Milestone A4): total
-    # EggPool-side latency from ASGI handler entry to dispatch.  Distinct
-    # from the coarse ``dispatch_overhead`` above which only covers the
-    # coordinator-internal slice.
-    local_pre_upstream_recorder = LocalPreUpstreamRecorder(window_size=100)
-    app.state.local_pre_upstream_recorder = local_pre_upstream_recorder
-
-    # 18c.1. Dispatch-span recorder for fine-grained per-region latency
-    # (Phase 1 hot-path dispatch optimization).  Tracks named spans
-    # such as ``body_read``, ``json_parse``, ``routing_plan``,
-    # ``selection_lock_wait`` and ``compression_apply`` so operators
-    # can identify dispatch hotspots without re-reading source code.
-    dispatch_span_recorder = DispatchSpanRecorder(
-        window_size=200,
-        detailed_span_sample_rate=config.metrics.detailed_span_sample_rate,
-    )
-    app.state.dispatch_span_recorder = dispatch_span_recorder
-
-    # 18d.1. Dispatch persistence writer (Milestone C): process-owned
-    # microbatching writer that persists dispatch bundles in bounded
-    # batches.  Only constructed when the feature is enabled in config.
-    dispatch_writer = None
-    if config.dispatch_writer.enabled:
-        from eggpool.request.dispatch_writer import (  # noqa: PLC0415
-            DispatchPersistenceWriter,
-        )
-
-        dispatch_writer = DispatchPersistenceWriter(
-            db=db,
-            max_queue_depth=config.dispatch_writer.max_queue_depth,
-            max_batch_size=config.dispatch_writer.max_batch_size,
-            max_batch_wait_ms=config.dispatch_writer.max_batch_wait_ms,
-            enqueue_timeout_ms=config.dispatch_writer.enqueue_timeout_ms,
-            shutdown_drain_timeout_s=config.dispatch_writer.shutdown_drain_timeout_s,
-        )
-        dispatch_writer.start()
-    process.dispatch_writer = dispatch_writer
-    app.state.dispatch_writer = dispatch_writer
-
-    # 18d.2. Routing trace writer (Milestone D): process-owned async
-    # writer that persists routing-decision traces in background
-    # batches, removing trace writes from the synchronous request path.
-    from eggpool.db.repositories import RoutingDecisionRepository  # noqa: PLC0415
-    from eggpool.observability.routing_trace_writer import (  # noqa: PLC0415
-        RoutingTraceWriter,
-    )
-
-    routing_trace_writer = RoutingTraceWriter(
-        db=db,
-        routing_decision_repo=RoutingDecisionRepository(db),
-        queue_capacity=config.routing.trace.queue_capacity,
-        flush_interval_s=config.routing.trace.flush_interval_s,
-        max_batch_size=config.routing.trace.max_batch_size,
-        shutdown_flush_timeout_s=config.routing.trace.shutdown_flush_timeout_s,
-    )
-    routing_trace_writer.configure(
-        mode=config.routing.trace.mode,
-        sample_rate=config.routing.trace.sample_rate,
-    )
-    routing_trace_writer.start()
-    process.routing_trace_writer = routing_trace_writer
-    app.state.routing_trace_writer = routing_trace_writer
-
-    # 18d. Request coordinator
-    coordinator = RequestCoordinator(
-        registry=registry,
-        catalog=catalog,
-        router=router,
-        db=db,
-        client_pool=client_pool,
-        request_repo=request_repo,
-        reservation_repo=reservation_repo,
-        attempt_repo=attempt_repo,
-        usage_window_repo=usage_window_repo,
-        health_manager=health_manager,
-        cost_calculator=cost_calculator,
-        quota_estimator=router.quota_estimator,
-        max_retry_attempts=1 + config.routing.max_retries_before_stream,
-        quota_exhausted_cooldown_seconds=config.routing.quota_exhausted_cooldown_seconds,
-        persist_error_detail=config.security.persist_redacted_error_detail,
-        config=config,
-        account_backoff_repo=account_backoff_repo,
-        metrics_coalescer=metrics_coalescer,
-        dispatch_overhead_recorder=dispatch_overhead_recorder,
-        local_pre_upstream_recorder=local_pre_upstream_recorder,
-        dispatch_span_recorder=dispatch_span_recorder,
-        transcoder_policy=config.transcoder,
-        cache_config=config.cache,
-        compression_tuning_registry=app.state.compression_tuning_registry,
-        compression_policy=config.compression,
-        stream_diagnostics=get_stream_diagnostics(),
-        dispatch_writer=dispatch_writer,
-        routing_trace_writer=routing_trace_writer,
-    )
-    app.state.coordinator = coordinator
-
-    # Finalization retry queue (Phase 3): short-cadence targeted drain
-    # of cancellation finalizations that escaped the immediate shielded
-    # path (10s timeout hit under heavy SQLite lock contention).  Must
-    # be constructed before RuntimeMetricsService so the runtime snapshot
-    # can expose queue state.
-    from eggpool.request.finalization_queue import FinalizationRetryQueue
-
-    finalization_retry_queue = FinalizationRetryQueue(
-        db=db,
-        # coordinator._finalizer is intentionally wired here so the
-        # retry queue can re-run finalization idempotently when the
-        # immediate shielded path timed out.
-        finalizer=coordinator._finalizer,  # pyright: ignore[reportPrivateUsage]
-        router=router,
-        quota_estimator=router.quota_estimator,
-    )
-    app.state.finalization_retry_queue = finalization_retry_queue
-    # Re-wire the coordinator so it routes new enqueues to the same
-    # queue instance the periodic task drains.
-    coordinator._finalization_retry_queue = (  # pyright: ignore[reportPrivateUsage]
-        finalization_retry_queue
-    )
-
-    # Routing trace write guardrail (Phase 4): when the SQLite
-    # lock-wait p95 exceeds the configured threshold, skip the
-    # best-effort routing trace writes to avoid amplifying contention.
-    from eggpool.request.routing_trace_guard import get_routing_trace_guard
-
-    routing_trace_guard = get_routing_trace_guard()
-    routing_trace_guard.configure(
-        threshold_ms=config.routing.trace.skip_above_lock_wait_p95_ms,
-        queue_occupancy_threshold=config.routing.trace.guard_queue_occupancy_threshold,
-        oldest_event_age_s=config.routing.trace.guard_oldest_event_age_s,
-        cooldown_s=config.routing.trace.guard_cooldown_s,
-    )
-    app.state.routing_trace_guard = routing_trace_guard
-    coordinator._routing_trace_guard = (  # pyright: ignore[reportPrivateUsage]
-        routing_trace_guard
-    )
-
-    # 18e. Event-loop lag monitor (process-owned, Milestone F6).
+    # 16. Event-loop lag monitor (process-owned, Milestone F6).
     # Measures event-loop starvation via periodic callback drift.
     event_loop_lag_monitor = EventLoopLagMonitor(
         cadence_s=1.0,
@@ -1434,49 +1051,16 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     )
     app.state.event_loop_lag_monitor = event_loop_lag_monitor
 
-    # 19. Reconcile expired reservations at startup so dashboard counts
+    # 17. Reconcile expired reservations at startup so dashboard counts
     # and in-memory quota state are accurate before readiness reports OK.
     await reconcile_expired_reservations(
         db,
-        quota_estimator=router.quota_estimator,
-        router=router,
+        quota_estimator=gen_result.router.quota_estimator,
+        router=gen_result.router,
     )
 
-    # 19b. Publish the initial runtime generation.  This used to be
-    # step 24 (after task registration) but the closure pass requires
-    # the unified register_runtime_tasks() helper to receive a real
-    # RuntimeManager reference rather than a mutable dict ref, so the
-    # manager is created first.  The supervisor reference is patched
-    # in step 20 below via RuntimeManager.attach_supervisor_to_active.
-    runtime_manager = RuntimeManager()
-    initial_generation = RuntimeGeneration(
-        generation_id=runtime_manager.reserve_next_generation_id(),
-        config=config,
-        config_digest=getattr(app.state, "config_digest", ""),
-        registry=app.state.registry,
-        catalog=app.state.catalog,
-        router=app.state.router,
-        coordinator=app.state.coordinator,
-        client_pool=app.state.client_pool,
-        outbound_manager=app.state.outbound_manager,
-        dns_backend=getattr(app.state, "dns_backend", None),
-        health_manager=app.state.health_manager,
-        cost_calculator=app.state.cost_calculator,
-        transcoder_policy=app.state.transcoder_policy,
-        compression_policy=app.state.compression_policy,
-        cache_config=app.state.cache_config,
-        compression_tuning_registry=app.state.compression_tuning_registry,
-        dispatch_overhead_recorder=app.state.dispatch_overhead_recorder,
-        dispatch_span_recorder=app.state.dispatch_span_recorder,
-        account_backoff_repo=app.state.account_backoff_repo,
-        stats_service=app.state.stats,
-        supervisor=None,  # patched in step 20 via attach_supervisor_to_active
-        finalization_retry_queue=app.state.finalization_retry_queue,
-        routing_trace_guard=app.state.routing_trace_guard,
-        routing_trace_writer=routing_trace_writer,
-        created_at_monotonic=app.state.started_monotonic,
-        created_at_epoch=app.state.started_epoch,
-    )
+    # 18. Publish the initial runtime generation.
+    initial_generation = gen_result.generation
     await runtime_manager.install_initial(initial_generation)
     attach_runtime_manager(app, runtime_manager)
     _mirror_generation_on_app_state(app, initial_generation)
@@ -1516,10 +1100,6 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     app.state.dashboard_telemetry = DashboardTelemetry()
     app.state.dashboard_telemetry.cache_stats = app.state.stats.cache_snapshot
 
-    # Stream outcome diagnostics service (process-wide singleton so the
-    # coordinator and runtime-metrics paths see the same counters).
-    app.state.stream_diagnostics = get_stream_diagnostics()
-
     # Maintenance state aggregator for /api/stats/runtime diagnostics.
     app.state.maintenance_state = MaintenanceState()
     process.maintenance_state = app.state.maintenance_state
@@ -1530,17 +1110,17 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         stats_db=stats_db,
         supervisor=supervisor,
         task_monitor=task_monitor,
-        router=router,
-        health_manager=health_manager,
+        router=app.state.router,
+        health_manager=app.state.health_manager,
         started_monotonic=app.state.started_monotonic,
         started_epoch=app.state.started_epoch,
         metrics_coalescer=metrics_coalescer,
-        outbound_manager=outbound_manager,
-        dns_backend=dns_backend,
-        provider_client_pool=client_pool,
-        dispatch_overhead_recorder=dispatch_overhead_recorder,
-        local_pre_upstream_recorder=local_pre_upstream_recorder,
-        dispatch_span_recorder=dispatch_span_recorder,
+        outbound_manager=app.state.outbound_manager,
+        dns_backend=getattr(app.state, "dns_backend", None),
+        provider_client_pool=app.state.client_pool,
+        dispatch_overhead_recorder=app.state.dispatch_overhead_recorder,
+        local_pre_upstream_recorder=app.state.local_pre_upstream_recorder,
+        dispatch_span_recorder=app.state.dispatch_span_recorder,
         model_info=model_info,
         dashboard_telemetry=app.state.dashboard_telemetry,
         stream_diagnostics=app.state.stream_diagnostics,

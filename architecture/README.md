@@ -3653,7 +3653,7 @@ which orchestrates the complete reload transaction under a serializing
    the entire operation to be rejected with the offending field paths.
 5. **No-op detection** — Identical fingerprints return success without
    building a new generation.
-6. **Candidate preparation** — `_build_candidate_generation()` builds
+6. **Candidate preparation** — `RuntimeGenerationFactory.prepare()` builds
    a new `RuntimeGeneration` off to the side (router, DB, app state)
    without touching the active generation. If `self.preparation_event`
    (an `asyncio.Event | None`) is set, the coroutine awaits it before
