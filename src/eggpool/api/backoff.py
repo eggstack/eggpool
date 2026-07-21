@@ -21,6 +21,16 @@ if TYPE_CHECKING:
     from fastapi.responses import Response
 
 
+def _get_account_backoff_repo(request: Request) -> Any:
+    """Get account_backoff_repo from the active generation or app.state fallback."""
+    from eggpool.app import get_active_generation  # noqa: PLC0415
+
+    gen = get_active_generation(request)
+    if gen is not None:
+        return getattr(gen, "account_backoff_repo", None)
+    return getattr(request.app.state, "account_backoff_repo", None)
+
+
 def _iso_or_none(epoch: float | None) -> str | None:
     """Convert a POSIX epoch to an ISO 8601 UTC string, or return None."""
     if epoch is None:
@@ -82,7 +92,7 @@ async def handle_backoffs(request: Request) -> Response:
     callers to make the snapshot reproducible in tests; the default
     uses wall-clock time.
     """
-    repo = getattr(request.app.state, "account_backoff_repo", None)
+    repo = _get_account_backoff_repo(request)
     db = getattr(request.app.state, "db", None) or getattr(
         request.app.state, "stats_db", None
     )

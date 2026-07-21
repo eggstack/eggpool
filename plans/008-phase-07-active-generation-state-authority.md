@@ -1,7 +1,7 @@
 # Phase 7 — Active-Generation State Authority
 
 Date: 2026-07-19
-Status: implementation handoff
+Status: implemented
 Roadmap: `plans/001-reload-correctness-performance-roadmap.md`
 Prerequisites: Phases 1–6.
 

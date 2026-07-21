@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import time
@@ -515,7 +516,25 @@ def _default_client(generation: RuntimeGeneration) -> Any:
     return getter()
 
 
-def _mirror_generation_on_app_state(
+def get_active_generation(request: Request) -> RuntimeGeneration | None:
+    """Get the active runtime generation from a request.
+
+    Returns the active generation if a runtime manager is installed and
+    has an active generation, or ``None`` otherwise.  Intended for
+    request handlers that need generation-owned services.
+    """
+    runtime_manager: RuntimeManager | None = getattr(
+        request.app.state, "runtime_manager", None
+    )
+    if runtime_manager is None or not runtime_manager.has_active_generation():
+        return None
+    try:
+        return runtime_manager.active_snapshot()
+    except Exception:
+        return None
+
+
+def mirror_generation_on_app_state(
     app: FastAPI,
     generation: RuntimeGeneration,
 ) -> None:
@@ -567,6 +586,10 @@ def _mirror_generation_on_app_state(
         "supervisor": generation.supervisor,
         "finalization_retry_queue": generation.finalization_retry_queue,
         "routing_trace_guard": generation.routing_trace_guard,
+        "stream_diagnostics": getattr(generation, "stream_diagnostics", None),
+        "local_pre_upstream_recorder": getattr(
+            generation, "local_pre_upstream_recorder", None
+        ),
     }
     for name, value in mirrors.items():
         if name in process_owned:
@@ -1063,7 +1086,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     initial_generation = gen_result.generation
     await runtime_manager.install_initial(initial_generation)
     attach_runtime_manager(app, runtime_manager)
-    _mirror_generation_on_app_state(app, initial_generation)
+    mirror_generation_on_app_state(app, initial_generation)
     logger.info(
         "RuntimeManager: generation %d published (%d owned services)",
         initial_generation.generation_id,
@@ -1077,7 +1100,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # exists so retirement closes it.
     patched = runtime_manager.attach_supervisor_to_active(supervisor)
     if patched is not None:
-        _mirror_generation_on_app_state(app, patched)
+        mirror_generation_on_app_state(app, patched)
 
     # 20a. Process-owned task supervisor (survives generation swaps).
     # Holds process-owned tasks (checkpoint, metrics_flush, update_checker,
@@ -1222,6 +1245,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     reload_manager = ReloadManager(
         runtime_manager=runtime_manager,
         process=process,
+        app=app,
     )
     app.state.reload_manager = reload_manager
     runtime_metrics_service._reload_manager = reload_manager  # pyright: ignore[reportPrivateUsage]
@@ -1680,7 +1704,19 @@ def create_app(
                 media_type="application/json",
             )
 
-        config: AppConfig = request.app.state.config
+        # Use the active generation snapshot for generation-owned
+        # checks instead of reading stale app.state mirrors.
+        runtime_manager: RuntimeManager | None = getattr(
+            request.app.state, "runtime_manager", None
+        )
+        gen = None
+        if runtime_manager is not None and runtime_manager.has_active_generation():
+            with contextlib.suppress(Exception):
+                gen = runtime_manager.active_snapshot()
+
+        # Fall back to app.state for tests or minimal apps without
+        # a runtime manager installed.
+        config: AppConfig = gen.config if gen is not None else request.app.state.config
         if not config.all_accounts():
             return Response(
                 content='{"status":"degraded","reason":"no accounts configured"}',
@@ -1696,8 +1732,12 @@ def create_app(
                 media_type="application/json",
             )
 
-        # Check loaded credentials
-        registry: AccountRegistry | None = getattr(request.app.state, "registry", None)
+        # Check loaded credentials from the active generation's registry
+        registry: AccountRegistry | None = (
+            gen.registry
+            if gen is not None
+            else getattr(request.app.state, "registry", None)
+        )
         if registry is not None:
             enabled_states = registry.get_enabled_states()
             has_credentials = any(
@@ -1710,8 +1750,12 @@ def create_app(
                     media_type="application/json",
                 )
 
-        # Check usable model catalog
-        catalog: CatalogService | None = getattr(request.app.state, "catalog", None)
+        # Check usable model catalog from the active generation
+        catalog: CatalogService | None = (
+            gen.catalog
+            if gen is not None
+            else getattr(request.app.state, "catalog", None)
+        )
         if catalog is not None and catalog.cache.model_count == 0:
             return Response(
                 content='{"status":"degraded","reason":"no usable model catalog"}',
@@ -1720,7 +1764,11 @@ def create_app(
             )
 
         # Real eligible-pairing readiness (Section 12.2)
-        router: Router | None = getattr(request.app.state, "router", None)
+        router: Router | None = (
+            gen.router
+            if gen is not None
+            else getattr(request.app.state, "router", None)
+        )
         if router is not None and not router.has_eligible_pairing():
             return Response(
                 content=(
@@ -1730,8 +1778,10 @@ def create_app(
                 media_type="application/json",
             )
 
-        supervisor: TaskSupervisor | None = getattr(
-            request.app.state, "supervisor", None
+        supervisor: TaskSupervisor | None = (
+            gen.supervisor
+            if gen is not None
+            else getattr(request.app.state, "supervisor", None)
         )
         if supervisor is not None and not supervisor.all_healthy:
             return Response(
@@ -1767,17 +1817,30 @@ def create_app(
         await require_auth(request)
 
         config: AppConfig = request.app.state.config
-        catalog: CatalogService = request.app.state.catalog
-        health_mgr: HealthManager | None = getattr(
-            request.app.state, "health_manager", None
+        # Use the active generation snapshot for generation-owned services.
+        runtime_manager: RuntimeManager | None = getattr(
+            request.app.state, "runtime_manager", None
         )
+        if runtime_manager is not None and runtime_manager.has_active_generation():
+            try:
+                gen = runtime_manager.active_snapshot()
+                catalog: CatalogService = gen.catalog
+                health_mgr: HealthManager | None = gen.health_manager
+                mi_service = getattr(gen, "model_info", None)
+            except Exception:
+                catalog = request.app.state.catalog
+                health_mgr = getattr(request.app.state, "health_manager", None)
+                mi_service = getattr(request.app.state, "model_info", None)
+        else:
+            catalog = request.app.state.catalog
+            health_mgr = getattr(request.app.state, "health_manager", None)
+            mi_service = getattr(request.app.state, "model_info", None)
         models = catalog.get_models_for_exposure(health_manager=health_mgr)
 
         # Build model-info summary map when enabled and available.
         # A single DB read avoids per-model queries inside the loop.
         model_info_map: dict[str, Any] = {}
         mi_config = getattr(config, "model_info", None)
-        mi_service = getattr(request.app.state, "model_info", None)
         if (
             mi_config is not None
             and getattr(mi_config, "include_in_models_endpoint", False)

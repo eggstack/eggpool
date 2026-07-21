@@ -241,8 +241,25 @@ class TestTranscodingJsonEndpoint:
                     "period_seen": period,
                 }
 
-        # Replace the stats service on the app state with a mock
-        migrated_client.app.state.stats = _StatsService(migrated_client.app.state.db)
+        # Replace the stats service on the active generation with a mock.
+        # The test overrides the stats service to control the response
+        # data, so we must patch the generation-owned service.
+        from eggpool.runtime_manager import RuntimeManager  # noqa: TC001
+
+        rm: RuntimeManager | None = getattr(
+            migrated_client.app.state, "runtime_manager", None
+        )
+        if rm is not None and rm.has_active_generation():
+            from dataclasses import replace
+
+            gen = rm.active_snapshot()
+            mock_stats = _StatsService(migrated_client.app.state.db)
+            new_gen = replace(gen, stats_service=mock_stats)
+            rm._active.generation = new_gen  # pyright: ignore[reportPrivateUsage]
+        else:
+            migrated_client.app.state.stats = _StatsService(
+                migrated_client.app.state.db
+            )
 
         response = migrated_client.get("/api/stats/transcoding?period=7d")
         assert response.status_code == 200

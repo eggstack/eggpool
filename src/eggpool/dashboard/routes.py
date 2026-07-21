@@ -95,6 +95,36 @@ logger = logging.getLogger(__name__)
 _DashboardStageResult = TypeVar("_DashboardStageResult")
 
 
+def _get_stats(request: Request) -> Any:
+    """Get the stats service from the active generation or app.state fallback."""
+    from eggpool.app import get_active_generation  # noqa: PLC0415
+
+    gen = get_active_generation(request)
+    if gen is not None:
+        return gen.stats_service
+    return getattr(request.app.state, "stats", None)
+
+
+def _get_model_info(request: Request) -> Any:
+    """Get the model_info service from the active generation or app.state fallback."""
+    from eggpool.app import get_active_generation  # noqa: PLC0415
+
+    gen = get_active_generation(request)
+    if gen is not None:
+        return getattr(gen, "model_info", None)
+    return getattr(request.app.state, "model_info", None)
+
+
+def _get_catalog(request: Request) -> Any:
+    """Get the catalog from the active generation or app.state fallback."""
+    from eggpool.app import get_active_generation  # noqa: PLC0415
+
+    gen = get_active_generation(request)
+    if gen is not None:
+        return gen.catalog
+    return getattr(request.app.state, "catalog", None)
+
+
 async def _await_dashboard_stage(
     telemetry: Any | None,
     page: str,
@@ -678,7 +708,7 @@ def _collect_model_options(request: Request) -> list[str]:
     false (the default).  Falls back to an empty list when no catalog
     is attached yet — e.g. early in startup before the first refresh.
     """
-    catalog = getattr(request.app.state, "catalog", None)
+    catalog = _get_catalog(request)
     if catalog is None:
         return []
     try:
@@ -713,14 +743,14 @@ async def handle_overview(
     _start = time.perf_counter()
     dashboard_config = _get_dashboard_config(request)
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     # The renderer always displays the six-month calendar. Query that full
     # window rather than the shorter raw-request retention setting, otherwise
     # the overview renders empty-looking gaps for activity still available in
     # usage_rollups.
     heatmap_range = _heatmap_time_range(_HEATMAP_MAX_DAYS)
     telemetry = getattr(request.app.state, "dashboard_telemetry", None)
-    model_info_service = getattr(request.app.state, "model_info", None)
+    model_info_service = _get_model_info(request)
 
     # Always fetch the disabled count so the Account breakdown empty
     # state can offer a one-click opt-in even when no rows are
@@ -931,7 +961,7 @@ async def handle_accounts(
     """
     _get_dashboard_config(request)
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
 
     # Always fetch the disabled count so the empty state can offer the
     # one-click opt-in even when no rows are currently visible.
@@ -975,9 +1005,9 @@ async def handle_models(
     _start = time.perf_counter()
     _get_dashboard_config(request)
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
-    model_info_service = getattr(request.app.state, "model_info", None)
-    catalog = getattr(request.app.state, "catalog", None)
+    stats = _get_stats(request)
+    model_info_service = _get_model_info(request)
+    catalog = _get_catalog(request)
     app_config = getattr(request.app.state, "config", None)
     collapse_models = _read_collapse_models(app_config)
     known_providers = _known_provider_ids_from_config(app_config)
@@ -1696,7 +1726,7 @@ async def handle_model_detail(
 ) -> Response:
     """Render the model-info detail page for a specific model."""
     _get_dashboard_config(request)
-    model_info_service = getattr(request.app.state, "model_info", None)
+    model_info_service = _get_model_info(request)
     from urllib.parse import unquote
 
     from eggpool.routing.provider import parse_model_provider
@@ -1766,8 +1796,8 @@ async def handle_latency(
     """Render the latency breakdown page."""
     _get_dashboard_config(request)
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
-    model_info_service = getattr(request.app.state, "model_info", None)
+    stats = _get_stats(request)
+    model_info_service = _get_model_info(request)
     provider_ttft, model_ttft, phases, model_info_state = cast(
         "_LatencyPayload",
         await asyncio.gather(
@@ -1799,7 +1829,7 @@ async def handle_reliability(
     """Render the Reliability page."""
     _get_dashboard_config(request)
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     telemetry = getattr(request.app.state, "dashboard_telemetry", None)
     _gather_start = time.perf_counter()
     (
@@ -1859,8 +1889,8 @@ async def handle_routing(
     """Render the Routing page."""
     _get_dashboard_config(request)
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
-    model_info_service = getattr(request.app.state, "model_info", None)
+    stats = _get_stats(request)
+    model_info_service = _get_model_info(request)
     runtime_metrics = getattr(request.app.state, "runtime_metrics", None)
     trace_mode = getattr(request.app.state.config.routing.trace, "mode", "off")  # type: ignore[union-attr]
     trace_sample_rate = getattr(
@@ -1922,8 +1952,8 @@ async def handle_traces(
     """
     _get_dashboard_config(request)
     bounded_limit = _clamp_int(limit, minimum=10, maximum=500)
-    stats = request.app.state.stats
-    model_info_service = getattr(request.app.state, "model_info", None)
+    stats = _get_stats(request)
+    model_info_service = _get_model_info(request)
     recent_requests, model_info_state = cast(
         "tuple[list[dict[str, Any]], ModelInfoDashboardState]",
         await asyncio.gather(
@@ -1952,7 +1982,7 @@ async def handle_pings(
     """Render the provider pings health page."""
     _get_dashboard_config(request)
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     ping_summary, recent_pings = cast(
         "_PingsPayload",
         await asyncio.gather(
@@ -1983,7 +2013,7 @@ async def handle_events(
     """Render the events page."""
     _get_dashboard_config(request)
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     events, available_types = cast(
         "tuple[list[dict[str, Any]], list[str]]",
         await asyncio.gather(
@@ -2028,9 +2058,9 @@ async def handle_timeseries(
     bucket = _normalize_bucket(bucket, time_range.label)
     group_by = _normalize_group_by(group_by)
     bounded_limit = clamp_grouped_limit(limit)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     telemetry = getattr(request.app.state, "dashboard_telemetry", None)
-    model_info_service = getattr(request.app.state, "model_info", None)
+    model_info_service = _get_model_info(request)
     grouped, model_info_state = await asyncio.gather(
         _await_dashboard_stage(
             telemetry,
@@ -2094,7 +2124,7 @@ async def handle_bandwidth(
     _get_dashboard_config(request)
     time_range = resolve_time_range(period)
     bucket = _normalize_bucket(bucket, time_range.label)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     telemetry = getattr(request.app.state, "dashboard_telemetry", None)
     _gather_start = time.perf_counter()
     heatmap_range = _heatmap_time_range(_HEATMAP_MAX_DAYS)
@@ -2151,7 +2181,7 @@ async def handle_timeseries_json(
     _get_dashboard_config(request)
     time_range = resolve_time_range(period)
     bucket = _normalize_bucket(bucket, time_range.label)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     series = await stats.get_timeseries(
         time_range,
         bucket=bucket,
@@ -2184,7 +2214,7 @@ async def handle_grouped_timeseries_json(
     bucket = _normalize_bucket(bucket, time_range.label)
     group_by = _normalize_group_by(group_by)
     bounded_limit = clamp_grouped_limit(limit)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     payload = await stats.get_grouped_timeseries(
         time_range,
         bucket=bucket,
@@ -2206,7 +2236,7 @@ async def handle_runtime(
     _start = time.perf_counter()
     _get_dashboard_config(request)
     runtime_metrics = request.app.state.runtime_metrics
-    stats_service = request.app.state.stats
+    stats_service = _get_stats(request)
     telemetry = getattr(request.app.state, "dashboard_telemetry", None)
     _gather_start = time.perf_counter()
     snapshot, transcoding_stats = cast(
@@ -2254,7 +2284,7 @@ async def handle_cache(
     _start = time.perf_counter()
     _get_dashboard_config(request)
     runtime_metrics = request.app.state.runtime_metrics
-    stats_service = request.app.state.stats
+    stats_service = _get_stats(request)
     telemetry = getattr(request.app.state, "dashboard_telemetry", None)
     _gather_start = time.perf_counter()
     (
@@ -2343,7 +2373,7 @@ async def handle_transcoding_stats_json(request: Request) -> Response:
     from eggpool.stats import serialize_transcoding_stats
 
     period = request.query_params.get("period", "24h")
-    stats_service = request.app.state.stats
+    stats_service = _get_stats(request)
     data = await stats_service.get_transcoding_stats(period)
     return JSONResponse(content=serialize_transcoding_stats(data))
 
@@ -2358,7 +2388,7 @@ async def handle_cache_observability_json(request: Request) -> Response:
     """
     _get_dashboard_config(request)
     period = request.query_params.get("period", "24h")
-    stats_service = request.app.state.stats
+    stats_service = _get_stats(request)
     data = await stats_service.get_cache_observability(period)
     return JSONResponse(content=data)
 
@@ -2367,7 +2397,7 @@ async def handle_canonical_request_segmentation_json(request: Request) -> Respon
     """Return canonical request segmentation aggregates as JSON."""
     _get_dashboard_config(request)
     period = request.query_params.get("period", "24h")
-    stats_service = request.app.state.stats
+    stats_service = _get_stats(request)
     data = await stats_service.get_canonical_request_segmentation(period)
     return JSONResponse(content=serialize_canonical_request_segmentation(data))
 
@@ -2380,7 +2410,7 @@ async def handle_compression_observability_json(request: Request) -> Response:
     """
     _get_dashboard_config(request)
     period = request.query_params.get("period", "24h")
-    stats_service = request.app.state.stats
+    stats_service = _get_stats(request)
     data = await stats_service.get_compression_observability(period)
     return JSONResponse(content=data)
 
@@ -2394,7 +2424,7 @@ async def handle_synthetic_cache_observability_json(request: Request) -> Respons
     """
     _get_dashboard_config(request)
     period = request.query_params.get("period", "24h")
-    stats_service = request.app.state.stats
+    stats_service = _get_stats(request)
     data = await stats_service.get_synthetic_cache_summary(period)
     return JSONResponse(
         content={
@@ -2417,7 +2447,7 @@ async def handle_compression_tuning_json(request: Request) -> Response:
     """
     _get_dashboard_config(request)
     period = request.query_params.get("period", "24h")
-    stats_service = request.app.state.stats
+    stats_service = _get_stats(request)
     data = await stats_service.get_compression_tuning_window_metrics(period)
     return JSONResponse(
         content={
@@ -2438,7 +2468,7 @@ async def handle_request_shaping_json(request: Request) -> Response:
     runtime_metrics = request.app.state.runtime_metrics
 
     period = request.query_params.get("period", "24h")
-    stats_service = request.app.state.stats
+    stats_service = _get_stats(request)
     (
         cache_observability,
         canonical_request_segmentation,
@@ -2489,7 +2519,7 @@ async def handle_compression_runtime_json(request: Request) -> Response:
     """
     _get_dashboard_config(request)
     period = request.query_params.get("period", "24h")
-    stats_service = request.app.state.stats
+    stats_service = _get_stats(request)
     data = await stats_service.get_compression_runtime(period)
     return JSONResponse(content=data)
 
@@ -2504,7 +2534,7 @@ async def handle_compression_policy_stats_json(request: Request) -> Response:
     """
     _get_dashboard_config(request)
     period = request.query_params.get("period", "24h")
-    stats_service = request.app.state.stats
+    stats_service = _get_stats(request)
     data = await stats_service.get_compression_policy_stats(period)
     return JSONResponse(content=data)
 
@@ -2520,7 +2550,7 @@ async def handle_cache_stability_json(request: Request) -> Response:
     """
     _get_dashboard_config(request)
     period = request.query_params.get("period", "24h")
-    stats_service = request.app.state.stats
+    stats_service = _get_stats(request)
     data = await stats_service.get_cache_stability(period)
     return JSONResponse(content=data)
 

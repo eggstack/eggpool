@@ -28,6 +28,17 @@ from eggpool.routing.provider import parse_model_provider
 
 logger = logging.getLogger(__name__)
 
+
+def _get_model_info(request: Request) -> Any:
+    """Get the model_info service from the active generation or app.state fallback."""
+    from eggpool.app import get_active_generation  # noqa: PLC0415
+
+    gen = get_active_generation(request)
+    if gen is not None:
+        return getattr(gen, "model_info", None)
+    return getattr(request.app.state, "model_info", None)
+
+
 if TYPE_CHECKING:
     from fastapi.responses import Response
 
@@ -286,7 +297,7 @@ def _decode_model_info_lookup_id(
 
 async def handle_model_info_summary(request: Request) -> Response:
     """GET /api/model-info — summary list of all models."""
-    model_info = getattr(request.app.state, "model_info", None)
+    model_info = _get_model_info(request)
     if model_info is None:
         return JSONResponse(
             status_code=503,
@@ -299,7 +310,7 @@ async def handle_model_info_summary(request: Request) -> Response:
 
 async def handle_model_info_detail(request: Request, model_id: str) -> Response:
     """GET /api/model-info/{model_id} — per-model detail."""
-    model_info = getattr(request.app.state, "model_info", None)
+    model_info = _get_model_info(request)
     if model_info is None:
         return JSONResponse(
             status_code=503,
@@ -359,7 +370,7 @@ async def handle_model_info_detail(request: Request, model_id: str) -> Response:
 
 async def handle_model_info_sources(request: Request) -> Response:
     """GET /api/model-info/sources — source health snapshot."""
-    model_info = getattr(request.app.state, "model_info", None)
+    model_info = _get_model_info(request)
     if model_info is None:
         return JSONResponse(
             status_code=503,
@@ -433,7 +444,7 @@ async def handle_model_info_aliases(request: Request, model_id: str) -> Response
     resolved to the canonical base via ``_decode_model_info_lookup_id``
     so aliases resolve identically to the detail endpoint.
     """
-    model_info = getattr(request.app.state, "model_info", None)
+    model_info = _get_model_info(request)
     if model_info is None:
         return JSONResponse(
             status_code=503,
@@ -462,7 +473,7 @@ async def handle_model_info_matches(request: Request, model_id: str) -> Response
     resolved to the canonical base via ``_decode_model_info_lookup_id``
     so matches resolve identically to the detail endpoint.
     """
-    model_info = getattr(request.app.state, "model_info", None)
+    model_info = _get_model_info(request)
     if model_info is None:
         return JSONResponse(
             status_code=503,
@@ -547,7 +558,7 @@ async def handle_model_info_refresh(request: Request) -> Response:
 
     Unknown ``source`` values are rejected with HTTP 400.
     """
-    model_info = getattr(request.app.state, "model_info", None)
+    model_info = _get_model_info(request)
     if model_info is None:
         return JSONResponse(
             status_code=503,

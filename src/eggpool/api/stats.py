@@ -40,10 +40,30 @@ if TYPE_CHECKING:
     from fastapi.responses import Response
 
 
+def _get_stats(request: Request) -> Any:
+    """Get the stats service from the active generation or app.state fallback."""
+    from eggpool.app import get_active_generation  # noqa: PLC0415
+
+    gen = get_active_generation(request)
+    if gen is not None:
+        return gen.stats_service
+    return getattr(request.app.state, "stats", None)
+
+
+def _get_router(request: Request) -> Any:
+    """Get the router from the active generation or app.state fallback."""
+    from eggpool.app import get_active_generation  # noqa: PLC0415
+
+    gen = get_active_generation(request)
+    if gen is not None:
+        return gen.router
+    return getattr(request.app.state, "router", None)
+
+
 async def handle_summary(request: Request, period: str | None = "24h") -> Response:
     """GET /api/stats/summary."""
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     summary = await stats.get_summary(time_range)
     return JSONResponse(content={"period": time_range.label, **summary})
 
@@ -62,7 +82,7 @@ async def handle_account_stats(
     them, mirroring the dashboard's "Show disabled accounts" toggle.
     """
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     accounts = await stats.get_account_stats(
         time_range, include_disabled=include_disabled
     )
@@ -82,7 +102,7 @@ async def handle_model_stats(
 ) -> Response:
     """GET /api/stats/models."""
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     models = await stats.get_model_stats(time_range, account_name=account or None)
     if models is None:
         return JSONResponse(
@@ -109,7 +129,7 @@ async def handle_timeseries(
     time_range = resolve_time_range(period)
     if bucket not in ("hour", "day"):
         bucket = "hour"
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     series = await stats.get_timeseries(
         time_range,
         bucket=bucket,
@@ -138,7 +158,7 @@ async def handle_errors(
     """GET /api/stats/errors."""
     limit = max(1, min(limit, 100))
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     errors = await stats.get_error_breakdown(time_range, limit=limit)
     return JSONResponse(content={"period": time_range.label, "errors": errors})
 
@@ -150,7 +170,7 @@ async def handle_events(
 ) -> Response:
     """GET /api/events."""
     limit = max(1, min(limit, 100))
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     events = await stats.get_recent_events(limit=limit, event_type=type_filter or None)
     return JSONResponse(content={"limit": limit, "type": type_filter, "events": events})
 
@@ -162,7 +182,7 @@ async def handle_bandwidth(
 ) -> Response:
     """GET /api/stats/bandwidth."""
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     daily = await stats.get_bandwidth_timeseries(
         time_range, account_name=account or None
     )
@@ -181,7 +201,7 @@ async def handle_latency(
 ) -> Response:
     """GET /api/stats/latency."""
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     provider_ttft = await stats.get_provider_ttft_summary(time_range)
     model_ttft = await stats.get_provider_model_ttft(time_range)
     phases = await stats.get_latency_phase_breakdown(time_range)
@@ -202,7 +222,7 @@ async def handle_pings(
 ) -> Response:
     """GET /api/stats/pings."""
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     ping_summary = await stats.get_ping_summary(time_range)
     recent_pings = await stats.get_ping_recent(provider_id=provider or None, limit=50)
     return JSONResponse(
@@ -218,7 +238,7 @@ async def handle_pings(
 async def handle_ip_stats(request: Request, period: str | None = "24h") -> Response:
     """GET /api/stats/ips."""
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     ip_stats = await stats.get_ip_stats(time_range)
     return JSONResponse(content={"period": time_range.label, "ips": ip_stats})
 
@@ -237,7 +257,7 @@ async def handle_attempt_stats(
     on account, model, and provider are accepted as query params.
     """
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     attempts = await stats.get_attempt_stats(
         time_range,
         account_name=account or None,
@@ -266,7 +286,7 @@ async def handle_retry_distribution(
     class of error is most common?" dashboards.
     """
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     rows = await stats.get_retry_distribution(time_range)
     return JSONResponse(content={"period": time_range.label, "distribution": rows})
 
@@ -278,7 +298,7 @@ async def handle_request_trace(request: Request, request_id: int) -> Response:
     Always auth-gated: per-request traces expose model, prompt
     volume, and error detail that operators consider sensitive.
     """
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     trace = await stats.get_request_trace(request_id)
     if trace is None:
         return JSONResponse(
@@ -305,7 +325,7 @@ async def handle_routing_distribution(
     of distinct accounts that were selected.
     """
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     rows = await stats.get_routing_distribution(time_range)
     return JSONResponse(content={"period": time_range.label, "distribution": rows})
 
@@ -318,7 +338,7 @@ async def handle_routing_selection_breakdown(
     Account-level selection counts derived from routing_decisions.
     """
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     rows = await stats.get_routing_selection_breakdown(time_range)
     return JSONResponse(content={"period": time_range.label, "selections": rows})
 
@@ -333,7 +353,7 @@ async def handle_routing_exclusion_breakdown(
     routing_decisions row.
     """
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     rows = await stats.get_routing_exclusion_breakdown(time_range)
     return JSONResponse(content={"period": time_range.label, "exclusions": rows})
 
@@ -347,7 +367,7 @@ async def handle_routing_skew_summary(
     most/least selected accounts, total selections.
     """
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     summary = await stats.get_routing_skew_summary(time_range)
     return JSONResponse(content={"period": time_range.label, **summary})
 
@@ -365,7 +385,7 @@ async def handle_routing_eligibility_explanation(
     call against the live registry + catalog so operators can diagnose
     routing skew without restarting the service.
     """
-    router = getattr(request.app.state, "router", None)
+    router = _get_router(request)
     if router is None:
         return JSONResponse(
             content={"error": "router unavailable"},
@@ -401,7 +421,7 @@ async def handle_operational_health(
     recent) for consistency.
     """
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     limit = max(1, min(limit, 200))
     summary = await stats.get_operational_event_summary(time_range)
     recent = await stats.get_recent_operational_events(
@@ -425,7 +445,7 @@ async def handle_pending_health(request: Request) -> Response:
     to surface leak-style failures (pending requests surviving past
     their reservation TTL, orphaned active reservations).
     """
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     snapshot = await stats.get_pending_health_snapshot()
     return JSONResponse(content=snapshot)
 
@@ -445,7 +465,7 @@ async def handle_pricing_provenance(request: Request) -> Response:
     """
     from eggpool.stats.queries import fetch_pricing_provenance_stats
 
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     rows = await fetch_pricing_provenance_stats(stats._db)
     return JSONResponse(content={"snapshots": rows})
 
@@ -502,7 +522,7 @@ async def handle_cache_observability(
     from eggpool.stats import resolve_time_range
 
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     payload = await stats.get_cache_observability(time_range)
     return JSONResponse(content={"period": time_range.label, **payload})
 
@@ -536,7 +556,7 @@ async def handle_canonical_request_segmentation(
       ``stable_prefix_bytes > 0`` segment
     """
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     payload = await stats.get_canonical_request_segmentation(time_range)
     return JSONResponse(
         content={
@@ -591,7 +611,7 @@ async def handle_compression_observability(
     from eggpool.stats import resolve_time_range
 
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     payload = await stats.get_compression_observability(time_range)
     return JSONResponse(content={"period": time_range.label, **payload})
 
@@ -628,7 +648,7 @@ async def handle_synthetic_cache_observability(
     from eggpool.stats import resolve_time_range
 
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     payload = await stats.get_synthetic_cache_summary(time_range)
     return JSONResponse(
         content={
@@ -672,7 +692,7 @@ async def handle_compression_tuning(
     from eggpool.stats import resolve_time_range
 
     time_range = resolve_time_range(period)
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     payload = await stats.get_compression_tuning_window_metrics(time_range)
     return JSONResponse(
         content={
@@ -703,7 +723,7 @@ async def handle_recent_requests(
     enabled IP stats on the dashboard.  Error class is returned but
     the raw upstream error_detail is never sent to this endpoint.
     """
-    stats = request.app.state.stats
+    stats = _get_stats(request)
     account_id_value: int | None = None
     if account:
         from eggpool.stats.queries import fetch_account_id

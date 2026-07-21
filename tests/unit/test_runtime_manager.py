@@ -422,17 +422,17 @@ class TestAttachRuntimeManager:
 
 
 # ---------------------------------------------------------------------------
-# _mirror_generation_on_app_state (app.py)
+# mirror_generation_on_app_state (app.py)
 # ---------------------------------------------------------------------------
 
 
 class TestMirrorGenerationOnAppState:
     def test_mirror_sets_generation_owned_attrs(self) -> None:
-        from eggpool.app import _mirror_generation_on_app_state
+        from eggpool.app import mirror_generation_on_app_state
 
         app = MagicMock()
         gen = _fake_generation(0)
-        _mirror_generation_on_app_state(app, gen)
+        mirror_generation_on_app_state(app, gen)
         # Should have set router, catalog, coordinator, etc.
         assert app.state.router is gen.router
         assert app.state.catalog is gen.catalog
@@ -440,7 +440,7 @@ class TestMirrorGenerationOnAppState:
         assert app.state.health_manager is gen.health_manager
 
     def test_mirror_does_not_overwrite_process_owned(self) -> None:
-        from eggpool.app import _mirror_generation_on_app_state
+        from eggpool.app import mirror_generation_on_app_state
 
         app = MagicMock()
         app.state.db = MagicMock()
@@ -448,7 +448,7 @@ class TestMirrorGenerationOnAppState:
         original_db = app.state.db
         original_config = app.state.config
         gen = _fake_generation(0)
-        _mirror_generation_on_app_state(app, gen)
+        mirror_generation_on_app_state(app, gen)
         assert app.state.db is original_db
         assert app.state.config is original_config
 
@@ -1057,4 +1057,205 @@ class TestOldGenerationClientPoolClosure:
         # client_pool should be closed despite held lease (timeout forced it)
         gen0.client_pool.aclose.assert_called()
 
-        await manager.shutdown()
+
+# ---------------------------------------------------------------------------
+# Phase 7: Active-generation state authority
+# ---------------------------------------------------------------------------
+
+
+class TestActiveGenerationMetadata:
+    """Test RuntimeManager.active_metadata() and snapshot_active_values()."""
+
+    @pytest.mark.asyncio
+    async def test_active_metadata_returns_immutable_view(self) -> None:
+        from eggpool.runtime_manager import ActiveGenerationMetadata
+
+        manager = RuntimeManager()
+        gen = _fake_generation(42)
+        await manager.install_initial(gen)
+
+        meta = manager.active_metadata()
+        assert isinstance(meta, ActiveGenerationMetadata)
+        assert meta.generation_id == 42
+        assert meta.config_digest == "a" * 64
+
+    @pytest.mark.asyncio
+    async def test_active_metadata_raises_when_no_generation(self) -> None:
+        from eggpool.runtime_manager import RuntimeManagerShutdownError
+
+        manager = RuntimeManager()
+        with pytest.raises(RuntimeManagerShutdownError):
+            manager.active_metadata()
+
+    @pytest.mark.asyncio
+    async def test_snapshot_active_values_returns_view(self) -> None:
+        from eggpool.runtime_manager import ActiveGenerationView
+
+        manager = RuntimeManager()
+        gen = _fake_generation(7)
+        await manager.install_initial(gen)
+
+        view = manager.snapshot_active_values()
+        assert isinstance(view, ActiveGenerationView)
+        assert view.generation_id == 7
+        assert view.config is gen.config
+        assert view.registry is gen.registry
+        assert view.catalog is gen.catalog
+        assert view.router is gen.router
+        assert view.coordinator is gen.coordinator
+        assert view.health_manager is gen.health_manager
+        assert view.stats is gen.stats_service
+
+    @pytest.mark.asyncio
+    async def test_snapshot_active_values_raises_when_no_generation(self) -> None:
+        from eggpool.runtime_manager import RuntimeManagerShutdownError
+
+        manager = RuntimeManager()
+        with pytest.raises(RuntimeManagerShutdownError):
+            manager.snapshot_active_values()
+
+    @pytest.mark.asyncio
+    async def test_metadata_updates_after_candidate_publication(self) -> None:
+        manager = RuntimeManager()
+        gen0 = _fake_generation(0)
+        await manager.install_initial(gen0)
+
+        meta0 = manager.active_metadata()
+        assert meta0.generation_id == 0
+
+        gen1 = _fake_generation(1)
+        await manager.install_candidate(gen1)
+
+        meta1 = manager.active_metadata()
+        assert meta1.generation_id == 1
+        assert meta1.config_digest == gen1.config_digest
+
+    @pytest.mark.asyncio
+    async def test_snapshot_updates_after_candidate_publication(self) -> None:
+        manager = RuntimeManager()
+        gen0 = _fake_generation(0)
+        await manager.install_initial(gen0)
+
+        view0 = manager.snapshot_active_values()
+        assert view0.generation_id == 0
+        assert view0.router is gen0.router
+
+        gen1 = _fake_generation(1)
+        await manager.install_candidate(gen1)
+
+        view1 = manager.snapshot_active_values()
+        assert view1.generation_id == 1
+        assert view1.router is gen1.router
+
+    @pytest.mark.asyncio
+    async def test_snapshot_reflects_supervisor_patch(self) -> None:
+        manager = RuntimeManager()
+        gen = _fake_generation(0)
+        await manager.install_initial(gen)
+
+        new_supervisor = MagicMock()
+        manager.attach_supervisor_to_active(new_supervisor)
+
+        view = manager.snapshot_active_values()
+        assert view.supervisor is new_supervisor
+
+
+class TestAppStateAuditEnforcementPhase7:
+    """Phase 7 audit: generation-owned services accessed through helpers."""
+
+    def test_stats_routes_use_helper(self) -> None:
+        """Verify stats.py uses _get_stats helper instead of direct app.state."""
+        stats_path = (
+            Path(__file__).resolve().parent.parent.parent
+            / "src"
+            / "eggpool"
+            / "api"
+            / "stats.py"
+        )
+        source = stats_path.read_text()
+        assert "_get_stats(request)" in source or "def _get_stats" in source, (
+            "stats.py must use _get_stats helper for generation-owned services"
+        )
+        # Verify no direct request.app.state.stats reads remain outside the helper
+        lines = source.split("\n")
+        in_helper = False
+        violations = []
+        for i, line in enumerate(lines, 1):
+            if "def _get_stats" in line:
+                in_helper = True
+                continue
+            if in_helper and (line.strip() == "" or not line.startswith(" ")):
+                in_helper = False
+            if (
+                not in_helper
+                and "request.app.state.stats" in line
+                and "def " not in line
+            ):
+                violations.append((i, line.strip()))
+        assert violations == [], (
+            f"stats.py has direct app.state.stats reads outside helper: {violations}"
+        )
+
+    def test_model_info_routes_use_helper(self) -> None:
+        """Verify model_info.py uses _get_model_info helper."""
+        mi_path = (
+            Path(__file__).resolve().parent.parent.parent
+            / "src"
+            / "eggpool"
+            / "api"
+            / "model_info.py"
+        )
+        source = mi_path.read_text()
+        assert (
+            "_get_model_info(request)" in source or "def _get_model_info" in source
+        ), "model_info.py must use _get_model_info helper"
+
+    def test_dashboard_routes_use_helpers(self) -> None:
+        """Verify dashboard/routes.py uses helpers for generation-owned services."""
+        routes_path = (
+            Path(__file__).resolve().parent.parent.parent
+            / "src"
+            / "eggpool"
+            / "dashboard"
+            / "routes.py"
+        )
+        source = routes_path.read_text()
+        assert "def _get_stats" in source, (
+            "dashboard/routes.py must define _get_stats helper"
+        )
+        assert "def _get_model_info" in source, (
+            "dashboard/routes.py must define _get_model_info helper"
+        )
+        assert "def _get_catalog" in source, (
+            "dashboard/routes.py must define _get_catalog helper"
+        )
+
+    def test_backoff_routes_use_helper(self) -> None:
+        """Verify backoff.py uses _get_account_backoff_repo helper."""
+        backoff_path = (
+            Path(__file__).resolve().parent.parent.parent
+            / "src"
+            / "eggpool"
+            / "api"
+            / "backoff.py"
+        )
+        source = backoff_path.read_text()
+        assert "def _get_account_backoff_repo" in source, (
+            "backoff.py must define _get_account_backoff_repo helper"
+        )
+
+    def test_readiness_uses_active_generation(self) -> None:
+        """Verify readyz endpoint uses runtime_manager.active_snapshot()."""
+        app_path = (
+            Path(__file__).resolve().parent.parent.parent / "src" / "eggpool" / "app.py"
+        )
+        source = app_path.read_text()
+        # Find the readyz handler
+        readyz_start = source.find("async def readyz(")
+        assert readyz_start != -1, "readyz handler not found"
+        # Find the end of readyz (next @app.get or next function def)
+        readyz_section = source[readyz_start : readyz_start + 2000]
+        assert "runtime_manager.active_snapshot()" in readyz_section, (
+            "readyz must use runtime_manager.active_snapshot()"
+            " for generation-owned checks"
+        )

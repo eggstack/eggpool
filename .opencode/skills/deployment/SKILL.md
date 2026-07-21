@@ -141,6 +141,15 @@ plane infrastructure (control socket, reload manager, candidate
 generation, persistence reconciliation, atomic publication) is fully
 operational.
 
+### ReloadManager App Reference
+
+The `ReloadManager` constructor now accepts an optional `app` parameter.
+When provided, the reload manager calls `mirror_generation_on_app_state()`
+after each successful publication to keep `app.state` mirrors in sync
+with the active generation. This ensures dashboard routes, readiness
+probes, and other synchronous consumers see updated services immediately
+after a reload.
+
 **Connect/logout fallback**: `eggpool connect` and `eggpool logout`
 route through the same validate-and-reload helper. When the server is
 healthy but the control socket is missing, they return

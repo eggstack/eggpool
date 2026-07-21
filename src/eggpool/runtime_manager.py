@@ -697,6 +697,62 @@ class GenerationDiagnostics:
 
 
 @dataclass(frozen=True)
+class ActiveGenerationMetadata:
+    """Immutable metadata about the active generation without service references.
+
+    Returned by :meth:`RuntimeManager.active_metadata` for short
+    synchronous diagnostics that need generation identity without
+    acquiring a lease or retaining service references.  The snapshot
+    is invalidated atomically at publication.
+    """
+
+    generation_id: int
+    config_digest: str
+    created_at_monotonic: float
+    created_at_epoch: float
+
+
+@dataclass(frozen=True)
+class ActiveGenerationView:
+    """Compatibility view of the active generation's services.
+
+    Returned by :meth:`RuntimeManager.snapshot_active_values` for
+    handlers that need multiple generation-owned references without
+    acquiring a lease.  The view is snapshot at call time; the
+    underlying generation may retire after the snapshot is taken.
+
+    .. deprecated::
+        Prefer acquiring a lease via :meth:`RuntimeManager.acquire`
+        for any operation that awaits while using generation-owned
+        services.  This view exists only for short synchronous
+        diagnostics and backward-compatible dashboard routes.
+    """
+
+    generation_id: int
+    config_digest: str
+    config: Any  # noqa: ANN401
+    registry: Any  # noqa: ANN401
+    catalog: Any  # noqa: ANN401
+    router: Any  # noqa: ANN401
+    coordinator: Any  # noqa: ANN401
+    health_manager: Any  # noqa: ANN401
+    stats: Any  # noqa: ANN401
+    model_info: Any  # noqa: ANN401
+    transcoder_policy: Any  # noqa: ANN401
+    compression_policy: Any  # noqa: ANN401
+    client_pool: Any  # noqa: ANN401
+    outbound_manager: Any  # noqa: ANN401
+    cost_calculator: Any  # noqa: ANN401
+    account_backoff_repo: Any  # noqa: ANN401
+    dispatch_overhead_recorder: Any  # noqa: ANN401
+    dispatch_span_recorder: Any  # noqa: ANN401
+    stream_diagnostics: Any  # noqa: ANN401
+    finalization_retry_queue: Any  # noqa: ANN401
+    routing_trace_guard: Any  # noqa: ANN401
+    supervisor: Any  # noqa: ANN401
+
+
+@dataclass(frozen=True)
 class RuntimeDiagnostics:
     """Process-wide snapshot of the runtime manager.
 
@@ -929,6 +985,70 @@ class RuntimeManager:
     def has_active_generation(self) -> bool:
         """Return ``True`` once :meth:`install_initial` has succeeded."""
         return self._active is not None
+
+    def active_metadata(self) -> ActiveGenerationMetadata:
+        """Return immutable metadata about the active generation.
+
+        Safe for short synchronous diagnostics (e.g. config/status
+        endpoints) that only need the generation ID, digest, and
+        timestamps without retaining service references.  Raises
+        :class:`RuntimeManagerShutdownError` when no generation is
+        installed.
+        """
+        slot = self._active
+        if slot is None:
+            raise RuntimeManagerShutdownError("No active runtime generation installed")
+        gen = slot.generation
+        return ActiveGenerationMetadata(
+            generation_id=gen.generation_id,
+            config_digest=gen.config_digest,
+            created_at_monotonic=gen.created_at_monotonic,
+            created_at_epoch=gen.created_at_epoch,
+        )
+
+    def snapshot_active_values(self) -> ActiveGenerationView:
+        """Snapshot the active generation's services for synchronous diagnostics.
+
+        Returns an :class:`ActiveGenerationView` that captures
+        references to the active generation's services at call time.
+        The underlying generation may retire after the snapshot is
+        taken; callers must not retain the view across await points
+        or slow operations.
+
+        Prefer :meth:`acquire` for any operation that awaits while
+        using generation-owned services.
+
+        Raises :class:`RuntimeManagerShutdownError` when no generation
+        is installed.
+        """
+        slot = self._active
+        if slot is None:
+            raise RuntimeManagerShutdownError("No active runtime generation installed")
+        gen = slot.generation
+        return ActiveGenerationView(
+            generation_id=gen.generation_id,
+            config_digest=gen.config_digest,
+            config=gen.config,
+            registry=gen.registry,
+            catalog=gen.catalog,
+            router=gen.router,
+            coordinator=gen.coordinator,
+            health_manager=gen.health_manager,
+            stats=gen.stats_service,
+            model_info=getattr(gen, "model_info", None),
+            transcoder_policy=gen.transcoder_policy,
+            compression_policy=gen.compression_policy,
+            client_pool=gen.client_pool,
+            outbound_manager=gen.outbound_manager,
+            cost_calculator=gen.cost_calculator,
+            account_backoff_repo=gen.account_backoff_repo,
+            dispatch_overhead_recorder=gen.dispatch_overhead_recorder,
+            dispatch_span_recorder=gen.dispatch_span_recorder,
+            stream_diagnostics=getattr(gen, "stream_diagnostics", None),
+            finalization_retry_queue=gen.finalization_retry_queue,
+            routing_trace_guard=gen.routing_trace_guard,
+            supervisor=gen.supervisor,
+        )
 
     # -- retirement ---------------------------------------------------------
 
@@ -1511,6 +1631,7 @@ _RUNTIME_OWNED_APP_STATE_ATTRS: frozenset[str] = frozenset(
         "task_monitor",
         "dashboard_telemetry",
         "stream_diagnostics",
+        "local_pre_upstream_recorder",
         "runtime_metrics",
         "transcoder_policy",
         "compression_policy",
@@ -1572,6 +1693,8 @@ async def wrap_stream_with_lease(
 
 
 __all__ = [
+    "ActiveGenerationMetadata",
+    "ActiveGenerationView",
     "CandidateOwnershipState",
     "CleanupDiagnostics",
     "GenerationBuildResult",

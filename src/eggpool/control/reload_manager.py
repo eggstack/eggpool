@@ -327,9 +327,11 @@ class ReloadManager:
         *,
         drain_timeout_s: float | None = None,
         observer: ReloadObserver | None = None,
+        app: Any = None,  # noqa: ANN401 — FastAPI app for mirror updates
     ) -> None:
         self._runtime_manager = runtime_manager
         self._process = process
+        self._app = app
         if drain_timeout_s is None:
             drain_timeout_s = _resolve_drain_timeout_s()
         self._drain_timeout_s = drain_timeout_s
@@ -1599,6 +1601,15 @@ class ReloadManager:
             transfer_fn = getattr(candidate, "transfer_to_runtime_manager", None)
             if transfer_fn is not None:
                 transfer_fn()
+            # Mirror the new generation onto app.state so dashboard,
+            # readyz, and other synchronous consumers see the updated
+            # services immediately after publication.
+            if self._app is not None:
+                from eggpool.app import (  # noqa: PLC0415
+                    mirror_generation_on_app_state,
+                )
+
+                mirror_generation_on_app_state(self._app, generation)
         except Exception as exc:
             logger.exception("Generation publication failed")
             raise ReloadCommitError(f"Failed to publish generation: {exc!r}") from exc
