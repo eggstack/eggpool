@@ -1338,6 +1338,7 @@ def _runtime_manager_to_dict(diag: Any) -> dict[str, Any]:
         "retiring_count": len(diag.retiring),
         "shutdown_in_progress": diag.shutdown_in_progress,
         "next_generation_id": diag.next_generation_id,
+        "retirement_task_count": diag.retirement_task_count,
     }
 
 
@@ -1345,7 +1346,7 @@ def _generation_diag_to_dict(diag: Any) -> dict[str, Any] | None:
     """Render a :class:`GenerationDiagnostics` as a JSON-safe dict."""
     if diag is None:
         return None
-    return {
+    result: dict[str, Any] = {
         "generation_id": diag.generation_id,
         "config_digest_prefix": diag.config_digest_prefix,
         "created_at_monotonic": diag.created_at_monotonic,
@@ -1356,4 +1357,15 @@ def _generation_diag_to_dict(diag: Any) -> dict[str, Any] | None:
         "retirement_started": diag.retirement_started,
         "retirement_complete": diag.retirement_complete,
         "last_close_error": diag.last_close_error,
+        "state": diag.state,
+        "forced_close": diag.forced_close,
     }
+    if diag.retirement_start_time is not None:
+        result["retirement_start_time"] = diag.retirement_start_time
+    if diag.drain_deadline_s is not None:
+        result["drain_deadline_s"] = diag.drain_deadline_s
+    if diag.close_start_time is not None:
+        result["close_start_time"] = diag.close_start_time
+    if diag.close_complete_time is not None:
+        result["close_complete_time"] = diag.close_complete_time
+    return result

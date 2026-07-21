@@ -123,6 +123,9 @@ uv run pytest tests/unit/test_control_server.py tests/unit/test_reload_manager.p
 # resources, retirement, and construction parity
 uv run pytest tests/integration/reload/ -v
 
+# Phase 3 — Asynchronous generation retirement tests
+uv run pytest tests/unit/test_phase3_async_retirement.py -v
+
 # Reload correctness baseline — single file
 uv run pytest tests/integration/reload/test_reload_admission.py -v
 

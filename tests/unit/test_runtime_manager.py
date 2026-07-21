@@ -861,21 +861,16 @@ class TestMultiGenerationRetirement:
         held_lease = await manager.acquire()
         assert held_lease.generation_id == 0
 
-        # Publish gen1 as background task — gen0 starts retiring
-        # (drain blocked by held lease)
+        # Publish gen1 — gen0 starts retiring (drain blocked by held lease)
         gen1 = _fake_generation(1)
-        task1 = asyncio.create_task(
-            manager.install_candidate(gen1, drain_timeout_s=5.0)
-        )
+        await manager.install_candidate(gen1, drain_timeout_s=5.0)
         await asyncio.sleep(0.05)
         assert any(s.generation.generation_id == 0 for s in manager._retiring)
 
         # Acquire on gen1, then publish gen2 — gen1 starts retiring too
         lease1 = await manager.acquire()
         gen2 = _fake_generation(2)
-        task2 = asyncio.create_task(
-            manager.install_candidate(gen2, drain_timeout_s=5.0)
-        )
+        await manager.install_candidate(gen2, drain_timeout_s=5.0)
         await asyncio.sleep(0.05)
 
         # Both gen0 and gen1 should be in _retiring simultaneously
@@ -886,7 +881,9 @@ class TestMultiGenerationRetirement:
         # Release all leases to let retirements complete
         await held_lease.release()
         await lease1.release()
-        await asyncio.gather(task1, task2)
+        # Wait for retirement tasks to complete
+        await manager.wait_for_retirement(0, timeout_s=5.0)
+        await manager.wait_for_retirement(1, timeout_s=5.0)
 
         # Active should be gen2, _retiring empty
         assert manager.active_snapshot().generation_id == 2
@@ -906,15 +903,13 @@ class TestMultiGenerationRetirement:
         # Hold a lease so retirement cannot complete immediately
         held = await manager.acquire()
 
-        # Publish gen1 as background task
-        task = asyncio.create_task(
-            manager.install_candidate(_fake_generation(1), drain_timeout_s=5.0)
-        )
+        # Publish gen1
+        await manager.install_candidate(_fake_generation(1), drain_timeout_s=5.0)
         await asyncio.sleep(0.05)
         assert len(manager._retiring) >= 1
 
         await held.release()
-        await task
+        await manager.wait_for_retirement(0, timeout_s=5.0)
         assert len(manager._retiring) == 0
 
         await manager.shutdown()
@@ -940,7 +935,8 @@ class TestRetirementTimeout:
         gen1 = _fake_generation(1)
         await manager.install_candidate(gen1, drain_timeout_s=0.05)
 
-        # install_candidate awaits retirement; no extra sleep needed
+        # Wait for the retirement task to complete (force-close path)
+        await manager.wait_for_retirement(0, timeout_s=2.0)
 
         # gen0's client_pool.aclose() should have been called
         gen0.client_pool.aclose.assert_called()
@@ -960,13 +956,11 @@ class TestRetirementTimeout:
 
         # Publish gen1 with generous timeout
         gen1 = _fake_generation(1)
-        # install_candidate starts retirement in background
         await manager.install_candidate(gen1, drain_timeout_s=5.0)
 
-        # Release the lease quickly — retirement should complete cleanly
-        await asyncio.sleep(0.05)
+        # Release the lease — retirement should complete cleanly
         await lease.release()
-        await asyncio.sleep(0.1)
+        await manager.wait_for_retirement(0, timeout_s=5.0)
 
         # gen0's client_pool should be closed
         gen0.client_pool.aclose.assert_called()
@@ -1029,9 +1023,9 @@ class TestOldGenerationClientPoolClosure:
 
         lease = await manager.acquire()
 
-        # Publish gen1 as background task — gen0 starts draining
+        # Publish gen1 — gen0 starts draining
         gen1 = _fake_generation(1)
-        task = asyncio.create_task(manager.install_candidate(gen1, drain_timeout_s=5.0))
+        await manager.install_candidate(gen1, drain_timeout_s=5.0)
         await asyncio.sleep(0.05)
 
         # gen0's client_pool should NOT be closed yet (lease held, drain
@@ -1040,7 +1034,7 @@ class TestOldGenerationClientPoolClosure:
 
         # Release the lease — drain completes, resources close
         await lease.release()
-        await task
+        await manager.wait_for_retirement(0, timeout_s=5.0)
 
         # Now gen0's client_pool should be closed
         gen0.client_pool.aclose.assert_called()
@@ -1058,7 +1052,7 @@ class TestOldGenerationClientPoolClosure:
 
         gen1 = _fake_generation(1)
         await manager.install_candidate(gen1, drain_timeout_s=0.05)
-        await asyncio.sleep(0.15)
+        await manager.wait_for_retirement(0, timeout_s=2.0)
 
         # client_pool should be closed despite held lease (timeout forced it)
         gen0.client_pool.aclose.assert_called()

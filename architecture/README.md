@@ -3787,6 +3787,78 @@ missed-deadline tasks. The `/api/stats/runtime` endpoint and
 `eggpool runtime-status` CLI surface `background_task_summary` with
 per-label counters.
 
+### Phase 3 — Asynchronous runtime-generation retirement
+
+`RuntimeManager` publication is now bounded and independent of
+old-generation drainage.  A successful rehash installs the candidate
+generation and returns promptly even when long-lived streams still hold
+leases on the previous generation.
+
+**Slot lifecycle states** (`SlotState` enum in `runtime_manager.py`):
+`active` → `retiring` → `closing` → `closed` (or `failed_close` on
+terminal close error).
+
+**Publication behavior** (`install_candidate`):
+1. Validate candidate and expected active generation.
+2. Acquire the runtime-manager state lock.
+3. Mark the old slot non-accepting (state → `retiring`).
+4. Install the candidate as active (state → `active`).
+5. Register the old slot in the retiring collection.
+6. Create and register one retirement task for the old slot.
+7. Release the state lock.
+8. Return publication metadata immediately.
+
+No network close, lease-drain wait, sleep, or long-running cleanup
+occurs while holding the state lock.
+
+**Retirement task ownership**: `RuntimeManager` maintains
+`_retirement_tasks: dict[int, asyncio.Task[None]]` keyed by generation
+ID.  Each task:
+- waits for active lease count to reach zero (via `drain_event`) or
+  the drain deadline;
+- observes shutdown acceleration policy;
+- transitions slot state under the manager lock;
+- closes generation-owned resources exactly once;
+- consumes and records all exceptions;
+- removes itself from the registry in `finally`.
+
+**Event-based drain signaling**: `GenerationLease.release()` signals
+`slot.drain_event` when `active_leases` reaches zero.  The retirement
+task uses `asyncio.wait_for(slot.drain_event.wait(), ...)` instead of
+polling with `asyncio.sleep`.
+
+**Deadline behavior**: when the drain deadline expires:
+- stop waiting for leases;
+- mark the generation `forced_close = True`;
+- close resources using the existing bounded close policy;
+- record active lease count at deadline;
+- log a structured warning;
+- late lease releases remain safe and idempotent.
+
+**Shutdown semantics** (`shutdown()`):
+1. mark the manager as shutting down and reject new leases/publications;
+2. mark the active slot retiring;
+3. schedule retirement for the active slot;
+4. await all registered retirement tasks within a bounded shutdown
+   deadline (10s);
+5. force-cancel remaining tasks if necessary;
+6. leave no EggPool-owned retirement tasks pending.
+
+**Diagnostics** (`RuntimeDiagnostics`): exposes `active` generation
+diagnostics, `retiring` tuple (per-generation state, active_leases,
+forced_close, timing), `retirement_task_count`, and
+`shutdown_in_progress`.  `GenerationDiagnostics` includes `state`
+(SlotState value), `forced_close`, `retirement_start_time`,
+`drain_deadline_s`, `close_start_time`, and `close_complete_time`.
+
+**Tests**: `tests/unit/test_phase3_async_retirement.py` covers prompt
+reload completion, natural drainage, deadline force close, multiple
+concurrent generations, shutdown with various states, task hygiene,
+slot state lifecycle, and `wait_for_retirement`.  Existing tests in
+`tests/unit/test_runtime_manager.py` and
+`tests/integration/reload/test_reload_retirement.py` are updated for
+the non-blocking publication path.
+
 ### Diagnostics (Milestone C-related)
 
 - **Stream diagnostics** (`src/eggpool/request/stream_diagnostics.py`):

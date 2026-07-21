@@ -1,9 +1,9 @@
 """Reload retirement and lease-drain tests.
 
 Tests that verify:
-- Reload blocks on lease drain (current behavior — documents the defect)
+- Reload completes promptly without blocking on lease drain (Phase 3)
 - Active generation changes even when leases are held
-- Old generation is retired after new generation is published
+- Old generation is retired asynchronously after new generation is published
 """
 
 from __future__ import annotations
@@ -21,40 +21,35 @@ if TYPE_CHECKING:
 
 
 @pytest.mark.asyncio()
-async def test_reload_blocks_on_lease_drain(
+async def test_reload_completes_promptly_with_held_lease(
     reload_harness: ReloadHarness,
 ) -> None:
-    """Current behavior: reload blocks until held leases drain or timeout.
+    """Phase 3: reload completes promptly even with held leases.
 
-    The reload manager's ``install_candidate`` calls ``begin_retirement``
-    which waits for active leases to drain (bounded by ``drain_timeout_s``).
-    This means a reload with held leases blocks for up to the drain timeout.
-
-    The desired future behavior (Phase 3) is for retirement to be fully
-    asynchronous so reload completion is never blocked by held leases.
+    The reload manager's ``install_candidate`` spawns a background
+    retirement task and returns immediately.  Publication is no longer
+    gated on old-generation lease drain.
     """
     # Acquire a lease on the current generation
     lease = await reload_harness.runtime_manager.acquire()
     assert lease.generation_id == 0
 
-    # Reload — blocks because begin_retirement waits for lease drain
+    # Reload — should complete promptly (not block on drain)
     start = time.monotonic()
     result = await reload_harness.reload()
     elapsed = time.monotonic() - start
 
     assert result.ok is True
 
-    # The reload blocks on drain_timeout_s (5.0s in the harness).
-    # This documents the current defect: reload completion is gated
-    # on old-generation lease drain.
-    assert elapsed >= 1.0, (
-        f"Reload completed in {elapsed:.2f}s — expected blocking on drain"
+    # Reload completes promptly — not gated on drain timeout
+    assert elapsed < 1.0, (
+        f"Reload took {elapsed:.2f}s — expected prompt completion (Phase 3)"
     )
 
     # Release the old lease (retirement should now complete)
     await lease.release()
-    # Wait for the drain to finish
-    await asyncio.sleep(0.1)
+    # Wait for the retirement task to finish
+    await asyncio.sleep(0.2)
 
 
 @pytest.mark.asyncio()
@@ -78,8 +73,8 @@ async def test_new_generation_active_during_old_lease(
     assert lease.generation_id == old_gen_id
 
     await lease.release()
-    # Wait for retirement drain to complete
-    await asyncio.sleep(0.1)
+    # Wait for retirement to complete
+    await asyncio.sleep(0.2)
 
 
 @pytest.mark.asyncio()
@@ -94,8 +89,8 @@ async def test_old_generation_retired_after_new_publication(
     assert result.ok is True
     new_gen_id = result.generation
 
-    # Wait for retirement to complete (drain_timeout_s)
-    await asyncio.sleep(0.1)
+    # Wait for retirement to complete
+    await asyncio.sleep(0.2)
 
     post_snapshot = RuntimeSnapshot.capture(reload_harness.runtime_manager)
     assert post_snapshot.active_generation_id == new_gen_id

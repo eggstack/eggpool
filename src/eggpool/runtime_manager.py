@@ -102,6 +102,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import enum
 import logging
 import time
 from collections.abc import (  # noqa: TC003 - used at runtime
@@ -131,6 +132,31 @@ if TYPE_CHECKING:
     from eggpool.stats import StatsService
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Slot lifecycle state (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+class SlotState(enum.Enum):
+    """Explicit lifecycle state for a generation slot.
+
+    Transitions::
+
+        active → retiring → closing → closed
+        active → retiring → closing → failed_close
+
+    A slot in ``retiring`` no longer accepts new leases but may still
+    hold active leases.  ``closing`` means the close sequence is in
+    progress.  ``closed`` and ``failed_close`` are terminal states.
+    """
+
+    ACTIVE = "active"
+    RETIRING = "retiring"
+    CLOSING = "closing"
+    CLOSED = "closed"
+    FAILED_CLOSE = "failed_close"
 
 
 # ---------------------------------------------------------------------------
@@ -286,19 +312,26 @@ class _GenerationSlot:
     1. Built by :meth:`RuntimeManager.install_initial` once a generation
        is ready to publish.
     2. Serves incoming :meth:`RuntimeManager.acquire` calls until
-       :attr:`accepting_leases` flips to ``False`` (typically because
+       :attr:`state` transitions away from ``ACTIVE`` (typically because
        a new generation was published).
     3. Waits for active leases to drain (or a hard deadline elapses
        on process shutdown) and then performs the ordered teardown.
     """
 
     generation: RuntimeGeneration
+    state: SlotState = SlotState.ACTIVE
     active_leases: int = 0
-    accepting_leases: bool = True
-    retirement_started: bool = False
+    accepting_leases: bool = True  # kept for backward compat; derived from state
+    retirement_started: bool = False  # kept for backward compat; derived from state
     retirement_complete: asyncio.Event = field(default_factory=asyncio.Event)
+    drain_event: asyncio.Event = field(default_factory=asyncio.Event)
     close_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     last_close_error: str | None = None
+    forced_close: bool = False
+    retirement_start_time: float | None = None
+    close_start_time: float | None = None
+    close_complete_time: float | None = None
+    drain_deadline_s: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -335,7 +368,9 @@ class GenerationLease:
         """Decrement the slot's active lease count exactly once.
 
         Idempotent: a second call from a streaming wrapper or a
-        post-finalization task is silently ignored.
+        post-finalization task is silently ignored.  Signals the
+        slot's drain event when the count reaches zero so retirement
+        tasks can proceed without polling.
         """
         async with self.release_lock:
             if self.released:
@@ -344,6 +379,7 @@ class GenerationLease:
             self.slot.active_leases -= 1
             if self.slot.active_leases <= 0:
                 self.slot.active_leases = 0
+                self.slot.drain_event.set()
             logger.debug(
                 "Generation %d lease released (active=%d)",
                 self.generation_id,
@@ -381,6 +417,12 @@ class GenerationDiagnostics:
     retirement_started: bool
     retirement_complete: bool
     last_close_error: str | None
+    state: str = "active"
+    forced_close: bool = False
+    retirement_start_time: float | None = None
+    drain_deadline_s: float | None = None
+    close_start_time: float | None = None
+    close_complete_time: float | None = None
 
 
 @dataclass(frozen=True)
@@ -403,12 +445,15 @@ class RuntimeDiagnostics:
       invoked.
     - ``next_generation_id``: next ID that will be assigned when a new
       generation is published.
+    - ``retirement_task_count``: number of tracked retirement tasks
+      (Phase 3).
     """
 
     active: GenerationDiagnostics | None
     retiring: tuple[GenerationDiagnostics, ...]
     shutdown_in_progress: bool
     next_generation_id: int
+    retirement_task_count: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -463,6 +508,7 @@ class RuntimeManager:
         self._shutdown_in_progress = False
         self._acquire_id = 0  # monotonic tie-breaker for lease diagnostics
         self._synthetic_generation_digest: str = ""
+        self._retirement_tasks: dict[int, asyncio.Task[None]] = {}  # Phase 3
 
     # -- publication --------------------------------------------------------
 
@@ -511,6 +557,11 @@ class RuntimeManager:
         slot begins accepting leases immediately and the old slot is
         marked for retirement under the same lock acquisition.
 
+        Publication returns promptly — the old generation's retirement
+        (lease drain + resource close) runs as a tracked background
+        task.  Call :meth:`wait_for_retirement` to wait for a specific
+        generation's retirement to complete.
+
         Idempotent: if the generation has the same ``generation_id``
         already active, this is a no-op.  After shutdown begins the
         call raises :class:`RuntimeManagerShutdownError`.
@@ -543,7 +594,7 @@ class RuntimeManager:
                 _digest_prefix(generation.config_digest),
             )
         if old_slot is not None:
-            await self.begin_retirement(old_slot, drain_timeout_s=drain_timeout_s)
+            await self._spawn_retirement_task(old_slot, drain_timeout_s)
 
     # -- lease acquisition -------------------------------------------------
 
@@ -610,6 +661,41 @@ class RuntimeManager:
 
     # -- retirement ---------------------------------------------------------
 
+    async def _spawn_retirement_task(
+        self, slot: _GenerationSlot, drain_timeout_s: float
+    ) -> None:
+        """Create and register a background retirement task for *slot*.
+
+        The task runs :meth:`begin_retirement` and removes itself from
+        the registry on completion.  Called by :meth:`install_candidate`
+        so publication returns promptly while retirement proceeds in
+        the background.
+        """
+        gen_id = slot.generation.generation_id
+
+        async def _retire() -> None:
+            try:
+                await self.begin_retirement(slot, drain_timeout_s=drain_timeout_s)
+            finally:
+                self._retirement_tasks.pop(gen_id, None)
+
+        task = asyncio.create_task(_retire(), name=f"retire-gen-{gen_id}")
+        self._retirement_tasks[gen_id] = task
+
+    async def wait_for_retirement(
+        self, generation_id: int, *, timeout_s: float = 300.0
+    ) -> None:
+        """Wait for a specific generation's retirement task to complete.
+
+        Raises :class:`asyncio.TimeoutError` if the task does not
+        complete within *timeout_s*.  No-op when no task is tracked for
+        the given *generation_id* (already completed or never existed).
+        """
+        task = self._retirement_tasks.get(generation_id)
+        if task is None:
+            return
+        await asyncio.wait_for(asyncio.shield(task), timeout=timeout_s)
+
     async def begin_retirement(
         self, slot: _GenerationSlot, *, drain_timeout_s: float = 5.0
     ) -> None:
@@ -632,6 +718,9 @@ class RuntimeManager:
                 return
             slot.retirement_started = True
             slot.accepting_leases = False
+            slot.state = SlotState.RETIRING
+            slot.retirement_start_time = time.monotonic()
+            slot.drain_deadline_s = drain_timeout_s
         logger.info(
             "Runtime generation %d retirement starting (active_leases=%d)",
             slot.generation.generation_id,
@@ -651,9 +740,13 @@ class RuntimeManager:
     ) -> None:
         """Wait for active leases to reach zero, then close owned resources."""
         deadline = time.monotonic() + drain_timeout_s
+        # Event-based drain: wait for drain_event or deadline, whichever
+        # comes first.  The drain_event is set by GenerationLease.release()
+        # when the lease count reaches zero.
         while slot.active_leases > 0:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                slot.forced_close = True
                 logger.warning(
                     "Runtime generation %d retirement drain timed out with "
                     "%d active leases; forcing close",
@@ -661,16 +754,27 @@ class RuntimeManager:
                     slot.active_leases,
                 )
                 break
-            await asyncio.sleep(min(0.05, remaining))
+            try:
+                await asyncio.wait_for(
+                    slot.drain_event.wait(), timeout=min(0.5, remaining)
+                )
+                break  # drain_event set — leases reached zero
+            except TimeoutError:
+                continue  # re-check deadline
         # Close generation-owned resources in the documented order.
+        slot.state = SlotState.CLOSING
+        slot.close_start_time = time.monotonic()
         await self._close_slot_resources(slot)
+        slot.close_complete_time = time.monotonic()
         slot.retirement_complete.set()
         async with self._lock:
+            slot.state = SlotState.CLOSED
             with contextlib.suppress(ValueError):
                 self._retiring.remove(slot)
         logger.info(
-            "Runtime generation %d retirement complete",
+            "Runtime generation %d retirement complete (forced=%s)",
             slot.generation.generation_id,
+            slot.forced_close,
         )
 
     async def _close_slot_resources(self, slot: _GenerationSlot) -> None:
@@ -745,24 +849,33 @@ class RuntimeManager:
 
         Idempotent.  After this returns, :meth:`acquire` raises
         :class:`RuntimeManagerLeaseExhaustedError` so any late
-        request handlers fail closed rather than hang.
+        request handlers fail closed rather than hang.  All tracked
+        retirement tasks are joined within a bounded deadline.
         """
+        shutdown_deadline_s = 10.0
         async with self._lock:
             if self._shutdown_in_progress:
                 return
             self._shutdown_in_progress = True
             active = self._active
         if active is not None:
-            await self.begin_retirement(active, drain_timeout_s=5.0)
-            return
-        # No active generation (e.g. startup never completed): still
-        # wait for any already-retiring slots to finish.
-        async with self._lock:
-            retiring = list(self._retiring)
-        for slot in retiring:
-            await slot.retirement_complete.wait()
-            async with slot.close_lock:
-                await self._close_slot_resources(slot)
+            await self._spawn_retirement_task(active, drain_timeout_s=5.0)
+        # Join all tracked retirement tasks within a bounded deadline.
+        # Force-cancel any tasks that do not complete in time.
+        if self._retirement_tasks:
+            tasks = list(self._retirement_tasks.values())
+            _, pending = await asyncio.wait(tasks, timeout=shutdown_deadline_s)
+            for task in pending:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+            # Wait for cancelled tasks to finish their finally blocks
+            # so _retirement_tasks is cleaned up.
+            if self._retirement_tasks:
+                await asyncio.wait(
+                    list(self._retirement_tasks.values()),
+                    timeout=2.0,
+                )
 
     # -- diagnostics --------------------------------------------------------
 
@@ -784,6 +897,7 @@ class RuntimeManager:
             retiring=retiring,
             shutdown_in_progress=self._shutdown_in_progress,
             next_generation_id=self._next_generation_id,
+            retirement_task_count=len(self._retirement_tasks),
         )
 
     # -- internals ----------------------------------------------------------
@@ -851,6 +965,12 @@ def _slot_diagnostics(
         retirement_started=slot.retirement_started,
         retirement_complete=slot.retirement_complete.is_set(),
         last_close_error=slot.last_close_error,
+        state=slot.state.value,
+        forced_close=slot.forced_close,
+        retirement_start_time=slot.retirement_start_time,
+        drain_deadline_s=slot.drain_deadline_s,
+        close_start_time=slot.close_start_time,
+        close_complete_time=slot.close_complete_time,
     )
 
 
@@ -1185,6 +1305,7 @@ __all__ = [
     "RuntimeManager",
     "RuntimeManagerLeaseExhaustedError",
     "RuntimeManagerShutdownError",
+    "SlotState",
     "attach_runtime_manager",
     "build_generation_from_config",
     "is_runtime_owned_attr",
