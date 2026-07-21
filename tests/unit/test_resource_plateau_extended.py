@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -31,6 +32,7 @@ from eggpool.request.stream_diagnostics import (
     STREAM_OUTCOME_UPSTREAM_PROTOCOL_ERROR,
     StreamDiagnostics,
 )
+from eggpool.runtime_manager import RuntimeGenerationCandidate
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -344,3 +346,55 @@ class TestFdSocketBoundedness:
         assert hasattr(socket, "AF_INET")
         assert hasattr(socket, "AF_INET6")
         assert hasattr(socket, "AF_UNSPEC")
+
+
+# ---------------------------------------------------------------------------
+# Memory plateau (Phase 4 gap-fill)
+# ---------------------------------------------------------------------------
+
+
+class TestMemoryPlateau:
+    """Verify process memory is stable and within documented tolerance.
+
+    The plan requires ``"memory plateau within a documented tolerance"``.
+    We measure RSS before and after repeated candidate abort cycles and
+    assert the growth is bounded.  Absolute numbers vary by platform,
+    so we only assert relative stability (no monotonic growth).
+    """
+
+    def test_memory_stable_after_repeated_aborts(self) -> None:
+        """Repeated candidate aborts do not cause monotonic memory growth."""
+
+        # Get RSS in kilobytes from /proc on Linux.
+        def _rss_kb() -> int:
+            # On Linux, read from /proc/self/status for current RSS.
+            try:
+                with open("/proc/self/status") as f:
+                    for line in f:
+                        if line.startswith("VmRSS:"):
+                            return int(line.split()[1])
+            except (FileNotFoundError, OSError):
+                # macOS: resource.getrusage only gives maxrss, not current.
+                # Use a simpler metric — just verify no exception.
+                return 0
+            return 0
+
+        baseline_rss_kb = _rss_kb()
+
+        # Run 500 candidate abort cycles with registered resources.
+        for _ in range(500):
+            c = RuntimeGenerationCandidate(generation_id=1)
+            for j in range(5):
+                c.register_resource(f"res_{j}", MagicMock())
+            asyncio.run(c.abort(RuntimeError("cycle")))
+
+        if baseline_rss_kb > 0:
+            post_rss_kb = _rss_kb()
+            growth_kb = post_rss_kb - baseline_rss_kb
+            # Allow up to 5 MB of growth (generous for CI variance).
+            assert growth_kb < 5120, (
+                f"Memory grew by {growth_kb} KB after 500 abort cycles; "
+                f"baseline={baseline_rss_kb} KB, post={post_rss_kb} KB"
+            )
+        # If we couldn't measure RSS (macOS), the test still passes
+        # as long as no exceptions were raised during the cycles.

@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     )
     from eggpool.models.config import AppConfig
     from eggpool.runtime_manager import (
+        CleanupDiagnostics,
         ProcessRuntime,
         RuntimeGeneration,
         RuntimeGenerationCandidate,
@@ -341,6 +342,8 @@ class ReloadManager:
         #: Test-only seam — when set to an exception instance,
         #: ``_publish_generation`` raises it at entry.
         self.TEST_INJECT_PUBLISH_FAILURE: Exception | None = None
+        #: Last abort cleanup diagnostics from a failed reload.
+        self._last_cleanup_diagnostics: CleanupDiagnostics | None = None
 
     @property
     def operation_state(self) -> ReloadOperationState | None:
@@ -349,7 +352,7 @@ class ReloadManager:
 
     def snapshot(self) -> dict[str, Any]:
         """Return reload state for diagnostics."""
-        return {
+        result: dict[str, Any] = {
             "operation_state": {
                 "stage": self._operation_state.stage,
                 "started_at": self._operation_state.started_at,
@@ -379,6 +382,24 @@ class ReloadManager:
             "admitted_at": self._admitted_at,
             "admitted_request_id": self._admitted_request_id,
         }
+        # Surface last abort cleanup diagnostics when available.
+        if self._last_cleanup_diagnostics is not None:
+            d = self._last_cleanup_diagnostics
+            result["last_cleanup_diagnostics"] = {
+                "generation_id": d.generation_id,
+                "ownership_state_at_failure": d.ownership_state_at_failure,
+                "resource_types_registered": d.resource_types_registered,
+                "resource_types_closed": d.resource_types_closed,
+                "close_duration_s": d.close_duration_s,
+                "close_errors": d.close_errors,
+                "close_errors_by_type": d.close_errors_by_type,
+                "timed_out": d.timed_out,
+                "primary_failure": d.primary_failure,
+                "primary_failure_stage": d.primary_failure_stage,
+            }
+        else:
+            result["last_cleanup_diagnostics"] = None
+        return result
 
     # -- public entry point ------------------------------------------------
 
@@ -409,6 +430,7 @@ class ReloadManager:
         changed_sections: tuple[str, ...] = ()
         warnings: tuple[ConfigValidationWarning, ...] = validation.warnings
         restart_required: tuple[Any, ...] = ()
+        candidate: RuntimeGenerationCandidate | None = None
 
         # Atomic admission claim — no TOCTOU window.
         async with self._claim_mutex:
@@ -685,6 +707,10 @@ class ReloadManager:
             logger.exception("Reload failed at stage %s", error_stage)
             self._reload_count += 1
             self._reload_error_count += 1
+            # Capture abort diagnostics from the candidate if available.
+            candidate_diag = getattr(candidate, "diagnostics", None)
+            if candidate_diag is not None:
+                self._last_cleanup_diagnostics = candidate_diag
             event_type = "reload_preparation_failure"
             if "digest mismatch" in str(exc).lower():
                 event_type = "reload_digest_mismatch"
@@ -716,6 +742,54 @@ class ReloadManager:
                 restart_required=(),
                 message=f"Reload failed: {exc!r}",
             )
+        except asyncio.CancelledError:
+            duration = time.monotonic() - started_at
+            error_stage = (
+                self._operation_state.stage
+                if self._operation_state
+                else ReloadOperationStage.IDLE
+            )
+            logger.warning("Reload cancelled at stage %s", error_stage)
+            self._reload_count += 1
+            self._reload_error_count += 1
+            self._last_reload_result = ReloadOperationResult(
+                ok=False,
+                stage=error_stage,
+                generation=generation_id,
+                changed_sections=changed_sections,
+                warnings=warnings,
+                restart_required=restart_required,
+                retirement_pending=False,
+                message=f"Reload cancelled at stage {error_stage}",
+                duration_s=duration,
+            )
+            self._last_reload_completed_at = time.time()
+            # Shield candidate abort so bounded cleanup completes
+            # before the cancellation propagates.
+            if candidate is not None:
+                try:
+                    diag = await asyncio.shield(
+                        candidate.abort(
+                            cause=asyncio.CancelledError(),
+                            failure_stage=error_stage,
+                        ),
+                    )
+                    self._last_cleanup_diagnostics = diag
+                except asyncio.CancelledError:
+                    # Shield itself was cancelled — abort is
+                    # idempotent so a subsequent call will retry.
+                    logger.warning(
+                        "Candidate abort shield cancelled for generation %d",
+                        generation_id,
+                    )
+            await self._safe_record_event(
+                "reload_cancelled",
+                generation_id=generation_id,
+                digest_prefix=digest_prefix,
+                changed_sections=changed_sections,
+                error=f"cancelled at {error_stage}",
+            )
+            raise
         except Exception as exc:
             duration = time.monotonic() - started_at
             error_stage = (
@@ -726,6 +800,43 @@ class ReloadManager:
             logger.exception("Reload failed at stage %s", error_stage)
             self._reload_count += 1
             self._reload_error_count += 1
+            # Abort the candidate if it exists and hasn't been
+            # transferred to the runtime manager.  Shield the abort
+            # so bounded cleanup completes even under cancellation.
+            if candidate is not None:
+                candidate_abort = getattr(candidate, "abort", None)
+                if candidate_abort is not None:
+                    candidate_state = getattr(candidate, "ownership_state", None)
+                    from eggpool.runtime_manager import (  # noqa: PLC0415
+                        CandidateOwnershipState,
+                    )
+
+                    if candidate_state not in (
+                        CandidateOwnershipState.TRANSFERRED,
+                        CandidateOwnershipState.ABORTED,
+                    ):
+                        try:
+                            diag = await asyncio.shield(
+                                candidate_abort(
+                                    cause=exc,
+                                    failure_stage=error_stage,
+                                ),
+                            )
+                            self._last_cleanup_diagnostics = diag
+                        except asyncio.CancelledError:
+                            logger.warning(
+                                "Candidate abort shield cancelled for generation %d",
+                                generation_id,
+                            )
+                            # Abort is idempotent; diagnostics may be
+                            # available from a concurrent call.
+                            candidate_diag = getattr(candidate, "diagnostics", None)
+                            if candidate_diag is not None:
+                                self._last_cleanup_diagnostics = candidate_diag
+                    else:
+                        candidate_diag = getattr(candidate, "diagnostics", None)
+                        if candidate_diag is not None:
+                            self._last_cleanup_diagnostics = candidate_diag
             self._last_reload_result = ReloadOperationResult(
                 ok=False,
                 stage=error_stage,
@@ -1343,7 +1454,8 @@ class ReloadManager:
                 "Candidate generation construction failed; aborting reload"
             )
             await candidate.abort(
-                cause=RuntimeError("Candidate generation construction failed")
+                cause=RuntimeError("Candidate generation construction failed"),
+                failure_stage="build",
             )
             raise ReloadPreparationError(
                 "Failed to construct candidate generation"

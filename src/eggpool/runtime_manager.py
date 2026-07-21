@@ -188,6 +188,9 @@ class CleanupDiagnostics:
     close_errors: tuple[str, ...]
     timed_out: bool
     primary_failure: str
+    primary_failure_stage: str = "unknown"
+    close_errors_by_type: tuple[tuple[str, str], ...] = ()
+    ownership_state_at_failure: str = "unknown"
 
 
 @dataclass
@@ -294,12 +297,20 @@ class RuntimeGenerationCandidate:
     async def abort(
         self,
         cause: BaseException,
+        *,
+        failure_stage: str = "unknown",
     ) -> CleanupDiagnostics:
         """Close all registered resources in reverse registration order.
 
         Idempotent: a second call returns the same diagnostics.
         Collects close errors without masking the primary error.
         Leaves process-owned resources untouched.
+
+        Args:
+            cause: The primary exception that triggered the abort.
+            failure_stage: The reload stage at which the failure
+                occurred (e.g. ``"build"``, ``"reconcile"``,
+                ``"commit"``, ``"unknown"``).
         """
         async with self._abort_lock:
             if self._state is CandidateOwnershipState.ABORTED:
@@ -312,11 +323,15 @@ class RuntimeGenerationCandidate:
                     close_errors=(),
                     timed_out=False,
                     primary_failure=str(cause),
+                    primary_failure_stage=failure_stage,
+                    ownership_state_at_failure=self._state.value,
                 )
 
+            ownership_state_at_failure = self._state.value
             registered_names = tuple(r.name for r in self._resources)
             closed_names: list[str] = []
             close_errors: list[str] = []
+            close_errors_by_type: list[tuple[str, str]] = []
             close_start = time.monotonic()
             timed_out = False
 
@@ -332,9 +347,12 @@ class RuntimeGenerationCandidate:
                             close_errors.append(
                                 f"{resource.name}: close timed out after 5s"
                             )
+                            close_errors_by_type.append((resource.name, "TimeoutError"))
                             continue
                 except Exception as exc:  # noqa: BLE001 -- close path must not raise
+                    error_type = type(exc).__name__
                     close_errors.append(f"{resource.name}: {exc!r}")
+                    close_errors_by_type.append((resource.name, error_type))
                     logger.warning(
                         "Candidate %d resource %s close failed: %r",
                         self._generation_id,
@@ -357,6 +375,9 @@ class RuntimeGenerationCandidate:
                 close_errors=tuple(close_errors),
                 timed_out=timed_out,
                 primary_failure=str(cause),
+                primary_failure_stage=failure_stage,
+                close_errors_by_type=tuple(close_errors_by_type),
+                ownership_state_at_failure=ownership_state_at_failure,
             )
 
             if close_errors:
