@@ -1194,6 +1194,22 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # 21b. Start the event-loop lag monitor (process-owned, F6).
     event_loop_lag_monitor.start()
 
+    # 21c. Start the process-owned database writable probe (Phase 9).
+    # Removes SQLite write activity from the /readyz request path.
+    from eggpool.health.writable_probe import DatabaseWritableProbe  # noqa: PLC0415
+
+    readiness_probe = DatabaseWritableProbe(
+        db=db,
+        interval_s=config.readiness_probe.interval_s,
+        freshness_s=config.readiness_probe.freshness_s,
+        timeout_s=config.readiness_probe.timeout_s,
+        initial_probe=config.readiness_probe.initial_probe,
+    )
+    if config.readiness_probe.enabled:
+        await readiness_probe.start()
+    process.readiness_probe = readiness_probe
+    app.state.readiness_probe = readiness_probe
+
     # 22. Transcoding status
     if config.transcoder.enabled is False:
         logger.warning(
@@ -1447,6 +1463,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                 logger.exception(
                     "Error closing outbound client manager during shutdown"
                 )
+
+        # Stop the readiness probe before closing the database so no
+        # probe task accesses a closed database.
+        readiness_probe: Any = getattr(app.state, "readiness_probe", None)
+        if readiness_probe is not None:
+            try:
+                await readiness_probe.stop()
+            except Exception:
+                logger.exception("Error stopping readiness probe during shutdown")
 
         # Drain the dispatch writer before closing the database so
         # committed intents are not lost.
@@ -1704,13 +1729,32 @@ def create_app(
                 media_type="application/json",
             )
 
-        # Real writeability probe using probe_writable()
-        if not await db.probe_writable():
-            return Response(
-                content='{"status":"degraded","reason":"database not writable"}',
-                status_code=503,
-                media_type="application/json",
-            )
+        # Read the cached probe snapshot instead of performing a write.
+        # The process-owned DatabaseWritableProbe checks writeability
+        # on a bounded cadence; readyz never initiates a write.
+        readiness_probe: Any = getattr(request.app.state, "readiness_probe", None)
+        if readiness_probe is not None:
+            probe_snap = await readiness_probe.snapshot()
+            if probe_snap.status.value in ("unknown", "stopped"):
+                return Response(
+                    content=(
+                        '{"status":"degraded","reason":"database probe not started"}'
+                    ),
+                    status_code=503,
+                    media_type="application/json",
+                )
+            if probe_snap.status.value == "stale":
+                return Response(
+                    content='{"status":"degraded","reason":"database probe stale"}',
+                    status_code=503,
+                    media_type="application/json",
+                )
+            if probe_snap.status.value == "unhealthy":
+                return Response(
+                    content='{"status":"degraded","reason":"database not writable"}',
+                    status_code=503,
+                    media_type="application/json",
+                )
 
         # Use the active generation snapshot for generation-owned
         # checks instead of reading stale app.state mirrors.

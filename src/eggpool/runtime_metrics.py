@@ -266,6 +266,8 @@ class RuntimeMetricsService:
 
         result["resource_plateaus"] = self._snapshot_resource_plateaus(probe_errors)
 
+        result["readiness_probe"] = await self._snapshot_readiness_probe(probe_errors)
+
         return result
 
     # -- Server / process ---------------------------------------------------
@@ -1189,6 +1191,30 @@ class RuntimeMetricsService:
             _append_probe_error(
                 probe_errors,
                 f"Event-loop lag snapshot failed: {exc}",
+            )
+            return {"enabled": True, "error": str(exc)}
+
+    async def _snapshot_readiness_probe(
+        self, probe_errors: list[str]
+    ) -> dict[str, Any]:
+        """Best-effort snapshot of the process-owned readiness probe.
+
+        Returns probe status, timing, and error details so operators
+        can interpret readiness responses.  Returns ``{"enabled": False}``
+        when no probe is wired.
+        """
+        probe = (
+            getattr(self._process, "readiness_probe", None) if self._process else None
+        )
+        if probe is None:
+            return {"enabled": False}
+        try:
+            snap = await probe.snapshot()
+            return {"enabled": True, **snap.to_dict()}
+        except Exception as exc:
+            _append_probe_error(
+                probe_errors,
+                f"Readiness probe snapshot failed: {exc}",
             )
             return {"enabled": True, "error": str(exc)}
 

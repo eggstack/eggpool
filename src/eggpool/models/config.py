@@ -158,6 +158,59 @@ class DatabaseConfig(BaseModel):
     )
 
 
+class ReadinessProbeConfig(BaseModel):
+    """Configuration for the process-owned database writable probe.
+
+    The probe removes SQLite write activity from the ``/readyz`` path
+    by executing a real write transaction on a bounded cadence and
+    caching the result.  ``/readyz`` reads the cached snapshot without
+    any write.
+
+    The probe is process-owned and survives generation swaps (rehash).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(
+        default=True,
+        description="Enable the background database writable probe.",
+    )
+    interval_s: float = Field(
+        default=10.0,
+        gt=0.0,
+        le=60.0,
+        description="Seconds between successive writable probes.",
+    )
+    freshness_s: float = Field(
+        default=30.0,
+        gt=0.0,
+        le=300.0,
+        description=(
+            "Maximum age (seconds) of a successful probe result before "
+            "readiness reports stale.  Must be greater than interval_s."
+        ),
+    )
+    timeout_s: float = Field(
+        default=5.0,
+        gt=0.0,
+        le=30.0,
+        description="Per-probe write timeout in seconds.",
+    )
+    initial_probe: bool = Field(
+        default=True,
+        description="Perform an immediate probe at startup before accepting readiness.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_freshness(self) -> ReadinessProbeConfig:
+        if self.freshness_s <= self.interval_s:
+            raise ConfigError(
+                f"readiness_probe.freshness_s ({self.freshness_s}) must be "
+                f"greater than readiness_probe.interval_s ({self.interval_s})"
+            )
+        return self
+
+
 class ModelsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1147,6 +1200,9 @@ class AppConfig(BaseModel):
         default_factory=MaintenanceBudgetConfig,
     )
     backup: BackupConfig = Field(default_factory=BackupConfig)
+    readiness_probe: ReadinessProbeConfig = Field(
+        default_factory=ReadinessProbeConfig,
+    )
     dns_cache: DnsCacheConfig = Field(default_factory=DnsCacheConfig)
     network: NetworkConfig = Field(default_factory=NetworkConfig)
     proxies: dict[str, ProxyConfig] = Field(default_factory=dict)

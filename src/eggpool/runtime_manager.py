@@ -486,6 +486,7 @@ class ProcessRuntime:
     routing_trace_writer: Any = None  # noqa: ANN401 — RoutingTraceWriter
     maintenance_state: Any = None  # noqa: ANN401 — MaintenanceState
     event_loop_lag_monitor: Any = None  # noqa: ANN401 — EventLoopLagMonitor
+    readiness_probe: Any = None  # noqa: ANN401 — DatabaseWritableProbe
 
 
 # ---------------------------------------------------------------------------

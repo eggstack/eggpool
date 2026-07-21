@@ -148,6 +148,7 @@ See `architecture/README.md` for the full design overview.
 ## Concurrency
 
 - Readiness probes use `probe_writable()` with owned transactions, never interfere with request lifecycle work
+- **Readiness probing and SQLite contention reduction (Phase 9)**: `DatabaseWritableProbe` (`src/eggpool/health/writable_probe.py`) is a process-owned background service that performs real SQLite write transactions on a bounded cadence to verify database writability. The probe survives generation swaps because it is process-owned (not generation-owned). `/readyz` reads a cached probe state snapshot instead of performing a write, eliminating routine write-lock contention from orchestrator polling. Configured via `[readiness_probe]` in config.toml
 - Child tasks cannot inherit transaction ownership (both task identity and ContextVar depth must match)
 - Reservation and active-count in-memory cleanup occur only when the database reservation actually transitions
 - Exhausted retries cannot corrupt another request's in-memory state

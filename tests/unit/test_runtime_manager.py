@@ -1254,7 +1254,7 @@ class TestAppStateAuditEnforcementPhase7:
         readyz_start = source.find("async def readyz(")
         assert readyz_start != -1, "readyz handler not found"
         # Find the end of readyz (next @app.get or next function def)
-        readyz_section = source[readyz_start : readyz_start + 2000]
+        readyz_section = source[readyz_start : readyz_start + 3000]
         assert "runtime_manager.active_snapshot()" in readyz_section, (
             "readyz must use runtime_manager.active_snapshot()"
             " for generation-owned checks"
@@ -1267,7 +1267,7 @@ class TestAppStateAuditEnforcementPhase7:
         )
         source = app_path.read_text()
         readyz_start = source.find("async def readyz(")
-        readyz_section = source[readyz_start : readyz_start + 2500]
+        readyz_section = source[readyz_start : readyz_start + 4000]
         assert "is_accepting_leases()" in readyz_section, (
             "readyz must check is_accepting_leases()"
         )
@@ -1282,7 +1282,7 @@ class TestAppStateAuditEnforcementPhase7:
         )
         source = app_path.read_text()
         readyz_start = source.find("async def readyz(")
-        readyz_section = source[readyz_start : readyz_start + 3000]
+        readyz_section = source[readyz_start : readyz_start + 5000]
         assert "compensation_failed" in readyz_section, (
             "readyz must check for compensation_failed transaction state"
         )
