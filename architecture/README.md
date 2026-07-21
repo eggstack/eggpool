@@ -3633,15 +3633,17 @@ do not need to map stages themselves.
 **Security model**: socket mode `0o600` prevents unprivileged
 clients on shared hosts from issuing reload commands.
 
-### Reload manager transaction flow (Milestone C)
+### Reload manager transaction flow (Milestone C + Phase 6)
 
 `src/eggpool/control/reload_manager.py` implements `ReloadManager`,
 which orchestrates the complete reload transaction under a serializing
-`asyncio.Lock`:
+`asyncio.Lock`.  Phase 6 introduces an application-level transaction
+(`ReloadTransaction` in `src/eggpool/reload_transaction.py`) with a
+monotonic state machine, prepared deltas, and a narrow commit point.
 
 1. **Atomic admission claim** — `_claim_mutex` + `_reload_claimed`
    eliminate the TOCTOU race on concurrent reload attempts. The claim
-   is acquired and released under `_claim_mutex`; concurrent callers
+   is acquired and released under `_mutex`; concurrent callers
    see `_reload_claimed == True` and raise `ReloadInProgressError`.
    The claim state is exposed via `ReloadManager.snapshot()` diagnostics
    (`admitted`, `admitted_at`, `admitted_request_id`).
@@ -3655,24 +3657,41 @@ which orchestrates the complete reload transaction under a serializing
    building a new generation.
 6. **Candidate preparation** — `RuntimeGenerationFactory.prepare()` builds
    a new `RuntimeGeneration` off to the side (router, DB, app state)
-   without touching the active generation. If `self.preparation_event`
-   (an `asyncio.Event | None`) is set, the coroutine awaits it before
-   continuing — a test-only seam for deterministically holding a reload
-   while a concurrent one is attempted.
-7. **Persistence reconciliation** — Database state is reconciled in a
-   transaction; failures trigger rollback.
-8. **Atomic publication** — `RuntimeManager.install_generation()` swaps
-   the active/retiring slots. New requests immediately use the new
-   generation.
-9. **Retirement** — Old generation is marked retiring; active streams
-   continue on it. Old resources close after all leases drain
-   (timeout: 300s default).
+   without touching the active generation.  Process-supervisor task
+   reconfiguration (`apply_spec_diff`) is **not** called here — it is
+   deferred to the commit phase (step 10) to avoid leaving the process
+   supervisor in a partially-reconfigured state on failure.
+7. **Prepare persistence delta** — Calculate providers/accounts to
+   sync without applying them.  Returns an immutable `PersistenceDelta`.
+8. **Prepare process transitions** — Calculate task specs and callback
+   factories without applying them.  Returns a `ProcessTransitionPlan`.
+9. **Pre-commit verification** — Revalidate shutdown state and
+   candidate ownership before entering the commit guard.
+10. **Commit** (narrow commit guard):
+    a. Apply persistence delta in a SQLite transaction.
+    b. Publish candidate generation atomically via `RuntimeManager.install_candidate()`.
+    c. Transfer candidate ownership to the runtime manager.
+    d. Apply process transitions (`apply_spec_diff`) — after publication.
+    e. Update observable state.
+    f. Schedule old-generation retirement.
+11. **Completion** — Mark transaction completed.
+
+The `ReloadTransaction` state machine tracks every transition:
+`created → validated → diffed → candidate_prepared →
+persistence_prepared → process_transitions_prepared →
+commit_started → runtime_published → process_transitions_applied →
+persistence_committed → observable_state_updated →
+retirement_scheduled → completed`.
+
+Post-publication failures are compensated by accepting the new
+generation (the persistence delta is idempotent).  Cancellation
+after publication is shielded to prevent mixed state.
 
 The manager exposes `snapshot()` for runtime diagnostics, including
 `reload_count`, `reload_error_count`, `last_reload_result`, `admitted`
-(claim state), `admitted_at`, `admitted_request_id`, and
+(claim state), `admitted_at`, `admitted_request_id`,
 `operation_state` (current stage, started_at, generation_id,
-digest_prefix).
+digest_prefix), and `active_transaction` (Phase 6 transaction state).
 
 ### Reload observer protocol
 

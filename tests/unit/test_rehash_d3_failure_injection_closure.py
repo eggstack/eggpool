@@ -82,6 +82,7 @@ def _make_candidate_with_resources(
     diff.live = True
     diff.restart_required = ()
     candidate = CandidateGeneration(generation=gen, process=process, diff=diff)
+    candidate._built_generation = gen  # pyright: ignore[reportPrivateUsage]
     candidate.client_pool = client_pool or MagicMock()
     candidate.outbound_manager = outbound_manager or MagicMock()
     candidate.supervisor = supervisor or MagicMock()
@@ -352,6 +353,8 @@ async def _drive_publish_and_capture_slot(
             return_value=_make_candidate_with_resources(),
         ),
         patch.object(mgr, "_reconcile_persistence", new_callable=AsyncMock),
+        patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
+        patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
         patch.object(mgr, "_publish_generation", _real_publish),
     ):
         result = await mgr.reload(_make_validation())
@@ -505,6 +508,8 @@ class TestRetirementTimeoutHeldLease:
                 return_value=candidate,
             ),
             patch.object(mgr, "_reconcile_persistence", new_callable=AsyncMock),
+            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
+            patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
             patch.object(mgr, "_publish_generation", _patched_publish),
         ):
             result = await mgr.reload(_make_validation())
@@ -526,5 +531,5 @@ class TestRetirementTimeoutHeldLease:
 def _make_proc() -> MagicMock:
     """Return a MagicMock ``ProcessRuntime`` with a process_supervisor slot."""
     proc = _make_process()
-    proc.process_supervisor = MagicMock()
+    proc.process_supervisor = None
     return proc

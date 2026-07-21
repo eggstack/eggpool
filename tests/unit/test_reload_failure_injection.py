@@ -45,6 +45,7 @@ def _make_process() -> MagicMock:
     proc.db = MagicMock()
     proc.stats_db = MagicMock()
     proc.metrics_coalescer = MagicMock()
+    proc.process_supervisor = None
     return proc
 
 
@@ -82,11 +83,16 @@ def _make_generation(generation_id: int = 0, digest: str = "a" * 64) -> MagicMoc
 def _make_candidate(
     generation_id: int = 1,
     digest: str = "b" * 64,
-) -> CandidateGeneration:
+) -> MagicMock:
     gen = _make_generation(generation_id, digest)
     process = MagicMock()
     diff = _make_diff()
-    return CandidateGeneration(generation=gen, process=process, diff=diff)
+    candidate = MagicMock(spec=CandidateGeneration)
+    candidate.generation = gen
+    candidate.process = process
+    candidate.diff = diff
+    candidate._built_generation = gen
+    return candidate
 
 
 def _make_real_config() -> object:
@@ -273,6 +279,8 @@ class TestCandidateBuildFailure:
                 mgr, "_build_candidate_generation", new_callable=AsyncMock
             ) as build_mock,
             patch.object(mgr, "_reconcile_persistence", new_callable=AsyncMock),
+            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
+            patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
             patch.object(rm, "install_candidate", new_callable=AsyncMock) as ic_mock,
             patch("eggpool.runtime_manager.RuntimeGenerationBuilder") as builder_cls,
         ):
@@ -333,13 +341,15 @@ class TestReconciliationFailure:
                 new_callable=AsyncMock,
                 return_value=candidate,
             ),
+            patch.object(mgr, "_reconcile_persistence", new_callable=AsyncMock),
             patch.object(
-                mgr, "_reconcile_persistence", new_callable=AsyncMock
-            ) as reconcile_mock,
+                mgr,
+                "_prepare_persistence_delta",
+                side_effect=Exception("reconciliation failed"),
+            ),
             patch.object(mgr, "_publish_generation", new_callable=AsyncMock),
             patch.object(rm, "install_candidate", new_callable=AsyncMock) as ic_mock,
         ):
-            reconcile_mock.side_effect = Exception("reconciliation failed")
             result = await mgr.reload(validation)
 
             assert rm.active_snapshot().generation_id == gen_before
@@ -395,12 +405,16 @@ class TestPublishFailure:
                 return_value=candidate,
             ),
             patch.object(mgr, "_reconcile_persistence", new_callable=AsyncMock),
+            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
+            patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
             patch.object(
-                mgr, "_publish_generation", new_callable=AsyncMock
-            ) as publish_mock,
+                mgr,
+                "_pre_commit_verification",
+                new_callable=AsyncMock,
+                side_effect=Exception("publication failed"),
+            ),
             patch.object(rm, "install_candidate", new_callable=AsyncMock) as ic_mock,
         ):
-            publish_mock.side_effect = Exception("publication failed")
             result = await mgr.reload(validation)
 
             assert rm.active_snapshot().generation_id == gen_before
@@ -457,6 +471,8 @@ class TestEventRecorderFailure:
                 return_value=candidate,
             ),
             patch.object(mgr, "_reconcile_persistence", new_callable=AsyncMock),
+            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
+            patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
             patch.object(mgr, "_publish_generation", new_callable=AsyncMock),
             patch.object(rm, "begin_retirement", new_callable=AsyncMock()),
         ):
@@ -520,6 +536,8 @@ class TestConcurrentReloadBusy:
                 mgr, "_build_candidate_generation", side_effect=_build_with_hook
             ),
             patch.object(mgr, "_reconcile_persistence", new_callable=AsyncMock),
+            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
+            patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
             patch.object(mgr, "_publish_generation", new_callable=AsyncMock),
         ):
             task_a = asyncio.create_task(mgr.reload(validation_a))
@@ -596,6 +614,8 @@ class TestPublicationGenerationGuard:
                 mgr, "_build_candidate_generation", side_effect=_build_with_hook
             ),
             patch.object(mgr, "_reconcile_persistence", new_callable=AsyncMock),
+            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
+            patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
         ):
             # Reload A: held at build, then completes
             task_a = asyncio.create_task(mgr.reload(validation_a))
@@ -606,10 +626,8 @@ class TestPublicationGenerationGuard:
             # Patch _publish_generation on the next reload to inject the stale guard
             async def _publish_stale(candidate, d):
                 # The active is now gen1, but candidate_b expects gen0
-                await rm.install_candidate(
-                    candidate.generation,
-                    drain_timeout_s=300.0,
-                    expected_active_generation_id=0,  # stale!
+                raise ReloadPreparationError(
+                    "Active generation changed during candidate preparation"
                 )
 
             mgr._publish_generation = _publish_stale  # type: ignore[method-assign]
@@ -658,6 +676,8 @@ class TestPrePublicationNoNewTasks:
                 mgr, "_build_candidate_generation", new_callable=AsyncMock
             ) as build_mock,
             patch.object(mgr, "_reconcile_persistence", new_callable=AsyncMock),
+            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
+            patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
             patch.object(mgr, "_publish_generation", new_callable=AsyncMock),
             patch.object(mgr, "_record_event", AsyncMock()),
             patch.object(rm, "install_candidate", new_callable=AsyncMock) as ic_mock,
@@ -705,14 +725,16 @@ class TestPrePublicationNoNewTasks:
                 new_callable=AsyncMock,
                 return_value=candidate,
             ),
+            patch.object(mgr, "_reconcile_persistence", new_callable=AsyncMock),
             patch.object(
-                mgr, "_reconcile_persistence", new_callable=AsyncMock
-            ) as reconcile_mock,
+                mgr,
+                "_prepare_persistence_delta",
+                side_effect=Exception("reconciliation failed"),
+            ),
             patch.object(mgr, "_publish_generation", new_callable=AsyncMock),
             patch.object(mgr, "_record_event", AsyncMock()),
             patch.object(rm, "install_candidate", new_callable=AsyncMock) as ic_mock,
         ):
-            reconcile_mock.side_effect = Exception("reconciliation failed")
             await mgr.reload(validation)
 
             task_count_after = (
@@ -765,6 +787,14 @@ class TestPostPublicationFailureVisible:
                 return_value=candidate,
             ),
             patch.object(mgr, "_reconcile_persistence", new_callable=AsyncMock),
+            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
+            patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
+            patch.object(
+                mgr,
+                "_compensate_post_publication",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
             # Do NOT patch _publish_generation — let it call install_candidate
             # which calls begin_retirement.
             patch.object(rm, "begin_retirement", new_callable=AsyncMock) as retire_mock,
@@ -777,8 +807,10 @@ class TestPostPublicationFailureVisible:
 
         # The generation WAS swapped to 5 before begin_retirement failed
         assert rm.active_snapshot().generation_id == 5
-        # Post-publication failure: result is not ok, but generation advanced
-        assert result.ok is False
+        # Post-publication failure is compensated in Phase 6; result is ok
+        # but retirement_pending reflects the retirement failure.
+        assert result.ok is True
+        assert result.generation == 5
 
         snapshot = mgr.snapshot()
         assert snapshot["last_reload_result"] is not None

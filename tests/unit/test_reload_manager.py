@@ -76,17 +76,23 @@ def _make_generation(generation_id: int = 1, digest: str = "b" * 64) -> MagicMoc
 def _make_candidate(
     generation_id: int = 1,
     digest: str = "b" * 64,
-) -> CandidateGeneration:
-    """Build a CandidateGeneration with mock internals."""
+) -> MagicMock:
+    """Build a mock candidate with generation and _built_generation."""
     gen = _make_generation(generation_id, digest)
     process = MagicMock()
     diff = _make_diff()
-    return CandidateGeneration(generation=gen, process=process, diff=diff)
+    candidate = MagicMock(spec=CandidateGeneration)
+    candidate.generation = gen
+    candidate.process = process
+    candidate.diff = diff
+    candidate._built_generation = gen
+    return candidate
 
 
 def _make_runtime_manager(active_generation: MagicMock | None = None) -> MagicMock:
     """Build a mock RuntimeManager."""
     rm = MagicMock()
+    rm._shutdown_in_progress = False
     if active_generation is None:
         active_generation = _make_generation(0)
     rm.active_snapshot.return_value = active_generation
@@ -101,6 +107,7 @@ def _make_process() -> MagicMock:
     proc.db = MagicMock()
     proc.stats_db = MagicMock()
     proc.metrics_coalescer = MagicMock()
+    proc.process_supervisor = None
     return proc
 
 
@@ -217,6 +224,8 @@ class TestReloadConcurrency:
                 mgr, "_build_candidate_generation", side_effect=_blocking_build
             ),
             patch.object(mgr, "_reconcile_persistence", new_callable=AsyncMock),
+            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
+            patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
             patch.object(mgr, "_publish_generation", new_callable=AsyncMock),
         ):
             diff_mock.return_value = _make_diff(changes=(MagicMock(section="routing"),))
@@ -351,6 +360,8 @@ class TestReloadSuccess:
                 "_reconcile_persistence",
                 new_callable=AsyncMock,
             ),
+            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
+            patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
             patch.object(
                 mgr,
                 "_publish_generation",
@@ -397,6 +408,8 @@ class TestReloadSuccess:
                 "_reconcile_persistence",
                 new_callable=AsyncMock,
             ),
+            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
+            patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
             patch.object(
                 mgr,
                 "_publish_generation",
@@ -469,14 +482,16 @@ class TestReloadFailures:
                 new_callable=AsyncMock,
                 return_value=candidate,
             ),
+            patch.object(mgr, "_reconcile_persistence", new_callable=AsyncMock),
             patch.object(
-                mgr, "_reconcile_persistence", new_callable=AsyncMock
-            ) as reconcile_mock,
+                mgr,
+                "_prepare_persistence_delta",
+                side_effect=Exception("reconciliation failed"),
+            ),
             patch.object(
                 mgr, "_publish_generation", new_callable=AsyncMock
             ) as publish_mock,
         ):
-            reconcile_mock.side_effect = Exception("reconciliation failed")
             result = await mgr.reload(validation)
 
         assert result.ok is False
@@ -505,11 +520,15 @@ class TestReloadFailures:
                 return_value=candidate,
             ),
             patch.object(mgr, "_reconcile_persistence", new_callable=AsyncMock),
+            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
+            patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
             patch.object(
-                mgr, "_publish_generation", new_callable=AsyncMock
-            ) as publish_mock,
+                mgr,
+                "_pre_commit_verification",
+                new_callable=AsyncMock,
+                side_effect=Exception("commit failed"),
+            ),
         ):
-            publish_mock.side_effect = Exception("commit failed")
             result = await mgr.reload(validation)
 
         assert result.ok is False
@@ -829,6 +848,8 @@ class TestDeterministicConcurrency:
                 "_reconcile_persistence",
                 new_callable=AsyncMock,
             ),
+            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
+            patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
             patch.object(mgr, "_record_event", side_effect=_capture_event),
         ):
             task_a = asyncio.create_task(mgr.reload(validation_a))
@@ -899,6 +920,8 @@ class TestDeterministicConcurrency:
                 "_reconcile_persistence",
                 new_callable=AsyncMock,
             ),
+            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
+            patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
             patch.object(
                 mgr,
                 "_publish_generation",
@@ -1163,7 +1186,9 @@ class TestMilestoneD1CandidateBuild:
                 created_at_epoch=gen.created_at_epoch,
             )
             captured["generation"] = gen
-            return CandidateGeneration(generation=gen, process=proc, diff=diff)
+            candidate = CandidateGeneration(generation=gen, process=proc, diff=diff)
+            candidate._built_generation = gen  # pyright: ignore[reportPrivateUsage]
+            return candidate
 
         mgr._build_candidate_generation = _capture_build  # type: ignore[method-assign]
 
@@ -1199,6 +1224,8 @@ class TestMilestoneD1CandidateBuild:
         validation = _make_real_validation(candidate_config)
         monkeypatch.setattr(mgr, "_compute_reload_diff", AsyncMock(return_value=diff))
         monkeypatch.setattr(mgr, "_reconcile_persistence", AsyncMock())
+        monkeypatch.setattr(mgr, "_prepare_persistence_delta", MagicMock())
+        monkeypatch.setattr(mgr, "_apply_persistence_delta", AsyncMock())
         monkeypatch.setattr(mgr, "_record_event", AsyncMock())
         monkeypatch.setattr(rm, "begin_retirement", AsyncMock())
 
@@ -1237,6 +1264,8 @@ class TestMilestoneD1CandidateBuild:
         validation = _make_real_validation(candidate_config)
         monkeypatch.setattr(mgr, "_compute_reload_diff", AsyncMock(return_value=diff))
         monkeypatch.setattr(mgr, "_reconcile_persistence", AsyncMock())
+        monkeypatch.setattr(mgr, "_prepare_persistence_delta", MagicMock())
+        monkeypatch.setattr(mgr, "_apply_persistence_delta", AsyncMock())
         monkeypatch.setattr(mgr, "_record_event", AsyncMock())
         monkeypatch.setattr(rm, "begin_retirement", AsyncMock())
 
@@ -1273,6 +1302,8 @@ class TestMilestoneD1CandidateBuild:
         validation = _make_real_validation(candidate_config)
         monkeypatch.setattr(mgr, "_compute_reload_diff", AsyncMock(return_value=diff))
         monkeypatch.setattr(mgr, "_reconcile_persistence", AsyncMock())
+        monkeypatch.setattr(mgr, "_prepare_persistence_delta", MagicMock())
+        monkeypatch.setattr(mgr, "_apply_persistence_delta", AsyncMock())
         monkeypatch.setattr(mgr, "_record_event", AsyncMock())
         monkeypatch.setattr(rm, "begin_retirement", AsyncMock())
 
@@ -1313,6 +1344,8 @@ class TestMilestoneD1CandidateBuild:
         validation = _make_real_validation(candidate_config)
         monkeypatch.setattr(mgr, "_compute_reload_diff", AsyncMock(return_value=diff))
         monkeypatch.setattr(mgr, "_reconcile_persistence", AsyncMock())
+        monkeypatch.setattr(mgr, "_prepare_persistence_delta", MagicMock())
+        monkeypatch.setattr(mgr, "_apply_persistence_delta", AsyncMock())
         monkeypatch.setattr(mgr, "_record_event", AsyncMock())
         monkeypatch.setattr(rm, "begin_retirement", AsyncMock())
 
@@ -1350,6 +1383,8 @@ class TestMilestoneD1CandidateBuild:
         validation = _make_real_validation(candidate_config)
         monkeypatch.setattr(mgr, "_compute_reload_diff", AsyncMock(return_value=diff))
         monkeypatch.setattr(mgr, "_reconcile_persistence", AsyncMock())
+        monkeypatch.setattr(mgr, "_prepare_persistence_delta", MagicMock())
+        monkeypatch.setattr(mgr, "_apply_persistence_delta", AsyncMock())
         monkeypatch.setattr(mgr, "_record_event", AsyncMock())
         monkeypatch.setattr(rm, "begin_retirement", AsyncMock())
 
@@ -1393,6 +1428,8 @@ class TestMilestoneD1CandidateBuild:
         validation = _make_real_validation(candidate_cfg)
         monkeypatch.setattr(mgr, "_compute_reload_diff", AsyncMock(return_value=diff))
         monkeypatch.setattr(mgr, "_reconcile_persistence", AsyncMock())
+        monkeypatch.setattr(mgr, "_prepare_persistence_delta", MagicMock())
+        monkeypatch.setattr(mgr, "_apply_persistence_delta", AsyncMock())
         monkeypatch.setattr(mgr, "_record_event", AsyncMock())
         monkeypatch.setattr(rm, "begin_retirement", AsyncMock())
 
@@ -1481,6 +1518,8 @@ class TestMilestoneD1CandidateBuild:
         validation = _make_real_validation(candidate_config)
         monkeypatch.setattr(mgr, "_compute_reload_diff", AsyncMock(return_value=diff))
         monkeypatch.setattr(mgr, "_reconcile_persistence", AsyncMock())
+        monkeypatch.setattr(mgr, "_prepare_persistence_delta", MagicMock())
+        monkeypatch.setattr(mgr, "_apply_persistence_delta", AsyncMock())
         monkeypatch.setattr(mgr, "_record_event", AsyncMock())
         monkeypatch.setattr(rm, "begin_retirement", AsyncMock())
 
@@ -1626,7 +1665,9 @@ class TestMilestoneD1RepeatedReloadSoak:
             )
             captured.setdefault("config_ids", set()).add(id(candidate_config))
             captured["last_gen_id"] = gen_id
-            return CandidateGeneration(generation=gen, process=proc, diff=diff)
+            candidate = CandidateGeneration(generation=gen, process=proc, diff=diff)
+            candidate._built_generation = gen  # pyright: ignore[reportPrivateUsage]
+            return candidate
 
         mgr._build_candidate_generation = _capture_build  # type: ignore[method-assign]
 
@@ -1643,6 +1684,8 @@ class TestMilestoneD1RepeatedReloadSoak:
                 mgr, "_compute_reload_diff", AsyncMock(return_value=diff)
             )
             monkeypatch.setattr(mgr, "_reconcile_persistence", AsyncMock())
+            monkeypatch.setattr(mgr, "_prepare_persistence_delta", MagicMock())
+            monkeypatch.setattr(mgr, "_apply_persistence_delta", AsyncMock())
             monkeypatch.setattr(mgr, "_record_event", AsyncMock())
             monkeypatch.setattr(rm, "begin_retirement", AsyncMock())
 

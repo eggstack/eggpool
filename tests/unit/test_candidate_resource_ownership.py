@@ -577,8 +577,8 @@ class TestPrePublicationFailureInjection:
         process = MagicMock(spec=ProcessRuntime)
         process.db = MagicMock()
         process.stats_db = MagicMock()
+        process.process_supervisor = None
         mgr = ReloadManager(rm, process)
-        mgr.TEST_INJECT_RECONCILE_FAILURE = RuntimeError("reconcile exploded")
 
         from tests.unit.test_reload_manager import (
             _make_diff,
@@ -609,6 +609,11 @@ class TestPrePublicationFailureInjection:
         with (
             patch.object(mgr, "_build_candidate_generation", return_value=candidate),
             patch.object(mgr, "_compute_reload_diff", return_value=diff),
+            patch.object(
+                mgr,
+                "_prepare_persistence_delta",
+                side_effect=RuntimeError("reconcile exploded"),
+            ),
         ):
             result = await mgr.reload(validation)
 
@@ -624,7 +629,7 @@ class TestPrePublicationFailureInjection:
 
     @pytest.mark.asyncio
     async def test_publish_failure_aborts_candidate(self) -> None:
-        """When publish fails, the candidate is aborted."""
+        """When publish fails before commit, the candidate is aborted."""
         from eggpool.control.reload_manager import ReloadManager
         from eggpool.runtime_manager import (
             ProcessRuntime,
@@ -636,8 +641,8 @@ class TestPrePublicationFailureInjection:
         process = MagicMock(spec=ProcessRuntime)
         process.db = MagicMock()
         process.stats_db = MagicMock()
+        process.process_supervisor = None
         mgr = ReloadManager(rm, process)
-        mgr.TEST_INJECT_PUBLISH_FAILURE = RuntimeError("publish exploded")
 
         from tests.unit.test_reload_manager import (
             _make_diff,
@@ -667,6 +672,14 @@ class TestPrePublicationFailureInjection:
             patch.object(mgr, "_build_candidate_generation", return_value=candidate),
             patch.object(mgr, "_compute_reload_diff", return_value=diff),
             patch.object(mgr, "_reconcile_persistence", new_callable=AsyncMock),
+            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
+            patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
+            patch.object(
+                mgr,
+                "_pre_commit_verification",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("publish exploded"),
+            ),
         ):
             result = await mgr.reload(validation)
 

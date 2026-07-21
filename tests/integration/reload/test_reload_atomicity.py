@@ -92,10 +92,18 @@ async def test_reconcile_failure_preserves_active_generation(
     reload_harness.reload_manager.TEST_INJECT_RECONCILE_FAILURE = RuntimeError(
         "simulated reconcile failure"
     )
+    # Phase 6: inject failure via _apply_persistence_delta instead
+    original_apply = reload_harness.reload_manager._apply_persistence_delta
+
+    async def _failing_apply(delta: object) -> None:
+        raise RuntimeError("simulated reconcile failure")
+
+    reload_harness.reload_manager._apply_persistence_delta = _failing_apply  # type: ignore[assignment]
     try:
         result = await reload_harness.reload()
     finally:
         reload_harness.reload_manager.TEST_INJECT_RECONCILE_FAILURE = None
+        reload_harness.reload_manager._apply_persistence_delta = original_apply
 
     assert result.ok is False
 
