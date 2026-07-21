@@ -540,12 +540,20 @@ def mirror_generation_on_app_state(
 ) -> None:
     """Mirror the active generation's services onto ``app.state``.
 
+    .. deprecated::
+        Prefer :meth:`RuntimeManager.acquire` or
+        :meth:`RuntimeManager.snapshot_active_values` for accessing
+        generation-owned services.  The ``app.state`` mirrors exist
+        only for backward compatibility with dashboard routes, readyz
+        probes, and request handlers that have not yet migrated.
+        New code must not read generation-owned services from
+        ``app.state`` directly.
+
     The mirrors exist so existing dashboard routes, readyz probes,
     and request handlers can keep reading ``app.state.router``,
-    ``app.state.catalog``, etc. without immediate refactors.  Milestone
-    C's transactional reload will replace these mirrors whenever a new
-    generation is published so the pointers always reflect the
-    currently active slot.
+    ``app.state.catalog``, etc. without immediate refactors.
+    Publication replaces these mirrors whenever a new generation is
+    published so the pointers always reflect the currently active slot.
 
     The mirror only writes attributes the manager actually owns;
     process-owned attributes (``app.state.db``, ``app.state.config``,
@@ -1713,6 +1721,42 @@ def create_app(
         if runtime_manager is not None and runtime_manager.has_active_generation():
             with contextlib.suppress(Exception):
                 gen = runtime_manager.active_snapshot()
+
+        # Check that the active generation accepts new leases.
+        # If the generation is retiring or the manager is shutting
+        # down, report degraded rather than serving stale state.
+        if (
+            runtime_manager is not None
+            and runtime_manager.has_active_generation()
+            and not runtime_manager.is_accepting_leases()
+        ):
+            return Response(
+                content=(
+                    '{"status":"degraded",'
+                    '"reason":"active generation not accepting leases"}'
+                ),
+                status_code=503,
+                media_type="application/json",
+            )
+
+        # Check for critical transaction failure from live reload.
+        reload_manager: Any = getattr(request.app.state, "reload_manager", None)
+        if reload_manager is not None:
+            txn: Any = getattr(reload_manager, "active_transaction", None)
+            if txn is not None:
+                txn_snapshot: dict[str, Any] = (
+                    txn.snapshot() if hasattr(txn, "snapshot") else {}
+                )
+                txn_state: str = txn_snapshot.get("state", "")
+                if txn_state == "compensation_failed":
+                    return Response(
+                        content=(
+                            '{"status":"degraded",'
+                            '"reason":"reload compensation failed"}'
+                        ),
+                        status_code=503,
+                        media_type="application/json",
+                    )
 
         # Fall back to app.state for tests or minimal apps without
         # a runtime manager installed.

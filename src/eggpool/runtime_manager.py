@@ -986,6 +986,15 @@ class RuntimeManager:
         """Return ``True`` once :meth:`install_initial` has succeeded."""
         return self._active is not None
 
+    def is_accepting_leases(self) -> bool:
+        """Return ``True`` if the active generation accepts new leases.
+
+        Returns ``False`` before ``install_initial``, during retirement
+        of the active slot, or after ``shutdown``.
+        """
+        slot = self._active
+        return slot is not None and slot.accepting_leases
+
     def active_metadata(self) -> ActiveGenerationMetadata:
         """Return immutable metadata about the active generation.
 
@@ -1049,6 +1058,29 @@ class RuntimeManager:
             routing_trace_guard=gen.routing_trace_guard,
             supervisor=gen.supervisor,
         )
+
+    def retirement_snapshot(
+        self, generation_id: int | None = None
+    ) -> GenerationDiagnostics | tuple[GenerationDiagnostics, ...]:
+        """Return retirement diagnostics for one or all retiring generations.
+
+        When *generation_id* is provided, returns the
+        :class:`GenerationDiagnostics` for that specific generation if
+        it is currently retiring, or raises :class:`ValueError` if no
+        retiring slot matches.
+
+        When *generation_id* is ``None`` (default), returns a tuple of
+        diagnostics for all currently retiring generations.
+
+        Safe for short synchronous diagnostics; no locks are held.
+        """
+        now = time.monotonic()
+        if generation_id is not None:
+            for slot in self._retiring:
+                if slot.generation.generation_id == generation_id:
+                    return _slot_diagnostics(slot, now)
+            raise ValueError(f"No retiring generation with id {generation_id!r}")
+        return tuple(_slot_diagnostics(slot, now) for slot in self._retiring)
 
     # -- retirement ---------------------------------------------------------
 

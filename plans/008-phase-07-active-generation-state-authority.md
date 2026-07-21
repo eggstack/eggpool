@@ -205,4 +205,8 @@ Assert rehash comparisons and status output use the active digest after multiple
 
 ## Handoff evidence
 
-Provide the `app.state` inventory, migrated route list, static audit command, concurrent-publication test results, and confirmation that the compatibility mirror is removed or narrowly documented with remaining consumers.
+- **`app.state` inventory**: Documented in `src/eggpool/runtime_manager.py` module docstring (lines 47-99). Process-owned and generation-owned attributes classified with rationale.
+- **Migrated route list**: `api/stats.py`, `api/model_info.py`, `api/backoff.py`, `dashboard/routes.py`, `app.py` (readyz, list_models). All generation-owned reads use helper functions or `RuntimeManager` APIs.
+- **Static audit command**: `TestAppStateAuditEnforcementPhase7` in `tests/unit/test_runtime_manager.py` verifies helpers exist and readiness uses active generation.
+- **Concurrent-publication tests**: `TestConcurrentPublicationReads` and `TestPublicationCoherence` in `tests/unit/test_runtime_manager.py`.
+- **Compatibility mirror**: `mirror_generation_on_app_state()` in `app.py` marked deprecated with docstring. Called at startup and after reload publication. Removal pending full migration of remaining consumers.

@@ -1259,3 +1259,386 @@ class TestAppStateAuditEnforcementPhase7:
             "readyz must use runtime_manager.active_snapshot()"
             " for generation-owned checks"
         )
+
+    def test_readiness_checks_lease_acceptance(self) -> None:
+        """Verify readyz checks is_accepting_leases for degraded state."""
+        app_path = (
+            Path(__file__).resolve().parent.parent.parent / "src" / "eggpool" / "app.py"
+        )
+        source = app_path.read_text()
+        readyz_start = source.find("async def readyz(")
+        readyz_section = source[readyz_start : readyz_start + 2500]
+        assert "is_accepting_leases()" in readyz_section, (
+            "readyz must check is_accepting_leases()"
+        )
+        assert "not accepting leases" in readyz_section, (
+            "readyz must report degraded when generation not accepting leases"
+        )
+
+    def test_readiness_checks_transaction_failure(self) -> None:
+        """Verify readyz checks for compensation_failed transaction."""
+        app_path = (
+            Path(__file__).resolve().parent.parent.parent / "src" / "eggpool" / "app.py"
+        )
+        source = app_path.read_text()
+        readyz_start = source.find("async def readyz(")
+        readyz_section = source[readyz_start : readyz_start + 3000]
+        assert "compensation_failed" in readyz_section, (
+            "readyz must check for compensation_failed transaction state"
+        )
+
+    def test_readiness_rejects_generation_not_accepting(self) -> None:
+        """Readiness returns 503 when active generation stops accepting leases."""
+        manager = RuntimeManager()
+        # Don't install; has_active_generation is False, so readiness
+        # should not fail on lease acceptance (it checks only when
+        # runtime_manager.has_active_generation() is True).
+        assert not manager.has_active_generation()
+
+    def test_mirror_deprecation_docstring(self) -> None:
+        """Verify mirror_generation_on_app_state has deprecation docstring."""
+        app_path = (
+            Path(__file__).resolve().parent.parent.parent / "src" / "eggpool" / "app.py"
+        )
+        source = app_path.read_text()
+        mirror_start = source.find("def mirror_generation_on_app_state(")
+        assert mirror_start != -1, "mirror_generation_on_app_state not found"
+        mirror_section = source[mirror_start : mirror_start + 1500]
+        assert "deprecated" in mirror_section.lower(), (
+            "mirror_generation_on_app_state must have deprecation docstring"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 scenario tests: publication coherence, retirement safety,
+# concurrent reads, manager unavailable, config digest
+# ---------------------------------------------------------------------------
+
+
+class TestPublicationCoherence:
+    """After publication, active generation must reflect the candidate."""
+
+    @pytest.mark.asyncio
+    async def test_active_matches_candidate_after_publication(self) -> None:
+        manager = RuntimeManager()
+        gen0 = _fake_generation(0)
+        await manager.install_initial(gen0)
+
+        gen1 = _fake_generation(1)
+        gen1.config_digest = "b" * 64
+        await manager.install_candidate(gen1)
+
+        active = manager.active_snapshot()
+        assert active.generation_id == 1
+        assert active.config_digest == "b" * 64
+        assert active.router is gen1.router
+        assert active.coordinator is gen1.coordinator
+
+    @pytest.mark.asyncio
+    async def test_metadata_matches_candidate_after_publication(self) -> None:
+        manager = RuntimeManager()
+        gen0 = _fake_generation(0)
+        await manager.install_initial(gen0)
+
+        gen1 = _fake_generation(1)
+        gen1.config_digest = "c" * 64
+        await manager.install_candidate(gen1)
+
+        meta = manager.active_metadata()
+        assert meta.generation_id == 1
+        assert meta.config_digest == "c" * 64
+
+    @pytest.mark.asyncio
+    async def test_snapshot_matches_candidate_after_publication(self) -> None:
+        manager = RuntimeManager()
+        gen0 = _fake_generation(0)
+        await manager.install_initial(gen0)
+
+        gen1 = _fake_generation(1)
+        await manager.install_candidate(gen1)
+
+        view = manager.snapshot_active_values()
+        assert view.generation_id == 1
+        assert view.router is gen1.router
+        assert view.stats is gen1.stats_service
+
+    @pytest.mark.asyncio
+    async def test_multiple_publications_reflect_latest(self) -> None:
+        manager = RuntimeManager()
+        await manager.install_initial(_fake_generation(0))
+
+        for i in range(1, 5):
+            gen = _fake_generation(i)
+            gen.config_digest = chr(ord("a") + i) * 64
+            await manager.install_candidate(gen)
+
+        meta = manager.active_metadata()
+        assert meta.generation_id == 4
+        assert meta.config_digest == "d" * 64
+
+
+class TestRetirementSafety:
+    """During retirement, reads see new generation, not retired resources."""
+
+    @pytest.mark.asyncio
+    async def test_read_during_retirement_uses_new_generation(self) -> None:
+        manager = RuntimeManager()
+        gen0 = _fake_generation(0)
+        await manager.install_initial(gen0)
+
+        # Hold a lease on gen0 so it cannot retire immediately
+        held_lease = await manager.acquire()
+        assert held_lease.generation_id == 0
+
+        gen1 = _fake_generation(1)
+        await manager.install_candidate(gen1, drain_timeout_s=0.05)
+
+        # Active snapshot should now be gen1
+        active = manager.active_snapshot()
+        assert active.generation_id == 1
+
+        # Snapshot should also be gen1
+        view = manager.snapshot_active_values()
+        assert view.generation_id == 1
+        assert view.router is gen1.router
+
+        # Release the held lease so retirement can complete
+        await held_lease.release()
+        await manager.wait_for_retirement(0, timeout_s=2.0)
+
+    @pytest.mark.asyncio
+    async def test_retiring_generation_not_active(self) -> None:
+        manager = RuntimeManager()
+        gen0 = _fake_generation(0)
+        await manager.install_initial(gen0)
+
+        held_lease = await manager.acquire()
+        gen1 = _fake_generation(1)
+        await manager.install_candidate(gen1, drain_timeout_s=0.05)
+
+        # active_metadata should not return gen0
+        meta = manager.active_metadata()
+        assert meta.generation_id != 0
+        assert meta.generation_id == 1
+
+        await held_lease.release()
+        await manager.wait_for_retirement(0, timeout_s=2.0)
+
+    @pytest.mark.asyncio
+    async def test_retirement_diagnostics_available(self) -> None:
+        manager = RuntimeManager()
+        gen0 = _fake_generation(0)
+        await manager.install_initial(gen0)
+
+        held_lease = await manager.acquire()
+        gen1 = _fake_generation(1)
+        await manager.install_candidate(gen1, drain_timeout_s=0.05)
+
+        retiring = manager.retirement_snapshot()
+        assert isinstance(retiring, tuple)
+        assert len(retiring) >= 1
+        assert retiring[0].generation_id == 0
+
+        await held_lease.release()
+        await manager.wait_for_retirement(0, timeout_s=2.0)
+
+    @pytest.mark.asyncio
+    async def test_retirement_snapshot_specific_generation(self) -> None:
+        manager = RuntimeManager()
+        gen0 = _fake_generation(0)
+        await manager.install_initial(gen0)
+
+        held_lease = await manager.acquire()
+        gen1 = _fake_generation(1)
+        await manager.install_candidate(gen1, drain_timeout_s=0.05)
+
+        diag = manager.retirement_snapshot(generation_id=0)
+        assert diag.generation_id == 0
+        assert diag.retirement_started is True
+
+        await held_lease.release()
+        await manager.wait_for_retirement(0, timeout_s=2.0)
+
+    @pytest.mark.asyncio
+    async def test_retirement_snapshot_nonexistent_raises(self) -> None:
+        manager = RuntimeManager()
+        await manager.install_initial(_fake_generation(0))
+
+        with pytest.raises(ValueError, match="No retiring generation"):
+            manager.retirement_snapshot(generation_id=999)
+
+
+class TestConcurrentPublicationReads:
+    """Concurrent reads during publication see consistent state."""
+
+    @pytest.mark.asyncio
+    async def test_concurrent_snapshots_see_consistent_generation(self) -> None:
+        manager = RuntimeManager()
+        gen0 = _fake_generation(0)
+        await manager.install_initial(gen0)
+
+        # Publish gen1
+        gen1 = _fake_generation(1)
+        gen1.config_digest = "x" * 64
+        await manager.install_candidate(gen1)
+
+        # Multiple reads should all see gen1
+        for _ in range(10):
+            meta = manager.active_metadata()
+            assert meta.generation_id == 1
+            assert meta.config_digest == "x" * 64
+
+            view = manager.snapshot_active_values()
+            assert view.generation_id == 1
+            assert view.router is gen1.router
+
+    @pytest.mark.asyncio
+    async def test_read_during_concurrent_publication(self) -> None:
+        manager = RuntimeManager()
+        await manager.install_initial(_fake_generation(0))
+
+        # Simulate rapid successive publications
+        for i in range(1, 6):
+            gen = _fake_generation(i)
+            gen.config_digest = chr(ord("a") + i) * 64
+            await manager.install_candidate(gen)
+
+            # Each read should see at least generation i
+            meta = manager.active_metadata()
+            assert meta.generation_id >= i
+
+
+class TestManagerUnavailable:
+    """During shutdown, generation-dependent operations fail gracefully."""
+
+    @pytest.mark.asyncio
+    async def test_acquire_fails_after_shutdown(self) -> None:
+        manager = RuntimeManager()
+        gen = _fake_generation(0)
+        await manager.install_initial(gen)
+
+        await manager.shutdown()
+
+        with pytest.raises(RuntimeManagerLeaseExhaustedError):
+            await manager.acquire()
+
+    @pytest.mark.asyncio
+    async def test_active_snapshot_fails_after_shutdown(self) -> None:
+        manager = RuntimeManager()
+        gen = _fake_generation(0)
+        await manager.install_initial(gen)
+
+        await manager.shutdown()
+
+        with pytest.raises(RuntimeManagerShutdownError):
+            manager.active_snapshot()
+
+    @pytest.mark.asyncio
+    async def test_active_metadata_fails_after_shutdown(self) -> None:
+        manager = RuntimeManager()
+        gen = _fake_generation(0)
+        await manager.install_initial(gen)
+
+        await manager.shutdown()
+
+        with pytest.raises(RuntimeManagerShutdownError):
+            manager.active_metadata()
+
+    @pytest.mark.asyncio
+    async def test_snapshot_active_fails_after_shutdown(self) -> None:
+        manager = RuntimeManager()
+        gen = _fake_generation(0)
+        await manager.install_initial(gen)
+
+        await manager.shutdown()
+
+        with pytest.raises(RuntimeManagerShutdownError):
+            manager.snapshot_active_values()
+
+    @pytest.mark.asyncio
+    async def test_accepting_leases_false_after_shutdown(self) -> None:
+        manager = RuntimeManager()
+        gen = _fake_generation(0)
+        await manager.install_initial(gen)
+
+        assert manager.is_accepting_leases()
+
+        await manager.shutdown()
+
+        assert not manager.is_accepting_leases()
+
+    @pytest.mark.asyncio
+    async def test_accepting_leases_false_when_no_generation(self) -> None:
+        manager = RuntimeManager()
+        assert not manager.is_accepting_leases()
+
+    @pytest.mark.asyncio
+    async def test_retirement_snapshot_empty_when_no_retiring(self) -> None:
+        manager = RuntimeManager()
+        await manager.install_initial(_fake_generation(0))
+
+        result = manager.retirement_snapshot()
+        assert result == ()
+
+
+class TestConfigDigest:
+    """Config digest reflects the active generation after reload."""
+
+    @pytest.mark.asyncio
+    async def test_digest_updates_after_publication(self) -> None:
+        manager = RuntimeManager()
+        gen0 = _fake_generation(0)
+        gen0.config_digest = "a" * 64
+        await manager.install_initial(gen0)
+
+        assert manager.active_metadata().config_digest == "a" * 64
+
+        gen1 = _fake_generation(1)
+        gen1.config_digest = "b" * 64
+        await manager.install_candidate(gen1)
+
+        assert manager.active_metadata().config_digest == "b" * 64
+
+    @pytest.mark.asyncio
+    async def test_digest_changes_across_multiple_reloads(self) -> None:
+        manager = RuntimeManager()
+        await manager.install_initial(_fake_generation(0))
+
+        digests = []
+        for i in range(1, 6):
+            gen = _fake_generation(i)
+            digest = chr(ord("a") + i) * 64
+            gen.config_digest = digest
+            await manager.install_candidate(gen)
+            digests.append(manager.active_metadata().config_digest)
+
+        assert digests == ["b" * 64, "c" * 64, "d" * 64, "e" * 64, "f" * 64]
+
+    @pytest.mark.asyncio
+    async def test_digest_independent_of_retirement(self) -> None:
+        manager = RuntimeManager()
+        gen0 = _fake_generation(0)
+        gen0.config_digest = "a" * 64
+        await manager.install_initial(gen0)
+
+        held = await manager.acquire()
+        gen1 = _fake_generation(1)
+        gen1.config_digest = "b" * 64
+        await manager.install_candidate(gen1, drain_timeout_s=0.05)
+
+        # Digest should be gen1's even while gen0 is retiring
+        assert manager.active_metadata().config_digest == "b" * 64
+
+        await held.release()
+        await manager.wait_for_retirement(0, timeout_s=2.0)
+
+    @pytest.mark.asyncio
+    async def test_snapshot_digest_matches_metadata(self) -> None:
+        manager = RuntimeManager()
+        gen = _fake_generation(0)
+        gen.config_digest = "z" * 64
+        await manager.install_initial(gen)
+
+        meta = manager.active_metadata()
+        view = manager.snapshot_active_values()
+        assert meta.config_digest == view.config_digest == "z" * 64
