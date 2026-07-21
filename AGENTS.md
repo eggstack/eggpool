@@ -134,6 +134,10 @@ uv run pytest tests/integration/reload/ -v
 # Phase 3 — Asynchronous generation retirement tests
 uv run pytest tests/unit/test_phase3_async_retirement.py -v
 
+# Phase 11 — Reload diagnostics outcome matrix (result categories, counters,
+# stage accuracy, retirement status, snapshot, classify_result_category)
+uv run pytest tests/unit/test_reload_diagnostics_matrix.py -v
+
 # Reload correctness baseline — single file
 uv run pytest tests/integration/reload/test_reload_admission.py -v
 

@@ -39,6 +39,15 @@ from eggpool.config_reload_policy import (
     ReloadStage,
     compute_diff,
 )
+from eggpool.reload_diagnostics import (
+    ReloadCounters,
+    ReloadDiagnosticResult,
+    ReloadResultCategory,
+    ReloadRetirementStatus,
+    ReloadTerminalStage,
+    classify_result_category,
+    stage_from_error_class,
+)
 from eggpool.reload_transaction import (
     PersistenceDelta,
     ProcessTransitionPlan,
@@ -366,6 +375,10 @@ class ReloadManager:
         self._last_cleanup_diagnostics: CleanupDiagnostics | None = None
         #: Current transaction (Phase 6) — ``None`` when idle.
         self._current_transaction: ReloadTransaction | None = None
+        #: Phase 11: precise counters for reload operations.
+        self._counters = ReloadCounters()
+        #: Phase 11: canonical diagnostic result for the most recent reload.
+        self._last_diagnostic_result: ReloadDiagnosticResult | None = None
 
     @property
     def operation_state(self) -> ReloadOperationState | None:
@@ -437,6 +450,53 @@ class ReloadManager:
             "admitted_at": self._admitted_at,
             "admitted_request_id": self._admitted_request_id,
         }
+        # Phase 11: precise counters.
+        result["counters"] = {
+            "total_requests": self._counters.total_requests,
+            "admitted_operations": self._counters.admitted_operations,
+            "busy_rejections": self._counters.busy_rejections,
+            "committed_reloads": self._counters.committed_reloads,
+            "noop_outcomes": self._counters.noop_outcomes,
+            "ignored_only_outcomes": self._counters.ignored_only_outcomes,
+            "validation_rejections": self._counters.validation_rejections,
+            "restart_required_rejections": self._counters.restart_required_rejections,
+            "prepare_failures": self._counters.prepare_failures,
+            "commit_failures": self._counters.commit_failures,
+            "cancellations": self._counters.cancellations,
+            "compensation_failures": self._counters.compensation_failures,
+            "retirement_failures": self._counters.retirement_failures,
+        }
+        # Phase 11: canonical diagnostic result.
+        if self._last_diagnostic_result is not None:
+            d = self._last_diagnostic_result
+            result["last_diagnostic_result"] = {
+                "request_id": d.request_id,
+                "category": d.category.value,
+                "terminal_stage": d.terminal_stage.value,
+                "started_at": d.started_at,
+                "completed_at": d.completed_at,
+                "duration_s": d.duration_s,
+                "old_generation_id": d.old_generation_id,
+                "candidate_generation_id": d.candidate_generation_id,
+                "active_generation_id": d.active_generation_id,
+                "changed_sections": d.changed_sections,
+                "ignored_sections": d.ignored_sections,
+                "restart_required_sections": d.restart_required_sections,
+                "semantic_noop": d.semantic_noop,
+                "publication_occurred": d.publication_occurred,
+                "persistence_committed": d.persistence_committed,
+                "process_transitions_applied": d.process_transitions_applied,
+                "compensation_attempted": d.compensation_attempted,
+                "compensation_succeeded": d.compensation_succeeded,
+                "retirement_pending": d.retirement.retirement_pending,
+                "retiring_generation_id": d.retirement.retiring_generation_id,
+                "error_code": d.error_code,
+                "error_class": d.error_class,
+                "message": d.message,
+                "warning_count": len(d.warning_messages),
+            }
+        else:
+            result["last_diagnostic_result"] = None
         # Surface last abort cleanup diagnostics when available.
         if self._last_cleanup_diagnostics is not None:
             d = self._last_cleanup_diagnostics
@@ -497,6 +557,23 @@ class ReloadManager:
         candidate: RuntimeGenerationCandidate | None = None
         process_transition_plan: ProcessTransitionPlan | None = None
 
+        # Phase 11: increment total requests.
+        self._counters = ReloadCounters(
+            total_requests=self._counters.total_requests + 1,
+            admitted_operations=self._counters.admitted_operations,
+            busy_rejections=self._counters.busy_rejections,
+            committed_reloads=self._counters.committed_reloads,
+            noop_outcomes=self._counters.noop_outcomes,
+            ignored_only_outcomes=self._counters.ignored_only_outcomes,
+            validation_rejections=self._counters.validation_rejections,
+            restart_required_rejections=self._counters.restart_required_rejections,
+            prepare_failures=self._counters.prepare_failures,
+            commit_failures=self._counters.commit_failures,
+            cancellations=self._counters.cancellations,
+            compensation_failures=self._counters.compensation_failures,
+            retirement_failures=self._counters.retirement_failures,
+        )
+
         # Phase 6: create the transaction to track state.
         txn = ReloadTransaction(
             request_id=f"reload-{int(started_at * 1000)}",
@@ -509,11 +586,43 @@ class ReloadManager:
         async with self._claim_mutex:
             if self._reload_claimed:
                 self._current_transaction = None
+                # Phase 11: increment busy rejections.
+                self._counters = ReloadCounters(
+                    total_requests=self._counters.total_requests,
+                    admitted_operations=self._counters.admitted_operations,
+                    busy_rejections=self._counters.busy_rejections + 1,
+                    committed_reloads=self._counters.committed_reloads,
+                    noop_outcomes=self._counters.noop_outcomes,
+                    ignored_only_outcomes=self._counters.ignored_only_outcomes,
+                    validation_rejections=self._counters.validation_rejections,
+                    restart_required_rejections=self._counters.restart_required_rejections,
+                    prepare_failures=self._counters.prepare_failures,
+                    commit_failures=self._counters.commit_failures,
+                    cancellations=self._counters.cancellations,
+                    compensation_failures=self._counters.compensation_failures,
+                    retirement_failures=self._counters.retirement_failures,
+                )
                 raise ReloadInProgressError(
                     "A reload transaction is already in progress"
                 )
             self._reload_claimed = True
             self._admitted_at = time.monotonic()
+            # Phase 11: increment admitted operations.
+            self._counters = ReloadCounters(
+                total_requests=self._counters.total_requests,
+                admitted_operations=self._counters.admitted_operations + 1,
+                busy_rejections=self._counters.busy_rejections,
+                committed_reloads=self._counters.committed_reloads,
+                noop_outcomes=self._counters.noop_outcomes,
+                ignored_only_outcomes=self._counters.ignored_only_outcomes,
+                validation_rejections=self._counters.validation_rejections,
+                restart_required_rejections=self._counters.restart_required_rejections,
+                prepare_failures=self._counters.prepare_failures,
+                commit_failures=self._counters.commit_failures,
+                cancellations=self._counters.cancellations,
+                compensation_failures=self._counters.compensation_failures,
+                retirement_failures=self._counters.retirement_failures,
+            )
             # Reset the completion event so shutdown waiters see a fresh
             # signal for this new transaction.
             self._transaction_complete_event.clear()
@@ -579,36 +688,41 @@ class ReloadManager:
                     digest_prefix=digest_prefix,
                     changed_sections=sections,
                 )
-                duration = time.monotonic() - started_at
-                self._reload_count += 1
-                self._reload_error_count += 1
-                self._last_reload_result = ReloadOperationResult(
-                    ok=False,
-                    stage=ReloadStage.DIFF.value,
-                    generation=None,
-                    changed_sections=sections,
-                    warnings=warnings,
-                    restart_required=tuple(restart_required),
-                    retirement_pending=False,
-                    message=(
-                        f"Reload rejected: {len(restart_required)} "
-                        "restart-required field(s) changed"
-                    ),
-                    duration_s=duration,
+                # Phase 11: update counters and finalize.
+                self._counters = ReloadCounters(
+                    total_requests=self._counters.total_requests,
+                    admitted_operations=self._counters.admitted_operations,
+                    busy_rejections=self._counters.busy_rejections,
+                    committed_reloads=self._counters.committed_reloads,
+                    noop_outcomes=self._counters.noop_outcomes,
+                    ignored_only_outcomes=self._counters.ignored_only_outcomes,
+                    validation_rejections=self._counters.validation_rejections,
+                    restart_required_rejections=self._counters.restart_required_rejections
+                    + 1,
+                    prepare_failures=self._counters.prepare_failures,
+                    commit_failures=self._counters.commit_failures,
+                    cancellations=self._counters.cancellations,
+                    compensation_failures=self._counters.compensation_failures,
+                    retirement_failures=self._counters.retirement_failures,
                 )
-                self._last_reload_completed_at = time.time()
-                return ReloadResult(
+                diag, wire_result = self._finalize_reload(
+                    request_id=txn.request_id,
+                    started_at=started_at,
+                    txn=txn,
+                    txn_state=txn.state,
                     ok=False,
-                    stage=ReloadStage.DIFF,
-                    generation=None,
-                    changed_sections=sections,
+                    stage=ReloadTerminalStage.DIFF,
+                    generation_id=None,
+                    digest_prefix=digest_prefix,
+                    changed_sections=(),
+                    ignored_sections=(),
+                    restart_required_sections=sections,
+                    restart_required_changes=tuple(restart_required),
                     warnings=warnings,
-                    restart_required=tuple(restart_required),
-                    message=(
-                        f"Reload rejected: {len(restart_required)} "
-                        "restart-required field(s) changed"
-                    ),
+                    is_restart_required=True,
                 )
+                self._last_diagnostic_result = diag
+                return wire_result
 
             # Stage 4: Semantic no-op
             if not diff.changes:
@@ -620,15 +734,39 @@ class ReloadManager:
                 )
                 txn.mark_aborting(RuntimeError("No changes"))
                 txn.mark_aborted()
-                return ReloadResult(
-                    ok=True,
-                    stage=ReloadStage.COMMIT,
-                    generation=active.generation_id,
-                    changed_sections=(),
-                    warnings=warnings,
-                    restart_required=(),
-                    message="No configuration changes detected",
+                # Phase 11: update counters and finalize.
+                self._counters = ReloadCounters(
+                    total_requests=self._counters.total_requests,
+                    admitted_operations=self._counters.admitted_operations,
+                    busy_rejections=self._counters.busy_rejections,
+                    committed_reloads=self._counters.committed_reloads,
+                    noop_outcomes=self._counters.noop_outcomes + 1,
+                    ignored_only_outcomes=self._counters.ignored_only_outcomes,
+                    validation_rejections=self._counters.validation_rejections,
+                    restart_required_rejections=self._counters.restart_required_rejections,
+                    prepare_failures=self._counters.prepare_failures,
+                    commit_failures=self._counters.commit_failures,
+                    cancellations=self._counters.cancellations,
+                    compensation_failures=self._counters.compensation_failures,
+                    retirement_failures=self._counters.retirement_failures,
                 )
+                diag, wire_result = self._finalize_reload(
+                    request_id=txn.request_id,
+                    started_at=started_at,
+                    txn=txn,
+                    txn_state=txn.state,
+                    ok=True,
+                    stage=ReloadTerminalStage.COMMIT,
+                    generation_id=active.generation_id,
+                    digest_prefix=digest_prefix,
+                    changed_sections=(),
+                    ignored_sections=(),
+                    restart_required_sections=(),
+                    warnings=warnings,
+                    is_noop=True,
+                )
+                self._last_diagnostic_result = diag
+                return wire_result
 
             # All changes are IGNORED (no LIVE changes) — success with explanation
             if not diff.live:
@@ -641,15 +779,39 @@ class ReloadManager:
                 )
                 txn.mark_aborting(RuntimeError("All changes ignored"))
                 txn.mark_aborted()
-                return ReloadResult(
-                    ok=True,
-                    stage=ReloadStage.DIFF,
-                    generation=active.generation_id,
-                    changed_sections=ignored_sections,
-                    warnings=warnings,
-                    restart_required=(),
-                    message="Configuration changes detected but all are ignored",
+                # Phase 11: update counters and finalize.
+                self._counters = ReloadCounters(
+                    total_requests=self._counters.total_requests,
+                    admitted_operations=self._counters.admitted_operations,
+                    busy_rejections=self._counters.busy_rejections,
+                    committed_reloads=self._counters.committed_reloads,
+                    noop_outcomes=self._counters.noop_outcomes,
+                    ignored_only_outcomes=self._counters.ignored_only_outcomes + 1,
+                    validation_rejections=self._counters.validation_rejections,
+                    restart_required_rejections=self._counters.restart_required_rejections,
+                    prepare_failures=self._counters.prepare_failures,
+                    commit_failures=self._counters.commit_failures,
+                    cancellations=self._counters.cancellations,
+                    compensation_failures=self._counters.compensation_failures,
+                    retirement_failures=self._counters.retirement_failures,
                 )
+                diag, wire_result = self._finalize_reload(
+                    request_id=txn.request_id,
+                    started_at=started_at,
+                    txn=txn,
+                    txn_state=txn.state,
+                    ok=True,
+                    stage=ReloadTerminalStage.DIFF,
+                    generation_id=active.generation_id,
+                    digest_prefix=digest_prefix,
+                    changed_sections=ignored_sections,
+                    ignored_sections=ignored_sections,
+                    restart_required_sections=(),
+                    warnings=warnings,
+                    is_ignored_only=True,
+                )
+                self._last_diagnostic_result = diag
+                return wire_result
 
             changed_sections = tuple(sorted({c.section for c in diff.changes}))
             txn.mark_diffed(
@@ -806,38 +968,47 @@ class ReloadManager:
                 duration,
                 ",".join(changed_sections) or "(none)",
             )
-            result = ReloadResult(
-                ok=True,
-                stage=ReloadStage.RETIREMENT,
-                generation=generation_id,
-                changed_sections=changed_sections,
-                warnings=warnings,
-                restart_required=(),
-                message=(
-                    f"Reload applied: generation {generation_id}, "
-                    f"{len(changed_sections)} section(s) changed"
-                ),
+            # Phase 11: update counters and finalize.
+            self._counters = ReloadCounters(
+                total_requests=self._counters.total_requests,
+                admitted_operations=self._counters.admitted_operations,
+                busy_rejections=self._counters.busy_rejections,
+                committed_reloads=self._counters.committed_reloads + 1,
+                noop_outcomes=self._counters.noop_outcomes,
+                ignored_only_outcomes=self._counters.ignored_only_outcomes,
+                validation_rejections=self._counters.validation_rejections,
+                restart_required_rejections=self._counters.restart_required_rejections,
+                prepare_failures=self._counters.prepare_failures,
+                commit_failures=self._counters.commit_failures,
+                cancellations=self._counters.cancellations,
+                compensation_failures=self._counters.compensation_failures,
+                retirement_failures=self._counters.retirement_failures,
             )
-            self._reload_count += 1
-            self._last_reload_result = ReloadOperationResult(
+            diagnostic, wire_result = self._finalize_reload(
+                request_id=txn.request_id,
+                started_at=started_at,
+                txn=txn,
+                txn_state=txn.state,
                 ok=True,
-                stage=ReloadStage.RETIREMENT.value,
-                generation=generation_id,
+                stage=ReloadTerminalStage.RETIREMENT,
+                generation_id=generation_id,
+                digest_prefix=digest_prefix,
                 changed_sections=changed_sections,
+                ignored_sections=(),
+                restart_required_sections=(),
                 warnings=warnings,
-                restart_required=(),
-                retirement_pending=True,
-                message=result.message,
-                duration_s=duration,
+                publication_occurred=True,
+                persistence_committed=True,
+                process_transitions_applied=True,
             )
-            self._last_reload_completed_at = time.time()
+            self._last_diagnostic_result = diagnostic
             await self._safe_record_event(
                 "reload_activated",
                 generation_id=generation_id,
                 digest_prefix=digest_prefix,
                 changed_sections=changed_sections,
             )
-            return result
+            return wire_result
 
         except ReloadInProgressError:
             raise
@@ -849,8 +1020,32 @@ class ReloadManager:
                 else ReloadOperationStage.IDLE
             )
             logger.exception("Reload failed at stage %s", error_stage)
-            self._reload_count += 1
-            self._reload_error_count += 1
+            # Phase 11: update counters.
+            # Distinguish digest mismatch (validation) from build failure (prep).
+            is_digest_mismatch = "digest mismatch" in str(exc).lower()
+            self._counters = ReloadCounters(
+                total_requests=self._counters.total_requests,
+                admitted_operations=self._counters.admitted_operations,
+                busy_rejections=self._counters.busy_rejections,
+                committed_reloads=self._counters.committed_reloads,
+                noop_outcomes=self._counters.noop_outcomes,
+                ignored_only_outcomes=self._counters.ignored_only_outcomes,
+                validation_rejections=(
+                    self._counters.validation_rejections + 1
+                    if is_digest_mismatch
+                    else self._counters.validation_rejections
+                ),
+                restart_required_rejections=self._counters.restart_required_rejections,
+                prepare_failures=(
+                    self._counters.prepare_failures
+                    if is_digest_mismatch
+                    else self._counters.prepare_failures + 1
+                ),
+                commit_failures=self._counters.commit_failures,
+                cancellations=self._counters.cancellations,
+                compensation_failures=self._counters.compensation_failures,
+                retirement_failures=self._counters.retirement_failures,
+            )
             # Phase 6: transition transaction to aborting/aborted.
             txn.mark_aborting(exc)
             # Capture abort diagnostics from the candidate if available.
@@ -860,18 +1055,37 @@ class ReloadManager:
             event_type = "reload_preparation_failure"
             if "digest mismatch" in str(exc).lower():
                 event_type = "reload_digest_mismatch"
-            self._last_reload_result = ReloadOperationResult(
+            # Phase 11: derive correct stage from the operation state.
+            # The _set_stage() call before the failed step already set
+            # the correct stage (e.g., VALIDATION for digest mismatch,
+            # PREPARATION for build failure).
+            try:
+                terminal_stage = ReloadTerminalStage(
+                    self._operation_state.stage
+                    if self._operation_state
+                    else ReloadOperationStage.VALIDATION
+                )
+            except ValueError:
+                terminal_stage = ReloadTerminalStage.VALIDATION
+            diagnostic, wire_result = self._finalize_reload(
+                request_id=txn.request_id,
+                started_at=started_at,
+                txn=txn,
+                txn_state=txn.state,
                 ok=False,
-                stage=error_stage,
-                generation=generation_id,
+                stage=terminal_stage,
+                generation_id=generation_id,
+                digest_prefix=digest_prefix,
                 changed_sections=changed_sections,
+                ignored_sections=(),
+                restart_required_sections=(),
                 warnings=warnings,
-                restart_required=restart_required,
-                retirement_pending=False,
-                message=f"Reload failed: {exc!r}",
-                duration_s=duration,
+                error=exc,
+                error_class="ReloadPreparationError",
+                candidate_cleanup_attempted=candidate_diag is not None,
+                candidate_cleanup_succeeded=candidate_diag is not None,
             )
-            self._last_reload_completed_at = time.time()
+            self._last_diagnostic_result = diagnostic
             await self._safe_record_event(
                 event_type,
                 generation_id=generation_id,
@@ -880,15 +1094,7 @@ class ReloadManager:
                 error=f"{exc!r}",
             )
             txn.mark_aborted()
-            return ReloadResult(
-                ok=False,
-                stage=ReloadStage.VALIDATION,
-                generation=None,
-                changed_sections=(),
-                warnings=warnings,
-                restart_required=(),
-                message=f"Reload failed: {exc!r}",
-            )
+            return wire_result
         except asyncio.CancelledError:
             duration = time.monotonic() - started_at
             error_stage = (
@@ -897,8 +1103,22 @@ class ReloadManager:
                 else ReloadOperationStage.IDLE
             )
             logger.warning("Reload cancelled at stage %s", error_stage)
-            self._reload_count += 1
-            self._reload_error_count += 1
+            # Phase 11: update counters.
+            self._counters = ReloadCounters(
+                total_requests=self._counters.total_requests,
+                admitted_operations=self._counters.admitted_operations,
+                busy_rejections=self._counters.busy_rejections,
+                committed_reloads=self._counters.committed_reloads,
+                noop_outcomes=self._counters.noop_outcomes,
+                ignored_only_outcomes=self._counters.ignored_only_outcomes,
+                validation_rejections=self._counters.validation_rejections,
+                restart_required_rejections=self._counters.restart_required_rejections,
+                prepare_failures=self._counters.prepare_failures,
+                commit_failures=self._counters.commit_failures,
+                cancellations=self._counters.cancellations + 1,
+                compensation_failures=self._counters.compensation_failures,
+                retirement_failures=self._counters.retirement_failures,
+            )
             # Phase 6: if we haven't published yet, cancellation is safe.
             # If we have published, shield the commit to completion.
             if txn.is_committing:
@@ -932,22 +1152,25 @@ class ReloadManager:
             else:
                 txn.mark_aborting(RuntimeError("Reload cancelled before commit point"))
 
-            self._last_reload_result = ReloadOperationResult(
+            # Phase 11: finalize.
+            terminal_stage = ReloadTerminalStage(error_stage)
+            diagnostic, wire_result = self._finalize_reload(
+                request_id=txn.request_id,
+                started_at=started_at,
+                txn=txn,
+                txn_state=txn.state,
                 ok=txn.state == TransactionState.COMPLETED,
-                stage=error_stage,
-                generation=generation_id,
+                stage=terminal_stage,
+                generation_id=generation_id,
+                digest_prefix=digest_prefix,
                 changed_sections=changed_sections,
+                ignored_sections=(),
+                restart_required_sections=(),
                 warnings=warnings,
-                restart_required=restart_required,
-                retirement_pending=txn.state == TransactionState.COMPLETED,
-                message=(
-                    "Reload completed despite cancellation"
-                    if txn.state == TransactionState.COMPLETED
-                    else f"Reload cancelled at stage {error_stage}"
-                ),
-                duration_s=duration,
+                is_cancelled=True,
+                publication_occurred=txn.is_committing,
             )
-            self._last_reload_completed_at = time.time()
+            self._last_diagnostic_result = diagnostic
             # Shield candidate abort so bounded cleanup completes
             # before the cancellation propagates.
             if candidate is not None and not txn.is_committing:
@@ -982,10 +1205,26 @@ class ReloadManager:
                 else ReloadOperationStage.IDLE
             )
             logger.exception("Reload failed at stage %s", error_stage)
-            self._reload_count += 1
-            self._reload_error_count += 1
+            # Phase 11: update counters.
+            self._counters = ReloadCounters(
+                total_requests=self._counters.total_requests,
+                admitted_operations=self._counters.admitted_operations,
+                busy_rejections=self._counters.busy_rejections,
+                committed_reloads=self._counters.committed_reloads,
+                noop_outcomes=self._counters.noop_outcomes,
+                ignored_only_outcomes=self._counters.ignored_only_outcomes,
+                validation_rejections=self._counters.validation_rejections,
+                restart_required_rejections=self._counters.restart_required_rejections,
+                prepare_failures=self._counters.prepare_failures,
+                commit_failures=self._counters.commit_failures + 1,
+                cancellations=self._counters.cancellations,
+                compensation_failures=self._counters.compensation_failures,
+                retirement_failures=self._counters.retirement_failures,
+            )
             # Phase 6: if we haven't published, abort cleanly.
             # If we have published, attempt compensation.
+            compensation_ok = False
+            compensation_attempted = False
             if txn.state == TransactionState.RUNTIME_PUBLISHED:
                 # Publication succeeded but a post-publication step failed.
                 # Compensate by accepting the new generation and retrying
@@ -995,6 +1234,7 @@ class ReloadManager:
                     "attempting compensation",
                     generation_id,
                 )
+                compensation_attempted = True
                 compensation_ok = await self._compensate_post_publication(
                     txn,
                     exc,
@@ -1009,6 +1249,22 @@ class ReloadManager:
                 else:
                     txn.mark_aborting(exc)
                     txn.mark_compensation_failed()
+                    # Phase 11: update compensation failure counter.
+                    self._counters = ReloadCounters(
+                        total_requests=self._counters.total_requests,
+                        admitted_operations=self._counters.admitted_operations,
+                        busy_rejections=self._counters.busy_rejections,
+                        committed_reloads=self._counters.committed_reloads,
+                        noop_outcomes=self._counters.noop_outcomes,
+                        ignored_only_outcomes=self._counters.ignored_only_outcomes,
+                        validation_rejections=self._counters.validation_rejections,
+                        restart_required_rejections=self._counters.restart_required_rejections,
+                        prepare_failures=self._counters.prepare_failures,
+                        commit_failures=self._counters.commit_failures,
+                        cancellations=self._counters.cancellations,
+                        compensation_failures=self._counters.compensation_failures + 1,
+                        retirement_failures=self._counters.retirement_failures,
+                    )
             elif txn.state in (
                 TransactionState.COMMIT_STARTED,
                 TransactionState.PROCESS_TRANSITIONS_APPLIED,
@@ -1025,6 +1281,8 @@ class ReloadManager:
             # so bounded cleanup completes even under cancellation.
             # Skip when compensation succeeded (candidate was transferred).
             compensation_succeeded = txn.state == TransactionState.COMPLETED
+            candidate_cleanup_attempted = False
+            candidate_cleanup_succeeded = False
             if (
                 candidate is not None
                 and not txn.is_committing
@@ -1041,6 +1299,7 @@ class ReloadManager:
                         CandidateOwnershipState.TRANSFERRED,
                         CandidateOwnershipState.ABORTED,
                     ):
+                        candidate_cleanup_attempted = True
                         try:
                             diag = await asyncio.shield(
                                 candidate_abort(
@@ -1049,6 +1308,7 @@ class ReloadManager:
                                 ),
                             )
                             self._last_cleanup_diagnostics = diag
+                            candidate_cleanup_succeeded = True
                         except asyncio.CancelledError:
                             logger.warning(
                                 "Candidate abort shield cancelled for generation %d",
@@ -1062,22 +1322,42 @@ class ReloadManager:
                         if candidate_diag is not None:
                             self._last_cleanup_diagnostics = candidate_diag
             ok = txn.state == TransactionState.COMPLETED
-            self._last_reload_result = ReloadOperationResult(
+            # Phase 11: derive correct stage from the operation state.
+            # The _set_stage() call before the failed step already set
+            # the correct stage.  Fall back to error class mapping
+            # only if the operation stage is not a valid terminal stage.
+            error_class_name = type(exc).__name__
+            try:
+                terminal_stage = ReloadTerminalStage(error_stage)
+            except ValueError:
+                terminal_stage = stage_from_error_class(error_class_name)
+
+            diagnostic, wire_result = self._finalize_reload(
+                request_id=txn.request_id,
+                started_at=started_at,
+                txn=txn,
+                txn_state=txn.state,
                 ok=ok,
-                stage=error_stage,
-                generation=generation_id,
+                stage=terminal_stage,
+                generation_id=generation_id,
+                digest_prefix=digest_prefix,
                 changed_sections=changed_sections,
+                ignored_sections=(),
+                restart_required_sections=(),
                 warnings=warnings,
-                restart_required=restart_required,
-                retirement_pending=ok,
-                message=(
-                    "Reload compensated after post-publication failure"
-                    if ok
-                    else f"Reload failed: {exc!r}"
-                ),
-                duration_s=duration,
+                error=exc,
+                error_class=error_class_name,
+                is_compensation_failed=not compensation_ok and compensation_attempted,
+                publication_occurred=txn.is_committing,
+                persistence_committed=ok,
+                process_transitions_applied=ok,
+                compensation_attempted=compensation_attempted,
+                compensation_succeeded=compensation_ok,
+                candidate_cleanup_attempted=candidate_cleanup_attempted,
+                candidate_cleanup_succeeded=candidate_cleanup_succeeded,
             )
-            self._last_reload_completed_at = time.time()
+            self._last_diagnostic_result = diagnostic
+
             event_type = "reload_preparation_failure"
             if error_stage == ReloadOperationStage.RECONCILIATION:
                 event_type = "reload_reconciliation_failure"
@@ -1090,25 +1370,7 @@ class ReloadManager:
                 changed_sections=changed_sections,
                 error=f"{exc!r}",
             )
-            if not ok:
-                return ReloadResult(
-                    ok=False,
-                    stage=ReloadStage.VALIDATION,
-                    generation=None,
-                    changed_sections=(),
-                    warnings=warnings,
-                    restart_required=(),
-                    message=f"Reload failed: {exc!r}",
-                )
-            return ReloadResult(
-                ok=True,
-                stage=ReloadStage.RETIREMENT,
-                generation=generation_id,
-                changed_sections=changed_sections,
-                warnings=warnings,
-                restart_required=(),
-                message="Reload compensated after post-publication failure",
-            )
+            return wire_result
         finally:
             # Signal transaction completion before clearing the reference
             # so shutdown waiters are notified while the transaction is
@@ -1139,6 +1401,255 @@ class ReloadManager:
             digest_prefix=digest_prefix,
             error=error,
         )
+
+    # -- Phase 11: retirement derivation -----------------------------------
+
+    def _derive_retirement_status(
+        self,
+        *,
+        txn_state: TransactionState,
+        old_generation_id: int | None,
+    ) -> ReloadRetirementStatus:
+        """Derive retirement fields from the runtime manager state.
+
+        Reflects actual tracked retirement tasks rather than inferring
+        pending status from result success.
+        """
+        if old_generation_id is None:
+            return ReloadRetirementStatus(retirement_pending=False)
+
+        if txn_state == TransactionState.COMPLETED:
+            # After successful publication, check if the old generation
+            # is still tracked by the runtime manager (draining).
+            try:
+                diagnostics = self._runtime_manager.diagnostics()
+                for gen in diagnostics.retiring:
+                    if gen.generation_id == old_generation_id:
+                        return ReloadRetirementStatus(
+                            retirement_pending=True,
+                            retiring_generation_id=old_generation_id,
+                        )
+                return ReloadRetirementStatus(retirement_pending=False)
+            except Exception:
+                # If we can't query runtime manager, infer pending
+                # from the fact that we just published.
+                return ReloadRetirementStatus(
+                    retirement_pending=True,
+                    retiring_generation_id=old_generation_id,
+                )
+
+        if txn_state in (
+            TransactionState.ABORTED,
+            TransactionState.COMPENSATION_FAILED,
+        ):
+            return ReloadRetirementStatus(retirement_pending=False)
+
+        return ReloadRetirementStatus(retirement_pending=False)
+
+    # -- Phase 11: single finalization path --------------------------------
+
+    def _finalize_reload(
+        self,
+        *,
+        request_id: str,
+        started_at: float,
+        txn: ReloadTransaction,
+        txn_state: TransactionState,
+        ok: bool,
+        stage: ReloadTerminalStage,
+        generation_id: int | None,
+        digest_prefix: str,
+        changed_sections: tuple[str, ...],
+        ignored_sections: tuple[str, ...],
+        restart_required_sections: tuple[str, ...],
+        restart_required_changes: tuple[Any, ...] = (),
+        warnings: tuple[ConfigValidationWarning, ...],
+        error: Exception | None = None,
+        error_class: str | None = None,
+        is_noop: bool = False,
+        is_ignored_only: bool = False,
+        is_restart_required: bool = False,
+        is_cancelled: bool = False,
+        is_shutdown: bool = False,
+        is_compensation_failed: bool = False,
+        publication_occurred: bool = False,
+        persistence_committed: bool = False,
+        process_transitions_applied: bool = False,
+        compensation_attempted: bool = False,
+        compensation_succeeded: bool = False,
+        candidate_cleanup_attempted: bool = False,
+        candidate_cleanup_succeeded: bool = False,
+    ) -> tuple[ReloadDiagnosticResult, ReloadResult]:
+        """Single terminal finalizer for every admitted reload.
+
+        Derives terminal outcome from transaction state and primary error,
+        captures active-generation and retirement snapshots, updates
+        counters, sets completion time and duration, returns operation
+        state to idle, and produces the canonical result.
+        """
+        import time as _time
+
+        completed_at = _time.time()
+        duration_s = _time.monotonic() - started_at
+
+        # Derive category from flags.
+        category = classify_result_category(
+            ok=ok,
+            stage=stage,
+            is_noop=is_noop,
+            is_ignored_only=is_ignored_only,
+            is_restart_required=is_restart_required,
+            is_cancelled=is_cancelled,
+            is_shutdown=is_shutdown,
+            is_compensation_failed=is_compensation_failed,
+            error_class=error_class,
+        )
+
+        # Derive retirement status from runtime manager.
+        retirement = self._derive_retirement_status(
+            txn_state=txn_state,
+            old_generation_id=txn.old_generation_id,
+        )
+
+        # Active generation snapshot.
+        try:
+            active_snap = self._runtime_manager.active_snapshot()
+            active_generation_id = active_snap.generation_id
+            active_generation_digest = active_snap.config_digest
+        except Exception:
+            active_generation_id = None
+            active_generation_digest = None
+
+        # Build warning messages (bounded).
+        warning_messages = tuple(
+            w if isinstance(w, str) else str(w) for w in warnings[:10]
+        )
+
+        # Error classification.
+        err_code: str | None = None
+        err_class: str | None = error_class
+        if error is not None:
+            err_code = type(error).__name__
+            if err_class is None:
+                err_class = err_code
+
+        # Message.
+        if ok and is_noop:
+            message = "No configuration changes detected"
+        elif ok and is_ignored_only:
+            message = "Configuration changes detected but all are ignored"
+        elif ok:
+            message = (
+                f"Reload applied: generation {generation_id}, "
+                f"{len(changed_sections)} section(s) changed"
+            )
+        elif is_restart_required:
+            n = len(restart_required_sections)
+            message = f"Reload rejected: {n} restart-required field(s) changed"
+        elif is_cancelled and txn_state == TransactionState.COMPLETED:
+            message = "Reload completed despite cancellation"
+        elif is_cancelled:
+            message = f"Reload cancelled at stage {stage.value}"
+        elif is_compensation_failed:
+            message = (
+                "Reload compensated after post-publication failure"
+                if compensation_succeeded
+                else f"Reload failed: {error!r}"
+            )
+        elif error is not None:
+            message = f"Reload failed: {error!r}"
+        else:
+            message = f"Reload failed at stage {stage.value}"
+
+        # Build diagnostic result.
+        diagnostic = ReloadDiagnosticResult(
+            request_id=request_id,
+            category=category,
+            terminal_stage=stage,
+            admitted_at=self._admitted_at,
+            started_at=started_at,
+            completed_at=completed_at,
+            duration_s=duration_s,
+            old_generation_id=txn.old_generation_id,
+            old_generation_digest=None,
+            candidate_generation_id=generation_id,
+            candidate_generation_digest=digest_prefix,
+            active_generation_id=active_generation_id,
+            active_generation_digest=active_generation_digest,
+            changed_sections=changed_sections,
+            ignored_sections=ignored_sections,
+            restart_required_sections=restart_required_sections,
+            semantic_noop=is_noop,
+            publication_occurred=publication_occurred,
+            persistence_committed=persistence_committed,
+            process_transitions_applied=process_transitions_applied,
+            compensation_attempted=compensation_attempted,
+            compensation_succeeded=compensation_succeeded,
+            candidate_cleanup_attempted=candidate_cleanup_attempted,
+            candidate_cleanup_succeeded=candidate_cleanup_succeeded,
+            retirement=retirement,
+            error_code=err_code,
+            error_class=err_class,
+            message=message,
+            warnings=warnings,
+            warning_messages=warning_messages,
+            counters=self._counters,
+        )
+
+        # Build the wire-format ReloadResult.
+        wire_stage: ReloadStage
+        if stage == ReloadTerminalStage.VALIDATION:
+            wire_stage = ReloadStage.VALIDATION
+        elif stage == ReloadTerminalStage.DIFF:
+            wire_stage = ReloadStage.DIFF
+        elif stage == ReloadTerminalStage.PREPARATION:
+            wire_stage = ReloadStage.PREPARATION
+        elif stage == ReloadTerminalStage.RECONCILIATION:
+            wire_stage = ReloadStage.RECONCILIATION
+        elif stage == ReloadTerminalStage.COMMIT:
+            wire_stage = ReloadStage.COMMIT
+        elif stage == ReloadTerminalStage.RETIREMENT:
+            wire_stage = ReloadStage.RETIREMENT
+        else:
+            wire_stage = ReloadStage.COMMIT
+
+        wire_result = ReloadResult(
+            ok=ok,
+            stage=wire_stage,
+            generation=generation_id if ok else None,
+            changed_sections=changed_sections,
+            warnings=warnings,
+            restart_required=(
+                restart_required_changes
+                if restart_required_changes
+                else tuple(
+                    c
+                    for c in txn.restart_required
+                    if c.section in restart_required_sections
+                )
+            ),
+            message=message,
+        )
+
+        # Store internal result (backward compat).
+        self._last_reload_result = ReloadOperationResult(
+            ok=ok,
+            stage=stage.value,
+            generation=generation_id,
+            changed_sections=changed_sections,
+            warnings=warnings,
+            restart_required=(
+                restart_required_changes
+                if restart_required_changes
+                else tuple(txn.restart_required)
+            ),
+            retirement_pending=retirement.retirement_pending,
+            message=message,
+            duration_s=duration_s,
+        )
+        self._last_reload_completed_at = completed_at
+
+        return diagnostic, wire_result
 
     async def _record_event(
         self,
@@ -1618,6 +2129,8 @@ class ReloadManager:
 __all__ = [
     "CandidateGeneration",
     "ReloadCommitError",
+    "ReloadCounters",
+    "ReloadDiagnosticResult",
     "ReloadInProgressError",
     "ReloadManager",
     "ReloadObserver",
@@ -1626,6 +2139,9 @@ __all__ = [
     "ReloadOperationState",
     "ReloadPreparationError",
     "ReloadReconciliationError",
+    "ReloadResultCategory",
+    "ReloadRetirementStatus",
+    "ReloadTerminalStage",
     # Phase 6 transaction types (re-exported for convenience)
     "PersistenceDelta",
     "ProcessTransitionPlan",

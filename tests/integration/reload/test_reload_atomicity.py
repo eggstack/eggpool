@@ -193,8 +193,8 @@ async def test_reload_failure_records_operational_event(
         reload_harness.reload_manager.TEST_INJECT_BUILD_FAILURE = None
 
     assert result.ok is False
-    # The reload error count should have increased
-    assert reload_harness.reload_manager._reload_error_count > 0
+    # The reload error count should have increased (Phase 11: use new counters).
+    assert reload_harness.reload_manager._counters.prepare_failures > 0
 
 
 @pytest.mark.asyncio()

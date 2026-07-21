@@ -234,8 +234,8 @@ class TestDiffComputationFailure:
             ic_mock.assert_not_called()
 
         assert result.ok is False
-        # Generic Exception handler returns stage=ReloadStage.VALIDATION
-        assert result.stage == ReloadStage.VALIDATION
+        # Phase 11: diff computation failure now correctly reports stage=DIFF.
+        assert result.stage == ReloadStage.DIFF
         failure_events = [et for et, _ in event_calls if "failure" in et]
         assert len(failure_events) >= 1
 
@@ -293,8 +293,8 @@ class TestCandidateBuildFailure:
             ic_mock.assert_not_called()
 
         assert result.ok is False
-        # ReloadPreparationError handler returns stage=ReloadStage.VALIDATION
-        assert result.stage == ReloadStage.VALIDATION
+        # Phase 11: build failure now correctly reports stage=PREPARATION.
+        assert result.stage == ReloadStage.PREPARATION
         failure_events = [et for et, _ in event_calls if "failure" in et]
         assert len(failure_events) >= 1
 
@@ -356,8 +356,8 @@ class TestReconciliationFailure:
             ic_mock.assert_not_called()
 
         assert result.ok is False
-        # Generic Exception handler returns stage=ReloadStage.VALIDATION
-        assert result.stage == ReloadStage.VALIDATION
+        # Phase 11: reconciliation failure now correctly reports stage=RECONCILIATION.
+        assert result.stage == ReloadStage.RECONCILIATION
         reconciliation_events = [et for et, _ in event_calls if "reconciliation" in et]
         assert len(reconciliation_events) >= 1
 
@@ -421,8 +421,9 @@ class TestPublishFailure:
             ic_mock.assert_not_called()
 
         assert result.ok is False
-        # Generic Exception handler returns stage=ReloadStage.VALIDATION
-        assert result.stage == ReloadStage.VALIDATION
+        # Phase 11: pre-commit verification failure occurs during RECONCILIATION stage
+        # (before _set_stage(COMMIT) is called).
+        assert result.stage == ReloadStage.RECONCILIATION
         failure_events = [et for et, _ in event_calls if "failure" in et]
         assert len(failure_events) >= 1
 

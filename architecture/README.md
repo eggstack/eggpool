@@ -36,6 +36,7 @@ src/eggpool/
 ├── cli_full.py        # Click CLI commands (heavy imports)
 ├── config.py          # Config file helpers
 ├── config_reload_policy.py # Typed configuration diff, reload policy, ReloadResult, ReloadStage
+├── reload_diagnostics.py  # Phase 11: canonical reload result categories, counters, finalization
 ├── config_utils.py    # Configuration utility functions for CLI and integrations
 ├── config_validation.py # Reusable validation contract used by check-config and rehash
 ├── constants.py       # Project-wide constants
@@ -3906,6 +3907,58 @@ the non-blocking publication path.
   exceeds threshold (default 200ms).
 - **DB contention snapshot**: `lock_wait_p50_ms`, `p95_ms`, `p99_ms`,
   `max_ms`, `sample_count` exposed via `/api/stats/runtime`.
+
+### Reload diagnostics (Phase 11)
+
+Phase 11 makes every reload outcome observable, internally consistent,
+and stage-accurate. The implementation lives in
+`src/eggpool/reload_diagnostics.py` and `src/eggpool/control/reload_manager.py`.
+
+**Canonical result model** (`ReloadDiagnosticResult`):
+every admitted reload reaches one terminal finalizer
+(`_finalize_reload`) that produces a frozen dataclass carrying:
+- `request_id`, `category` (`ReloadResultCategory` enum),
+  `terminal_stage` (`ReloadTerminalStage` enum);
+- timestamps (`admitted_at`, `started_at`, `completed_at`, `duration_s`);
+- generation metadata (old, candidate, active IDs and digests);
+- section tracking (changed, ignored, restart-required);
+- operation flags (semantic_noop, publication_occurred, persistence_committed,
+  process_transitions_applied);
+- compensation and cleanup status;
+- retirement status (derived from `RuntimeManager.diagnostics()`);
+- error classification (stable code/class, bounded message);
+- bounded warnings and precise counters (`ReloadCounters`).
+
+**Result categories** (`ReloadResultCategory`):
+`SUCCESS_COMMITTED`, `SUCCESS_NOOP`, `SUCCESS_IGNORED_ONLY`,
+`REJECTED_BUSY`, `REJECTED_VALIDATION`, `REJECTED_RESTART_REQUIRED`,
+`FAILED_CANDIDATE_PREPARE`, `FAILED_PERSISTENCE_PREPARE`,
+`FAILED_COMMIT`, `ABORTED_CANCELLED`, `ABORTED_SHUTDOWN`,
+`COMPENSATION_FAILED`, `INTERNAL_ERROR`.
+
+**Counter semantics** (`ReloadCounters`):
+`total_requests`, `admitted_operations`, `busy_rejections`,
+`committed_reloads`, `noop_outcomes`, `ignored_only_outcomes`,
+`validation_rejections`, `restart_required_rejections`,
+`prepare_failures`, `commit_failures`, `cancellations`,
+`compensation_failures`, `retirement_failures`.
+
+**Stage accuracy**: the terminal stage comes from the Phase 6
+transaction state via `_set_stage()`, not from error class mapping.
+A `ReloadPreparationError` at the VALIDATION stage (digest mismatch)
+reports `VALIDATION`; at the PREPARATION stage (build failure) reports
+`PREPARATION`.
+
+**Retirement status**: derived from `RuntimeManager.diagnostics()`
+after commit finalization, reflecting actual tracked retirement
+tasks rather than inferring pending status from result success.
+
+**Control protocol**: `ControlResponse` includes optional
+`result_category` and `duration_s` fields (backward-compatible).
+CLI `--json` output includes `result_category` and `duration_s`.
+
+**Tests**: `tests/unit/test_reload_diagnostics_matrix.py` exercises
+every result category, counter, stage, and snapshot field.
 
 ### Critical rules
 

@@ -202,8 +202,7 @@ async def test_reload_count_and_error_count_increment(
     reload_harness: ReloadHarness,
 ) -> None:
     """Reload counter increments for success and error counter for failure."""
-    initial_count = reload_harness.reload_manager._reload_count
-    initial_error_count = reload_harness.reload_manager._reload_error_count
+    initial = reload_harness.reload_manager._counters
 
     # Failed reload first — counter increments and error counter increments.
     reload_harness.reload_manager.TEST_INJECT_BUILD_FAILURE = RuntimeError("fail")
@@ -213,14 +212,19 @@ async def test_reload_count_and_error_count_increment(
         reload_harness.reload_manager.TEST_INJECT_BUILD_FAILURE = None
 
     assert result.ok is False
-    assert reload_harness.reload_manager._reload_count == initial_count + 1
-    assert reload_harness.reload_manager._reload_error_count == initial_error_count + 1
+    after_fail = reload_harness.reload_manager._counters
+    assert after_fail.total_requests == initial.total_requests + 1
+    assert after_fail.admitted_operations == initial.admitted_operations + 1
+    assert after_fail.prepare_failures == initial.prepare_failures + 1
 
     # Successful reload — counter increments, error counter unchanged.
     result = await reload_harness.reload()
     assert result.ok is True
-    assert reload_harness.reload_manager._reload_count == initial_count + 2
-    assert reload_harness.reload_manager._reload_error_count == initial_error_count + 1
+    after_ok = reload_harness.reload_manager._counters
+    assert after_ok.total_requests == initial.total_requests + 2
+    assert after_ok.admitted_operations == initial.admitted_operations + 2
+    assert after_ok.prepare_failures == initial.prepare_failures + 1
+    assert after_ok.committed_reloads == initial.committed_reloads + 1
 
 
 @pytest.mark.asyncio()
@@ -237,7 +241,10 @@ async def test_last_reload_result_snapshot(
     assert op.generation == result.generation
     assert op.changed_sections == result.changed_sections
     assert op.duration_s >= 0
-    assert op.retirement_pending is True
+    # Phase 11: retirement_pending is derived from actual runtime state,
+    # not inferred from success.  After a successful reload, the old
+    # generation may have already completed retirement.
+    assert isinstance(op.retirement_pending, bool)
 
 
 @pytest.mark.asyncio()
@@ -250,6 +257,15 @@ async def test_snapshot_exposes_reload_counters(
     assert "reload_error_count" in snapshot
     assert "last_reload_completed_at" in snapshot
     assert "operation_state" in snapshot
+    # Phase 11: precise counters.
+    assert "counters" in snapshot
+    counters = snapshot["counters"]
+    assert "total_requests" in counters
+    assert "admitted_operations" in counters
+    assert "committed_reloads" in counters
+    assert "noop_outcomes" in counters
+    # Phase 11: canonical diagnostic result.
+    assert "last_diagnostic_result" in snapshot
     # The exact shape of operation_state depends on whether a reload
     # is in flight, but it must be either None or a valid dict.
     assert snapshot["operation_state"] is None or isinstance(

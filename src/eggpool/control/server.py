@@ -96,10 +96,13 @@ class ControlResponse:
     restart_required: tuple[str, ...]
     retirement_pending: bool
     message: str
+    # Phase 11: optional diagnostic fields (backward-compatible).
+    result_category: str | None = None
+    duration_s: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise to a JSON-compatible dict."""
-        return {
+        d: dict[str, Any] = {
             "protocol_version": self.protocol_version,
             "request_id": self.request_id,
             "ok": self.ok,
@@ -111,6 +114,12 @@ class ControlResponse:
             "retirement_pending": self.retirement_pending,
             "message": self.message,
         }
+        # Phase 11: include optional diagnostic fields.
+        if self.result_category is not None:
+            d["result_category"] = self.result_category
+        if self.duration_s is not None:
+            d["duration_s"] = self.duration_s
+        return d
 
 
 def control_socket_path() -> Path:
@@ -284,6 +293,7 @@ def _error_response(
         restart_required=(),
         retirement_pending=False,
         message=message,
+        result_category="internal_error",
     )
 
 

@@ -42,6 +42,27 @@ _STAGE_LABELS: dict[str, str] = {
     "parse": "control-unavailable",
 }
 
+# Phase 11: human-readable labels for result categories.
+_RESULT_CATEGORY_LABELS: dict[str, str] = {
+    "success_committed": "applied",
+    "success_noop": "no-op",
+    "success_ignored_only": "ignored-only",
+    "rejected_busy": "busy",
+    "rejected_validation": "validation-failure",
+    "rejected_restart_required": "restart-required",
+    "failed_candidate_prepare": "preparation-failure",
+    "failed_persistence_prepare": "persistence-failure",
+    "failed_process_transition_prepare": "process-transition-failure",
+    "failed_commit": "commit-failure",
+    "failed_publication": "publication-failure",
+    "failed_process_transition_apply": "process-transition-failure",
+    "failed_persistence_commit": "persistence-failure",
+    "aborted_cancelled": "cancelled",
+    "aborted_shutdown": "shutdown",
+    "compensation_failed": "compensation-failure",
+    "internal_error": "internal-error",
+}
+
 
 def format_rehash_json(result: ControlResponse, exit_code: int) -> dict[str, Any]:
     """Build the canonical JSON dict for a ``ControlResponse``.
@@ -49,7 +70,7 @@ def format_rehash_json(result: ControlResponse, exit_code: int) -> dict[str, Any
     Always includes every required key so ``--json`` consumers never
     see missing fields.
     """
-    return {
+    d: dict[str, Any] = {
         "ok": result.ok,
         "stage": result.stage,
         "exit_code": exit_code,
@@ -60,6 +81,12 @@ def format_rehash_json(result: ControlResponse, exit_code: int) -> dict[str, Any
         "retirement_pending": result.retirement_pending,
         "message": result.message,
     }
+    # Phase 11: include optional diagnostic fields.
+    if result.result_category is not None:
+        d["result_category"] = result.result_category
+    if result.duration_s is not None:
+        d["duration_s"] = result.duration_s
+    return d
 
 
 def _redact_message(message: str) -> str:
