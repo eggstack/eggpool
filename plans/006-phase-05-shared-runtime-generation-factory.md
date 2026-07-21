@@ -1,7 +1,7 @@
 # Phase 5 — Shared Runtime-Generation Factory
 
 Date: 2026-07-19
-Status: implementation handoff
+Status: complete
 Roadmap: `plans/001-reload-correctness-performance-roadmap.md`
 Prerequisites: Phases 1–4.
 
@@ -206,4 +206,18 @@ The manifest should fail when a future dependency is added to one path only.
 
 ## Handoff evidence
 
-Record the service-graph manifest, startup/reload parity test commands, before/after constructor call sites, backoff survival test, and confirmation that process-owned workers are not recreated per generation.
+**Service-graph manifest**: `test_construction_parity_manifest` in `tests/unit/test_generation_factory.py` compares normalized manifests between startup and reload paths, failing if future dependencies are added to one path only.
+
+**Startup/reload parity test commands**:
+```bash
+uv run pytest tests/unit/test_generation_factory.py -v
+```
+14 tests covering: service-graph manifest, dispatch writer, detailed span sample rate, local pre-upstream recorder, stream diagnostics, backoff hydration, candidate cleanup, no-op reload, and no remote refresh.
+
+**Before/after constructor call sites**:
+- `src/eggpool/app.py`: Startup now calls `factory.prepare()` (line ~945) instead of inline construction. Process-owned services (MetricsWriteCoalescer, DispatchPersistenceWriter, RoutingTraceWriter) created before factory call.
+- `src/eggpool/control/reload_manager.py`: `_build_candidate_generation()` replaced with single `factory.prepare()` call (line ~1009). ~400 lines of duplicated service construction removed.
+
+**Backoff survival test**: `test_backoff_hydration` verifies persisted account/model backoffs are loaded into the health manager during factory preparation, ensuring suppressed accounts remain ineligible after rehash.
+
+**Process-owned workers not recreated**: Factory accepts `ProcessRuntime` as input and does not construct MetricsWriteCoalescer, DispatchPersistenceWriter, or RoutingTraceWriter. These remain process-owned and survive generation swaps.

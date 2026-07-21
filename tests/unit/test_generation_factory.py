@@ -639,6 +639,53 @@ class TestCandidateConstructionFailure:
 # ---------------------------------------------------------------------------
 
 
+class TestNoRemoteRefresh:
+    """Verify the factory does not trigger remote catalog refresh.
+
+    Startup calls ``catalog.refresh()`` *after* the factory returns.
+    The factory itself must only perform local catalog operations
+    (load cached models, attach resolvers). A full remote refresh
+    during reload would waste network resources and could mask stale
+    provider data.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_factory_does_not_call_catalog_refresh(self) -> None:
+        """factory.prepare() never invokes catalog.refresh() (remote fetch)."""
+        from unittest.mock import AsyncMock, patch
+
+        from eggpool.db.connection import Database
+        from eggpool.db.migrations import MigrationRunner
+        from eggpool.generation_factory import RuntimeGenerationFactory
+
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+            await MigrationRunner(db).run()
+            process = _make_process(db=db, stats_db=db)
+            config = _make_config()
+
+            factory = RuntimeGenerationFactory()
+            with patch(
+                "eggpool.catalog.service.CatalogService.refresh",
+                new_callable=AsyncMock,
+            ) as mock_refresh:
+                result = await factory.prepare(
+                    config=config,
+                    config_digest="test-digest",
+                    generation_id=1,
+                    process=process,
+                )
+
+                # catalog.refresh() must NOT have been called
+                mock_refresh.assert_not_called()
+
+                # But the catalog should be functional (cached models loaded)
+                assert result.catalog is not None
+        finally:
+            await db.disconnect()
+
+
 class TestNoOpReload:
     """Verify repeated no-op reload behavior."""
 
