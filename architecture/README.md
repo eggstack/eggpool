@@ -3708,6 +3708,44 @@ The manager exposes `snapshot()` for runtime diagnostics, including
 `operation_state` (current stage, started_at, generation_id,
 digest_prefix), and `active_transaction` (Phase 6 transaction state).
 
+### Prepared-swap publication protocol (Milestone C / Plan 014)
+
+The `ReloadManager._publish_generation()` method is decomposed into
+three auditable phases so the publication fact recording, the
+runtime pointer swap, and the post-publication housekeeping can be
+reasoned about (and tested) individually.
+
+1. `_prepare_swap(candidate)` — `src/eggpool/control/reload_manager.py:2408`
+   captures the active generation identity and the candidate
+   generation object in a frozen `_PreparedSwap` record. **No state
+   mutation occurs** in this phase. The record's `active_generation_id`
+   is consulted in `_commit_publication` to detect concurrent
+   publication races.
+2. `_commit_publication(swap)` — `:2431` invokes
+   `RuntimeManager.install_candidate(...)` inside the same SQLite
+   transaction that holds the persistence delta. A failure raises
+   `ReloadCommitError` and triggers `ReloadTransaction.mark_aborting`
+   so the transaction state machine records that publication was
+   attempted but did not occur.
+3. `_finalize_retirement_handling(swap)` — `:2455` calls the
+   candidate's `transfer_to_runtime_manager()` so the candidate's
+   registered closeables are not re-closed by abort, then mirrors the
+   new generation onto `app.state` for dashboard, readyz, and other
+   synchronous consumers.
+
+The transaction state machine records explicit publication facts
+(`publication_attempted`, `publication_occurred`,
+`active_generation_before`, `active_generation_after`,
+`persistence_committed`, `process_transitions_applied`,
+`effective_state_updated`, `retirement_scheduled`) that are
+populated as each phase completes. Cancellation before publication
+is handled by `publication_occurred == False`; after publication the
+remaining commit work is shielded from cancellation.
+
+Programmatic invariants are pinned by
+`tests/unit/test_published_swap_protocol.py` and the round-trip end
+to end matrix in `tests/integration/reload/test_reload_fault_matrix.py`.
+
 ### Reload observer protocol
 
 `ReloadObserver` (defined in `src/eggpool/control/reload_manager.py`) provides a no-op base class with async stage callbacks. Tests subclass it to intercept specific reload stages without modifying production code. Every method is a no-op by default, so attaching an observer has zero runtime cost when no overrides are provided.
@@ -3978,6 +4016,46 @@ every result category, counter, stage, and snapshot field.
 - HTTPX exception class names are stable operator-facing tokens — do
   not rename them without a coordinated update to the dashboard,
   the runtime JSON contract, and the playbook.
+
+### Reload consistency audit (Plan 014 / Workstream G4)
+
+`scripts/audit_reload_consistency.py` is an offline cross-layer
+auditor that proves the active generation's configured providers,
+accounts, task specs, and routing-trace writer mode agree with what
+actually exists in the SQLite database and the running process. The
+script catches drift introduced by a reload that committed the
+runtime pointer swap but did not apply the persistence delta (or
+vice versa).
+
+Three checks run by default:
+
+* `provider_rows_vs_active_config` — The `providers` table must
+  contain every active provider with matching `base_url` and
+  `protocols`. A provider present in the snapshot but missing from
+  the DB (or a row marked disabled while the snapshot says enabled)
+  is reported as a violation.
+* `account_rows_vs_active_config` — The `accounts` table must
+  contain every active account with matching `provider_id`,
+  `enabled`, and `weight`. Drift on any field is a violation.
+* `task_specs_vs_active_registry` — When the environment variable
+  `EGGPOOL_AUDIT_TASK_SPECS_ACTIVE` is populated (a comma-separated
+  list of task spec names reported live by the process supervisor),
+  every configured task spec must be present in that list. The check
+  is silent in offline audit contexts.
+
+Optional flags:
+
+* `--live-writer` — additionally compares the routing-trace writer's
+  live mode (read from the `EGGPOOL_LIVE_TRACE_MODE` env var) against
+  the active generation's `routing.trace.mode`.
+* `--emit-snapshot-template` — prints a blank snapshot JSON template
+  for operators building a snapshot from a non-standard introspection
+  source.
+
+The script exits 0 when clean, 1 on any violation, 2 on usage error.
+Output is a single JSON document (`passed`, `violations[*]`) suitable
+for CI consumption. Programmatic invariants are pinned by
+`tests/unit/test_audit_reload_consistency.py`.
 
 ## Dispatch Stability Milestone G — Soak Validation, Rollout, and Operational Closure
 

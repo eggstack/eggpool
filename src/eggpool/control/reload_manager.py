@@ -87,8 +87,62 @@ class ReloadInProgressError(Exception):
     """Raised when a reload is attempted while another is in progress."""
 
 
+@dataclass(frozen=True)
+class _PreparedSwap:
+    """State captured between prepare / commit / finalize phases.
+
+    The publication pipeline is split into three phases to keep the
+    ``prepare_swap`` / ``commit_publication`` / ``finalize_retirement``
+    transitions auditable individually:
+
+    - :meth:`ReloadManager._prepare_swap` populates this record.
+    - :meth:`ReloadManager._commit_publication` consumes it to swap
+      the active slot.
+    - :meth:`ReloadManager._finalize_retirement_handling` consumes it
+      to transfer ownership and mirror onto ``app.state``.
+
+    Splitting the phases lets the transaction state machine record
+    publication facts as soon as each step succeeds, even if a later
+    step fails.  See the "prepared-swap protocol" section of
+    :mod:`architecture.reload`.
+    """
+
+    candidate: object
+    generation: RuntimeGeneration
+    active_generation_id: int
+    drain_timeout_s: float
+
+
 class ReloadPreparationError(Exception):
     """Raised when candidate generation construction fails."""
+
+    error_kind: str = "preparation"
+
+    def __init__(self, message: str = "") -> None:
+        super().__init__(message)
+        self.message = message
+
+
+class ReloadDigestMismatchError(ReloadPreparationError):
+    """Raised when the caller's expected content digest does not match.
+
+    Carries ``expected`` and ``actual`` hex strings (both truncated for
+    diagnostic brevity) so typed callers can route this rejection to
+    the validation counter without parsing the message.
+    """
+
+    error_kind: str = "digest_mismatch"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        expected: str,
+        actual: str,
+    ) -> None:
+        super().__init__(message)
+        self.expected = expected
+        self.actual = actual
 
 
 class ReloadReconciliationError(Exception):
@@ -1065,8 +1119,13 @@ class ReloadManager:
             )
             logger.exception("Reload failed at stage %s", error_stage)
             # Phase 11: update counters.
-            # Distinguish digest mismatch (validation) from build failure (prep).
-            is_digest_mismatch = "digest mismatch" in str(exc).lower()
+            # Distinguish digest mismatch (validation) from build failure (prep)
+            # using the typed ``error_kind`` discriminator — string matching
+            # is fragile and bypassed by translation/localization changes.
+            is_digest_mismatch = (
+                isinstance(exc, ReloadDigestMismatchError)
+                or getattr(exc, "error_kind", "") == "digest_mismatch"
+            )
             self._counters = ReloadCounters(
                 total_requests=self._counters.total_requests,
                 admitted_operations=self._counters.admitted_operations,
@@ -1097,7 +1156,10 @@ class ReloadManager:
             if candidate_diag is not None:
                 self._last_cleanup_diagnostics = candidate_diag
             event_type = "reload_preparation_failure"
-            if "digest mismatch" in str(exc).lower():
+            if (
+                isinstance(exc, ReloadDigestMismatchError)
+                or getattr(exc, "error_kind", "") == "digest_mismatch"
+            ):
                 event_type = "reload_digest_mismatch"
             # Phase 11: derive correct stage from the operation state.
             # The _set_stage() call before the failed step already set
@@ -1864,9 +1926,11 @@ class ReloadManager:
     ) -> None:
         """Verify the content digest matches the caller's expectation."""
         if expected is not None and expected != validation.content_digest:
-            raise ReloadPreparationError(
+            raise ReloadDigestMismatchError(
                 "Content digest mismatch: expected "
-                f"{expected[:12]}… got {validation.content_digest[:12]}…"
+                f"{expected[:12]}… got {validation.content_digest[:12]}…",
+                expected=expected,
+                actual=validation.content_digest,
             )
 
     async def _compute_reload_diff(self, candidate_config: AppConfig) -> ConfigDiff:
@@ -2311,47 +2375,86 @@ class ReloadManager:
     ) -> None:
         """Atomically publish the candidate generation.
 
-        Delegates to ``RuntimeManager.install_candidate`` which swaps
-        the active slot and begins retirement of the old generation.
-        After successful publication, transfers ownership from the
-        candidate to the runtime manager.
-        """
-        try:
-            if self.TEST_INJECT_PUBLISH_FAILURE is not None:
-                raise self.TEST_INJECT_PUBLISH_FAILURE
-            # Support both old CandidateGeneration.generation and
-            # new RuntimeGenerationCandidate._built_generation.
-            generation = getattr(candidate, "generation", None) or getattr(
-                candidate,
-                "_built_generation",
-                None,  # pyright: ignore[reportPrivateUsage]
-            )
-            if generation is None:
-                raise ReloadCommitError(
-                    "Candidate has no generation; was mark_prepared() called?"
-                )
-            active = self._runtime_manager.active_snapshot()
-            await self._runtime_manager.install_candidate(
-                generation,
-                drain_timeout_s=self._drain_timeout_s,
-                expected_active_generation_id=active.generation_id,
-            )
-            # Transfer ownership: candidate abort is now a no-op.
-            transfer_fn = getattr(candidate, "transfer_to_runtime_manager", None)
-            if transfer_fn is not None:
-                transfer_fn()
-            # Mirror the new generation onto app.state so dashboard,
-            # readyz, and other synchronous consumers see the updated
-            # services immediately after publication.
-            if self._app is not None:
-                from eggpool.app import (  # noqa: PLC0415
-                    mirror_generation_on_app_state,
-                )
+        The publication is split into three explicit phases:
 
-                mirror_generation_on_app_state(self._app, generation)
+        1. ``_prepare_swap`` — capture the active generation identity
+           and the candidate generation object.  Failures here abort
+           the candidate before ownership transfers.
+        2. ``_commit_publication`` — invoke
+           :meth:`RuntimeManager.install_candidate` which performs the
+           pointer swap.  Failures here leave the SQLite transaction
+           rolled back (persistence + publication live inside the same
+           transaction).
+        3. ``_finalize_retirement_handling`` — transfer candidate
+           ownership to the runtime manager (so the candidate's
+           registered closeables are never re-closed) and mirror the
+           new generation onto ``app.state`` for synchronous consumers.
+
+        Splitting these phases lets the transaction state machine
+        record publication facts as soon as each step succeeds, even
+        if a later step fails.  See the ``prepared-swap protocol``
+        section of :mod:`architecture.reload`.
+        """
+        if self.TEST_INJECT_PUBLISH_FAILURE is not None:
+            raise self.TEST_INJECT_PUBLISH_FAILURE
+        swap = self._prepare_swap(candidate)
+        # At this point the active generation identity and the
+        # candidate generation are captured but no pointer swap has
+        # occurred.  Any exception raised in ``_commit_publication``
+        # below propagates as a ``ReloadCommitError`` and leaves the
+        # SQLite transaction to roll back atomically.
+        await self._commit_publication(swap)
+        self._finalize_retirement_handling(swap)
+
+    def _prepare_swap(
+        self,
+        candidate: CandidateGeneration | RuntimeGenerationCandidate,
+    ) -> _PreparedSwap:
+        """Capture publication inputs without mutating any state."""
+        generation: RuntimeGeneration | None = getattr(
+            candidate, "generation", None
+        ) or getattr(candidate, "_built_generation", None)  # pyright: ignore[reportPrivateUsage]
+        if generation is None:
+            raise ReloadCommitError(
+                "Candidate has no generation; was mark_prepared() called?"
+            )
+        active = self._runtime_manager.active_snapshot()
+        return _PreparedSwap(
+            candidate=candidate,
+            generation=generation,
+            active_generation_id=active.generation_id,
+            drain_timeout_s=self._drain_timeout_s,
+        )
+
+    async def _commit_publication(
+        self,
+        swap: _PreparedSwap,
+    ) -> None:
+        """Swap the active slot and retire the previous generation."""
+        try:
+            await self._runtime_manager.install_candidate(
+                swap.generation,
+                drain_timeout_s=swap.drain_timeout_s,
+                expected_active_generation_id=swap.active_generation_id,
+            )
         except Exception as exc:
             logger.exception("Generation publication failed")
             raise ReloadCommitError(f"Failed to publish generation: {exc!r}") from exc
+
+    def _finalize_retirement_handling(
+        self,
+        swap: _PreparedSwap,
+    ) -> None:
+        """Transfer candidate ownership and mirror onto ``app.state``."""
+        transfer_fn = getattr(swap.candidate, "transfer_to_runtime_manager", None)
+        if transfer_fn is not None:
+            transfer_fn()
+        if self._app is not None:
+            from eggpool.app import (  # noqa: PLC0415
+                mirror_generation_on_app_state,
+            )
+
+            mirror_generation_on_app_state(self._app, swap.generation)
 
 
 __all__ = [

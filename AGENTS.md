@@ -205,11 +205,19 @@ uv run pytest tests/soak/test_extended_stability_gates.py -m extended_soak -v
 # Skip/xfail audit — must pass for CI soak-audit job
 uv run python scripts/audit_xfail_skips.py
 
+# Reload consistency audit (Plan 014 / Workstream G4)
+uv run pytest tests/unit/test_audit_reload_consistency.py -v
+uv run python scripts/audit_reload_consistency.py \
+  --emit-snapshot-template
+
 # Dispatch stability soak runner
 uv run python scripts/run_dispatch_stability_soak.py \
   --profile balanced-file-backed \
   --mode smoke \
   --output artifacts/dispatch-soak/smoke
+
+# Prepared-swap publication protocol tests (C1)
+uv run pytest tests/unit/test_published_swap_protocol.py -v
 
 # Lint auto-fix
 uv run ruff check --fix src/

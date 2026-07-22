@@ -444,4 +444,27 @@ uv run pytest -m cache_compression_replay_full tests/unit/test_replay_fixtures_r
 - Branch: `main`
 - Commit messages: concise, imperative mood
 - Never commit secrets, API keys, or `.env` files
+
+## Reload Consistency Audit
+
+Offline cross-layer auditor for the published plan 014:
+
+```bash
+# Print a snapshot template for the active generation
+uv run python scripts/audit_reload_consistency.py --emit-snapshot-template
+
+# Audit a database + snapshot pair (CI-friendly exit code 0 on clean)
+uv run python scripts/audit_reload_consistency.py \
+    --db-path /var/lib/eggpool/usage.sqlite3 \
+    --active-snapshot artifacts/active-snapshot.json
+
+# Optional: include routing-trace writer mode comparison (needs EGGPOOL_LIVE_TRACE_MODE)
+uv run python scripts/audit_reload_consistency.py \
+    --db-path /var/lib/eggpool/usage.sqlite3 \
+    --active-snapshot artifacts/active-snapshot.json \
+    --live-writer
+
+# Programmatic invariants (always run as part of CI)
+uv run pytest tests/unit/test_audit_reload_consistency.py -v
+```
 - Run all checks before committing

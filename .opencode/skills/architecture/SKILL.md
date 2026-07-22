@@ -528,7 +528,57 @@ The reload policy (`config_reload_policy.py`) classifies every `AppConfig` field
 
 `ConfigDiff`, `ConfigChange`, `ReloadResult`, and `ReloadStage` are the protocol-neutral wire types that milestone C's control socket will speak directly. `compute_diff()` produces a `ConfigDiff` from two parsed configs; `diff_from_validation()` produces one from a validation result for the case where only one config is available. `ConfigChange` carries `field_path`, `old_value`, `new_value`, `disposition`, and `secret` (redacted in repr).
 
-- **Control socket hardening**: The control server validates JSON type (must be object), rejects unknown commands, validates request_id and digest formats, bounds error messages to prevent exception text leakage, enforces fail-closed socket permissions (0o600), probes liveness before stale socket removal, and uses XDG_RUNTIME_DIR for the socket path.
+- **Control socket hardening**: The control server validates JSON type (must be object), rejects unknown commands, validates request_id and digest formats, bounds error messages to prevent exception text leakage, enforces fail-closed socket permissions (0o600), probes liveness before stale socket removal, and uses XDG_RUNTIME_DIR for the socket path. On Linux, `SO_PEERCRED` rejects cross-UID connections; other platforms silently skip.
+
+### Prepared-Swap Publication Protocol (Milestone C / Plan 014)
+
+`ReloadManager._publish_generation` is decomposed into three explicit
+phases to keep publication facts auditable:
+
+1. `_prepare_swap(candidate)` — captures the active generation identity
+   and the candidate generation object in a frozen `_PreparedSwap`
+   record. No state mutation.
+2. `_commit_publication(swap)` — invokes
+   `RuntimeManager.install_candidate(...)` inside the same SQLite
+   transaction that holds the persistence delta. A failure raises
+   `ReloadCommitError` and triggers `ReloadTransaction.mark_aborting`.
+3. `_finalize_retirement_handling(swap)` — calls
+   `candidate.transfer_to_runtime_manager()` so the candidate's
+   closeables are not re-closed on abort, then mirrors the new
+   generation onto `app.state` for synchronous consumers.
+
+The transaction state machine records explicit publication facts
+(`publication_attempted`, `publication_occurred`,
+`active_generation_before`, `active_generation_after`,
+`persistence_committed`, `process_transitions_applied`,
+`effective_state_updated`, `retirement_scheduled`) populated as each
+phase completes. Cancellation before publication is distinguished
+from cancellation after publication via `publication_occurred`.
+
+Programmatic invariants are pinned by
+`tests/unit/test_published_swap_protocol.py` and the round-trip matrix
+in `tests/integration/reload/test_reload_fault_matrix.py`.
+
+### Typed exception routing
+
+`ReloadDigestMismatchError(ReloadPreparationError)` carries an
+`error_kind="digest_mismatch"` discriminator plus the `expected` and
+`actual` digests. Production code routes digest-mismatch rejections
+through this typed subclass (and any other exception that exposes an
+`error_kind="digest_mismatch"` attribute) rather than parsing the
+exception message string. Never add new ad-hoc `"digest mismatch" in
+str(exc).lower()` checks.
+
+### Reload Consistency Audit
+
+`scripts/audit_reload_consistency.py` performs offline cross-layer
+checks: the active generation's configured providers, accounts, task
+specs, and routing-trace writer mode must agree with the SQLite
+database and the live process. Drift indicates a reload that
+committed the runtime pointer swap but did not apply the persistence
+delta (or vice versa). The script reads JSON snapshots, exits 0 on
+clean / 1 on violation, and is pinned by
+`tests/unit/test_audit_reload_consistency.py`.
 
 ## CLI Commands
 

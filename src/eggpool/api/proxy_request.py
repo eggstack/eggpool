@@ -411,8 +411,26 @@ async def _handle_proxy_request_inner(
             error_type="invalid_request_error",
         )
 
-    config = cast("AppConfig | None", getattr(request.app.state, "config", None))
-    known_providers = set(config.providers) if config is not None else None
+    # Provider id parsing relies on the leased generation's precomputed
+    # provider set (built from the registry when the generation was
+    # constructed).  Reading through ``request.app.state.config`` would
+    # bypass the lease and use a generation that may already be retired.
+    # The legacy fallback below is unreachable once a runtime manager is
+    # installed (the outer handler always acquires a lease or returns 503).
+    config: AppConfig | None
+    known_providers: set[str] | None
+    if lease is not None:
+        config = lease.runtime.config
+        known_providers = set(lease.runtime.immutable_request_state.provider_ids)
+    else:
+        legacy_config = cast(
+            "AppConfig | None",
+            getattr(request.app.state, "config", None),
+        )
+        config = legacy_config
+        known_providers = (
+            set(legacy_config.providers) if legacy_config is not None else None
+        )
     with _span(span_recorder, SPAN_MODEL_PARSE):
         model_id, provider_id = parse_model_provider(model_value, known_providers)
 
@@ -421,6 +439,10 @@ async def _handle_proxy_request_inner(
         catalog = lease.runtime.catalog
         transcoder_policy = lease.runtime.transcoder_policy
     else:
+        # Legacy fallback path used by tests that construct an app
+        # without a runtime manager.  In production the outer handler
+        # always acquires a lease or returns 503, so this branch is
+        # unreachable at runtime.
         catalog = getattr(request.app.state, "catalog", None)
         transcoder_policy = getattr(request.app.state, "transcoder_policy", None)
     preflight: TranscodePreflightResult | None = None
@@ -540,8 +562,12 @@ async def _handle_proxy_request_inner(
         compression_policy = lease.runtime.compression_policy
         runtime_override_registry: Any = lease.runtime.compression_tuning_registry
     else:
+        # Legacy fallback path used by tests that construct an app
+        # without a runtime manager.  In production the outer handler
+        # always acquires a lease or returns 503, so this branch is
+        # unreachable at runtime.
         compression_policy = getattr(request.app.state, "compression_policy", None)
-        runtime_override_registry: Any = getattr(
+        runtime_override_registry = getattr(
             request.app.state,
             "compression_tuning_registry",
             None,

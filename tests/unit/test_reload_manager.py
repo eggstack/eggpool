@@ -17,6 +17,7 @@ from eggpool.config_reload_policy import (
 )
 from eggpool.control.reload_manager import (
     CandidateGeneration,
+    ReloadDigestMismatchError,
     ReloadInProgressError,
     ReloadManager,
     ReloadOperationStage,
@@ -177,6 +178,24 @@ class TestDigestValidation:
         validation = _make_validation(content_digest="a" * 64)
         with pytest.raises(ReloadPreparationError, match="Content digest mismatch"):
             await mgr._validate_digest(validation, "b" * 64)
+
+    @pytest.mark.asyncio
+    async def test_validate_digest_mismatch_typed(self) -> None:
+        """Digest mismatches raise the typed ReloadDigestMismatchError.
+
+        The handler uses the typed ``error_kind`` discriminator on the
+        exception, not string matching, so production routing must use
+        the typed subclass.
+        """
+        mgr = ReloadManager(_make_runtime_manager(), _make_process())
+        validation = _make_validation(content_digest="a" * 64)
+        with pytest.raises(ReloadDigestMismatchError) as excinfo:
+            await mgr._validate_digest(validation, "b" * 64)
+        assert excinfo.value.expected == "b" * 64
+        assert excinfo.value.actual == "a" * 64
+        assert excinfo.value.error_kind == "digest_mismatch"
+        # Subclass relationship keeps backward compatibility.
+        assert isinstance(excinfo.value, ReloadPreparationError)
 
     @pytest.mark.asyncio
     async def test_validate_digest_none_expected(self) -> None:
