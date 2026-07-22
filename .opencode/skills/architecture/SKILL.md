@@ -559,15 +559,16 @@ CI runs 6 parallel jobs:
 | `slow` | Tests exceeding normal CI budget |
 | `network` | Tests requiring network access |
 
-### Fault Injection Matrix
+### Fault Injection Matrix (28 tests)
 
 The complete fault-injection matrix (`tests/integration/reload/test_reload_fault_matrix.py`) covers every stage of the Phase 6 transactional flow:
 
-- **Preparation faults**: candidate build, persistence prepare, validation
-- **Commit faults**: persistence apply, publication, process transition apply
-- **Cleanup/compensation faults**: compensation retry success/failure
-- **Cancellation faults**: cancellation at every pipeline stage, post-publication shielding
-- **Concurrent faults**: busy rejection, sequential reload success
+- **Preparation faults (4)**: candidate build, persistence prepare, validation, diff computation
+- **Commit faults (4)**: persistence apply, publication, process transition apply (transient + persistent)
+- **Cancellation faults (8)**: cancellation at all 8 observer stages, post-publication shielding
+- **Cleanup/compensation faults (6)**: compensation retry success/failure, candidate close, persistence failure, publish failure, sequential failure recovery, shutdown during reload
+- **Concurrent faults (2)**: busy rejection, sequential reload success
+- **Full-state comparison (3)**: snapshot comparison after build failure, publish failure, and success
 
 Every fault yields complete old state (pre-commit) or complete new state (post-commit) — never mixed state.
 
