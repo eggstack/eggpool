@@ -54,6 +54,7 @@ jobs:
   # ------------------------------------------------------------------
   unit-integration:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [lint]
     strategy:
       fail-fast: false
@@ -72,6 +73,7 @@ jobs:
           -m "not slow and not performance and not soak and not extended_soak and not live"
           --ignore=tests/integration/reload/
           -q --tb=short
+          ${{ matrix.python-version == '3.11' && '-vv --capture=tee-sys -o faulthandler_timeout=300 --durations=25' || '' }}
 
       - name: Upload test logs on failure
         if: always()
