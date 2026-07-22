@@ -312,6 +312,195 @@ class TaskSpecTransition(ProcessTransition):
             self._applied = False
 
 
+class RoutingTraceWriterTransition(ProcessTransition):
+    """Transition for reconfiguring the process-owned routing-trace writer.
+
+    Captures the old mode/sample_rate at preflight and applies the new
+    configuration.  Rollback restores the previous settings.
+    """
+
+    def __init__(
+        self,
+        *,
+        writer: Any,
+        mode: str,
+        sample_rate: float,
+    ) -> None:
+        super().__init__(
+            name="routing_trace_writer",
+            description="Reconfigure routing-trace writer mode and sample rate",
+            reversible=True,
+        )
+        self._writer = writer
+        self._mode = mode
+        self._sample_rate = sample_rate
+        self._old_mode: str | None = None
+        self._old_sample_rate: float | None = None
+        self._applied = False
+
+    async def preflight(self) -> None:
+        """Capture current writer configuration without mutation."""
+        if self._writer is None:
+            return
+        self._old_mode = getattr(self._writer, "_mode", None) or getattr(
+            self._writer, "mode", None
+        )
+        self._old_sample_rate = getattr(self._writer, "_sample_rate", None) or getattr(
+            self._writer, "sample_rate", None
+        )
+
+    async def apply(self) -> None:
+        """Apply new routing-trace writer configuration."""
+        if self._writer is None:
+            return
+        self._writer.configure(mode=self._mode, sample_rate=self._sample_rate)
+        self._applied = True
+
+    async def rollback(self) -> None:
+        """Restore previous writer configuration."""
+        if not self._applied or self._writer is None:
+            return
+        if self._old_mode is not None and self._old_sample_rate is not None:
+            try:
+                self._writer.configure(
+                    mode=self._old_mode, sample_rate=self._old_sample_rate
+                )
+            except Exception:
+                logger.warning(
+                    "RoutingTraceWriterTransition rollback failed; "
+                    "writer may be in intermediate state"
+                )
+        self._applied = False
+
+
+class RoutingTraceGuardTransition(ProcessTransition):
+    """Transition for reconfiguring the process-owned routing-trace guard.
+
+    Captures the old guard settings at preflight and applies the new
+    configuration.  Rollback restores the previous settings.
+    """
+
+    def __init__(
+        self,
+        *,
+        guard: Any,
+        threshold_ms: float,
+        queue_occupancy_threshold: float,
+        oldest_event_age_s: float,
+        cooldown_s: float,
+    ) -> None:
+        super().__init__(
+            name="routing_trace_guard",
+            description="Reconfigure routing-trace guard thresholds",
+            reversible=True,
+        )
+        self._guard = guard
+        self._threshold_ms = threshold_ms
+        self._queue_occupancy_threshold = queue_occupancy_threshold
+        self._oldest_event_age_s = oldest_event_age_s
+        self._cooldown_s = cooldown_s
+        self._old_settings: dict[str, Any] | None = None
+        self._applied = False
+
+    async def preflight(self) -> None:
+        """Capture current guard settings without mutation."""
+        if self._guard is None:
+            return
+        self._old_settings = {
+            "threshold_ms": getattr(self._guard, "_threshold_ms", None),
+            "queue_occupancy_threshold": getattr(
+                self._guard, "_queue_occupancy_threshold", None
+            ),
+            "oldest_event_age_s": getattr(self._guard, "_oldest_event_age_s", None),
+            "cooldown_s": getattr(self._guard, "_cooldown_s", None),
+        }
+
+    async def apply(self) -> None:
+        """Apply new guard configuration."""
+        if self._guard is None:
+            return
+        self._guard.configure(
+            threshold_ms=self._threshold_ms,
+            queue_occupancy_threshold=self._queue_occupancy_threshold,
+            oldest_event_age_s=self._oldest_event_age_s,
+            cooldown_s=self._cooldown_s,
+        )
+        self._applied = True
+
+    async def rollback(self) -> None:
+        """Restore previous guard configuration."""
+        if not self._applied or self._guard is None or self._old_settings is None:
+            return
+        try:
+            self._guard.configure(**self._old_settings)
+        except Exception:
+            logger.warning(
+                "RoutingTraceGuardTransition rollback failed; "
+                "guard may be in intermediate state"
+            )
+        self._applied = False
+
+
+class EffectiveStateTransition(ProcessTransition):
+    """Transition for updating app.state compatibility mirrors.
+
+    Captures the previous effective state (config, config_digest,
+    coordinator, catalog, etc.) at preflight and applies the new
+    state at commit.  Rollback restores the previous state.
+    """
+
+    def __init__(
+        self,
+        *,
+        app_state: Any,
+        config: Any,
+        config_digest: str,
+        generation_id: int,
+    ) -> None:
+        super().__init__(
+            name="effective_state",
+            description="Update app.state compatibility mirrors",
+            reversible=True,
+        )
+        self._app_state = app_state
+        self._config = config
+        self._config_digest = config_digest
+        self._generation_id = generation_id
+        self._old_config: Any = None
+        self._old_config_digest: str | None = None
+        self._old_generation_id: int | None = None
+        self._applied = False
+
+    async def preflight(self) -> None:
+        """Capture previous effective state without mutation."""
+        if self._app_state is None:
+            return
+        self._old_config = getattr(self._app_state, "config", None)
+        self._old_config_digest = getattr(self._app_state, "config_digest", None)
+        self._old_generation_id = getattr(self._app_state, "generation_id", None)
+
+    async def apply(self) -> None:
+        """Apply new effective state to app.state."""
+        if self._app_state is None:
+            return
+        self._app_state.config = self._config
+        self._app_state.config_digest = self._config_digest
+        self._app_state.generation_id = self._generation_id
+        self._applied = True
+
+    async def rollback(self) -> None:
+        """Restore previous effective state."""
+        if not self._applied or self._app_state is None:
+            return
+        if self._old_config is not None:
+            self._app_state.config = self._old_config
+        if self._old_config_digest is not None:
+            self._app_state.config_digest = self._old_config_digest
+        if self._old_generation_id is not None:
+            self._app_state.generation_id = self._old_generation_id
+        self._applied = False
+
+
 @dataclass(frozen=True)
 class ProcessTransitionPlan:
     """Prepared process transitions for a reload.
@@ -385,6 +574,17 @@ class ReloadTransaction:
         # Commit-phase data
         self._commit_diagnostics = CommitDiagnostics()
         self._published_generation: RuntimeGeneration | None = None
+
+        # Explicit publication facts (C4) — tracked independently of
+        # state-machine transitions so diagnostics derive from facts.
+        self.publication_attempted: bool = False
+        self.publication_occurred: bool = False
+        self.active_generation_before: int | None = None
+        self.active_generation_after: int | None = None
+        self.persistence_committed: bool = False
+        self.process_transitions_applied: bool = False
+        self.effective_state_updated: bool = False
+        self.retirement_scheduled: bool = False
 
         # Terminal state
         self._completed_at: float | None = None
@@ -530,6 +730,7 @@ class ReloadTransaction:
     ) -> None:
         """Transition: PROCESS_TRANSITIONS_PREPARED → COMMIT_STARTED."""
         self._old_generation_id = old_generation_id
+        self.active_generation_before = old_generation_id
         self._commit_diagnostics = CommitDiagnostics(
             commit_started_at=time.monotonic(),
             old_generation_id=old_generation_id,
@@ -542,6 +743,9 @@ class ReloadTransaction:
     ) -> None:
         """Transition: COMMIT_STARTED → RUNTIME_PUBLISHED."""
         self._published_generation = published_generation
+        self.publication_attempted = True
+        self.publication_occurred = True
+        self.active_generation_after = published_generation.generation_id
         self._commit_diagnostics = CommitDiagnostics(
             commit_started_at=self._commit_diagnostics.commit_started_at,
             old_generation_id=self._commit_diagnostics.old_generation_id,
@@ -554,18 +758,22 @@ class ReloadTransaction:
 
     def mark_process_transitions_applied(self) -> None:
         """Transition: RUNTIME_PUBLISHED → PROCESS_TRANSITIONS_APPLIED."""
+        self.process_transitions_applied = True
         self._transition_to(TransactionState.PROCESS_TRANSITIONS_APPLIED)
 
     def mark_persistence_committed(self) -> None:
         """Transition: PROCESS_TRANSITIONS_APPLIED → PERSISTENCE_COMMITTED."""
+        self.persistence_committed = True
         self._transition_to(TransactionState.PERSISTENCE_COMMITTED)
 
     def mark_observable_state_updated(self) -> None:
         """Transition: PERSISTENCE_COMMITTED → OBSERVABLE_STATE_UPDATED."""
+        self.effective_state_updated = True
         self._transition_to(TransactionState.OBSERVABLE_STATE_UPDATED)
 
     def mark_retirement_scheduled(self) -> None:
         """Transition: OBSERVABLE_STATE_UPDATED → RETIREMENT_SCHEDULED."""
+        self.retirement_scheduled = True
         self._transition_to(TransactionState.RETIREMENT_SCHEDULED)
 
     def mark_completed(self) -> None:
@@ -586,7 +794,12 @@ class ReloadTransaction:
         self._transition_to(TransactionState.COMPLETED)
 
     def mark_aborting(self, error: Exception | None = None) -> None:
-        """Transition to ABORTING from any non-terminal state."""
+        """Transition to ABORTING from any non-terminal state.
+
+        When aborting from a post-commit state, records that publication
+        was attempted so diagnostics can distinguish pre-commit abort
+        from post-publication compensation.
+        """
         if self._state in (
             TransactionState.COMPLETED,
             TransactionState.ABORTED,
@@ -595,6 +808,15 @@ class ReloadTransaction:
         ):
             return  # already terminal or aborting
         self._error = error
+        if self._state in (
+            TransactionState.COMMIT_STARTED,
+            TransactionState.RUNTIME_PUBLISHED,
+            TransactionState.PROCESS_TRANSITIONS_APPLIED,
+            TransactionState.PERSISTENCE_COMMITTED,
+            TransactionState.OBSERVABLE_STATE_UPDATED,
+            TransactionState.RETIREMENT_SCHEDULED,
+        ):
+            self.publication_attempted = True
         self._transition_to(TransactionState.ABORTING)
 
     def mark_aborted(self) -> None:
@@ -648,6 +870,14 @@ class ReloadTransaction:
                 if self._published_generation
                 else None
             ),
+            "publication_attempted": self.publication_attempted,
+            "publication_occurred": self.publication_occurred,
+            "active_generation_before": self.active_generation_before,
+            "active_generation_after": self.active_generation_after,
+            "persistence_committed": self.persistence_committed,
+            "process_transitions_applied": self.process_transitions_applied,
+            "effective_state_updated": self.effective_state_updated,
+            "retirement_scheduled": self.retirement_scheduled,
             "commit_diagnostics": {
                 "commit_started_at": self._commit_diagnostics.commit_started_at,
                 "sqlite_apply_duration_s": (
@@ -675,10 +905,13 @@ class ReloadTransaction:
 
 __all__ = [
     "CommitDiagnostics",
+    "EffectiveStateTransition",
     "PersistenceDelta",
     "ProcessTransition",
     "ProcessTransitionPlan",
     "ReloadTransaction",
+    "RoutingTraceGuardTransition",
+    "RoutingTraceWriterTransition",
     "TaskSpecTransition",
     "TransactionState",
     "TransactionStateError",

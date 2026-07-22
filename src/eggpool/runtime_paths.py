@@ -17,13 +17,26 @@ logger = logging.getLogger(__name__)
 
 
 def state_dir() -> Path:
-    """Return ``~/.local/state/eggpool``, creating parent directories if missing.
+    """Return persistent state directory, honoring XDG_STATE_HOME.
 
-    Returns the path even when parent creation fails so the caller can
-    decide whether to fall back to a UID-scoped ``/tmp`` path. The
-    exception is logged at warning level.
+    Resolution order:
+    1. ``$EGGPOOL_STATE_DIR`` (explicit override)
+    2. ``$XDG_STATE_HOME/eggpool`` (XDG compliant)
+    3. ``~/.local/state/eggpool`` (XDG fallback)
+
+    Creates parent directories when possible.  Returns the path even
+    when creation fails so the caller can fall back to a UID-scoped
+    ``/tmp`` path.  The exception is logged at warning level.
     """
-    path = Path.home() / ".local" / "state" / "eggpool"
+    explicit = os.environ.get("EGGPOOL_STATE_DIR")
+    if explicit:
+        path = Path(explicit)
+    else:
+        xdg_state = os.environ.get("XDG_STATE_HOME")
+        if xdg_state:
+            path = Path(xdg_state) / "eggpool"
+        else:
+            path = Path.home() / ".local" / "state" / "eggpool"
     try:
         path.mkdir(parents=True, exist_ok=True)
     except OSError as exc:

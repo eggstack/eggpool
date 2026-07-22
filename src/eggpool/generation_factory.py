@@ -352,31 +352,22 @@ class RuntimeGenerationFactory:
             finalization_retry_queue
         )
 
-        # -- Routing trace guard --------------------------------------------
+        # -- Routing trace guard (NOT configured during preparation) ---------
+        # Configuration is deferred to RoutingTraceGuardTransition at commit
+        # time so candidate preparation has no process-owned side effects.
         from eggpool.request.routing_trace_guard import (  # noqa: PLC0415
             get_routing_trace_guard,
         )
 
         routing_trace_guard = get_routing_trace_guard()
-        routing_trace_guard.configure(
-            threshold_ms=config.routing.trace.skip_above_lock_wait_p95_ms,
-            queue_occupancy_threshold=(
-                config.routing.trace.guard_queue_occupancy_threshold
-            ),
-            oldest_event_age_s=config.routing.trace.guard_oldest_event_age_s,
-            cooldown_s=config.routing.trace.guard_cooldown_s,
-        )
         coordinator._routing_trace_guard = (  # pyright: ignore[reportPrivateUsage]
             routing_trace_guard
         )
 
-        # -- Routing trace writer (process-owned, reconfigure) --------------
+        # -- Routing trace writer (NOT configured during preparation) -------
+        # Configuration is deferred to RoutingTraceWriterTransition at commit
+        # time so candidate preparation has no process-owned side effects.
         routing_trace_writer = getattr(process, "routing_trace_writer", None)
-        if routing_trace_writer is not None:
-            routing_trace_writer.configure(
-                mode=config.routing.trace.mode,
-                sample_rate=config.routing.trace.sample_rate,
-            )
         coordinator._routing_trace_writer = (  # pyright: ignore[reportPrivateUsage]
             routing_trace_writer
         )

@@ -103,6 +103,7 @@ class ControlResponse:
     # Phase 11: optional diagnostic fields (backward-compatible).
     result_category: str | None = None
     duration_s: float | None = None
+    retiring_generation_id: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise to a JSON-compatible dict."""
@@ -123,6 +124,8 @@ class ControlResponse:
             d["result_category"] = self.result_category
         if self.duration_s is not None:
             d["duration_s"] = self.duration_s
+        if self.retiring_generation_id is not None:
+            d["retiring_generation_id"] = self.retiring_generation_id
         return d
 
 
@@ -197,6 +200,8 @@ class ControlServer:
     ) -> None:
         """Handle a single short-lived connection."""
         peer = writer.get_extra_info("peername", "?")
+        # SO_PEERCRED: reject connections from a different UID where supported.
+        _reject_unmatched_peer_uid(writer)
         try:
             raw_line = await asyncio.wait_for(
                 reader.readline(),
@@ -424,3 +429,42 @@ def _restrict_socket_permissions(path: Path) -> None:
         raise ControlServerError(
             f"socket {path} has mode {oct(actual)}, expected 0o600"
         )
+
+
+def _reject_unmatched_peer_uid(writer: asyncio.StreamWriter) -> None:
+    """Reject connections from a different UID using SO_PEERCRED where available.
+
+    On Linux, ``SO_PEERCRED`` provides the peer's UID at connection time.
+    If the peer UID does not match the server UID the connection is
+    closed immediately.  On platforms where ``SO_PEERCRED`` is unavailable
+    (e.g. macOS), the check is silently skipped — the socket's ``0o600``
+    permissions already restrict access to the file owner.
+    """
+    import socket as _socket
+    import struct as _struct
+
+    sock: _socket.socket | None = writer.get_extra_info("socket")
+    if sock is None:
+        return
+
+    peercred_attr = getattr(_socket, "SO_PEERCRED", None)
+    if peercred_attr is None:
+        return
+
+    try:
+        creds = sock.getsockopt(_socket.SOL_SOCKET, peercred_attr)
+        # struct ucred: pid_t pid, uid_t uid, gid_t gid
+        # uid is at offset 4 (after pid)
+        creds_bytes = creds if isinstance(creds, bytes) else b""
+        _pid, uid, _gid = _struct.unpack("iii", creds_bytes)
+    except (OSError, ValueError, _struct.error):
+        return
+
+    server_uid = os.getuid()
+    if uid != server_uid:
+        logger.warning(
+            "Rejecting control connection from UID %d (server UID %d)",
+            uid,
+            server_uid,
+        )
+        writer.close()

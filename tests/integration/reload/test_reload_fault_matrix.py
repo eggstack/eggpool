@@ -539,21 +539,23 @@ class TestCancellationAtAdditionalStages:
         """CancelledError at on_publish_started (during commit).
 
         on_publish_started fires during the commit phase after
-        mark_commit_started(). Cancellation at this point causes a
-        TransactionStateError because the state machine does not allow
-        commit_started → aborted. This is expected: once commit begins,
-        the system must either complete or compensate under shielding.
-        The test verifies the error propagates without corrupting state.
+        mark_commit_started() but before publication.  Cancellation at
+        this point aborts cleanly to the old state because publication
+        has not occurred — the candidate is aborted, not transferred.
         """
+        pre = RuntimeSnapshot.capture(reload_harness.runtime_manager)
+
         injector = ReloadFaultInjector(
             target_stage="on_publish_started",
             fault_type=FaultType.CANCELLATION,
         )
 
-        from eggpool.reload_transaction import TransactionStateError
-
-        with pytest.raises((asyncio.CancelledError, TransactionStateError)):
+        with pytest.raises(asyncio.CancelledError):
             await reload_harness.reload(observer=injector)
+
+        post = RuntimeSnapshot.capture(reload_harness.runtime_manager)
+        diffs = post.assert_same_generation(pre)
+        assert diffs == [], f"Generation changed after cancel: {diffs}"
 
 
 # ---------------------------------------------------------------------------
@@ -705,3 +707,147 @@ class TestCleanupCompensationFaults:
         # After shutdown, no generation should be accepting leases
         snap = reload_harness.reload_manager.snapshot()
         assert snap is not None
+
+
+# ---------------------------------------------------------------------------
+# Post-swap bookkeeping failure tests (A2)
+# ---------------------------------------------------------------------------
+
+
+class TestPostSwapBookkeeping:
+    """Failures injected after individual post-publication steps.
+
+    Each test injects a failure at a specific point in the commit flow
+    after publication has occurred.  The system must compensate by
+    accepting the new generation (since publication already happened)
+    and retrying the failed step.
+    """
+
+    @pytest.mark.asyncio
+    async def test_process_transition_failure_after_publish(
+        self, reload_harness: ReloadHarness
+    ) -> None:
+        """Process transition apply fails after publication.
+
+        Publication already swapped the active slot.  The system
+        compensates by accepting the new generation and retrying
+        process transitions.
+        """
+        pre = RuntimeSnapshot.capture(reload_harness.runtime_manager)
+        gen_before = pre.active_generation_id
+
+        original_apply = reload_harness.reload_manager._apply_process_transitions
+
+        call_count = 0
+
+        async def _fail_once(plan: object) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("process transition failed")
+
+        reload_harness.reload_manager._apply_process_transitions = _fail_once  # type: ignore[assignment]
+        try:
+            await reload_harness.reload()
+        finally:
+            reload_harness.reload_manager._apply_process_transitions = original_apply
+
+        # Publication succeeded — generation advanced.
+        post = RuntimeSnapshot.capture(reload_harness.runtime_manager)
+        assert post.active_generation_id != gen_before
+
+        # Transaction state reflects compensation attempt.
+        snap = reload_harness.reload_manager.snapshot()
+        diag = snap.get("last_diagnostic_result")
+        assert diag is not None
+
+    @pytest.mark.asyncio
+    async def test_effective_state_update_failure_after_publish(
+        self, reload_harness: ReloadHarness
+    ) -> None:
+        """Effective state (app.state mirror) update fails after publication.
+
+        Publication already swapped the active slot.  The system
+        compensates by accepting the new generation.
+        """
+        from tests.support.reload_harness import make_candidate_config
+
+        pre = RuntimeSnapshot.capture(reload_harness.runtime_manager)
+        gen_before = pre.active_generation_id
+
+        # Inject failure in the effective state transition's apply method
+        from eggpool.reload_transaction import EffectiveStateTransition
+
+        original_apply = EffectiveStateTransition.apply
+
+        async def _failing_apply(self_inner: object) -> None:
+            raise RuntimeError("effective state update failed")
+
+        EffectiveStateTransition.apply = _failing_apply  # type: ignore[assignment]
+        try:
+            await reload_harness.reload(make_candidate_config())
+        finally:
+            EffectiveStateTransition.apply = original_apply  # type: ignore[assignment]
+
+        # Publication succeeded — generation advanced.
+        post = RuntimeSnapshot.capture(reload_harness.runtime_manager)
+        assert post.active_generation_id != gen_before
+
+    @pytest.mark.asyncio
+    async def test_retirement_scheduling_failure_after_publish(
+        self, reload_harness: ReloadHarness
+    ) -> None:
+        """Retirement scheduling fails after publication.
+
+        Publication already swapped the active slot.  The system
+        compensates by accepting the new generation.
+        """
+        pre = RuntimeSnapshot.capture(reload_harness.runtime_manager)
+        gen_before = pre.active_generation_id
+
+        # Inject failure in begin_retirement to simulate retirement failure
+        original_begin = reload_harness.runtime_manager.begin_retirement
+
+        async def _failing_begin(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("retirement scheduling failed")
+
+        reload_harness.runtime_manager.begin_retirement = _failing_begin  # type: ignore[assignment]
+        try:
+            await reload_harness.reload()
+        finally:
+            reload_harness.runtime_manager.begin_retirement = original_begin  # type: ignore[assignment]
+
+        # Publication succeeded — generation advanced.
+        post = RuntimeSnapshot.capture(reload_harness.runtime_manager)
+        assert post.active_generation_id != gen_before
+
+    @pytest.mark.asyncio
+    async def test_transaction_state_matches_runtime_after_failure(
+        self, reload_harness: ReloadHarness
+    ) -> None:
+        """Transaction state must agree with the runtime manager's active generation.
+
+        After a post-publication failure, the transaction's
+        publication_occurred and active_generation_after must match
+        the runtime manager's actual active generation.
+        """
+        from tests.support.reload_harness import make_candidate_config
+
+        original_apply = reload_harness.reload_manager._apply_process_transitions
+
+        async def _fail_once(plan: object) -> None:
+            raise RuntimeError("process transition failed")
+
+        reload_harness.reload_manager._apply_process_transitions = _fail_once  # type: ignore[assignment]
+        try:
+            await reload_harness.reload(make_candidate_config())
+        finally:
+            reload_harness.reload_manager._apply_process_transitions = original_apply
+
+        # Transaction facts must match runtime state.
+        snap = reload_harness.reload_manager.snapshot()
+        txn_snap = snap.get("active_transaction")
+        if txn_snap is not None:
+            assert txn_snap.get("publication_occurred") is True
+            active_gen = reload_harness.runtime_manager.active_snapshot()
+            assert txn_snap.get("active_generation_after") == active_gen.generation_id

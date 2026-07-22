@@ -769,6 +769,8 @@ class ReloadResult:
     warnings: tuple[ConfigValidationWarning, ...]
     restart_required: tuple[ConfigChange, ...]
     message: str
+    retirement_pending: bool = False
+    retiring_generation_id: int | None = None
 
 
 def diff_from_validation(

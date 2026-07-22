@@ -49,9 +49,13 @@ from eggpool.reload_diagnostics import (
     stage_from_error_class,
 )
 from eggpool.reload_transaction import (
+    EffectiveStateTransition,
     PersistenceDelta,
+    ProcessTransition,
     ProcessTransitionPlan,
     ReloadTransaction,
+    RoutingTraceGuardTransition,
+    RoutingTraceWriterTransition,
     TaskSpecTransition,
     TransactionState,
 )
@@ -911,6 +915,8 @@ class ReloadManager:
             process_transition_plan = self._prepare_process_transitions(
                 validation.config,
                 runtime_manager=self._runtime_manager,
+                generation_id=generation_id,
+                config_digest=validation.content_digest or "",
             )
             txn.mark_process_transitions_prepared(process_transition_plan)
 
@@ -1160,7 +1166,9 @@ class ReloadManager:
             )
             # Phase 6: if we haven't published yet, cancellation is safe.
             # If we have published, shield the commit to completion.
-            if txn.is_committing:
+            # Use publication_occurred (not is_committing) to distinguish
+            # pre-publication abort from post-publication shielding.
+            if txn.publication_occurred:
                 # Publication already happened — shield remaining commit
                 # work to avoid leaving mixed state.
                 logger.warning(
@@ -1213,7 +1221,10 @@ class ReloadManager:
             await self._record_terminal_event(diagnostic)
             # Shield candidate abort so bounded cleanup completes
             # before the cancellation propagates.
-            if candidate is not None and not txn.is_committing:
+            # Only abort the candidate if publication did NOT occur —
+            # if publication occurred, the candidate was transferred to
+            # the runtime manager and abort is a no-op.
+            if candidate is not None and not txn.publication_occurred:
                 try:
                     diag = await asyncio.shield(
                         candidate.abort(
@@ -1745,6 +1756,8 @@ class ReloadManager:
                 )
             ),
             message=message,
+            retirement_pending=retirement.retirement_pending,
+            retiring_generation_id=retirement.retiring_generation_id,
         )
 
         # Store internal result (backward compat).
@@ -1974,53 +1987,106 @@ class ReloadManager:
         candidate_config: AppConfig,
         *,
         runtime_manager: RuntimeManager | None = None,
+        generation_id: int = 0,
+        config_digest: str = "",
     ) -> ProcessTransitionPlan:
         """Calculate process-supervisor task specs without applying them.
 
         Returns a :class:`ProcessTransitionPlan` that the commit step
-        applies after publication.
+        applies after publication.  Includes transitions for:
+
+        - Task spec diff (process supervisor reconfiguration)
+        - Routing-trace writer reconfiguration
+        - Routing-trace guard reconfiguration
+        - Effective state (app.state compatibility mirrors)
         """
         process = self._process
         process_supervisor = process.process_supervisor
-        if process_supervisor is None:
-            return ProcessTransitionPlan(
-                task_specs=(),
-                callback_factories={},
-                transitions=(),
+        transitions: list[ProcessTransition] = []
+
+        # Task spec transition
+        if process_supervisor is not None:
+            from eggpool.runtime_tasks import (  # noqa: PLC0415
+                TaskRegistrationContext,
+                build_callback_factories_for_specs,
+                build_task_specs,
             )
 
-        from eggpool.runtime_tasks import (  # noqa: PLC0415
-            TaskRegistrationContext,
-            build_callback_factories_for_specs,
-            build_task_specs,
-        )
-
-        candidate_specs = build_task_specs(
-            TaskRegistrationContext(
+            candidate_specs = build_task_specs(
+                TaskRegistrationContext(
+                    process=process,
+                    runtime_manager=runtime_manager,  # type: ignore[arg-type]
+                    config=candidate_config,
+                    update_checker_outbound=None,
+                    process_supervisor=process_supervisor,
+                )
+            )
+            callback_factories = build_callback_factories_for_specs(
+                candidate_specs,
                 process=process,
-                runtime_manager=runtime_manager,  # type: ignore[arg-type]
+                runtime_manager=runtime_manager,
                 config=candidate_config,
-                update_checker_outbound=None,
-                process_supervisor=process_supervisor,
             )
-        )
-        callback_factories = build_callback_factories_for_specs(
-            candidate_specs,
-            process=process,
-            runtime_manager=runtime_manager,
-            config=candidate_config,
-        )
-        return ProcessTransitionPlan(
-            task_specs=candidate_specs,
-            callback_factories=callback_factories,
-            transitions=(
+            transitions.append(
                 TaskSpecTransition(
                     process_supervisor=process_supervisor,
                     candidate_specs=candidate_specs,
                     callback_factories=callback_factories,
                     process=process,
+                )
+            )
+        else:
+            candidate_specs = ()
+            callback_factories: dict[str, Any] = {}
+
+        # Routing-trace writer transition
+        routing_trace_writer = getattr(process, "routing_trace_writer", None)
+        if routing_trace_writer is not None:
+            transitions.append(
+                RoutingTraceWriterTransition(
+                    writer=routing_trace_writer,
+                    mode=candidate_config.routing.trace.mode,
+                    sample_rate=candidate_config.routing.trace.sample_rate,
+                )
+            )
+
+        # Routing-trace guard transition
+        from eggpool.request.routing_trace_guard import (  # noqa: PLC0415
+            get_routing_trace_guard,
+        )
+
+        guard = get_routing_trace_guard()
+        transitions.append(
+            RoutingTraceGuardTransition(
+                guard=guard,
+                threshold_ms=(
+                    candidate_config.routing.trace.skip_above_lock_wait_p95_ms
                 ),
-            ),
+                queue_occupancy_threshold=(
+                    candidate_config.routing.trace.guard_queue_occupancy_threshold
+                ),
+                oldest_event_age_s=(
+                    candidate_config.routing.trace.guard_oldest_event_age_s
+                ),
+                cooldown_s=candidate_config.routing.trace.guard_cooldown_s,
+            )
+        )
+
+        # Effective state transition (app.state mirrors)
+        if self._app is not None:
+            transitions.append(
+                EffectiveStateTransition(
+                    app_state=getattr(self._app, "state", None),
+                    config=candidate_config,
+                    config_digest=config_digest,
+                    generation_id=generation_id,
+                )
+            )
+
+        return ProcessTransitionPlan(
+            task_specs=candidate_specs,
+            callback_factories=callback_factories,
+            transitions=tuple(transitions),
         )
 
     async def _apply_persistence_delta(

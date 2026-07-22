@@ -1371,8 +1371,9 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
                 f"{c.path} ({c.old_display} → {c.new_display})"
                 for c in result.restart_required
             ),
-            retirement_pending=result.ok,
+            retirement_pending=result.retirement_pending,
             message=result.message,
+            retiring_generation_id=result.retiring_generation_id,
         )
 
     control_server = ControlServer(_control_reload_handler)
