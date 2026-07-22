@@ -1354,6 +1354,12 @@ class ReloadManager:
                             candidate_diag = getattr(candidate, "diagnostics", None)
                             if candidate_diag is not None:
                                 self._last_cleanup_diagnostics = candidate_diag
+                        except Exception:
+                            logger.warning(
+                                "Candidate abort failed for generation %d",
+                                generation_id,
+                                exc_info=True,
+                            )
                     else:
                         candidate_diag = getattr(candidate, "diagnostics", None)
                         if candidate_diag is not None:

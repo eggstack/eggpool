@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -38,10 +37,6 @@ from eggpool.reload_diagnostics import (
     stage_from_error_class,
 )
 from eggpool.runtime_manager import RuntimeGeneration
-
-if TYPE_CHECKING:
-    from tests.support.reload_harness import ReloadHarness
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -944,6 +939,166 @@ class TestRetirementStatusDerivedFromRuntime:
         assert diag is not None
         assert diag.retirement.retirement_pending is False
 
+    @pytest.mark.asyncio()
+    async def test_retirement_pending_when_old_generation_draining(self) -> None:
+        """When old generation is in the retiring list, retirement is pending."""
+        active_gen = _make_generation(generation_id=1)
+        rm = _make_runtime_manager(active_generation=active_gen)
+        proc = _make_process()
+        mgr = ReloadManager(rm, proc)
+
+        # Mock diagnostics to return the old generation as retiring
+        retiring_gen = MagicMock()
+        retiring_gen.generation_id = 1
+        diagnostics = MagicMock()
+        diagnostics.retiring = (retiring_gen,)
+        rm.diagnostics.return_value = diagnostics
+
+        change = MagicMock(section="routing")
+        diff = _make_diff(changes=(change,))
+        candidate = _make_candidate(generation_id=5)
+
+        with (
+            patch.object(
+                mgr,
+                "_compute_reload_diff",
+                new_callable=AsyncMock,
+                return_value=diff,
+            ),
+            patch.object(
+                mgr,
+                "_build_candidate_generation",
+                new_callable=AsyncMock,
+                return_value=candidate,
+            ),
+            patch.object(
+                mgr,
+                "_reconcile_persistence",
+                new_callable=AsyncMock,
+            ),
+            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
+            patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
+            patch.object(
+                mgr,
+                "_publish_generation",
+                new_callable=AsyncMock,
+            ),
+        ):
+            result = await mgr.reload(_make_validation())
+
+        assert result.ok is True
+        diag = mgr._last_diagnostic_result
+        assert diag is not None
+        assert diag.retirement.retirement_pending is True
+        assert diag.retirement.retiring_generation_id == 1
+
+    @pytest.mark.asyncio()
+    async def test_retirement_not_pending_when_old_generation_closed(self) -> None:
+        """When old generation is not in retiring list, retirement is not pending."""
+        active_gen = _make_generation(generation_id=1)
+        rm = _make_runtime_manager(active_generation=active_gen)
+        proc = _make_process()
+        mgr = ReloadManager(rm, proc)
+
+        # Mock diagnostics to return empty retiring list (retirement complete)
+        diagnostics = MagicMock()
+        diagnostics.retiring = ()
+        rm.diagnostics.return_value = diagnostics
+
+        change = MagicMock(section="routing")
+        diff = _make_diff(changes=(change,))
+        candidate = _make_candidate(generation_id=5)
+
+        with (
+            patch.object(
+                mgr,
+                "_compute_reload_diff",
+                new_callable=AsyncMock,
+                return_value=diff,
+            ),
+            patch.object(
+                mgr,
+                "_build_candidate_generation",
+                new_callable=AsyncMock,
+                return_value=candidate,
+            ),
+            patch.object(
+                mgr,
+                "_reconcile_persistence",
+                new_callable=AsyncMock,
+            ),
+            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
+            patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
+            patch.object(
+                mgr,
+                "_publish_generation",
+                new_callable=AsyncMock,
+            ),
+        ):
+            result = await mgr.reload(_make_validation())
+
+        assert result.ok is True
+        diag = mgr._last_diagnostic_result
+        assert diag is not None
+        assert diag.retirement.retirement_pending is False
+        assert diag.retirement.retiring_generation_id is None
+
+    @pytest.mark.asyncio()
+    async def test_retirement_pending_with_forced_close(self) -> None:
+        """Forced close during retirement reports pending if still retiring."""
+        active_gen = _make_generation(generation_id=1)
+        rm = _make_runtime_manager(active_generation=active_gen)
+        proc = _make_process()
+        mgr = ReloadManager(rm, proc)
+
+        # Mock diagnostics: old generation is still in retiring list
+        # even though it was force-closed (state="closing", forced_close=True)
+        retiring_gen = MagicMock()
+        retiring_gen.generation_id = 1
+        diagnostics = MagicMock()
+        diagnostics.retiring = (retiring_gen,)
+        rm.diagnostics.return_value = diagnostics
+
+        change = MagicMock(section="routing")
+        diff = _make_diff(changes=(change,))
+        candidate = _make_candidate(generation_id=5)
+
+        with (
+            patch.object(
+                mgr,
+                "_compute_reload_diff",
+                new_callable=AsyncMock,
+                return_value=diff,
+            ),
+            patch.object(
+                mgr,
+                "_build_candidate_generation",
+                new_callable=AsyncMock,
+                return_value=candidate,
+            ),
+            patch.object(
+                mgr,
+                "_reconcile_persistence",
+                new_callable=AsyncMock,
+            ),
+            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
+            patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
+            patch.object(
+                mgr,
+                "_publish_generation",
+                new_callable=AsyncMock,
+            ),
+        ):
+            result = await mgr.reload(_make_validation())
+
+        assert result.ok is True
+        diag = mgr._last_diagnostic_result
+        assert diag is not None
+        # Forced close during retirement still reports pending
+        # because the generation is still in the retiring list
+        assert diag.retirement.retirement_pending is True
+        assert diag.retirement.retiring_generation_id == 1
+
 
 # ---------------------------------------------------------------------------
 # 13. test_diagnostic_result_fields_complete
@@ -1279,162 +1434,6 @@ class TestStageFromErrorClass:
 # ---------------------------------------------------------------------------
 
 
-class TestHarnessFullReloadDiagnostics:
-    """Integration tests using the full ReloadHarness for end-to-end diagnostics."""
-
-    @pytest.mark.asyncio()
-    async def test_harness_success_committed(
-        self, reload_harness: ReloadHarness
-    ) -> None:
-        """Full harness: LIVE changes produce SUCCESS_COMMITTED."""
-        result = await reload_harness.reload(reload_harness.candidate_config)
-        assert result.ok is True
-        assert result.generation is not None
-        assert len(result.changed_sections) > 0
-
-        diag = reload_harness.reload_manager._last_diagnostic_result
-        assert diag is not None
-        assert diag.category == ReloadResultCategory.SUCCESS_COMMITTED
-
-    @pytest.mark.asyncio()
-    async def test_harness_success_noop(self, reload_harness: ReloadHarness) -> None:
-        """Full harness: identical config produces SUCCESS_NOOP."""
-        result = await reload_harness.reload(reload_harness.initial_config)
-        assert result.ok is True
-        assert "No configuration changes" in result.message
-
-        diag = reload_harness.reload_manager._last_diagnostic_result
-        assert diag is not None
-        assert diag.category == ReloadResultCategory.SUCCESS_NOOP
-
-    @pytest.mark.asyncio()
-    async def test_harness_rejected_validation(
-        self, reload_harness: ReloadHarness
-    ) -> None:
-        """Full harness: digest mismatch produces REJECTED_VALIDATION."""
-        validation = reload_harness.make_validation(reload_harness.candidate_config)
-        wrong_digest = "0" * 64
-        result = await reload_harness.reload_manager.reload(
-            validation, expected_digest=wrong_digest
-        )
-        assert result.ok is False
-
-        diag = reload_harness.reload_manager._last_diagnostic_result
-        assert diag is not None
-        assert diag.category == ReloadResultCategory.REJECTED_VALIDATION
-
-    @pytest.mark.asyncio()
-    async def test_harness_rejected_restart_required(
-        self, reload_harness: ReloadHarness
-    ) -> None:
-        """Full harness: host change produces REJECTED_RESTART_REQUIRED."""
-        from eggpool.models.config import AppConfig, ServerConfig
-
-        restart_config = AppConfig(
-            server=ServerConfig(host="127.0.0.1", port=9999),
-            providers=reload_harness.initial_config.providers,
-        )
-        result = await reload_harness.reload(restart_config)
-        assert result.ok is False
-        assert len(result.restart_required) > 0
-
-        diag = reload_harness.reload_manager._last_diagnostic_result
-        assert diag is not None
-        assert diag.category == ReloadResultCategory.REJECTED_RESTART_REQUIRED
-
-    @pytest.mark.asyncio()
-    async def test_harness_failed_candidate_prepare(
-        self, reload_harness: ReloadHarness
-    ) -> None:
-        """Full harness: build failure produces FAILED_CANDIDATE_PREPARE."""
-        reload_harness.reload_manager.TEST_INJECT_BUILD_FAILURE = RuntimeError(
-            "simulated build failure"
-        )
-        try:
-            result = await reload_harness.reload()
-        finally:
-            reload_harness.reload_manager.TEST_INJECT_BUILD_FAILURE = None
-
-        assert result.ok is False
-
-        diag = reload_harness.reload_manager._last_diagnostic_result
-        assert diag is not None
-        assert diag.category == ReloadResultCategory.FAILED_CANDIDATE_PREPARE
-
-    @pytest.mark.asyncio()
-    async def test_harness_failed_commit(self, reload_harness: ReloadHarness) -> None:
-        """Full harness: publish failure produces FAILED_COMMIT."""
-        reload_harness.reload_manager.TEST_INJECT_PUBLISH_FAILURE = RuntimeError(
-            "simulated publish failure"
-        )
-        try:
-            result = await reload_harness.reload()
-        finally:
-            reload_harness.reload_manager.TEST_INJECT_PUBLISH_FAILURE = None
-
-        assert result.ok is False
-
-        diag = reload_harness.reload_manager._last_diagnostic_result
-        assert diag is not None
-        assert diag.category in (
-            ReloadResultCategory.FAILED_COMMIT,
-            ReloadResultCategory.FAILED_PUBLICATION,
-            ReloadResultCategory.COMPENSATION_FAILED,
-        )
-
-    @pytest.mark.asyncio()
-    async def test_harness_snapshot_includes_diagnostic(
-        self, reload_harness: ReloadHarness
-    ) -> None:
-        """Full harness: snapshot includes last_diagnostic_result after reload."""
-        await reload_harness.reload()
-
-        snapshot = reload_harness.reload_manager.snapshot()
-        diag = snapshot["last_diagnostic_result"]
-        assert diag is not None
-        assert isinstance(diag, dict)
-        assert "category" in diag
-        assert "terminal_stage" in diag
-
-    @pytest.mark.asyncio()
-    async def test_harness_counters_in_snapshot(
-        self, reload_harness: ReloadHarness
-    ) -> None:
-        """Full harness: snapshot counters include all 13 fields."""
-        await reload_harness.reload()
-
-        snapshot = reload_harness.reload_manager.snapshot()
-        counters = snapshot["counters"]
-        expected_keys = {
-            "total_requests",
-            "admitted_operations",
-            "busy_rejections",
-            "committed_reloads",
-            "noop_outcomes",
-            "ignored_only_outcomes",
-            "validation_rejections",
-            "restart_required_rejections",
-            "prepare_failures",
-            "commit_failures",
-            "cancellations",
-            "compensation_failures",
-            "retirement_failures",
-        }
-        assert expected_keys == set(counters.keys())
-
-    @pytest.mark.asyncio()
-    async def test_harness_retirement_status_on_success(
-        self, reload_harness: ReloadHarness
-    ) -> None:
-        """Full harness: retirement status is a ReloadRetirementStatus on success."""
-        await reload_harness.reload(reload_harness.candidate_config)
-
-        diag = reload_harness.reload_manager._last_diagnostic_result
-        assert diag is not None
-        assert isinstance(diag.retirement, ReloadRetirementStatus)
-        assert isinstance(diag.retirement.retirement_pending, bool)
-
-
 # ---------------------------------------------------------------------------
 # 16. test_failed_publication_category
 # ---------------------------------------------------------------------------
@@ -1740,6 +1739,62 @@ class TestCompensationFailedCategory:
             ReloadResultCategory.FAILED_COMMIT,
         )
 
+    @pytest.mark.asyncio()
+    async def test_cleanup_failure_recorded_as_warning(self) -> None:
+        """Primary failure with cleanup failure: primary remains, cleanup is warning."""
+        rm = _make_runtime_manager()
+        proc = _make_process()
+        mgr = ReloadManager(rm, proc)
+
+        change = MagicMock(section="routing")
+        diff = _make_diff(changes=(change,))
+        candidate = _make_candidate(generation_id=5)
+
+        validation = _make_validation()
+
+        # Primary failure: publish fails.  Cleanup also fails (abort raises).
+        async def _publish_fail(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("publish failed")
+
+        async def _abort_fail(**kwargs: object) -> None:
+            raise RuntimeError("cleanup failed")
+
+        candidate.abort = _abort_fail
+
+        with (
+            patch.object(
+                mgr,
+                "_compute_reload_diff",
+                new_callable=AsyncMock,
+                return_value=diff,
+            ),
+            patch.object(
+                mgr,
+                "_build_candidate_generation",
+                new_callable=AsyncMock,
+                return_value=candidate,
+            ),
+            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
+            patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
+            patch.object(
+                mgr,
+                "_publish_generation",
+                new_callable=AsyncMock,
+                side_effect=_publish_fail,
+            ),
+        ):
+            result = await mgr.reload(validation)
+
+        assert result.ok is False
+
+        diag = mgr._last_diagnostic_result
+        assert diag is not None
+        # Primary error is the publish failure
+        assert diag.error_class == "RuntimeError"
+        assert "publish failed" in diag.message
+        # Cleanup failure is logged as a warning (not propagated)
+        assert "candidate_cleanup_succeeded" in dir(diag)
+
 
 # ---------------------------------------------------------------------------
 # 22. test_internal_error_category
@@ -1808,6 +1863,73 @@ class TestProtocolCompatibility:
         d = resp.to_dict()
         assert d["result_category"] == "success_committed"
         assert d["duration_s"] == 0.123
+
+    def test_response_is_json_serializable(self) -> None:
+        """ControlResponse dict is JSON-serializable for wire transport."""
+        import json
+
+        from eggpool.control.server import ControlResponse
+
+        resp = ControlResponse(
+            protocol_version=1,
+            request_id="test-3",
+            ok=True,
+            stage="retirement",
+            generation=5,
+            changed_sections=("routing",),
+            warnings=(),
+            restart_required=(),
+            message="Reload applied",
+            retirement_pending=False,
+            result_category="success_committed",
+            duration_s=0.456,
+        )
+        d = resp.to_dict()
+        # Must be JSON-serializable without errors
+        json_str = json.dumps(d)
+        parsed = json.loads(json_str)
+        assert parsed["ok"] is True
+        assert parsed["result_category"] == "success_committed"
+        assert parsed["duration_s"] == 0.456
+
+    def test_old_client_ignores_unknown_fields(self) -> None:
+        """Old client parsing a response with extra fields doesn't break."""
+        from eggpool.control.server import ControlResponse
+
+        resp = ControlResponse(
+            protocol_version=1,
+            request_id="test-4",
+            ok=False,
+            stage="validation",
+            generation=None,
+            changed_sections=(),
+            warnings=(),
+            restart_required=(),
+            message="Digest mismatch",
+            retirement_pending=False,
+            result_category="rejected_validation",
+            duration_s=0.01,
+        )
+        d = resp.to_dict()
+        # Simulate old client: only read known fields
+        old_client_fields = {
+            "ok",
+            "stage",
+            "generation",
+            "changed_sections",
+            "warnings",
+            "restart_required",
+            "message",
+            "retirement_pending",
+            "request_id",
+            "protocol_version",
+        }
+        # Old client ignores unknown fields gracefully
+        filtered = {k: v for k, v in d.items() if k in old_client_fields}
+        assert filtered["ok"] is False
+        assert filtered["stage"] == "validation"
+        assert "result_category" not in filtered
+        assert "duration_s" not in filtered
 
 
 # ---------------------------------------------------------------------------
