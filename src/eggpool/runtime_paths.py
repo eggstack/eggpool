@@ -31,6 +31,25 @@ def state_dir() -> Path:
     return path
 
 
+def runtime_dir() -> Path:
+    """XDG_RUNTIME_DIR or fallback for ephemeral runtime files.
+
+    Resolution order:
+    1. ``$EGGPOOL_RUNTIME_DIR`` (explicit override)
+    2. ``$XDG_RUNTIME_DIR/eggpool`` (XDG compliant)
+    3. ``/tmp/eggpool-<UID>.runtime`` (UID-scoped fallback)
+    """
+    explicit = os.environ.get("EGGPOOL_RUNTIME_DIR")
+    if explicit:
+        return Path(explicit)
+
+    xdg_runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg_runtime:
+        return Path(xdg_runtime) / "eggpool"
+
+    return Path(f"/tmp/eggpool-{os.getuid()}.runtime")
+
+
 def default_pid_file() -> Path:
     """Resolve the live PID file path with this precedence.
 

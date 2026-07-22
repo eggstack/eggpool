@@ -182,9 +182,9 @@ class TestRehashDoesNotRestartHealthyServer:
             assert original_pid is not None, "PID file not written"
 
             # Remove the control socket to simulate it being missing
-            from eggpool.runtime_paths import state_dir
+            from eggpool.runtime_paths import runtime_dir
 
-            sock_path = state_dir() / "eggpool.sock"
+            sock_path = runtime_dir() / "eggpool.sock"
             if sock_path.exists():
                 sock_path.unlink()
 

@@ -432,6 +432,141 @@ class TestControlServerValidation:
         finally:
             await srv.stop()
 
+    @pytest.mark.asyncio
+    async def test_rejects_non_object_json(self, socket_dir: Path) -> None:
+        path = _sock(socket_dir)
+        srv = ControlServer(_noop_handler, path=path)
+        await srv.start()
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_unix_connection(str(path)), timeout=5.0
+            )
+            try:
+                writer.write(b"[1, 2, 3]\n")
+                await writer.drain()
+                raw = await asyncio.wait_for(reader.readline(), timeout=5.0)
+                resp = json.loads(raw)
+                assert resp["ok"] is False
+                assert resp["stage"] == "parse"
+                assert "request must be a JSON object" in resp["message"]
+            finally:
+                writer.close()
+                with _Silence():
+                    await writer.wait_closed()
+        finally:
+            await srv.stop()
+
+    @pytest.mark.asyncio
+    async def test_rejects_unknown_command(self, socket_dir: Path) -> None:
+        path = _sock(socket_dir)
+        srv = ControlServer(_noop_handler, path=path)
+        await srv.start()
+        try:
+            payload = _make_request(command="shutdown")
+            resp = await _send_raw(path, payload)
+            assert resp["ok"] is False
+            assert resp["stage"] == "parse"
+            assert "unknown command: shutdown" in resp["message"]
+        finally:
+            await srv.stop()
+
+    @pytest.mark.asyncio
+    async def test_rejects_empty_request_id(self, socket_dir: Path) -> None:
+        path = _sock(socket_dir)
+        srv = ControlServer(_noop_handler, path=path)
+        await srv.start()
+        try:
+            payload = {
+                "protocol_version": PROTOCOL_VERSION,
+                "command": "reload_config",
+                "request_id": "",
+            }
+            resp = await _send_raw(path, payload)
+            assert resp["ok"] is False
+            assert resp["stage"] == "parse"
+            assert "missing or invalid request_id" in resp["message"]
+        finally:
+            await srv.stop()
+
+    @pytest.mark.asyncio
+    async def test_rejects_non_string_request_id(self, socket_dir: Path) -> None:
+        path = _sock(socket_dir)
+        srv = ControlServer(_noop_handler, path=path)
+        await srv.start()
+        try:
+            payload = {
+                "protocol_version": PROTOCOL_VERSION,
+                "command": "reload_config",
+                "request_id": 123,
+            }
+            resp = await _send_raw(path, payload)
+            assert resp["ok"] is False
+            assert resp["stage"] == "parse"
+            assert "missing or invalid request_id" in resp["message"]
+        finally:
+            await srv.stop()
+
+    @pytest.mark.asyncio
+    async def test_rejects_too_long_request_id(self, socket_dir: Path) -> None:
+        path = _sock(socket_dir)
+        srv = ControlServer(_noop_handler, path=path)
+        await srv.start()
+        try:
+            payload = _make_request(request_id="x" * 300)
+            resp = await _send_raw(path, payload)
+            assert resp["ok"] is False
+            assert resp["stage"] == "parse"
+            assert "request_id exceeds maximum length" in resp["message"]
+        finally:
+            await srv.stop()
+
+    @pytest.mark.asyncio
+    async def test_rejects_invalid_digest_format(self, socket_dir: Path) -> None:
+        path = _sock(socket_dir)
+        srv = ControlServer(_noop_handler, path=path)
+        await srv.start()
+        try:
+            payload = _make_request(validated_digest="not-hex")
+            resp = await _send_raw(path, payload)
+            assert resp["ok"] is False
+            assert resp["stage"] == "parse"
+            assert "validated_digest" in resp["message"]
+        finally:
+            await srv.stop()
+
+    @pytest.mark.asyncio
+    async def test_rejects_short_digest(self, socket_dir: Path) -> None:
+        path = _sock(socket_dir)
+        srv = ControlServer(_noop_handler, path=path)
+        await srv.start()
+        try:
+            payload = _make_request(validated_digest="abc123")
+            resp = await _send_raw(path, payload)
+            assert resp["ok"] is False
+            assert resp["stage"] == "parse"
+            assert "validated_digest" in resp["message"]
+        finally:
+            await srv.stop()
+
+    @pytest.mark.asyncio
+    async def test_rejects_non_string_digest(self, socket_dir: Path) -> None:
+        path = _sock(socket_dir)
+        srv = ControlServer(_noop_handler, path=path)
+        await srv.start()
+        try:
+            payload = {
+                "protocol_version": PROTOCOL_VERSION,
+                "command": "reload_config",
+                "request_id": "r1",
+                "validated_digest": 123,
+            }
+            resp = await _send_raw(path, payload)
+            assert resp["ok"] is False
+            assert resp["stage"] == "parse"
+            assert "validated_digest" in resp["message"]
+        finally:
+            await srv.stop()
+
 
 # ---------------------------------------------------------------------------
 # ControlServer handler dispatch
@@ -481,8 +616,8 @@ class TestControlServerHandler:
             resp = await _send_raw(path, _make_request(request_id="fail-1"))
             assert resp["ok"] is False
             assert resp["stage"] == "handler"
-            assert "handler error" in resp["message"]
-            assert "boom" in resp["message"]
+            assert resp["message"] == "handler error"
+            assert "boom" not in resp["message"]
         finally:
             await srv.stop()
 

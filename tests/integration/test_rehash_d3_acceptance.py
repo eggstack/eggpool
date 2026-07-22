@@ -147,14 +147,14 @@ async def _send_raw_control_message(
 
 
 def _get_control_socket_path(xdg_state_home: str | None = None) -> str:
-    """Return the control socket path (~/.local/state/eggpool/eggpool.sock).
+    """Return the control socket path from runtime_paths.runtime_dir().
 
     Args:
         xdg_state_home: Ignored (kept for backward compatibility).
     """
-    from pathlib import Path
+    from eggpool.runtime_paths import runtime_dir
 
-    return str(Path.home() / ".local" / "state" / "eggpool" / "eggpool.sock")
+    return str(runtime_dir() / "eggpool.sock")
 
 
 def _write_extended_config(

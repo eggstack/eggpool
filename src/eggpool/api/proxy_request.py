@@ -417,10 +417,14 @@ async def _handle_proxy_request_inner(
         model_id, provider_id = parse_model_provider(model_value, known_providers)
 
     # Preflight context limit check (guardrail, not primary enforcement).
-    catalog = getattr(request.app.state, "catalog", None)
+    if lease is not None:
+        catalog = lease.runtime.catalog
+        transcoder_policy = lease.runtime.transcoder_policy
+    else:
+        catalog = getattr(request.app.state, "catalog", None)
+        transcoder_policy = getattr(request.app.state, "transcoder_policy", None)
     preflight: TranscodePreflightResult | None = None
     prepared_transcode: PreparedTranscode | None = None
-    transcoder_policy = getattr(request.app.state, "transcoder_policy", None)
     if catalog is not None:
         with _span(span_recorder, SPAN_CONTEXT_LIMIT):
             try:
@@ -532,12 +536,16 @@ async def _handle_proxy_request_inner(
     # This runs BEFORE the segmentation guard so the guard reads the
     # effective (possibly policy-overridden) compression enabled/mode
     # instead of the raw global config.
-    compression_policy = getattr(request.app.state, "compression_policy", None)
-    runtime_override_registry: Any = getattr(
-        request.app.state,
-        "compression_tuning_registry",
-        None,
-    )
+    if lease is not None:
+        compression_policy = lease.runtime.compression_policy
+        runtime_override_registry: Any = lease.runtime.compression_tuning_registry
+    else:
+        compression_policy = getattr(request.app.state, "compression_policy", None)
+        runtime_override_registry: Any = getattr(
+            request.app.state,
+            "compression_tuning_registry",
+            None,
+        )
     with _span(span_recorder, SPAN_COMPRESSION_POLICY):
         resolved_compression_policy: Any = None
         if compression_policy is not None:

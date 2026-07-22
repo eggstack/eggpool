@@ -62,6 +62,15 @@ uv run pytest tests/perf/test_dispatch_baseline.py -m performance -v
 
 # Reload correctness baseline (Phase 1)
 uv run pytest tests/integration/reload/ -v
+
+# Control server validation and socket hardening tests
+uv run pytest tests/unit/test_control_server.py -v
+
+# Reload persistence/publication atomicity tests
+uv run pytest tests/integration/reload/test_persistence_publication_split.py -v
+
+# Proxy request generation-coherent handling tests
+uv run pytest tests/unit/test_proxy_request_hotpath_modes.py -v
 ```
 
 ## Linting

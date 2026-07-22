@@ -46,10 +46,11 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import stat
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from eggpool import jsonx
 
@@ -62,6 +63,9 @@ PROTOCOL_VERSION: Final = 1
 CONTROL_SOCKET_NAME: Final = "eggpool.sock"
 MAX_REQUEST_SIZE: Final = 65536
 COMMAND_TIMEOUT_S: Final = 30.0
+MAX_REQUEST_ID_LEN: Final = 256
+_VALID_COMMANDS: Final = frozenset({"reload_config"})
+_HEX64_RE: Final = re.compile(r"^[0-9a-f]{64}$")
 
 
 class ControlProtocolError(Exception):
@@ -123,10 +127,10 @@ class ControlResponse:
 
 
 def control_socket_path() -> Path:
-    """Return the deterministic socket path from ``runtime_paths.state_dir()``."""
-    from eggpool.runtime_paths import state_dir
+    """Return the deterministic socket path under ``runtime_paths.runtime_dir()``."""
+    from eggpool.runtime_paths import runtime_dir
 
-    return state_dir() / CONTROL_SOCKET_NAME
+    return runtime_dir() / CONTROL_SOCKET_NAME
 
 
 ReloadHandler = Callable[[ControlRequest], Coroutine[Any, Any, ControlResponse]]
@@ -166,7 +170,15 @@ class ControlServer:
             raise ControlServerError(
                 f"failed to bind control socket {self._path}: {exc}"
             ) from exc
-        _restrict_socket_permissions(self._path)
+        try:
+            _restrict_socket_permissions(self._path)
+        except ControlServerError:
+            # Tear down the server and unlink the socket on permission failure.
+            self._server.close()
+            await self._server.wait_closed()
+            self._server = None
+            _remove_socket_file(self._path)
+            raise
         logger.info("control server listening on %s", self._path)
 
     async def stop(self) -> None:
@@ -232,28 +244,66 @@ class ControlServer:
             )
 
         try:
-            payload: dict[str, Any] = jsonx.loads(raw_line)
-        except Exception as exc:
+            raw_payload: Any = jsonx.loads(raw_line)
+        except Exception:
             return _error_response(
                 "",
-                f"invalid JSON: {exc}",
+                "invalid JSON",
                 stage="parse",
             )
 
+        if not isinstance(raw_payload, dict):
+            return _error_response(
+                "",
+                "request must be a JSON object",
+                stage="parse",
+            )
+
+        payload: dict[str, Any] = cast("dict[str, Any]", raw_payload)
         proto = payload.get("protocol_version")
         if proto != PROTOCOL_VERSION:
             return _error_response(
-                payload.get("request_id", ""),
+                str(payload.get("request_id", "")),
                 f"unsupported protocol version: {proto}",
                 stage="parse",
             )
 
-        request_id = str(payload.get("request_id", ""))
-        command = str(payload.get("command", ""))
-        if not command:
+        request_id = payload.get("request_id", "")
+        if not isinstance(request_id, str) or not request_id:
+            return _error_response(
+                "",
+                "missing or invalid request_id",
+                stage="parse",
+            )
+        if len(request_id) > MAX_REQUEST_ID_LEN:
+            return _error_response(
+                request_id,
+                "request_id exceeds maximum length",
+                stage="parse",
+            )
+
+        command = payload.get("command", "")
+        if not isinstance(command, str) or not command:
             return _error_response(
                 request_id,
                 "missing command",
+                stage="parse",
+            )
+        if command not in _VALID_COMMANDS:
+            return _error_response(
+                request_id,
+                f"unknown command: {command}",
+                stage="parse",
+            )
+
+        validated_digest = payload.get("validated_digest")
+        if validated_digest is not None and (
+            not isinstance(validated_digest, str)
+            or not _HEX64_RE.fullmatch(validated_digest)
+        ):
+            return _error_response(
+                request_id,
+                "invalid validated_digest: must be exactly 64 hex characters",
                 stage="parse",
             )
 
@@ -261,16 +311,18 @@ class ControlServer:
             protocol_version=proto,
             request_id=request_id,
             command=command,
-            validated_digest=payload.get("validated_digest"),
+            validated_digest=(
+                validated_digest if isinstance(validated_digest, str) else None
+            ),
         )
 
         try:
             return await self._reload_handler(request)
-        except Exception as exc:
+        except Exception:
             logger.exception("reload handler failed for request %s", request_id)
             return _error_response(
                 request_id,
-                f"handler error: {exc}",
+                "handler error",
                 stage="handler",
             )
 
@@ -297,16 +349,46 @@ def _error_response(
     )
 
 
+def _remove_socket_file(path: Path) -> None:
+    """Unconditionally remove a socket file. Never raises."""
+    with contextlib.suppress(OSError):
+        path.unlink(missing_ok=True)
+
+
 def _clean_stale_socket(path: Path) -> None:
     """Remove a stale socket file or symlink at *path*.
 
-    The function handles three cases:
-    * Regular socket file (``S_ISSOCK``) – removed.
-    * Dangling symlink (target missing) – removed so ``bind()`` can
-      reclaim the path.
-    * Symlink to a socket file – removed to avoid following a stale
-      reference.
+    Before removing an existing socket, probes it with a quick connect
+    to avoid unlinking a socket owned by a live server:
+
+    * Connection succeeds → server is live, raise ``ControlServerError``.
+    * Connection refused → stale socket, safe to remove.
+    * Other connection error → likely stale, remove.
     """
+    import socket as _socket
+
+    if not path.exists() and not path.is_symlink():
+        return
+
+    # Probe: is a live server listening on this socket?
+    try:
+        probe = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        try:
+            probe.settimeout(1.0)
+            probe.connect(str(path))
+            # Connection succeeded — a live server is listening.
+            raise ControlServerError(f"control socket already in use: {path}")
+        except OSError:
+            # Connection refused or other socket error — stale.
+            pass
+        finally:
+            probe.close()
+    except ControlServerError:
+        raise
+    except OSError as exc:
+        logger.warning("could not probe socket %s: %s", path, exc)
+
+    # Remove the stale socket or symlink.
     try:
         if path.is_symlink():
             path.unlink()
@@ -319,13 +401,26 @@ def _clean_stale_socket(path: Path) -> None:
 
 
 def _restrict_socket_permissions(path: Path) -> None:
-    """Set socket mode to 0o600 (owner-only)."""
+    """Set socket mode to 0o600 (owner-only).
+
+    Raises:
+        ControlServerError: If chmod fails or mode is wrong after setting.
+    """
     try:
         os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
-        logger.debug("set control socket permissions to 0o600")
     except OSError as exc:
-        logger.warning(
-            "could not restrict socket permissions on %s: %s",
-            path,
-            exc,
+        raise ControlServerError(
+            f"failed to restrict socket permissions on {path}: {exc}"
+        ) from exc
+
+    try:
+        actual = stat.S_IMODE(path.stat().st_mode)
+    except OSError as exc:
+        raise ControlServerError(
+            f"failed to verify socket permissions on {path}: {exc}"
+        ) from exc
+
+    if actual != (stat.S_IRUSR | stat.S_IWUSR):
+        raise ControlServerError(
+            f"socket {path} has mode {oct(actual)}, expected 0o600"
         )

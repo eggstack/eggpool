@@ -943,11 +943,16 @@ class ReloadManager:
                 digest_prefix=digest_prefix,
             )
 
-            # 9a: Apply persistence delta in a SQLite transaction
-            await self._apply_persistence_delta(persistence_delta)
+            # 9a: Apply persistence delta inside the outer SQLite
+            # transaction and publish candidate generation atomically.
+            # The outer db.transaction() ensures that if publication
+            # fails, the SQLite writes are rolled back — no split state.
+            db = self._process.db
+            async with db.transaction():
+                await self._apply_persistence_delta(persistence_delta, nested=True)
 
-            # 9b: Publish candidate generation atomically
-            await self._publish_generation(candidate, diff)
+                # 9b: Publish candidate generation atomically
+                await self._publish_generation(candidate, diff)
             published_gen = candidate._built_generation  # pyright: ignore[reportPrivateUsage]
             assert published_gen is not None, "Generation must be built before publish"
             txn.mark_runtime_published(published_gen)
@@ -962,7 +967,8 @@ class ReloadManager:
             await self._apply_process_transitions(process_transition_plan)
             txn.mark_process_transitions_applied()
 
-            # 9d: Mark persistence committed (SQLite already committed in 9a)
+            # 9d: Mark persistence committed (SQLite already committed
+            # above when the db.transaction() context exited normally)
             txn.mark_persistence_committed()
 
             # 9e: Update observable state (no-op currently; placeholder
@@ -2017,8 +2023,21 @@ class ReloadManager:
             ),
         )
 
-    async def _apply_persistence_delta(self, delta: PersistenceDelta) -> None:
-        """Apply a prepared persistence delta inside a SQLite transaction."""
+    async def _apply_persistence_delta(
+        self,
+        delta: PersistenceDelta,
+        *,
+        nested: bool = False,
+    ) -> None:
+        """Apply a prepared persistence delta inside a SQLite transaction.
+
+        When *nested* is ``True`` the caller owns the outer transaction;
+        this method executes the writes without opening its own
+        ``BEGIN IMMEDIATE`` block, allowing the outer transaction to
+        commit or roll back atomically.  When ``False`` (the default)
+        the method creates its own transaction for backward
+        compatibility with direct callers.
+        """
         from eggpool.db.repositories import (  # noqa: PLC0415
             AccountRepository,
             ProviderRepository,
@@ -2026,12 +2045,21 @@ class ReloadManager:
 
         db = self._process.db
         try:
-            async with db.transaction():
+            if nested:
+                # Piggyback on the caller's transaction — the ContextVar
+                # nesting logic in Database.transaction() handles this.
                 provider_repo = ProviderRepository(db)
                 await provider_repo.sync_from_config(delta.configured_providers)
 
                 account_repo = AccountRepository(db)
                 await account_repo.sync_from_config(list(delta.config_accounts))
+            else:
+                async with db.transaction():
+                    provider_repo = ProviderRepository(db)
+                    await provider_repo.sync_from_config(delta.configured_providers)
+
+                    account_repo = AccountRepository(db)
+                    await account_repo.sync_from_config(list(delta.config_accounts))
         except Exception as exc:
             logger.exception("Persistence delta application failed")
             raise ReloadReconciliationError(

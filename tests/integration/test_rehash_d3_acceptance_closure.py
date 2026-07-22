@@ -37,7 +37,6 @@ import socket
 import sys
 import time
 from http.server import HTTPServer
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -227,7 +226,9 @@ def _make_env(tmp_path: Any) -> dict[str, str]:
 
 
 def _control_socket_path() -> str:
-    return str(Path.home() / ".local" / "state" / "eggpool" / "eggpool.sock")
+    from eggpool.runtime_paths import runtime_dir
+
+    return str(runtime_dir() / "eggpool.sock")
 
 
 # ---------------------------------------------------------------------------

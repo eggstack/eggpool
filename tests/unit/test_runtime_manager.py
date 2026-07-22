@@ -42,12 +42,14 @@ from eggpool.runtime_metrics import (
 )
 
 
-def _fake_generation(generation_id: int = 0) -> RuntimeGeneration:
+def _fake_generation(
+    generation_id: int = 0, *, config_digest: str = "a" * 64
+) -> RuntimeGeneration:
     """Return a minimal RuntimeGeneration with mock services."""
     return RuntimeGeneration(
         generation_id=generation_id,
         config=MagicMock(),
-        config_digest="a" * 64,
+        config_digest=config_digest,
         registry=MagicMock(),
         catalog=MagicMock(),
         router=MagicMock(),
@@ -1324,8 +1326,7 @@ class TestPublicationCoherence:
         gen0 = _fake_generation(0)
         await manager.install_initial(gen0)
 
-        gen1 = _fake_generation(1)
-        gen1.config_digest = "b" * 64
+        gen1 = _fake_generation(1, config_digest="b" * 64)
         await manager.install_candidate(gen1)
 
         active = manager.active_snapshot()
@@ -1340,8 +1341,7 @@ class TestPublicationCoherence:
         gen0 = _fake_generation(0)
         await manager.install_initial(gen0)
 
-        gen1 = _fake_generation(1)
-        gen1.config_digest = "c" * 64
+        gen1 = _fake_generation(1, config_digest="c" * 64)
         await manager.install_candidate(gen1)
 
         meta = manager.active_metadata()
@@ -1368,13 +1368,12 @@ class TestPublicationCoherence:
         await manager.install_initial(_fake_generation(0))
 
         for i in range(1, 5):
-            gen = _fake_generation(i)
-            gen.config_digest = chr(ord("a") + i) * 64
+            gen = _fake_generation(i, config_digest=chr(ord("a") + i) * 64)
             await manager.install_candidate(gen)
 
         meta = manager.active_metadata()
         assert meta.generation_id == 4
-        assert meta.config_digest == "d" * 64
+        assert meta.config_digest == "e" * 64
 
 
 class TestRetirementSafety:
@@ -1433,6 +1432,8 @@ class TestRetirementSafety:
         held_lease = await manager.acquire()
         gen1 = _fake_generation(1)
         await manager.install_candidate(gen1, drain_timeout_s=0.05)
+        # Allow the background retirement task to start
+        await asyncio.sleep(0)
 
         retiring = manager.retirement_snapshot()
         assert isinstance(retiring, tuple)
@@ -1451,6 +1452,7 @@ class TestRetirementSafety:
         held_lease = await manager.acquire()
         gen1 = _fake_generation(1)
         await manager.install_candidate(gen1, drain_timeout_s=0.05)
+        await asyncio.sleep(0)
 
         diag = manager.retirement_snapshot(generation_id=0)
         assert diag.generation_id == 0
@@ -1478,8 +1480,7 @@ class TestConcurrentPublicationReads:
         await manager.install_initial(gen0)
 
         # Publish gen1
-        gen1 = _fake_generation(1)
-        gen1.config_digest = "x" * 64
+        gen1 = _fake_generation(1, config_digest="x" * 64)
         await manager.install_candidate(gen1)
 
         # Multiple reads should all see gen1
@@ -1499,8 +1500,7 @@ class TestConcurrentPublicationReads:
 
         # Simulate rapid successive publications
         for i in range(1, 6):
-            gen = _fake_generation(i)
-            gen.config_digest = chr(ord("a") + i) * 64
+            gen = _fake_generation(i, config_digest=chr(ord("a") + i) * 64)
             await manager.install_candidate(gen)
 
             # Each read should see at least generation i
@@ -1587,14 +1587,12 @@ class TestConfigDigest:
     @pytest.mark.asyncio
     async def test_digest_updates_after_publication(self) -> None:
         manager = RuntimeManager()
-        gen0 = _fake_generation(0)
-        gen0.config_digest = "a" * 64
+        gen0 = _fake_generation(0, config_digest="a" * 64)
         await manager.install_initial(gen0)
 
         assert manager.active_metadata().config_digest == "a" * 64
 
-        gen1 = _fake_generation(1)
-        gen1.config_digest = "b" * 64
+        gen1 = _fake_generation(1, config_digest="b" * 64)
         await manager.install_candidate(gen1)
 
         assert manager.active_metadata().config_digest == "b" * 64
@@ -1606,9 +1604,8 @@ class TestConfigDigest:
 
         digests = []
         for i in range(1, 6):
-            gen = _fake_generation(i)
             digest = chr(ord("a") + i) * 64
-            gen.config_digest = digest
+            gen = _fake_generation(i, config_digest=digest)
             await manager.install_candidate(gen)
             digests.append(manager.active_metadata().config_digest)
 
@@ -1617,13 +1614,11 @@ class TestConfigDigest:
     @pytest.mark.asyncio
     async def test_digest_independent_of_retirement(self) -> None:
         manager = RuntimeManager()
-        gen0 = _fake_generation(0)
-        gen0.config_digest = "a" * 64
+        gen0 = _fake_generation(0, config_digest="a" * 64)
         await manager.install_initial(gen0)
 
         held = await manager.acquire()
-        gen1 = _fake_generation(1)
-        gen1.config_digest = "b" * 64
+        gen1 = _fake_generation(1, config_digest="b" * 64)
         await manager.install_candidate(gen1, drain_timeout_s=0.05)
 
         # Digest should be gen1's even while gen0 is retiring
@@ -1635,8 +1630,7 @@ class TestConfigDigest:
     @pytest.mark.asyncio
     async def test_snapshot_digest_matches_metadata(self) -> None:
         manager = RuntimeManager()
-        gen = _fake_generation(0)
-        gen.config_digest = "z" * 64
+        gen = _fake_generation(0, config_digest="z" * 64)
         await manager.install_initial(gen)
 
         meta = manager.active_metadata()

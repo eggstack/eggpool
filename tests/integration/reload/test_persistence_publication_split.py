@@ -1,22 +1,19 @@
 """Persistence/publication split reload tests.
 
-The reload pipeline stages DB reconciliation and publication as separate
-phases: ``_reconcile_persistence`` (which writes new providers/accounts
-to SQLite inside a transaction) runs before ``_publish_generation``
-(which swaps the active runtime generation).
-
-The desired invariant is *all-or-nothing*: either both succeed or
-neither is visible.  This file documents the current behavior, where a
-failure between the two phases leaves the database ahead of the
-runtime.
+The reload pipeline stages DB reconciliation and publication as
+separate phases, but both execute inside a single SQLite transaction.
+``_apply_persistence_delta`` writes new providers/accounts within the
+outer ``db.transaction()`` block; ``_publish_generation`` swaps the
+active runtime generation inside the same block.  If publication fails
+the entire SQLite transaction rolls back, leaving both persistence and
+runtime unchanged.
 
 Plan section ``Required failing tests`` -> ``Persistence/publication split``:
 
     Inject failure after provider/account persistence changes are
-    prepared or committed but before publication completes.  Compare
-    the pre-state and post-state.  The desired future invariant is
-    total equality with the old state; document the current mixed
-    state precisely.
+    prepared but before publication completes.  The SQLite transaction
+    rolls back atomically so the post-state matches the pre-state
+    exactly.
 """
 
 from __future__ import annotations
@@ -35,18 +32,16 @@ if TYPE_CHECKING:
 async def test_reconcile_then_publish_failure_leaves_db_split(
     reload_harness: ReloadHarness,
 ) -> None:
-    """Reconcile succeeds; publish fails.  DB has new accounts, runtime has old.
+    """Reconcile succeeds; publish fails.  DB and runtime both unchanged.
 
     The candidate config adds ``acct-b1`` (provider-b) plus switches
-    ``local_quota_mode``.  The injector fails the publish stage; the
-    reconcile phase has already committed the new providers and
-    accounts to SQLite.
+    ``local_quota_mode``.  The injector fails the publish stage;
+    because persistence and publication execute inside a single SQLite
+    transaction, the DB writes are rolled back atomically.
 
-    Documented behavior:
-
-    - The active runtime generation is unchanged (preserve-old-state invariant).
-    - The persisted SQLite state has been updated with the candidate's
-      providers and accounts (mixed-state defect: DB ahead of runtime).
+    Invariant: no externally observable state changed — active
+    generation ID, config, providers, and accounts all match the
+    pre-reload state.
     """
     pre = await RuntimeSnapshot.capture_async(
         reload_harness.runtime_manager,
@@ -76,36 +71,19 @@ async def test_reconcile_then_publish_failure_leaves_db_split(
         f"{pre.active_generation_id} -> {post.active_generation_id}"
     )
 
-    # Document the mixed state: persisted providers/accounts reflect
-    # the candidate, while the runtime generation still references the
-    # initial config.
-    expected_persisted_providers = set(reload_harness.candidate_config.providers.keys())
-    expected_persisted_accounts = {
-        acct.name for acct in reload_harness.candidate_config.all_accounts()
-    }
-    assert set(post.persisted_provider_ids) == expected_persisted_providers, (
-        "Persisted providers should match candidate after reconcile. "
-        f"Expected {expected_persisted_providers}, "
-        f"got {set(post.persisted_provider_ids)}"
-    )
-    assert set(post.persisted_account_names) == expected_persisted_accounts, (
-        "Persisted accounts should match candidate after reconcile. "
-        f"Expected {expected_persisted_accounts}, "
-        f"got {set(post.persisted_account_names)}"
+    # Persistence must also be unchanged — the SQLite transaction rolled
+    # back when publication failed, so the DB still reflects the initial
+    # config's providers and accounts.
+    persistence_diffs = post.assert_same_persistence(pre)
+    assert persistence_diffs == [], (
+        "Persisted state changed after publish failure (should be atomic rollback): "
+        + "; ".join(persistence_diffs)
     )
 
-    # Active generation config values still match the initial config,
-    # not the candidate.  Provider membership differs between the two
-    # configs, so we verify via persisted providers rather than a
-    # config-value field that may default to the same value.
-    initial_providers = set(reload_harness.initial_config.providers.keys())
-    candidate_providers = set(reload_harness.candidate_config.providers.keys())
-    assert initial_providers != candidate_providers, (
-        "Test fixture invariant: initial and candidate configs must "
-        "differ in provider membership"
-    )
-    assert post.active_generation_id == pre.active_generation_id, (
-        "Active generation must not advance after publish failure"
+    # Config values preserved.
+    assert post.generation_config_values == pre.generation_config_values, (
+        f"Config values changed after publish failure: "
+        f"{pre.generation_config_values} -> {post.generation_config_values}"
     )
 
 

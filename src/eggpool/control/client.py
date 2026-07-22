@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import uuid
 from typing import TYPE_CHECKING
 
 from eggpool import jsonx
@@ -76,7 +77,7 @@ class ControlClient:
         """
         request = ControlRequest(
             protocol_version=PROTOCOL_VERSION,
-            request_id="",
+            request_id=uuid.uuid4().hex,
             command="reload_config",
             validated_digest=validated_digest,
         )

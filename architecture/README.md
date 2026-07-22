@@ -3671,12 +3671,11 @@ monotonic state machine, prepared deltas, and a narrow commit point.
    the commit guard.  A concurrent reload that advanced the
    generation causes commit rejection.
 10. **Commit** (narrow commit guard):
-    a. Apply persistence delta in a SQLite transaction.
-    b. Publish candidate generation atomically via `RuntimeManager.install_candidate()`.
-    c. Transfer candidate ownership to the runtime manager.
-    d. Apply process transitions (`apply_spec_diff`) — after publication.
-    e. Update observable state.
-    f. Schedule old-generation retirement.
+    a. Apply persistence delta and publish candidate generation within a single SQLite transaction. The delta SQL is applied first (inside the transaction), then the runtime pointer swap occurs. If publication fails, the SQLite transaction rolls back automatically, leaving provider/account state identical to the pre-reload state.
+    b. Transfer candidate ownership to the runtime manager.
+    c. Apply process transitions (`apply_spec_diff`) — after the SQLite commit.
+    d. Update observable state.
+    e. Schedule old-generation retirement.
 11. **Completion** — Mark transaction completed.
 
 The `ReloadTransaction` state machine tracks every transition:

@@ -992,6 +992,26 @@ class TestDeterministicConcurrency:
             "reload_restart_required_rejected",
             "reload_digest_mismatch",
             "reload_reconciliation_failure",
+            # Terminal diagnostic events (constructed as
+            # f"reload_terminal_{category.value}" for each
+            # ReloadResultCategory member).
+            "reload_terminal_success_committed",
+            "reload_terminal_success_noop",
+            "reload_terminal_success_ignored_only",
+            "reload_terminal_rejected_busy",
+            "reload_terminal_rejected_validation",
+            "reload_terminal_rejected_restart_required",
+            "reload_terminal_failed_candidate_prepare",
+            "reload_terminal_failed_persistence_prepare",
+            "reload_terminal_failed_process_transition_prepare",
+            "reload_terminal_failed_commit",
+            "reload_terminal_failed_publication",
+            "reload_terminal_failed_process_transition_apply",
+            "reload_terminal_failed_persistence_commit",
+            "reload_terminal_aborted_cancelled",
+            "reload_terminal_aborted_shutdown",
+            "reload_terminal_compensation_failed",
+            "reload_terminal_internal_error",
         }
 
         for event_type, kwargs in event_calls:
