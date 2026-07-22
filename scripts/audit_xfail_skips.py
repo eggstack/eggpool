@@ -42,11 +42,6 @@ ALLOWLIST: list[tuple[str, int | None, str]] = [
         1076,
         "drain timeout exceeds CI budget — covered by scenario 9 soft-drain test",
     ),
-    (
-        "tests/integration/test_rehash_d3_operator_workflow_closure.py",
-        74,
-        "XDG state_dir() not honored — both servers bind the same control socket",
-    ),
 ]
 
 # Build a lookup dict for O(1) checks: {(rel_path, line): rationale, ...}

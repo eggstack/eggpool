@@ -66,11 +66,24 @@ uv run pytest tests/integration/reload/ -v
 # Control server validation and socket hardening tests
 uv run pytest tests/unit/test_control_server.py -v
 
+# Control socket hardening tests (SO_PEERCRED, stale socket,
+# inode protection, runtime dir permissions)
+uv run pytest tests/unit/test_control_server.py tests/unit/test_reload_security.py -v
+
 # Reload persistence/publication atomicity tests
 uv run pytest tests/integration/reload/test_persistence_publication_split.py -v
 
 # Proxy request generation-coherent handling tests
 uv run pytest tests/unit/test_proxy_request_hotpath_modes.py -v
+
+# Plan 015 — Reload atomicity final closure (PendingGenerationSwap,
+# lease gate, process-transition lifecycle, control socket hardening)
+uv run pytest \
+    tests/unit/test_control_server.py \
+    tests/unit/test_reload_security.py \
+    tests/unit/test_phase6_fault_injection.py \
+    tests/unit/test_reload_diagnostics_matrix.py \
+    tests/integration/reload/test_reload_fault_matrix.py -v
 ```
 
 ## Linting

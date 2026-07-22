@@ -122,6 +122,7 @@ class TestHarnessFullReloadDiagnostics:
             ReloadResultCategory.FAILED_COMMIT,
             ReloadResultCategory.FAILED_PUBLICATION,
             ReloadResultCategory.COMPENSATION_FAILED,
+            ReloadResultCategory.FAILED_PROCESS_TRANSITION_APPLY,
         )
 
     @pytest.mark.asyncio()

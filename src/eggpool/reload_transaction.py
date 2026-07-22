@@ -58,7 +58,7 @@ from __future__ import annotations
 import enum
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -230,6 +230,14 @@ class ProcessTransition:
         transitions applied AFTER publication), rollback is not needed
         because compensation retries the transition instead.  This
         method exists for forward-compatibility if the ordering changes.
+        """
+
+    async def finalize(self) -> None:
+        """Finalize the transition after successful commit.
+
+        Called only after the transaction is accepted.  Releases
+        captured old-state snapshots.  Idempotent.  Failure is treated
+        as post-commit housekeeping.
         """
 
     def __repr__(self) -> str:
@@ -441,12 +449,17 @@ class RoutingTraceGuardTransition(ProcessTransition):
         self._applied = False
 
 
+_MISSING = object()
+"""Sentinel distinguishing 'attribute absent' from 'attribute is None'."""
+
+
 class EffectiveStateTransition(ProcessTransition):
     """Transition for updating app.state compatibility mirrors.
 
     Captures the previous effective state (config, config_digest,
     coordinator, catalog, etc.) at preflight and applies the new
-    state at commit.  Rollback restores the previous state.
+    state at commit.  Rollback restores the previous state, correctly
+    handling the case where an attribute was absent before preflight.
     """
 
     def __init__(
@@ -466,18 +479,18 @@ class EffectiveStateTransition(ProcessTransition):
         self._config = config
         self._config_digest = config_digest
         self._generation_id = generation_id
-        self._old_config: Any = None
-        self._old_config_digest: str | None = None
-        self._old_generation_id: int | None = None
+        self._old_config: Any = _MISSING
+        self._old_config_digest: Any = _MISSING
+        self._old_generation_id: Any = _MISSING
         self._applied = False
 
     async def preflight(self) -> None:
         """Capture previous effective state without mutation."""
         if self._app_state is None:
             return
-        self._old_config = getattr(self._app_state, "config", None)
-        self._old_config_digest = getattr(self._app_state, "config_digest", None)
-        self._old_generation_id = getattr(self._app_state, "generation_id", None)
+        self._old_config = getattr(self._app_state, "config", _MISSING)
+        self._old_config_digest = getattr(self._app_state, "config_digest", _MISSING)
+        self._old_generation_id = getattr(self._app_state, "generation_id", _MISSING)
 
     async def apply(self) -> None:
         """Apply new effective state to app.state."""
@@ -489,16 +502,29 @@ class EffectiveStateTransition(ProcessTransition):
         self._applied = True
 
     async def rollback(self) -> None:
-        """Restore previous effective state."""
+        """Restore previous effective state.
+
+        Distinguishes three cases per attribute:
+        - ``_MISSING``: attribute was absent before preflight → delete it
+        - ``None``: attribute was present with value None → set to None
+        - other: attribute had a real value → restore it
+        """
         if not self._applied or self._app_state is None:
             return
-        if self._old_config is not None:
-            self._app_state.config = self._old_config
-        if self._old_config_digest is not None:
-            self._app_state.config_digest = self._old_config_digest
-        if self._old_generation_id is not None:
-            self._app_state.generation_id = self._old_generation_id
+        self._restore_attr("config", self._old_config)
+        self._restore_attr("config_digest", self._old_config_digest)
+        self._restore_attr("generation_id", self._old_generation_id)
         self._applied = False
+
+    def _restore_attr(self, attr: str, old_value: Any) -> None:
+        """Restore a single attribute on _app_state."""
+        if old_value is _MISSING:
+            try:  # noqa: SIM105
+                delattr(self._app_state, attr)
+            except AttributeError:
+                pass
+        else:
+            setattr(self._app_state, attr, old_value)
 
 
 @dataclass(frozen=True)
@@ -512,6 +538,90 @@ class ProcessTransitionPlan:
     task_specs: tuple[Any, ...]
     callback_factories: dict[str, Any]
     transitions: tuple[ProcessTransition, ...]
+
+
+async def preflight_all_transitions(plan: ProcessTransitionPlan) -> list[str]:
+    """Run preflight on every transition in declared order.
+
+    Must not mutate any process state.  Collects the exact transition
+    that failed.  Raises RuntimeError if any preflight fails.
+    """
+    preflighted: list[str] = []
+    for transition in plan.transitions:
+        await transition.preflight()
+        preflighted.append(transition.name)
+    return preflighted
+
+
+@dataclass
+class TransitionApplyResult:
+    """Tracks applied transitions for rollback and finalization.
+
+    After a successful commit, call :meth:`finalize_all` to release
+    captured old-state snapshots.  On failure, call
+    :meth:`rollback_applied` to undo applied transitions in reverse
+    order.
+    """
+
+    _plan: ProcessTransitionPlan
+    _applied: list[ProcessTransition] = field(
+        default_factory=lambda: list[ProcessTransition]()
+    )
+    _finalized: bool = False
+
+    async def apply_all(self) -> None:
+        """Apply transitions in order.  Stop at first failure."""
+        for transition in self._plan.transitions:
+            try:
+                await transition.apply()
+                self._applied.append(transition)
+            except Exception:
+                raise
+
+    async def rollback_applied(self) -> list[tuple[str, str]]:
+        """Roll back applied transitions in reverse order.
+
+        Continues after individual rollback failures so every
+        transition gets a chance.  Returns a list of
+        ``(transition_name, error_message)`` for failures.
+        """
+        errors: list[tuple[str, str]] = []
+        for transition in reversed(self._applied):
+            try:
+                await transition.rollback()
+            except Exception as exc:
+                errors.append((transition.name, str(exc)))
+        return errors
+
+    async def finalize_all(self) -> None:
+        """Finalize applied transitions after commit.
+
+        Called only after the transaction is accepted.  Releases
+        captured old-state snapshots.  Failures are treated as
+        post-commit housekeeping and logged but not propagated.
+        """
+        if self._finalized:
+            return
+        for transition in self._applied:
+            try:
+                await transition.finalize()
+            except Exception:
+                logger.debug(
+                    "Finalization of transition %s failed (housekeeping)",
+                    transition.name,
+                    exc_info=True,
+                )
+        self._finalized = True
+
+    @property
+    def applied_count(self) -> int:
+        """Number of transitions successfully applied."""
+        return len(self._applied)
+
+    @property
+    def is_fully_applied(self) -> bool:
+        """True if all transitions in the plan were applied."""
+        return len(self._applied) == len(self._plan.transitions)
 
 
 @dataclass(frozen=True)
@@ -913,6 +1023,8 @@ __all__ = [
     "RoutingTraceGuardTransition",
     "RoutingTraceWriterTransition",
     "TaskSpecTransition",
+    "TransitionApplyResult",
     "TransactionState",
     "TransactionStateError",
+    "preflight_all_transitions",
 ]

@@ -33,6 +33,7 @@ from eggpool.control.server import (
     ControlRequest,
     ControlResponse,
     ControlServer,
+    ControlServerError,
 )
 
 # ---------------------------------------------------------------------------
@@ -703,41 +704,27 @@ class TestStaleSocketReplacement:
 
     @pytest.mark.asyncio
     async def test_stale_socket_is_replaced(self, socket_dir: Path) -> None:
-        """A stale socket file (S_ISSOCK=True) IS cleaned and replaced."""
+        """A stale socket file (real AF_UNIX socket, not listening) IS cleaned."""
+        import socket as _socket
+
         path = _sock(socket_dir)
-        path.write_text("", encoding="utf-8")
-        # Make it look like a socket for _clean_stale_socket
-        original_stat = os.stat
+        # Create a real Unix socket that is not listening (stale).
+        probe = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        try:
+            probe.bind(str(path))
+            # Don't listen — so connect() returns ECONNREFUSED.
+        finally:
+            probe.close()
+        assert path.exists()
+        assert stat.S_ISSOCK(os.stat(path).st_mode)
 
-        def _fake_stat(p: Path, *args: object, **kwargs: object) -> os.stat_result:
-            result = original_stat(p, *args, **kwargs)
-            if p == path:
-                # Patch st_mode to include S_ISSOCK
-                new_mode = result.st_mode | stat.S_IFSOCK
-                return os.stat_result(
-                    (
-                        new_mode,
-                        result.st_ino,
-                        result.st_dev,
-                        result.st_nlink,
-                        result.st_uid,
-                        result.st_gid,
-                        result.st_size,
-                        result.st_atime,
-                        result.st_mtime,
-                        result.st_ctime,
-                    )
-                )
-            return result
-
-        with patch("os.stat", side_effect=_fake_stat):
-            srv = ControlServer(_noop_handler, path=path)
-            await srv.start()
-            try:
-                assert path.exists()
-                assert stat.S_ISSOCK(os.stat(path).st_mode)
-            finally:
-                await srv.stop()
+        srv = ControlServer(_noop_handler, path=path)
+        await srv.start()
+        try:
+            assert path.exists()
+            assert stat.S_ISSOCK(os.stat(path).st_mode)
+        finally:
+            await srv.stop()
 
     @pytest.mark.asyncio
     async def test_client_can_connect_after_start(self, socket_dir: Path) -> None:
@@ -762,48 +749,46 @@ class TestSymlinkSocketRejection:
     """Symlinks at the socket path are cleaned before bind."""
 
     @pytest.mark.asyncio
-    async def test_symlink_to_regular_file_removed_before_binding(
+    async def test_symlink_to_regular_file_blocks_binding(
         self, socket_dir: Path
     ) -> None:
-        """A symlink to a regular file is removed by _clean_stale_socket
-        so the server can bind successfully."""
+        """A symlink at the socket path is NOT cleaned up (fail-closed).
+
+        The server refuses to bind because the symlink was not removed."""
         target = socket_dir / "target.txt"
         target.write_text("not a socket", encoding="utf-8")
         path = _sock(socket_dir, "prevent")
         os.symlink(str(target), str(path))
 
         srv = ControlServer(_noop_handler, path=path)
-        await srv.start()
-        try:
-            assert path.exists()
-            assert stat.S_ISSOCK(os.stat(path).st_mode)
-            client = ControlClient(socket_path=path)
-            resp = await client.reload(validated_digest="a" * 64)
-            assert resp.ok is True
-        finally:
-            await srv.stop()
+        with pytest.raises(
+            Exception, match="failed to bind|control socket|already in use"
+        ):
+            await srv.start()
 
     @pytest.mark.asyncio
-    async def test_symlink_to_nonexistent_target_allows_binding(
-        self, socket_dir: Path
-    ) -> None:
-        """A dangling symlink at the socket path is removed by
-        _clean_stale_socket so the server can bind successfully."""
+    async def test_dangling_symlink_not_cleaned(self, socket_dir: Path) -> None:
+        """A dangling symlink at the socket path is NOT cleaned up (fail-closed).
+
+        _clean_stale_socket logs a warning and refuses to remove symlinks.
+        The symlink remains after the start attempt."""
+
         target = socket_dir / "nonexistent_target"
         path = _sock(socket_dir, "symlink")
         os.symlink(str(target), str(path))
 
         srv = ControlServer(_noop_handler, path=path)
-        await srv.start()
+        # On some platforms (macOS), start_unix_server may follow the
+        # symlink and bind to the target.  On others it may fail.
+        # Either way, the symlink must NOT have been removed.
         try:
-            assert path.exists()
-            assert stat.S_ISSOCK(os.stat(path).st_mode)
-            # Verify client can connect
-            client = ControlClient(socket_path=path)
-            resp = await client.reload(validated_digest="a" * 64)
-            assert resp.ok is True
-        finally:
+            await srv.start()
             await srv.stop()
+        except (ControlServerError, OSError):
+            pass
+        # The symlink must still exist — _clean_stale_socket must not
+        # have removed it.
+        assert path.is_symlink()
 
 
 # ---------------------------------------------------------------------------

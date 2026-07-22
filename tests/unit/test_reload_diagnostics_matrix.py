@@ -630,6 +630,7 @@ class TestFailedCommitCategory:
         assert diag.category in (
             ReloadResultCategory.FAILED_COMMIT,
             ReloadResultCategory.FAILED_PUBLICATION,
+            ReloadResultCategory.FAILED_PROCESS_TRANSITION_APPLY,
             ReloadResultCategory.COMPENSATION_FAILED,
         )
         assert diag.error_class is not None
@@ -1727,6 +1728,7 @@ class TestCompensationFailedCategory:
         assert diag.category in (
             ReloadResultCategory.COMPENSATION_FAILED,
             ReloadResultCategory.FAILED_COMMIT,
+            ReloadResultCategory.FAILED_PROCESS_TRANSITION_APPLY,
         )
 
     @pytest.mark.asyncio()

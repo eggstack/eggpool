@@ -43,6 +43,7 @@ def socket_dir() -> Path:
     """Return a short-path temporary directory for Unix socket files."""
     d = Path(_os.path.join(_os.environ.get("TMPDIR", "/tmp"), "ep-test"))
     d.mkdir(parents=True, exist_ok=True)
+    _os.chmod(d, 0o700)
     for f in d.iterdir():
         if f.suffix == ".sock":
             f.unlink(missing_ok=True)
@@ -209,12 +210,15 @@ class TestControlSocketPath:
 
 
 class TestCleanStaleSocket:
-    def test_removes_socket(self, tmp_path: Path) -> None:
-        """A socket-like file is removed when S_ISSOCK reports True."""
-        sock = tmp_path / "test.sock"
-        sock.write_text("", encoding="utf-8")
-        with patch("stat.S_ISSOCK", return_value=True):
-            _clean_stale_socket(sock)
+    def test_removes_socket(self, socket_dir: Path) -> None:
+        """A stale Unix socket is removed when the probe returns ECONNREFUSED."""
+        import socket as _sock
+
+        sock = socket_dir / "test.sock"
+        srv = _sock.socket(_sock.AF_UNIX, _sock.SOCK_STREAM)
+        srv.bind(str(sock))
+        srv.close()
+        _clean_stale_socket(sock)
         assert not sock.exists()
 
     def test_ignores_nonexistent(self, tmp_path: Path) -> None:
@@ -225,6 +229,38 @@ class TestCleanStaleSocket:
         f.write_text("hello", encoding="utf-8")
         _clean_stale_socket(f)
         assert f.exists()
+
+    def test_ignores_symlink(self, tmp_path: Path) -> None:
+        target = tmp_path / "real.sock"
+        link = tmp_path / "link.sock"
+        link.symlink_to(target)
+        _clean_stale_socket(link)
+        assert link.is_symlink()
+
+    def test_skips_when_identity_changed(self, socket_dir: Path) -> None:
+        """Removal is skipped when inode identity changes during probe."""
+        import socket as _sock
+
+        sock = socket_dir / "test.sock"
+        srv = _sock.socket(_sock.AF_UNIX, _sock.SOCK_STREAM)
+        srv.bind(str(sock))
+        srv.close()
+        call_count = 0
+
+        def _changing_identity(path: Path) -> tuple[int, int, int] | None:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return (1, 1, 0o1000)
+            return (2, 2, 0o1000)
+
+        with patch(
+            "eggpool.control.server._stat_socket_identity",
+            side_effect=_changing_identity,
+        ):
+            _clean_stale_socket(sock)
+        # Socket should still exist because identity changed.
+        assert sock.exists()
 
 
 # ---------------------------------------------------------------------------

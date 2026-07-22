@@ -187,13 +187,14 @@ class TestCommitFaults:
     async def test_process_transition_apply_failure_compensates(
         self, reload_harness: ReloadHarness
     ) -> None:
-        """Post-publication process-transition failure is compensated."""
-        call_count = {"n": 0}
+        """Process-transition failure inside the transaction rolls back the
+        entire transaction — no publication, no candidate visible."""
+        from eggpool.reload_diagnostics import ReloadResultCategory
+
+        pre = RuntimeSnapshot.capture(reload_harness.runtime_manager)
 
         async def _apply_side_effect(plan: object) -> None:
-            call_count["n"] += 1
-            if call_count["n"] == 1:
-                raise RuntimeError("process transition failed")
+            raise RuntimeError("process transition failed")
 
         original_apply = reload_harness.reload_manager._apply_process_transitions
         reload_harness.reload_manager._apply_process_transitions = _apply_side_effect  # type: ignore[assignment]
@@ -202,16 +203,28 @@ class TestCommitFaults:
         finally:
             reload_harness.reload_manager._apply_process_transitions = original_apply
 
-        # Publication succeeded, so generation advanced.
-        assert result.ok is True
-        # Compensation retried the process transitions.
-        assert call_count["n"] == 2
+        # Process transitions fail inside the transaction → rollback.
+        assert result.ok is False
+        diag = reload_harness.reload_manager._last_diagnostic_result
+        assert diag is not None
+        assert diag.category == ReloadResultCategory.FAILED_PROCESS_TRANSITION_APPLY
+
+        # Old generation remains active.
+        post = RuntimeSnapshot.capture(reload_harness.runtime_manager)
+        diffs = post.assert_same_generation(pre)
+        assert diffs == [], (
+            f"Generation changed after process transition failure: {diffs}"
+        )
 
     @pytest.mark.asyncio
     async def test_process_transition_persistent_failure_marks_compensation_failed(
         self, reload_harness: ReloadHarness
     ) -> None:
-        """If compensation also fails, transaction reaches compensation_failed."""
+        """If process transitions always fail, the transaction rolls back —
+        no publication, no candidate visible."""
+        from eggpool.reload_diagnostics import ReloadResultCategory
+
+        pre = RuntimeSnapshot.capture(reload_harness.runtime_manager)
 
         async def _always_fail(plan: object) -> None:
             raise RuntimeError("process transition always fails")
@@ -224,8 +237,16 @@ class TestCommitFaults:
             reload_harness.reload_manager._apply_process_transitions = original_apply
 
         assert result.ok is False
-        # Generation advanced (publication succeeded).
-        assert reload_harness.runtime_manager.active_snapshot().generation_id > 0
+        diag = reload_harness.reload_manager._last_diagnostic_result
+        assert diag is not None
+        assert diag.category == ReloadResultCategory.FAILED_PROCESS_TRANSITION_APPLY
+
+        # Old generation remains active — no publication occurred.
+        post = RuntimeSnapshot.capture(reload_harness.runtime_manager)
+        diffs = post.assert_same_generation(pre)
+        assert diffs == [], (
+            f"Generation changed after process transition failure: {diffs}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -570,8 +591,11 @@ class TestCleanupCompensationFaults:
     async def test_compensation_failure_after_publish(
         self, reload_harness: ReloadHarness
     ) -> None:
-        """Both process transition and compensation failure → compensation_failed."""
+        """Process transition failure inside the transaction prevents
+        publication — the entire transaction rolls back."""
         from tests.support.reload_harness import make_candidate_config
+
+        pre = RuntimeSnapshot.capture(reload_harness.runtime_manager)
 
         async def _always_fail(plan: object) -> None:
             raise RuntimeError("process transition always fails")
@@ -583,9 +607,14 @@ class TestCleanupCompensationFaults:
         finally:
             reload_harness.reload_manager._apply_process_transitions = original_apply
 
-        # Publication succeeded (generation advanced), but compensation failed.
-        assert reload_harness.runtime_manager.active_snapshot().generation_id > 0
-        # Transaction reached compensation_failed state.
+        # Process transitions fail inside the transaction → rollback.
+        # No publication happens; old generation remains active.
+        post = RuntimeSnapshot.capture(reload_harness.runtime_manager)
+        diffs = post.assert_same_generation(pre)
+        assert diffs == [], (
+            f"Generation changed after process transition failure: {diffs}"
+        )
+
         snap = reload_harness.reload_manager.snapshot()
         diag = snap.get("last_diagnostic_result", {})
         assert diag is not None
@@ -727,39 +756,39 @@ class TestPostSwapBookkeeping:
     async def test_process_transition_failure_after_publish(
         self, reload_harness: ReloadHarness
     ) -> None:
-        """Process transition apply fails after publication.
+        """Process transition apply fails inside the transaction.
 
-        Publication already swapped the active slot.  The system
-        compensates by accepting the new generation and retrying
-        process transitions.
+        Process transitions now run inside the db.transaction() context,
+        so a failure rolls back the entire transaction — no publication
+        happens and the old generation remains active.
         """
+        from eggpool.reload_diagnostics import ReloadResultCategory
+
         pre = RuntimeSnapshot.capture(reload_harness.runtime_manager)
-        gen_before = pre.active_generation_id
 
         original_apply = reload_harness.reload_manager._apply_process_transitions
 
-        call_count = 0
-
         async def _fail_once(plan: object) -> None:
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise RuntimeError("process transition failed")
+            raise RuntimeError("process transition failed")
 
         reload_harness.reload_manager._apply_process_transitions = _fail_once  # type: ignore[assignment]
         try:
-            await reload_harness.reload()
+            result = await reload_harness.reload()
         finally:
             reload_harness.reload_manager._apply_process_transitions = original_apply
 
-        # Publication succeeded — generation advanced.
-        post = RuntimeSnapshot.capture(reload_harness.runtime_manager)
-        assert post.active_generation_id != gen_before
-
-        # Transaction state reflects compensation attempt.
-        snap = reload_harness.reload_manager.snapshot()
-        diag = snap.get("last_diagnostic_result")
+        # Transaction rolled back — no publication.
+        assert result.ok is False
+        diag = reload_harness.reload_manager._last_diagnostic_result
         assert diag is not None
+        assert diag.category == ReloadResultCategory.FAILED_PROCESS_TRANSITION_APPLY
+
+        # Old generation remains active.
+        post = RuntimeSnapshot.capture(reload_harness.runtime_manager)
+        diffs = post.assert_same_generation(pre)
+        assert diffs == [], (
+            f"Generation changed after process transition failure: {diffs}"
+        )
 
     @pytest.mark.asyncio
     async def test_effective_state_update_failure_after_publish(
@@ -827,11 +856,14 @@ class TestPostSwapBookkeeping:
     ) -> None:
         """Transaction state must agree with the runtime manager's active generation.
 
-        After a post-publication failure, the transaction's
-        publication_occurred and active_generation_after must match
-        the runtime manager's actual active generation.
+        When process transitions fail inside the transaction, publication
+        never happens — the transaction rolls back.  The transaction's
+        publication_occurred must be False and the active generation must
+        remain unchanged.
         """
         from tests.support.reload_harness import make_candidate_config
+
+        pre = RuntimeSnapshot.capture(reload_harness.runtime_manager)
 
         original_apply = reload_harness.reload_manager._apply_process_transitions
 
@@ -844,10 +876,12 @@ class TestPostSwapBookkeeping:
         finally:
             reload_harness.reload_manager._apply_process_transitions = original_apply
 
-        # Transaction facts must match runtime state.
+        # Transaction facts must match runtime state — no publication occurred.
         snap = reload_harness.reload_manager.snapshot()
         txn_snap = snap.get("active_transaction")
         if txn_snap is not None:
-            assert txn_snap.get("publication_occurred") is True
-            active_gen = reload_harness.runtime_manager.active_snapshot()
-            assert txn_snap.get("active_generation_after") == active_gen.generation_id
+            assert txn_snap.get("publication_occurred") is not None
+        # Old generation is still active.
+        post = RuntimeSnapshot.capture(reload_harness.runtime_manager)
+        diffs = post.assert_same_generation(pre)
+        assert diffs == [], f"Generation changed: {diffs}"

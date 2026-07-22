@@ -44,10 +44,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import logging
 import os
+import pwd
 import re
+import socket as _socket
 import stat
+import struct as _struct
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, cast
@@ -164,6 +168,7 @@ class ControlServer:
         """Bind the socket and begin accepting connections."""
         _clean_stale_socket(self._path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        _verify_runtime_dir(self._path.parent)
         try:
             self._server = await asyncio.start_unix_server(
                 self._handle_connection,
@@ -360,22 +365,45 @@ def _remove_socket_file(path: Path) -> None:
         path.unlink(missing_ok=True)
 
 
+def _stat_socket_identity(path: Path) -> tuple[int, int, int] | None:
+    """Capture (device, inode, mode) for a path. Returns None if unavailable."""
+    try:
+        st = path.stat()
+        return (st.st_dev, st.st_ino, st.st_mode)
+    except OSError:
+        return None
+
+
 def _clean_stale_socket(path: Path) -> None:
-    """Remove a stale socket file or symlink at *path*.
+    """Remove a stale socket file at *path*.
 
-    Before removing an existing socket, probes it with a quick connect
-    to avoid unlinking a socket owned by a live server:
+    Only removes for positive stale signals:
+    - ECONNREFUSED: socket exists but no server listening
+    - ENOENT: path disappeared during probe
 
-    * Connection succeeds → server is live, raise ``ControlServerError``.
-    * Connection refused → stale socket, safe to remove.
-    * Other connection error → likely stale, remove.
+    Fails closed for EACCES, EPERM, timeout, unknown errors,
+    regular files, and symlinks.
+
+    Uses inode identity checks to detect pathname replacement races
+    between the probe and the unlink.
     """
-    import socket as _socket
-
     if not path.exists() and not path.is_symlink():
         return
 
-    # Probe: is a live server listening on this socket?
+    # Fail closed: refuse to clean symlinks.
+    if path.is_symlink():
+        logger.warning("Refusing to clean stale symlink at %s", path)
+        return
+
+    # Fail closed: refuse to clean non-socket files.
+    if path.exists() and not stat.S_ISSOCK(path.stat().st_mode):
+        logger.warning("Refusing to clean non-socket at %s", path)
+        return
+
+    # Capture identity before probing.
+    identity_before = _stat_socket_identity(path)
+
+    # Probe the socket.
     try:
         probe = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
         try:
@@ -383,26 +411,43 @@ def _clean_stale_socket(path: Path) -> None:
             probe.connect(str(path))
             # Connection succeeded — a live server is listening.
             raise ControlServerError(f"control socket already in use: {path}")
-        except OSError:
-            # Connection refused or other socket error — stale.
-            pass
+        except TimeoutError:
+            logger.warning("Socket probe timed out for %s; not removing", path)
+            return
+        except OSError as exc:
+            if exc.errno == errno.ECONNREFUSED:
+                pass  # stale, safe to remove
+            elif exc.errno == errno.ENOENT:
+                return  # already gone, nothing to do
+            elif exc.errno in (errno.EACCES, errno.EPERM):
+                logger.warning("Permission error probing %s; not removing", path)
+                return
+            else:
+                logger.warning(
+                    "Unexpected error probing %s: %s; not removing", path, exc
+                )
+                return
         finally:
             probe.close()
     except ControlServerError:
         raise
-    except OSError as exc:
-        logger.warning("could not probe socket %s: %s", path, exc)
+    except Exception as exc:
+        logger.warning("Could not probe socket %s: %s; not removing", path, exc)
+        return
 
-    # Remove the stale socket or symlink.
+    # Verify identity has not changed during the probe (TOCTOU guard).
+    identity_after = _stat_socket_identity(path)
+    if identity_before != identity_after:
+        logger.warning("Socket identity changed during probe; not removing %s", path)
+        return
+
+    # Positive stale signal confirmed — safe to remove.
     try:
-        if path.is_symlink():
+        if path.exists():
             path.unlink()
-            logger.info("removed stale symlink %s", path)
-        elif path.exists() and stat.S_ISSOCK(path.stat().st_mode):
-            path.unlink()
-            logger.info("removed stale control socket %s", path)
+            logger.info("Removed stale control socket %s", path)
     except OSError as exc:
-        logger.warning("could not clean stale socket %s: %s", path, exc)
+        logger.warning("Could not remove stale socket %s: %s", path, exc)
 
 
 def _restrict_socket_permissions(path: Path) -> None:
@@ -431,6 +476,44 @@ def _restrict_socket_permissions(path: Path) -> None:
         )
 
 
+def _verify_runtime_dir(path: Path) -> None:
+    """Verify the runtime directory is safe for control sockets.
+
+    Checks that:
+    - The directory is not group/world writable.
+    - The directory is owned by the current UID.
+
+    Raises ControlServerError if the directory is unsafe.
+    """
+    try:
+        st = path.stat()
+    except OSError as exc:
+        raise ControlServerError(
+            f"Cannot stat runtime directory {path}: {exc}"
+        ) from exc
+
+    mode = stat.S_IMODE(st.st_mode)
+    # Fail closed if group or world writable.
+    unsafe_bits = stat.S_IWGRP | stat.S_IWOTH
+    if mode & unsafe_bits:
+        raise ControlServerError(
+            f"Runtime directory {path} is group/world writable "
+            f"(mode {oct(mode)}); refusing to bind control socket"
+        )
+
+    try:
+        owner = pwd.getpwuid(st.st_uid)
+        if owner.pw_uid != os.getuid():
+            raise ControlServerError(
+                f"Runtime directory {path} is owned by UID {st.st_uid}, "
+                f"expected {os.getuid()}"
+            )
+    except KeyError:
+        raise ControlServerError(
+            f"Runtime directory {path} has unknown UID {st.st_uid}"
+        ) from None
+
+
 def _reject_unmatched_peer_uid(writer: asyncio.StreamWriter) -> None:
     """Reject connections from a different UID using SO_PEERCRED where available.
 
@@ -440,9 +523,6 @@ def _reject_unmatched_peer_uid(writer: asyncio.StreamWriter) -> None:
     (e.g. macOS), the check is silently skipped — the socket's ``0o600``
     permissions already restrict access to the file owner.
     """
-    import socket as _socket
-    import struct as _struct
-
     sock: _socket.socket | None = writer.get_extra_info("socket")
     if sock is None:
         return
@@ -452,11 +532,11 @@ def _reject_unmatched_peer_uid(writer: asyncio.StreamWriter) -> None:
         return
 
     try:
-        creds = sock.getsockopt(_socket.SOL_SOCKET, peercred_attr)
-        # struct ucred: pid_t pid, uid_t uid, gid_t gid
-        # uid is at offset 4 (after pid)
-        creds_bytes = creds if isinstance(creds, bytes) else b""
-        _pid, uid, _gid = _struct.unpack("iii", creds_bytes)
+        size = _struct.calcsize("3i")
+        creds_bytes: bytes = sock.getsockopt(_socket.SOL_SOCKET, peercred_attr, size)
+        if len(creds_bytes) != size:
+            return  # insufficient data, fail closed
+        _pid, uid, _gid = _struct.unpack("3i", creds_bytes)
     except (OSError, ValueError, _struct.error):
         return
 
@@ -468,3 +548,4 @@ def _reject_unmatched_peer_uid(writer: asyncio.StreamWriter) -> None:
             server_uid,
         )
         writer.close()
+        return

@@ -58,6 +58,7 @@ from eggpool.reload_transaction import (
     RoutingTraceWriterTransition,
     TaskSpecTransition,
     TransactionState,
+    TransitionApplyResult,
 )
 
 if TYPE_CHECKING:
@@ -987,6 +988,10 @@ class ReloadManager:
             )
 
             # Stage 9: Commit (narrow commit guard)
+            # The lease gate is installed BEFORE the SQLite transaction
+            # so that no request can acquire the candidate generation
+            # until the database commit succeeds.  If the transaction
+            # rolls back, the gate is cleared in the finally block.
             self._set_stage(
                 ReloadOperationStage.COMMIT,
                 started_at,
@@ -1003,37 +1008,67 @@ class ReloadManager:
                 digest_prefix=digest_prefix,
             )
 
-            # 9a: Apply persistence delta inside the outer SQLite
-            # transaction and publish candidate generation atomically.
-            # The outer db.transaction() ensures that if publication
-            # fails, the SQLite writes are rolled back — no split state.
-            db = self._process.db
-            async with db.transaction():
-                await self._apply_persistence_delta(persistence_delta, nested=True)
+            # Install lease gate — acquire() callers will wait on this
+            # event until the commit is accepted or rolled back.
+            lease_gate_event = asyncio.Event()
+            self._runtime_manager._lease_gate_event = lease_gate_event  # pyright: ignore[reportPrivateUsage]
+            transition_result: TransitionApplyResult | None = None
+            try:
+                # 9a: Apply persistence delta inside the outer SQLite
+                # transaction and publish candidate generation atomically.
+                # The outer db.transaction() ensures that if publication
+                # fails, the SQLite writes are rolled back — no split state.
+                db = self._process.db
+                async with db.transaction():
+                    await self._apply_persistence_delta(persistence_delta, nested=True)
 
-                # 9b: Publish candidate generation atomically
-                await self._publish_generation(candidate, diff)
-            published_gen = candidate._built_generation  # pyright: ignore[reportPrivateUsage]
-            assert published_gen is not None, "Generation must be built before publish"
-            txn.mark_runtime_published(published_gen)
+                    # 9b: Apply process transitions inside the transaction
+                    # so they roll back atomically on failure.
+                    transition_result = await self._apply_process_transitions(
+                        process_transition_plan
+                    )
 
-            # Observer: publish complete
-            await self._observer.on_publish_complete(
-                generation_id=generation_id,
-                digest_prefix=digest_prefix,
-            )
+                    # 9c: Publish candidate generation atomically
+                    await self._publish_generation(candidate, diff)
+                # SQLite committed successfully — clear the gate.
+                published_gen = candidate._built_generation  # pyright: ignore[reportPrivateUsage]
+                assert published_gen is not None, (
+                    "Generation must be built before publish"
+                )
+                txn.mark_runtime_published(published_gen)
 
-            # 9c: Apply process transitions (after publication)
-            await self._apply_process_transitions(process_transition_plan)
-            txn.mark_process_transitions_applied()
+                # Observer: publish complete
+                await self._observer.on_publish_complete(
+                    generation_id=generation_id,
+                    digest_prefix=digest_prefix,
+                )
 
-            # 9d: Mark persistence committed (SQLite already committed
-            # above when the db.transaction() context exited normally)
-            txn.mark_persistence_committed()
+                txn.mark_process_transitions_applied()
 
-            # 9e: Update observable state (no-op currently; placeholder
-            #     for Phase 7 effective-config mechanism)
-            txn.mark_observable_state_updated()
+                # 9d: Mark persistence committed (SQLite already committed
+                # above when the db.transaction() context exited normally)
+                txn.mark_persistence_committed()
+
+                # 9e: Update observable state
+                txn.mark_observable_state_updated()
+
+            except Exception:
+                # Rollback: clear the lease gate so requests resume on
+                # the old generation.  Process transitions inside the
+                # SQLite transaction are rolled back by the DB layer.
+                if transition_result is not None:
+                    rollback_errors = await transition_result.rollback_applied()
+                    if rollback_errors:
+                        logger.warning(
+                            "Process transition rollback errors "
+                            "during commit failure: %s",
+                            rollback_errors,
+                        )
+                raise
+            finally:
+                # Always clear the lease gate — on success it was already
+                # cleared by publish; on failure we must re-open admission.
+                self._runtime_manager._lease_gate_event = None  # pyright: ignore[reportPrivateUsage]
 
             # Stage 10: Begin retirement (non-blocking)
             self._set_stage(
@@ -1469,13 +1504,16 @@ class ReloadManager:
                 pre_abort_txn_state == TransactionState.COMMIT_STARTED
                 and error_stage == ReloadOperationStage.COMMIT
             ):
-                # Failure at commit stage during publication.
+                # Failure at commit stage during the transaction.
                 if error_class_name == "ReloadCommitError":
                     is_pub_failed = True
                 elif error_class_name == "ReloadReconciliationError":
                     is_persist_commit_failed = True
                 else:
-                    is_pub_failed = True
+                    # Process transitions now run inside the transaction;
+                    # a RuntimeError here is a transition apply failure,
+                    # not a publication failure.
+                    is_pt_apply_failed = True
             elif (
                 pre_abort_txn_state in (TransactionState.PERSISTENCE_COMMITTED,)
                 and error_stage == ReloadOperationStage.COMMIT
@@ -1535,6 +1573,9 @@ class ReloadManager:
             # so shutdown waiters are notified while the transaction is
             # still accessible for diagnostics.
             self._transaction_complete_event.set()
+            # Always clear the lease gate on every terminal path —
+            # ensures requests resume after cancellation or failure.
+            self._runtime_manager._lease_gate_event = None  # pyright: ignore[reportPrivateUsage]
             # Release admission claim on every terminal path.
             self._current_transaction = None
             async with self._claim_mutex:
@@ -2190,19 +2231,21 @@ class ReloadManager:
     async def _apply_process_transitions(
         self,
         plan: ProcessTransitionPlan,
-    ) -> None:
+    ) -> TransitionApplyResult:
         """Apply prepared process transitions.
 
         Called after publication so the process supervisor is only
         reconfigured when the new generation is already live.
-        Each transition's ``apply()`` method is called in order.
-        """
-        process_supervisor = self._process.process_supervisor
-        if process_supervisor is None or not plan.task_specs:
-            return
+        Each transition's ``apply()`` method is called in order,
+        regardless of whether task specs are present — independent
+        transitions (routing-trace writer/guard, effective-state) still
+        execute even when the process supervisor is absent.
 
-        for transition in plan.transitions:
-            await transition.apply()
+        Returns a :class:`TransitionApplyResult` for rollback tracking.
+        """
+        result = TransitionApplyResult(plan)
+        await result.apply_all()
+        return result
 
     async def _pre_commit_verification(
         self,
