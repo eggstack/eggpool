@@ -1,4 +1,4 @@
-name: Extended Dispatch Stability Soak
+name: Extended Soak Validation
 
 on:
   workflow_dispatch:
@@ -20,6 +20,15 @@ on:
         required: false
         default: "42"
         type: string
+      duration:
+        description: "Duration profile (short=30min, standard=60min, long=120min)"
+        required: false
+        default: "standard"
+        type: choice
+        options:
+          - short
+          - standard
+          - long
   schedule:
     # Sundays at 02:00 UTC
     - cron: "0 2 * * 0"
@@ -34,9 +43,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  soak:
+  # ------------------------------------------------------------------
+  # Short soak (30 min) — full coverage on Python 3.12
+  # ------------------------------------------------------------------
+  soak-short:
+    if: inputs.duration == 'short' || (!inputs.duration && github.event_name == 'schedule')
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 45
     steps:
       - name: Record runner hardware metadata
         run: |
@@ -51,8 +64,58 @@ jobs:
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/checkout@v4
-
       - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Run extended stability gates
+        run: >
+          uv run pytest tests/soak/test_extended_stability_gates.py
+          -m extended_soak -v --tb=short
+
+      - name: Run resource plateau validation
+        run: uv run pytest tests/soak/test_resource_plateau.py -v --tb=short
+
+      - name: Run database consistency audit
+        run: uv run pytest tests/soak/test_db_consistency_audit.py -v --tb=short
+
+      - name: Upload soak artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: extended-soak-short
+          path: |
+            artifacts/
+            *.json
+            *.md
+          retention-days: 90
+          if-no-files-found: ignore
+
+  # ------------------------------------------------------------------
+  # Standard soak (60 min) — dispatch stability + full workload profiles
+  # ------------------------------------------------------------------
+  soak-standard:
+    if: inputs.duration == 'standard' || (!inputs.duration && github.event_name == 'schedule')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Record runner hardware metadata
+        run: |
+          echo "## Runner hardware" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "CPU:     $(nproc) cores" >> "$GITHUB_STEP_SUMMARY"
+          echo "Memory:  $(free -h 2>/dev/null | awk '/^Mem:/{print $2}' || echo 'unknown')" >> "$GITHUB_STEP_SUMMARY"
+          echo "Kernel:  $(uname -r)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Arch:    $(uname -m)" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
 
       - name: Install dependencies
         run: uv sync --frozen --extra dev
@@ -65,16 +128,103 @@ jobs:
             --output artifacts/dispatch-soak/nightly \
             --seed "${{ inputs.seed || '42' }}"
 
+      - name: Run workload profile tests
+        run: uv run pytest tests/soak/test_workload_profiles.py -v --tb=short
+
+      - name: Run extended stability gates
+        run: >
+          uv run pytest tests/soak/test_extended_stability_gates.py
+          -m extended_soak -v --tb=short
+
+      - name: Run database consistency audit
+        run: uv run pytest tests/soak/test_db_consistency_audit.py -v --tb=short
+
       - name: Upload soak artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: dispatch-soak-nightly
-          path: artifacts/dispatch-soak/nightly/
+          name: extended-soak-standard
+          path: |
+            artifacts/
+            *.json
+            *.md
           retention-days: 90
+          if-no-files-found: ignore
 
       - name: Cleanup
         if: always()
         run: |
-          rm -rf artifacts/dispatch-soak/nightly/
+          rm -rf artifacts/
+          find /tmp -maxdepth 1 -name 'eggpool-soak-*' -exec rm -rf {} + 2>/dev/null || true
+
+  # ------------------------------------------------------------------
+  # Long soak (120 min) — comprehensive coverage, both Python versions
+  # ------------------------------------------------------------------
+  soak-long:
+    if: inputs.duration == 'long'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - name: Record runner hardware metadata
+        run: |
+          echo "## Runner hardware" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "CPU:     $(nproc) cores" >> "$GITHUB_STEP_SUMMARY"
+          echo "Memory:  $(free -h 2>/dev/null | awk '/^Mem:/{print $2}' || echo 'unknown')" >> "$GITHUB_STEP_SUMMARY"
+          echo "Python:  ${{ matrix.python-version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Run dispatch stability soak
+        run: |
+          uv run python scripts/run_dispatch_stability_soak.py \
+            --profile "${{ inputs.profile || 'balanced-file-backed' }}" \
+            --mode nightly \
+            --output artifacts/dispatch-soak/nightly \
+            --seed "${{ inputs.seed || '42' }}"
+
+      - name: Run all workload profiles
+        run: uv run pytest tests/soak/test_workload_profiles.py -v --tb=short
+
+      - name: Run extended stability gates
+        run: >
+          uv run pytest tests/soak/test_extended_stability_gates.py
+          -m extended_soak -v --tb=short
+
+      - name: Run resource plateau validation
+        run: uv run pytest tests/soak/test_resource_plateau.py -v --tb=short
+
+      - name: Run database consistency audit
+        run: uv run pytest tests/soak/test_db_consistency_audit.py -v --tb=short
+
+      - name: Run reload/control-plane stress
+        run: uv run pytest tests/integration/reload/ -v --tb=short
+
+      - name: Upload soak artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: extended-soak-long-py${{ matrix.python-version }}
+          path: |
+            artifacts/
+            *.json
+            *.md
+          retention-days: 90
+          if-no-files-found: ignore
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -rf artifacts/
           find /tmp -maxdepth 1 -name 'eggpool-soak-*' -exec rm -rf {} + 2>/dev/null || true

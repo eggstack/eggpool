@@ -23,9 +23,23 @@ uv run ruff format --check src/ tests/ scripts/
 uv run ruff check src/ tests/ scripts/
 uv run pyright src/ scripts/
 uv run pytest
+uv run python scripts/audit_xfail_skips.py
 ```
 
-All four must pass with zero errors.
+All five must pass with zero errors.
+
+## CI Partitioning
+
+CI runs 6 parallel jobs:
+
+| Job | Python | Command |
+|-----|--------|---------|
+| lint | 3.12 | `ruff format --check` + `ruff check` |
+| typecheck | 3.12 | `pyright src/ scripts/` |
+| unit-integration | 3.11, 3.12 | `pytest -m "not slow and not performance and not soak and not extended_soak and not live"` |
+| reload-control | 3.11, 3.12 | `pytest tests/integration/reload/` |
+| performance | 3.12 | `pytest -m performance` |
+| soak-audit | 3.12 | `pytest -m soak` + `audit_xfail_skips.py` |
 
 ## Focused Verification
 
@@ -158,6 +172,18 @@ uv run pytest tests/integration/reload/test_diagnostics_contract.py -v
 # for at least 100 repeated runs".
 uv run python scripts/admission_race_stress.py 100
 
+# Integration tests (marker)
+uv run pytest -m integration -v
+
+# Reload tests (marker)
+uv run pytest -m reload -v
+
+# Network-dependent tests (marker)
+uv run pytest -m network -v
+
+# Soak tests (marker — short PR soak)
+uv run pytest -m soak tests/soak/ -v
+
 # Soak validation and workload profiles (Milestone G)
 uv run pytest tests/soak/ -v
 
@@ -175,6 +201,9 @@ uv run pytest tests/soak/test_db_consistency_audit.py -v
 
 # Extended stability gates (extended-soak mode only)
 uv run pytest tests/soak/test_extended_stability_gates.py -m extended_soak -v
+
+# Skip/xfail audit — must pass for CI soak-audit job
+uv run python scripts/audit_xfail_skips.py
 
 # Dispatch stability soak runner
 uv run python scripts/run_dispatch_stability_soak.py \

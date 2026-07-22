@@ -228,7 +228,28 @@ uv sync --extra fast     # or: uv pip install 'eggpool[fast]'
 
 # High-concurrency streaming reproducer (no real providers needed)
 uv run python scripts/repro_high_concurrency_streams.py --concurrency 50 --cancel-rate 0.25
+
+# Skip/xfail audit
+uv run python scripts/audit_xfail_skips.py
 ```
+
+### CI Partitions
+
+CI runs 6 parallel jobs on Python 3.11+3.12:
+
+| Job | Python | Description |
+|-----|--------|-------------|
+| lint | 3.12 | ruff format + check |
+| typecheck | 3.12 | pyright strict |
+| unit-integration | 3.11, 3.12 | `not reload and not soak` |
+| reload-control | 3.11, 3.12 | `-m reload` |
+| performance | 3.12 | `-m performance` |
+| soak-audit | 3.12 | `-m soak` + `audit_xfail_skips.py` |
+
+### Test Markers
+
+- `integration`, `reload`, `network`, `soak` — CI partition markers
+- `request_path`, `dashboard`, `performance`, `slow`, `extended_soak` — feature markers
 
 See `AGENTS.md` for focused test subset commands including the
 dispatch-stability baseline (`tests/perf/test_dispatch_baseline.py`).

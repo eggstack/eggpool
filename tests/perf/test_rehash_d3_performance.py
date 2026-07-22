@@ -48,6 +48,8 @@ try:
 except ImportError:
     pass
 
+pytestmark = pytest.mark.performance
+
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -14,6 +14,7 @@ uv run ruff format --check src/ tests/ scripts/
 uv run ruff check src/ tests/ scripts/
 uv run pyright src/ scripts/
 uv run pytest
+uv run python scripts/audit_xfail_skips.py
 ```
 
 ## Focused Verification
@@ -113,6 +114,13 @@ uv run coverage report
 
 Defined in `pyproject.toml` and applied at the module level via `pytestmark`:
 
+**CI partition markers** (define which CI job runs which tests):
+- **`integration`** — integration tests (run in unit-integration job).
+- **`reload`** — reload and live-rehash tests (dedicated reload-control job).
+- **`network`** — tests requiring network access (run in unit-integration job).
+- **`soak`** — soak and long-running stability tests (dedicated soak-audit job).
+
+**Feature markers**:
 - **`request_path`** — routing, transcoding, finalization, and provider contract tests. Covers `tests/unit/test_routing*.py`, `tests/unit/test_contract*.py`, and `tests/unit/test_request_finalizer.py`.
 - **`dashboard`** — dashboard rendering, cache-page, and API endpoint tests. Covers `tests/unit/test_dashboard*.py`, `tests/unit/test_api*.py`, and `tests/unit/test_compression_stats_phase7.py`.
 - **`performance`** — performance baseline and regression guards. Covers `tests/perf/test_perf_baseline.py` and `tests/perf/test_perf_regression.py`.
@@ -121,11 +129,25 @@ Defined in `pyproject.toml` and applied at the module level via `pytestmark`:
 - **`live`** — opt-in live external-source tests (requires network access to real APIs).
 - **`extended_soak`** — extended-soak mode only tests (stability gates for long-running validation).
 
+### CI Partitions
+
+CI runs 6 parallel jobs on GitHub Actions:
+
+| Job | Python | Command |
+|-----|--------|---------|
+| lint | 3.12 | `ruff format --check` + `ruff check` |
+| typecheck | 3.12 | `pyright src/ scripts/` |
+| unit-integration | 3.11, 3.12 | `pytest -m "not slow and not performance and not soak and not extended_soak and not live"` |
+| reload-control | 3.11, 3.12 | `pytest tests/integration/reload/` |
+| performance | 3.12 | `pytest -m performance` |
+| soak-audit | 3.12 | `pytest -m soak` + `audit_xfail_skips.py` |
+
 ```bash
 uv run pytest -m request_path -v     # routing/transcoding/finalization only
 uv run pytest -m dashboard -v        # dashboard and cache-page only
 uv run pytest -m performance -v      # performance baseline only
 uv run pytest -m "not slow" -v       # skip slow tests
+uv run pytest -m soak tests/soak/ -v # short PR soak
 uv run pytest tests/soak/ -v         # soak validation and workload profiles
 uv run pytest -m extended_soak -v    # extended-soak mode only
 ```

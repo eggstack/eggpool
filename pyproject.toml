@@ -130,4 +130,8 @@ markers = [
     "performance: performance baseline and regression tests",
     "live: opt-in live external-source verification tests",
     "extended_soak: strict early-vs-late stability gates (extended-soak mode only)",
+    "integration: integration tests requiring full component wiring",
+    "reload: reload/rehash transaction and lifecycle tests",
+    "network: tests requiring network access or external services",
+    "soak: short deterministic soak tests for PR CI (distinct from extended_soak)",
 ]
