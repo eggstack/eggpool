@@ -257,6 +257,7 @@ class TestModelInfoAPIEndpoints:
         mock_service.get_summary_map.return_value = {"gpt-4": info}
 
         request = MagicMock()
+        request.app.state.runtime_manager = None
         request.app.state.model_info = mock_service
 
         response = await handle_model_info_summary(request)
@@ -289,6 +290,7 @@ class TestModelInfoAPIEndpoints:
         mock_service.get_summary.return_value = info
 
         request = MagicMock()
+        request.app.state.runtime_manager = None
         request.app.state.model_info = mock_service
 
         response = await handle_model_info_detail(request, "minimax-m3")
@@ -317,6 +319,7 @@ class TestModelInfoAPIEndpoints:
         }
 
         request = MagicMock()
+        request.app.state.runtime_manager = None
         request.app.state.model_info = mock_service
 
         response = await handle_model_info_sources(request)
@@ -354,6 +357,7 @@ class TestModelInfoAPIEndpoints:
         }
 
         request = MagicMock()
+        request.app.state.runtime_manager = None
         request.app.state.model_info = mock_service
 
         with warnings.catch_warnings(record=True) as caught:
@@ -383,6 +387,7 @@ class TestModelInfoAPIEndpoints:
         }
 
         request = MagicMock()
+        request.app.state.runtime_manager = None
         request.app.state.model_info = mock_service
         request.query_params = {}
 

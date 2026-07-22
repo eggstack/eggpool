@@ -497,7 +497,7 @@ class TestCleanupOldRollups:
                     bucket_start="2020-01-02 00:00:00",
                     model_id="old_model_b",
                 ),
-                _row(bucket_start="2026-06-20 12:00:00"),
+                _row(bucket_start="2026-07-20 12:00:00"),
             ]
         )
 
@@ -510,7 +510,7 @@ class TestCleanupOldRollups:
             bucket_size_s=60,
         )
         assert len(rows) == 1
-        assert rows[0]["bucket"] == "2026-06-20 12:00:00"
+        assert rows[0]["bucket"] == "2026-07-20 12:00:00"
 
 
 class TestCleanupOldRollupsNoOldData:
@@ -518,7 +518,7 @@ class TestCleanupOldRollupsNoOldData:
     async def test_returns_zero_when_no_old_data(
         self, repo: UsageRollupRepository
     ) -> None:
-        await repo.upsert_many([_row(bucket_start="2026-06-20 12:00:00")])
+        await repo.upsert_many([_row(bucket_start="2026-07-20 12:00:00")])
 
         deleted = await repo.cleanup_old_rollups(retain_days=30)
         assert deleted == 0

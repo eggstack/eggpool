@@ -947,12 +947,8 @@ class TestRetirementStatusDerivedFromRuntime:
         proc = _make_process()
         mgr = ReloadManager(rm, proc)
 
-        # Mock diagnostics to return the old generation as retiring
-        retiring_gen = MagicMock()
-        retiring_gen.generation_id = 1
-        diagnostics = MagicMock()
-        diagnostics.retiring = (retiring_gen,)
-        rm.diagnostics.return_value = diagnostics
+        # Simulate an active retirement task for the old generation
+        rm._retirement_tasks = {1: MagicMock()}
 
         change = MagicMock(section="routing")
         diff = _make_diff(changes=(change,))
@@ -1000,10 +996,8 @@ class TestRetirementStatusDerivedFromRuntime:
         proc = _make_process()
         mgr = ReloadManager(rm, proc)
 
-        # Mock diagnostics to return empty retiring list (retirement complete)
-        diagnostics = MagicMock()
-        diagnostics.retiring = ()
-        rm.diagnostics.return_value = diagnostics
+        # Simulate no active retirement tasks (retirement complete)
+        rm._retirement_tasks = {}
 
         change = MagicMock(section="routing")
         diff = _make_diff(changes=(change,))
@@ -1051,13 +1045,9 @@ class TestRetirementStatusDerivedFromRuntime:
         proc = _make_process()
         mgr = ReloadManager(rm, proc)
 
-        # Mock diagnostics: old generation is still in retiring list
+        # Simulate an active retirement task for the old generation
         # even though it was force-closed (state="closing", forced_close=True)
-        retiring_gen = MagicMock()
-        retiring_gen.generation_id = 1
-        diagnostics = MagicMock()
-        diagnostics.retiring = (retiring_gen,)
-        rm.diagnostics.return_value = diagnostics
+        rm._retirement_tasks = {1: MagicMock()}
 
         change = MagicMock(section="routing")
         diff = _make_diff(changes=(change,))

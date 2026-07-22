@@ -708,6 +708,7 @@ class TestDetailEndpointObservations:
             app.state.model_info = service
 
             request = MagicMock()
+            request.app.state.runtime_manager = None
             request.app.state.model_info = service
             request.app.state.config = MagicMock()
             request.app.state.config.providers = {"opencode-go"}
@@ -829,6 +830,7 @@ class TestDetailEndpointObservations:
         app.state.model_info = service
 
         request = MagicMock()
+        request.app.state.runtime_manager = None
         request.app.state.model_info = service
         request.app.state.config = MagicMock()
         request.app.state.config.providers = {"opencode-go"}

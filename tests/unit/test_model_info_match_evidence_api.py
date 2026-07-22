@@ -49,6 +49,7 @@ class TestDetailMatchEvidence:
         ]
 
         request = MagicMock()
+        request.app.state.runtime_manager = None
         request.app.state.model_info = mock_service
 
         response = await handle_model_info_detail(request, "claude-3-opus")
@@ -99,6 +100,7 @@ class TestDetailMatchEvidence:
         ]
 
         request = MagicMock()
+        request.app.state.runtime_manager = None
         request.app.state.model_info = mock_service
 
         response = await handle_model_info_detail(request, "claude-3-opus")
@@ -128,6 +130,7 @@ class TestDetailMatchEvidence:
         mock_service.repo.list_match_evidence.return_value = []
 
         request = MagicMock()
+        request.app.state.runtime_manager = None
         request.app.state.model_info = mock_service
 
         response = await handle_model_info_detail(request, "no-evidence-model")
@@ -168,6 +171,7 @@ class TestMatchesEndpoint:
         ]
 
         request = MagicMock()
+        request.app.state.runtime_manager = None
         request.app.state.model_info = mock_service
 
         response = await handle_model_info_matches(request, "gpt-4o")
@@ -199,6 +203,7 @@ class TestMatchesEndpoint:
         ]
 
         request = MagicMock()
+        request.app.state.runtime_manager = None
         request.app.state.model_info = mock_service
 
         response = await handle_model_info_matches(request, "test-model")
@@ -213,6 +218,7 @@ class TestMatchesEndpoint:
         mock_service.repo.list_match_evidence.return_value = []
 
         request = MagicMock()
+        request.app.state.runtime_manager = None
         request.app.state.model_info = mock_service
 
         response = await handle_model_info_matches(request, "unknown-model")
@@ -224,6 +230,7 @@ class TestMatchesEndpoint:
     @pytest.mark.asyncio()
     async def test_matches_endpoint_503_when_model_info_disabled(self) -> None:
         request = MagicMock()
+        request.app.state.runtime_manager = None
         request.app.state.model_info = None
 
         response = await handle_model_info_matches(request, "any-model")
@@ -235,6 +242,7 @@ class TestMatchesEndpoint:
         mock_service.repo.list_match_evidence.side_effect = RuntimeError("db down")
 
         request = MagicMock()
+        request.app.state.runtime_manager = None
         request.app.state.model_info = mock_service
 
         response = await handle_model_info_matches(request, "error-model")
@@ -262,6 +270,7 @@ class TestMatchesEndpoint:
         mock_service.repo.list_match_evidence.side_effect = RuntimeError("db error")
 
         request = MagicMock()
+        request.app.state.runtime_manager = None
         request.app.state.model_info = mock_service
 
         response = await handle_model_info_detail(request, "partial-model")
@@ -284,6 +293,7 @@ class TestProviderSuffixResolution:
         mock_service.repo.list_alias_rows_for_model.return_value = []
 
         request = MagicMock()
+        request.app.state.runtime_manager = None
         request.app.state.model_info = mock_service
         request.app.state.config = MagicMock(providers={"opencode-go": ...})
 
@@ -316,6 +326,7 @@ class TestProviderSuffixResolution:
         ]
 
         request = MagicMock()
+        request.app.state.runtime_manager = None
         request.app.state.model_info = mock_service
         request.app.state.config = MagicMock(providers={"opencode-go": ...})
 
@@ -340,6 +351,7 @@ class TestProviderSuffixResolution:
         mock_service.repo.list_match_evidence.return_value = []
 
         request = MagicMock()
+        request.app.state.runtime_manager = None
         request.app.state.model_info = mock_service
         request.app.state.config = MagicMock(providers={"opencode-go": ...})
 

@@ -1578,24 +1578,15 @@ class ReloadManager:
             return ReloadRetirementStatus(retirement_pending=False)
 
         if txn_state == TransactionState.COMPLETED:
-            # After successful publication, check if the old generation
-            # is still tracked by the runtime manager (draining).
-            try:
-                diagnostics = self._runtime_manager.diagnostics()
-                for gen in diagnostics.retiring:
-                    if gen.generation_id == old_generation_id:
-                        return ReloadRetirementStatus(
-                            retirement_pending=True,
-                            retiring_generation_id=old_generation_id,
-                        )
-                return ReloadRetirementStatus(retirement_pending=False)
-            except Exception:
-                # If we can't query runtime manager, infer pending
-                # from the fact that we just published.
+            # Check the retirement task registry which is populated
+            # synchronously at create_task time, avoiding a race with
+            # the transient diagnostics.retiring list.
+            if old_generation_id in self._runtime_manager._retirement_tasks:  # pyright: ignore[reportPrivateUsage]
                 return ReloadRetirementStatus(
                     retirement_pending=True,
                     retiring_generation_id=old_generation_id,
                 )
+            return ReloadRetirementStatus(retirement_pending=False)
 
         if txn_state in (
             TransactionState.ABORTED,

@@ -981,6 +981,7 @@ class TestDetailAPI:
         mock_service.get_summary.return_value = info
 
         request = MagicMock()
+        request.app.state.runtime_manager = None
         request.app.state.model_info = mock_service
 
         response = await handle_model_info_detail(request, "gpt-4o")
@@ -1016,6 +1017,7 @@ class TestDetailAPI:
         mock_service.get_summary.return_value = info
 
         request = MagicMock()
+        request.app.state.runtime_manager = None
         request.app.state.model_info = mock_service
         request.app.state.config.providers = {
             "openai": ProviderConfig.model_construct()
@@ -1058,6 +1060,7 @@ class TestDetailAPI:
         mock_service.get_summary.return_value = info
 
         request = MagicMock()
+        request.app.state.runtime_manager = None
         request.app.state.model_info = mock_service
 
         response = await handle_model_info_detail(request, "test-model")
@@ -1093,6 +1096,7 @@ class TestDetailAPI:
         mock_service.get_summary.return_value = info
 
         request = MagicMock()
+        request.app.state.runtime_manager = None
         request.app.state.model_info = mock_service
 
         response = await handle_model_info_detail(request, "xss-model")
@@ -1125,6 +1129,7 @@ class TestDetailAPI:
         mock_service.get_summary.return_value = info
 
         request = MagicMock()
+        request.app.state.runtime_manager = None
         request.app.state.model_info = mock_service
 
         response = await handle_model_info_detail(request, "test-model")
@@ -1162,6 +1167,7 @@ class TestDetailAPI:
         mock_service.get_summary.return_value = info
 
         request = MagicMock()
+        request.app.state.runtime_manager = None
         request.app.state.model_info = mock_service
 
         response = await handle_model_info_detail(request, "test-model")
@@ -1204,6 +1210,7 @@ class TestDetailAPI:
         mock_service.get_summary.return_value = info
 
         request = MagicMock()
+        request.app.state.runtime_manager = None
         request.app.state.model_info = mock_service
 
         response = await handle_model_info_detail(request, "gpt-4o")
@@ -1246,6 +1253,7 @@ class TestDetailAPI:
         mock_service.get_summary.return_value = info
 
         request = MagicMock()
+        request.app.state.runtime_manager = None
         request.app.state.model_info = mock_service
 
         response = await handle_model_info_detail(request, "legacy-model")

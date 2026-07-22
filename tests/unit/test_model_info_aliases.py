@@ -416,6 +416,7 @@ class TestModelInfoAliasesEndpoint:
             app = FastAPI()
             app.state.model_info = service
             request = MagicMock()
+            request.app.state.runtime_manager = None
             request.app.state.model_info = service
 
             response = await handle_model_info_aliases(request, "gpt-4o")
@@ -436,6 +437,7 @@ class TestModelInfoAliasesEndpoint:
         from eggpool.api.model_info import handle_model_info_aliases
 
         request = MagicMock()
+        request.app.state.runtime_manager = None
         request.app.state.model_info = None
 
         response = await handle_model_info_aliases(request, "x")

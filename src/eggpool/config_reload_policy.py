@@ -336,6 +336,12 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "model_info.aliases": ReloadDisposition.RESTART_REQUIRED,
     "model_info.overrides": ReloadDisposition.RESTART_REQUIRED,
     "force_segmentation": ReloadDisposition.RESTART_REQUIRED,
+    # Readiness probe is process-owned and survives generation swaps.
+    "readiness_probe.enabled": ReloadDisposition.RESTART_REQUIRED,
+    "readiness_probe.freshness_s": ReloadDisposition.RESTART_REQUIRED,
+    "readiness_probe.initial_probe": ReloadDisposition.RESTART_REQUIRED,
+    "readiness_probe.interval_s": ReloadDisposition.RESTART_REQUIRED,
+    "readiness_probe.timeout_s": ReloadDisposition.RESTART_REQUIRED,
 }
 
 
