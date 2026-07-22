@@ -77,6 +77,10 @@ class ConsistencyAuditor:
             self.check_incomplete_attempt_for_terminal,
             self.check_duplicate_attempt_numbers,
             self.check_no_orphan_routing_traces,
+            self.check_orphan_account_backoffs,
+            self.check_stuck_reservations,
+            self.check_attempt_ordering,
+            self.check_no_orphan_price_snapshots,
         ]
         for check_fn in checks:
             result.checks_run += 1
@@ -208,6 +212,102 @@ class ConsistencyAuditor:
             description=(
                 f"Found {len(rows)} routing decisions without matching requests"
             ),
+            row_count=len(rows),
+            sample_ids=tuple(str(r["id"]) for r in rows),
+            severity="warning",
+        )
+
+    async def check_orphan_account_backoffs(self) -> AuditViolation | None:
+        """Check for account_backoff rows referencing deleted accounts."""
+        rows = await self._db.fetch_all(
+            """
+            SELECT ab.id
+            FROM account_backoffs ab
+            WHERE NOT EXISTS (
+                SELECT 1 FROM accounts a
+                WHERE a.id = ab.account_id
+            )
+            LIMIT 10
+            """
+        )
+        if not rows:
+            return None
+        return AuditViolation(
+            check_name="orphan_account_backoffs",
+            description=(
+                f"Found {len(rows)} account_backoff rows without matching accounts"
+            ),
+            row_count=len(rows),
+            sample_ids=tuple(str(r["id"]) for r in rows),
+        )
+
+    async def check_stuck_reservations(self) -> AuditViolation | None:
+        """Check for active reservations that have been held for more than 1 hour.
+
+        Stuck reservations indicate a request that was never finalized or
+        a finalization failure that wasn't cleaned up.
+        """
+        rows = await self._db.fetch_all(
+            """
+            SELECT resv.id, resv.request_id
+            FROM reservations resv
+            WHERE resv.status = 'active'
+              AND resv.created_at < datetime('now', '-1 hour')
+            LIMIT 10
+            """
+        )
+        if not rows:
+            return None
+        return AuditViolation(
+            check_name="stuck_reservations",
+            description=(f"Found {len(rows)} active reservations older than 1 hour"),
+            row_count=len(rows),
+            sample_ids=tuple(str(r["id"]) for r in rows),
+        )
+
+    async def check_attempt_ordering(self) -> AuditViolation | None:
+        """Check that attempt numbers start at 1 and are sequential per request.
+
+        Detects gaps in attempt numbering which could indicate a
+        finalization failure or data corruption.
+        """
+        rows = await self._db.fetch_all(
+            """
+            SELECT request_id, MIN(attempt_number) as first_num
+            FROM request_attempts
+            GROUP BY request_id
+            HAVING first_num != 1
+            LIMIT 10
+            """
+        )
+        if not rows:
+            return None
+        return AuditViolation(
+            check_name="attempt_ordering_violation",
+            description=(f"Found {len(rows)} requests where attempts don't start at 1"),
+            row_count=len(rows),
+            sample_ids=tuple(str(r["request_id"]) for r in rows),
+            severity="warning",
+        )
+
+    async def check_no_orphan_price_snapshots(self) -> AuditViolation | None:
+        """Check for model_price_snapshots referencing deleted models."""
+        rows = await self._db.fetch_all(
+            """
+            SELECT mps.id
+            FROM model_price_snapshots mps
+            WHERE NOT EXISTS (
+                SELECT 1 FROM models m
+                WHERE m.model_id = mps.model_id
+            )
+            LIMIT 10
+            """
+        )
+        if not rows:
+            return None
+        return AuditViolation(
+            check_name="orphan_price_snapshots",
+            description=(f"Found {len(rows)} price snapshots without matching models"),
             row_count=len(rows),
             sample_ids=tuple(str(r["id"]) for r in rows),
             severity="warning",

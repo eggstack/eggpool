@@ -531,3 +531,76 @@ The reload policy (`config_reload_policy.py`) classifies every `AppConfig` field
 
 - `models refresh` synchronizes configured accounts via `AccountRepository.sync_from_config` before refreshing the catalog, so cached account/model relationships match normal application startup
 - The CLI has a two-tier entry point: `eggpool.cli:main` is a tiny bootstrap that dispatches `croncheck` and `ensure-running` through the stdlib-only `eggpool.fastcli` fast path, then falls through to the heavy Click CLI in `eggpool.cli_full` for everything else. See **Fast-Path CLI** above
+
+## CI Partitioning and Test Infrastructure (Phase 12)
+
+### CI Job Groups
+
+CI runs 6 parallel jobs:
+
+| Job | Python | Command |
+|-----|--------|---------|
+| lint | 3.12 | `ruff format --check` + `ruff check` |
+| typecheck | 3.12 | `pyright src/ scripts/` |
+| unit-integration | 3.11, 3.12 | `pytest -m "not slow and not performance and not soak and not extended_soak and not live"` |
+| reload-control | 3.11, 3.12 | `pytest tests/integration/reload/` |
+| performance | 3.12 | `pytest -m performance` |
+| soak-audit | 3.12 | `pytest -m soak` + `audit_xfail_skips.py` |
+
+### Test Markers
+
+| Marker | Purpose |
+|--------|---------|
+| `integration` | Integration tests requiring real services |
+| `reload` | Reload correctness baseline tests |
+| `performance` | Performance contract and benchmark tests |
+| `soak` | Short PR soak and resource plateau tests |
+| `extended_soak` | Extended scheduled soak (manual/cron only) |
+| `slow` | Tests exceeding normal CI budget |
+| `network` | Tests requiring network access |
+
+### Fault Injection Matrix
+
+The complete fault-injection matrix (`tests/integration/reload/test_reload_fault_matrix.py`) covers every stage of the Phase 6 transactional flow:
+
+- **Preparation faults**: candidate build, persistence prepare, validation
+- **Commit faults**: persistence apply, publication, process transition apply
+- **Cleanup/compensation faults**: compensation retry success/failure
+- **Cancellation faults**: cancellation at every pipeline stage, post-publication shielding
+- **Concurrent faults**: busy rejection, sequential reload success
+
+Every fault yields complete old state (pre-commit) or complete new state (post-commit) — never mixed state.
+
+### Consistency Audit
+
+`ConsistencyAuditor` (`src/eggpool/db/consistency_audit.py`) performs 9 read-only invariant checks after each soak:
+
+1. Pending requests with no active attempt
+2. Active reservations on non-pending requests
+3. Incomplete attempts on terminal requests
+4. Duplicate attempt numbers
+5. Orphan routing traces
+6. Orphan account backoffs
+7. Stuck reservations (active > 1 hour)
+8. Attempt ordering violations
+9. Orphan price snapshots
+
+### Resource Plateau Tolerances
+
+Defined in `docs/resource-plateau-tolerances.md`:
+
+- **Threads**: max `initial + 20`
+- **RSS**: growth ratio `< 1.5x` across cycles, slope `<= 1 MB/req` in late windows
+- **Async tasks**: final count `<= initial + 2`
+- **File descriptors**: no positive slope in late windows
+- **Reservations/pending**: exactly 0 after quiescence
+- **Writer/trace/finalization queues**: must drain after load stops
+
+### Skip/XFail Audit
+
+`scripts/audit_xfail_skips.py` scans all test files for non-strict xfails and unconditional skips. Existing exemptions require:
+- Rationale explaining why the invariant can't be tested strictly
+- Reference to the strict test that covers the same invariant
+- Expiry or removal criteria
+
+The audit runs in the soak-audit CI job and must pass for every commit.

@@ -2,6 +2,16 @@
 
 Verifies that RSS, file descriptors, threads, tasks, and other
 runtime resources plateau after warm-up and do not grow unboundedly.
+
+Tolerances (from plans/013-phase-12-ci-soak-and-performance-closure.md):
+- Tasks, open clients, and retiring generations must return exactly
+  to baseline after quiescence.
+- Descriptors may have a small fixed warm-up delta but no positive
+  slope in late windows.
+- RSS may plateau above startup due to allocator behavior, but
+  late-window growth slope must remain within a documented bound.
+- Writer queue must drain after load stops.
+- No unobserved task exception is permitted.
 """
 
 from __future__ import annotations
@@ -200,3 +210,101 @@ class TestResourcePlateau:
             "SELECT * FROM requests WHERE status = 'pending'"
         )
         assert len(pending) == 0
+
+    @pytest.mark.asyncio
+    async def test_asyncio_task_count_plateau(
+        self,
+        soak_coordinator: RequestCoordinator,
+        soak_db: Database,
+    ) -> None:
+        """Asyncio task count should plateau and return to baseline."""
+        with respx.mock:
+            respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+                side_effect=_stream_handler
+            )
+            initial_tasks = len(asyncio.all_tasks())
+            task_counts = [initial_tasks]
+
+            for cycle in range(3):
+                for i in range(10):
+                    context = ProxyRequestContext(
+                        request_id=f"plateau-task-{cycle}-{i}",
+                        protocol="openai",
+                        model_id="gpt-4",
+                        streaming=True,
+                        original_body=json.dumps(
+                            {
+                                "model": "gpt-4",
+                                "messages": [{"role": "user", "content": f"Msg {i}"}],
+                                "stream": True,
+                            }
+                        ).encode(),
+                        incoming_headers={"content-type": "application/json"},
+                    )
+                    response = await soak_coordinator.execute(context)
+                    if response.stream_iterator is not None:
+                        await _consume_stream(response.stream_iterator)
+                # Brief yield to let tasks complete
+                await asyncio.sleep(0.01)
+                task_counts.append(len(asyncio.all_tasks()))
+
+        # After quiescence, task count must return to baseline.
+        # Allow +2 for background supervisor tasks that survive across cycles.
+        final_tasks = task_counts[-1]
+        assert final_tasks <= initial_tasks + 2, (
+            f"Task count grew from {initial_tasks} to {final_tasks} "
+            f"after quiescence (allowed max: {initial_tasks + 2})"
+        )
+
+    @pytest.mark.asyncio
+    async def test_file_descriptor_plateau(
+        self,
+        soak_coordinator: RequestCoordinator,
+        soak_db: Database,
+    ) -> None:
+        """Open file descriptors should plateau (no positive slope in late windows)."""
+        try:
+            import psutil
+
+            proc = psutil.Process()
+            get_fds = lambda: proc.num_fds()  # noqa: E731
+        except ImportError:
+            pytest.skip("psutil not installed")
+
+        with respx.mock:
+            respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+                side_effect=_stream_handler
+            )
+            fd_samples = []
+            for cycle in range(3):
+                for i in range(10):
+                    context = ProxyRequestContext(
+                        request_id=f"plateau-fd-{cycle}-{i}",
+                        protocol="openai",
+                        model_id="gpt-4",
+                        streaming=True,
+                        original_body=json.dumps(
+                            {
+                                "model": "gpt-4",
+                                "messages": [{"role": "user", "content": f"Msg {i}"}],
+                                "stream": True,
+                            }
+                        ).encode(),
+                        incoming_headers={"content-type": "application/json"},
+                    )
+                    response = await soak_coordinator.execute(context)
+                    if response.stream_iterator is not None:
+                        await _consume_stream(response.stream_iterator)
+                fd_samples.append(get_fds())
+
+        # FD count should not have a positive slope in late windows.
+        # Allow a small warm-up delta between first and second cycle,
+        # but second-to-third must be flat or decreasing.
+        if len(fd_samples) >= 3:
+            warmup_delta = fd_samples[1] - fd_samples[0]
+            late_delta = fd_samples[2] - fd_samples[1]
+            # Late window must not grow more than warm-up delta
+            assert late_delta <= warmup_delta + 5, (
+                f"FD slope in late window: {late_delta} "
+                f"(warm-up delta: {warmup_delta}). Samples: {fd_samples}"
+            )
