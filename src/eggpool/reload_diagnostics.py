@@ -162,6 +162,10 @@ def classify_result_category(
     is_cancelled: bool = False,
     is_shutdown: bool = False,
     is_compensation_failed: bool = False,
+    is_publication_failed: bool = False,
+    is_process_transition_prepare_failed: bool = False,
+    is_process_transition_apply_failed: bool = False,
+    is_persistence_commit_failed: bool = False,
     error_class: str | None = None,
 ) -> ReloadResultCategory:
     """Derive the result category from outcome flags.
@@ -179,6 +183,16 @@ def classify_result_category(
             return ReloadResultCategory.COMPENSATION_FAILED
         if is_restart_required:
             return ReloadResultCategory.REJECTED_RESTART_REQUIRED
+        # Granular failure categories take priority over stage-based
+        # fallback when the caller can identify the specific barrier.
+        if is_publication_failed:
+            return ReloadResultCategory.FAILED_PUBLICATION
+        if is_process_transition_prepare_failed:
+            return ReloadResultCategory.FAILED_PROCESS_TRANSITION_PREPARE
+        if is_process_transition_apply_failed:
+            return ReloadResultCategory.FAILED_PROCESS_TRANSITION_APPLY
+        if is_persistence_commit_failed:
+            return ReloadResultCategory.FAILED_PERSISTENCE_COMMIT
         # Prioritize stage over error class: the stage reflects where
         # the failure occurred (e.g. ReloadPreparationError at VALIDATION
         # stage is a validation failure, not a preparation failure).

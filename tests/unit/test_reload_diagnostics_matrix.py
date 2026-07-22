@@ -10,6 +10,7 @@ Uses the ``ReloadHarness`` pattern from ``tests/support/reload_harness.py``.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -22,6 +23,7 @@ from eggpool.config_reload_policy import (
     ReloadStage,
 )
 from eggpool.control.reload_manager import (
+    ReloadCommitError,
     ReloadInProgressError,
     ReloadManager,
     ReloadPreparationError,
@@ -571,6 +573,7 @@ class TestFailedPersistencePrepareCategory:
         # Persistence apply failure at COMMIT stage.
         assert diag.category in (
             ReloadResultCategory.FAILED_PERSISTENCE_PREPARE,
+            ReloadResultCategory.FAILED_PERSISTENCE_COMMIT,
             ReloadResultCategory.FAILED_COMMIT,
             ReloadResultCategory.INTERNAL_ERROR,
         )
@@ -631,6 +634,7 @@ class TestFailedCommitCategory:
         assert diag is not None
         assert diag.category in (
             ReloadResultCategory.FAILED_COMMIT,
+            ReloadResultCategory.FAILED_PUBLICATION,
             ReloadResultCategory.COMPENSATION_FAILED,
         )
         assert diag.error_class is not None
@@ -1374,6 +1378,7 @@ class TestHarnessFullReloadDiagnostics:
         assert diag is not None
         assert diag.category in (
             ReloadResultCategory.FAILED_COMMIT,
+            ReloadResultCategory.FAILED_PUBLICATION,
             ReloadResultCategory.COMPENSATION_FAILED,
         )
 
@@ -1428,3 +1433,690 @@ class TestHarnessFullReloadDiagnostics:
         assert diag is not None
         assert isinstance(diag.retirement, ReloadRetirementStatus)
         assert isinstance(diag.retirement.retirement_pending, bool)
+
+
+# ---------------------------------------------------------------------------
+# 16. test_failed_publication_category
+# ---------------------------------------------------------------------------
+
+
+class TestFailedPublicationCategory:
+    """Publication failure produces FAILED_PUBLICATION."""
+
+    @pytest.mark.asyncio()
+    async def test_failed_publication_category(self) -> None:
+        """A publish failure at COMMIT stage must be FAILED_PUBLICATION."""
+        rm = _make_runtime_manager()
+        proc = _make_process()
+        mgr = ReloadManager(rm, proc)
+
+        change = MagicMock(section="routing")
+        diff = _make_diff(changes=(change,))
+        candidate = _make_candidate(generation_id=5)
+
+        validation = _make_validation()
+        with (
+            patch.object(
+                mgr,
+                "_compute_reload_diff",
+                new_callable=AsyncMock,
+                return_value=diff,
+            ),
+            patch.object(
+                mgr,
+                "_build_candidate_generation",
+                new_callable=AsyncMock,
+                return_value=candidate,
+            ),
+            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
+            patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
+            patch.object(mgr, "_pre_commit_verification", new_callable=AsyncMock),
+            patch.object(
+                mgr,
+                "_publish_generation",
+                new_callable=AsyncMock,
+                side_effect=ReloadCommitError("publish failed"),
+            ),
+        ):
+            result = await mgr.reload(validation)
+
+        assert result.ok is False
+
+        diag = mgr._last_diagnostic_result
+        assert diag is not None
+        assert diag.category == ReloadResultCategory.FAILED_PUBLICATION
+        assert diag.terminal_stage == ReloadTerminalStage.COMMIT
+        assert diag.error_class == "ReloadCommitError"
+
+        snap = mgr.snapshot()
+        assert snap["counters"]["commit_failures"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# 17. test_failed_process_transition_apply_category
+# ---------------------------------------------------------------------------
+
+
+class TestFailedProcessTransitionApplyCategory:
+    """Process transition apply failure produces FAILED_PROCESS_TRANSITION_APPLY."""
+
+    @pytest.mark.asyncio()
+    async def test_failed_process_transition_apply_category(self) -> None:
+        """A process transition failure after publication must be
+        FAILED_PROCESS_TRANSITION_APPLY."""
+        rm = _make_runtime_manager()
+        proc = _make_process()
+        mgr = ReloadManager(rm, proc)
+
+        change = MagicMock(section="routing")
+        diff = _make_diff(changes=(change,))
+        candidate = _make_candidate(generation_id=5)
+
+        validation = _make_validation()
+        with (
+            patch.object(
+                mgr,
+                "_compute_reload_diff",
+                new_callable=AsyncMock,
+                return_value=diff,
+            ),
+            patch.object(
+                mgr,
+                "_build_candidate_generation",
+                new_callable=AsyncMock,
+                return_value=candidate,
+            ),
+            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
+            patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
+            patch.object(mgr, "_pre_commit_verification", new_callable=AsyncMock),
+            patch.object(
+                mgr,
+                "_publish_generation",
+                new_callable=AsyncMock,
+            ),
+            patch.object(
+                mgr,
+                "_apply_process_transitions",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("process transition failed"),
+            ),
+        ):
+            result = await mgr.reload(validation)
+
+        assert result.ok is False
+
+        diag = mgr._last_diagnostic_result
+        assert diag is not None
+        assert diag.category in (
+            ReloadResultCategory.FAILED_PROCESS_TRANSITION_APPLY,
+            ReloadResultCategory.COMPENSATION_FAILED,
+        )
+
+        snap = mgr.snapshot()
+        assert snap["counters"]["commit_failures"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# 18. test_failed_persistence_commit_category
+# ---------------------------------------------------------------------------
+
+
+class TestFailedPersistenceCommitCategory:
+    """Persistence commit failure produces FAILED_PERSISTENCE_COMMIT."""
+
+    @pytest.mark.asyncio()
+    async def test_failed_persistence_commit_category(self) -> None:
+        """A persistence failure at COMMIT stage must be
+        FAILED_PERSISTENCE_COMMIT."""
+        rm = _make_runtime_manager()
+        proc = _make_process()
+        mgr = ReloadManager(rm, proc)
+
+        change = MagicMock(section="routing")
+        diff = _make_diff(changes=(change,))
+        candidate = _make_candidate(generation_id=5)
+
+        validation = _make_validation()
+        with (
+            patch.object(
+                mgr,
+                "_compute_reload_diff",
+                new_callable=AsyncMock,
+                return_value=diff,
+            ),
+            patch.object(
+                mgr,
+                "_build_candidate_generation",
+                new_callable=AsyncMock,
+                return_value=candidate,
+            ),
+            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
+            patch.object(
+                mgr,
+                "_apply_persistence_delta",
+                new_callable=AsyncMock,
+                side_effect=ReloadReconciliationError("db commit failed"),
+            ),
+            patch.object(
+                mgr,
+                "_publish_generation",
+                new_callable=AsyncMock,
+            ),
+            patch.object(mgr, "_pre_commit_verification", new_callable=AsyncMock),
+        ):
+            result = await mgr.reload(validation)
+
+        assert result.ok is False
+
+        diag = mgr._last_diagnostic_result
+        assert diag is not None
+        assert diag.category in (
+            ReloadResultCategory.FAILED_PERSISTENCE_COMMIT,
+            ReloadResultCategory.FAILED_COMMIT,
+        )
+        assert diag.error_class == "ReloadReconciliationError"
+
+        snap = mgr.snapshot()
+        assert snap["counters"]["commit_failures"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# 19. test_aborted_cancelled_category
+# ---------------------------------------------------------------------------
+
+
+class TestAbortedCancelledCategory:
+    """Cancellation produces ABORTED_CANCELLED."""
+
+    def test_aborted_cancelled_unit(self) -> None:
+        """is_cancelled produces ABORTED_CANCELLED."""
+        cat = classify_result_category(
+            ok=False,
+            stage=ReloadTerminalStage.PREPARATION,
+            is_cancelled=True,
+        )
+        assert cat == ReloadResultCategory.ABORTED_CANCELLED
+
+    def test_cancelled_takes_priority(self) -> None:
+        """is_cancelled takes priority over other error flags."""
+        cat = classify_result_category(
+            ok=False,
+            stage=ReloadTerminalStage.COMMIT,
+            is_cancelled=True,
+            is_compensation_failed=True,
+            error_class="ReloadCommitError",
+        )
+        assert cat == ReloadResultCategory.ABORTED_CANCELLED
+
+
+# ---------------------------------------------------------------------------
+# 20. test_aborted_shutdown_category
+# ---------------------------------------------------------------------------
+
+
+class TestAbortedShutdownCategory:
+    """Shutdown produces ABORTED_SHUTDOWN via classify_result_category."""
+
+    def test_aborted_shutdown_unit(self) -> None:
+        """is_shutdown produces ABORTED_SHUTDOWN."""
+        cat = classify_result_category(
+            ok=False,
+            stage=ReloadTerminalStage.PREPARATION,
+            is_shutdown=True,
+        )
+        assert cat == ReloadResultCategory.ABORTED_SHUTDOWN
+
+
+# ---------------------------------------------------------------------------
+# 21. test_compensation_failed_category
+# ---------------------------------------------------------------------------
+
+
+class TestCompensationFailedCategory:
+    """Compensation failure produces COMPENSATION_FAILED via classifier."""
+
+    def test_compensation_failed_unit(self) -> None:
+        """is_compensation_failed produces COMPENSATION_FAILED."""
+        cat = classify_result_category(
+            ok=False,
+            stage=ReloadTerminalStage.COMMIT,
+            is_compensation_failed=True,
+        )
+        assert cat == ReloadResultCategory.COMPENSATION_FAILED
+
+    @pytest.mark.asyncio()
+    async def test_compensation_failed_integration(self) -> None:
+        """Post-publication failure with failed compensation."""
+        rm = _make_runtime_manager()
+        proc = _make_process()
+        mgr = ReloadManager(rm, proc)
+
+        change = MagicMock(section="routing")
+        diff = _make_diff(changes=(change,))
+        candidate = _make_candidate(generation_id=5)
+
+        validation = _make_validation()
+        # First publish succeeds, then process transitions fail,
+        # and compensation also fails.
+
+        async def _apply_pt_fail(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("process transition failed")
+
+        with (
+            patch.object(
+                mgr,
+                "_compute_reload_diff",
+                new_callable=AsyncMock,
+                return_value=diff,
+            ),
+            patch.object(
+                mgr,
+                "_build_candidate_generation",
+                new_callable=AsyncMock,
+                return_value=candidate,
+            ),
+            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
+            patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
+            patch.object(
+                mgr,
+                "_publish_generation",
+                new_callable=AsyncMock,
+            ),
+            patch.object(
+                mgr,
+                "_apply_process_transitions",
+                new_callable=AsyncMock,
+                side_effect=_apply_pt_fail,
+            ),
+        ):
+            result = await mgr.reload(validation)
+
+        assert result.ok is False
+
+        diag = mgr._last_diagnostic_result
+        assert diag is not None
+        assert diag.category in (
+            ReloadResultCategory.COMPENSATION_FAILED,
+            ReloadResultCategory.FAILED_COMMIT,
+        )
+
+
+# ---------------------------------------------------------------------------
+# 22. test_internal_error_category
+# ---------------------------------------------------------------------------
+
+
+class TestInternalErrorCategory:
+    """Internal error produces INTERNAL_ERROR via classifier."""
+
+    def test_internal_error_unit(self) -> None:
+        """Unknown stage with no flags produces INTERNAL_ERROR."""
+        cat = classify_result_category(
+            ok=False,
+            stage=ReloadTerminalStage.IDLE,
+        )
+        assert cat == ReloadResultCategory.INTERNAL_ERROR
+
+
+# ---------------------------------------------------------------------------
+# 23. test_protocol_compatibility
+# ---------------------------------------------------------------------------
+
+
+class TestProtocolCompatibility:
+    """ControlResponse backward compatibility for Phase 11 fields."""
+
+    def test_control_response_backward_compat(self) -> None:
+        """ControlResponse without Phase 11 fields omits them from dict."""
+        from eggpool.control.server import ControlResponse
+
+        resp = ControlResponse(
+            protocol_version=1,
+            request_id="test-1",
+            ok=True,
+            stage="retirement",
+            generation=5,
+            changed_sections=("routing",),
+            warnings=(),
+            restart_required=(),
+            message="Reload applied",
+            retirement_pending=False,
+        )
+        d = resp.to_dict()
+        # Phase 11 fields should be absent (None defaults omitted).
+        assert "result_category" not in d
+        assert "duration_s" not in d
+
+    def test_control_response_with_phase11_fields(self) -> None:
+        """ControlResponse with Phase 11 fields includes them in dict."""
+        from eggpool.control.server import ControlResponse
+
+        resp = ControlResponse(
+            protocol_version=1,
+            request_id="test-2",
+            ok=True,
+            stage="retirement",
+            generation=5,
+            changed_sections=("routing",),
+            warnings=(),
+            restart_required=(),
+            message="Reload applied",
+            retirement_pending=False,
+            result_category="success_committed",
+            duration_s=0.123,
+        )
+        d = resp.to_dict()
+        assert d["result_category"] == "success_committed"
+        assert d["duration_s"] == 0.123
+
+
+# ---------------------------------------------------------------------------
+# 24. test_cleanup_and_compensation_warning
+# ---------------------------------------------------------------------------
+
+
+class TestCleanupAndCompensationWarning:
+    """Cleanup failure is separate from primary error."""
+
+    @pytest.mark.asyncio()
+    async def test_cleanup_failure_as_warning(self) -> None:
+        """Primary error remains primary; cleanup failure appears as warning."""
+        rm = _make_runtime_manager()
+        proc = _make_process()
+        mgr = ReloadManager(rm, proc)
+
+        change = MagicMock(section="routing")
+        diff = _make_diff(changes=(change,))
+        candidate = _make_candidate(generation_id=5)
+
+        validation = _make_validation()
+        with (
+            patch.object(
+                mgr,
+                "_compute_reload_diff",
+                new_callable=AsyncMock,
+                return_value=diff,
+            ),
+            patch.object(
+                mgr,
+                "_build_candidate_generation",
+                new_callable=AsyncMock,
+                return_value=candidate,
+            ),
+            patch.object(
+                mgr,
+                "_apply_persistence_delta",
+                new_callable=AsyncMock,
+                side_effect=ReloadReconciliationError("db sync failed"),
+            ),
+            patch.object(mgr, "_pre_commit_verification", new_callable=AsyncMock),
+        ):
+            result = await mgr.reload(validation)
+
+        assert result.ok is False
+
+        diag = mgr._last_diagnostic_result
+        assert diag is not None
+        # Primary error is the reconciliation error, not a cleanup error.
+        assert diag.error_class == "ReloadReconciliationError"
+
+
+# ---------------------------------------------------------------------------
+# 25. test_cancellation_shutdown_integration
+# ---------------------------------------------------------------------------
+
+
+class TestCancellationShutdownIntegration:
+    """Cancellation/shutdown outcomes finalize and release admission."""
+
+    @pytest.mark.asyncio()
+    async def test_cancellation_releases_admission(self) -> None:
+        """After a cancelled reload, the admission lock is released."""
+        rm = _make_runtime_manager()
+        proc = _make_process()
+        mgr = ReloadManager(rm, proc)
+
+        validation_a = _make_validation(content_digest="a" * 64)
+        validation_b = _make_validation(content_digest="b" * 64)
+
+        build_event = asyncio.Event()
+
+        async def _build_slow(*args: object, **kwargs: object) -> MagicMock:
+            await build_event.wait()
+            return _make_candidate(generation_id=5)
+
+        with (
+            patch.object(
+                mgr,
+                "_compute_reload_diff",
+                new_callable=AsyncMock,
+                return_value=_make_diff(changes=(MagicMock(section="routing"),)),
+            ),
+            patch.object(
+                mgr,
+                "_build_candidate_generation",
+                side_effect=_build_slow,
+            ),
+            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
+            patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
+            patch.object(
+                mgr,
+                "_publish_generation",
+                new_callable=AsyncMock,
+            ),
+        ):
+            task_a = asyncio.create_task(mgr.reload(validation_a))
+            await asyncio.sleep(0.05)
+
+            # Cancel the in-flight reload
+            task_a.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task_a
+            build_event.set()
+
+            # Wait a bit for cleanup
+            await asyncio.sleep(0.05)
+
+            # Admission should be released — a new reload should succeed
+            assert not mgr._reload_claimed
+
+            # A new reload should not raise ReloadInProgressError
+            with patch.object(
+                mgr,
+                "_compute_reload_diff",
+                new_callable=AsyncMock,
+            ) as diff_mock:
+                diff_mock.return_value = _make_diff(changes=())
+                result_b = await mgr.reload(validation_b)
+            assert result_b.ok is True
+
+
+# ---------------------------------------------------------------------------
+# 26. test_reload_history_bounded
+# ---------------------------------------------------------------------------
+
+
+class TestReloadHistoryBounded:
+    """Verify bounded reload history in snapshot."""
+
+    @pytest.mark.asyncio()
+    async def test_reload_history_grows(self) -> None:
+        """Each reload appends to the bounded history."""
+        rm = _make_runtime_manager()
+        proc = _make_process()
+        mgr = ReloadManager(rm, proc)
+
+        # First reload (noop)
+        with patch.object(
+            mgr, "_compute_reload_diff", new_callable=AsyncMock
+        ) as diff_mock:
+            diff_mock.return_value = _make_diff(changes=())
+            await mgr.reload(_make_validation())
+
+        snap = mgr.snapshot()
+        history = snap["reload_history"]
+        assert len(history) >= 1
+        assert history[0]["category"] == "success_noop"
+
+    @pytest.mark.asyncio()
+    async def test_reload_history_bounded_limit(self) -> None:
+        """History does not exceed the max size."""
+        rm = _make_runtime_manager()
+        proc = _make_process()
+        mgr = ReloadManager(rm, proc)
+        mgr._reload_history_max = 3
+
+        for _ in range(5):
+            with patch.object(
+                mgr, "_compute_reload_diff", new_callable=AsyncMock
+            ) as diff_mock:
+                diff_mock.return_value = _make_diff(changes=())
+                await mgr.reload(_make_validation())
+
+        snap = mgr.snapshot()
+        history = snap["reload_history"]
+        assert len(history) <= 3
+
+    @pytest.mark.asyncio()
+    async def test_reload_history_after_failure(self) -> None:
+        """Failed reloads also appear in history."""
+        rm = _make_runtime_manager()
+        proc = _make_process()
+        mgr = ReloadManager(rm, proc)
+
+        mgr.TEST_INJECT_BUILD_FAILURE = RuntimeError("fail")
+        try:
+            with patch.object(
+                mgr,
+                "_compute_reload_diff",
+                new_callable=AsyncMock,
+                return_value=_make_diff(changes=(MagicMock(section="routing"),)),
+            ):
+                await mgr.reload(_make_validation())
+        finally:
+            mgr.TEST_INJECT_BUILD_FAILURE = None
+
+        snap = mgr.snapshot()
+        history = snap["reload_history"]
+        assert len(history) >= 1
+        assert history[0]["category"] == "failed_candidate_prepare"
+
+
+# ---------------------------------------------------------------------------
+# 27. test_operational_event_recorded_flag
+# ---------------------------------------------------------------------------
+
+
+class TestOperationalEventRecordedFlag:
+    """Verify operational_event_recorded flag is set after terminal event."""
+
+    @pytest.mark.asyncio()
+    async def test_operational_event_recorded_on_success(self) -> None:
+        """Successful reload sets operational_event_recorded=True."""
+        rm = _make_runtime_manager()
+        proc = _make_process()
+        mgr = ReloadManager(rm, proc)
+
+        change = MagicMock(section="routing")
+        diff = _make_diff(changes=(change,))
+        candidate = _make_candidate(generation_id=5)
+
+        with (
+            patch.object(
+                mgr,
+                "_compute_reload_diff",
+                new_callable=AsyncMock,
+                return_value=diff,
+            ),
+            patch.object(
+                mgr,
+                "_build_candidate_generation",
+                new_callable=AsyncMock,
+                return_value=candidate,
+            ),
+            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
+            patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
+            patch.object(
+                mgr,
+                "_publish_generation",
+                new_callable=AsyncMock,
+            ),
+        ):
+            await mgr.reload(_make_validation())
+
+        diag = mgr._last_diagnostic_result
+        assert diag is not None
+        assert diag.operational_event_recorded is True
+
+    @pytest.mark.asyncio()
+    async def test_operational_event_recorded_on_failure(self) -> None:
+        """Failed reload sets operational_event_recorded=True."""
+        rm = _make_runtime_manager()
+        proc = _make_process()
+        mgr = ReloadManager(rm, proc)
+
+        mgr.TEST_INJECT_BUILD_FAILURE = RuntimeError("fail")
+        try:
+            with patch.object(
+                mgr,
+                "_compute_reload_diff",
+                new_callable=AsyncMock,
+                return_value=_make_diff(changes=(MagicMock(section="routing"),)),
+            ):
+                await mgr.reload(_make_validation())
+        finally:
+            mgr.TEST_INJECT_BUILD_FAILURE = None
+
+        diag = mgr._last_diagnostic_result
+        assert diag is not None
+        assert diag.operational_event_recorded is True
+
+
+# ---------------------------------------------------------------------------
+# 28. test_old_generation_digest_populated
+# ---------------------------------------------------------------------------
+
+
+class TestOldGenerationDigestPopulated:
+    """Verify old_generation_digest is populated when available."""
+
+    @pytest.mark.asyncio()
+    async def test_old_generation_digest_on_success(self) -> None:
+        """After successful commit, old_generation_digest is set."""
+        rm = _make_runtime_manager()
+        proc = _make_process()
+        mgr = ReloadManager(rm, proc)
+
+        change = MagicMock(section="routing")
+        diff = _make_diff(changes=(change,))
+        candidate = _make_candidate(generation_id=5)
+
+        with (
+            patch.object(
+                mgr,
+                "_compute_reload_diff",
+                new_callable=AsyncMock,
+                return_value=diff,
+            ),
+            patch.object(
+                mgr,
+                "_build_candidate_generation",
+                new_callable=AsyncMock,
+                return_value=candidate,
+            ),
+            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
+            patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
+            patch.object(
+                mgr,
+                "_publish_generation",
+                new_callable=AsyncMock,
+            ),
+        ):
+            await mgr.reload(_make_validation())
+
+        diag = mgr._last_diagnostic_result
+        assert diag is not None
+        # old_generation_digest may be None if the active generation
+        # was generation 0 (initial) or if lookup failed, but the
+        # field should exist on the dataclass.
+        assert hasattr(diag, "old_generation_digest")

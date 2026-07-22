@@ -379,6 +379,9 @@ class ReloadManager:
         self._counters = ReloadCounters()
         #: Phase 11: canonical diagnostic result for the most recent reload.
         self._last_diagnostic_result: ReloadDiagnosticResult | None = None
+        #: Phase 11: bounded history of recent reload diagnostic results.
+        self._reload_history: list[ReloadDiagnosticResult] = []
+        self._reload_history_max: int = 50
 
     @property
     def operation_state(self) -> ReloadOperationState | None:
@@ -519,6 +522,31 @@ class ReloadManager:
             result["active_transaction"] = self._current_transaction.snapshot()
         else:
             result["active_transaction"] = None
+        # Phase 11: bounded reload history (most recent first).
+        result["reload_history"] = [
+            {
+                "request_id": d.request_id,
+                "category": d.category.value,
+                "terminal_stage": d.terminal_stage.value,
+                "started_at": d.started_at,
+                "completed_at": d.completed_at,
+                "duration_s": d.duration_s,
+                "old_generation_id": d.old_generation_id,
+                "candidate_generation_id": d.candidate_generation_id,
+                "active_generation_id": d.active_generation_id,
+                "changed_sections": d.changed_sections,
+                "ignored_sections": d.ignored_sections,
+                "restart_required_sections": d.restart_required_sections,
+                "semantic_noop": d.semantic_noop,
+                "publication_occurred": d.publication_occurred,
+                "retirement_pending": d.retirement.retirement_pending,
+                "error_code": d.error_code,
+                "error_class": d.error_class,
+                "message": d.message,
+                "warning_count": len(d.warning_messages),
+            }
+            for d in reversed(self._reload_history)
+        ]
         return result
 
     # -- public entry point ------------------------------------------------
@@ -722,6 +750,7 @@ class ReloadManager:
                     is_restart_required=True,
                 )
                 self._last_diagnostic_result = diag
+                await self._record_terminal_event(diag)
                 return wire_result
 
             # Stage 4: Semantic no-op
@@ -766,6 +795,7 @@ class ReloadManager:
                     is_noop=True,
                 )
                 self._last_diagnostic_result = diag
+                await self._record_terminal_event(diag)
                 return wire_result
 
             # All changes are IGNORED (no LIVE changes) — success with explanation
@@ -811,6 +841,7 @@ class ReloadManager:
                     is_ignored_only=True,
                 )
                 self._last_diagnostic_result = diag
+                await self._record_terminal_event(diag)
                 return wire_result
 
             changed_sections = tuple(sorted({c.section for c in diff.changes}))
@@ -1002,6 +1033,7 @@ class ReloadManager:
                 process_transitions_applied=True,
             )
             self._last_diagnostic_result = diagnostic
+            await self._record_terminal_event(diagnostic)
             await self._safe_record_event(
                 "reload_activated",
                 generation_id=generation_id,
@@ -1086,6 +1118,7 @@ class ReloadManager:
                 candidate_cleanup_succeeded=candidate_diag is not None,
             )
             self._last_diagnostic_result = diagnostic
+            await self._record_terminal_event(diagnostic)
             await self._safe_record_event(
                 event_type,
                 generation_id=generation_id,
@@ -1171,6 +1204,7 @@ class ReloadManager:
                 publication_occurred=txn.is_committing,
             )
             self._last_diagnostic_result = diagnostic
+            await self._record_terminal_event(diagnostic)
             # Shield candidate abort so bounded cleanup completes
             # before the cancellation propagates.
             if candidate is not None and not txn.is_committing:
@@ -1205,6 +1239,9 @@ class ReloadManager:
                 else ReloadOperationStage.IDLE
             )
             logger.exception("Reload failed at stage %s", error_stage)
+            # Phase 11: capture pre-abort transaction state for failure
+            # classification before mark_aborting() transitions to ABORTING.
+            pre_abort_txn_state = txn.state
             # Phase 11: update counters.
             self._counters = ReloadCounters(
                 total_requests=self._counters.total_requests,
@@ -1332,6 +1369,38 @@ class ReloadManager:
             except ValueError:
                 terminal_stage = stage_from_error_class(error_class_name)
 
+            # Phase 11: detect granular failure type for precise category.
+            is_pub_failed = False
+            is_pt_prep_failed = False
+            is_pt_apply_failed = False
+            is_persist_commit_failed = False
+            if pre_abort_txn_state == TransactionState.RUNTIME_PUBLISHED:
+                # Publication succeeded; failure is in a post-publication step.
+                if error_class_name == "ReloadCommitError":
+                    is_pub_failed = True
+                else:
+                    is_pt_apply_failed = True
+            elif (
+                pre_abort_txn_state == TransactionState.COMMIT_STARTED
+                and error_stage == ReloadOperationStage.COMMIT
+            ):
+                # Failure at commit stage during publication.
+                if error_class_name == "ReloadCommitError":
+                    is_pub_failed = True
+                elif error_class_name == "ReloadReconciliationError":
+                    is_persist_commit_failed = True
+                else:
+                    is_pub_failed = True
+            elif (
+                pre_abort_txn_state in (TransactionState.PERSISTENCE_COMMITTED,)
+                and error_stage == ReloadOperationStage.COMMIT
+            ):
+                # Failure at commit stage after persistence.
+                if error_class_name == "ReloadReconciliationError":
+                    is_persist_commit_failed = True
+                else:
+                    is_persist_commit_failed = True
+
             diagnostic, wire_result = self._finalize_reload(
                 request_id=txn.request_id,
                 started_at=started_at,
@@ -1348,6 +1417,10 @@ class ReloadManager:
                 error=exc,
                 error_class=error_class_name,
                 is_compensation_failed=not compensation_ok and compensation_attempted,
+                is_publication_failed=is_pub_failed,
+                is_process_transition_prepare_failed=is_pt_prep_failed,
+                is_process_transition_apply_failed=is_pt_apply_failed,
+                is_persistence_commit_failed=is_persist_commit_failed,
                 publication_occurred=txn.is_committing,
                 persistence_committed=ok,
                 process_transitions_applied=ok,
@@ -1357,6 +1430,7 @@ class ReloadManager:
                 candidate_cleanup_succeeded=candidate_cleanup_succeeded,
             )
             self._last_diagnostic_result = diagnostic
+            await self._record_terminal_event(diagnostic)
 
             event_type = "reload_preparation_failure"
             if error_stage == ReloadOperationStage.RECONCILIATION:
@@ -1472,6 +1546,10 @@ class ReloadManager:
         is_cancelled: bool = False,
         is_shutdown: bool = False,
         is_compensation_failed: bool = False,
+        is_publication_failed: bool = False,
+        is_process_transition_prepare_failed: bool = False,
+        is_process_transition_apply_failed: bool = False,
+        is_persistence_commit_failed: bool = False,
         publication_occurred: bool = False,
         persistence_committed: bool = False,
         process_transitions_applied: bool = False,
@@ -1502,6 +1580,10 @@ class ReloadManager:
             is_cancelled=is_cancelled,
             is_shutdown=is_shutdown,
             is_compensation_failed=is_compensation_failed,
+            is_publication_failed=is_publication_failed,
+            is_process_transition_prepare_failed=is_process_transition_prepare_failed,
+            is_process_transition_apply_failed=is_process_transition_apply_failed,
+            is_persistence_commit_failed=is_persistence_commit_failed,
             error_class=error_class,
         )
 
@@ -1511,7 +1593,9 @@ class ReloadManager:
             old_generation_id=txn.old_generation_id,
         )
 
-        # Active generation snapshot.
+        # Active generation snapshot and old generation digest.
+        old_generation_digest: str | None = None
+        active_snap = None
         try:
             active_snap = self._runtime_manager.active_snapshot()
             active_generation_id = active_snap.generation_id
@@ -1519,6 +1603,26 @@ class ReloadManager:
         except Exception:
             active_generation_id = None
             active_generation_digest = None
+
+        # Look up old generation digest from the active snapshot
+        # or retiring generations when we have an old generation ID.
+        if txn.old_generation_id is not None:
+            try:
+                diagnostics = self._runtime_manager.diagnostics()
+                if (
+                    active_snap is not None
+                    and active_snap.generation_id == txn.old_generation_id
+                ):
+                    old_generation_digest = active_snap.config_digest
+                else:
+                    for retiring_diag in diagnostics.retiring:
+                        if retiring_diag.generation_id == txn.old_generation_id:
+                            # Only prefix available from diagnostics; use
+                            # None to avoid misleading partial digests.
+                            old_generation_digest = None
+                            break
+            except Exception:
+                old_generation_digest = None
 
         # Build warning messages (bounded).
         warning_messages = tuple(
@@ -1571,7 +1675,7 @@ class ReloadManager:
             completed_at=completed_at,
             duration_s=duration_s,
             old_generation_id=txn.old_generation_id,
-            old_generation_digest=None,
+            old_generation_digest=old_generation_digest,
             candidate_generation_id=generation_id,
             candidate_generation_digest=digest_prefix,
             active_generation_id=active_generation_id,
@@ -1649,6 +1753,11 @@ class ReloadManager:
         )
         self._last_reload_completed_at = completed_at
 
+        # Phase 11: append to bounded reload history.
+        self._reload_history.append(diagnostic)
+        if len(self._reload_history) > self._reload_history_max:
+            self._reload_history = self._reload_history[-self._reload_history_max :]
+
         return diagnostic, wire_result
 
     async def _record_event(
@@ -1701,6 +1810,25 @@ class ReloadManager:
             logger.debug(
                 "Event recording failed for %s (non-fatal)", event_type, exc_info=True
             )
+
+    async def _record_terminal_event(
+        self,
+        diagnostic: ReloadDiagnosticResult,
+    ) -> None:
+        """Record a terminal operational event for the given diagnostic.
+
+        Called after every admitted reload reaches its finalizer.
+        Best-effort: failures are swallowed so they never break reload.
+        """
+        event_type = f"reload_terminal_{diagnostic.category.value}"
+        await self._safe_record_event(
+            event_type,
+            generation_id=diagnostic.candidate_generation_id,
+            digest_prefix=diagnostic.candidate_generation_digest or "",
+            changed_sections=diagnostic.changed_sections,
+        )
+        # Update the diagnostic result to reflect event was recorded.
+        object.__setattr__(diagnostic, "operational_event_recorded", True)
 
     # -- step implementations ----------------------------------------------
 

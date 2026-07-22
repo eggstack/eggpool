@@ -5986,6 +5986,114 @@ def _render_routing_guardrails_panel(routing: dict[str, Any]) -> str:
     return routing_guardrails_panel
 
 
+def _render_reload_diagnostics(reload_state: dict[str, Any]) -> str:
+    """Render the reload diagnostics panel for the runtime page.
+
+    Shows the last reload result, current transaction stage, precise
+    counters, and retirement status derived from the runtime manager.
+    """
+    if not reload_state:
+        return ""
+
+    last_diag = _as_dict(reload_state.get("last_diagnostic_result"))
+    counters = _as_dict(reload_state.get("counters"))
+    op_state = _as_dict(reload_state.get("operation_state"))
+
+    # No data to show.
+    if not last_diag and not counters and not op_state:
+        return ""
+
+    # Last reload result cards.
+    result_cards: list[str] = []
+    if last_diag:
+        category = str(last_diag.get("category", "—"))
+        terminal_stage = str(last_diag.get("terminal_stage", "—"))
+        duration_s = last_diag.get("duration_s")
+        duration_str = (
+            f"{float(duration_s):.3f}s" if isinstance(duration_s, (int, float)) else "—"
+        )
+        message = str(last_diag.get("message", "—"))
+        active_gen = last_diag.get("active_generation_id")
+        active_gen_str = str(active_gen) if active_gen is not None else "—"
+        retirement_pending = last_diag.get("retirement_pending", False)
+
+        result_cards = [
+            _render_metric_card(
+                title="Last reload",
+                metric=escape(category.replace("_", " ").title()),
+                sub=f"stage {escape(terminal_stage)} · {escape(duration_str)}",
+            ),
+            _render_metric_card(
+                title="Active generation",
+                metric=escape(active_gen_str),
+                sub=f"retirement {'pending' if retirement_pending else 'none'}",
+                warning=retirement_pending,
+            ),
+        ]
+
+        # Show error if present.
+        error_class = last_diag.get("error_class")
+        if error_class:
+            result_cards.append(
+                _render_metric_card(
+                    title="Last reload error",
+                    metric=escape(str(error_class)),
+                    sub=escape(truncate(message, 80)),
+                    warning=True,
+                )
+            )
+
+    # Counters cards.
+    counter_cards: list[str] = []
+    if counters:
+        committed = int(counters.get("committed_reloads", 0))
+        noop = int(counters.get("noop_outcomes", 0))
+        ignored = int(counters.get("ignored_only_outcomes", 0))
+        busy = int(counters.get("busy_rejections", 0))
+        prepare_f = int(counters.get("prepare_failures", 0))
+        commit_f = int(counters.get("commit_failures", 0))
+        cancel_f = int(counters.get("cancellations", 0))
+
+        counter_cards = [
+            _render_metric_card(
+                title="Reload outcomes",
+                metric=f"{committed:,}",
+                sub=(f"{noop:,} noop · {ignored:,} ignored · {busy:,} busy"),
+            ),
+            _render_metric_card(
+                title="Reload failures",
+                metric=format_int(prepare_f + commit_f),
+                sub=(
+                    f"{prepare_f:,} prepare · {commit_f:,} commit · "
+                    f"{cancel_f:,} cancelled"
+                ),
+                warning=(prepare_f + commit_f) > 0,
+            ),
+        ]
+
+    # Current transaction stage.
+    op_cards: list[str] = []
+    if op_state:
+        stage = str(op_state.get("stage", "—"))
+        op_cards = [
+            _render_metric_card(
+                title="Transaction stage",
+                metric=escape(stage),
+                sub="current operation",
+            )
+        ]
+
+    all_cards = result_cards + counter_cards + op_cards
+    if not all_cards:
+        return ""
+
+    return f"""
+<section class="cards">
+  {"".join(all_cards)}
+</section>
+"""
+
+
 def render_runtime(
     snapshot: dict[str, Any],
     theme_css: str = "",
@@ -6010,6 +6118,7 @@ def render_runtime(
     dispatch = _as_dict(snapshot.get("dispatch_overhead"))
     dispatch_spans_payload = _as_dict(snapshot.get("dispatch_spans"))
     dispatch_spans: list[dict[str, Any]] = dispatch_spans_payload.get("spans") or []
+    reload_state = _as_dict(snapshot.get("reload_state"))
 
     # Transcoding stats
     tc_total: int = int(transcoding_stats.get("total", 0)) if transcoding_stats else 0
@@ -6628,6 +6737,8 @@ def render_runtime(
 {tc_card}
 
 {dispatch_spans_panel}
+
+{_render_reload_diagnostics(reload_state)}
 
 <section class="panel">
   <h3>Health states</h3>
