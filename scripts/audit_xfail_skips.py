@@ -33,7 +33,7 @@ ALLOWLIST: list[tuple[str, int | None, str]] = [
     ),
     (
         "tests/integration/test_rehash_d3_operator_workflow.py",
-        281,
+        283,
         "concurrent rehash serialization — same rationale as above",
     ),
     # --- existing unconditional skips (known, documented) ---
