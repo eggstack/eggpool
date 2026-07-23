@@ -253,7 +253,7 @@ uv run pytest \
     tests/unit/test_process_transition_plan.py \
     tests/unit/test_reload_manager.py \
     tests/unit/test_reload_diagnostics_matrix.py \
-    tests/unit/test_db_connection.py \
+    tests/unit/test_db.py \
     tests/integration/reload/test_pending_swap_visibility.py \
     tests/integration/reload/test_sqlite_commit_failure.py \
     tests/integration/reload/test_reload_fault_matrix.py \

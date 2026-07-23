@@ -1,7 +1,7 @@
 # Reload Atomicity Final Corrective Pass
 
 Date: 2026-07-23
-Status: implementation handoff
+Status: completed
 Depends on:
 
 - `plans/015-reload-atomicity-final-closure.md`
@@ -1029,7 +1029,7 @@ Likely test files:
 - `tests/unit/test_process_transition_plan.py`
 - `tests/unit/test_reload_manager.py`
 - `tests/unit/test_reload_diagnostics_matrix.py`
-- `tests/unit/test_db_connection.py`
+- `tests/unit/test_db.py`
 - `tests/integration/reload/test_pending_swap_visibility.py`
 - `tests/integration/reload/test_sqlite_commit_failure.py`
 - `tests/integration/reload/test_reload_fault_matrix.py`
@@ -1127,7 +1127,7 @@ uv run pytest \
   tests/unit/test_process_transition_plan.py \
   tests/unit/test_reload_manager.py \
   tests/unit/test_reload_diagnostics_matrix.py \
-  tests/unit/test_db_connection.py \
+  tests/unit/test_db.py \
   tests/integration/reload/test_pending_swap_visibility.py \
   tests/integration/reload/test_sqlite_commit_failure.py \
   tests/integration/reload/test_reload_fault_matrix.py \
