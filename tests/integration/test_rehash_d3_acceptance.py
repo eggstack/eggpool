@@ -970,15 +970,6 @@ async def test_d3_mixed_live_plus_restart_rejected_atomically(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Subprocess-based concurrent rehashes serialize on fast CI "
-        "runners without reliably hitting the admission guard.  The "
-        "single-process test_reload_manager.py proves the busy-reject "
-        "code path deterministically."
-    ),
-    strict=False,
-)
 @pytest.mark.asyncio()
 async def test_d3_concurrent_reload_burst_rejects_busy(tmp_path: Any) -> None:
     """Burst of concurrent rehashes deterministically produces a busy reject.

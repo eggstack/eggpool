@@ -313,9 +313,8 @@ async def _drive_publish_and_capture_slot(
 ) -> tuple[ReloadResult, list[_GenerationSlot]]:
     """Drive ReloadManager.reload to publication; capture the retired slot.
 
-    Patches ``mgr._publish_generation`` to actually invoke
-    ``rm.install_candidate`` so the slot swap and retirement actually
-    happen.  The captured list contains the original-active slot that
+    Uses the staged-swap protocol to actually invoke the slot swap and
+    retirement.  The captured list contains the original-active slot that
     began retiring as a side-effect of publication.
     """
     baseline = _make_real_config()
@@ -323,17 +322,11 @@ async def _drive_publish_and_capture_slot(
 
     captured: list[_GenerationSlot] = []
 
-    async def _real_publish(candidate: CandidateGeneration, diff: Any) -> None:
-        active = rm.active_snapshot()
-        # Capture the slot that is about to be retired by the swap.
+    # Capture the old slot before the swap happens.
+    async def _capture_old_slot() -> None:
         current = rm._active  # type: ignore[attr-defined]
         if current is not None:
             captured.append(current)
-        await rm.install_candidate(
-            candidate.generation,
-            drain_timeout_s=drain_timeout_s,
-            expected_active_generation_id=active.generation_id,
-        )
 
     diff = MagicMock()
     diff.changes = (_make_change(),)
@@ -355,9 +348,29 @@ async def _drive_publish_and_capture_slot(
         patch.object(mgr, "_reconcile_persistence", new_callable=AsyncMock),
         patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
         patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
-        patch.object(mgr, "_publish_generation", _real_publish),
+        patch.object(
+            mgr,
+            "_apply_process_transitions",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "eggpool.control.reload_manager.preflight_all_transitions",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
     ):
-        result = await mgr.reload(_make_validation())
+        # Wrap prepare_candidate_swap to capture the old slot.
+        original_prepare = rm.prepare_candidate_swap
+
+        async def _prepare_and_capture(*args: Any, **kwargs: Any) -> Any:
+            await _capture_old_slot()
+            return await original_prepare(*args, **kwargs)
+
+        rm.prepare_candidate_swap = _prepare_and_capture  # type: ignore[assignment]
+        try:
+            result = await mgr.reload(_make_validation())
+        finally:
+            rm.prepare_candidate_swap = original_prepare  # type: ignore[assignment]
     return result, captured
 
 

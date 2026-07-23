@@ -161,12 +161,12 @@ def _make_change() -> MagicMock:
 
 class TestProcessTransitionApplyFailure:
     @pytest.mark.asyncio
-    async def test_process_transition_failure_compensates(
+    async def test_process_transition_failure_rolls_back(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """After publication, a process-transition failure must be
-        compensated: the new generation is accepted and process
-        transitions are retried."""
+        """Inside the db.transaction(), a process-transition failure must
+        roll back the entire transaction: persistence, runtime staging,
+        and process transitions all revert to the pre-reload state."""
         rm = RuntimeManager()
         proc = _make_process()
         mgr = ReloadManager(rm, proc)
@@ -200,23 +200,8 @@ class TestProcessTransitionApplyFailure:
 
         monkeypatch.setattr(mgr, "_record_event", AsyncMock())
 
-        call_count = {"n": 0}
-
         async def _apply_transitions_side_effect(plan: Any) -> None:
-            call_count["n"] += 1
-            if call_count["n"] == 1:
-                # First call (from reload pipeline) fails
-                raise RuntimeError("process transition apply failed")
-            # Second call (from compensation) succeeds
-
-        async def _publish_and_install(c: Any, d: Any) -> None:
-            """Actually install the candidate so the generation advances."""
-            gen = c._built_generation
-            await rm.install_candidate(
-                gen,
-                drain_timeout_s=300.0,
-                expected_active_generation_id=rm.active_snapshot().generation_id,
-            )
+            raise RuntimeError("process transition apply failed")
 
         with (
             patch.object(
@@ -236,22 +221,20 @@ class TestProcessTransitionApplyFailure:
                 new_callable=AsyncMock,
                 side_effect=_apply_transitions_side_effect,
             ),
-            patch.object(
-                mgr,
-                "_publish_generation",
+            patch(
+                "eggpool.control.reload_manager.preflight_all_transitions",
                 new_callable=AsyncMock,
-                side_effect=_publish_and_install,
+                return_value=[],
             ),
             patch.object(rm, "begin_retirement", new_callable=AsyncMock()),
         ):
             result = await mgr.reload(validation)
 
-        # Publication succeeded, so the new generation is active.
-        assert rm.active_snapshot().generation_id == 5
-        # Compensation retried the process transitions.
-        assert call_count["n"] == 2
-        # Result is OK because compensation succeeded.
-        assert result.ok is True
+        # Process transition failure rolls back everything — generation
+        # stays at the pre-reload state.
+        assert rm.active_snapshot().generation_id == 0
+        # Result is a failure.
+        assert result.ok is False
 
     @pytest.mark.asyncio
     async def test_process_transition_compensation_failure(
@@ -295,14 +278,6 @@ class TestProcessTransitionApplyFailure:
         async def _always_fail(plan: Any) -> None:
             raise RuntimeError("process transition always fails")
 
-        async def _publish_and_install(c: Any, d: Any) -> None:
-            gen = c._built_generation
-            await rm.install_candidate(
-                gen,
-                drain_timeout_s=300.0,
-                expected_active_generation_id=rm.active_snapshot().generation_id,
-            )
-
         with (
             patch.object(
                 mgr, "_compute_reload_diff", new_callable=AsyncMock, return_value=diff
@@ -321,19 +296,19 @@ class TestProcessTransitionApplyFailure:
                 new_callable=AsyncMock,
                 side_effect=_always_fail,
             ),
-            patch.object(
-                mgr,
-                "_publish_generation",
+            patch(
+                "eggpool.control.reload_manager.preflight_all_transitions",
                 new_callable=AsyncMock,
-                side_effect=_publish_and_install,
+                return_value=[],
             ),
             patch.object(rm, "begin_retirement", new_callable=AsyncMock()),
         ):
             result = await mgr.reload(validation)
 
-        # Publication succeeded, so the new generation is active.
-        assert rm.active_snapshot().generation_id == 5
-        # But compensation failed.
+        # Process transition failure rolls back everything — generation
+        # stays at the pre-reload state.
+        assert rm.active_snapshot().generation_id == 0
+        # Compensation failed.
         assert result.ok is False
         assert "Reload compensated" not in result.message
 

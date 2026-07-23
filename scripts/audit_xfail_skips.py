@@ -26,20 +26,15 @@ ALLOWLIST: list[tuple[str, int | None, str]] = [
     ("tests/live/test_model_info_openrouter_live.py", 31, "live gate skipif"),
     # --- existing non-strict xfails (known, documented) ---
     (
-        "tests/integration/test_rehash_d3_acceptance.py",
-        973,
-        "concurrent rehash serialization — subprocess-based test cannot "
-        "reliably hit the admission guard; single-process test proves the path",
-    ),
-    (
         "tests/integration/test_rehash_d3_operator_workflow.py",
         283,
-        "concurrent rehash serialization — same rationale as above",
+        "concurrent rehash serialization — subprocess-based test cannot "
+        "reliably hit the admission guard; single-process test proves the path",
     ),
     # --- existing unconditional skips (known, documented) ---
     (
         "tests/integration/test_rehash_d3_acceptance.py",
-        1076,
+        1067,
         "drain timeout exceeds CI budget — covered by scenario 9 soft-drain test",
     ),
 ]

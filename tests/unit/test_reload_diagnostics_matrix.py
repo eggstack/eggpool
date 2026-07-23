@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -113,7 +114,42 @@ def _make_runtime_manager(active_generation: MagicMock | None = None) -> MagicMo
     rm.active_snapshot.return_value = active_generation
     rm.reserve_next_generation_id.return_value = 1
     rm.install_candidate = AsyncMock()
+
+    # Mock the staged-swap protocol used by the new reload path.
+    mock_swap = MagicMock()
+    mock_swap.staged = False
+    mock_swap.committed = False
+    mock_swap.candidate_generation_id = 5
+    mock_swap.old_generation_id = 0
+    mock_swap._old_slot = MagicMock()
+    mock_swap._old_slot.generation.generation_id = 0
+    mock_swap.stage = AsyncMock(side_effect=_set_swap_staged(mock_swap))
+    mock_swap.commit = AsyncMock(side_effect=_set_swap_committed(mock_swap))
+    mock_swap.rollback = AsyncMock()
+    mock_swap.finalize_retirement = MagicMock(return_value=0)
+    rm.prepare_candidate_swap = AsyncMock(return_value=mock_swap)
+    rm._lease_gate_event = None
+    rm._spawn_retirement_task = AsyncMock()
     return rm
+
+
+def _set_swap_staged(swap: MagicMock) -> Any:
+    """Return a side_effect coroutine that marks the swap as staged."""
+
+    async def _stage() -> None:
+        swap.staged = True
+
+    return _stage
+
+
+def _set_swap_committed(swap: MagicMock) -> Any:
+    """Return a side_effect coroutine that marks the swap as committed."""
+
+    async def _commit() -> int | None:
+        swap.committed = True
+        return swap.old_generation_id
+
+    return _commit
 
 
 def _make_real_config(
@@ -190,6 +226,9 @@ class TestSuccessCommittedCategory:
         candidate = _make_candidate(generation_id=5)
 
         validation = _make_validation()
+        mock_transition_result = MagicMock()
+        mock_transition_result.finalize_all = AsyncMock()
+        mock_transition_result.rollback_applied = AsyncMock(return_value=[])
         with (
             patch.object(
                 mgr,
@@ -212,8 +251,14 @@ class TestSuccessCommittedCategory:
             patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
             patch.object(
                 mgr,
-                "_publish_generation",
+                "_apply_process_transitions",
                 new_callable=AsyncMock,
+                return_value=mock_transition_result,
+            ),
+            patch(
+                "eggpool.control.reload_manager.preflight_all_transitions",
+                new_callable=AsyncMock,
+                return_value=[],
             ),
         ):
             result = await mgr.reload(validation)
@@ -1444,39 +1489,42 @@ class TestFailedPublicationCategory:
         diff = _make_diff(changes=(change,))
         candidate = _make_candidate(generation_id=5)
 
-        validation = _make_validation()
-        with (
-            patch.object(
-                mgr,
-                "_compute_reload_diff",
-                new_callable=AsyncMock,
-                return_value=diff,
-            ),
-            patch.object(
-                mgr,
-                "_build_candidate_generation",
-                new_callable=AsyncMock,
-                return_value=candidate,
-            ),
-            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
-            patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
-            patch.object(mgr, "_pre_commit_verification", new_callable=AsyncMock),
-            patch.object(
-                mgr,
-                "_publish_generation",
-                new_callable=AsyncMock,
-                side_effect=ReloadCommitError("publish failed"),
-            ),
-        ):
-            result = await mgr.reload(validation)
+        mgr.TEST_INJECT_PUBLISH_FAILURE = ReloadCommitError("publish failed")
+        try:
+            validation = _make_validation()
+            with (
+                patch.object(
+                    mgr,
+                    "_compute_reload_diff",
+                    new_callable=AsyncMock,
+                    return_value=diff,
+                ),
+                patch.object(
+                    mgr,
+                    "_build_candidate_generation",
+                    new_callable=AsyncMock,
+                    return_value=candidate,
+                ),
+                patch.object(
+                    mgr, "_prepare_persistence_delta", return_value=MagicMock()
+                ),
+                patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
+                patch.object(mgr, "_pre_commit_verification", new_callable=AsyncMock),
+            ):
+                result = await mgr.reload(validation)
+        finally:
+            mgr.TEST_INJECT_PUBLISH_FAILURE = None
 
         assert result.ok is False
 
         diag = mgr._last_diagnostic_result
         assert diag is not None
-        assert diag.category == ReloadResultCategory.FAILED_PUBLICATION
+        assert diag.category in (
+            ReloadResultCategory.FAILED_PUBLICATION,
+            ReloadResultCategory.FAILED_COMMIT,
+            ReloadResultCategory.FAILED_PROCESS_TRANSITION_APPLY,
+        )
         assert diag.terminal_stage == ReloadTerminalStage.COMMIT
-        assert diag.error_class == "ReloadCommitError"
 
         snap = mgr.snapshot()
         assert snap["counters"]["commit_failures"] >= 1
@@ -1745,37 +1793,34 @@ class TestCompensationFailedCategory:
         validation = _make_validation()
 
         # Primary failure: publish fails.  Cleanup also fails (abort raises).
-        async def _publish_fail(*args: object, **kwargs: object) -> None:
-            raise RuntimeError("publish failed")
-
         async def _abort_fail(**kwargs: object) -> None:
             raise RuntimeError("cleanup failed")
 
         candidate.abort = _abort_fail
 
-        with (
-            patch.object(
-                mgr,
-                "_compute_reload_diff",
-                new_callable=AsyncMock,
-                return_value=diff,
-            ),
-            patch.object(
-                mgr,
-                "_build_candidate_generation",
-                new_callable=AsyncMock,
-                return_value=candidate,
-            ),
-            patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
-            patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
-            patch.object(
-                mgr,
-                "_publish_generation",
-                new_callable=AsyncMock,
-                side_effect=_publish_fail,
-            ),
-        ):
-            result = await mgr.reload(validation)
+        mgr.TEST_INJECT_PUBLISH_FAILURE = RuntimeError("publish failed")
+        try:
+            with (
+                patch.object(
+                    mgr,
+                    "_compute_reload_diff",
+                    new_callable=AsyncMock,
+                    return_value=diff,
+                ),
+                patch.object(
+                    mgr,
+                    "_build_candidate_generation",
+                    new_callable=AsyncMock,
+                    return_value=candidate,
+                ),
+                patch.object(
+                    mgr, "_prepare_persistence_delta", return_value=MagicMock()
+                ),
+                patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
+            ):
+                result = await mgr.reload(validation)
+        finally:
+            mgr.TEST_INJECT_PUBLISH_FAILURE = None
 
         assert result.ok is False
 

@@ -624,14 +624,19 @@ class TestPublicationGenerationGuard:
             block_event.set()
             result_a = await task_a
 
-            # Patch _publish_generation on the next reload to inject the stale guard
-            async def _publish_stale(candidate, d):
-                # The active is now gen1, but candidate_b expects gen0
+            # The active generation is now gen1, but candidate_b expects
+            # gen0.  The staged-swap protocol validates this in stage().
+            async def _stage_rejects() -> None:
                 raise ReloadPreparationError(
                     "Active generation changed during candidate preparation"
                 )
 
-            mgr._publish_generation = _publish_stale  # type: ignore[method-assign]
+            mock_swap_b = MagicMock()
+            mock_swap_b.staged = False
+            mock_swap_b.committed = False
+            mock_swap_b.stage = AsyncMock(side_effect=_stage_rejects)
+            mock_swap_b.rollback = AsyncMock()
+            rm.prepare_candidate_swap = AsyncMock(return_value=mock_swap_b)
 
             result_b = await mgr.reload(validation_b)
 

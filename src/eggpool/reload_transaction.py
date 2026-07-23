@@ -94,7 +94,10 @@ class TransactionState(enum.Enum):
     CANDIDATE_PREPARED = "candidate_prepared"
     PERSISTENCE_PREPARED = "persistence_prepared"
     PROCESS_TRANSITIONS_PREPARED = "process_transitions_prepared"
+    PROCESS_TRANSITIONS_PREFLIGHTED = "process_transitions_preflighted"
     COMMIT_STARTED = "commit_started"
+    RUNTIME_STAGED = "runtime_staged"
+    RUNTIME_SWAP_COMMITTED = "runtime_swap_committed"
     RUNTIME_PUBLISHED = "runtime_published"
     PROCESS_TRANSITIONS_APPLIED = "process_transitions_applied"
     PERSISTENCE_COMMITTED = "persistence_committed"
@@ -127,8 +130,28 @@ _VALID_TRANSITIONS: dict[TransactionState, frozenset[TransactionState]] = {
     TransactionState.PROCESS_TRANSITIONS_PREPARED: frozenset(
         {TransactionState.COMMIT_STARTED, TransactionState.ABORTING}
     ),
+    TransactionState.PROCESS_TRANSITIONS_PREFLIGHTED: frozenset(
+        {TransactionState.COMMIT_STARTED, TransactionState.ABORTING}
+    ),
     TransactionState.COMMIT_STARTED: frozenset(
-        {TransactionState.RUNTIME_PUBLISHED, TransactionState.ABORTING}
+        {
+            TransactionState.PROCESS_TRANSITIONS_PREFLIGHTED,
+            TransactionState.RUNTIME_STAGED,
+            TransactionState.RUNTIME_PUBLISHED,
+            TransactionState.ABORTING,
+        }
+    ),
+    TransactionState.PROCESS_TRANSITIONS_PREFLIGHTED: frozenset(
+        {TransactionState.RUNTIME_STAGED, TransactionState.ABORTING}
+    ),
+    TransactionState.RUNTIME_STAGED: frozenset(
+        {TransactionState.RUNTIME_SWAP_COMMITTED, TransactionState.ABORTING}
+    ),
+    TransactionState.RUNTIME_SWAP_COMMITTED: frozenset(
+        {
+            TransactionState.PROCESS_TRANSITIONS_APPLIED,
+            TransactionState.ABORTING,
+        }
     ),
     TransactionState.RUNTIME_PUBLISHED: frozenset(
         {
@@ -684,6 +707,9 @@ class ReloadTransaction:
         # Commit-phase data
         self._commit_diagnostics = CommitDiagnostics()
         self._published_generation: RuntimeGeneration | None = None
+        self._preflighted_transitions: tuple[str, ...] = ()
+        self._staged_swap_generation_id: int | None = None
+        self._swap_old_generation_id: int | None = None
 
         # Explicit publication facts (C4) — tracked independently of
         # state-machine transitions so diagnostics derive from facts.
@@ -834,6 +860,17 @@ class ReloadTransaction:
         self._process_transition_plan = plan
         self._transition_to(TransactionState.PROCESS_TRANSITIONS_PREPARED)
 
+    def mark_process_transitions_preflighted(
+        self,
+        preflighted: list[str],
+    ) -> None:
+        """Transition: PROCESS_TRANSITIONS_PREPARED → PROCESS_TRANSITIONS_PREFLIGHTED.
+
+        Records the list of transitions that passed preflight validation.
+        """
+        self._preflighted_transitions = tuple(preflighted)
+        self._transition_to(TransactionState.PROCESS_TRANSITIONS_PREFLIGHTED)
+
     def mark_commit_started(
         self,
         old_generation_id: int,
@@ -846,6 +883,26 @@ class ReloadTransaction:
             old_generation_id=old_generation_id,
         )
         self._transition_to(TransactionState.COMMIT_STARTED)
+
+    def mark_runtime_staged(
+        self,
+        pending_swap: Any,
+    ) -> None:
+        """Transition: COMMIT_STARTED → RUNTIME_STAGED."""
+        self.publication_attempted = True
+        self._staged_swap_generation_id = getattr(
+            pending_swap, "candidate_generation_id", None
+        )
+        self._transition_to(TransactionState.RUNTIME_STAGED)
+
+    def mark_runtime_swap_committed(
+        self,
+        old_generation_id: int | None,
+    ) -> None:
+        """Transition: RUNTIME_STAGED → RUNTIME_SWAP_COMMITTED."""
+        self.publication_occurred = True
+        self._swap_old_generation_id = old_generation_id
+        self._transition_to(TransactionState.RUNTIME_SWAP_COMMITTED)
 
     def mark_runtime_published(
         self,
@@ -867,7 +924,7 @@ class ReloadTransaction:
         self._transition_to(TransactionState.RUNTIME_PUBLISHED)
 
     def mark_process_transitions_applied(self) -> None:
-        """Transition: RUNTIME_PUBLISHED → PROCESS_TRANSITIONS_APPLIED."""
+        """Mark process transitions applied (from SWAP_COMMITTED or PUBLISHED)."""
         self.process_transitions_applied = True
         self._transition_to(TransactionState.PROCESS_TRANSITIONS_APPLIED)
 
@@ -953,6 +1010,8 @@ class ReloadTransaction:
     def is_committing(self) -> bool:
         return self._state in (
             TransactionState.COMMIT_STARTED,
+            TransactionState.RUNTIME_STAGED,
+            TransactionState.RUNTIME_SWAP_COMMITTED,
             TransactionState.RUNTIME_PUBLISHED,
             TransactionState.PROCESS_TRANSITIONS_APPLIED,
             TransactionState.PERSISTENCE_COMMITTED,

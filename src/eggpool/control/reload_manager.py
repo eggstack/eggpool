@@ -74,6 +74,7 @@ if TYPE_CHECKING:
         RuntimeManager,
     )
 
+from eggpool.reload_transaction import preflight_all_transitions
 from eggpool.runtime_manager import RuntimeGenerationCandidate
 
 logger = logging.getLogger(__name__)
@@ -988,10 +989,11 @@ class ReloadManager:
             )
 
             # Stage 9: Commit (narrow commit guard)
-            # The lease gate is installed BEFORE the SQLite transaction
-            # so that no request can acquire the candidate generation
-            # until the database commit succeeds.  If the transaction
-            # rolls back, the gate is cleared in the finally block.
+            # The lease-gated staged-swap protocol ensures no request can
+            # acquire the candidate generation until the SQLite commit
+            # and process transitions succeed.  If the transaction rolls
+            # back, PendingGenerationSwap.rollback() restores the old
+            # slot and reopens admission.
             self._set_stage(
                 ReloadOperationStage.COMMIT,
                 started_at,
@@ -1008,34 +1010,50 @@ class ReloadManager:
                 digest_prefix=digest_prefix,
             )
 
-            # Install lease gate — acquire() callers will wait on this
-            # event until the commit is accepted or rolled back.
-            lease_gate_event = asyncio.Event()
-            self._runtime_manager._lease_gate_event = lease_gate_event  # pyright: ignore[reportPrivateUsage]
+            # 9a: Run transition preflights before the commit gate.
+            # Preflight must not mutate process state; it validates
+            # that each transition can be applied and rolled back.
+            preflighted = await preflight_all_transitions(process_transition_plan)
+            txn.mark_process_transitions_preflighted(preflighted)
+
+            # 9b: Create the pending swap — does not mutate any state yet.
+            published_gen = candidate._built_generation  # pyright: ignore[reportPrivateUsage]
+            assert published_gen is not None, "Generation must be built before publish"
+            pending_swap = await self._runtime_manager.prepare_candidate_swap(
+                published_gen,
+                drain_timeout_s=self._drain_timeout_s,
+                expected_active_generation_id=expected_gen_id,
+            )
             transition_result: TransitionApplyResult | None = None
             try:
-                # 9a: Apply persistence delta inside the outer SQLite
-                # transaction and publish candidate generation atomically.
-                # The outer db.transaction() ensures that if publication
-                # fails, the SQLite writes are rolled back — no split state.
+                # 9c: Enter SQLite transaction, apply persistence delta,
+                # stage the runtime swap (installs lease gate), then apply
+                # process transitions — all inside the same transaction so
+                # any failure rolls back everything atomically.
                 db = self._process.db
                 async with db.transaction():
                     await self._apply_persistence_delta(persistence_delta, nested=True)
 
-                    # 9b: Apply process transitions inside the transaction
+                    # Stage the swap — gates lease admission and creates
+                    # a non-accepting candidate slot.  The old slot remains
+                    # active but new acquire() calls block on the gate.
+                    await pending_swap.stage()
+                    txn.mark_runtime_staged(pending_swap)
+
+                    # Test seam: inject publish failure after staging
+                    # but before the transaction commits.
+                    if self.TEST_INJECT_PUBLISH_FAILURE is not None:
+                        raise self.TEST_INJECT_PUBLISH_FAILURE
+
+                    # 9d: Apply process transitions inside the transaction
                     # so they roll back atomically on failure.
                     transition_result = await self._apply_process_transitions(
                         process_transition_plan
                     )
-
-                    # 9c: Publish candidate generation atomically
-                    await self._publish_generation(candidate, diff)
-                # SQLite committed successfully — clear the gate.
-                published_gen = candidate._built_generation  # pyright: ignore[reportPrivateUsage]
-                assert published_gen is not None, (
-                    "Generation must be built before publish"
-                )
-                txn.mark_runtime_published(published_gen)
+                # SQLite committed successfully — commit the swap.
+                # This makes the candidate active and reopens admission.
+                old_gen_id = await pending_swap.commit()
+                txn.mark_runtime_swap_committed(old_gen_id)
 
                 # Observer: publish complete
                 await self._observer.on_publish_complete(
@@ -1043,19 +1061,35 @@ class ReloadManager:
                     digest_prefix=digest_prefix,
                 )
 
+                # 9e: Transfer candidate ownership and mirror app.state.
+                # These are post-commit housekeeping — not request-authoritative.
+                transfer_fn = getattr(candidate, "transfer_to_runtime_manager", None)
+                if transfer_fn is not None:
+                    transfer_fn()
+                if self._app is not None:
+                    from eggpool.app import (  # noqa: PLC0415
+                        mirror_generation_on_app_state,
+                    )
+
+                    mirror_generation_on_app_state(self._app, published_gen)
+
+                # 9f: Finalize process transitions — release captured
+                # old-state snapshots.  Failures are housekeeping only.
+                if transition_result is not None:  # pyright: ignore[reportUnnecessaryComparison]
+                    await transition_result.finalize_all()
+
                 txn.mark_process_transitions_applied()
-
-                # 9d: Mark persistence committed (SQLite already committed
-                # above when the db.transaction() context exited normally)
                 txn.mark_persistence_committed()
-
-                # 9e: Update observable state
                 txn.mark_observable_state_updated()
 
             except Exception:
-                # Rollback: clear the lease gate so requests resume on
-                # the old generation.  Process transitions inside the
-                # SQLite transaction are rolled back by the DB layer.
+                # Rollback: restore the old slot and clear the lease gate
+                # so requests resume on the old generation.  Process
+                # transitions inside the SQLite transaction are rolled
+                # back by the DB layer; any that applied before the
+                # failure are rolled back explicitly.
+                if pending_swap.staged and not pending_swap.committed:
+                    await pending_swap.rollback()
                 if transition_result is not None:
                     rollback_errors = await transition_result.rollback_applied()
                     if rollback_errors:
@@ -1065,12 +1099,10 @@ class ReloadManager:
                             rollback_errors,
                         )
                 raise
-            finally:
-                # Always clear the lease gate — on success it was already
-                # cleared by publish; on failure we must re-open admission.
-                self._runtime_manager._lease_gate_event = None  # pyright: ignore[reportPrivateUsage]
 
-            # Stage 10: Begin retirement (non-blocking)
+            # Stage 10: Schedule retirement of the old generation
+            # (non-blocking).  The retirement task runs in the background
+            # and drains existing leases before closing resources.
             self._set_stage(
                 ReloadOperationStage.RETIREMENT,
                 started_at,
@@ -1083,6 +1115,12 @@ class ReloadManager:
                 digest_prefix=digest_prefix,
                 old_generation_id=old_generation_id,
             )
+            # Spawn the retirement task for the old generation.
+            if old_gen_id is not None and pending_swap._old_slot is not None:  # pyright: ignore[reportPrivateUsage]
+                await self._runtime_manager._spawn_retirement_task(  # pyright: ignore[reportPrivateUsage]
+                    pending_swap._old_slot,  # pyright: ignore[reportPrivateUsage]
+                    self._drain_timeout_s,
+                )
             txn.mark_retirement_scheduled()
             txn.mark_completed()
 
@@ -1343,6 +1381,8 @@ class ReloadManager:
                 error=f"cancelled at {error_stage}",
             )
             if txn.state != TransactionState.COMPLETED:
+                if txn.state != TransactionState.ABORTING:
+                    txn.mark_aborting(RuntimeError("Reload cancelled"))
                 txn.mark_aborted()
             raise
         except Exception as exc:
@@ -1494,8 +1534,18 @@ class ReloadManager:
             is_pt_prep_failed = False
             is_pt_apply_failed = False
             is_persist_commit_failed = False
-            if pre_abort_txn_state == TransactionState.RUNTIME_PUBLISHED:
+            if pre_abort_txn_state in (
+                TransactionState.RUNTIME_PUBLISHED,
+                TransactionState.RUNTIME_SWAP_COMMITTED,
+            ):
                 # Publication succeeded; failure is in a post-publication step.
+                if error_class_name == "ReloadCommitError":
+                    is_pub_failed = True
+                else:
+                    is_pt_apply_failed = True
+            elif pre_abort_txn_state == TransactionState.RUNTIME_STAGED:
+                # Runtime staged but swap not committed; failure is in
+                # process transitions or the swap commit path.
                 if error_class_name == "ReloadCommitError":
                     is_pub_failed = True
                 else:

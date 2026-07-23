@@ -790,6 +790,11 @@ class PendingGenerationSwap:
         return self._staged
 
     @property
+    def committed(self) -> bool:
+        """Return True if commit() has been called."""
+        return self._committed
+
+    @property
     def candidate_generation_id(self) -> int | None:
         """Return the candidate generation ID, or None if not staged."""
         return self._candidate_generation.generation_id if self._staged else None
