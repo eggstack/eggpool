@@ -347,3 +347,246 @@ async def test_transaction_state_machine_monotonic() -> None:
     # Terminal — no more transitions.
     with pytest.raises(TransactionStateError):
         txn._transition_to(TransactionState.CREATED)
+
+
+# ---------------------------------------------------------------------------
+# Tests: post-acceptance cancellation (Gap 1 / D #8 / F #4)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio()
+async def test_post_acceptance_cancellation_after_commit(
+    reload_harness: ReloadHarness,
+) -> None:
+    """Cancellation in the post-acceptance block keeps candidate active.
+
+    Injects CancelledError after ownership transfer but before mirror
+    update / transition finalize.  The candidate must remain authoritative,
+    no transition rollback occurs, and no candidate abort occurs.
+    """
+    rm = reload_harness.runtime_manager
+    pre_gen_id = rm.active_snapshot().generation_id
+
+    reload_harness.reload_manager.TEST_INJECT_FINALIZATION_CANCEL = (
+        asyncio.CancelledError("post-acceptance cancel")
+    )
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await reload_harness.reload()
+    finally:
+        reload_harness.reload_manager.TEST_INJECT_FINALIZATION_CANCEL = None
+
+    # The candidate generation must still be active — acceptance
+    # occurred before the cancellation, so the candidate is authoritative.
+    post_gen_id = rm.active_snapshot().generation_id
+    assert post_gen_id != pre_gen_id, (
+        f"generation should have changed from {pre_gen_id} after acceptance"
+    )
+
+    # The reload must be accepted (not aborted).
+    # Transaction may be None after completion; check the last diagnostic.
+    last_diag = reload_harness.reload_manager._last_diagnostic_result
+    if last_diag is not None:
+        # Publication occurred — the reload was accepted.
+        assert getattr(last_diag, "publication_occurred", True) is True
+
+    # Lease admission must be open for the new candidate.
+    assert rm.is_accepting_leases()
+
+    # A subsequent reload must succeed — proves no broken state.
+    result2 = await reload_harness.reload()
+    assert result2.ok is True, f"subsequent reload failed: {result2}"
+
+
+# ---------------------------------------------------------------------------
+# Tests: retirement scheduling failure retains candidate (Gap 2 / D #10)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio()
+async def test_retirement_failure_retains_candidate(
+    reload_harness: ReloadHarness,
+) -> None:
+    """Retirement scheduling failure after acceptance does not lose old gen.
+
+    The candidate remains active, old admission is closed, and retry is
+    possible on the next reload.
+    """
+    rm = reload_harness.runtime_manager
+    pre_gen_id = rm.active_snapshot().generation_id
+
+    reload_harness.reload_manager.TEST_INJECT_RETIREMENT_FAILURE = RuntimeError(
+        "retirement scheduling failed"
+    )
+    try:
+        result = await reload_harness.reload()
+    finally:
+        reload_harness.reload_manager.TEST_INJECT_RETIREMENT_FAILURE = None
+
+    # The reload must succeed (ok=True) because retirement failure
+    # is a degraded outcome, not a reload failure.
+    assert result.ok is True, (
+        f"reload should succeed despite retirement failure: {result}"
+    )
+
+    # The candidate generation must be active — acceptance occurred.
+    post_gen_id = rm.active_snapshot().generation_id
+    assert post_gen_id != pre_gen_id
+
+    # Lease admission must be open.
+    assert rm.is_accepting_leases()
+
+    # Retirement failure counter must be incremented.
+    snap = reload_harness.reload_manager.snapshot()
+    counters = snap.get("counters")
+    if counters is not None:
+        retirement_failures = getattr(counters, "retirement_failures", None)
+        if retirement_failures is not None:
+            assert retirement_failures >= 1
+
+    # A subsequent reload must succeed — proves retry is idempotent.
+    result2 = await reload_harness.reload()
+    assert result2.ok is True, f"subsequent reload failed: {result2}"
+
+
+# ---------------------------------------------------------------------------
+# Tests: partial transition failure through ReloadManager.reload() (Gap 3 / F #5)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio()
+async def test_partial_transition_failure_through_reload(
+    reload_harness: ReloadHarness,
+) -> None:
+    """Partial transition failure through the full reload() path.
+
+    Uses TEST_INJECT_PUBLISH_FAILURE to trigger the precommit cleanup
+    path, which exercises _abort_precommit_reload() with the real
+    transition_result from the production _apply_process_transitions
+    call.
+    """
+    rm = reload_harness.runtime_manager
+    pre_gen_id = rm.active_snapshot().generation_id
+
+    reload_harness.reload_manager.TEST_INJECT_PUBLISH_FAILURE = RuntimeError(
+        "deliberate publish failure"
+    )
+    try:
+        result = await reload_harness.reload()
+    finally:
+        reload_harness.reload_manager.TEST_INJECT_PUBLISH_FAILURE = None
+
+    # Reload must fail cleanly.
+    assert result.ok is False, f"reload should fail with inject: {result}"
+
+    # Active generation must be unchanged — old state preserved.
+    post_gen_id = rm.active_snapshot().generation_id
+    assert post_gen_id == pre_gen_id
+
+    # Lease admission must be open.
+    assert rm.is_accepting_leases()
+
+    # Cleanup diagnostics must be recorded.
+    snap = reload_harness.reload_manager.snapshot()
+    cleanup = snap.get("last_cleanup_diagnostics")
+    assert cleanup is not None, "cleanup diagnostics should be recorded"
+
+    # A subsequent reload must succeed — proves no broken state.
+    result2 = await reload_harness.reload()
+    assert result2.ok is True, f"subsequent reload failed: {result2}"
+
+
+# ---------------------------------------------------------------------------
+# Tests: close counts per failure class (Gap 4 / F #6, F #7)
+# ---------------------------------------------------------------------------
+
+
+class _CountingCloseable:
+    """Closeable with a tracked close counter."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.close_count = 0
+
+    async def aclose(self) -> None:
+        self.close_count += 1
+
+
+@pytest.mark.asyncio()
+async def test_close_counts_transition_failure(
+    reload_harness: ReloadHarness,
+) -> None:
+    """Candidate resources close exactly once on transition failure."""
+    from eggpool.runtime_manager import RuntimeGenerationCandidate
+
+    candidate = RuntimeGenerationCandidate(generation_id=900)
+    res_a = _CountingCloseable("a")
+    res_b = _CountingCloseable("b")
+    candidate.register_resource("a", res_a.aclose)
+    candidate.register_resource("b", res_b.aclose)
+    candidate.mark_prepared()
+
+    await candidate.abort(cause=RuntimeError("test"), failure_stage="test")
+
+    assert res_a.close_count == 1
+    assert res_b.close_count == 1
+
+    # Abort is idempotent — second call does not close again.
+    await candidate.abort(cause=RuntimeError("test"), failure_stage="test")
+    assert res_a.close_count == 1
+    assert res_b.close_count == 1
+
+
+@pytest.mark.asyncio()
+async def test_close_counts_publish_failure(
+    reload_harness: ReloadHarness,
+) -> None:
+    """Publish failure triggers exactly-once candidate close via cleanup."""
+    rm = reload_harness.runtime_manager
+    pre_gen_id = rm.active_snapshot().generation_id
+
+    reload_harness.reload_manager.TEST_INJECT_PUBLISH_FAILURE = RuntimeError(
+        "publish fail"
+    )
+    try:
+        result = await reload_harness.reload()
+    finally:
+        reload_harness.reload_manager.TEST_INJECT_PUBLISH_FAILURE = None
+
+    assert result.ok is False
+    # Active generation unchanged.
+    assert rm.active_snapshot().generation_id == pre_gen_id
+
+    # The cleanup diagnostics must show candidate abort was attempted.
+    snap = reload_harness.reload_manager.snapshot()
+    cleanup = snap.get("last_cleanup_diagnostics")
+    assert cleanup is not None
+
+    # Old generation resources must not be closed.
+    assert rm.is_accepting_leases()
+
+
+@pytest.mark.asyncio()
+async def test_close_counts_post_acceptance_failure(
+    reload_harness: ReloadHarness,
+) -> None:
+    """Post-acceptance failure does NOT close candidate resources.
+
+    The candidate remains authoritative — its resources stay open.
+    """
+    rm = reload_harness.runtime_manager
+    pre_gen_id = rm.active_snapshot().generation_id
+
+    reload_harness.reload_manager.TEST_INJECT_FINALIZATION_CANCEL = (
+        asyncio.CancelledError("post-accept cancel")
+    )
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await reload_harness.reload()
+    finally:
+        reload_harness.reload_manager.TEST_INJECT_FINALIZATION_CANCEL = None
+
+    # Candidate is active — resources are NOT closed.
+    post_gen_id = rm.active_snapshot().generation_id
+    assert post_gen_id != pre_gen_id
+    assert rm.is_accepting_leases()

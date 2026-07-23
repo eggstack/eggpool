@@ -460,6 +460,14 @@ class ReloadManager:
         #: Test-only seam — when set to an exception instance,
         #: ``_publish_generation`` raises it at entry.
         self.TEST_INJECT_PUBLISH_FAILURE: Exception | None = None
+        #: Test-only seam — when set to an exception instance,
+        #: the post-acceptance finalization block raises it after
+        #: ownership transfer (for testing post-acceptance cancellation).
+        self.TEST_INJECT_FINALIZATION_CANCEL: BaseException | None = None
+        #: Test-only seam — when set to an exception instance,
+        #: the retirement scheduling section raises it (for testing
+        #: retirement failure after acceptance).
+        self.TEST_INJECT_RETIREMENT_FAILURE: Exception | None = None
         #: Last abort cleanup diagnostics from a failed reload.
         self._last_cleanup_diagnostics: CleanupDiagnostics | None = None
         #: Current transaction (Phase 6) — ``None`` when idle.
@@ -1178,6 +1186,11 @@ class ReloadManager:
                     transfer_fn()
                 finalization.candidate_ownership_transferred = True
 
+                # Test seam: inject post-acceptance cancellation
+                # (after ownership transfer, before mirror/finalize).
+                if self.TEST_INJECT_FINALIZATION_CANCEL is not None:
+                    raise self.TEST_INJECT_FINALIZATION_CANCEL
+
                 # 9f: Mirror app.state for backward compatibility.
                 if self._app is not None:
                     from eggpool.app import (  # noqa: PLC0415
@@ -1240,11 +1253,69 @@ class ReloadManager:
             # Plan 016 Workstream A: route retirement through the
             # public ``PendingGenerationSwap.finalize_retirement()`` API
             # instead of reaching through private slot fields.
-            old_gen_id = await pending_swap.finalize_retirement()
-            txn.mark_retirement_scheduled()
-            finalization.retirement_scheduled = True
-            txn.mark_completed()
-            finalization.transaction_completed = True
+            # Plan 017: retirement failure must not lose the old
+            # generation or leave the candidate in a broken state.
+            try:
+                # Test seam: inject retirement failure.
+                if self.TEST_INJECT_RETIREMENT_FAILURE is not None:
+                    raise self.TEST_INJECT_RETIREMENT_FAILURE
+                old_gen_id = await pending_swap.finalize_retirement()
+                txn.mark_retirement_scheduled()
+                finalization.retirement_scheduled = True
+                txn.mark_completed()
+                finalization.transaction_completed = True
+            except Exception as exc:
+                logger.warning(
+                    "Post-acceptance retirement scheduling failed for "
+                    "generation %d: %r",
+                    generation_id,
+                    exc,
+                    exc_info=True,
+                )
+                self._counters = ReloadCounters(
+                    total_requests=self._counters.total_requests,
+                    admitted_operations=self._counters.admitted_operations,
+                    busy_rejections=self._counters.busy_rejections,
+                    committed_reloads=self._counters.committed_reloads,
+                    noop_outcomes=self._counters.noop_outcomes,
+                    ignored_only_outcomes=self._counters.ignored_only_outcomes,
+                    validation_rejections=self._counters.validation_rejections,
+                    restart_required_rejections=self._counters.restart_required_rejections,
+                    prepare_failures=self._counters.prepare_failures,
+                    commit_failures=self._counters.commit_failures,
+                    cancellations=self._counters.cancellations,
+                    compensation_failures=self._counters.compensation_failures,
+                    retirement_failures=self._counters.retirement_failures + 1,
+                )
+                # The candidate is authoritative; old admission is
+                # closed.  Retirement is idempotent and retryable on
+                # the next reload or shutdown.
+                diagnostic, wire_result = self._finalize_reload(
+                    request_id=txn.request_id,
+                    started_at=started_at,
+                    txn=txn,
+                    txn_state=txn.state,
+                    ok=True,
+                    stage=ReloadTerminalStage.RETIREMENT,
+                    generation_id=generation_id,
+                    digest_prefix=digest_prefix,
+                    changed_sections=changed_sections,
+                    ignored_sections=(),
+                    restart_required_sections=(),
+                    warnings=warnings,
+                    publication_occurred=True,
+                    persistence_committed=True,
+                    process_transitions_applied=True,
+                )
+                self._last_diagnostic_result = diagnostic
+                await self._record_terminal_event(diagnostic)
+                await self._safe_record_event(
+                    "reload_retirement_failed",
+                    generation_id=generation_id,
+                    digest_prefix=digest_prefix,
+                    error=f"{exc!r}",
+                )
+                return wire_result
 
             self._set_stage(
                 ReloadOperationStage.IDLE,
