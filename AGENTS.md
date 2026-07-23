@@ -39,7 +39,7 @@ CI runs 7 parallel jobs:
 | unit-integration | 3.11, 3.12 | `pytest -m "not slow and not performance and not soak and not extended_soak and not live"` |
 | reload-control | 3.11, 3.12 | `pytest tests/integration/reload/` |
 | plan-016-corrective | 3.11, 3.12 | Plan 016/017 focused test command (see below) |
-| plan-018-reload-closure | 3.11, 3.12 | Plan 018 focused test command (see below) |
+| plan-018-reload-closure | 3.11, 3.12 | Plan 018/019 reload closure tests (see below) |
 | performance | 3.12 | `pytest -m performance` |
 | soak-audit | 3.12 | `pytest -m soak` + `audit_xfail_skips.py` |
 
@@ -263,7 +263,7 @@ uv run pytest \
     tests/integration/reload/test_plan_017_acceptance_finalization.py \
     -v
 
-# Plan 018 — Reload atomicity closure corrective pass
+# Plan 018/019 — Reload atomicity closure corrective pass + accepted-finalization lifecycle closure
 uv run pytest \
     tests/unit/test_runtime_manager.py \
     tests/unit/test_process_transition_plan.py \
@@ -276,6 +276,7 @@ uv run pytest \
     tests/integration/reload/test_plan_018_database_commit_failure.py \
     tests/integration/reload/test_plan_018_gate_repair.py \
     tests/integration/reload/test_pending_swap_visibility.py \
+    tests/integration/reload/test_diagnostics_matrix.py \
     -v
 
 # Control socket hardening tests (SO_PEERCRED, stale socket,
@@ -357,6 +358,7 @@ CI sets `PYTHONHASHSEED=0` and `TZ=UTC`; reproduce locally for deterministic res
 - **Dispatch timing**: `LocalPreUpstreamRecorder` measures full EggPool-side window; `DispatchOverheadRecorder` covers coordinator-internal slice. Both use monotonic clocks.
 - **Performance hot path**: `Router.build_routing_plan()` is the authoritative selection path (no fallback to legacy `select_accounts()`). `DispatchSpanRecorder` provides 200-sample dispatch span telemetry.
 - **Plan 018 — Reload Atomicity Closure Corrective Pass**: correctness pass closing edge cases in transition ownership tracking, accepted-finalization idempotency, retirement retry safety, database commit failure recovery, and gate repair. New integration tests: `test_plan_018_transition_ownership.py`, `test_plan_018_accepted_finalization.py`, `test_plan_018_retirement_retry.py`, `test_plan_018_database_commit_failure.py`, `test_plan_018_gate_repair.py`.
+- **Plan 019 — Accepted-Finalization Lifecycle Closure**: makes the Plan 018 finalization architecture truthful, retryable, bounded, and safe for long-running processes. Key changes: (1) progress/health separation — `AcceptedFinalizationStep` is the progress cursor; `AcceptedFinalizationHealth` records attempt outcome; only `COMPLETED` progress is terminal. (2) single-flight `run()` via `asyncio.Lock` — concurrent callers share one attempt. (3) transition-finalization outcome inspection — `TransitionFinalizationPendingError` blocks advancement when transitions remain. (4) retirement fault injection wired at the real production boundary. (5) bounded registry — active jobs dict + `deque(maxlen=32)` diagnostic history; completed jobs pruned and references released. (6) shutdown drain before `runtime_manager.shutdown()`. (7) defensive `_abort_precommit_reload` guard rejects accepted transactions. (8) `ReloadResult.finalization_status` field distinguishes accepted from fully finalized. (9) new counters: `accepted_reloads`, `fully_finalized_reloads`, `accepted_finalization_failures`, `accepted_finalization_retries`, `retirement_retry_count`.
 
 ## Gotchas
 

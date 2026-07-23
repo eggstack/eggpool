@@ -1413,6 +1413,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             except Exception:
                 logger.exception("Error stopping control server during shutdown")
 
+        # Plan 019 Workstream E1: drain accepted-finalization jobs
+        # before runtime shutdown so retirement scheduling completes
+        # while process-owned dependencies are still alive.
+        reload_manager: ReloadManager | None = getattr(
+            app.state, "reload_manager", None
+        )
+        if reload_manager is not None:
+            try:
+                unresolved = await reload_manager.drain_finalization_jobs(
+                    timeout_s=10.0,
+                )
+                if unresolved:
+                    logger.warning(
+                        "%d finalization job(s) unresolved after drain",
+                        unresolved,
+                    )
+            except Exception:
+                logger.exception("Error draining finalization jobs during shutdown")
+
         runtime_manager: RuntimeManager | None = getattr(
             app.state, "runtime_manager", None
         )

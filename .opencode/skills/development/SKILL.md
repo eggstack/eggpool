@@ -102,7 +102,7 @@ uv run pytest \
     tests/integration/reload/test_plan_016_corrective_replacements.py \
     tests/integration/reload/test_reload_fault_matrix.py -v
 
-# Plan 018 — Reload atomicity closure corrective pass
+# Plan 018/019 — Reload atomicity closure + accepted-finalization lifecycle closure
 uv run pytest \
     tests/unit/test_runtime_manager.py \
     tests/unit/test_process_transition_plan.py \
@@ -115,6 +115,7 @@ uv run pytest \
     tests/integration/reload/test_plan_018_database_commit_failure.py \
     tests/integration/reload/test_plan_018_gate_repair.py \
     tests/integration/reload/test_pending_swap_visibility.py \
+    tests/integration/reload/test_diagnostics_matrix.py \
     -v
 ```
 
@@ -194,7 +195,7 @@ CI runs 7 parallel jobs on GitHub Actions:
 | unit-integration | 3.11, 3.12 | `pytest -m "not slow and not performance and not soak and not extended_soak and not live"` |
 | reload-control | 3.11, 3.12 | `pytest tests/integration/reload/` |
 | plan-016-corrective | 3.11, 3.12 | Plan 016/017 focused test command |
-| plan-018-reload-closure | 3.11, 3.12 | Plan 018 focused test command |
+| plan-018-reload-closure | 3.11, 3.12 | Plan 018/019 reload closure tests |
 | performance | 3.12 | `pytest -m performance` |
 | soak-audit | 3.12 | `pytest -m soak` + `audit_xfail_skips.py` |
 

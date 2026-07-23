@@ -766,6 +766,12 @@ class ReloadResult:
 
     Construction is intentionally lossy on the ``AppConfig`` itself: the
     result must never leak raw config bodies or credentials.
+
+    Plan 019 Workstream G1/G2: ``ok`` means the new configuration was
+    accepted and is authoritative.  ``finalization_status`` is
+    independent and indicates whether all lifecycle work completed.
+    ``ok=True`` with ``retry_pending`` is an accepted but degraded
+    operational result and includes a warning message.
     """
 
     ok: bool
@@ -777,6 +783,14 @@ class ReloadResult:
     message: str
     retirement_pending: bool = False
     retiring_generation_id: int | None = None
+    # Plan 019 Workstream G1: explicit finalization status.
+    finalization_status: str = "completed"
+    finalization_next_step: str | None = None
+    finalization_attempt_count: int = 0
+    finalization_last_error_class: str | None = None
+    finalization_last_error_message: str | None = None
+    old_generation_id: int | None = None
+    pending_swap_committed: bool = False
 
 
 def diff_from_validation(

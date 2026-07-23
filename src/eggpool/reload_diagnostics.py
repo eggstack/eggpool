@@ -89,6 +89,12 @@ class ReloadCounters:
     cancellations: int = 0
     compensation_failures: int = 0
     retirement_failures: int = 0
+    # Plan 019 Workstream G3: precise finalization counters.
+    accepted_reloads: int = 0
+    fully_finalized_reloads: int = 0
+    accepted_finalization_failures: int = 0
+    accepted_finalization_retries: int = 0
+    retirement_retry_count: int = 0
 
 
 @dataclass(frozen=True)

@@ -56,10 +56,20 @@ async def test_retirement_failure_retains_original_old_generation() -> None:
 
         # The old generation (1) should be retained in the finalization job.
         jobs = harness.reload_manager._accepted_finalization_jobs
-        gen2_jobs = [j for j in jobs if j.generation_id == gen2_id]
-        assert len(gen2_jobs) >= 1, "no finalization job for generation 2"
-        last_gen2_job = gen2_jobs[-1]
-        assert last_gen2_job.old_generation_id == gen1_id
+        history = harness.reload_manager._finalization_history
+        # Check active jobs first (may be pending if retirement failed).
+        gen2_jobs = [j for j in jobs.values() if j.generation_id == gen2_id]
+        # Also check history (job may have been completed and pruned).
+        gen2_records = [r for r in history if r.generation_id == gen2_id]
+        assert len(gen2_jobs) >= 1 or len(gen2_records) >= 1, (
+            "no finalization job or record for generation 2"
+        )
+        if gen2_jobs:
+            last_gen2_job = gen2_jobs[-1]
+            assert last_gen2_job.old_generation_id == gen1_id
+        else:
+            last_gen2_record = gen2_records[-1]
+            assert last_gen2_record.old_generation_id == gen1_id
 
         # A subsequent reload must succeed — proves no broken state.
         result3 = await harness.reload()

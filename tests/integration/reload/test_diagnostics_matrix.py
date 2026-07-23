@@ -143,7 +143,7 @@ class TestHarnessFullReloadDiagnostics:
     async def test_harness_counters_in_snapshot(
         self, reload_harness: ReloadHarness
     ) -> None:
-        """Full harness: snapshot counters include all 13 fields."""
+        """Full harness: snapshot counters include all expected fields."""
         await reload_harness.reload()
 
         snapshot = reload_harness.reload_manager.snapshot()
@@ -162,6 +162,12 @@ class TestHarnessFullReloadDiagnostics:
             "cancellations",
             "compensation_failures",
             "retirement_failures",
+            # Plan 019 Workstream G3: finalization counters.
+            "accepted_reloads",
+            "fully_finalized_reloads",
+            "accepted_finalization_failures",
+            "accepted_finalization_retries",
+            "retirement_retry_count",
         }
         assert expected_keys == set(counters.keys())
 
