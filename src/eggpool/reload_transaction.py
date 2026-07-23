@@ -111,6 +111,26 @@ class TransactionState(enum.Enum):
 
 # Valid forward transitions.  From state X, only states listed in
 # _VALID_TRANSITIONS[X] are reachable.
+#
+# Plan 016 Workstream D5: the production state ordering is
+#
+#   PROCESS_TRANSITIONS_PREPARED
+#     → PROCESS_TRANSITIONS_PREFLIGHTED
+#     → COMMIT_STARTED
+#     → RUNTIME_STAGED
+#     → RUNTIME_SWAP_COMMITTED
+#     → PROCESS_TRANSITIONS_APPLIED
+#     → PERSISTENCE_COMMITTED
+#     → OBSERVABLE_STATE_UPDATED
+#     → RETIREMENT_SCHEDULED
+#     → COMPLETED
+#
+# Preflight always runs before COMMIT_STARTED, which runs before the
+# lease gate closes.  Each state appears exactly once as a key in the
+# map below (prior versions had ``PROCESS_TRANSITIONS_PREFLIGHTED``
+# listed twice, leaving the first definition dead and the second
+# definition leaking transitions that should not be reachable from
+# ``PROCESS_TRANSITIONS_PREFLIGHTED``).
 _VALID_TRANSITIONS: dict[TransactionState, frozenset[TransactionState]] = {
     TransactionState.CREATED: frozenset(
         {TransactionState.VALIDATED, TransactionState.ABORTING}
@@ -128,21 +148,20 @@ _VALID_TRANSITIONS: dict[TransactionState, frozenset[TransactionState]] = {
         {TransactionState.PROCESS_TRANSITIONS_PREPARED, TransactionState.ABORTING}
     ),
     TransactionState.PROCESS_TRANSITIONS_PREPARED: frozenset(
-        {TransactionState.COMMIT_STARTED, TransactionState.ABORTING}
+        {
+            TransactionState.PROCESS_TRANSITIONS_PREFLIGHTED,
+            TransactionState.ABORTING,
+        }
     ),
     TransactionState.PROCESS_TRANSITIONS_PREFLIGHTED: frozenset(
         {TransactionState.COMMIT_STARTED, TransactionState.ABORTING}
     ),
     TransactionState.COMMIT_STARTED: frozenset(
         {
-            TransactionState.PROCESS_TRANSITIONS_PREFLIGHTED,
             TransactionState.RUNTIME_STAGED,
             TransactionState.RUNTIME_PUBLISHED,
             TransactionState.ABORTING,
         }
-    ),
-    TransactionState.PROCESS_TRANSITIONS_PREFLIGHTED: frozenset(
-        {TransactionState.RUNTIME_STAGED, TransactionState.ABORTING}
     ),
     TransactionState.RUNTIME_STAGED: frozenset(
         {TransactionState.RUNTIME_SWAP_COMMITTED, TransactionState.ABORTING}
@@ -188,6 +207,36 @@ _VALID_TRANSITIONS: dict[TransactionState, frozenset[TransactionState]] = {
 
 class TransactionStateError(Exception):
     """Raised on an invalid state transition."""
+
+
+class ProcessTransitionApplyError(Exception):
+    """Typed error carrying context for a partial transition apply failure.
+
+    Plan 016 Workstream D2: callers routing a partial transition
+    failure need the failed transition name, its position in the
+    plan, the list of transitions that already applied (so the
+    rollback path is recoverable), and the original cause.  This
+    error keeps that context for diagnostic classification without
+    forcing the aggregator to walk message strings.
+    """
+
+    def __init__(
+        self,
+        *,
+        failed_transition_name: str,
+        failed_transition_index: int,
+        applied_transition_names: tuple[str, ...],
+        original_exception: BaseException,
+    ) -> None:
+        super().__init__(
+            f"Process transition {failed_transition_name!r} "
+            f"(index {failed_transition_index}) failed: "
+            f"{type(original_exception).__name__}: {original_exception}"
+        )
+        self.failed_transition_name = failed_transition_name
+        self.failed_transition_index = failed_transition_index
+        self.applied_transition_names = applied_transition_names
+        self.original_exception = original_exception
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +349,10 @@ class TaskSpecTransition(ProcessTransition):
         self._process = process
         self._old_specs: tuple[Any, ...] | None = None
         self._applied = False
+        # Plan 016 Workstream D4: explicit lifecycle for rollback /
+        # finalize idempotence.
+        self._rolled_back = False
+        self._finalized = False
 
     async def preflight(self) -> None:
         """Verify the process supervisor is available."""
@@ -322,8 +375,21 @@ class TaskSpecTransition(ProcessTransition):
         self._applied = True
 
     async def rollback(self) -> None:
-        """Roll back by re-applying the old specs."""
-        if not self._applied:
+        """Roll back by re-applying the old specs.
+
+        Plan 016 Workstream D3: rollback failures must propagate to
+        the aggregator (``TransitionApplyResult.rollback_applied``)
+        so degraded-state diagnostics can classify them.  This method
+        does not swallow exceptions; it logs at debug for traceability
+        and re-raises so the aggregation layer captures the cause.
+
+        Workstream D4: a second rollback after success is a no-op; a
+        rollback after finalize raises ``TransactionStateError`` so
+        diagnostic classification catches misuse.
+        """
+        if self._finalized:
+            raise TransactionStateError(f"Cannot rollback {self.name} after finalize")
+        if not self._applied or self._rolled_back:
             return
         if self._process_supervisor is None or self._old_specs is None:
             return
@@ -334,13 +400,23 @@ class TaskSpecTransition(ProcessTransition):
                 callback_factories={},
                 process=self._process,
             )
-        except Exception:
-            logger.warning(
-                "TaskSpecTransition rollback failed; "
-                "process supervisor may be in intermediate state"
-            )
+        except Exception as exc:
+            logger.debug("TaskSpecTransition rollback failed: %r", exc, exc_info=True)
+            raise
         finally:
             self._applied = False
+            self._rolled_back = True
+
+    async def finalize(self) -> None:
+        """Release captured old-state snapshots after commit.
+
+        Plan 016 Workstream D4: finalize is idempotent and a no-op
+        when the transition has already been finalized.
+        """
+        if self._finalized:
+            return
+        self._old_specs = None
+        self._finalized = True
 
 
 class RoutingTraceWriterTransition(ProcessTransition):
@@ -368,6 +444,8 @@ class RoutingTraceWriterTransition(ProcessTransition):
         self._old_mode: str | None = None
         self._old_sample_rate: float | None = None
         self._applied = False
+        self._rolled_back = False
+        self._finalized = False
 
     async def preflight(self) -> None:
         """Capture current writer configuration without mutation."""
@@ -388,20 +466,40 @@ class RoutingTraceWriterTransition(ProcessTransition):
         self._applied = True
 
     async def rollback(self) -> None:
-        """Restore previous writer configuration."""
-        if not self._applied or self._writer is None:
+        """Restore previous writer configuration.
+
+        Plan 016 Workstream D3: rollback failures propagate to the
+        aggregator so degraded-state diagnostics can classify them.
+
+        Workstream D4: a second rollback after success is a no-op; a
+        rollback after finalize raises ``TransactionStateError``.
+        """
+        if self._finalized:
+            raise TransactionStateError(f"Cannot rollback {self.name} after finalize")
+        if not self._applied or self._rolled_back or self._writer is None:
             return
         if self._old_mode is not None and self._old_sample_rate is not None:
             try:
                 self._writer.configure(
                     mode=self._old_mode, sample_rate=self._old_sample_rate
                 )
-            except Exception:
-                logger.warning(
-                    "RoutingTraceWriterTransition rollback failed; "
-                    "writer may be in intermediate state"
+            except Exception as exc:
+                logger.debug(
+                    "RoutingTraceWriterTransition rollback failed: %r",
+                    exc,
+                    exc_info=True,
                 )
+                raise
         self._applied = False
+        self._rolled_back = True
+
+    async def finalize(self) -> None:
+        """Release captured old-state snapshots."""
+        if self._finalized:
+            return
+        self._old_mode = None
+        self._old_sample_rate = None
+        self._finalized = True
 
 
 class RoutingTraceGuardTransition(ProcessTransition):
@@ -432,6 +530,8 @@ class RoutingTraceGuardTransition(ProcessTransition):
         self._cooldown_s = cooldown_s
         self._old_settings: dict[str, Any] | None = None
         self._applied = False
+        self._rolled_back = False
+        self._finalized = False
 
     async def preflight(self) -> None:
         """Capture current guard settings without mutation."""
@@ -459,17 +559,39 @@ class RoutingTraceGuardTransition(ProcessTransition):
         self._applied = True
 
     async def rollback(self) -> None:
-        """Restore previous guard configuration."""
-        if not self._applied or self._guard is None or self._old_settings is None:
+        """Restore previous guard configuration.
+
+        Plan 016 Workstream D3: rollback failures propagate to the
+        aggregator so degraded-state diagnostics can classify them.
+
+        Workstream D4: a second rollback after success is a no-op; a
+        rollback after finalize raises ``TransactionStateError``.
+        """
+        if self._finalized:
+            raise TransactionStateError(f"Cannot rollback {self.name} after finalize")
+        if (
+            not self._applied
+            or self._rolled_back
+            or self._guard is None
+            or self._old_settings is None
+        ):
             return
         try:
             self._guard.configure(**self._old_settings)
-        except Exception:
-            logger.warning(
-                "RoutingTraceGuardTransition rollback failed; "
-                "guard may be in intermediate state"
+        except Exception as exc:
+            logger.debug(
+                "RoutingTraceGuardTransition rollback failed: %r", exc, exc_info=True
             )
+            raise
         self._applied = False
+        self._rolled_back = True
+
+    async def finalize(self) -> None:
+        """Release captured old-state snapshots."""
+        if self._finalized:
+            return
+        self._old_settings = None
+        self._finalized = True
 
 
 _MISSING = object()
@@ -506,6 +628,8 @@ class EffectiveStateTransition(ProcessTransition):
         self._old_config_digest: Any = _MISSING
         self._old_generation_id: Any = _MISSING
         self._applied = False
+        self._rolled_back = False
+        self._finalized = False
 
     async def preflight(self) -> None:
         """Capture previous effective state without mutation."""
@@ -531,13 +655,19 @@ class EffectiveStateTransition(ProcessTransition):
         - ``_MISSING``: attribute was absent before preflight → delete it
         - ``None``: attribute was present with value None → set to None
         - other: attribute had a real value → restore it
+
+        Plan 016 Workstream D4: a second rollback after success is a
+        no-op; a rollback after finalize raises ``TransactionStateError``.
         """
-        if not self._applied or self._app_state is None:
+        if self._finalized:
+            raise TransactionStateError(f"Cannot rollback {self.name} after finalize")
+        if not self._applied or self._rolled_back or self._app_state is None:
             return
         self._restore_attr("config", self._old_config)
         self._restore_attr("config_digest", self._old_config_digest)
         self._restore_attr("generation_id", self._old_generation_id)
         self._applied = False
+        self._rolled_back = True
 
     def _restore_attr(self, attr: str, old_value: Any) -> None:
         """Restore a single attribute on _app_state."""
@@ -548,6 +678,15 @@ class EffectiveStateTransition(ProcessTransition):
                 pass
         else:
             setattr(self._app_state, attr, old_value)
+
+    async def finalize(self) -> None:
+        """Release captured old-state snapshots."""
+        if self._finalized:
+            return
+        self._old_config = _MISSING
+        self._old_config_digest = _MISSING
+        self._old_generation_id = _MISSING
+        self._finalized = True
 
 
 @dataclass(frozen=True)
@@ -584,22 +723,40 @@ class TransitionApplyResult:
     captured old-state snapshots.  On failure, call
     :meth:`rollback_applied` to undo applied transitions in reverse
     order.
+
+    Plan 016 Workstream D1: the result object owns the applied-stack
+    lifecycle.  :meth:`apply_all` raises :class:`ProcessTransitionApplyError`
+    carrying the failed transition's name and index plus the list of
+    already-applied transitions.  Callers can then call
+    :meth:`rollback_applied` against the same result instance without
+    losing the partial stack to a helper that raised before returning.
     """
 
     _plan: ProcessTransitionPlan
     _applied: list[ProcessTransition] = field(
         default_factory=lambda: list[ProcessTransition]()
     )
+    _rolled_back: bool = False
     _finalized: bool = False
 
     async def apply_all(self) -> None:
-        """Apply transitions in order.  Stop at first failure."""
-        for transition in self._plan.transitions:
+        """Apply transitions in order.  Stop at first failure.
+
+        On failure raises :class:`ProcessTransitionApplyError` so the
+        caller has the failed transition's name and index plus the
+        list of already-applied transitions for the rollback path.
+        """
+        for index, transition in enumerate(self._plan.transitions):
             try:
                 await transition.apply()
-                self._applied.append(transition)
-            except Exception:
-                raise
+            except Exception as exc:
+                raise ProcessTransitionApplyError(
+                    failed_transition_name=transition.name,
+                    failed_transition_index=index,
+                    applied_transition_names=tuple(t.name for t in self._applied),
+                    original_exception=exc,
+                ) from exc
+            self._applied.append(transition)
 
     async def rollback_applied(self) -> list[tuple[str, str]]:
         """Roll back applied transitions in reverse order.
@@ -607,13 +764,30 @@ class TransitionApplyResult:
         Continues after individual rollback failures so every
         transition gets a chance.  Returns a list of
         ``(transition_name, error_message)`` for failures.
+
+        Plan 016 Workstream D3: per-transition rollback failures
+        propagate from the concrete rollback methods; this aggregator
+        catches each failure, logs it, and continues to the next
+        transition so a partial-stack restore still runs to
+        completion.  Aggregate failures are returned to the caller for
+        degraded-state classification.
         """
+        if self._rolled_back:
+            return []  # idempotent
         errors: list[tuple[str, str]] = []
         for transition in reversed(self._applied):
             try:
                 await transition.rollback()
             except Exception as exc:
-                errors.append((transition.name, str(exc)))
+                error_type = type(exc).__name__
+                errors.append((transition.name, f"{error_type}: {exc}"))
+                logger.warning(
+                    "Process transition %r rollback failed: %s",
+                    transition.name,
+                    exc,
+                    exc_info=True,
+                )
+        self._rolled_back = True
         return errors
 
     async def finalize_all(self) -> None:
@@ -622,6 +796,9 @@ class TransitionApplyResult:
         Called only after the transaction is accepted.  Releases
         captured old-state snapshots.  Failures are treated as
         post-commit housekeeping and logged but not propagated.
+
+        Plan 016 Workstream E2: finalize is a no-op once it has run
+        and must never be invoked from a rollback path.
         """
         if self._finalized:
             return
@@ -645,6 +822,21 @@ class TransitionApplyResult:
     def is_fully_applied(self) -> bool:
         """True if all transitions in the plan were applied."""
         return len(self._applied) == len(self._plan.transitions)
+
+    @property
+    def applied_transitions(self) -> tuple[ProcessTransition, ...]:
+        """Immutable view of transitions that successfully applied."""
+        return tuple(self._applied)
+
+    @property
+    def is_rolled_back(self) -> bool:
+        """True if :meth:`rollback_applied` has been called successfully."""
+        return self._rolled_back
+
+    @property
+    def is_finalized(self) -> bool:
+        """True if :meth:`finalize_all` has been called."""
+        return self._finalized
 
 
 @dataclass(frozen=True)
@@ -722,6 +914,19 @@ class ReloadTransaction:
         self.effective_state_updated: bool = False
         self.retirement_scheduled: bool = False
 
+        # Plan 016 Workstream H2/H3: per-stage progress flags surfaced
+        # in the diagnostic.  Each flips to ``True`` when the matching
+        # post-publication boundary has been crossed.  The terminal
+        # snapshot freezes the values so a reload that crashes mid-way
+        # shows which step is still pending.
+        self._lease_admission_gated_at_terminal: bool = False
+        self._post_commit_finalization_pending: bool = True
+        self._ownership_transfer_pending: bool = True
+        self._mirror_update_pending: bool = True
+        self._retirement_scheduling_pending: bool = True
+        self._pending_swap_state_at_terminal: str | None = None
+        self._publication_epoch: int = 0
+
         # Terminal state
         self._completed_at: float | None = None
         self._error: Exception | None = None
@@ -796,6 +1001,79 @@ class ReloadTransaction:
     @property
     def elapsed_s(self) -> float:
         return time.monotonic() - self._created_at
+
+    # -- Workstream H2/H3 diagnostic snapshot -------------------------------
+
+    @property
+    def pending_swap_state_at_terminal(self) -> str | None:
+        """Plan 016 Workstream H2: pending swap state at finalization.
+
+        Records the most recent ``PendingSwapState`` value seen by
+        the manager during the transaction so the diagnostic shows
+        whether the swap reached ``COMMITTED``, ``FINALIZED``, or
+        was rolled back before reaching the post-publication steps.
+        """
+        return self._pending_swap_state_at_terminal
+
+    @property
+    def lease_admission_gated_at_terminal(self) -> bool:
+        """Plan 016 Workstream H2: lease admission gate state.
+
+        ``True`` if the runtime manager reported an active lease
+        gate at finalization time.  Useful for distinguishing
+        reloads that committed cleanly (gate cleared) from those
+        that aborted before clearing the gate.
+        """
+        return self._lease_admission_gated_at_terminal
+
+    @property
+    def post_commit_finalization_pending(self) -> bool:
+        """Plan 016 Workstream H3: post-commit finalization pending.
+
+        ``True`` until the post-commit ``finalize_all()`` step has
+        completed.  Flips to ``False`` when ``finalize_all()`` runs
+        successfully.
+        """
+        return self._post_commit_finalization_pending
+
+    @property
+    def ownership_transfer_pending(self) -> bool:
+        """Plan 016 Workstream H3: ownership transfer pending.
+
+        ``True`` until the candidate's ownership has been
+        transferred to the runtime manager.  Flips to ``False`` on
+        successful publication.
+        """
+        return self._ownership_transfer_pending
+
+    @property
+    def mirror_update_pending(self) -> bool:
+        """Plan 016 Workstream H3: mirror-update pending.
+
+        ``True`` until ``mirror_generation_on_app_state`` has been
+        called for the new generation.  Flips to ``False`` when
+        observable state is updated.
+        """
+        return self._mirror_update_pending
+
+    @property
+    def retirement_scheduling_pending(self) -> bool:
+        """Plan 016 Workstream H3: retirement scheduling pending.
+
+        ``True`` until the old-generation retirement task has been
+        scheduled.  Flips to ``False`` when retirement is scheduled.
+        """
+        return self._retirement_scheduling_pending
+
+    @property
+    def publication_epoch(self) -> int:
+        """Plan 016 Workstream H2: monotonic publication epoch.
+
+        Captures the runtime manager's ``publication_epoch`` at the
+        moment of finalization so operators can correlate the
+        diagnostic with the manager's monotonic counter.
+        """
+        return self._publication_epoch
 
     # -- State transitions --------------------------------------------------
 
@@ -875,7 +1153,13 @@ class ReloadTransaction:
         self,
         old_generation_id: int,
     ) -> None:
-        """Transition: PROCESS_TRANSITIONS_PREPARED → COMMIT_STARTED."""
+        """Transition: PROCESS_TRANSITIONS_PREFLIGHTED → COMMIT_STARTED.
+
+        Plan 016 Workstream D5: production ordering is
+        PROCESS_TRANSITIONS_PREPARED → PROCESS_TRANSITIONS_PREFLIGHTED
+        → COMMIT_STARTED, so preflight always completes before commit
+        state is recorded.
+        """
         self._old_generation_id = old_generation_id
         self.active_generation_before = old_generation_id
         self._commit_diagnostics = CommitDiagnostics(
@@ -898,10 +1182,32 @@ class ReloadTransaction:
     def mark_runtime_swap_committed(
         self,
         old_generation_id: int | None,
+        *,
+        new_generation_id: int | None = None,
     ) -> None:
-        """Transition: RUNTIME_STAGED → RUNTIME_SWAP_COMMITTED."""
+        """Transition: RUNTIME_STAGED → RUNTIME_SWAP_COMMITTED.
+
+        Plan 016 Workstream H1: record the new active generation ID
+        and publication timestamp so committed transaction diagnostics
+        identify the new active generation.  When the caller passes
+        ``new_generation_id``, ``active_generation_after`` is set
+        immediately for downstream consumers.
+        """
         self.publication_occurred = True
         self._swap_old_generation_id = old_generation_id
+        if new_generation_id is not None:
+            self.active_generation_after = new_generation_id
+            self._commit_diagnostics = CommitDiagnostics(
+                commit_started_at=self._commit_diagnostics.commit_started_at,
+                old_generation_id=self._commit_diagnostics.old_generation_id,
+                new_generation_id=new_generation_id,
+            )
+        # Plan 016 Workstream H3: ownership is transferred at swap
+        # commit; mirror is updated at observable-state; retirement is
+        # scheduled after the swap commits.
+        self._pending_swap_state_at_terminal = "committed"
+        self._ownership_transfer_pending = False
+        self._lease_admission_gated_at_terminal = False
         self._transition_to(TransactionState.RUNTIME_SWAP_COMMITTED)
 
     def mark_runtime_published(
@@ -921,6 +1227,10 @@ class ReloadTransaction:
                 time.monotonic() - self._commit_diagnostics.commit_started_at
             ),
         )
+        # Plan 016 Workstream H3: ownership is transferred once the
+        # candidate is published.
+        self._pending_swap_state_at_terminal = "committed"
+        self._ownership_transfer_pending = False
         self._transition_to(TransactionState.RUNTIME_PUBLISHED)
 
     def mark_process_transitions_applied(self) -> None:
@@ -934,17 +1244,31 @@ class ReloadTransaction:
         self._transition_to(TransactionState.PERSISTENCE_COMMITTED)
 
     def mark_observable_state_updated(self) -> None:
-        """Transition: PERSISTENCE_COMMITTED → OBSERVABLE_STATE_UPDATED."""
+        """Transition: PERSISTENCE_COMMITTED → OBSERVABLE_STATE_UPDATED.
+
+        Plan 016 Workstream H3: the app-state mirror is updated at
+        this boundary, so ``mirror_update_pending`` flips to False.
+        """
         self.effective_state_updated = True
+        self._mirror_update_pending = False
         self._transition_to(TransactionState.OBSERVABLE_STATE_UPDATED)
 
     def mark_retirement_scheduled(self) -> None:
-        """Transition: OBSERVABLE_STATE_UPDATED → RETIREMENT_SCHEDULED."""
+        """Transition: OBSERVABLE_STATE_UPDATED → RETIREMENT_SCHEDULED.
+
+        Plan 016 Workstream H3: retirement is scheduled at this
+        boundary.
+        """
         self.retirement_scheduled = True
+        self._retirement_scheduling_pending = False
         self._transition_to(TransactionState.RETIREMENT_SCHEDULED)
 
     def mark_completed(self) -> None:
-        """Transition: RETIREMENT_SCHEDULED → COMPLETED."""
+        """Transition: RETIREMENT_SCHEDULED → COMPLETED.
+
+        Plan 016 Workstream H3: post-commit finalization completes
+        here.
+        """
         self._completed_at = time.monotonic()
         self._commit_diagnostics = CommitDiagnostics(
             commit_started_at=self._commit_diagnostics.commit_started_at,
@@ -958,6 +1282,7 @@ class ReloadTransaction:
             total_commit_duration_s=time.monotonic()
             - self._commit_diagnostics.commit_started_at,
         )
+        self._post_commit_finalization_pending = False
         self._transition_to(TransactionState.COMPLETED)
 
     def mark_aborting(self, error: Exception | None = None) -> None:
@@ -966,6 +1291,13 @@ class ReloadTransaction:
         When aborting from a post-commit state, records that publication
         was attempted so diagnostics can distinguish pre-commit abort
         from post-publication compensation.
+
+        Plan 016 Workstream H4: ``RUNTIME_STAGED`` records
+        ``publication_attempted=True`` (publication was attempted but
+        did not occur) and ``RUNTIME_SWAP_COMMITTED`` (or any later
+        state) records ``publication_occurred=True`` so abort
+        diagnostics derive from explicit facts rather than the broad
+        ``is_committing`` state category.
         """
         if self._state in (
             TransactionState.COMPLETED,
@@ -975,8 +1307,11 @@ class ReloadTransaction:
         ):
             return  # already terminal or aborting
         self._error = error
-        if self._state in (
+        if self._state is TransactionState.RUNTIME_STAGED:
+            self.publication_attempted = True
+        elif self._state in (
             TransactionState.COMMIT_STARTED,
+            TransactionState.RUNTIME_SWAP_COMMITTED,
             TransactionState.RUNTIME_PUBLISHED,
             TransactionState.PROCESS_TRANSITIONS_APPLIED,
             TransactionState.PERSISTENCE_COMMITTED,
@@ -984,6 +1319,7 @@ class ReloadTransaction:
             TransactionState.RETIREMENT_SCHEDULED,
         ):
             self.publication_attempted = True
+            self.publication_occurred = True
         self._transition_to(TransactionState.ABORTING)
 
     def mark_aborted(self) -> None:
@@ -1077,6 +1413,7 @@ __all__ = [
     "EffectiveStateTransition",
     "PersistenceDelta",
     "ProcessTransition",
+    "ProcessTransitionApplyError",
     "ProcessTransitionPlan",
     "ReloadTransaction",
     "RoutingTraceGuardTransition",

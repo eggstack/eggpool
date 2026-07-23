@@ -154,6 +154,17 @@ class ReloadDiagnosticResult:
     warning_messages: tuple[str, ...] = ()
     counters: ReloadCounters = field(default_factory=ReloadCounters)
     operational_event_recorded: bool = False
+    # Plan 016 Workstream H2/H3: explicit per-stage progress flags so
+    # operators can see *which* post-publication step is still
+    # pending.  Every flag flips to ``True`` only when the matching
+    # :class:`ReloadTransaction` marker method has been called.
+    pending_swap_state: str | None = None
+    lease_admission_gated: bool = False
+    post_commit_finalization_pending: bool = False
+    ownership_transfer_pending: bool = False
+    mirror_update_pending: bool = False
+    retirement_scheduling_pending: bool = False
+    publication_epoch: int = 0
 
 
 def classify_result_category(

@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sys
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
@@ -75,7 +76,10 @@ if TYPE_CHECKING:
     )
 
 from eggpool.reload_transaction import preflight_all_transitions
-from eggpool.runtime_manager import RuntimeGenerationCandidate
+from eggpool.runtime_manager import (
+    RuntimeGenerationCandidate,
+    RuntimeManagerSwapStateError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -557,6 +561,16 @@ class ReloadManager:
                 "error_class": d.error_class,
                 "message": d.message,
                 "warning_count": len(d.warning_messages),
+                # Plan 016 Workstream H2/H3: per-stage progress flags.
+                "pending_swap_state": d.pending_swap_state,
+                "lease_admission_gated": d.lease_admission_gated,
+                "post_commit_finalization_pending": (
+                    d.post_commit_finalization_pending
+                ),
+                "ownership_transfer_pending": d.ownership_transfer_pending,
+                "mirror_update_pending": d.mirror_update_pending,
+                "retirement_scheduling_pending": (d.retirement_scheduling_pending),
+                "publication_epoch": d.publication_epoch,
             }
         else:
             result["last_diagnostic_result"] = None
@@ -604,6 +618,16 @@ class ReloadManager:
                 "error_class": d.error_class,
                 "message": d.message,
                 "warning_count": len(d.warning_messages),
+                # Plan 016 Workstream H2/H3: per-stage progress flags.
+                "pending_swap_state": d.pending_swap_state,
+                "lease_admission_gated": d.lease_admission_gated,
+                "post_commit_finalization_pending": (
+                    d.post_commit_finalization_pending
+                ),
+                "ownership_transfer_pending": d.ownership_transfer_pending,
+                "mirror_update_pending": d.mirror_update_pending,
+                "retirement_scheduling_pending": (d.retirement_scheduling_pending),
+                "publication_epoch": d.publication_epoch,
             }
             for d in reversed(self._reload_history)
         ]
@@ -644,6 +668,12 @@ class ReloadManager:
         restart_required: tuple[Any, ...] = ()
         candidate: RuntimeGenerationCandidate | None = None
         process_transition_plan: ProcessTransitionPlan | None = None
+        # Plan 016 Workstream C2: pre-initialize cleanup-owner state
+        # so the cancellation and exception handlers see consistent
+        # identifiers even when construction failed before reaching
+        # the assignment sites.
+        pending_swap: Any | None = None
+        transition_result: TransitionApplyResult | None = None
 
         # Phase 11: increment total requests.
         self._counters = ReloadCounters(
@@ -1002,7 +1032,6 @@ class ReloadManager:
             )
             # Capture old generation ID before publication swaps it
             old_generation_id = expected_gen_id
-            txn.mark_commit_started(old_generation_id)
 
             # Observer: publish started
             await self._observer.on_publish_started(
@@ -1011,10 +1040,13 @@ class ReloadManager:
             )
 
             # 9a: Run transition preflights before the commit gate.
-            # Preflight must not mutate process state; it validates
-            # that each transition can be applied and rolled back.
+            # Plan 016 Workstream D5: preflight must complete before
+            # ``mark_commit_started`` so the state machine records the
+            # documented ordering PROCESS_TRANSITIONS_PREPARED →
+            # PROCESS_TRANSITIONS_PREFLIGHTED → COMMIT_STARTED.
             preflighted = await preflight_all_transitions(process_transition_plan)
             txn.mark_process_transitions_preflighted(preflighted)
+            txn.mark_commit_started(old_generation_id)
 
             # 9b: Create the pending swap — does not mutate any state yet.
             published_gen = candidate._built_generation  # pyright: ignore[reportPrivateUsage]
@@ -1053,7 +1085,13 @@ class ReloadManager:
                 # SQLite committed successfully — commit the swap.
                 # This makes the candidate active and reopens admission.
                 old_gen_id = await pending_swap.commit()
-                txn.mark_runtime_swap_committed(old_gen_id)
+                # Plan 016 Workstream H1: pass the published generation
+                # ID so the transaction records the new active
+                # generation identity on commit.
+                txn.mark_runtime_swap_committed(
+                    old_gen_id,
+                    new_generation_id=published_gen.generation_id,
+                )
 
                 # Observer: publish complete
                 await self._observer.on_publish_complete(
@@ -1083,21 +1121,14 @@ class ReloadManager:
                 txn.mark_observable_state_updated()
 
             except Exception:
-                # Rollback: restore the old slot and clear the lease gate
-                # so requests resume on the old generation.  Process
-                # transitions inside the SQLite transaction are rolled
-                # back by the DB layer; any that applied before the
-                # failure are rolled back explicitly.
-                if pending_swap.staged and not pending_swap.committed:
-                    await pending_swap.rollback()
-                if transition_result is not None:
-                    rollback_errors = await transition_result.rollback_applied()
-                    if rollback_errors:
-                        logger.warning(
-                            "Process transition rollback errors "
-                            "during commit failure: %s",
-                            rollback_errors,
-                        )
+                # Plan 016 Workstream C1/C2: route precommit cleanup
+                # through the shared helper so cancellation and
+                # ordinary exceptions use the same path.
+                await self._abort_precommit_reload(
+                    pending_swap=pending_swap,
+                    transition_result=transition_result,
+                    cause=sys.exc_info()[1] or RuntimeError("precommit failure"),
+                )
                 raise
 
             # Stage 10: Schedule retirement of the old generation
@@ -1115,12 +1146,10 @@ class ReloadManager:
                 digest_prefix=digest_prefix,
                 old_generation_id=old_generation_id,
             )
-            # Spawn the retirement task for the old generation.
-            if old_gen_id is not None and pending_swap._old_slot is not None:  # pyright: ignore[reportPrivateUsage]
-                await self._runtime_manager._spawn_retirement_task(  # pyright: ignore[reportPrivateUsage]
-                    pending_swap._old_slot,  # pyright: ignore[reportPrivateUsage]
-                    self._drain_timeout_s,
-                )
+            # Plan 016 Workstream A: route retirement through the
+            # public ``PendingGenerationSwap.finalize_retirement()`` API
+            # instead of reaching through private slot fields.
+            old_gen_id = await pending_swap.finalize_retirement()
             txn.mark_retirement_scheduled()
             txn.mark_completed()
 
@@ -1332,7 +1361,31 @@ class ReloadManager:
                         RuntimeError("Commit completion failed after cancellation")
                     )
             else:
+                # Plan 016 Workstream C2/C3: cancellation before commit
+                # must route through the shared precommit abort helper
+                # so the lease gate is reopened, the pending swap is
+                # rolled back, and any applied transitions are
+                # reverted.  Shield each step so the bounded cleanup
+                # completes before the cancellation propagates.
                 txn.mark_aborting(RuntimeError("Reload cancelled before commit point"))
+                try:
+                    await asyncio.shield(
+                        self._abort_precommit_reload(
+                            pending_swap=pending_swap,
+                            transition_result=transition_result,
+                            cause=asyncio.CancelledError(),
+                        )
+                    )
+                except asyncio.CancelledError:
+                    logger.warning(
+                        "Precommit abort shield cancelled for generation %d",
+                        generation_id,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Precommit abort raised during cancellation for generation %d",
+                        generation_id,
+                    )
 
             # Phase 11: finalize.
             terminal_stage = ReloadTerminalStage(error_stage)
@@ -1350,7 +1403,7 @@ class ReloadManager:
                 restart_required_sections=(),
                 warnings=warnings,
                 is_cancelled=True,
-                publication_occurred=txn.is_committing,
+                publication_occurred=txn.publication_occurred,
             )
             self._last_diagnostic_result = diagnostic
             await self._record_terminal_event(diagnostic)
@@ -1430,6 +1483,7 @@ class ReloadManager:
                     txn,
                     exc,
                     process_transition_plan=process_transition_plan,
+                    pending_swap=pending_swap,
                 )
                 if compensation_ok:
                     txn.mark_process_transitions_applied()
@@ -1594,9 +1648,12 @@ class ReloadManager:
                 is_process_transition_prepare_failed=is_pt_prep_failed,
                 is_process_transition_apply_failed=is_pt_apply_failed,
                 is_persistence_commit_failed=is_persist_commit_failed,
-                publication_occurred=txn.is_committing,
-                persistence_committed=ok,
-                process_transitions_applied=ok,
+                # Plan 016 Workstream E6: wire fields derive from
+                # explicit transaction facts (``publication_occurred``)
+                # rather than the broad ``is_committing`` state category.
+                publication_occurred=txn.publication_occurred,
+                persistence_committed=txn.persistence_committed,
+                process_transitions_applied=txn.process_transitions_applied,
                 compensation_attempted=compensation_attempted,
                 compensation_succeeded=compensation_ok,
                 candidate_cleanup_attempted=candidate_cleanup_attempted,
@@ -1608,7 +1665,7 @@ class ReloadManager:
             event_type = "reload_preparation_failure"
             if error_stage == ReloadOperationStage.RECONCILIATION:
                 event_type = "reload_reconciliation_failure"
-            if txn.is_committing:
+            if txn.publication_occurred:
                 event_type = "reload_post_publication_failure"
             await self._safe_record_event(
                 event_type,
@@ -1760,6 +1817,30 @@ class ReloadManager:
             old_generation_id=txn.old_generation_id,
         )
 
+        # Plan 016 Workstream H2: capture the runtime manager's
+        # publication_epoch and pending_swap_state at finalization
+        # so the diagnostic reflects the manager's view, not just
+        # the transaction's local copy.
+        try:
+            rm_diag = self._runtime_manager.diagnostics()
+            txn._publication_epoch = rm_diag.publication_epoch  # pyright: ignore[reportPrivateUsage]
+            if (
+                txn._pending_swap_state_at_terminal is None  # pyright: ignore[reportPrivateUsage]
+                and rm_diag.pending_swap_state is not None
+            ):
+                txn._pending_swap_state_at_terminal = (  # pyright: ignore[reportPrivateUsage]
+                    rm_diag.pending_swap_state
+                )
+            if not txn._lease_admission_gated_at_terminal:  # pyright: ignore[reportPrivateUsage]
+                txn._lease_admission_gated_at_terminal = (  # pyright: ignore[reportPrivateUsage]
+                    rm_diag.lease_admission_gated
+                )
+        except Exception:
+            logger.debug(
+                "Runtime manager diagnostics unavailable at finalization",
+                exc_info=True,
+            )
+
         # Active generation snapshot and old generation digest.
         old_generation_digest: str | None = None
         active_snap = None
@@ -1865,6 +1946,19 @@ class ReloadManager:
             warnings=warnings,
             warning_messages=warning_messages,
             counters=self._counters,
+            # Plan 016 Workstream H2/H3: surface explicit per-stage
+            # progress flags so operators can see *which* post-commit
+            # step is still pending.  Each flag flips to ``True`` only
+            # when the matching ``ReloadTransaction`` marker has
+            # been called; the values reflect the state at
+            # finalization time.
+            pending_swap_state=txn.pending_swap_state_at_terminal,
+            lease_admission_gated=txn.lease_admission_gated_at_terminal,
+            post_commit_finalization_pending=txn.post_commit_finalization_pending,
+            ownership_transfer_pending=txn.ownership_transfer_pending,
+            mirror_update_pending=txn.mirror_update_pending,
+            retirement_scheduling_pending=txn.retirement_scheduling_pending,
+            publication_epoch=txn.publication_epoch,
         )
 
         # Build the wire-format ReloadResult.
@@ -2297,6 +2391,62 @@ class ReloadManager:
         await result.apply_all()
         return result
 
+    async def _abort_precommit_reload(
+        self,
+        *,
+        pending_swap: Any,
+        transition_result: TransitionApplyResult | None,
+        cause: BaseException,
+    ) -> None:
+        """Shared precommit cleanup owner for the reload transaction.
+
+        Plan 016 Workstream C1: every precommit cleanup path
+        (``except Exception`` and ``except asyncio.CancelledError``)
+        funnels through this helper so the cleanup semantics are
+        identical regardless of the failure class.  The helper is
+        idempotent — pending swap rollback, transition rollback, and
+        lease-gate clearing are all safe to repeat.
+
+        Order of operations (all under cancellation shielding where the
+        caller expects it):
+
+        1. Rollback the staged pending swap so the lease gate is
+           reopened and the old slot is restored as active.
+        2. Rollback any applied process transitions in reverse order.
+           Aggregation errors are logged but do not mask the primary
+           cause.
+        3. Re-raise the original cause.
+
+        The lease gate is reopened by the swap rollback itself;
+        callers do not need to clear it explicitly.
+        """
+        if (
+            pending_swap is not None
+            and pending_swap.staged
+            and not pending_swap.committed
+        ):
+            try:
+                await pending_swap.rollback()
+            except RuntimeManagerSwapStateError:
+                # Idempotent — already rolled back or terminal.
+                logger.debug("Pending swap rollback skipped; not in staged state")
+            except Exception as exc:
+                logger.warning("Pending swap rollback raised: %r", exc, exc_info=True)
+        if transition_result is not None:
+            try:
+                rollback_errors = await transition_result.rollback_applied()
+                if rollback_errors:
+                    logger.warning(
+                        "Process transition rollback errors during precommit abort: %s",
+                        rollback_errors,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Transition rollback aggregation failed: %r",
+                    exc,
+                    exc_info=True,
+                )
+
     async def _pre_commit_verification(
         self,
         txn: ReloadTransaction,
@@ -2373,17 +2523,28 @@ class ReloadManager:
         exc: Exception,
         *,
         process_transition_plan: ProcessTransitionPlan | None = None,
+        pending_swap: Any | None = None,
     ) -> bool:
         """Attempt to compensate for a post-publication failure.
 
-        After publication, the new generation is live and accepting
-        leases.  We cannot roll it back.  The compensation strategy is:
+        Plan 016 Workstream E2 (commit acceptance): once the
+        candidate slot is the active slot (``is_candidate_slot_active``
+        on the pending swap), the reload has been *accepted* — the
+        new generation is live and accepting leases.  Compensation
+        must therefore NOT attempt rollback; it only retries
+        post-publication bookkeeping that may have failed.
+
+        The compensation strategy is:
 
         1. If the failure was in process transitions, retry applying
            them — the process supervisor can safely reconfigure after
            publication.
-        2. Accept the new generation regardless — the persistence delta
-           is idempotent and will be re-synced on the next reload.
+        2. Accept the new generation regardless — the persistence
+           delta is idempotent and will be re-synced on the next
+           reload.
+        3. If the pending swap reports its candidate slot is already
+           active, the reload was accepted even when post-publication
+           housekeeping failed; warn but do not attempt rollback.
 
         Returns ``True`` if compensation succeeded (new generation is
         accepted as the current state and process transitions were
@@ -2395,6 +2556,24 @@ class ReloadManager:
             txn.generation_id,
             exc,
         )
+
+        # Plan 016 Workstream E2: detect "candidate already active"
+        # so the compensation path does not duplicate work the
+        # ``PendingGenerationSwap`` already finalized.  This catches
+        # the race where ``commit()`` succeeded and the swap moved
+        # to ``COMMITTED`` state but a subsequent bookkeeping step
+        # raised — in that case the new generation is live and
+        # accepting leases, so compensation is a no-op.
+        swap_already_active = pending_swap is not None and getattr(
+            pending_swap, "is_candidate_slot_active", False
+        )
+        if swap_already_active:
+            logger.info(
+                "Post-publication compensation: candidate slot is "
+                "already active for generation %d; reload accepted; "
+                "treating post-publication failure as housekeeping",
+                txn.generation_id,
+            )
 
         compensation_ok = True
 
@@ -2430,6 +2609,7 @@ class ReloadManager:
             digest_prefix=txn.digest_prefix,
             error=f"{exc!r}",
             compensation_ok=compensation_ok,
+            candidate_already_active=swap_already_active,
         )
         return compensation_ok
 

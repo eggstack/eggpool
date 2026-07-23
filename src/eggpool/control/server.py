@@ -205,8 +205,20 @@ class ControlServer:
     ) -> None:
         """Handle a single short-lived connection."""
         peer = writer.get_extra_info("peername", "?")
-        # SO_PEERCRED: reject connections from a different UID where supported.
-        _reject_unmatched_peer_uid(writer)
+        # SO_PEERCRED: reject connections from a different UID where
+        # supported.  Plan 016 Workstream G1: the helper fails closed
+        # on missing sockets, insufficient peer-cred data, or
+        # ``OSError``; when it raises we MUST NOT process the request
+        # and MUST close the connection cleanly without sending any
+        # response (the peer is untrusted).
+        try:
+            _reject_unmatched_peer_uid(writer)
+        except ControlPeerCredentialError as exc:
+            logger.warning("Control connection from %s rejected: %s", peer, exc.reason)
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+            return
         try:
             raw_line = await asyncio.wait_for(
                 reader.readline(),
@@ -514,31 +526,58 @@ def _verify_runtime_dir(path: Path) -> None:
         ) from None
 
 
+class ControlPeerCredentialError(Exception):
+    """Raised when a control connection fails peer-credential validation.
+
+    Plan 016 Workstream G1: when ``SO_PEERCRED`` is supported, the
+    server must verify the peer's UID matches its own.  On
+    insufficient data, on the absence of a socket handle, or on
+    ``OSError`` from the kernel the server MUST treat the connection
+    as untrusted and terminate the handler cleanly.  Previously the
+    helper silently returned, allowing the request to proceed.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 def _reject_unmatched_peer_uid(writer: asyncio.StreamWriter) -> None:
     """Reject connections from a different UID using SO_PEERCRED where available.
 
     On Linux, ``SO_PEERCRED`` provides the peer's UID at connection time.
     If the peer UID does not match the server UID the connection is
-    closed immediately.  On platforms where ``SO_PEERCRED`` is unavailable
-    (e.g. macOS), the check is silently skipped — the socket's ``0o600``
+    closed immediately by raising :class:`ControlPeerCredentialError`.
+    On platforms where ``SO_PEERCRED`` is unavailable (e.g. macOS),
+    the check is silently skipped — the socket's ``0o600``
     permissions already restrict access to the file owner.
+
+    Plan 016 Workstream G1: when ``SO_PEERCRED`` is supported, the
+    helper fails closed.  Any failure to read peer credentials
+    (missing socket, insufficient data, ``OSError``, ``ValueError``)
+    raises :class:`ControlPeerCredentialError` so the handler
+    terminates without processing the request.
     """
     sock: _socket.socket | None = writer.get_extra_info("socket")
     if sock is None:
-        return
+        raise ControlPeerCredentialError("no socket handle available")
 
     peercred_attr = getattr(_socket, "SO_PEERCRED", None)
     if peercred_attr is None:
-        return
+        return  # SO_PEERCRED unavailable — socket perms are the gate
 
     try:
         size = _struct.calcsize("3i")
         creds_bytes: bytes = sock.getsockopt(_socket.SOL_SOCKET, peercred_attr, size)
-        if len(creds_bytes) != size:
-            return  # insufficient data, fail closed
+    except (OSError, ValueError, _struct.error) as exc:
+        raise ControlPeerCredentialError(f"SO_PEERCRED read failed: {exc!r}") from exc
+
+    if len(creds_bytes) != size:
+        raise ControlPeerCredentialError("SO_PEERCRED returned insufficient data")
+    try:
         _pid, uid, _gid = _struct.unpack("3i", creds_bytes)
-    except (OSError, ValueError, _struct.error):
-        return
+    except _struct.error as exc:
+        raise ControlPeerCredentialError(f"SO_PEERCRED unpack failed: {exc!r}") from exc
 
     server_uid = os.getuid()
     if uid != server_uid:
@@ -547,5 +586,4 @@ def _reject_unmatched_peer_uid(writer: asyncio.StreamWriter) -> None:
             uid,
             server_uid,
         )
-        writer.close()
-        return
+        raise ControlPeerCredentialError(f"peer UID {uid} != server UID {server_uid}")

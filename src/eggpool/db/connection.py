@@ -92,6 +92,17 @@ class Database:
     cannot piggyback on each other's transactions.
     """
 
+    #: Test-only fault injection seam for the outer COMMIT boundary.
+    #:
+    #: When set on the class, every outermost ``transaction()`` exits
+    #: by raising this exception *after* the inner work has yielded
+    #: successfully but *before* the SQLite COMMIT is issued.  This
+    #: simulates a process crash / power-loss between yield and commit
+    #: so reload tests can verify that callers see the failure and
+    #: run the rollback / compensation path.  Must default to ``None``
+    #: in production; only tests should set this.
+    TEST_INJECT_COMMIT_FAILURE: Exception | None = None
+
     def __init__(
         self,
         path: str,
@@ -709,6 +720,19 @@ class Database:
                 await self._conn.rollback()
                 raise
             else:
+                # Plan 016 Workstream F: test-only fault-injection seam
+                # to simulate a process crash *after* the inner work
+                # completed but *before* the SQLite COMMIT.  When the
+                # class-level ``TEST_INJECT_COMMIT_FAILURE`` is set,
+                # raise it here so the surrounding reload can verify
+                # that rollback / compensation paths see the failure.
+                # The injection MUST NOT swallow real database errors
+                # that arise from the actual ``commit()`` call.
+                if Database.TEST_INJECT_COMMIT_FAILURE is not None:
+                    injected = Database.TEST_INJECT_COMMIT_FAILURE
+                    Database.TEST_INJECT_COMMIT_FAILURE = None
+                    await self._conn.rollback()
+                    raise injected
                 await self._conn.commit()
             finally:
                 state.active = False

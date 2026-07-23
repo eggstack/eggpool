@@ -84,6 +84,23 @@ uv run pytest \
     tests/unit/test_phase6_fault_injection.py \
     tests/unit/test_reload_diagnostics_matrix.py \
     tests/integration/reload/test_reload_fault_matrix.py -v
+
+# Plan 016 — Reload atomicity corrective closure (pending-swap state
+# machine, lease linearization, cancellation-shielded precommit abort,
+# true SQLite COMMIT-bypass injection, peer-cred fail-closed, fact-based
+# diagnostic flags)
+uv run pytest \
+    tests/unit/test_runtime_manager.py \
+    tests/unit/test_process_transition_plan.py \
+    tests/unit/test_control_server.py \
+    tests/unit/test_reload_diagnostics_matrix.py \
+    tests/unit/test_reload_manager.py \
+    tests/unit/test_phase6_fault_injection.py \
+    tests/unit/test_published_swap_protocol.py \
+    tests/integration/reload/test_pending_swap_visibility.py \
+    tests/integration/reload/test_sqlite_commit_failure.py \
+    tests/integration/reload/test_plan_016_corrective_replacements.py \
+    tests/integration/reload/test_reload_fault_matrix.py -v
 ```
 
 ## Linting

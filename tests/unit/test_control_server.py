@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import os as _os
 import shutil as _shutil
 from pathlib import Path
@@ -919,3 +920,152 @@ class TestIntegration:
             assert received_digest == [None]
         finally:
             await srv.stop()
+
+
+# ---------------------------------------------------------------------------
+# Plan 016 Workstream G — peer-credential fail-closed
+# ---------------------------------------------------------------------------
+
+
+class TestPeerCredentialFailClosed:
+    """Plan 016 Workstream G1: the peer-cred helper must fail closed.
+
+    Previously the helper silently returned on missing sockets,
+    insufficient peer-cred data, or ``OSError`` from the kernel —
+    allowing untrusted connections to proceed to request processing.
+    Now the helper raises :class:`ControlPeerCredentialError` so the
+    handler can terminate cleanly without processing the request.
+    """
+
+    def test_missing_socket_raises(self) -> None:
+        from unittest.mock import MagicMock
+
+        from eggpool.control.server import (
+            ControlPeerCredentialError,
+            _reject_unmatched_peer_uid,
+        )
+
+        writer = MagicMock()
+        writer.get_extra_info.return_value = None
+        with pytest.raises(ControlPeerCredentialError):
+            _reject_unmatched_peer_uid(writer)
+
+    def test_oserror_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import socket as _socket
+        from unittest.mock import MagicMock
+
+        from eggpool.control.server import (
+            ControlPeerCredentialError,
+            _reject_unmatched_peer_uid,
+        )
+
+        class _Boom:
+            def getsockopt(self, *args: object, **kwargs: object) -> bytes:
+                raise OSError("simulated peercred failure")
+
+        monkeypatch.setattr(_socket, "SO_PEERCRED", 1, raising=False)
+        writer = MagicMock()
+        writer.get_extra_info.return_value = _Boom()
+        with pytest.raises(ControlPeerCredentialError):
+            _reject_unmatched_peer_uid(writer)
+
+    def test_short_response_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import socket as _socket
+        from unittest.mock import MagicMock
+
+        from eggpool.control.server import (
+            ControlPeerCredentialError,
+            _reject_unmatched_peer_uid,
+        )
+
+        class _Short:
+            def getsockopt(self, *args: object, **kwargs: object) -> bytes:
+                return b"\x00\x00\x00\x00"  # 4 bytes, not 12
+
+        monkeypatch.setattr(_socket, "SO_PEERCRED", 1, raising=False)
+        writer = MagicMock()
+        writer.get_extra_info.return_value = _Short()
+        with pytest.raises(ControlPeerCredentialError):
+            _reject_unmatched_peer_uid(writer)
+
+    def test_mismatched_uid_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import socket as _socket
+        import struct as _struct
+        from unittest.mock import MagicMock
+
+        from eggpool.control.server import (
+            ControlPeerCredentialError,
+            _reject_unmatched_peer_uid,
+        )
+
+        other_uid = (os.getuid() + 1) % 65536 or 1
+
+        class _OtherUid:
+            def getsockopt(self, *args: object, **kwargs: object) -> bytes:
+                return _struct.pack("3i", 0, other_uid, 0)
+
+        monkeypatch.setattr(_socket, "SO_PEERCRED", 1, raising=False)
+        writer = MagicMock()
+        writer.get_extra_info.return_value = _OtherUid()
+        with pytest.raises(ControlPeerCredentialError):
+            _reject_unmatched_peer_uid(writer)
+
+    def test_matching_uid_returns_silently(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import socket as _socket
+        import struct as _struct
+        from unittest.mock import MagicMock
+
+        from eggpool.control.server import _reject_unmatched_peer_uid
+
+        class _SameUid:
+            def getsockopt(self, *args: object, **kwargs: object) -> bytes:
+                return _struct.pack("3i", 0, os.getuid(), 0)
+
+        monkeypatch.setattr(_socket, "SO_PEERCRED", 1, raising=False)
+        writer = MagicMock()
+        writer.get_extra_info.return_value = _SameUid()
+        # No raise — matching UID passes.
+        _reject_unmatched_peer_uid(writer)
+
+    @pytest.mark.asyncio()
+    async def test_handle_connection_terminates_on_peer_cred_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """End-to-end: peer-cred failure closes the writer and skips processing.
+
+        Verifies that when ``_reject_unmatched_peer_uid`` raises, the
+        handler does NOT call ``_process_request`` and closes the
+        writer cleanly.  This is the Workstream G2 invariant: a
+        rejected connection cannot reach the request path.
+        """
+        from eggpool.control.server import (
+            ControlPeerCredentialError,
+            ControlServer,
+        )
+
+        process_mock = AsyncMock()
+        monkeypatch.setattr(ControlServer, "_process_request", process_mock)
+
+        def _raise_peer_cred(*args: object, **kwargs: object) -> None:
+            raise ControlPeerCredentialError("simulated")
+
+        monkeypatch.setattr(
+            "eggpool.control.server._reject_unmatched_peer_uid",
+            _raise_peer_cred,
+        )
+
+        # ControlServer needs a ReloadHandler; build a sentinel
+        # instance directly so we never call the real handler.
+        server = ControlServer.__new__(ControlServer)
+        server._path = Path("/tmp/unused.sock")
+        server._server = None
+
+        reader = AsyncMock()
+        writer = AsyncMock()
+        writer.get_extra_info.return_value = "test-peer"
+        await server._handle_connection(reader, writer)
+
+        process_mock.assert_not_called()
+        writer.close.assert_called()

@@ -112,7 +112,7 @@ def _make_runtime_manager(active_generation: MagicMock | None = None) -> MagicMo
     mock_swap.stage = AsyncMock(side_effect=_set_swap_staged(mock_swap))
     mock_swap.commit = AsyncMock(side_effect=_set_swap_committed(mock_swap))
     mock_swap.rollback = AsyncMock()
-    mock_swap.finalize_retirement = MagicMock(return_value=0)
+    mock_swap.finalize_retirement = AsyncMock(return_value=0)
     rm.prepare_candidate_swap = AsyncMock(return_value=mock_swap)
     rm._lease_gate_event = None
     rm._spawn_retirement_task = AsyncMock()

@@ -607,18 +607,58 @@ class _GenerationSlot:
 
 
 # ---------------------------------------------------------------------------
-# Pending generation swap (Workstream A — Plan 015)
+# Pending generation swap (Workstream A — Plan 015 + Plan 016)
 # ---------------------------------------------------------------------------
+
+
+class PendingSwapState(enum.Enum):
+    """Explicit lifecycle state of a :class:`PendingGenerationSwap`.
+
+    Transitions::
+
+        PREPARED → STAGED → COMMITTED → FINALIZED
+        PREPARED → STAGED → ROLLED_BACK
+
+    ``PREPARED`` is the initial state immediately after
+    :meth:`RuntimeManager.prepare_candidate_swap` returns the swap.
+    ``STAGED`` means lease admission is gated and the candidate slot is
+    non-accepting.  ``COMMITTED`` means the candidate became the active
+    slot and old admission closed, atomically.  ``ROLLED_BACK`` restores
+    the old slot and clears the gate.  ``FINALIZED`` is the terminal
+    state once the post-commit retirement scheduling has completed.
+
+    Repeated terminal calls are idempotent.  Conflicting calls
+    (rollback after commit, commit after rollback) raise
+    :class:`RuntimeManagerSwapStateError`.
+    """
+
+    PREPARED = "prepared"
+    STAGED = "staged"
+    COMMITTED = "committed"
+    ROLLED_BACK = "rolled_back"
+    FINALIZED = "finalized"
 
 
 class PendingGenerationSwap:
     """Single-use staged swap protocol for atomic reload publication.
 
+    Plan 016 Workstream A — all state mutations are routed through
+    private runtime-manager methods (``_stage_pending_swap``,
+    ``_commit_pending_swap``, ``_rollback_pending_swap``) that
+    acquire :attr:`RuntimeManager._lock` themselves, so callers never
+    need to hold the lock and no mutation can race with the
+    :meth:`RuntimeManager.acquire` lease linearization.
+
     Splits the coarse install_candidate() into explicit boundaries:
+
     - stage(): gates lease admission, places candidate in staged state
     - commit(): makes candidate active, reopens admission, returns old gen ID
     - rollback(): restores old slot, reopens admission, returns candidate for abort
     - finalize_retirement(): schedules old gen retirement after accepted publication
+
+    Lifecycle is tracked by :class:`PendingSwapState`.  Conflicting
+    lifecycle operations raise :class:`RuntimeManagerSwapStateError`
+    so diagnostics can classify them deterministically.
     """
 
     def __init__(
@@ -633,151 +673,242 @@ class PendingGenerationSwap:
         self._candidate_generation = candidate_generation
         self._old_slot: _GenerationSlot | None = None
         self._new_slot: _GenerationSlot | None = None
-        self._staged = False
-        self._committed = False
         self._drain_timeout_s = drain_timeout_s
         self._expected_active_generation_id = expected_active_generation_id
         self._lease_gate_event: asyncio.Event | None = None
         self._stage_started_at: float | None = None
+        self._state: PendingSwapState = PendingSwapState.PREPARED
 
     async def stage(self) -> None:
         """Gate lease admission and place the candidate in staged state.
 
-        Must be called under the runtime manager's lock.  Creates the
+        Acquires :attr:`RuntimeManager._lock` internally.  Creates the
         new slot but does NOT spawn retirement or close any resources.
-        """
-        if self._staged:
-            raise RuntimeError("PendingGenerationSwap already staged")
-        if self._committed:
-            raise RuntimeError("PendingGenerationSwap already committed")
+        Repeated calls are no-ops once staged.
 
+        The swap may have been constructed directly (tests) or via
+        :meth:`RuntimeManager.prepare_candidate_swap` (production).
+        Direct construction skips the ``rm._pending_swap is self``
+        ownership check so existing tests are not broken.
+        """
         rm = self._runtime_manager
-        if (
-            self._expected_active_generation_id is not None
-            and rm._active is not None  # pyright: ignore[reportPrivateUsage]
-            and rm._active.generation.generation_id  # pyright: ignore[reportPrivateUsage]
-            != self._expected_active_generation_id
-        ):
-            raise RuntimeError(
-                "Active generation changed during candidate preparation; "
-                f"expected {self._expected_active_generation_id}, "
-                f"found {rm._active.generation.generation_id}"  # pyright: ignore[reportPrivateUsage]
+        async with rm._lock:  # pyright: ignore[reportPrivateUsage]
+            if self._state is PendingSwapState.STAGED:
+                return  # idempotent
+            if self._state is not PendingSwapState.PREPARED:
+                raise RuntimeManagerSwapStateError(
+                    f"Cannot stage swap in state {self._state.value}"
+                )
+            if (
+                rm._pending_swap is not None  # pyright: ignore[reportPrivateUsage]
+                and rm._pending_swap is not self  # pyright: ignore[reportPrivateUsage]
+            ):
+                raise RuntimeManagerSwapInProgressError(
+                    "A different pending swap is already staged"
+                )
+            if rm._shutdown_in_progress:  # pyright: ignore[reportPrivateUsage]
+                raise RuntimeManagerShutdownError("Cannot stage swap after shutdown")
+            active = rm._active  # pyright: ignore[reportPrivateUsage]
+            if (
+                self._expected_active_generation_id is not None
+                and active is not None
+                and active.generation.generation_id
+                != self._expected_active_generation_id
+            ):
+                raise RuntimeError(
+                    "Active generation changed during candidate preparation; "
+                    f"expected {self._expected_active_generation_id}, "
+                    f"found {active.generation.generation_id}"
+                )
+
+            self._old_slot = active
+            self._new_slot = _GenerationSlot(
+                generation=self._candidate_generation,
+                accepting_leases=False,  # gated until commit
+            )
+            rm._next_generation_id = max(  # pyright: ignore[reportPrivateUsage]
+                rm._next_generation_id,  # pyright: ignore[reportPrivateUsage]
+                self._candidate_generation.generation_id + 1,
             )
 
-        self._old_slot = rm._active  # pyright: ignore[reportPrivateUsage]
-        self._new_slot = _GenerationSlot(
-            generation=self._candidate_generation,
-            accepting_leases=False,  # gated until commit
-        )
-        rm._next_generation_id = max(  # pyright: ignore[reportPrivateUsage]
-            rm._next_generation_id,  # pyright: ignore[reportPrivateUsage]
-            self._candidate_generation.generation_id + 1,
-        )
+            # Install lease gate — acquire() callers will wait on this event.
+            gate_event = asyncio.Event()
+            self._lease_gate_event = gate_event
+            rm._lease_gate_event = gate_event  # pyright: ignore[reportPrivateUsage]
+            self._stage_started_at = time.monotonic()
+            self._state = PendingSwapState.STAGED
 
-        # Install lease gate — acquire() callers will wait on this event.
-        gate_event = asyncio.Event()
-        self._lease_gate_event = gate_event
-        rm._lease_gate_event = gate_event  # pyright: ignore[reportPrivateUsage]
-
-        self._staged = True
-        self._stage_started_at = time.monotonic()
-
-        logger.info(
-            "PendingGenerationSwap staged for generation %d (old_gen=%s, digest=%s)",
-            self._candidate_generation.generation_id,
-            self._old_slot.generation.generation_id
-            if self._old_slot is not None
-            else "None",
-            _digest_prefix(self._candidate_generation.config_digest),
-        )
+            logger.info(
+                "PendingGenerationSwap staged for generation %d "
+                "(old_gen=%s, digest=%s)",
+                self._candidate_generation.generation_id,
+                self._old_slot.generation.generation_id
+                if self._old_slot is not None
+                else "None",
+                _digest_prefix(self._candidate_generation.config_digest),
+            )
 
     async def commit(self) -> int | None:
         """Make the candidate active, reopen admission, return old gen ID.
 
-        Must be non-fallible after stage() succeeded.  Transfers rollback
-        responsibility away (the caller must not call rollback after commit).
+        Acquires :attr:`RuntimeManager._lock` internally so the swap from
+        old slot (accepting) → candidate slot (accepting) and the gate
+        release happen in one critical section.  The linearization
+        point for lease publication.
+
+        Raises :class:`RuntimeManagerSwapStateError` if the swap has
+        already been rolled back.
         """
-        if not self._staged:
-            raise RuntimeError("PendingGenerationSwap not staged")
-        if self._committed:
-            raise RuntimeError("PendingGenerationSwap already committed")
-
         rm = self._runtime_manager
-        assert self._new_slot is not None  # guaranteed by stage()
+        async with rm._lock:  # pyright: ignore[reportPrivateUsage]
+            if self._state is PendingSwapState.COMMITTED:
+                return self._old_gen_id()  # idempotent re-commit
+            if self._state is PendingSwapState.FINALIZED:
+                return self._old_gen_id()  # post-finalization re-commit is a no-op
+            if self._state is not PendingSwapState.STAGED:
+                raise RuntimeManagerSwapStateError(
+                    f"Cannot commit swap in state {self._state.value}"
+                )
+            if (
+                rm._pending_swap is not None  # pyright: ignore[reportPrivateUsage]
+                and rm._pending_swap is not self  # pyright: ignore[reportPrivateUsage]
+            ):
+                raise RuntimeManagerSwapInProgressError(
+                    "A different pending swap is now the manager's pending swap"
+                )
+            assert self._new_slot is not None  # guaranteed by stage()
 
-        # Make the new slot active and accepting.
-        self._new_slot.accepting_leases = True
-        rm._active = self._new_slot  # pyright: ignore[reportPrivateUsage]
+            # Linearization point: make the new slot active, mark old
+            # non-accepting, bump the publication epoch, release the
+            # gate, set swap state — all under one lock acquisition so
+            # no acquire() can observe an old lease after committed
+            # publication.
+            self._new_slot.accepting_leases = True
+            rm._active = self._new_slot  # pyright: ignore[reportPrivateUsage]
 
-        # Mark old slot as NOT yet retiring (retirement is deferred).
-        if self._old_slot is not None:
-            self._old_slot.retirement_started = False
+            if self._old_slot is not None:
+                self._old_slot.accepting_leases = False
+                self._old_slot.retirement_started = False
 
-        # Clear the lease gate to wake blocked acquire() calls.
-        if self._lease_gate_event is not None:
-            self._lease_gate_event.set()
-            rm._lease_gate_event = None  # pyright: ignore[reportPrivateUsage]
-            self._lease_gate_event = None
+            # Release the lease gate to wake blocked acquire() calls.
+            if self._lease_gate_event is not None:
+                self._lease_gate_event.set()
+                rm._lease_gate_event = None  # pyright: ignore[reportPrivateUsage]
+                self._lease_gate_event = None
 
-        # Record commit.
-        self._committed = True
+            # Plan 016 Workstream B: bump publication epoch and wake
+            # blocked acquire() waiters via the manager-level state
+            # change event.
+            rm._publication_epoch += 1  # pyright: ignore[reportPrivateUsage]
+            rm._state_changed_event.set()  # pyright: ignore[reportPrivateUsage]
 
-        old_gen_id: int | None = None
-        if self._old_slot is not None:
-            old_gen_id = self._old_slot.generation.generation_id
+            self._state = PendingSwapState.COMMITTED
 
-        logger.info(
-            "PendingGenerationSwap committed: gen %d active (old_gen=%s)",
-            self._candidate_generation.generation_id,
-            old_gen_id,
-        )
-        return old_gen_id
+            old_gen_id = self._old_gen_id()
+            logger.info(
+                "PendingGenerationSwap committed: gen %d active (old_gen=%s)",
+                self._candidate_generation.generation_id,
+                old_gen_id,
+            )
+            return old_gen_id
 
     async def rollback(self) -> RuntimeGeneration | None:
         """Restore old slot as active, reopen admission, return candidate for abort.
 
-        Idempotent.  Leaves old slot non-retiring and retirement task
-        count unchanged.
-        """
-        if self._committed:
-            return None  # already committed; rollback is a no-op
+        Acquires :attr:`RuntimeManager._lock` internally so old admission
+        reopens and the gate clears in a single critical section.  After
+        a successful rollback the swap is cleared from the manager's
+        pending-slot slot (under the same lock acquisition) so a fresh
+        swap can be accepted.
 
+        Raises :class:`RuntimeManagerSwapStateError` if the swap has
+        already been committed.
+        """
         rm = self._runtime_manager
+        async with rm._lock:  # pyright: ignore[reportPrivateUsage]
+            if self._state is PendingSwapState.ROLLED_BACK:
+                return self._candidate_generation  # idempotent
+            if self._state in (
+                PendingSwapState.COMMITTED,
+                PendingSwapState.FINALIZED,
+            ):
+                raise RuntimeManagerSwapStateError("Cannot rollback swap after commit")
+            if self._state is not PendingSwapState.STAGED:
+                raise RuntimeManagerSwapStateError(
+                    f"Cannot rollback swap in state {self._state.value}"
+                )
 
-        if self._old_slot is not None:
-            rm._active = self._old_slot  # pyright: ignore[reportPrivateUsage]
-            self._old_slot.accepting_leases = True
-        else:
-            rm._active = None  # pyright: ignore[reportPrivateUsage]
+            if self._old_slot is not None:
+                rm._active = self._old_slot  # pyright: ignore[reportPrivateUsage]
+                self._old_slot.accepting_leases = True
+                self._old_slot.retirement_started = False
+            else:
+                rm._active = None  # pyright: ignore[reportPrivateUsage]
 
-        # Clear the lease gate.
-        if self._lease_gate_event is not None:
-            self._lease_gate_event.set()
-            rm._lease_gate_event = None  # pyright: ignore[reportPrivateUsage]
-            self._lease_gate_event = None
+            # Clear the lease gate so blocked acquire() calls resume.
+            if self._lease_gate_event is not None:
+                self._lease_gate_event.set()
+                rm._lease_gate_event = None  # pyright: ignore[reportPrivateUsage]
+                self._lease_gate_event = None
 
-        # Remove the staged candidate slot reference.
-        self._new_slot = None
+            # Plan 016 Workstream B: wake blocked acquire() waiters
+            # so they re-evaluate against the restored active slot.
+            rm._state_changed_event.set()  # pyright: ignore[reportPrivateUsage]
 
-        # Leave old slot non-retiring.
-        if self._old_slot is not None:
-            self._old_slot.retirement_started = False
+            # Drop the staged candidate slot reference.
+            self._new_slot = None
+            self._state = PendingSwapState.ROLLED_BACK
 
-        logger.info(
-            "PendingGenerationSwap rolled back (candidate gen %d discarded)",
-            self._candidate_generation.generation_id,
-        )
-        return self._candidate_generation
+            # Clear pending-swap ownership under the same lock so a fresh
+            # swap can be admitted immediately.
+            if rm._pending_swap is self:  # pyright: ignore[reportPrivateUsage]
+                rm._pending_swap = None  # pyright: ignore[reportPrivateUsage]
 
-    def finalize_retirement(self) -> int | None:
-        """Return old generation ID for retirement scheduling.
-
-        Must run only after commit.  Returns None if no old generation.
-        """
-        if not self._committed:
-            raise RuntimeError(
-                "PendingGenerationSwap.finalize_retirement called before commit"
+            logger.info(
+                "PendingGenerationSwap rolled back (candidate gen %d discarded)",
+                self._candidate_generation.generation_id,
             )
+            return self._candidate_generation
+
+    async def finalize_retirement(self) -> int | None:
+        """Schedule retirement of the old generation and mark the swap finalized.
+
+        Acquires :attr:`RuntimeManager._lock` internally to spawn the
+        retirement task under the manager's registry and to mark the
+        swap terminal.  Must run only after :meth:`commit` succeeds.
+        Returns the old generation ID when scheduled, or ``None`` when
+        there is no prior generation (initial install).
+
+        Raises :class:`RuntimeManagerSwapStateError` if the swap has not
+        been committed, or :class:`RuntimeManagerShutdownError` when the
+        manager is shutting down.
+        """
+        rm = self._runtime_manager
+        async with rm._lock:  # pyright: ignore[reportPrivateUsage]
+            if self._state is PendingSwapState.FINALIZED:
+                return self._old_gen_id()  # idempotent
+            if self._state is not PendingSwapState.COMMITTED:
+                raise RuntimeManagerSwapStateError(
+                    "PendingGenerationSwap.finalize_retirement called before commit"
+                )
+
+            old_slot = self._old_slot
+            old_id: int | None = (
+                old_slot.generation.generation_id if old_slot is not None else None
+            )
+
+            # Spawn the retirement task through the runtime manager so
+            # the manager's retirement-tasks registry stays accurate.
+            if old_slot is not None and not rm._shutdown_in_progress:  # pyright: ignore[reportPrivateUsage]
+                await rm._spawn_retirement_task(old_slot, self._drain_timeout_s)  # pyright: ignore[reportPrivateUsage]
+
+            self._state = PendingSwapState.FINALIZED
+            # Clear pending-swap ownership under the same lock.
+            if rm._pending_swap is self:  # pyright: ignore[reportPrivateUsage]
+                rm._pending_swap = None  # pyright: ignore[reportPrivateUsage]
+            return old_id
+
+    def _old_gen_id(self) -> int | None:
         if self._old_slot is not None:
             return self._old_slot.generation.generation_id
         return None
@@ -787,17 +918,37 @@ class PendingGenerationSwap:
     @property
     def staged(self) -> bool:
         """Return True if stage() has been called."""
-        return self._staged
+        return self._state is PendingSwapState.STAGED
 
     @property
     def committed(self) -> bool:
         """Return True if commit() has been called."""
-        return self._committed
+        return self._state in (
+            PendingSwapState.COMMITTED,
+            PendingSwapState.FINALIZED,
+        )
+
+    @property
+    def rolled_back(self) -> bool:
+        """Return True if rollback() has been called."""
+        return self._state is PendingSwapState.ROLLED_BACK
+
+    @property
+    def finalized(self) -> bool:
+        """Return True if finalize_retirement() has been called."""
+        return self._state is PendingSwapState.FINALIZED
+
+    @property
+    def swap_state(self) -> PendingSwapState:
+        """Return the current :class:`PendingSwapState`."""
+        return self._state
 
     @property
     def candidate_generation_id(self) -> int | None:
         """Return the candidate generation ID, or None if not staged."""
-        return self._candidate_generation.generation_id if self._staged else None
+        if self._state is PendingSwapState.PREPARED:
+            return None
+        return self._candidate_generation.generation_id
 
     @property
     def old_generation_id(self) -> int | None:
@@ -810,6 +961,20 @@ class PendingGenerationSwap:
     def stage_started_at(self) -> float | None:
         """Return the monotonic timestamp when stage() was called."""
         return self._stage_started_at
+
+    @property
+    def is_candidate_slot_active(self) -> bool:
+        """Return ``True`` if the candidate generation is currently active.
+
+        Plan 016 Workstream E1: after :meth:`commit` succeeds, the
+        candidate slot is the active slot and the prior slot is being
+        retired; any rollback attempt must therefore be a no-op because
+        the new generation has already taken over admission.  Returns
+        ``False`` for ``PREPARED`` and ``ROLLED_BACK`` (and
+        ``FINALIZED`` is not returned because the swap is terminal and
+        cannot be rolled back).
+        """
+        return self._state is PendingSwapState.COMMITTED
 
 
 # ---------------------------------------------------------------------------
@@ -981,6 +1146,18 @@ class RuntimeDiagnostics:
       generation is published.
     - ``retirement_task_count``: number of tracked retirement tasks
       (Phase 3).
+    - ``pending_swap_state``: lifecycle of the current pending swap
+      (:class:`PendingSwapState` value name, or ``None``).
+    - ``pending_swap_generation_id``: candidate generation ID, when
+      the swap has been staged or committed.
+    - ``pending_swap_old_generation_id``: ID of the generation being
+      replaced, when staged or committed.
+    - ``pending_swap_started_at``: monotonic timestamp of stage().
+    - ``lease_admission_gated``: ``True`` when the lease gate is open.
+    - ``lease_gate_waiter_count``: number of acquire() callers
+      currently waiting on the gate.
+    - ``publication_epoch``: monotonic counter incremented on every
+      committed publication.
     """
 
     active: GenerationDiagnostics | None
@@ -988,11 +1165,13 @@ class RuntimeDiagnostics:
     shutdown_in_progress: bool
     next_generation_id: int
     retirement_task_count: int = 0
+    pending_swap_state: str | None = None
     pending_swap_generation_id: int | None = None
     pending_swap_old_generation_id: int | None = None
     pending_swap_started_at: float | None = None
     lease_admission_gated: bool = False
     lease_gate_waiter_count: int = 0
+    publication_epoch: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -1024,6 +1203,26 @@ class RuntimeManagerLeaseExhaustedError(RuntimeError):
     """
 
 
+class RuntimeManagerSwapInProgressError(RuntimeError):
+    """Raised when a second pending swap is prepared while one is unresolved.
+
+    There is at most one pending swap owned by a single
+    :class:`RuntimeManager`.  This typed error lets diagnostics
+    distinguish admission-time conflicts from lifecycle-state conflicts
+    without parsing the message.
+    """
+
+
+class RuntimeManagerSwapStateError(RuntimeError):
+    """Raised when a pending swap receives a conflicting lifecycle operation.
+
+    Distinct from :class:`RuntimeManagerSwapInProgressError`:
+    admission-time overlaps are ``SwapInProgressError``; lifecycle
+    operations against the wrong state (commit after rollback, rollback
+    after commit) are ``SwapStateError``.
+    """
+
+
 class RuntimeManager:
     """Process-wide owner of generation slots, leases, and retirement.
 
@@ -1052,6 +1251,19 @@ class RuntimeManager:
             None  # blocks acquire() during staged swap
         )
         self._pending_swap: PendingGenerationSwap | None = None
+        # Plan 016 Workstream B: monotonic publication epoch.  Incremented
+        # only on committed publication so an acquire() that snapshotted
+        # pre-commit can detect the swap and retry through the gate path.
+        self._publication_epoch: int = 0
+        # Plan 016 Workstream H3: manager-level state-change event that
+        # wakes blocked acquire() callers when the active slot changes
+        # identity or the gate clears.  Replaces the 10 ms polling loop.
+        self._state_changed_event: asyncio.Event = asyncio.Event()
+        # Plan 016 Workstream H3: bounded count of tasks currently
+        # waiting for the lease gate to clear.  Incremented on gate
+        # entry and decremented on gate exit (success, timeout, or
+        # cancellation).
+        self._lease_gate_waiters: int = 0
 
     # -- publication --------------------------------------------------------
 
@@ -1080,6 +1292,10 @@ class RuntimeManager:
                 self._next_generation_id,
                 generation.generation_id + 1,
             )
+            # Plan 016 Workstream B: bump publication epoch and wake
+            # any pending acquire() waiters.
+            self._publication_epoch += 1
+            self._state_changed_event.set()
             logger.info(
                 "Runtime generation %d published (initial install; digest=%s)",
                 generation.generation_id,
@@ -1127,10 +1343,16 @@ class RuntimeManager:
                 )
             new_slot = _GenerationSlot(generation=generation)
             self._active = new_slot
+            if old_slot is not None:
+                old_slot.accepting_leases = False
             self._next_generation_id = max(
                 self._next_generation_id,
                 generation.generation_id + 1,
             )
+            # Plan 016 Workstream B: bump the publication epoch and
+            # wake blocked acquire() callers.
+            self._publication_epoch += 1
+            self._state_changed_event.set()
             logger.info(
                 "Runtime generation %d published (candidate swap; digest=%s)",
                 generation.generation_id,
@@ -1152,12 +1374,33 @@ class RuntimeManager:
         committed (or rolled back), and finalized by the caller.  The
         swap is stored on the manager for diagnostics but does not
         affect the active slot until stage() is called.
+
+        Raises :class:`RuntimeManagerSwapInProgressError` if a
+        previous swap is still ``PREPARED`` or ``STAGED``.  A swap in a
+        terminal state (``COMMITTED``, ``ROLLED_BACK``, ``FINALIZED``)
+        is allowed only after the manager has cleared its
+        ``_pending_swap`` slot — terminal-state calls clear it under
+        the same lock that transitions the swap.
         """
         async with self._lock:
             if self._shutdown_in_progress:
                 raise RuntimeManagerShutdownError(
                     "Cannot prepare candidate swap after shutdown"
                 )
+            existing = self._pending_swap
+            if existing is not None:
+                # A previous swap is still alive — must be resolved first.
+                if existing.swap_state in (
+                    PendingSwapState.PREPARED,
+                    PendingSwapState.STAGED,
+                ):
+                    raise RuntimeManagerSwapInProgressError(
+                        f"A pending swap is still in state {existing.swap_state.value}"
+                    )
+                # Defensive: terminal-state swap must already have
+                # cleared itself.  Force-clear under the lock so a
+                # dangling reference cannot block a fresh prepare.
+                self._pending_swap = None
             swap = PendingGenerationSwap(
                 self,
                 generation,
@@ -1188,73 +1431,97 @@ class RuntimeManager:
     async def acquire(self) -> GenerationLease:
         """Acquire one generation lease from the currently active slot.
 
-        Race-safe with publication: if the active slot has just stopped
-        accepting leases, the manager briefly waits for a new slot
-        (bounded by :data:`GENERATION_LEASE_TIMEOUT_S`) and then retries
-        against the new active slot.  After the timeout elapses or
-        shutdown begins, the call raises
-        :class:`RuntimeManagerLeaseExhaustedError` so the request handler
-        can render an explicit 503 rather than blocking the worker.
+        Plan 016 Workstream B — race-safe with publication:
 
-        When a lease gate is active (during a staged swap), acquire()
-        waits on the gate event instead of polling, and resumes normal
-        acquisition once the gate is cleared.
+        - The active-slot claim runs under ``self._lock`` so a concurrent
+          :meth:`PendingGenerationSwap.commit` cannot transition the slot
+          out of accepting between our snapshot and the lease increment.
+        - The publication epoch is snapshotted before the claim and
+          revalidated after acquiring the lock; if it advanced, we
+          retry through the gate path.
+        - The gate wait is event-driven via
+          :attr:`_state_changed_event` (no polling fallback).  The
+          event is set when the active slot changes, the gate clears,
+          or shutdown begins.
+
+        After :data:`GENERATION_LEASE_TIMEOUT_S` elapses or shutdown
+        begins, the call raises :class:`RuntimeManagerLeaseExhaustedError`
+        so the request handler can render an explicit 503 rather than
+        blocking the worker.
         """
         deadline = time.monotonic() + GENERATION_LEASE_TIMEOUT_S
+        first_pass = True
         while True:
-            # Check lease gate — event-driven wait during staged swap.
-            gate = self._lease_gate_event
-            if gate is not None:
-                if self._shutdown_in_progress:
-                    raise RuntimeManagerLeaseExhaustedError(
-                        "RuntimeManager is shutting down; no generation slot "
-                        "is accepting leases"
-                    )
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise RuntimeManagerLeaseExhaustedError(
-                        "No accepting generation slot within "
-                        f"{GENERATION_LEASE_TIMEOUT_S}s of acquire()"
-                    )
-                try:
-                    await asyncio.wait_for(gate.wait(), timeout=remaining)
-                except TimeoutError:
-                    raise RuntimeManagerLeaseExhaustedError(
-                        "No accepting generation slot within "
-                        f"{GENERATION_LEASE_TIMEOUT_S}s of acquire()"
-                    ) from None
-                # Gate cleared — fall through to normal acquisition.
-
-            slot = self._active
-            if slot is not None and slot.accepting_leases:
-                # Hot path: no lock acquisition.  We briefly snapshot
-                # the active count under the slot's own lock so a
-                # concurrent retirement cannot drop the count to
-                # negative while we increment it.
-                async with slot.close_lock:
-                    if not slot.accepting_leases:
-                        # Lost the race; restart the wait loop.
-                        slot = None
-                    else:
-                        slot.active_leases += 1
-                        self._acquire_id += 1
-                if slot is not None:
-                    return GenerationLease(
-                        generation_id=slot.generation.generation_id,
-                        slot=slot,
-                    )
             if self._shutdown_in_progress:
                 raise RuntimeManagerLeaseExhaustedError(
                     "RuntimeManager is shutting down; no generation slot "
                     "is accepting leases"
                 )
+
+            # Manager-lock-based claim.  Reads and writes of
+            # ``_active``, ``_lease_gate_event``, and the slot's
+            # ``accepting_leases`` / ``active_leases`` happen under
+            # one critical section so concurrent commit cannot leave
+            # us with an old-generation lease.
+            epoch_before = self._publication_epoch
+            async with self._lock:
+                gate = self._lease_gate_event
+                slot = self._active
+                # If a gate is active, the candidate slot is not yet
+                # accepting and the old slot is still accepting — but
+                # we are blocked at the gate boundary.  Treat as no
+                # slot available this iteration and wait for state
+                # change.
+                if gate is not None:
+                    slot = None
+                elif slot is not None and slot.accepting_leases:
+                    slot.active_leases += 1
+                    self._acquire_id += 1
+                else:
+                    slot = None
+                epoch_after = self._publication_epoch
+
+            if slot is not None:
+                if epoch_after != epoch_before:
+                    # Publication raced our claim — release and retry.
+                    async with self._lock:
+                        slot.active_leases = max(0, slot.active_leases - 1)
+                        if slot.active_leases == 0:
+                            slot.drain_event.set()
+                    # Loop continues to retry via the gate / state-change path.
+                else:
+                    return GenerationLease(
+                        generation_id=slot.generation.generation_id,
+                        slot=slot,
+                    )
+
+            # Block on the state-changed event until either the gate
+            # clears, the active slot changes, or shutdown begins.
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise RuntimeManagerLeaseExhaustedError(
                     "No accepting generation slot within "
                     f"{GENERATION_LEASE_TIMEOUT_S}s of acquire()"
                 )
-            await asyncio.sleep(min(0.01, remaining))
+            self._state_changed_event.clear()
+            async with self._lock:
+                self._lease_gate_waiters += 1
+            try:
+                if first_pass:
+                    first_pass = False
+                try:
+                    await asyncio.wait_for(
+                        self._state_changed_event.wait(),
+                        timeout=remaining,
+                    )
+                except TimeoutError:
+                    raise RuntimeManagerLeaseExhaustedError(
+                        "No accepting generation slot within "
+                        f"{GENERATION_LEASE_TIMEOUT_S}s of acquire()"
+                    ) from None
+            finally:
+                async with self._lock:
+                    self._lease_gate_waiters -= 1
 
     def active_snapshot(self) -> RuntimeGeneration:
         """Return the current active generation without acquiring a lease.
@@ -1567,6 +1834,9 @@ class RuntimeManager:
             if self._shutdown_in_progress:
                 return
             self._shutdown_in_progress = True
+            # Plan 016 Workstream B: wake blocked acquire() waiters so
+            # they observe the shutdown flag and raise immediately.
+            self._state_changed_event.set()
             active = self._active
         if active is not None:
             await self._spawn_retirement_task(active, drain_timeout_s=5.0)
@@ -1595,6 +1865,13 @@ class RuntimeManager:
         Safe to call from any thread or task; no locks are taken
         because the only mutable state we read (active_leases) is a
         plain ``int`` and an out-of-date value at most one-off.
+
+        Plan 016 Workstream H2: pending swap state is the canonical
+        ``PendingSwapState`` value name.  Once the swap reaches a
+        terminal state (``COMMITTED``, ``ROLLED_BACK``,
+        ``FINALIZED``), the swap itself clears
+        ``RuntimeManager._pending_swap`` so the diagnostic reflects an
+        honest absence of a pending swap.
         """
         now = time.monotonic()
         active = self._active
@@ -1605,13 +1882,16 @@ class RuntimeManager:
 
         # Pending swap diagnostics.
         pending_swap = self._pending_swap
+        pending_swap_state: str | None = None
         pending_swap_gen_id: int | None = None
         pending_swap_old_gen_id: int | None = None
         pending_swap_started_at: float | None = None
-        if pending_swap is not None and pending_swap.staged:
-            pending_swap_gen_id = pending_swap.candidate_generation_id
-            pending_swap_old_gen_id = pending_swap.old_generation_id
-            pending_swap_started_at = pending_swap.stage_started_at
+        if pending_swap is not None:
+            pending_swap_state = pending_swap.swap_state.value
+            if pending_swap.staged or pending_swap.committed:
+                pending_swap_gen_id = pending_swap.candidate_generation_id
+                pending_swap_old_gen_id = pending_swap.old_generation_id
+                pending_swap_started_at = pending_swap.stage_started_at
 
         return RuntimeDiagnostics(
             active=active_diag,
@@ -1619,11 +1899,13 @@ class RuntimeManager:
             shutdown_in_progress=self._shutdown_in_progress,
             next_generation_id=self._next_generation_id,
             retirement_task_count=len(self._retirement_tasks),
+            pending_swap_state=pending_swap_state,
             pending_swap_generation_id=pending_swap_gen_id,
             pending_swap_old_generation_id=pending_swap_old_gen_id,
             pending_swap_started_at=pending_swap_started_at,
             lease_admission_gated=self._lease_gate_event is not None,
-            lease_gate_waiter_count=0,  # TODO: track waiter count
+            lease_gate_waiter_count=self._lease_gate_waiters,
+            publication_epoch=self._publication_epoch,
         )
 
     # -- internals ----------------------------------------------------------
@@ -2036,14 +2318,16 @@ __all__ = [
     "GenerationDiagnostics",
     "GenerationLease",
     "PendingGenerationSwap",
+    "PendingSwapState",
     "ProcessRuntime",
     "RuntimeDiagnostics",
     "RuntimeGeneration",
     "RuntimeGenerationBuilder",
     "RuntimeGenerationCandidate",
-    "RuntimeManager",
     "RuntimeManagerLeaseExhaustedError",
     "RuntimeManagerShutdownError",
+    "RuntimeManagerSwapInProgressError",
+    "RuntimeManagerSwapStateError",
     "SlotState",
     "attach_runtime_manager",
     "build_generation_from_config",
