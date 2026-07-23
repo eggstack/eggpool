@@ -37,6 +37,7 @@ from eggpool.reload_diagnostics import (
     classify_result_category,
     stage_from_error_class,
 )
+from eggpool.reload_transaction import TransitionRollbackOutcome
 from eggpool.runtime_manager import RuntimeGeneration
 
 # ---------------------------------------------------------------------------
@@ -128,7 +129,8 @@ def _make_runtime_manager(active_generation: MagicMock | None = None) -> MagicMo
     mock_swap.rollback = AsyncMock()
     mock_swap.finalize_retirement = AsyncMock(return_value=0)
     rm.prepare_candidate_swap = AsyncMock(return_value=mock_swap)
-    rm._lease_gate_event = None
+    rm._lease_admission_gated = False
+    rm.ensure_reload_gate_released = AsyncMock()
     rm._spawn_retirement_task = AsyncMock()
     return rm
 
@@ -228,7 +230,11 @@ class TestSuccessCommittedCategory:
         validation = _make_validation()
         mock_transition_result = MagicMock()
         mock_transition_result.finalize_all = AsyncMock()
-        mock_transition_result.rollback_applied = AsyncMock(return_value=[])
+        mock_transition_result.rollback_applied = AsyncMock(
+            return_value=TransitionRollbackOutcome(
+                attempted=(), restored=(), failures=()
+            )
+        )
         with (
             patch.object(
                 mgr,

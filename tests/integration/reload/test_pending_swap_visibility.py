@@ -32,7 +32,7 @@ async def test_acquire_blocked_during_staged_swap() -> None:
         )
         await swap.stage()
 
-        assert h.runtime_manager._lease_gate_event is not None
+        assert h.runtime_manager._lease_admission_gated is True
 
         acquire_error: Exception | None = None
         lease_result = None
@@ -86,7 +86,7 @@ async def test_acquire_resumes_after_rollback() -> None:
 
 @pytest.mark.asyncio()
 async def test_lease_gate_cleared_on_rollback() -> None:
-    """Rollback clears the lease gate event on the runtime manager."""
+    """Rollback clears the lease admission gate on the runtime manager."""
     async with ReloadHarness() as h:
         from eggpool.runtime_manager import PendingGenerationSwap
 
@@ -98,16 +98,16 @@ async def test_lease_gate_cleared_on_rollback() -> None:
         )
         await swap.stage()
 
-        assert h.runtime_manager._lease_gate_event is not None
+        assert h.runtime_manager._lease_admission_gated is True
 
         await swap.rollback()
 
-        assert h.runtime_manager._lease_gate_event is None
+        assert h.runtime_manager._lease_admission_gated is False
 
 
 @pytest.mark.asyncio()
 async def test_lease_gate_cleared_on_commit() -> None:
-    """Commit clears the lease gate event on the runtime manager."""
+    """Commit clears the lease admission gate on the runtime manager."""
     async with ReloadHarness() as h:
         from eggpool.runtime_manager import PendingGenerationSwap
 
@@ -119,11 +119,11 @@ async def test_lease_gate_cleared_on_commit() -> None:
         )
         await swap.stage()
 
-        assert h.runtime_manager._lease_gate_event is not None
+        assert h.runtime_manager._lease_admission_gated is True
 
         await swap.commit()
 
-        assert h.runtime_manager._lease_gate_event is None
+        assert h.runtime_manager._lease_admission_gated is False
 
 
 @pytest.mark.asyncio()

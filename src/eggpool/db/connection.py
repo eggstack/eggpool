@@ -16,7 +16,7 @@ import aiosqlite
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
-from eggpool.errors import DatabaseError
+from eggpool.errors import DatabaseCommitError, DatabaseError
 
 
 class _RollbackProbeError(Exception):
@@ -92,7 +92,7 @@ class Database:
     cannot piggyback on each other's transactions.
     """
 
-    #: Test-only fault injection seam for the outer COMMIT boundary.
+    #: Test-only fault injection seam for the pre-commit boundary.
     #:
     #: When set on the class, every outermost ``transaction()`` exits
     #: by raising this exception *after* the inner work has yielded
@@ -101,7 +101,7 @@ class Database:
     #: so reload tests can verify that callers see the failure and
     #: run the rollback / compensation path.  Must default to ``None``
     #: in production; only tests should set this.
-    TEST_INJECT_COMMIT_FAILURE: Exception | None = None
+    TEST_INJECT_BEFORE_COMMIT_CALL: Exception | None = None
 
     def __init__(
         self,
@@ -164,6 +164,11 @@ class Database:
             "database_transaction_owner",
             default=None,
         )
+        # Instance-scoped test-only injection hooks.  These override
+        # the class-level seam for a single Database instance so tests
+        # can target a specific connection without affecting others.
+        self._test_inject_before_commit: Exception | None = None
+        self._test_inject_commit_call: Exception | None = None
 
     @property
     def read_only(self) -> bool:
@@ -205,6 +210,18 @@ class Database:
         if conn is not None:
             with suppress(Exception):
                 await conn.close()
+
+    async def _commit_connection(self) -> None:
+        """Execute the SQLite COMMIT. May be patched in tests."""
+        await self._conn.commit()  # type: ignore[union-attr]
+
+    def set_test_inject_before_commit(self, exc: Exception | None) -> None:
+        """Instance-scoped test hook for pre-commit bypass injection."""
+        self._test_inject_before_commit = exc
+
+    def set_test_inject_commit_call(self, exc: Exception | None) -> None:
+        """Instance-scoped test hook for commit-call failure injection."""
+        self._test_inject_commit_call = exc
 
     @staticmethod
     def _build_read_only_uri(path: str) -> tuple[str, bool]:
@@ -720,20 +737,73 @@ class Database:
                 await self._conn.rollback()
                 raise
             else:
-                # Plan 016 Workstream F: test-only fault-injection seam
-                # to simulate a process crash *after* the inner work
-                # completed but *before* the SQLite COMMIT.  When the
-                # class-level ``TEST_INJECT_COMMIT_FAILURE`` is set,
-                # raise it here so the surrounding reload can verify
-                # that rollback / compensation paths see the failure.
+                # Plan 016 Workstream F / Plan 017 Workstream E:
+                # test-only fault-injection seam to simulate a process
+                # crash *after* the inner work completed but *before*
+                # the SQLite COMMIT is issued.  Instance-level
+                # ``_test_inject_before_commit`` takes precedence over
+                # the class-level ``TEST_INJECT_BEFORE_COMMIT_CALL``.
                 # The injection MUST NOT swallow real database errors
                 # that arise from the actual ``commit()`` call.
-                if Database.TEST_INJECT_COMMIT_FAILURE is not None:
-                    injected = Database.TEST_INJECT_COMMIT_FAILURE
-                    Database.TEST_INJECT_COMMIT_FAILURE = None
+                injected = (
+                    self._test_inject_before_commit
+                    or Database.TEST_INJECT_BEFORE_COMMIT_CALL
+                )
+                if injected is not None:
+                    # One-shot: clear both instance and class seams.
+                    self._test_inject_before_commit = None
+                    if Database.TEST_INJECT_BEFORE_COMMIT_CALL is not None:
+                        Database.TEST_INJECT_BEFORE_COMMIT_CALL = None
                     await self._conn.rollback()
                     raise injected
-                await self._conn.commit()
+
+                # Plan 017 Workstream E: catch exceptions from the
+                # actual ``commit()`` call and attempt recovery.
+                commit_exc: Exception | None = None
+                try:
+                    commit_injected = self._test_inject_commit_call
+                    if commit_injected is not None:
+                        self._test_inject_commit_call = None
+                        raise commit_injected
+                    await self._commit_connection()
+                except Exception as exc:
+                    commit_exc = exc
+
+                if commit_exc is not None:
+                    rollback_attempted = False
+                    rollback_succeeded = False
+                    transaction_still_active: bool | None = None
+                    connection_invalidated = False
+
+                    try:
+                        rollback_attempted = True
+                        if (
+                            hasattr(self._conn, "in_transaction")
+                            and self._conn.in_transaction
+                        ):
+                            await self._conn.rollback()
+                            if (
+                                hasattr(self._conn, "in_transaction")
+                                and not self._conn.in_transaction
+                            ):
+                                rollback_succeeded = True
+                            else:
+                                connection_invalidated = True
+                        else:
+                            connection_invalidated = True
+                    except Exception:
+                        rollback_succeeded = False
+                        connection_invalidated = True
+
+                    outcome = "rolled_back" if rollback_succeeded else "indeterminate"
+                    raise DatabaseCommitError(
+                        f"SQLite COMMIT failed: {commit_exc!r}",
+                        rollback_attempted=rollback_attempted,
+                        rollback_succeeded=rollback_succeeded,
+                        transaction_still_active=transaction_still_active,
+                        connection_invalidated=connection_invalidated,
+                        outcome=outcome,
+                    ) from commit_exc
             finally:
                 state.active = False
                 state_context.reset(state_token)

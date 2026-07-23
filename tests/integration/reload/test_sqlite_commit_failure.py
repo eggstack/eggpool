@@ -123,7 +123,7 @@ async def test_publish_failure_does_not_leak_resources(
 
 def _set_commit_injection(db: Database, exc: Exception | None) -> None:
     """Helper to install / clear the test-only COMMIT-bypass seam."""
-    type(db).TEST_INJECT_COMMIT_FAILURE = exc
+    type(db).TEST_INJECT_BEFORE_COMMIT_CALL = exc
 
 
 @pytest.mark.asyncio()

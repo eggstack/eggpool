@@ -675,7 +675,6 @@ class PendingGenerationSwap:
         self._new_slot: _GenerationSlot | None = None
         self._drain_timeout_s = drain_timeout_s
         self._expected_active_generation_id = expected_active_generation_id
-        self._lease_gate_event: asyncio.Event | None = None
         self._stage_started_at: float | None = None
         self._state: PendingSwapState = PendingSwapState.PREPARED
 
@@ -731,10 +730,9 @@ class PendingGenerationSwap:
                 self._candidate_generation.generation_id + 1,
             )
 
-            # Install lease gate — acquire() callers will wait on this event.
-            gate_event = asyncio.Event()
-            self._lease_gate_event = gate_event
-            rm._lease_gate_event = gate_event  # pyright: ignore[reportPrivateUsage]
+            # Install lease gate — acquire() callers will block on the
+            # condition until the gate clears on commit or rollback.
+            rm._lease_admission_gated = True  # pyright: ignore[reportPrivateUsage]
             self._stage_started_at = time.monotonic()
             self._state = PendingSwapState.STAGED
 
@@ -791,16 +789,13 @@ class PendingGenerationSwap:
                 self._old_slot.retirement_started = False
 
             # Release the lease gate to wake blocked acquire() calls.
-            if self._lease_gate_event is not None:
-                self._lease_gate_event.set()
-                rm._lease_gate_event = None  # pyright: ignore[reportPrivateUsage]
-                self._lease_gate_event = None
+            rm._lease_admission_gated = False  # pyright: ignore[reportPrivateUsage]
 
             # Plan 016 Workstream B: bump publication epoch and wake
             # blocked acquire() waiters via the manager-level state
-            # change event.
+            # change condition.
             rm._publication_epoch += 1  # pyright: ignore[reportPrivateUsage]
-            rm._state_changed_event.set()  # pyright: ignore[reportPrivateUsage]
+            rm._lease_condition.notify_all()  # pyright: ignore[reportPrivateUsage]
 
             self._state = PendingSwapState.COMMITTED
 
@@ -846,14 +841,11 @@ class PendingGenerationSwap:
                 rm._active = None  # pyright: ignore[reportPrivateUsage]
 
             # Clear the lease gate so blocked acquire() calls resume.
-            if self._lease_gate_event is not None:
-                self._lease_gate_event.set()
-                rm._lease_gate_event = None  # pyright: ignore[reportPrivateUsage]
-                self._lease_gate_event = None
+            rm._lease_admission_gated = False  # pyright: ignore[reportPrivateUsage]
 
             # Plan 016 Workstream B: wake blocked acquire() waiters
             # so they re-evaluate against the restored active slot.
-            rm._state_changed_event.set()  # pyright: ignore[reportPrivateUsage]
+            rm._lease_condition.notify_all()  # pyright: ignore[reportPrivateUsage]
 
             # Drop the staged candidate slot reference.
             self._new_slot = None
@@ -1247,18 +1239,19 @@ class RuntimeManager:
         self._acquire_id = 0  # monotonic tie-breaker for lease diagnostics
         self._synthetic_generation_digest: str = ""
         self._retirement_tasks: dict[int, asyncio.Task[None]] = {}  # Phase 3
-        self._lease_gate_event: asyncio.Event | None = (
-            None  # blocks acquire() during staged swap
-        )
         self._pending_swap: PendingGenerationSwap | None = None
+        # Plan 017 Workstream A: predicate-based condition for lease
+        # admission.  Replaces the event-based clear/set pattern that
+        # had a lost-wakeup race.  All waiters block on the condition
+        # and re-evaluate the predicate under the shared lock.
+        self._lease_condition: asyncio.Condition = asyncio.Condition(
+            self._lock,
+        )
+        self._lease_admission_gated: bool = False  # authoritative gate state
         # Plan 016 Workstream B: monotonic publication epoch.  Incremented
         # only on committed publication so an acquire() that snapshotted
         # pre-commit can detect the swap and retry through the gate path.
         self._publication_epoch: int = 0
-        # Plan 016 Workstream H3: manager-level state-change event that
-        # wakes blocked acquire() callers when the active slot changes
-        # identity or the gate clears.  Replaces the 10 ms polling loop.
-        self._state_changed_event: asyncio.Event = asyncio.Event()
         # Plan 016 Workstream H3: bounded count of tasks currently
         # waiting for the lease gate to clear.  Incremented on gate
         # entry and decremented on gate exit (success, timeout, or
@@ -1295,7 +1288,8 @@ class RuntimeManager:
             # Plan 016 Workstream B: bump publication epoch and wake
             # any pending acquire() waiters.
             self._publication_epoch += 1
-            self._state_changed_event.set()
+            self._lease_admission_gated = False
+            self._lease_condition.notify_all()
             logger.info(
                 "Runtime generation %d published (initial install; digest=%s)",
                 generation.generation_id,
@@ -1352,7 +1346,7 @@ class RuntimeManager:
             # Plan 016 Workstream B: bump the publication epoch and
             # wake blocked acquire() callers.
             self._publication_epoch += 1
-            self._state_changed_event.set()
+            self._lease_condition.notify_all()
             logger.info(
                 "Runtime generation %d published (candidate swap; digest=%s)",
                 generation.generation_id,
@@ -1428,21 +1422,33 @@ class RuntimeManager:
             expected_active_generation_id=expected_active_generation_id,
         )
 
+    def _lease_claim_available_locked(self) -> bool:
+        """Evaluate whether a lease can be claimed (must hold self._lock).
+
+        Plan 017 Workstream A: predicate for condition-based waiting.
+        Returns ``True`` when either shutdown is in progress (so waiters
+        wake and raise immediately) or the active slot is accepting
+        leases and admission is not gated.
+        """
+        return self._shutdown_in_progress or (
+            not self._lease_admission_gated
+            and self._active is not None
+            and self._active.accepting_leases
+        )
+
     async def acquire(self) -> GenerationLease:
         """Acquire one generation lease from the currently active slot.
 
-        Plan 016 Workstream B — race-safe with publication:
+        Plan 017 Workstream A — predicate-based condition waiting:
 
-        - The active-slot claim runs under ``self._lock`` so a concurrent
-          :meth:`PendingGenerationSwap.commit` cannot transition the slot
-          out of accepting between our snapshot and the lease increment.
-        - The publication epoch is snapshotted before the claim and
-          revalidated after acquiring the lock; if it advanced, we
-          retry through the gate path.
-        - The gate wait is event-driven via
-          :attr:`_state_changed_event` (no polling fallback).  The
-          event is set when the active slot changes, the gate clears,
-          or shutdown begins.
+        - Uses :class:`asyncio.Condition` with
+          :meth:`_lease_claim_available_locked` as the predicate so
+          waiters re-evaluate atomically under the shared lock.  This
+          eliminates the lost-wakeup race from the old event
+          clear/set pattern.
+        - The active-slot claim and lease increment happen in one
+          critical section so concurrent commit cannot leave us with
+          an old-generation lease.
 
         After :data:`GENERATION_LEASE_TIMEOUT_S` elapses or shutdown
         begins, the call raises :class:`RuntimeManagerLeaseExhaustedError`
@@ -1450,68 +1456,20 @@ class RuntimeManager:
         blocking the worker.
         """
         deadline = time.monotonic() + GENERATION_LEASE_TIMEOUT_S
-        first_pass = True
-        while True:
-            if self._shutdown_in_progress:
-                raise RuntimeManagerLeaseExhaustedError(
-                    "RuntimeManager is shutting down; no generation slot "
-                    "is accepting leases"
-                )
-
-            # Manager-lock-based claim.  Reads and writes of
-            # ``_active``, ``_lease_gate_event``, and the slot's
-            # ``accepting_leases`` / ``active_leases`` happen under
-            # one critical section so concurrent commit cannot leave
-            # us with an old-generation lease.
-            epoch_before = self._publication_epoch
-            async with self._lock:
-                gate = self._lease_gate_event
-                slot = self._active
-                # If a gate is active, the candidate slot is not yet
-                # accepting and the old slot is still accepting — but
-                # we are blocked at the gate boundary.  Treat as no
-                # slot available this iteration and wait for state
-                # change.
-                if gate is not None:
-                    slot = None
-                elif slot is not None and slot.accepting_leases:
-                    slot.active_leases += 1
-                    self._acquire_id += 1
-                else:
-                    slot = None
-                epoch_after = self._publication_epoch
-
-            if slot is not None:
-                if epoch_after != epoch_before:
-                    # Publication raced our claim — release and retry.
-                    async with self._lock:
-                        slot.active_leases = max(0, slot.active_leases - 1)
-                        if slot.active_leases == 0:
-                            slot.drain_event.set()
-                    # Loop continues to retry via the gate / state-change path.
-                else:
-                    return GenerationLease(
-                        generation_id=slot.generation.generation_id,
-                        slot=slot,
-                    )
-
-            # Block on the state-changed event until either the gate
-            # clears, the active slot changes, or shutdown begins.
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise RuntimeManagerLeaseExhaustedError(
-                    "No accepting generation slot within "
-                    f"{GENERATION_LEASE_TIMEOUT_S}s of acquire()"
-                )
-            self._state_changed_event.clear()
-            async with self._lock:
-                self._lease_gate_waiters += 1
+        async with self._lease_condition:
+            self._lease_gate_waiters += 1
             try:
-                if first_pass:
-                    first_pass = False
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeManagerLeaseExhaustedError(
+                        "No accepting generation slot within "
+                        f"{GENERATION_LEASE_TIMEOUT_S}s of acquire()"
+                    )
                 try:
                     await asyncio.wait_for(
-                        self._state_changed_event.wait(),
+                        self._lease_condition.wait_for(
+                            self._lease_claim_available_locked,
+                        ),
                         timeout=remaining,
                     )
                 except TimeoutError:
@@ -1519,9 +1477,21 @@ class RuntimeManager:
                         "No accepting generation slot within "
                         f"{GENERATION_LEASE_TIMEOUT_S}s of acquire()"
                     ) from None
+                if self._shutdown_in_progress:
+                    raise RuntimeManagerLeaseExhaustedError(
+                        "RuntimeManager is shutting down; no generation slot "
+                        "is accepting leases"
+                    )
+                slot = self._active
+                assert slot is not None and slot.accepting_leases
+                slot.active_leases += 1
+                self._acquire_id += 1
+                return GenerationLease(
+                    generation_id=slot.generation.generation_id,
+                    slot=slot,
+                )
             finally:
-                async with self._lock:
-                    self._lease_gate_waiters -= 1
+                self._lease_gate_waiters -= 1
 
     def active_snapshot(self) -> RuntimeGeneration:
         """Return the current active generation without acquiring a lease.
@@ -1836,7 +1806,7 @@ class RuntimeManager:
             self._shutdown_in_progress = True
             # Plan 016 Workstream B: wake blocked acquire() waiters so
             # they observe the shutdown flag and raise immediately.
-            self._state_changed_event.set()
+            self._lease_condition.notify_all()
             active = self._active
         if active is not None:
             await self._spawn_retirement_task(active, drain_timeout_s=5.0)
@@ -1856,6 +1826,26 @@ class RuntimeManager:
                     list(self._retirement_tasks.values()),
                     timeout=2.0,
                 )
+
+    # -- defensive gate release --------------------------------------------
+
+    async def ensure_reload_gate_released(self) -> None:
+        """Ensure the lease gate is released if a pending swap is still staged.
+
+        Plan 017 Workstream A: defensive API called from the reload
+        manager's ``finally`` block to guarantee lease admission
+        resumes on every terminal path (success, cancellation, or
+        failure).  If the gate is still active and a pending swap
+        exists, the gate is cleared and a warning is logged.
+        """
+        async with self._lease_condition:
+            if self._lease_admission_gated and self._pending_swap is not None:
+                self._lease_admission_gated = False
+                logger.warning(
+                    "Repaired inconsistent lease gate state in finally block"
+                )
+            self._publication_epoch += 1
+            self._lease_condition.notify_all()
 
     # -- diagnostics --------------------------------------------------------
 
@@ -1903,7 +1893,7 @@ class RuntimeManager:
             pending_swap_generation_id=pending_swap_gen_id,
             pending_swap_old_generation_id=pending_swap_old_gen_id,
             pending_swap_started_at=pending_swap_started_at,
-            lease_admission_gated=self._lease_gate_event is not None,
+            lease_admission_gated=self._lease_admission_gated,
             lease_gate_waiter_count=self._lease_gate_waiters,
             publication_epoch=self._publication_epoch,
         )

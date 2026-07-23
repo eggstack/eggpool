@@ -38,7 +38,7 @@ CI runs 6 parallel jobs:
 | typecheck | 3.12 | `pyright src/ scripts/` |
 | unit-integration | 3.11, 3.12 | `pytest -m "not slow and not performance and not soak and not extended_soak and not live"` |
 | reload-control | 3.11, 3.12 | `pytest tests/integration/reload/` |
-| plan-016-corrective | 3.11, 3.12 | Plan 016 focused test command (see below) |
+| plan-016-corrective | 3.11, 3.12 | Plan 016/017 focused test command (see below) |
 | performance | 3.12 | `pytest -m performance` |
 | soak-audit | 3.12 | `pytest -m soak` + `audit_xfail_skips.py` |
 
@@ -246,6 +246,22 @@ uv run pytest \
     tests/integration/reload/test_plan_016_corrective_replacements.py \
     tests/integration/reload/test_reload_fault_matrix.py -v
 
+# Plan 017 — Reload atomicity final corrective closure (lease condition,
+# transition cleanup, acceptance finalization, commit-call recovery)
+uv run pytest \
+    tests/unit/test_runtime_manager.py \
+    tests/unit/test_process_transition_plan.py \
+    tests/unit/test_reload_manager.py \
+    tests/unit/test_reload_diagnostics_matrix.py \
+    tests/unit/test_db_connection.py \
+    tests/integration/reload/test_pending_swap_visibility.py \
+    tests/integration/reload/test_sqlite_commit_failure.py \
+    tests/integration/reload/test_reload_fault_matrix.py \
+    tests/integration/reload/test_plan_017_lease_condition.py \
+    tests/integration/reload/test_plan_017_transition_cleanup.py \
+    tests/integration/reload/test_plan_017_acceptance_finalization.py \
+    -v
+
 # Control socket hardening tests (SO_PEERCRED, stale socket,
 # inode protection, runtime dir permissions)
 uv run pytest tests/unit/test_control_server.py tests/unit/test_reload_security.py -v
@@ -309,7 +325,7 @@ CI sets `PYTHONHASHSEED=0` and `TZ=UTC`; reproduce locally for deterministic res
 - **Error hierarchy**: `AggregatorError` → `UpstreamError` → specific subclasses. `CapabilityError` for thinking/reasoning capability mismatches. `TranscodeLossError` (HTTP 400) for loss-policy reject. `ProtocolMismatchError` for endpoint/model-protocol mismatches.
 - **Process model**: supervisor + Granian worker (`workers=1`), PID file lifecycle, daemon mode (default for `eggpool serve`; `--verbose` for foreground). Default `runtime_threads=1` (single event-loop thread is canonical; values > 1 emit a startup warning), `database_worker_threads=2` (separate read-only stats connection). Readiness probe is process-owned and started after database initialization, stopped before database close.
 - **Background tasks**: `src/eggpool/background/` manages retention cleanup, periodic tasks, and startup crash recovery via `TaskSupervisor`. Fixed-delay scheduler: next interval begins after previous tick completes. `initial_delay_s` consumed exactly once per task lifecycle. Process-owned tasks (`checkpoint`, `metrics_flush`, `update_checker`, `automatic_backup`) survive generation swaps; generation-leased tasks are retired when their generation is retired.
-- **Runtime generations**: `RuntimeManager` owns active/retiring generation slots. Request-path code obtains `GenerationLease` via `wrap_stream_with_lease` or `leased_runtime`. `ProcessRuntime` holds process-owned containers (database connections) that outlive any generation. Lease acquisition is fail-closed: `RuntimeManager.acquire()` raises `RuntimeManagerLeaseExhaustedError` (→ HTTP 503) when no generation slot is accepting leases, rather than falling back to a legacy path. The request handler catches this and returns `503 Service Unavailable` immediately. During a staged reload swap, `RuntimeManager` installs an event-driven lease gate (`_lease_gate_event`): `acquire()` callers wait on the gate event rather than polling, and the gate is released (event set) on commit or rollback. The `PendingGenerationSwap` protocol splits publication into explicit `stage()` → `commit()`/`rollback()` → `finalize_retirement()` boundaries, ensuring no request can acquire the candidate generation until the SQLite commit and required process transitions succeed.
+- **Runtime generations**: `RuntimeManager` owns active/retiring generation slots. Request-path code obtains `GenerationLease` via `wrap_stream_with_lease` or `leased_runtime`. `ProcessRuntime` holds process-owned containers (database connections) that outlive any generation. Lease acquisition is fail-closed: `RuntimeManager.acquire()` raises `RuntimeManagerLeaseExhaustedError` (→ HTTP 503) when no generation slot is accepting leases, rather than falling back to a legacy path. The request handler catches this and returns `503 Service Unavailable` immediately. During a staged reload swap, `RuntimeManager` uses a predicate-based lease gate (`_lease_condition` with `_lease_admission_gated` boolean): `acquire()` callers wait on the condition rather than polling, and the gate is released (condition notified) on commit or rollback. The `PendingGenerationSwap` protocol splits publication into explicit `stage()` → `commit()`/`rollback()` → `finalize_retirement()` boundaries, ensuring no request can acquire the candidate generation until the SQLite commit and required process transitions succeed.
 - **Active-generation state authority (Phase 7)**: `RuntimeManager` is the sole authoritative source for active generation ID, config, digest, and generation-owned services. `active_metadata()` returns immutable generation identity for synchronous diagnostics. `snapshot_active_values()` returns a frozen `ActiveGenerationView` for short synchronous reads that need multiple generation-owned references. Request paths acquire a generation lease via `acquire()`. Production proxy request paths resolve generation-owned services from the leased generation, not from `app.state` mirrors. Readiness, dashboard, and stats routes read from the active generation via `get_active_generation(request)` helper. The compatibility mirror (`mirror_generation_on_app_state`) copies generation-owned services onto `app.state` for backward compatibility and is called at startup and after each reload publication.
 - **Candidate resource ownership (Phase 4)**: `RuntimeGenerationCandidate` makes ownership of reload-created resources explicit from the moment each resource is constructed. Every generation-owned closeable is registered immediately after construction via `candidate.register_resource()`. Any failure before publication calls `candidate.abort()` which closes all registered resources in reverse registration order, collects close errors without masking the primary error, and emits `CleanupDiagnostics`. Pre-publication failures (reconcile, publish) also abort the candidate with `asyncio.shield()` so bounded cleanup completes even under task cancellation. `ReloadManager.snapshot()` surfaces `last_cleanup_diagnostics` for observability. Successful publication calls `candidate.transfer_to_runtime_manager()` to detach candidate cleanup. Ownership taxonomy: process-owned (database, coalescer, dispatch writer, routing trace writer, control server), generation-owned (client pool, outbound manager, DNS backend, supervisor), candidate-owned (resources during construction), request-owned (leases).
 - **Shared runtime-generation factory (Phase 5)**: `RuntimeGenerationFactory` (`src/eggpool/generation_factory.py`) eliminates behavior drift between startup and reload by constructing all generation-owned services through a single authoritative path. Both startup and reload call `factory.prepare()`. The factory accepts process-owned dependencies as explicit inputs, constructs all generation-owned services with identical wiring, registers closeable resources on the candidate (reload case), hydrates persisted health/backoff state, and returns a `PreparedRuntimeGeneration`. Startup-only operations (migrations, crash recovery, catalog refresh, process workers) remain outside. **Dispatch writer enablement (Phase 8)**: the factory derives the coordinator's `use_dispatch_writer` from two conditions — the process-owned writer must be non-`None` *and* `config.dispatch_writer.enabled` must be `True`. Both must hold for the microbatch persistence path to be selected. Tests: `tests/unit/test_generation_factory.py`.

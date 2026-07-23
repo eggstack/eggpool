@@ -13,6 +13,39 @@ class DatabaseError(AggregatorError):
     """Raised for database-related failures."""
 
 
+class DatabaseCommitError(DatabaseError):
+    """Raised when the SQLite COMMIT call itself fails.
+
+    Attributes:
+        rollback_attempted: True if a rollback was attempted after the
+            commit failure.
+        rollback_succeeded: True if the rollback completed successfully.
+        transaction_still_active: True if ``in_transaction`` remains True
+            after rollback attempt; None when indeterminate.
+        connection_invalidated: True if the connection is in an unknown
+            state and should not be reused.
+        outcome: Categorical summary — ``"rolled_back"`` when the
+            connection is clean, ``"indeterminate"`` otherwise.
+    """
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        rollback_attempted: bool = False,
+        rollback_succeeded: bool = False,
+        transaction_still_active: bool | None = None,
+        connection_invalidated: bool = False,
+        outcome: str = "indeterminate",
+    ) -> None:
+        super().__init__(message)
+        self.rollback_attempted = rollback_attempted
+        self.rollback_succeeded = rollback_succeeded
+        self.transaction_still_active = transaction_still_active
+        self.connection_invalidated = connection_invalidated
+        self.outcome = outcome
+
+
 class UpstreamError(AggregatorError):
     """Base exception for upstream API errors."""
 

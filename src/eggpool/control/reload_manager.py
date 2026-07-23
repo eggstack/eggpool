@@ -50,16 +50,20 @@ from eggpool.reload_diagnostics import (
     stage_from_error_class,
 )
 from eggpool.reload_transaction import (
+    AcceptedReloadFinalization,
     EffectiveStateTransition,
     PersistenceDelta,
     ProcessTransition,
+    ProcessTransitionApplyError,
     ProcessTransitionPlan,
+    ReloadAcceptanceState,
     ReloadTransaction,
     RoutingTraceGuardTransition,
     RoutingTraceWriterTransition,
     TaskSpecTransition,
     TransactionState,
     TransitionApplyResult,
+    TransitionRollbackOutcome,
 )
 
 if TYPE_CHECKING:
@@ -117,6 +121,27 @@ class _PreparedSwap:
     generation: RuntimeGeneration
     active_generation_id: int
     drain_timeout_s: float
+
+
+@dataclass(frozen=True)
+class PrecommitAbortOutcome:
+    """Structured result of a precommit cleanup operation.
+
+    Plan 017 Workstream C: every precommit failure path funnels
+    through :meth:`ReloadManager._abort_precommit_reload` which
+    returns this typed outcome so callers and diagnostics can
+    inspect exactly what cleanup was attempted and succeeded.
+    """
+
+    swap_rollback_attempted: bool = False
+    swap_rollback_succeeded: bool = False
+    transition_rollback_outcome: TransitionRollbackOutcome | None = None
+    candidate_abort_attempted: bool = False
+    candidate_abort_succeeded: bool = False
+    candidate_cleanup_diagnostics: CleanupDiagnostics | None = None
+    admission_reopened: bool = False
+    degraded: bool = False
+    primary_error: str = ""
 
 
 class ReloadPreparationError(Exception):
@@ -1032,6 +1057,14 @@ class ReloadManager:
             )
             # Capture old generation ID before publication swaps it
             old_generation_id = expected_gen_id
+            # Plan 017 Workstream C: capture the current operation stage
+            # so the inner exception handler can pass it to the shared
+            # precommit abort helper.
+            error_stage = (
+                self._operation_state.stage
+                if self._operation_state
+                else ReloadOperationStage.IDLE
+            )
 
             # Observer: publish started
             await self._observer.on_publish_started(
@@ -1082,8 +1115,11 @@ class ReloadManager:
                     transition_result = await self._apply_process_transitions(
                         process_transition_plan
                     )
-                # SQLite committed successfully — commit the swap.
-                # This makes the candidate active and reopens admission.
+                # SQLite committed successfully — mark the narrow boundary
+                # between persistence commit and runtime swap commit.
+                txn.mark_persistence_committed_runtime_pending()
+                # Commit the swap.  This makes the candidate active and
+                # reopens admission.
                 old_gen_id = await pending_swap.commit()
                 # Plan 016 Workstream H1: pass the published generation
                 # ID so the transaction records the new active
@@ -1092,6 +1128,9 @@ class ReloadManager:
                     old_gen_id,
                     new_generation_id=published_gen.generation_id,
                 )
+                # Plan 017 Workstream D: the reload is now accepted —
+                # SQLite committed and runtime swap committed.
+                txn.mark_accepted()
 
                 # Observer: publish complete
                 await self._observer.on_publish_complete(
@@ -1099,37 +1138,89 @@ class ReloadManager:
                     digest_prefix=digest_prefix,
                 )
 
-                # 9e: Transfer candidate ownership and mirror app.state.
-                # These are post-commit housekeeping — not request-authoritative.
+            except asyncio.CancelledError:
+                # Plan 017 Workstream D: pre-acceptance cancellation.
+                # Route through the shared precommit abort helper.
+                await self._abort_precommit_reload(
+                    txn=txn,
+                    pending_swap=pending_swap,
+                    transition_result=transition_result,
+                    candidate=candidate,
+                    cause=asyncio.CancelledError(),
+                    error_stage=error_stage,
+                )
+                raise
+            except Exception:
+                # Plan 016 Workstream C1/C2: route precommit cleanup
+                # through the shared helper so cancellation and
+                # ordinary exceptions use the same path.
+                # Plan 017 Workstream C: pass txn and candidate so
+                # the helper owns all cleanup deterministically.
+                await self._abort_precommit_reload(
+                    txn=txn,
+                    pending_swap=pending_swap,
+                    transition_result=transition_result,
+                    candidate=candidate,
+                    cause=sys.exc_info()[1] or RuntimeError("precommit failure"),
+                    error_stage=error_stage,
+                )
+                raise
+
+            # -- Post-acceptance finalization (Workstream D) --------
+            # The reload is accepted.  Remaining steps are housekeeping
+            # that must not call _abort_precommit_reload() or restore
+            # the old active slot.
+            finalization = txn.accepted_finalization
+            try:
+                # 9e: Transfer candidate ownership.
                 transfer_fn = getattr(candidate, "transfer_to_runtime_manager", None)
                 if transfer_fn is not None:
                     transfer_fn()
+                finalization.candidate_ownership_transferred = True
+
+                # 9f: Mirror app.state for backward compatibility.
                 if self._app is not None:
                     from eggpool.app import (  # noqa: PLC0415
                         mirror_generation_on_app_state,
                     )
 
                     mirror_generation_on_app_state(self._app, published_gen)
+                finalization.compatibility_mirror_updated = True
 
-                # 9f: Finalize process transitions — release captured
+                # 9g: Finalize process transitions — release captured
                 # old-state snapshots.  Failures are housekeeping only.
                 if transition_result is not None:  # pyright: ignore[reportUnnecessaryComparison]
                     await transition_result.finalize_all()
+                finalization.transitions_finalized = True
 
                 txn.mark_process_transitions_applied()
                 txn.mark_persistence_committed()
                 txn.mark_observable_state_updated()
 
-            except Exception:
-                # Plan 016 Workstream C1/C2: route precommit cleanup
-                # through the shared helper so cancellation and
-                # ordinary exceptions use the same path.
-                await self._abort_precommit_reload(
-                    pending_swap=pending_swap,
-                    transition_result=transition_result,
-                    cause=sys.exc_info()[1] or RuntimeError("precommit failure"),
+            except asyncio.CancelledError:
+                # Post-acceptance cancellation: record which steps
+                # completed and propagate.  The candidate remains
+                # authoritative — no abort, no old-slot restoration.
+                logger.warning(
+                    "Post-acceptance finalization cancelled for generation %d "
+                    "at step: %s",
+                    generation_id,
+                    finalization.first_incomplete_step() or "complete",
                 )
                 raise
+            except Exception as exc:
+                # Post-acceptance failure: record and continue.
+                # The candidate is authoritative; the old generation is
+                # gone.  Degraded finalization is retryable on next
+                # reload.
+                logger.warning(
+                    "Post-acceptance finalization failed for generation %d "
+                    "at step %s: %r",
+                    generation_id,
+                    finalization.first_incomplete_step() or "unknown",
+                    exc,
+                    exc_info=True,
+                )
 
             # Stage 10: Schedule retirement of the old generation
             # (non-blocking).  The retirement task runs in the background
@@ -1151,7 +1242,9 @@ class ReloadManager:
             # instead of reaching through private slot fields.
             old_gen_id = await pending_swap.finalize_retirement()
             txn.mark_retirement_scheduled()
+            finalization.retirement_scheduled = True
             txn.mark_completed()
+            finalization.transaction_completed = True
 
             self._set_stage(
                 ReloadOperationStage.IDLE,
@@ -1328,6 +1421,10 @@ class ReloadManager:
                 compensation_failures=self._counters.compensation_failures,
                 retirement_failures=self._counters.retirement_failures,
             )
+            # Plan 017 Workstream C: pre-init cleanup outcome so the
+            # finalize_reload call sees consistent state regardless of
+            # which branch executes.
+            _cleanup_outcome: PrecommitAbortOutcome | None = None
             # Phase 6: if we haven't published yet, cancellation is safe.
             # If we have published, shield the commit to completion.
             # Use publication_occurred (not is_committing) to distinguish
@@ -1361,22 +1458,37 @@ class ReloadManager:
                         RuntimeError("Commit completion failed after cancellation")
                     )
             else:
-                # Plan 016 Workstream C2/C3: cancellation before commit
-                # must route through the shared precommit abort helper
-                # so the lease gate is reopened, the pending swap is
-                # rolled back, and any applied transitions are
-                # reverted.  Shield each step so the bounded cleanup
-                # completes before the cancellation propagates.
+                # Plan 017 Workstream C: cancellation before commit
+                # routes through the shared precommit abort helper
+                # which owns swap rollback, transition rollback,
+                # candidate abort, and admission verification.
+                # Shield the cleanup so bounded work completes before
+                # cancellation propagates.
                 txn.mark_aborting(RuntimeError("Reload cancelled before commit point"))
+                _cleanup_task: asyncio.Task[PrecommitAbortOutcome] | None = None
                 try:
-                    await asyncio.shield(
+                    _cleanup_task = asyncio.create_task(
                         self._abort_precommit_reload(
+                            txn=txn,
                             pending_swap=pending_swap,
                             transition_result=transition_result,
+                            candidate=candidate,
                             cause=asyncio.CancelledError(),
+                            error_stage=error_stage,
                         )
                     )
+                    _cleanup_outcome = await asyncio.shield(_cleanup_task)
                 except asyncio.CancelledError:
+                    # Shield broken — wait for cleanup task to finish
+                    # then propagate the cancellation.
+                    if _cleanup_task is not None and not _cleanup_task.done():
+                        try:
+                            _cleanup_outcome = await _cleanup_task
+                        except Exception:
+                            logger.debug(
+                                "Cleanup task raised after shield break",
+                                exc_info=True,
+                            )
                     logger.warning(
                         "Precommit abort shield cancelled for generation %d",
                         generation_id,
@@ -1404,28 +1516,19 @@ class ReloadManager:
                 warnings=warnings,
                 is_cancelled=True,
                 publication_occurred=txn.publication_occurred,
+                candidate_cleanup_attempted=(
+                    _cleanup_outcome.candidate_abort_attempted
+                    if _cleanup_outcome is not None
+                    else False
+                ),
+                candidate_cleanup_succeeded=(
+                    _cleanup_outcome.candidate_abort_succeeded
+                    if _cleanup_outcome is not None
+                    else False
+                ),
             )
             self._last_diagnostic_result = diagnostic
             await self._record_terminal_event(diagnostic)
-            # Shield candidate abort so bounded cleanup completes
-            # before the cancellation propagates.
-            # Only abort the candidate if publication did NOT occur —
-            # if publication occurred, the candidate was transferred to
-            # the runtime manager and abort is a no-op.
-            if candidate is not None and not txn.publication_occurred:
-                try:
-                    diag = await asyncio.shield(
-                        candidate.abort(
-                            cause=asyncio.CancelledError(),
-                            failure_stage=error_stage,
-                        ),
-                    )
-                    self._last_cleanup_diagnostics = diag
-                except asyncio.CancelledError:
-                    logger.warning(
-                        "Candidate abort shield cancelled for generation %d",
-                        generation_id,
-                    )
             await self._safe_record_event(
                 "reload_cancelled",
                 generation_id=generation_id,
@@ -1521,57 +1624,26 @@ class ReloadManager:
                 txn.mark_aborting(exc)
             else:
                 txn.mark_aborting(exc)
-            # Abort the candidate if it exists and hasn't been
-            # transferred to the runtime manager.  Shield the abort
-            # so bounded cleanup completes even under cancellation.
-            # Skip when compensation succeeded (candidate was transferred).
+            # Plan 017 Workstream C: route precommit cleanup through
+            # the shared helper.  Skip when compensation succeeded
+            # (candidate was already transferred to the runtime manager)
+            # or when publication already occurred (candidate is
+            # transferred or will be cleaned up by retirement).
             compensation_succeeded = txn.state == TransactionState.COMPLETED
-            candidate_cleanup_attempted = False
-            candidate_cleanup_succeeded = False
+            _cleanup_outcome: PrecommitAbortOutcome | None = None
             if (
                 candidate is not None
-                and not txn.is_committing
                 and not compensation_succeeded
+                and not txn.publication_occurred
             ):
-                candidate_abort = getattr(candidate, "abort", None)
-                if candidate_abort is not None:
-                    candidate_state = getattr(candidate, "ownership_state", None)
-                    from eggpool.runtime_manager import (  # noqa: PLC0415
-                        CandidateOwnershipState,
-                    )
-
-                    if candidate_state not in (
-                        CandidateOwnershipState.TRANSFERRED,
-                        CandidateOwnershipState.ABORTED,
-                    ):
-                        candidate_cleanup_attempted = True
-                        try:
-                            diag = await asyncio.shield(
-                                candidate_abort(
-                                    cause=exc,
-                                    failure_stage=error_stage,
-                                ),
-                            )
-                            self._last_cleanup_diagnostics = diag
-                            candidate_cleanup_succeeded = True
-                        except asyncio.CancelledError:
-                            logger.warning(
-                                "Candidate abort shield cancelled for generation %d",
-                                generation_id,
-                            )
-                            candidate_diag = getattr(candidate, "diagnostics", None)
-                            if candidate_diag is not None:
-                                self._last_cleanup_diagnostics = candidate_diag
-                        except Exception:
-                            logger.warning(
-                                "Candidate abort failed for generation %d",
-                                generation_id,
-                                exc_info=True,
-                            )
-                    else:
-                        candidate_diag = getattr(candidate, "diagnostics", None)
-                        if candidate_diag is not None:
-                            self._last_cleanup_diagnostics = candidate_diag
+                _cleanup_outcome = await self._abort_precommit_reload(
+                    txn=txn,
+                    pending_swap=pending_swap,
+                    transition_result=transition_result,
+                    candidate=candidate,
+                    cause=exc,
+                    error_stage=error_stage,
+                )
             ok = txn.state == TransactionState.COMPLETED
             # Phase 11: derive correct stage from the operation state.
             # The _set_stage() call before the failed step already set
@@ -1656,8 +1728,16 @@ class ReloadManager:
                 process_transitions_applied=txn.process_transitions_applied,
                 compensation_attempted=compensation_attempted,
                 compensation_succeeded=compensation_ok,
-                candidate_cleanup_attempted=candidate_cleanup_attempted,
-                candidate_cleanup_succeeded=candidate_cleanup_succeeded,
+                candidate_cleanup_attempted=(
+                    _cleanup_outcome.candidate_abort_attempted
+                    if _cleanup_outcome is not None
+                    else False
+                ),
+                candidate_cleanup_succeeded=(
+                    _cleanup_outcome.candidate_abort_succeeded
+                    if _cleanup_outcome is not None
+                    else False
+                ),
             )
             self._last_diagnostic_result = diagnostic
             await self._record_terminal_event(diagnostic)
@@ -1680,9 +1760,9 @@ class ReloadManager:
             # so shutdown waiters are notified while the transaction is
             # still accessible for diagnostics.
             self._transaction_complete_event.set()
-            # Always clear the lease gate on every terminal path —
+            # Always release the lease gate on every terminal path —
             # ensures requests resume after cancellation or failure.
-            self._runtime_manager._lease_gate_event = None  # pyright: ignore[reportPrivateUsage]
+            await self._runtime_manager.ensure_reload_gate_released()
             # Release admission claim on every terminal path.
             self._current_transaction = None
             async with self._claim_mutex:
@@ -2386,66 +2466,160 @@ class ReloadManager:
         execute even when the process supervisor is absent.
 
         Returns a :class:`TransitionApplyResult` for rollback tracking.
+
+        Plan 017 Workstream B: on partial failure the
+        :class:`ProcessTransitionApplyError` carries a reference to
+        the partial result so callers can perform rollback without
+        losing the old-state snapshots captured during apply.
         """
         result = TransitionApplyResult(plan)
-        await result.apply_all()
+        try:
+            await result.apply_all()
+        except ProcessTransitionApplyError as exc:
+            exc.transition_result = result
+            raise
         return result
 
     async def _abort_precommit_reload(
         self,
         *,
+        txn: ReloadTransaction,
         pending_swap: Any,
         transition_result: TransitionApplyResult | None,
+        candidate: RuntimeGenerationCandidate | None,
         cause: BaseException,
-    ) -> None:
+        error_stage: str = "unknown",
+    ) -> PrecommitAbortOutcome:
         """Shared precommit cleanup owner for the reload transaction.
 
-        Plan 016 Workstream C1: every precommit cleanup path
+        Plan 017 Workstream C: every precommit cleanup path
         (``except Exception`` and ``except asyncio.CancelledError``)
         funnels through this helper so the cleanup semantics are
         identical regardless of the failure class.  The helper is
-        idempotent — pending swap rollback, transition rollback, and
-        lease-gate clearing are all safe to repeat.
+        idempotent — pending swap rollback, transition rollback,
+        candidate abort, and lease-gate clearing are all safe to
+        repeat.
 
-        Order of operations (all under cancellation shielding where the
-        caller expects it):
+        Order of operations:
 
         1. Rollback the staged pending swap so the lease gate is
            reopened and the old slot is restored as active.
         2. Rollback any applied process transitions in reverse order.
            Aggregation errors are logged but do not mask the primary
            cause.
-        3. Re-raise the original cause.
+        3. Abort candidate resources if the candidate has not been
+           transferred to the runtime manager.
+        4. Verify old generation is still active and admission is open.
+        5. Capture cleanup diagnostics.
+        6. Return structured outcome.
 
-        The lease gate is reopened by the swap rollback itself;
-        callers do not need to clear it explicitly.
+        Plan 017 Workstream B: transition_result may carry a partial
+        result even when the caller did not receive it (e.g. the
+        ProcessTransitionApplyError was caught and the result attached
+        to it).  Rollback uses the structured
+        :class:`TransitionRollbackOutcome` return type.
         """
+        swap_rollback_attempted = False
+        swap_rollback_succeeded = False
+        transition_rollback_outcome: TransitionRollbackOutcome | None = None
+        candidate_abort_attempted = False
+        candidate_abort_succeeded = False
+        candidate_cleanup_diag: CleanupDiagnostics | None = None
+        admission_reopened = False
+        degraded = False
+
+        # 1. Rollback staged swap so the lease gate is reopened.
         if (
             pending_swap is not None
             and pending_swap.staged
             and not pending_swap.committed
         ):
+            swap_rollback_attempted = True
             try:
                 await pending_swap.rollback()
+                swap_rollback_succeeded = True
             except RuntimeManagerSwapStateError:
                 # Idempotent — already rolled back or terminal.
+                swap_rollback_succeeded = True
                 logger.debug("Pending swap rollback skipped; not in staged state")
             except Exception as exc:
+                degraded = True
                 logger.warning("Pending swap rollback raised: %r", exc, exc_info=True)
+
+        # 2. Rollback applied process transitions in reverse order.
         if transition_result is not None:
             try:
-                rollback_errors = await transition_result.rollback_applied()
-                if rollback_errors:
+                transition_rollback_outcome = await transition_result.rollback_applied()
+                if transition_rollback_outcome.failures:
+                    degraded = True
                     logger.warning(
                         "Process transition rollback errors during precommit abort: %s",
-                        rollback_errors,
+                        [
+                            (name, f"{type(exc).__name__}: {exc}")
+                            for name, exc in transition_rollback_outcome.failures
+                        ],
                     )
             except Exception as exc:
+                degraded = True
                 logger.warning(
                     "Transition rollback aggregation failed: %r",
                     exc,
                     exc_info=True,
                 )
+
+        # 3. Abort candidate resources if not yet transferred.
+        #    Use getattr for backward compat with CandidateGeneration
+        #    mocks that lack ownership_state / abort.
+        if candidate is not None:
+            candidate_abort_fn = getattr(candidate, "abort", None)
+            candidate_state = getattr(candidate, "ownership_state", None)
+            if candidate_abort_fn is not None:
+                from eggpool.runtime_manager import (  # noqa: PLC0415
+                    CandidateOwnershipState,
+                )
+
+                # Compare using .value for enum or direct string for mocks.
+                state_val = (
+                    candidate_state.value
+                    if isinstance(candidate_state, CandidateOwnershipState)
+                    else candidate_state
+                )
+                if state_val not in ("TRANSFERRED", "ABORTED"):
+                    candidate_abort_attempted = True
+                    try:
+                        candidate_cleanup_diag = await candidate.abort(
+                            cause=cause,
+                            failure_stage=error_stage,
+                        )
+                        candidate_abort_succeeded = True
+                        self._last_cleanup_diagnostics = candidate_cleanup_diag
+                    except Exception as exc:
+                        degraded = True
+                        logger.warning("Candidate abort failed: %r", exc, exc_info=True)
+                        # Fall back to candidate.diagnostics if available.
+                        candidate_cleanup_diag = getattr(candidate, "diagnostics", None)
+                        if candidate_cleanup_diag is not None:
+                            self._last_cleanup_diagnostics = candidate_cleanup_diag
+
+        # 4. Verify old generation is active and admission is open.
+        try:
+            self._runtime_manager.active_snapshot()
+            admission_reopened = True
+        except Exception:
+            admission_reopened = False
+            degraded = True
+
+        return PrecommitAbortOutcome(
+            swap_rollback_attempted=swap_rollback_attempted,
+            swap_rollback_succeeded=swap_rollback_succeeded,
+            transition_rollback_outcome=transition_rollback_outcome,
+            candidate_abort_attempted=candidate_abort_attempted,
+            candidate_abort_succeeded=candidate_abort_succeeded,
+            candidate_cleanup_diagnostics=candidate_cleanup_diag,
+            admission_reopened=admission_reopened,
+            degraded=degraded,
+            primary_error=str(cause),
+        )
 
     async def _pre_commit_verification(
         self,
@@ -2722,7 +2896,10 @@ class ReloadManager:
 
 
 __all__ = [
+    "AcceptedReloadFinalization",
     "CandidateGeneration",
+    "PrecommitAbortOutcome",
+    "ReloadAcceptanceState",
     "ReloadCommitError",
     "ReloadCounters",
     "ReloadDiagnosticResult",

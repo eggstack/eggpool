@@ -17,6 +17,7 @@ from eggpool.reload_transaction import (
     RoutingTraceGuardTransition,
     RoutingTraceWriterTransition,
     TransitionApplyResult,
+    TransitionRollbackOutcome,
 )
 
 
@@ -106,8 +107,11 @@ async def test_rollback_restores_effective_state_on_missing_attributes() -> None
     assert hasattr(app_state, "config")
     assert app_state.config_digest == "abc123"
 
-    errors = await result.rollback_applied()
-    assert errors == []
+    outcome = await result.rollback_applied()
+    assert isinstance(outcome, TransitionRollbackOutcome)
+    assert outcome.attempted == ("effective_state",)
+    assert outcome.restored == ("effective_state",)
+    assert outcome.failures == ()
 
 
 @pytest.mark.asyncio()
@@ -223,8 +227,11 @@ async def test_transition_apply_result_rollback_applied_in_reverse_order() -> No
     result = TransitionApplyResult(_plan=plan)
     result._applied = [t1, t2, t3]
 
-    errors = await result.rollback_applied()
-    assert errors == []
+    outcome = await result.rollback_applied()
+    assert isinstance(outcome, TransitionRollbackOutcome)
+    assert outcome.attempted == ("third", "second", "first")
+    assert outcome.restored == ("third", "second", "first")
+    assert outcome.failures == ()
     assert call_order == ["third", "second", "first"]
 
 
@@ -248,10 +255,13 @@ async def test_transition_apply_result_rollback_collects_errors() -> None:
     result = TransitionApplyResult(_plan=plan)
     result._applied = [t1, t2]
 
-    errors = await result.rollback_applied()
-    assert len(errors) == 1
-    assert errors[0][0] == "failing_transition"
-    assert "rollback failed" in errors[0][1]
+    outcome = await result.rollback_applied()
+    assert isinstance(outcome, TransitionRollbackOutcome)
+    assert len(outcome.failures) == 1
+    assert outcome.failures[0][0] == "failing_transition"
+    assert "rollback failed" in str(outcome.failures[0][1])
+    assert outcome.restored == ("ok_transition",)
+    assert outcome.attempted == ("failing_transition", "ok_transition")
 
     t1.rollback.assert_awaited_once()
 

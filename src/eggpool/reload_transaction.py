@@ -109,6 +109,21 @@ class TransactionState(enum.Enum):
     COMPENSATION_FAILED = "compensation_failed"
 
 
+class ReloadAcceptanceState(enum.Enum):
+    """Plan 017 Workstream D5: explicit acceptance lifecycle.
+
+    Tracks the boundary between pre-acceptance and post-acceptance
+    phases.  ``NOT_ACCEPTED`` is the initial state.  After SQLite
+    commit succeeds but before ``pending_swap.commit()``, the state is
+    ``PERSISTENCE_COMMITTED_RUNTIME_PENDING``.  After both SQLite and
+    runtime swap commit, the state is ``ACCEPTED``.
+    """
+
+    NOT_ACCEPTED = "not_accepted"
+    PERSISTENCE_COMMITTED_RUNTIME_PENDING = "persistence_committed_runtime_pending"
+    ACCEPTED = "accepted"
+
+
 # Valid forward transitions.  From state X, only states listed in
 # _VALID_TRANSITIONS[X] are reachable.
 #
@@ -218,6 +233,10 @@ class ProcessTransitionApplyError(Exception):
     rollback path is recoverable), and the original cause.  This
     error keeps that context for diagnostic classification without
     forcing the aggregator to walk message strings.
+
+    Plan 017 Workstream B: the error carries a reference to the
+    partial ``TransitionApplyResult`` so callers can perform rollback
+    without losing the old-state snapshots captured during apply.
     """
 
     def __init__(
@@ -237,6 +256,26 @@ class ProcessTransitionApplyError(Exception):
         self.failed_transition_index = failed_transition_index
         self.applied_transition_names = applied_transition_names
         self.original_exception = original_exception
+        self.transition_result: TransitionApplyResult | None = None
+
+
+@dataclass(frozen=True)
+class TransitionRollbackOutcome:
+    """Structured result of rolling back partially-applied transitions.
+
+    Plan 017 Workstream B: replaces the untyped
+    ``list[tuple[str, str]]`` return from
+    :meth:`TransitionApplyResult.rollback_applied` with a typed
+    container that distinguishes attempted transitions, successfully
+    restored transitions, and per-transition failures.
+    """
+
+    attempted: tuple[str, ...]
+    """Names of transitions whose rollback() was invoked."""
+    restored: tuple[str, ...]
+    """Names of transitions whose rollback() completed without error."""
+    failures: tuple[tuple[str, Exception], ...]
+    """Pairs of (transition_name, exception) for rollbacks that failed."""
 
 
 # ---------------------------------------------------------------------------
@@ -386,6 +425,10 @@ class TaskSpecTransition(ProcessTransition):
         Workstream D4: a second rollback after success is a no-op; a
         rollback after finalize raises ``TransactionStateError`` so
         diagnostic classification catches misuse.
+
+        Plan 017 Workstream B: on rollback failure, ``_rolled_back``
+        is NOT set so a subsequent rollback attempt can retry.  Only
+        successful rollback marks the transition as rolled back.
         """
         if self._finalized:
             raise TransactionStateError(f"Cannot rollback {self.name} after finalize")
@@ -403,9 +446,8 @@ class TaskSpecTransition(ProcessTransition):
         except Exception as exc:
             logger.debug("TaskSpecTransition rollback failed: %r", exc, exc_info=True)
             raise
-        finally:
-            self._applied = False
-            self._rolled_back = True
+        self._applied = False
+        self._rolled_back = True
 
     async def finalize(self) -> None:
         """Release captured old-state snapshots after commit.
@@ -758,12 +800,12 @@ class TransitionApplyResult:
                 ) from exc
             self._applied.append(transition)
 
-    async def rollback_applied(self) -> list[tuple[str, str]]:
+    async def rollback_applied(self) -> TransitionRollbackOutcome:
         """Roll back applied transitions in reverse order.
 
         Continues after individual rollback failures so every
-        transition gets a chance.  Returns a list of
-        ``(transition_name, error_message)`` for failures.
+        transition gets a chance.  Returns a
+        :class:`TransitionRollbackOutcome` with structured results.
 
         Plan 016 Workstream D3: per-transition rollback failures
         propagate from the concrete rollback methods; this aggregator
@@ -771,24 +813,40 @@ class TransitionApplyResult:
         transition so a partial-stack restore still runs to
         completion.  Aggregate failures are returned to the caller for
         degraded-state classification.
+
+        Plan 017 Workstream B: return type is now
+        :class:`TransitionRollbackOutcome` with explicit attempted,
+        restored, and failures fields.
         """
         if self._rolled_back:
-            return []  # idempotent
-        errors: list[tuple[str, str]] = []
+            return TransitionRollbackOutcome(
+                attempted=(),
+                restored=(),
+                failures=(),
+            )
+        attempted: list[str] = []
+        restored: list[str] = []
+        failures: list[tuple[str, Exception]] = []
         for transition in reversed(self._applied):
+            attempted.append(transition.name)
             try:
                 await transition.rollback()
             except Exception as exc:
-                error_type = type(exc).__name__
-                errors.append((transition.name, f"{error_type}: {exc}"))
+                failures.append((transition.name, exc))
                 logger.warning(
                     "Process transition %r rollback failed: %s",
                     transition.name,
                     exc,
                     exc_info=True,
                 )
+            else:
+                restored.append(transition.name)
         self._rolled_back = True
-        return errors
+        return TransitionRollbackOutcome(
+            attempted=tuple(attempted),
+            restored=tuple(restored),
+            failures=tuple(failures),
+        )
 
     async def finalize_all(self) -> None:
         """Finalize applied transitions after commit.
@@ -837,6 +895,42 @@ class TransitionApplyResult:
     def is_finalized(self) -> bool:
         """True if :meth:`finalize_all` has been called."""
         return self._finalized
+
+
+@dataclass
+class AcceptedReloadFinalization:
+    """Plan 017 Workstream D: tracks post-acceptance finalization steps.
+
+    After a reload is accepted (SQLite committed + runtime swap
+    committed), the remaining finalization steps are housekeeping that
+    must not fail the reload.  This record tracks which steps have
+    completed so diagnostics and retry logic can identify the current
+    finalization state.
+    """
+
+    candidate_ownership_transferred: bool = False
+    compatibility_mirror_updated: bool = False
+    transitions_finalized: bool = False
+    retirement_scheduled: bool = False
+    transaction_completed: bool = False
+
+    def first_incomplete_step(self) -> str | None:
+        """Return the name of the next incomplete step, or None if done."""
+        if not self.candidate_ownership_transferred:
+            return "ownership_transfer"
+        if not self.compatibility_mirror_updated:
+            return "compatibility_mirror_update"
+        if not self.transitions_finalized:
+            return "transitions_finalization"
+        if not self.retirement_scheduled:
+            return "retirement_scheduling"
+        if not self.transaction_completed:
+            return "transaction_completion"
+        return None
+
+    def is_complete(self) -> bool:
+        """True when all finalization steps have completed."""
+        return self.first_incomplete_step() is None
 
 
 @dataclass(frozen=True)
@@ -926,6 +1020,18 @@ class ReloadTransaction:
         self._retirement_scheduling_pending: bool = True
         self._pending_swap_state_at_terminal: str | None = None
         self._publication_epoch: int = 0
+
+        # Plan 017 Workstream D: explicit acceptance fact and finalization
+        # record.  ``_reload_accepted`` flips to True only after both
+        # SQLite commit and runtime swap commit succeed.  Post-acceptance
+        # finalization failures must NOT call _abort_precommit_reload.
+        self._reload_accepted: bool = False
+        self._acceptance_state: ReloadAcceptanceState = (
+            ReloadAcceptanceState.NOT_ACCEPTED
+        )
+        self._accepted_finalization: AcceptedReloadFinalization = (
+            AcceptedReloadFinalization()
+        )
 
         # Terminal state
         self._completed_at: float | None = None
@@ -1074,6 +1180,65 @@ class ReloadTransaction:
         diagnostic with the manager's monotonic counter.
         """
         return self._publication_epoch
+
+    # -- Workstream D: acceptance fact -----------------------------------
+
+    @property
+    def reload_accepted(self) -> bool:
+        """Plan 017 Workstream D: True after SQLite commit + runtime swap.
+
+        Once accepted, post-acceptance finalization failures must NOT
+        call ``_abort_precommit_reload()`` — the candidate remains
+        authoritative.
+        """
+        return self._reload_accepted
+
+    @property
+    def acceptance_state(self) -> ReloadAcceptanceState:
+        """Plan 017 Workstream D5: explicit acceptance lifecycle state."""
+        return self._acceptance_state
+
+    @property
+    def accepted_finalization(self) -> AcceptedReloadFinalization:
+        """Plan 017 Workstream D: post-acceptance finalization record."""
+        return self._accepted_finalization
+
+    def mark_persistence_committed_runtime_pending(self) -> None:
+        """Mark that SQLite committed but runtime swap is still pending.
+
+        Plan 017 Workstream D5: records the narrow boundary between
+        SQLite commit success and runtime swap commit.
+        """
+        self._acceptance_state = (
+            ReloadAcceptanceState.PERSISTENCE_COMMITTED_RUNTIME_PENDING
+        )
+
+    def mark_accepted(self) -> None:
+        """Mark reload as accepted after SQLite commit + runtime swap commit.
+
+        Must be called after the SQLite transaction has committed
+        (db.transaction() exited) and the runtime swap has been
+        committed (pending_swap.commit() succeeded).  The state machine
+        should be at ``RUNTIME_SWAP_COMMITTED`` at this point.
+        """
+        if self._state not in (
+            TransactionState.RUNTIME_SWAP_COMMITTED,
+            TransactionState.RUNTIME_PUBLISHED,
+            TransactionState.PROCESS_TRANSITIONS_APPLIED,
+            TransactionState.PERSISTENCE_COMMITTED,
+            TransactionState.OBSERVABLE_STATE_UPDATED,
+            TransactionState.RETIREMENT_SCHEDULED,
+            TransactionState.COMPLETED,
+        ):
+            raise TransactionStateError(
+                f"Cannot mark accepted from state {self._state.value}"
+            )
+        if not self.publication_occurred:
+            raise TransactionStateError(
+                "Cannot mark accepted: publication did not occur"
+            )
+        self._reload_accepted = True
+        self._acceptance_state = ReloadAcceptanceState.ACCEPTED
 
     # -- State transitions --------------------------------------------------
 
@@ -1402,6 +1567,26 @@ class ReloadTransaction:
             },
             "error": str(self._error) if self._error else None,
             "completed_at": self._completed_at,
+            # Plan 017 Workstream D: acceptance and finalization facts.
+            "reload_accepted": self._reload_accepted,
+            "acceptance_state": self._acceptance_state.value,
+            "accepted_finalization": {
+                "candidate_ownership_transferred": (
+                    self._accepted_finalization.candidate_ownership_transferred
+                ),
+                "compatibility_mirror_updated": (
+                    self._accepted_finalization.compatibility_mirror_updated
+                ),
+                "transitions_finalized": (
+                    self._accepted_finalization.transitions_finalized
+                ),
+                "retirement_scheduled": (
+                    self._accepted_finalization.retirement_scheduled
+                ),
+                "transaction_completed": (
+                    self._accepted_finalization.transaction_completed
+                ),
+            },
             "transition_history": [
                 {"state": s.value, "at": t} for s, t in self._transition_history
             ],
@@ -1409,17 +1594,20 @@ class ReloadTransaction:
 
 
 __all__ = [
+    "AcceptedReloadFinalization",
     "CommitDiagnostics",
     "EffectiveStateTransition",
     "PersistenceDelta",
     "ProcessTransition",
     "ProcessTransitionApplyError",
     "ProcessTransitionPlan",
+    "ReloadAcceptanceState",
     "ReloadTransaction",
     "RoutingTraceGuardTransition",
     "RoutingTraceWriterTransition",
     "TaskSpecTransition",
     "TransitionApplyResult",
+    "TransitionRollbackOutcome",
     "TransactionState",
     "TransactionStateError",
     "preflight_all_transitions",
