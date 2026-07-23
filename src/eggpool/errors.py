@@ -46,6 +46,15 @@ class DatabaseCommitError(DatabaseError):
         self.outcome = outcome
 
 
+class DatabaseConnectionInvalidatedError(DatabaseError):
+    """Raised when the database connection has been invalidated.
+
+    The connection was detached and closed after an indeterminate
+    commit failure.  A new ``connect()`` call is required before
+    future database access.
+    """
+
+
 class UpstreamError(AggregatorError):
     """Base exception for upstream API errors."""
 

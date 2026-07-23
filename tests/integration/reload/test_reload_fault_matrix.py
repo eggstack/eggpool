@@ -193,15 +193,18 @@ class TestCommitFaults:
 
         pre = RuntimeSnapshot.capture(reload_harness.runtime_manager)
 
-        async def _apply_side_effect(plan: object) -> None:
-            raise RuntimeError("process transition failed")
-
-        original_apply = reload_harness.reload_manager._apply_process_transitions
-        reload_harness.reload_manager._apply_process_transitions = _apply_side_effect  # type: ignore[assignment]
+        original_seam = (
+            reload_harness.reload_manager.TEST_INJECT_TRANSITION_APPLY_FAILURE
+        )
+        reload_harness.reload_manager.TEST_INJECT_TRANSITION_APPLY_FAILURE = (
+            RuntimeError("process transition failed")
+        )
         try:
             result = await reload_harness.reload()
         finally:
-            reload_harness.reload_manager._apply_process_transitions = original_apply
+            reload_harness.reload_manager.TEST_INJECT_TRANSITION_APPLY_FAILURE = (
+                original_seam
+            )
 
         # Process transitions fail inside the transaction → rollback.
         assert result.ok is False
@@ -226,15 +229,18 @@ class TestCommitFaults:
 
         pre = RuntimeSnapshot.capture(reload_harness.runtime_manager)
 
-        async def _always_fail(plan: object) -> None:
-            raise RuntimeError("process transition always fails")
-
-        original_apply = reload_harness.reload_manager._apply_process_transitions
-        reload_harness.reload_manager._apply_process_transitions = _always_fail  # type: ignore[assignment]
+        original_seam = (
+            reload_harness.reload_manager.TEST_INJECT_TRANSITION_APPLY_FAILURE
+        )
+        reload_harness.reload_manager.TEST_INJECT_TRANSITION_APPLY_FAILURE = (
+            RuntimeError("process transition always fails")
+        )
         try:
             result = await reload_harness.reload()
         finally:
-            reload_harness.reload_manager._apply_process_transitions = original_apply
+            reload_harness.reload_manager.TEST_INJECT_TRANSITION_APPLY_FAILURE = (
+                original_seam
+            )
 
         assert result.ok is False
         diag = reload_harness.reload_manager._last_diagnostic_result
@@ -597,15 +603,18 @@ class TestCleanupCompensationFaults:
 
         pre = RuntimeSnapshot.capture(reload_harness.runtime_manager)
 
-        async def _always_fail(plan: object) -> None:
-            raise RuntimeError("process transition always fails")
-
-        original_apply = reload_harness.reload_manager._apply_process_transitions
-        reload_harness.reload_manager._apply_process_transitions = _always_fail  # type: ignore[assignment]
+        original_seam = (
+            reload_harness.reload_manager.TEST_INJECT_TRANSITION_APPLY_FAILURE
+        )
+        reload_harness.reload_manager.TEST_INJECT_TRANSITION_APPLY_FAILURE = (
+            RuntimeError("process transition always fails")
+        )
         try:
             await reload_harness.reload(make_candidate_config())
         finally:
-            reload_harness.reload_manager._apply_process_transitions = original_apply
+            reload_harness.reload_manager.TEST_INJECT_TRANSITION_APPLY_FAILURE = (
+                original_seam
+            )
 
         # Process transitions fail inside the transaction → rollback.
         # No publication happens; old generation remains active.
@@ -766,16 +775,18 @@ class TestPostSwapBookkeeping:
 
         pre = RuntimeSnapshot.capture(reload_harness.runtime_manager)
 
-        original_apply = reload_harness.reload_manager._apply_process_transitions
-
-        async def _fail_once(plan: object) -> None:
-            raise RuntimeError("process transition failed")
-
-        reload_harness.reload_manager._apply_process_transitions = _fail_once  # type: ignore[assignment]
+        original_seam = (
+            reload_harness.reload_manager.TEST_INJECT_TRANSITION_APPLY_FAILURE
+        )
+        reload_harness.reload_manager.TEST_INJECT_TRANSITION_APPLY_FAILURE = (
+            RuntimeError("process transition failed")
+        )
         try:
             result = await reload_harness.reload()
         finally:
-            reload_harness.reload_manager._apply_process_transitions = original_apply
+            reload_harness.reload_manager.TEST_INJECT_TRANSITION_APPLY_FAILURE = (
+                original_seam
+            )
 
         # Transaction rolled back — no publication.
         assert result.ok is False
@@ -865,16 +876,18 @@ class TestPostSwapBookkeeping:
 
         pre = RuntimeSnapshot.capture(reload_harness.runtime_manager)
 
-        original_apply = reload_harness.reload_manager._apply_process_transitions
-
-        async def _fail_once(plan: object) -> None:
-            raise RuntimeError("process transition failed")
-
-        reload_harness.reload_manager._apply_process_transitions = _fail_once  # type: ignore[assignment]
+        original_seam = (
+            reload_harness.reload_manager.TEST_INJECT_TRANSITION_APPLY_FAILURE
+        )
+        reload_harness.reload_manager.TEST_INJECT_TRANSITION_APPLY_FAILURE = (
+            RuntimeError("process transition failed")
+        )
         try:
             await reload_harness.reload(make_candidate_config())
         finally:
-            reload_harness.reload_manager._apply_process_transitions = original_apply
+            reload_harness.reload_manager.TEST_INJECT_TRANSITION_APPLY_FAILURE = (
+                original_seam
+            )
 
         # Transaction facts must match runtime state — no publication occurred.
         snap = reload_harness.reload_manager.snapshot()

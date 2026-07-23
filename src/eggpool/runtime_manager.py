@@ -1391,9 +1391,18 @@ class RuntimeManager:
                     raise RuntimeManagerSwapInProgressError(
                         f"A pending swap is still in state {existing.swap_state.value}"
                     )
-                # Defensive: terminal-state swap must already have
-                # cleared itself.  Force-clear under the lock so a
-                # dangling reference cannot block a fresh prepare.
+                # Plan 018 Workstream D1: a COMMITTED swap is the
+                # authoritative owner of the old slot until
+                # finalize_retirement() succeeds.  Do not force-clear it.
+                if existing.swap_state is PendingSwapState.COMMITTED:
+                    raise RuntimeManagerSwapInProgressError(
+                        "A committed swap is still pending finalization; "
+                        "cannot prepare a new swap"
+                    )
+                # Terminal-state swap (ROLLED_BACK, FINALIZED) should
+                # already have cleared itself.  Defensive: clear under
+                # the lock so a dangling reference cannot block a fresh
+                # prepare.
                 self._pending_swap = None
             swap = PendingGenerationSwap(
                 self,
@@ -1830,21 +1839,40 @@ class RuntimeManager:
     # -- defensive gate release --------------------------------------------
 
     async def ensure_reload_gate_released(self) -> None:
-        """Ensure the lease gate is released if a pending swap is still staged.
+        """Defensive gate release — state-aware.
 
-        Plan 017 Workstream A: defensive API called from the reload
-        manager's ``finally`` block to guarantee lease admission
-        resumes on every terminal path (success, cancellation, or
-        failure).  If the gate is still active and a pending swap
-        exists, the gate is cleared and a warning is logged.
+        Plan 018 Workstream F2: called from the reload manager's
+        ``finally`` block to guarantee lease admission resumes on every
+        terminal path.  Unlike the previous implementation, this method:
+
+        - Does NOT increment ``_publication_epoch`` (no publication
+          occurred); only ``install_initial()`` and
+          ``PendingGenerationSwap.commit()`` may increment the epoch.
+        - Refuses to clear the gate when a staged swap is present
+          because the swap must be resolved through rollback or commit,
+          not bypassed by a defensive repair.
+        - Is a no-op when the gate is already clear.
         """
         async with self._lease_condition:
-            if self._lease_admission_gated and self._pending_swap is not None:
-                self._lease_admission_gated = False
-                logger.warning(
-                    "Repaired inconsistent lease gate state in finally block"
-                )
-            self._publication_epoch += 1
+            if not self._lease_admission_gated:
+                return  # No gate active, no-op.
+
+            if self._pending_swap is not None:
+                swap_state = self._pending_swap.swap_state
+                if swap_state is PendingSwapState.STAGED:
+                    logger.warning(
+                        "Defensive gate repair: staged swap present; "
+                        "gate cannot be cleared without rollback"
+                    )
+                    return
+                if swap_state is PendingSwapState.COMMITTED:
+                    # Committed swap: admission should already be open.
+                    # Clear gate defensively if it's still set.
+                    pass
+
+            # Clear the gate — do NOT increment publication_epoch.
+            self._lease_admission_gated = False
+            logger.warning("Repaired inconsistent lease gate state in finally block")
             self._lease_condition.notify_all()
 
     # -- diagnostics --------------------------------------------------------

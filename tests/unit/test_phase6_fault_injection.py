@@ -200,9 +200,6 @@ class TestProcessTransitionApplyFailure:
 
         monkeypatch.setattr(mgr, "_record_event", AsyncMock())
 
-        async def _apply_transitions_side_effect(plan: Any) -> None:
-            raise RuntimeError("process transition apply failed")
-
         with (
             patch.object(
                 mgr, "_compute_reload_diff", new_callable=AsyncMock, return_value=diff
@@ -215,12 +212,6 @@ class TestProcessTransitionApplyFailure:
             ),
             patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
             patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
-            patch.object(
-                mgr,
-                "_apply_process_transitions",
-                new_callable=AsyncMock,
-                side_effect=_apply_transitions_side_effect,
-            ),
             patch(
                 "eggpool.control.reload_manager.preflight_all_transitions",
                 new_callable=AsyncMock,
@@ -228,7 +219,13 @@ class TestProcessTransitionApplyFailure:
             ),
             patch.object(rm, "begin_retirement", new_callable=AsyncMock()),
         ):
-            result = await mgr.reload(validation)
+            mgr.TEST_INJECT_TRANSITION_APPLY_FAILURE = RuntimeError(
+                "process transition apply failed"
+            )
+            try:
+                result = await mgr.reload(validation)
+            finally:
+                mgr.TEST_INJECT_TRANSITION_APPLY_FAILURE = None
 
         # Process transition failure rolls back everything — generation
         # stays at the pre-reload state.
@@ -275,9 +272,6 @@ class TestProcessTransitionApplyFailure:
 
         monkeypatch.setattr(mgr, "_record_event", AsyncMock())
 
-        async def _always_fail(plan: Any) -> None:
-            raise RuntimeError("process transition always fails")
-
         with (
             patch.object(
                 mgr, "_compute_reload_diff", new_callable=AsyncMock, return_value=diff
@@ -290,12 +284,6 @@ class TestProcessTransitionApplyFailure:
             ),
             patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
             patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
-            patch.object(
-                mgr,
-                "_apply_process_transitions",
-                new_callable=AsyncMock,
-                side_effect=_always_fail,
-            ),
             patch(
                 "eggpool.control.reload_manager.preflight_all_transitions",
                 new_callable=AsyncMock,
@@ -303,7 +291,13 @@ class TestProcessTransitionApplyFailure:
             ),
             patch.object(rm, "begin_retirement", new_callable=AsyncMock()),
         ):
-            result = await mgr.reload(validation)
+            mgr.TEST_INJECT_TRANSITION_APPLY_FAILURE = RuntimeError(
+                "process transition always fails"
+            )
+            try:
+                result = await mgr.reload(validation)
+            finally:
+                mgr.TEST_INJECT_TRANSITION_APPLY_FAILURE = None
 
         # Process transition failure rolls back everything — generation
         # stays at the pre-reload state.

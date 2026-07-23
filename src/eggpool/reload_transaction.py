@@ -224,6 +224,18 @@ class TransactionStateError(Exception):
     """Raised on an invalid state transition."""
 
 
+class TransitionRollbackState(enum.Enum):
+    """Tracks retryability of transition rollback.
+
+    Plan 018 Workstream A3: rollback state is retryable — a partial
+    rollback can be retried to restore the remaining transitions.
+    """
+
+    NOT_ATTEMPTED = "not_attempted"
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+
+
 class ProcessTransitionApplyError(Exception):
     """Typed error carrying context for a partial transition apply failure.
 
@@ -276,6 +288,27 @@ class TransitionRollbackOutcome:
     """Names of transitions whose rollback() completed without error."""
     failures: tuple[tuple[str, Exception], ...]
     """Pairs of (transition_name, exception) for rollbacks that failed."""
+
+
+@dataclass(frozen=True)
+class TransitionFinalizeOutcome:
+    """Structured result of finalizing transitions after commit.
+
+    Plan 018 Workstream A4: replaces the swallowed-failure logging in
+    :meth:`TransitionApplyResult.finalize_all` with a typed container
+    that surfaces attempted, finalized, failed, and remaining
+    transitions so callers can retry or diagnose incomplete
+    finalization.
+    """
+
+    attempted: tuple[str, ...]
+    """Names of transitions whose finalize() was invoked."""
+    finalized: tuple[str, ...]
+    """Names of transitions whose finalize() completed without error."""
+    failures: tuple[tuple[str, Exception], ...]
+    """Pairs of (transition_name, exception) for finalizations that failed."""
+    remaining: tuple[str, ...]
+    """Names of transitions not yet finalized (resumable on next call)."""
 
 
 # ---------------------------------------------------------------------------
@@ -772,13 +805,26 @@ class TransitionApplyResult:
     already-applied transitions.  Callers can then call
     :meth:`rollback_applied` against the same result instance without
     losing the partial stack to a helper that raised before returning.
+
+    Plan 018 Workstream A3: rollback state is retryable — a partial
+    rollback can be retried to restore remaining transitions.
+
+    Plan 018 Workstream A4: finalization failures are surfaced in a
+    :class:`TransitionFinalizeOutcome` and a second call resumes from
+    the first incomplete transition.
     """
 
     _plan: ProcessTransitionPlan
     _applied: list[ProcessTransition] = field(
         default_factory=lambda: list[ProcessTransition]()
     )
-    _rolled_back: bool = False
+    _rollback_state: TransitionRollbackState = TransitionRollbackState.NOT_ATTEMPTED
+    _unrestored: list[ProcessTransition] = field(
+        default_factory=lambda: list[ProcessTransition]()
+    )
+    _finalized_transitions: list[ProcessTransition] = field(
+        default_factory=lambda: list[ProcessTransition]()
+    )
     _finalized: bool = False
 
     async def apply_all(self) -> None:
@@ -817,17 +863,28 @@ class TransitionApplyResult:
         Plan 017 Workstream B: return type is now
         :class:`TransitionRollbackOutcome` with explicit attempted,
         restored, and failures fields.
+
+        Plan 018 Workstream A3: rollback state is retryable — a
+        partial rollback can be retried to restore remaining
+        transitions.  ``COMPLETE`` returns immediately; ``PARTIAL``
+        retries only unrestored transitions.
         """
-        if self._rolled_back:
+        if self._rollback_state is TransitionRollbackState.COMPLETE:
             return TransitionRollbackOutcome(
                 attempted=(),
                 restored=(),
                 failures=(),
             )
+        transitions_to_rollback: list[ProcessTransition]
+        if self._rollback_state is TransitionRollbackState.PARTIAL and self._unrestored:
+            transitions_to_rollback = list(reversed(self._unrestored))
+        else:
+            transitions_to_rollback = list(reversed(self._applied))
+            self._unrestored = list(self._applied)
         attempted: list[str] = []
         restored: list[str] = []
         failures: list[tuple[str, Exception]] = []
-        for transition in reversed(self._applied):
+        for transition in transitions_to_rollback:
             attempted.append(transition.name)
             try:
                 await transition.rollback()
@@ -841,35 +898,73 @@ class TransitionApplyResult:
                 )
             else:
                 restored.append(transition.name)
-        self._rolled_back = True
+                if transition in self._unrestored:
+                    self._unrestored.remove(transition)
+        if not self._unrestored:
+            self._rollback_state = TransitionRollbackState.COMPLETE
+        else:
+            self._rollback_state = TransitionRollbackState.PARTIAL
         return TransitionRollbackOutcome(
             attempted=tuple(attempted),
             restored=tuple(restored),
             failures=tuple(failures),
         )
 
-    async def finalize_all(self) -> None:
+    async def finalize_all(self) -> TransitionFinalizeOutcome:
         """Finalize applied transitions after commit.
 
         Called only after the transaction is accepted.  Releases
-        captured old-state snapshots.  Failures are treated as
-        post-commit housekeeping and logged but not propagated.
+        captured old-state snapshots.  Returns a
+        :class:`TransitionFinalizeOutcome` with structured results.
 
         Plan 016 Workstream E2: finalize is a no-op once it has run
         and must never be invoked from a rollback path.
+
+        Plan 018 Workstream A4: failures are surfaced in the outcome
+        and a second call resumes from the first incomplete
+        transition.  ``_finalized`` is set only when all transitions
+        have been finalized.
         """
         if self._finalized:
-            return
+            return TransitionFinalizeOutcome(
+                attempted=(),
+                finalized=(),
+                failures=(),
+                remaining=(),
+            )
+        already_finalized_names = {t.name for t in self._finalized_transitions}
+        attempted: list[str] = []
+        finalized_names: list[str] = []
+        failures: list[tuple[str, Exception]] = []
         for transition in self._applied:
+            if transition.name in already_finalized_names:
+                continue
+            attempted.append(transition.name)
             try:
                 await transition.finalize()
-            except Exception:
+            except Exception as exc:
+                failures.append((transition.name, exc))
                 logger.debug(
                     "Finalization of transition %s failed (housekeeping)",
                     transition.name,
                     exc_info=True,
                 )
-        self._finalized = True
+            else:
+                finalized_names.append(transition.name)
+                self._finalized_transitions.append(transition)
+        remaining = tuple(
+            t.name
+            for t in self._applied
+            if t.name not in already_finalized_names and t.name not in finalized_names
+        )
+        if not remaining:
+            self._finalized = True
+        return TransitionFinalizeOutcome(
+            attempted=tuple(attempted),
+            finalized=tuple(finalized_names),
+            failures=tuple(failures),
+            remaining=remaining,
+        )
 
     @property
     def applied_count(self) -> int:
@@ -889,7 +984,12 @@ class TransitionApplyResult:
     @property
     def is_rolled_back(self) -> bool:
         """True if :meth:`rollback_applied` has been called successfully."""
-        return self._rolled_back
+        return self._rollback_state is not TransitionRollbackState.NOT_ATTEMPTED
+
+    @property
+    def rollback_state(self) -> TransitionRollbackState:
+        """Current rollback state for diagnostics."""
+        return self._rollback_state
 
     @property
     def is_finalized(self) -> bool:
@@ -1371,7 +1471,6 @@ class ReloadTransaction:
         # commit; mirror is updated at observable-state; retirement is
         # scheduled after the swap commits.
         self._pending_swap_state_at_terminal = "committed"
-        self._ownership_transfer_pending = False
         self._lease_admission_gated_at_terminal = False
         self._transition_to(TransactionState.RUNTIME_SWAP_COMMITTED)
 
@@ -1395,7 +1494,6 @@ class ReloadTransaction:
         # Plan 016 Workstream H3: ownership is transferred once the
         # candidate is published.
         self._pending_swap_state_at_terminal = "committed"
-        self._ownership_transfer_pending = False
         self._transition_to(TransactionState.RUNTIME_PUBLISHED)
 
     def mark_process_transitions_applied(self) -> None:
@@ -1427,6 +1525,15 @@ class ReloadTransaction:
         self.retirement_scheduled = True
         self._retirement_scheduling_pending = False
         self._transition_to(TransactionState.RETIREMENT_SCHEDULED)
+
+    def mark_ownership_transferred(self) -> None:
+        """Mark that candidate ownership has been transferred.
+
+        Plan 018 Workstream B4: ownership transfer pending flag is
+        cleared at the actual transfer point (``transfer_to_runtime_manager``),
+        not at publication.
+        """
+        self._ownership_transfer_pending = False
 
     def mark_completed(self) -> None:
         """Transition: RETIREMENT_SCHEDULED → COMPLETED.
@@ -1463,7 +1570,13 @@ class ReloadTransaction:
         state) records ``publication_occurred=True`` so abort
         diagnostics derive from explicit facts rather than the broad
         ``is_committing`` state category.
+
+        Plan 018 Workstream B2: accepted reloads cannot be aborted.
+        Once ``_reload_accepted`` is True, ``mark_aborting`` raises
+        ``TransactionStateError`` so callers catch the misuse early.
         """
+        if self._reload_accepted:
+            raise TransactionStateError("Accepted reload cannot be aborted")
         if self._state in (
             TransactionState.COMPLETED,
             TransactionState.ABORTED,
@@ -1607,7 +1720,9 @@ __all__ = [
     "RoutingTraceWriterTransition",
     "TaskSpecTransition",
     "TransitionApplyResult",
+    "TransitionFinalizeOutcome",
     "TransitionRollbackOutcome",
+    "TransitionRollbackState",
     "TransactionState",
     "TransactionStateError",
     "preflight_all_transitions",

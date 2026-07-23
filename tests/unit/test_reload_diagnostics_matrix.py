@@ -1578,14 +1578,14 @@ class TestFailedProcessTransitionApplyCategory:
                 "_publish_generation",
                 new_callable=AsyncMock,
             ),
-            patch.object(
-                mgr,
-                "_apply_process_transitions",
-                new_callable=AsyncMock,
-                side_effect=RuntimeError("process transition failed"),
-            ),
         ):
-            result = await mgr.reload(validation)
+            mgr.TEST_INJECT_TRANSITION_APPLY_FAILURE = RuntimeError(
+                "process transition failed"
+            )
+            try:
+                result = await mgr.reload(validation)
+            finally:
+                mgr.TEST_INJECT_TRANSITION_APPLY_FAILURE = None
 
         assert result.ok is False
 
@@ -1743,9 +1743,6 @@ class TestCompensationFailedCategory:
         # First publish succeeds, then process transitions fail,
         # and compensation also fails.
 
-        async def _apply_pt_fail(*args: object, **kwargs: object) -> None:
-            raise RuntimeError("process transition failed")
-
         with (
             patch.object(
                 mgr,
@@ -1766,14 +1763,14 @@ class TestCompensationFailedCategory:
                 "_publish_generation",
                 new_callable=AsyncMock,
             ),
-            patch.object(
-                mgr,
-                "_apply_process_transitions",
-                new_callable=AsyncMock,
-                side_effect=_apply_pt_fail,
-            ),
         ):
-            result = await mgr.reload(validation)
+            mgr.TEST_INJECT_TRANSITION_APPLY_FAILURE = RuntimeError(
+                "process transition failed"
+            )
+            try:
+                result = await mgr.reload(validation)
+            finally:
+                mgr.TEST_INJECT_TRANSITION_APPLY_FAILURE = None
 
         assert result.ok is False
 

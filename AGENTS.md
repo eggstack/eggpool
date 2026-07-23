@@ -30,7 +30,7 @@ All five must pass with zero errors.
 
 ## CI Partitioning
 
-CI runs 6 parallel jobs:
+CI runs 7 parallel jobs:
 
 | Job | Python | Command |
 |-----|--------|---------|
@@ -39,6 +39,7 @@ CI runs 6 parallel jobs:
 | unit-integration | 3.11, 3.12 | `pytest -m "not slow and not performance and not soak and not extended_soak and not live"` |
 | reload-control | 3.11, 3.12 | `pytest tests/integration/reload/` |
 | plan-016-corrective | 3.11, 3.12 | Plan 016/017 focused test command (see below) |
+| plan-018-reload-closure | 3.11, 3.12 | Plan 018 focused test command (see below) |
 | performance | 3.12 | `pytest -m performance` |
 | soak-audit | 3.12 | `pytest -m soak` + `audit_xfail_skips.py` |
 
@@ -262,6 +263,21 @@ uv run pytest \
     tests/integration/reload/test_plan_017_acceptance_finalization.py \
     -v
 
+# Plan 018 — Reload atomicity closure corrective pass
+uv run pytest \
+    tests/unit/test_runtime_manager.py \
+    tests/unit/test_process_transition_plan.py \
+    tests/unit/test_reload_manager.py \
+    tests/unit/test_reload_diagnostics_matrix.py \
+    tests/integration/reload/test_plan_017_lease_condition.py \
+    tests/integration/reload/test_plan_018_transition_ownership.py \
+    tests/integration/reload/test_plan_018_accepted_finalization.py \
+    tests/integration/reload/test_plan_018_retirement_retry.py \
+    tests/integration/reload/test_plan_018_database_commit_failure.py \
+    tests/integration/reload/test_plan_018_gate_repair.py \
+    tests/integration/reload/test_pending_swap_visibility.py \
+    -v
+
 # Control socket hardening tests (SO_PEERCRED, stale socket,
 # inode protection, runtime dir permissions)
 uv run pytest tests/unit/test_control_server.py tests/unit/test_reload_security.py -v
@@ -340,6 +356,7 @@ CI sets `PYTHONHASHSEED=0` and `TZ=UTC`; reproduce locally for deterministic res
 - **Model info sources**: `src/eggpool/model_info/` enriches model metadata from multiple sources with tiered identity matching (6 tiers). Case-insensitive lookups at every layer.
 - **Dispatch timing**: `LocalPreUpstreamRecorder` measures full EggPool-side window; `DispatchOverheadRecorder` covers coordinator-internal slice. Both use monotonic clocks.
 - **Performance hot path**: `Router.build_routing_plan()` is the authoritative selection path (no fallback to legacy `select_accounts()`). `DispatchSpanRecorder` provides 200-sample dispatch span telemetry.
+- **Plan 018 — Reload Atomicity Closure Corrective Pass**: correctness pass closing edge cases in transition ownership tracking, accepted-finalization idempotency, retirement retry safety, database commit failure recovery, and gate repair. New integration tests: `test_plan_018_transition_ownership.py`, `test_plan_018_accepted_finalization.py`, `test_plan_018_retirement_retry.py`, `test_plan_018_database_commit_failure.py`, `test_plan_018_gate_repair.py`.
 
 ## Gotchas
 

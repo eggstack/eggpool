@@ -16,7 +16,11 @@ import aiosqlite
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
-from eggpool.errors import DatabaseCommitError, DatabaseError
+from eggpool.errors import (
+    DatabaseCommitError,
+    DatabaseConnectionInvalidatedError,
+    DatabaseError,
+)
 
 
 class _RollbackProbeError(Exception):
@@ -169,6 +173,18 @@ class Database:
         # can target a specific connection without affecting others.
         self._test_inject_before_commit: Exception | None = None
         self._test_inject_commit_call: Exception | None = None
+        # Connection-invalidation state (Plan 018 Workstream E).
+        # Set when a commit failure leaves the connection in an
+        # indeterminate state; subsequent transaction() calls raise
+        # DatabaseConnectionInvalidatedError until connect() is called.
+        self._invalidated: bool = False
+        self._invalidated_reason: str | None = None
+        self._invalidated_at: float | None = None
+        self._last_commit_outcome: str | None = None
+        self._last_rollback_attempted: bool = False
+        self._last_rollback_succeeded: bool = False
+        self._last_in_transaction_before_rollback: bool | None = None
+        self._last_in_transaction_after_rollback: bool | None = None
 
     @property
     def read_only(self) -> bool:
@@ -178,6 +194,9 @@ class Database:
         """Open the connection and set pragmas."""
         if self._conn is not None:
             raise DatabaseError("Database already connected")
+        self._invalidated = False
+        self._invalidated_reason = None
+        self._invalidated_at = None
         try:
             if self._read_only:
                 # Use a read-only URI so SQLite refuses to change
@@ -243,6 +262,55 @@ class Database:
         if self._conn is not None:
             await self._conn.close()
             self._conn = None
+
+    async def _invalidate_connection(self, reason: str) -> None:
+        """Detach and close the connection after indeterminate state.
+
+        Atomically removes the connection from ``_conn`` while the
+        connection lock is held (the caller must already hold the lock),
+        sets the invalidated flag, and closes the detached connection
+        with bounded best-effort.  Future ``transaction()`` calls fail
+        with ``DatabaseConnectionInvalidatedError`` until ``connect()``
+        is called again.
+        """
+        if self._conn is None:
+            return
+        conn_to_close = self._conn
+        self._conn = None
+        self._invalidated = True
+        self._invalidated_reason = reason
+        self._invalidated_at = time.monotonic()
+        with suppress(Exception):
+            await asyncio.wait_for(conn_to_close.close(), timeout=5.0)
+
+    def diagnostics(self) -> dict[str, Any]:
+        """Return operational database diagnostics.
+
+        Exposes connection state, invalidation facts, and the last
+        commit/rollback outcome without SQL values, credentials, or
+        file contents.
+        """
+        if self._invalidated:
+            state = "invalidated"
+        elif self._conn is None:
+            state = "disconnected"
+        else:
+            state = "connected"
+        return {
+            "connection_state": state,
+            "invalidated_reason": self._invalidated_reason,
+            "invalidated_at": self._invalidated_at,
+            "reconnect_required": self._invalidated,
+            "last_commit_outcome": self._last_commit_outcome,
+            "last_rollback_attempted": self._last_rollback_attempted,
+            "last_rollback_succeeded": self._last_rollback_succeeded,
+            "last_in_transaction_before_rollback": (
+                self._last_in_transaction_before_rollback
+            ),
+            "last_in_transaction_after_rollback": (
+                self._last_in_transaction_after_rollback
+            ),
+        }
 
     @property
     def connection(self) -> aiosqlite.Connection:
@@ -343,6 +411,11 @@ class Database:
         Lock wait time is tracked in contention counters for
         runtime diagnostics.
         """
+        if self._invalidated:
+            raise DatabaseConnectionInvalidatedError(
+                self._invalidated_reason
+                or "Connection invalidated by indeterminate commit outcome"
+            )
         # ContextVar inheritance is the transaction's intentional
         # piggyback signal.  A child task created inside the transaction
         # inherits ``_in_transaction_context`` but not the identity of the
@@ -668,6 +741,11 @@ class Database:
         callers -- including task-spawned piggybackers -- simply
         yield and inherit the outer's commit boundary.
         """
+        if self._invalidated:
+            raise DatabaseConnectionInvalidatedError(
+                self._invalidated_reason
+                or "Connection invalidated by indeterminate commit outcome"
+            )
         if self._conn is None:
             raise DatabaseError("Database not connected")
 
@@ -697,6 +775,11 @@ class Database:
         # BEGIN / COMMIT boundaries.
         self._refresh_idle_connection_lock()
         async with self._connection_lock:
+            if self._invalidated:
+                raise DatabaseConnectionInvalidatedError(
+                    self._invalidated_reason
+                    or "Connection invalidated by indeterminate commit outcome"
+                )
             # Re-check under the lock. Another task may have raced
             # between our initial check and acquiring the lock.
             if self._has_active_transaction_context():
@@ -772,30 +855,58 @@ class Database:
                 if commit_exc is not None:
                     rollback_attempted = False
                     rollback_succeeded = False
-                    transaction_still_active: bool | None = None
                     connection_invalidated = False
+                    in_transaction_before_rollback: bool | None = None
+                    in_transaction_after_rollback: bool | None = None
 
                     try:
+                        in_transaction_before_rollback = getattr(
+                            self._conn, "in_transaction", None
+                        )
                         rollback_attempted = True
                         if (
-                            hasattr(self._conn, "in_transaction")
-                            and self._conn.in_transaction
+                            in_transaction_before_rollback is not None
+                            and in_transaction_before_rollback
                         ):
                             await self._conn.rollback()
-                            if (
-                                hasattr(self._conn, "in_transaction")
-                                and not self._conn.in_transaction
-                            ):
+                            in_transaction_after_rollback = getattr(
+                                self._conn, "in_transaction", None
+                            )
+                            if in_transaction_after_rollback is False:
                                 rollback_succeeded = True
                             else:
                                 connection_invalidated = True
                         else:
+                            # Commit raised but in_transaction is
+                            # already false — indeterminate.
                             connection_invalidated = True
                     except Exception:
                         rollback_succeeded = False
                         connection_invalidated = True
 
                     outcome = "rolled_back" if rollback_succeeded else "indeterminate"
+                    self._last_commit_outcome = outcome
+                    self._last_rollback_attempted = rollback_attempted
+                    self._last_rollback_succeeded = rollback_succeeded
+                    self._last_in_transaction_before_rollback = (
+                        in_transaction_before_rollback
+                    )
+                    self._last_in_transaction_after_rollback = (
+                        in_transaction_after_rollback
+                    )
+                    # Determine transaction_still_active from
+                    # actual observation rather than leaving it None.
+                    transaction_still_active: bool | None = (
+                        in_transaction_after_rollback
+                        if rollback_attempted
+                        else in_transaction_before_rollback
+                    )
+
+                    if connection_invalidated:
+                        await self._invalidate_connection(
+                            f"commit failure — {outcome}: {commit_exc!r}"
+                        )
+
                     raise DatabaseCommitError(
                         f"SQLite COMMIT failed: {commit_exc!r}",
                         rollback_attempted=rollback_attempted,

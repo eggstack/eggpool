@@ -171,6 +171,54 @@ jobs:
           if-no-files-found: ignore
 
   # ------------------------------------------------------------------
+  # 4c. Plan 018 — Reload atomicity closure corrective pass tests.
+  #     Runs the Plan 018 test command on a Python 3.11+3.12 matrix.
+  # ------------------------------------------------------------------
+  plan-018-reload-closure:
+    runs-on: ubuntu-latest
+    needs: [lint]
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --frozen --extra dev
+
+      - name: Plan 018 reload closure tests
+        run: |
+          uv run pytest \
+            tests/unit/test_runtime_manager.py \
+            tests/unit/test_process_transition_plan.py \
+            tests/unit/test_reload_manager.py \
+            tests/unit/test_reload_diagnostics_matrix.py \
+            tests/integration/reload/test_plan_017_lease_condition.py \
+            tests/integration/reload/test_plan_018_transition_ownership.py \
+            tests/integration/reload/test_plan_018_accepted_finalization.py \
+            tests/integration/reload/test_plan_018_retirement_retry.py \
+            tests/integration/reload/test_plan_018_database_commit_failure.py \
+            tests/integration/reload/test_plan_018_gate_repair.py \
+            tests/integration/reload/test_pending_swap_visibility.py \
+            -q --tb=short
+
+      - name: Run skip/xfail policy audit
+        run: uv run python scripts/audit_xfail_skips.py
+
+      - name: Upload test logs on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: plan-018-reload-closure-logs-py${{ matrix.python-version }}
+          path: |
+            .pytest_cache/
+            *.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # ------------------------------------------------------------------
   # 5. Performance — bounded perf-contract tests (3.12 only)
   # ------------------------------------------------------------------
   performance:
