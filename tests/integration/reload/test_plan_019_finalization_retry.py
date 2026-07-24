@@ -125,7 +125,7 @@ async def test_fail_once_transition_blocks_advancement(
     result1 = await job.run()
 
     # Step should remain at MIRROR_UPDATED (transition finalization failed).
-    assert result1 is AcceptedFinalizationStep.MIRROR_UPDATED
+    assert result1.next_step == AcceptedFinalizationStep.MIRROR_UPDATED.value
     assert not job.is_complete
     assert job.health is AcceptedFinalizationHealth.RETRY_PENDING
     assert job.last_error_class == "TransitionFinalizationPendingError"
@@ -189,7 +189,7 @@ async def test_retry_advances_after_b_succeeds(
 
     # Second run — B succeeds on retry, job completes.
     result2 = await job.run()
-    assert result2 is AcceptedFinalizationStep.COMPLETED
+    assert result2.completed
     assert job.is_complete
     assert job.health is AcceptedFinalizationHealth.COMPLETED
 

@@ -39,7 +39,7 @@ CI runs 7 parallel jobs:
 | unit-integration | 3.11, 3.12 | `pytest -m "not slow and not performance and not soak and not extended_soak and not live"` |
 | reload-control | 3.11, 3.12 | `pytest tests/integration/reload/` |
 | plan-016-corrective | 3.11, 3.12 | Plan 016/017 focused test command (see below) |
-| plan-018-reload-closure | 3.11, 3.12 | Plan 018/019 reload closure tests (see below) |
+| plan-018-reload-closure | 3.11, 3.12 | Plan 018/019/020 reload closure tests (see below) |
 | performance | 3.12 | `pytest -m performance` |
 | soak-audit | 3.12 | `pytest -m soak` + `audit_xfail_skips.py` |
 
@@ -263,7 +263,7 @@ uv run pytest \
     tests/integration/reload/test_plan_017_acceptance_finalization.py \
     -v
 
-# Plan 018/019 — Reload atomicity closure corrective pass + accepted-finalization lifecycle closure
+# Plan 018/019/020 — Reload atomicity closure corrective pass + accepted-finalization lifecycle closure + control-flow evidence corrective pass
 uv run pytest \
     tests/unit/test_runtime_manager.py \
     tests/unit/test_process_transition_plan.py \
@@ -275,6 +275,20 @@ uv run pytest \
     tests/integration/reload/test_plan_018_retirement_retry.py \
     tests/integration/reload/test_plan_018_database_commit_failure.py \
     tests/integration/reload/test_plan_018_gate_repair.py \
+    tests/integration/reload/test_plan_019_finalization_retry.py \
+    tests/integration/reload/test_plan_019_finalization_retention.py \
+    tests/integration/reload/test_plan_019_shutdown_drain.py \
+    tests/integration/reload/test_plan_019_acceptance_boundary.py \
+    tests/integration/reload/test_plan_019_database_invalidation.py \
+    tests/integration/reload/test_plan_019_transition_prefix.py \
+    tests/integration/reload/test_plan_019_diagnostics_assertions.py \
+    tests/integration/reload/test_plan_020_acceptance_window.py \
+    tests/integration/reload/test_plan_020_single_flight.py \
+    tests/integration/reload/test_plan_020_shutdown_transaction_ordering.py \
+    tests/integration/reload/test_plan_020_production_transition_rollback.py \
+    tests/integration/reload/test_plan_020_database_outcome_matrix.py \
+    tests/integration/reload/test_plan_020_retention_close_counts.py \
+    tests/integration/reload/test_plan_020_diagnostics_reconciliation.py \
     tests/integration/reload/test_pending_swap_visibility.py \
     tests/integration/reload/test_diagnostics_matrix.py \
     -v
@@ -359,6 +373,7 @@ CI sets `PYTHONHASHSEED=0` and `TZ=UTC`; reproduce locally for deterministic res
 - **Performance hot path**: `Router.build_routing_plan()` is the authoritative selection path (no fallback to legacy `select_accounts()`). `DispatchSpanRecorder` provides 200-sample dispatch span telemetry.
 - **Plan 018 — Reload Atomicity Closure Corrective Pass**: correctness pass closing edge cases in transition ownership tracking, accepted-finalization idempotency, retirement retry safety, database commit failure recovery, and gate repair. New integration tests: `test_plan_018_transition_ownership.py`, `test_plan_018_accepted_finalization.py`, `test_plan_018_retirement_retry.py`, `test_plan_018_database_commit_failure.py`, `test_plan_018_gate_repair.py`.
 - **Plan 019 — Accepted-Finalization Lifecycle Closure**: makes the Plan 018 finalization architecture truthful, retryable, bounded, and safe for long-running processes. Key changes: (1) progress/health separation — `AcceptedFinalizationStep` is the progress cursor; `AcceptedFinalizationHealth` records attempt outcome; only `COMPLETED` progress is terminal. (2) single-flight `run()` via `asyncio.Lock` — concurrent callers share one attempt. (3) transition-finalization outcome inspection — `TransitionFinalizationPendingError` blocks advancement when transitions remain. (4) retirement fault injection wired at the real production boundary. (5) bounded registry — active jobs dict + `deque(maxlen=32)` diagnostic history; completed jobs pruned and references released. (6) shutdown drain before `runtime_manager.shutdown()`. (7) defensive `_abort_precommit_reload` guard rejects accepted transactions. (8) `ReloadResult.finalization_status` field distinguishes accepted from fully finalized. (9) new counters: `accepted_reloads`, `fully_finalized_reloads`, `accepted_finalization_failures`, `accepted_finalization_retries`, `retirement_retry_count`.
+- **Plan 020 — Accepted-Finalization Control-Flow Evidence Corrective Pass**: closes the structural seams the Plan 019 architecture left open, making accepted-finalization lifecycle bound, reconcilable, and faithfully observable. Key changes: (1) genuine single-flight via retained `asyncio.Task` — `run()` spawns one task under `_run_lock` and callers `await asyncio.shield(task)`; cancel/timeout cannot cancel the retained task. (2) `run()` returns `AcceptedFinalizationOutcome` (with `completed`, `next_step`, `error`, `failure_count`, `retry_attempt_count`, `retirement_retry_attempt_count`, `retirement_scheduled`, `adopted_for_shutdown`) rather than `AcceptedFinalizationStep`, decoupling the public contract from the internal progress cursor. (3) `FinalizationStatus` enum (`COMPLETED` / `RETRY_PENDING` / `RETIREMENT_SCHEDULE_FAILED` / `SHUTDOWN_ADOPTED` / `INVARIANT_FAILED`) supersedes step-as-status; `is_complete` only true for `COMPLETED`. (4) `AcceptedFinalizationInvariantError` raised when an unknown step appears in the cursor (no silent swallow). (5) active error fields cleared on success — once a job recovers, the previous error is no longer reported. (6) `adopt_for_shutdown()` lets the lifespan take ownership of unresolved jobs before shutdown; `drain_finalization_jobs` shields retained tasks so cancel does not cancel them. (7) Counter reconciliation via `_reconcile_finalization_job()` with delta tracking per job (`_reconciled_attempt_count`, `_retirement_retry_accounted`, `mark_reconciled()`) — `accepted_reloads`/`committed_reloads` increment inline at accept; `fully_finalized_reloads`/`accepted_finalization_failures_recovered`/`delayed_completion_count` advance only via reconcile (idempotent). (8) `ReloadDiagnosticResult` gains 12 finalization fields (`finalization_status`, `finalization_active_count`, `finalization_history_count`, `finalization_failure_count`, `finalization_retry_attempt_count`, `finalization_retirement_retry_attempt_count`, `finalization_last_error_step`, `finalization_last_error_message`, `finalization_pending_jobs`, `pending_swap_committed`, `accepted_generation_authoritative`, `ownership_diagnostics`) and `classify_result_category()` returns `POST_COMMIT_FINALIZATION_PENDING`/`RETIREMENT_SCHEDULE_FAILED` categories. (9) `ReloadResult` gains matching finalization fields and the control server response carries them. (10) Ownership fallback normalized to lowercase (`"transferred"`/`"aborted"`). (11) Shutdown sequence: `wait_for_transaction_completion` → `drain_finalization_jobs` (shielded) → `adopt_for_shutdown` for unresolved jobs (none are silently dropped). Tests: `tests/unit/test_accepted_finalization_state_machine.py` + 7 `tests/integration/reload/test_plan_020_*.py` files (40 tests).
 
 ## Gotchas
 

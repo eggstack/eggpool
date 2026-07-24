@@ -787,8 +787,11 @@ class ReloadResult:
     finalization_status: str = "completed"
     finalization_next_step: str | None = None
     finalization_attempt_count: int = 0
+    finalization_failure_count: int = 0
+    finalization_retry_attempt_count: int = 0
     finalization_last_error_class: str | None = None
     finalization_last_error_message: str | None = None
+    finalization_last_error_step: str | None = None
     old_generation_id: int | None = None
     pending_swap_committed: bool = False
 

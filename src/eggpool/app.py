@@ -1374,6 +1374,15 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             retirement_pending=result.retirement_pending,
             message=result.message,
             retiring_generation_id=result.retiring_generation_id,
+            # Plan 020 Workstream D3: canonical finalization fields.
+            finalization_status=result.finalization_status,
+            finalization_next_step=result.finalization_next_step,
+            finalization_attempt_count=result.finalization_attempt_count,
+            finalization_failure_count=result.finalization_failure_count,
+            finalization_retry_attempt_count=result.finalization_retry_attempt_count,
+            finalization_last_error_step=result.finalization_last_error_step,
+            finalization_last_error_class=result.finalization_last_error_class,
+            finalization_last_error_message=result.finalization_last_error_message,
         )
 
     control_server = ControlServer(_control_reload_handler)
@@ -1413,13 +1422,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             except Exception:
                 logger.exception("Error stopping control server during shutdown")
 
-        # Plan 019 Workstream E1: drain accepted-finalization jobs
+        # Plan 019/020 Workstream E1: drain accepted-finalization jobs
         # before runtime shutdown so retirement scheduling completes
         # while process-owned dependencies are still alive.
         reload_manager: ReloadManager | None = getattr(
             app.state, "reload_manager", None
         )
         if reload_manager is not None:
+            # Plan 020 Workstream E1: wait for active reload transaction
+            # before draining finalization jobs.
+            try:
+                await reload_manager.wait_for_transaction_completion(timeout_s=5.0)
+            except Exception:
+                logger.exception("Error waiting for reload transaction completion")
             try:
                 unresolved = await reload_manager.drain_finalization_jobs(
                     timeout_s=10.0,
@@ -1429,6 +1444,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                         "%d finalization job(s) unresolved after drain",
                         unresolved,
                     )
+                    # Plan 020 Workstream E2: adopt remaining jobs for shutdown.
+                    for job in getattr(
+                        reload_manager, "_accepted_finalization_jobs", {}
+                    ).values():
+                        if not job.is_complete:
+                            await job.adopt_for_shutdown()
             except Exception:
                 logger.exception("Error draining finalization jobs during shutdown")
 

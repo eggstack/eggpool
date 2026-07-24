@@ -108,6 +108,15 @@ class ControlResponse:
     result_category: str | None = None
     duration_s: float | None = None
     retiring_generation_id: int | None = None
+    # Plan 020 Workstream D3: canonical finalization fields in control response.
+    finalization_status: str | None = None
+    finalization_next_step: str | None = None
+    finalization_attempt_count: int | None = None
+    finalization_failure_count: int | None = None
+    finalization_retry_attempt_count: int | None = None
+    finalization_last_error_step: str | None = None
+    finalization_last_error_class: str | None = None
+    finalization_last_error_message: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise to a JSON-compatible dict."""
@@ -130,6 +139,25 @@ class ControlResponse:
             d["duration_s"] = self.duration_s
         if self.retiring_generation_id is not None:
             d["retiring_generation_id"] = self.retiring_generation_id
+        # Plan 020 Workstream D3: canonical finalization fields.
+        if self.finalization_status is not None:
+            d["finalization_status"] = self.finalization_status
+        if self.finalization_next_step is not None:
+            d["finalization_next_step"] = self.finalization_next_step
+        if self.finalization_attempt_count is not None:
+            d["finalization_attempt_count"] = self.finalization_attempt_count
+        if self.finalization_failure_count is not None:
+            d["finalization_failure_count"] = self.finalization_failure_count
+        if self.finalization_retry_attempt_count is not None:
+            d["finalization_retry_attempt_count"] = (
+                self.finalization_retry_attempt_count
+            )
+        if self.finalization_last_error_step is not None:
+            d["finalization_last_error_step"] = self.finalization_last_error_step
+        if self.finalization_last_error_class is not None:
+            d["finalization_last_error_class"] = self.finalization_last_error_class
+        if self.finalization_last_error_message is not None:
+            d["finalization_last_error_message"] = self.finalization_last_error_message
         return d
 
 

@@ -168,6 +168,9 @@ class TestHarnessFullReloadDiagnostics:
             "accepted_finalization_failures",
             "accepted_finalization_retries",
             "retirement_retry_count",
+            # Plan 020 Workstream C2: completion reconciliation counters.
+            "accepted_finalization_failures_recovered",
+            "delayed_completion_count",
         }
         assert expected_keys == set(counters.keys())
 

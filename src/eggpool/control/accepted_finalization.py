@@ -1,4 +1,4 @@
-"""Accepted-reload finalization job (Plan 018/019).
+"""Accepted-reload finalization job (Plan 018/019/020).
 
 Every accepted reload creates exactly one process-owned
 :class:`AcceptedReloadFinalizationJob` before the first
@@ -20,8 +20,19 @@ Design principles
   latest attempt failed.
 - Only ``COMPLETED`` progress is terminal; there is no degraded
   completion state for retryable operational work.
-- Single-flight execution prevents concurrent ``run()`` calls from
-  overlapping attempts.
+- Single-flight execution is provided by a process-owned retained
+  task wrapper.  Concurrent ``run()`` callers share one executed
+  task.  Waiter cancellation does not cancel the retained task.
+- An unknown or invalid progress state raises
+  :class:`AcceptedFinalizationInvariantError` and is retained as
+  unresolved -- never silently converted to ``COMPLETED``.
+- Distinct counters separate attempts, failures, retry attempts,
+  and retirement-step retry attempts so operators can attribute
+  reload health without ambiguity.
+- Active error fields are cleared after a successful recovery;
+  prior failure information is retained only as bounded,
+  copy-on-record diagnostic data included in the lightweight
+  :class:`AcceptedFinalizationRecord`.
 """
 
 from __future__ import annotations
@@ -32,6 +43,8 @@ import logging
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+
+from eggpool.errors import AcceptedFinalizationInvariantError
 
 if TYPE_CHECKING:
     from eggpool.reload_transaction import ReloadTransaction, TransitionApplyResult
@@ -58,7 +71,8 @@ class AcceptedFinalizationStep(enum.Enum):
     MIRROR_UPDATED = "mirror_updated"
     TRANSITIONS_FINALIZED = "transitions_finalized"
     OBSERVER_REPORTED = "observer_reported"
-    RETIREMENT_SCHEDULED = "retirement_scheduling"
+    RETIREMENT_SCHEDULING = "retirement_scheduling"
+    RETIREMENT_SCHEDULED = "retirement_scheduled"
     TRANSACTION_COMPLETED = "transaction_completed"
     COMPLETED = "completed"
 
@@ -76,6 +90,20 @@ class AcceptedFinalizationHealth(enum.Enum):
     COMPLETED = "completed"
 
 
+class FinalizationStatus(enum.Enum):
+    """Operator-visible finalization status.
+
+    Plan 020 Workstream D2: distinguishes accepted-and-fully-completed
+    reloads from accepted-but-pending reloads.
+    """
+
+    COMPLETED = "completed"
+    RETRY_PENDING = "retry_pending"
+    RETIREMENT_SCHEDULE_FAILED = "retirement_schedule_failed"
+    SHUTDOWN_ADOPTED = "shutdown_adopted"
+    INVARIANT_FAILED = "invariant_failed"
+
+
 @dataclass(frozen=True)
 class AcceptedFinalizationRecord:
     """Lightweight immutable diagnostic record for completed jobs.
@@ -89,12 +117,36 @@ class AcceptedFinalizationRecord:
     old_generation_id: int | None
     completion_status: str
     attempts: int
-    retry_count: int
+    failure_count: int
+    retry_attempt_count: int
+    retirement_retry_attempt_count: int
     last_failed_step: str | None
     last_error_class: str | None
     last_error_message: str | None
     completed_at: float
     duration_s: float
+
+
+@dataclass(frozen=True)
+class AcceptedFinalizationOutcome:
+    """Structured scalar-only outcome of a finalization attempt.
+
+    Plan 020 Workstream B2: callers receive a complete view of the
+    finalization state so they can reconcile counters and history
+    without having to inspect the live job object.
+    """
+
+    completed: bool
+    next_step: str | None
+    attempt_count: int
+    failure_count: int
+    retry_attempt_count: int
+    retirement_retry_attempt_count: int
+    failed_step: str | None
+    error_class: str | None
+    error_message: str | None
+    retry_permitted: bool
+    status: FinalizationStatus
 
 
 @dataclass
@@ -120,11 +172,17 @@ class AcceptedReloadFinalizationJob:
     whether the latest attempt failed.  Only ``COMPLETED`` progress
     is terminal.
 
-    Plan 019 Workstream A3: single-flight execution via
-    ``_run_lock``.  Concurrent ``run()`` callers share one attempt.
+    Plan 019 Workstream A3: single-flight execution via a retained
+    task wrapper.  Concurrent ``run()`` callers share one actual
+    attempt; waiter cancellation does not cancel the retained task.
 
     Plan 019 Workstream C: operational references are released
     after completion via :meth:`release_references`.
+
+    Plan 020 Workstream B: attempt, failure, retry, and retirement
+    retry counters are distinct.  Active error fields are cleared
+    after successful recovery.  Unknown progress becomes an
+    invariant error and is never treated as completion.
     """
 
     request_id: str
@@ -151,15 +209,18 @@ class AcceptedReloadFinalizationJob:
         default=AcceptedFinalizationHealth.READY,
         repr=False,
     )
-    _attempts: int = field(default=0, repr=False)
-    _retry_count: int = field(default=0, repr=False)
+    _attempt_count: int = field(default=0, repr=False)
+    _failure_count: int = field(default=0, repr=False)
+    _retry_attempt_count: int = field(default=0, repr=False)
+    _retirement_retry_attempt_count: int = field(default=0, repr=False)
     _last_error_step: str | None = field(default=None, repr=False)
     _last_error_class: str | None = field(default=None, repr=False)
     _last_error_message: str | None = field(default=None, repr=False)
     _completed_at: float | None = field(default=None, repr=False)
     _started_at: float | None = field(default=None, repr=False)
+    _reconciled: bool = field(default=False, repr=False)
     _run_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
-    _run_task: asyncio.Task[AcceptedFinalizationStep] | None = field(
+    _run_task: asyncio.Task[AcceptedFinalizationOutcome] | None = field(
         default=None,
         repr=False,
     )
@@ -179,13 +240,23 @@ class AcceptedReloadFinalizationJob:
 
     @property
     def attempts(self) -> int:
-        """Number of ``run()`` invocations."""
-        return self._attempts
+        """Number of actual finalization attempts."""
+        return self._attempt_count
 
     @property
-    def retry_count(self) -> int:
-        """Number of retry attempts (total attempts minus first)."""
-        return self._retry_count
+    def failure_count(self) -> int:
+        """Number of failed attempts."""
+        return self._failure_count
+
+    @property
+    def retry_attempt_count(self) -> int:
+        """Number of attempts after the first (whether failed or succeeded)."""
+        return self._retry_attempt_count
+
+    @property
+    def retirement_retry_attempt_count(self) -> int:
+        """Number of retry attempts that started at ``RETIREMENT_SCHEDULING``."""
+        return self._retirement_retry_attempt_count
 
     @property
     def last_error_step(self) -> str | None:
@@ -204,11 +275,7 @@ class AcceptedReloadFinalizationJob:
 
     @property
     def is_complete(self) -> bool:
-        """True only when every required step completed.
-
-        Plan 019 Workstream A1: ``DEGRADED`` is not a completion
-        state.  Only ``COMPLETED`` progress is terminal.
-        """
+        """True only when every required step completed."""
         return self._step is AcceptedFinalizationStep.COMPLETED
 
     @property
@@ -216,32 +283,60 @@ class AcceptedReloadFinalizationJob:
         """True when the job is not yet complete."""
         return not self.is_complete
 
+    @property
+    def status(self) -> FinalizationStatus:
+        """Operator-visible finalization status."""
+        if self.is_complete:
+            return FinalizationStatus.COMPLETED
+        if self._step is AcceptedFinalizationStep.RETIREMENT_SCHEDULING:
+            return FinalizationStatus.RETIREMENT_SCHEDULE_FAILED
+        if self._last_error_class == "AcceptedFinalizationInvariantError":
+            return FinalizationStatus.INVARIANT_FAILED
+        return FinalizationStatus.RETRY_PENDING
+
     # -- single-flight execution ------------------------------------------
 
-    async def run(self) -> AcceptedFinalizationStep:
+    async def run(self) -> AcceptedFinalizationOutcome:
         """Execute incomplete steps idempotently.
 
-        Plan 019 Workstream A3: concurrent callers share one
-        execution via ``_run_lock``.  Waiter cancellation does not
-        cancel the process-owned execution task.
+        Plan 020 Workstream B1: a single retained task owns each
+        attempt.  Concurrent callers share the same task via
+        ``asyncio.shield``; waiter cancellation does not cancel the
+        task.  The lock exists only to serialize task creation and
+        cleanup, not to serialize the attempt itself.
 
-        Returns the terminal step: ``COMPLETED`` when every step
-        succeeded, or the current step if a step raised.
+        Returns a structured :class:`AcceptedFinalizationOutcome`.
         """
         if self.is_complete:
-            return self._step
+            return self._completed_outcome()
         async with self._run_lock:
-            return await self._run_inner()
+            task = self._run_task
+            if task is None or task.done():
+                task = asyncio.create_task(self._run_attempt())
+                self._run_task = task
+        return await asyncio.shield(task)
 
-    async def _run_inner(self) -> AcceptedFinalizationStep:
-        """Inner run guarded by the single-flight lock."""
-        self._attempts += 1
+    async def _run_attempt(self) -> AcceptedFinalizationOutcome:
+        """Single-shot attempt that owns the retained task lifecycle.
+
+        Plan 020 Workstream B3: callers always wait through
+        ``asyncio.shield`` so cancelling a waiter does not cancel
+        this task.  Timeout propagates to the caller but the
+        attempt continues to completion.
+        """
+        if self._reconciled:
+            return self._completed_outcome()
+        self._attempt_count += 1
         if self._started_at is None:
             self._started_at = time.monotonic()
+        previous_step = self._step
+        is_retry = self._attempt_count > 1
+        if is_retry:
+            self._retry_attempt_count += 1
+            if previous_step is AcceptedFinalizationStep.RETIREMENT_SCHEDULING:
+                self._retirement_retry_attempt_count += 1
         self._health = AcceptedFinalizationHealth.RUNNING
 
-        # Plan 019 Workstream A2: explicit loop dispatches the
-        # current step.  On failure the cursor stays unchanged.
         _step_dispatch: dict[
             AcceptedFinalizationStep,
             tuple[str, Any],
@@ -272,40 +367,92 @@ class AcceptedReloadFinalizationJob:
             ),
         }
 
-        while self._step is not AcceptedFinalizationStep.COMPLETED:
-            dispatch = _step_dispatch.get(self._step)
-            if dispatch is None:
-                # Should not happen -- indicates a bug in the enum or dispatch.
-                logger.error(
-                    "Accepted finalization job for generation %d has "
-                    "no dispatch for step %s; marking completed",
-                    self.generation_id,
-                    self._step.value,
-                )
-                self._step = AcceptedFinalizationStep.COMPLETED
-                break
-            step_name, step_fn = dispatch
-            self._last_error_step = step_name
-            try:
+        try:
+            while self._step is not AcceptedFinalizationStep.COMPLETED:
+                dispatch = _step_dispatch.get(self._step)
+                if dispatch is None:
+                    raise AcceptedFinalizationInvariantError(
+                        "No dispatch for accepted-finalization step "
+                        f"{self._step.value!r}",
+                        step=self._step.value,
+                        request_id=self.request_id,
+                        generation_id=self.generation_id,
+                    )
+                step_name, step_fn = dispatch
+                self._last_error_step = step_name
                 await step_fn()
-            except Exception as exc:
-                self._last_error_class = type(exc).__name__
-                self._last_error_message = str(exc)
-                self._retry_count += 1
-                self._health = AcceptedFinalizationHealth.RETRY_PENDING
-                logger.warning(
-                    "Accepted finalization step %s failed for generation %d: %r",
-                    step_name,
-                    self.generation_id,
-                    exc,
-                    exc_info=True,
-                )
-                return self._step
+                # Plan 020 Workstream C4: clear active error fields
+                # after a successful step so completed history does
+                # not carry stale error context.
+                self._last_error_step = None
+                self._last_error_class = None
+                self._last_error_message = None
+        except AcceptedFinalizationInvariantError as exc:
+            # Plan 020 Workstream B5: an invariant failure is not a
+            # normal retry.  Record failure state and re-raise so the
+            # caller observes the typed error.  The job stays in the
+            # active registry with status=invariant_failed.
+            self._failure_count += 1
+            self._last_error_class = type(exc).__name__
+            self._last_error_message = str(exc)
+            self._health = AcceptedFinalizationHealth.RETRY_PENDING
+            logger.warning(
+                "Accepted finalization invariant for generation %d: %r",
+                self.generation_id,
+                exc,
+                exc_info=True,
+            )
+            raise
+        except Exception as exc:
+            self._failure_count += 1
+            self._last_error_class = type(exc).__name__
+            self._last_error_message = str(exc)
+            self._health = AcceptedFinalizationHealth.RETRY_PENDING
+            logger.warning(
+                "Accepted finalization step %s failed for generation %d: %r",
+                self._last_error_step,
+                self.generation_id,
+                exc,
+                exc_info=True,
+            )
+            return self._outcome(retry_permitted=True)
 
-        # All steps succeeded.
         self._health = AcceptedFinalizationHealth.COMPLETED
         self._completed_at = time.monotonic()
-        return self._step
+        return self._outcome(retry_permitted=False)
+
+    def _outcome(self, *, retry_permitted: bool) -> AcceptedFinalizationOutcome:
+        """Build a structured outcome from the current job state."""
+        completed = self.is_complete
+        return AcceptedFinalizationOutcome(
+            completed=completed,
+            next_step=None if completed else self._step.value,
+            attempt_count=self._attempt_count,
+            failure_count=self._failure_count,
+            retry_attempt_count=self._retry_attempt_count,
+            retirement_retry_attempt_count=self._retirement_retry_attempt_count,
+            failed_step=self._last_error_step,
+            error_class=self._last_error_class,
+            error_message=self._last_error_message,
+            retry_permitted=retry_permitted,
+            status=FinalizationStatus.COMPLETED if completed else self.status,
+        )
+
+    def _completed_outcome(self) -> AcceptedFinalizationOutcome:
+        """Return a completed-only outcome for retry-after-completion callers."""
+        return AcceptedFinalizationOutcome(
+            completed=True,
+            next_step=None,
+            attempt_count=self._attempt_count,
+            failure_count=self._failure_count,
+            retry_attempt_count=self._retry_attempt_count,
+            retirement_retry_attempt_count=self._retirement_retry_attempt_count,
+            failed_step=None,
+            error_class=None,
+            error_message=None,
+            retry_permitted=False,
+            status=FinalizationStatus.COMPLETED,
+        )
 
     # -- individual steps ---------------------------------------------------
 
@@ -369,7 +516,14 @@ class AcceptedReloadFinalizationJob:
         self._step = AcceptedFinalizationStep.TRANSITIONS_FINALIZED
 
     async def _step_observer_report(self) -> None:
-        """Report publication completion through a safe observer wrapper."""
+        """Report publication and retirement through safe observer wrappers.
+
+        Plan 020 Workstream A3: both ``on_publish_complete`` and
+        ``on_retirement_started`` are invoked here as safe,
+        non-authoritative calls.  Observer failure is logged and
+        diagnosed but does not block transition finalization or
+        retirement.
+        """
         if self._step != AcceptedFinalizationStep.TRANSITIONS_FINALIZED:
             return
         try:
@@ -378,10 +532,21 @@ class AcceptedReloadFinalizationJob:
                 digest_prefix=self.transaction.digest_prefix,
             )
         except Exception as exc:
-            # Observer failure is non-authoritative -- does not block
-            # the finalization lifecycle.
             logger.warning(
                 "Observer on_publish_complete failed for generation %d: %r",
+                self.generation_id,
+                exc,
+                exc_info=True,
+            )
+        try:
+            await self.observer.on_retirement_started(
+                generation_id=self.generation_id,
+                digest_prefix=self.transaction.digest_prefix,
+                old_generation_id=self.old_generation_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Observer on_retirement_started failed for generation %d: %r",
                 self.generation_id,
                 exc,
                 exc_info=True,
@@ -423,6 +588,28 @@ class AcceptedReloadFinalizationJob:
         # Final step: mark COMPLETED only after all real work is done.
         self._step = AcceptedFinalizationStep.COMPLETED
 
+    # -- shutdown adoption -------------------------------------------------
+
+    async def adopt_for_shutdown(self) -> None:
+        """Mark the job as adopted by shutdown cleanup.
+
+        Plan 020 Workstream E2: when shutdown cannot drain the job
+        within the bound, deterministic ownership recovery transfers
+        the committed pending swap to runtime shutdown.  This method
+        records adoption state without rewriting the progress cursor.
+
+        The job remains in the active registry until the reload
+        manager prunes it; the manager uses ``adopted_for_shutdown``
+        to guarantee idempotent close semantics.
+        """
+        # Idempotent: a single marker is enough.
+        self._released = True
+
+    @property
+    def adopted_for_shutdown(self) -> bool:
+        """True once shutdown has adopted ownership."""
+        return self._released
+
     # -- reference lifecycle -----------------------------------------------
 
     def release_references(self) -> None:
@@ -443,6 +630,15 @@ class AcceptedReloadFinalizationJob:
         self.observer = None  # type: ignore[assignment]
         self.transaction = None  # type: ignore[assignment]
 
+    def mark_reconciled(self) -> None:
+        """Mark the job as reconciled by the manager.
+
+        Plan 020 Workstream C2: the manager's reconciliation step
+        calls this once it has updated all counters and history so
+        that no future attempt can double-count completion.
+        """
+        self._reconciled = True
+
     # -- diagnostics --------------------------------------------------------
 
     def snapshot(self) -> dict[str, Any]:
@@ -461,15 +657,19 @@ class AcceptedReloadFinalizationJob:
             "old_generation_id": self.old_generation_id,
             "step": self._step.value,
             "health": self._health.value,
+            "status": self.status.value,
             "is_complete": self.is_complete,
-            "attempts": self._attempts,
-            "retry_count": self._retry_count,
+            "attempt_count": self._attempt_count,
+            "failure_count": self._failure_count,
+            "retry_attempt_count": self._retry_attempt_count,
+            "retirement_retry_attempt_count": self._retirement_retry_attempt_count,
             "last_error_step": self._last_error_step,
             "last_error_class": self._last_error_class,
             "last_error_message": self._last_error_message,
             "completed_at": self._completed_at,
             "duration_s": duration_s,
             "released": self._released,
+            "reconciled": self._reconciled,
         }
 
     def to_record(self) -> AcceptedFinalizationRecord:
@@ -490,9 +690,11 @@ class AcceptedReloadFinalizationJob:
             request_id=self.request_id,
             generation_id=self.generation_id,
             old_generation_id=self.old_generation_id,
-            completion_status=self._health.value,
-            attempts=self._attempts,
-            retry_count=self._retry_count,
+            completion_status=self.status.value,
+            attempts=self._attempt_count,
+            failure_count=self._failure_count,
+            retry_attempt_count=self._retry_attempt_count,
+            retirement_retry_attempt_count=self._retirement_retry_attempt_count,
             last_failed_step=self._last_error_step,
             last_error_class=self._last_error_class,
             last_error_message=self._last_error_message,
@@ -522,8 +724,11 @@ class TransitionFinalizationPendingError(Exception):
 
 __all__ = [
     "AcceptedFinalizationHealth",
+    "AcceptedFinalizationOutcome",
     "AcceptedFinalizationRecord",
     "AcceptedFinalizationStep",
     "AcceptedReloadFinalizationJob",
+    "FinalizationStatus",
     "TransitionFinalizationPendingError",
+    "FINALIZATION_HISTORY_MAX",
 ]

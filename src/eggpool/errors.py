@@ -5,6 +5,33 @@ class AggregatorError(Exception):
     """Base exception for all aggregator errors."""
 
 
+class AcceptedFinalizationInvariantError(AggregatorError):
+    """Raised when an accepted-finalization invariant is violated.
+
+    Plan 020 Workstream B5: an unknown or invalid progress state cannot
+    be converted into ``COMPLETED``.  This typed error is raised from
+    :class:`AcceptedReloadFinalizationJob` when the dispatch table
+    cannot resolve the current progress step.  The reload manager
+    surfaces this error both inline and after the job's buffered
+    attempt completes; the job is retained in the active registry and
+    is retryable by the same code path that retries any other failed
+    step.
+    """
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        step: str | None = None,
+        request_id: str | None = None,
+        generation_id: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.step = step
+        self.request_id = request_id
+        self.generation_id = generation_id
+
+
 class ConfigError(AggregatorError):
     """Raised for invalid or missing configuration."""
 

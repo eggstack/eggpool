@@ -189,7 +189,14 @@ async def test_accepted_finalization_failures_counter(
 async def test_accepted_finalization_retries_counter(
     reload_harness: ReloadHarness,
 ) -> None:
-    """accepted_finalization_retries accumulates retry_count from jobs."""
+    """retry_attempt_count counter increments when a retry actually runs.
+
+    Plan 020 Workstream C1: ``accepted_finalization_retries`` counts
+    attempts after the first.  To trigger a retry we must admit a new
+    reload while the previous job is still pending — the admission
+    retry path calls the job's ``run()`` which now executes a real
+    retry attempt.
+    """
     rm = reload_harness.reload_manager
 
     # First reload to establish candidate as active.
@@ -197,12 +204,16 @@ async def test_accepted_finalization_retries_counter(
     snap_before = rm.snapshot()
     retries_before = snap_before["counters"]["accepted_finalization_retries"]
 
-    # Inject permanent retirement failure (1 retry attempt).
+    # Inject permanent retirement failure -- the first reload attempt
+    # at retirement scheduling fails.  The job remains pending.
     rm.TEST_INJECT_RETIREMENT_FAILURE = RuntimeError("retry test")
-    try:
-        await reload_harness.reload(config=reload_harness.initial_config)
-    finally:
-        rm.TEST_INJECT_RETIREMENT_FAILURE = None
+    await reload_harness.reload(config=reload_harness.initial_config)
+    # Clear the seam so the next admission's retry can succeed.
+    rm.TEST_INJECT_RETIREMENT_FAILURE = None
+
+    # A subsequent reload to candidate_config forces the admission
+    # retry path to run the pending job, which will now succeed.
+    await reload_harness.reload(config=reload_harness.candidate_config)
 
     snap_after = rm.snapshot()
     # At least one retry should have occurred.

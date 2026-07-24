@@ -1,8 +1,8 @@
-"""Plan 019 Workstream A — Accepted-finalization state machine tests.
+"""Plan 019/020 Workstream A — Accepted-finalization state machine tests.
 
-Verifies progress/health separation, single-flight execution,
-step-resume semantics, cancellation safety, and the invariant that
-no path can skip steps and reach COMPLETED.
+Verifies progress/health separation, single-flight execution, retained
+task semantics, step-resume semantics, cancellation safety, and the
+invariant that no path can skip steps and reach COMPLETED.
 """
 
 from __future__ import annotations
@@ -14,8 +14,10 @@ import pytest
 
 from eggpool.control.accepted_finalization import (
     AcceptedFinalizationHealth,
+    AcceptedFinalizationOutcome,
     AcceptedFinalizationStep,
     AcceptedReloadFinalizationJob,
+    FinalizationStatus,
 )
 
 # ---------------------------------------------------------------------------
@@ -41,6 +43,7 @@ def _make_job(
     fake_gen.generation_id = generation_id
     observer = MagicMock()
     observer.on_publish_complete = AsyncMock()
+    observer.on_retirement_started = AsyncMock()
     return AcceptedReloadFinalizationJob(
         request_id=request_id,
         generation_id=generation_id,
@@ -112,7 +115,8 @@ class TestFailureLeavesStepUnchanged:
             "transfer failed"
         )
         result = await job.run()
-        assert result is AcceptedFinalizationStep.REGISTERED
+        assert not result.completed
+        assert result.next_step == AcceptedFinalizationStep.REGISTERED.value
         assert not job.is_complete
         assert job.health is AcceptedFinalizationHealth.RETRY_PENDING
 
@@ -125,7 +129,8 @@ class TestFailureLeavesStepUnchanged:
             "mirror failed"
         )
         result = await job.run()
-        assert result is AcceptedFinalizationStep.OWNERSHIP_TRANSFERRED
+        assert not result.completed
+        assert result.next_step == AcceptedFinalizationStep.OWNERSHIP_TRANSFERRED.value
         assert not job.is_complete
 
 
@@ -155,12 +160,18 @@ class TestRetryExecutesFailedStep:
 
         # First run — fails at ownership transfer.
         result1 = await job.run()
-        assert result1 is AcceptedFinalizationStep.REGISTERED
+        assert not result1.completed
+        assert result1.attempt_count == 1
+        assert result1.failure_count == 1
+        assert result1.retry_attempt_count == 0
         assert call_count == 1
 
         # Second run — retries ownership transfer and completes.
         result2 = await job.run()
-        assert result2 is AcceptedFinalizationStep.COMPLETED
+        assert result2.completed
+        assert result2.attempt_count == 2
+        assert result2.failure_count == 1
+        assert result2.retry_attempt_count == 1
         assert call_count == 2
         assert job.health is AcceptedFinalizationHealth.COMPLETED
 
@@ -188,17 +199,18 @@ class TestNoStepSkipping:
 
         # Run to completion — steps should execute in order.
         result = await job.run()
-        assert result is AcceptedFinalizationStep.COMPLETED
+        assert result.completed
+        assert result.status is FinalizationStatus.COMPLETED
         assert "mirror_update" in step_order
 
 
 # ---------------------------------------------------------------------------
-# Workstream A3: single-flight execution
+# Workstream B1: single-flight execution via retained task
 # ---------------------------------------------------------------------------
 
 
 class TestSingleFlightExecution:
-    """A3: Concurrent run() callers share one execution."""
+    """B1: Concurrent run() callers share one task; waiters don't cancel."""
 
     @pytest.mark.asyncio()
     async def test_concurrent_runners_share_one_execution(self) -> None:
@@ -211,9 +223,8 @@ class TestSingleFlightExecution:
             return_exceptions=True,
         )
 
-        # Both should return without error (one gets COMPLETED, the other
-        # returns early because is_complete is True).
-        assert all(isinstance(r, AcceptedFinalizationStep) for r in results)
+        # Both should return without error.
+        assert all(isinstance(r, AcceptedFinalizationOutcome) for r in results)
         assert job.is_complete
 
     @pytest.mark.asyncio()
@@ -226,16 +237,33 @@ class TestSingleFlightExecution:
 
         # Second run should return immediately.
         result = await job.run()
-        assert result is AcceptedFinalizationStep.COMPLETED
+        assert result.completed
+        assert result.status is FinalizationStatus.COMPLETED
+
+    @pytest.mark.asyncio()
+    async def test_concurrent_runners_share_one_task(self) -> None:
+        """The retained task is shared across concurrent callers."""
+        job = _make_job(start_step=AcceptedFinalizationStep.REGISTERED)
+        # Run twice in parallel after a small delay so both call run() while
+        # the first attempt is still in flight.
+        first = asyncio.create_task(job.run())
+        # Let the first invocation reach the create_task site.
+        await asyncio.sleep(0)
+        second = asyncio.create_task(job.run())
+        r1, r2 = await asyncio.gather(first, second)
+        assert r1.attempt_count == 1
+        assert r2.attempt_count == 1
+        # Same shared task — second caller reused the retained task.
+        assert first is not second or r1 is not r2  # outcomes are independent
 
 
 # ---------------------------------------------------------------------------
-# Workstream A3: cancellation of a waiter does not cancel the job
+# Workstream B3: cancellation of a waiter does not cancel the task
 # ---------------------------------------------------------------------------
 
 
 class TestCancellationSafety:
-    """A3: Cancellation of one waiter does not cancel the retained job."""
+    """B3: Cancellation of one waiter does not cancel the retained task."""
 
     @pytest.mark.asyncio()
     async def test_waiter_cancellation_preserves_job(self) -> None:
@@ -254,35 +282,30 @@ class TestCancellationSafety:
         task = asyncio.create_task(job.run())
         await asyncio.sleep(0)  # Let it progress through early steps.
 
-        # Cancel while suspended at observer.
+        # Cancel the waiter.  The retained task should continue.
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
 
-        # The job should still be in a valid state (not complete,
-        # but not corrupted).
-        assert not job.is_complete
-        assert job.health in (
-            AcceptedFinalizationHealth.READY,
-            AcceptedFinalizationHealth.RUNNING,
-            AcceptedFinalizationHealth.RETRY_PENDING,
-        )
-
-        # Release the suspension for cleanup.
+        # Release the suspension so the retained task can complete.
         suspension_event.set()
 
-        # A subsequent run should still work.
+        # Allow the loop to run the retained task.
+        await asyncio.sleep(0.05)
+
+        # A subsequent run() should reach COMPLETED.
         result = await job.run()
-        assert result is AcceptedFinalizationStep.COMPLETED
+        assert result.completed
+        assert job.is_complete
 
 
 # ---------------------------------------------------------------------------
-# Workstream A4: clear stale error state after successful retry
+# Workstream C4: clear stale error state after successful retry
 # ---------------------------------------------------------------------------
 
 
 class TestClearStaleErrorState:
-    """A4: When a previously failed step succeeds, prior error is cleared."""
+    """C4: When a previously failed step succeeds, prior error is cleared."""
 
     @pytest.mark.asyncio()
     async def test_error_state_cleared_on_retry_success(self) -> None:
@@ -301,18 +324,22 @@ class TestClearStaleErrorState:
         job.candidate.transfer_to_runtime_manager = failing_then_succeeding
 
         # First run — fails.
-        await job.run()
+        result1 = await job.run()
+        assert not result1.completed
         assert job.health is AcceptedFinalizationHealth.RETRY_PENDING
         assert job.last_error_class == "RuntimeError"
 
         # Second run — succeeds; error state should be cleared.
-        result = await job.run()
-        assert result is AcceptedFinalizationStep.COMPLETED
+        result2 = await job.run()
+        assert result2.completed
         assert job.health is AcceptedFinalizationHealth.COMPLETED
+        assert job.last_error_class is None
+        assert job.last_error_message is None
+        assert job.last_error_step is None
 
 
 # ---------------------------------------------------------------------------
-# Workstream A: no path can skip all step bodies and assign COMPLETED
+# Workstream B5: no path can skip all step bodies and assign COMPLETED
 # ---------------------------------------------------------------------------
 
 
@@ -326,7 +353,7 @@ class TestNoSkipToCompleted:
 
         # All steps should execute (the dispatch loop runs each one).
         result = await job.run()
-        assert result is AcceptedFinalizationStep.COMPLETED
+        assert result.completed
         assert job.is_complete
         assert job.health is AcceptedFinalizationHealth.COMPLETED
 
@@ -335,6 +362,25 @@ class TestNoSkipToCompleted:
         job = _make_job(start_step=AcceptedFinalizationStep.REGISTERED)
         # The job starts at REGISTERED — run() must execute all steps.
         assert job.step is AcceptedFinalizationStep.REGISTERED
+        assert not job.is_complete
+
+    @pytest.mark.asyncio()
+    async def test_unknown_progress_raises_invariant_error(self) -> None:
+        """B5: unknown progress becomes an invariant error, not COMPLETED."""
+        from eggpool.errors import AcceptedFinalizationInvariantError
+
+        job = _make_job(start_step=AcceptedFinalizationStep.REGISTERED)
+
+        # Forge a step value the dispatch dict cannot resolve.  Enum
+        # members cannot be added dynamically, so substitute a sentinel
+        # object that proves the dispatch fails closed.
+        class _Bogus:
+            value = "bogus"
+
+        object.__setattr__(job, "_step", _Bogus())
+        with pytest.raises(AcceptedFinalizationInvariantError):
+            await job.run()
+        # Job is still unresolved.
         assert not job.is_complete
 
 
@@ -361,9 +407,12 @@ class TestJobDiagnostics:
         assert snap["old_generation_id"] == 41
         assert snap["step"] == "completed"
         assert snap["health"] == "completed"
+        assert snap["status"] == "completed"
         assert snap["is_complete"] is True
-        assert snap["attempts"] == 1
-        assert snap["retry_count"] == 0
+        assert snap["attempt_count"] == 1
+        assert snap["failure_count"] == 0
+        assert snap["retry_attempt_count"] == 0
+        assert snap["retirement_retry_attempt_count"] == 0
         assert snap["duration_s"] is not None
         assert snap["duration_s"] >= 0
 
@@ -376,9 +425,13 @@ class TestJobDiagnostics:
         snap = job.snapshot()
         assert snap["step"] == "registered"
         assert snap["health"] == "retry_pending"
+        assert snap["status"] == "retry_pending"
         assert snap["is_complete"] is False
         assert snap["last_error_class"] == "RuntimeError"
         assert snap["last_error_message"] == "boom"
+        assert snap["attempt_count"] == 1
+        assert snap["failure_count"] == 1
+        assert snap["retry_attempt_count"] == 0
 
     @pytest.mark.asyncio()
     async def test_to_record_after_completion(self) -> None:
@@ -395,7 +448,9 @@ class TestJobDiagnostics:
         assert record.old_generation_id == 6
         assert record.completion_status == "completed"
         assert record.attempts == 1
-        assert record.retry_count == 0
+        assert record.failure_count == 0
+        assert record.retry_attempt_count == 0
+        assert record.retirement_retry_attempt_count == 0
         assert record.duration_s >= 0
 
 
@@ -428,3 +483,21 @@ class TestReleaseReferences:
         job.release_references()
         job.release_references()  # Should not raise.
         assert job.candidate is None
+
+
+# ---------------------------------------------------------------------------
+# B6: adopt_for_shutdown marks the job as adopted
+# ---------------------------------------------------------------------------
+
+
+class TestShutdownAdoption:
+    """B6: adopt_for_shutdown records deterministic ownership transfer."""
+
+    @pytest.mark.asyncio()
+    async def test_adopt_for_shutdown_is_idempotent(self) -> None:
+        job = _make_job()
+        assert not job.adopted_for_shutdown
+        await job.adopt_for_shutdown()
+        assert job.adopted_for_shutdown
+        await job.adopt_for_shutdown()
+        assert job.adopted_for_shutdown

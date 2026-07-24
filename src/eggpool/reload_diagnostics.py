@@ -95,6 +95,9 @@ class ReloadCounters:
     accepted_finalization_failures: int = 0
     accepted_finalization_retries: int = 0
     retirement_retry_count: int = 0
+    # Plan 020 Workstream C2: precise finalization reconciliation counters.
+    accepted_finalization_failures_recovered: int = 0
+    delayed_completion_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -171,6 +174,17 @@ class ReloadDiagnosticResult:
     mirror_update_pending: bool = False
     retirement_scheduling_pending: bool = False
     publication_epoch: int = 0
+    # Plan 020 Workstream D1: canonical finalization fields.
+    finalization_status: str = "completed"
+    finalization_next_step: str | None = None
+    finalization_attempt_count: int = 0
+    finalization_failure_count: int = 0
+    finalization_retry_attempt_count: int = 0
+    finalization_last_error_step: str | None = None
+    finalization_last_error_class: str | None = None
+    finalization_last_error_message: str | None = None
+    pending_swap_committed: bool = False
+    accepted_generation_authoritative: bool = True
 
 
 def classify_result_category(
@@ -188,6 +202,7 @@ def classify_result_category(
     is_process_transition_apply_failed: bool = False,
     is_persistence_commit_failed: bool = False,
     error_class: str | None = None,
+    finalization_status: str = "completed",
 ) -> ReloadResultCategory:
     """Derive the result category from outcome flags.
 
@@ -240,6 +255,12 @@ def classify_result_category(
         return ReloadResultCategory.SUCCESS_NOOP
     if is_ignored_only:
         return ReloadResultCategory.SUCCESS_IGNORED_ONLY
+    # Plan 020 Workstream D2: accepted-but-pending outcomes are
+    # classified distinctly from fully finalized success.
+    if finalization_status == "retirement_schedule_failed":
+        return ReloadResultCategory.RETIREMENT_SCHEDULE_FAILED
+    if finalization_status == "retry_pending":
+        return ReloadResultCategory.POST_COMMIT_FINALIZATION_PENDING
     return ReloadResultCategory.SUCCESS_COMMITTED
 
 
