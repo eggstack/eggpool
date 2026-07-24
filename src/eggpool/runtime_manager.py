@@ -1807,6 +1807,10 @@ class RuntimeManager:
         :class:`RuntimeManagerLeaseExhaustedError` so any late
         request handlers fail closed rather than hang.  All tracked
         retirement tasks are joined within a bounded deadline.
+
+        Plan 019 Workstream E2: also adopts any old slot retained by a
+        committed pending swap so it is not orphaned when finalization
+        drain times out.
         """
         shutdown_deadline_s = 10.0
         async with self._lock:
@@ -1817,8 +1821,28 @@ class RuntimeManager:
             # they observe the shutdown flag and raise immediately.
             self._lease_condition.notify_all()
             active = self._active
+            # Plan 019 Workstream E2: adopt the old slot from any
+            # committed pending swap that was not finalized during
+            # drain.  Snapshot the slot under the lock so retirement
+            # can proceed after the lock is released.
+            pending_swap = self._pending_swap
+            old_slot_from_swap: _GenerationSlot | None = None
+            if (
+                pending_swap is not None
+                and pending_swap.committed
+                and pending_swap._old_slot is not None  # pyright: ignore[reportPrivateUsage]
+                and not pending_swap.finalized  # pyright: ignore[reportPrivateUsage]
+            ):
+                old_slot_from_swap = pending_swap._old_slot  # pyright: ignore[reportPrivateUsage]
         if active is not None:
             await self._spawn_retirement_task(active, drain_timeout_s=5.0)
+        if old_slot_from_swap is not None:
+            logger.info(
+                "Shutdown adopting old slot from unresolved pending swap "
+                "(generation %d)",
+                old_slot_from_swap.generation.generation_id,
+            )
+            await self._spawn_retirement_task(old_slot_from_swap, drain_timeout_s=5.0)
         # Join all tracked retirement tasks within a bounded deadline.
         # Force-cancel any tasks that do not complete in time.
         if self._retirement_tasks:

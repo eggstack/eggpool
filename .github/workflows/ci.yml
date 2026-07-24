@@ -208,6 +208,9 @@ jobs:
             tests/integration/reload/test_plan_019_acceptance_boundary.py \
             tests/integration/reload/test_plan_019_database_invalidation.py \
             tests/integration/reload/test_plan_019_transition_prefix.py \
+            tests/integration/reload/test_plan_019_admission_blocking.py \
+            tests/integration/reload/test_plan_019_shutdown_adoption.py \
+            tests/integration/reload/test_plan_019_diagnostics_assertions.py \
             tests/integration/reload/test_pending_swap_visibility.py \
             tests/integration/reload/test_diagnostics_matrix.py \
             -q --tb=short
