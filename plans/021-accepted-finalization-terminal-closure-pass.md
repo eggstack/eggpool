@@ -1,7 +1,7 @@
 # Accepted-Finalization Terminal Closure Pass
 
 Date: 2026-07-24
-Status: implementation handoff
+Status: completed
 
 Depends on:
 
@@ -12,6 +12,14 @@ Depends on:
 Implementation baseline:
 
 - `e3bd47c0cedb55449b7f73a87698b359adbd678a`
+
+Closure record:
+
+- Implementation: `13f9a5f4a4314fd8f15a355c1478b0c19b716879`
+- Exact-head evidence: [`artifacts/plan-021-evidence.md`](../artifacts/plan-021-evidence.md)
+- All Plan 021 lifecycle, accounting, shutdown, production-boundary, and
+  verification gates are satisfied. The only post-implementation changes are
+  this status update and the evidence artifact.
 
 ## Objective
 
