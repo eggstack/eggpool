@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import threading
 from contextlib import suppress
 from contextvars import ContextVar
 
@@ -223,6 +224,20 @@ async def test_concurrent_readers_during_write() -> None:
         db1._max_lock_wait_s = 0.0  # type: ignore[reportPrivateUsage]
         db1._lock_wait_count = 0  # type: ignore[reportPrivateUsage]
         db1._lock_wait_samples_s = collections.deque(maxlen=512)  # type: ignore[reportPrivateUsage]
+        db1._connection_lock_guard = threading.Lock()  # type: ignore[reportPrivateUsage]
+        db1._transaction_state = ContextVar(  # type: ignore[reportPrivateUsage]
+            "database_transaction_state1", default=None
+        )
+        db1._test_inject_before_commit = None  # type: ignore[reportPrivateUsage]
+        db1._test_inject_commit_call = None  # type: ignore[reportPrivateUsage]
+        db1._invalidated = False  # type: ignore[reportPrivateUsage]
+        db1._invalidated_reason = None  # type: ignore[reportPrivateUsage]
+        db1._invalidated_at = None  # type: ignore[reportPrivateUsage]
+        db1._last_commit_outcome = None  # type: ignore[reportPrivateUsage]
+        db1._last_rollback_attempted = False  # type: ignore[reportPrivateUsage]
+        db1._last_rollback_succeeded = False  # type: ignore[reportPrivateUsage]
+        db1._last_in_transaction_before_rollback = None  # type: ignore[reportPrivateUsage]
+        db1._last_in_transaction_after_rollback = None  # type: ignore[reportPrivateUsage]
         db2 = Database.__new__(Database)
         db2._conn = conn2  # type: ignore[reportPrivateUsage]
         db2._path = db_uri  # type: ignore[reportPrivateUsage]
@@ -244,6 +259,20 @@ async def test_concurrent_readers_during_write() -> None:
         db2._max_lock_wait_s = 0.0  # type: ignore[reportPrivateUsage]
         db2._lock_wait_count = 0  # type: ignore[reportPrivateUsage]
         db2._lock_wait_samples_s = collections.deque(maxlen=512)  # type: ignore[reportPrivateUsage]
+        db2._connection_lock_guard = threading.Lock()  # type: ignore[reportPrivateUsage]
+        db2._transaction_state = ContextVar(  # type: ignore[reportPrivateUsage]
+            "database_transaction_state2", default=None
+        )
+        db2._test_inject_before_commit = None  # type: ignore[reportPrivateUsage]
+        db2._test_inject_commit_call = None  # type: ignore[reportPrivateUsage]
+        db2._invalidated = False  # type: ignore[reportPrivateUsage]
+        db2._invalidated_reason = None  # type: ignore[reportPrivateUsage]
+        db2._invalidated_at = None  # type: ignore[reportPrivateUsage]
+        db2._last_commit_outcome = None  # type: ignore[reportPrivateUsage]
+        db2._last_rollback_attempted = False  # type: ignore[reportPrivateUsage]
+        db2._last_rollback_succeeded = False  # type: ignore[reportPrivateUsage]
+        db2._last_in_transaction_before_rollback = None  # type: ignore[reportPrivateUsage]
+        db2._last_in_transaction_after_rollback = None  # type: ignore[reportPrivateUsage]
 
         await _run_migrations(db1)
 

@@ -157,6 +157,32 @@ def _get_control_socket_path(xdg_state_home: str | None = None) -> str:
     return str(runtime_dir() / "eggpool.sock")
 
 
+async def _wait_control_socket(*, timeout: float = 10.0) -> bool:
+    """Wait for the control socket file to exist on disk.
+
+    The server's :class:`ControlServer` binds the socket before
+    :func:`_wait_healthy` returns 200, but on a slow CI host the socket
+    file can briefly lag the HTTP listener.  Burst-style rehash tests
+    that fire many concurrent ``eggpool rehash`` subprocesses need a
+    bound socket before they can connect; otherwise the subprocess
+    connect() can race the bind and time out.
+
+    Returns ``True`` if the socket file appeared within ``timeout``
+    seconds, ``False`` otherwise.
+    """
+    import time
+
+    from eggpool.runtime_paths import runtime_dir
+
+    socket_path = runtime_dir() / "eggpool.sock"
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if socket_path.exists():
+            return True
+        await asyncio.sleep(0.05)
+    return False
+
+
 def _write_extended_config(
     path: str,
     *,
@@ -971,17 +997,35 @@ async def test_d3_mixed_live_plus_restart_rejected_atomically(
 
 
 @pytest.mark.asyncio()
-async def test_d3_concurrent_reload_burst_rejects_busy(tmp_path: Any) -> None:
-    """Burst of concurrent rehashes deterministically produces a busy reject.
+async def test_d3_concurrent_reload_burst_stays_healthy(tmp_path: Any) -> None:
+    """Burst of concurrent rehashes is safe even if all serialize.
 
-    Fires 8 concurrent rehash subprocesses against a healthy server.  At
-    least one MUST exit with code 4 (``EXIT_RELOAD_BUSY``); the rest
-    MUST exit with 0, 4, or 5 (validation/prep failures are tolerated
-    on heavily concurrent races).  The test never crashes the server.
+    Fires 8 concurrent rehash subprocesses against a healthy server.
+    The test asserts the invariants that matter in production:
 
-    This is more reliable than the per-pair assertion because the
-    reload critical section is very short and a 2-process pair can
-    serialize without ever observing the busy state.
+    1. The server process never crashes (the rehash critical section
+       is fail-closed and the atomic admission claim never leaves the
+       server in a corrupt state, no matter how the bursts interleave).
+    2. Every subprocess exit code is in the valid reload set
+       ``{0, 4, 5}`` -- ok, busy, or prep-failed.  Anything else
+       indicates the control protocol has drifted.
+    3. After the burst settles, a fresh rehash still works, proving
+       the admission lock was released and the generation is still
+       reloadable.
+
+    The test does NOT assert a specific count of ``EXIT_RELOAD_BUSY``
+    (exit=4) rejections.  The reload critical section on a small
+    single-provider config is a few milliseconds; on a fast CI host the
+    second subprocess may arrive at the control socket after the first
+    has already released the lock, so all 8 may legitimately complete
+    with exit=0.  The deterministic, in-process equivalent that does
+    assert the busy-rejection behavior lives in
+    ``tests/unit/test_reload_failure_injection.py::
+    TestConcurrentReloadBusy.test_concurrent_reload_returns_busy_immediately``
+    where the reload preparation is blocked on an ``asyncio.Event`` so
+    contention is observed deterministically.  This E2E test is the
+    smoke layer: it proves the subprocess + control-socket path is
+    robust under burst, not that busy is always observed.
     """
     state = _MockState()
     upstream = _make_mock_server(state)
@@ -1000,6 +1044,7 @@ async def test_d3_concurrent_reload_burst_rejects_busy(tmp_path: Any) -> None:
     proc, drain = await _spawn_and_drain(config_path, env)
     try:
         assert await _wait_healthy(server_port), "server did not become healthy"
+        assert await _wait_control_socket(), "control socket did not appear"
 
         # Change config so rehash has work to do.
         _write_config(
@@ -1009,39 +1054,20 @@ async def test_d3_concurrent_reload_burst_rejects_busy(tmp_path: Any) -> None:
             inflight_penalty=750_000,
         )
 
-        # Fire a burst of 8 concurrent rehash commands.  Retry up to 3
-        # times because the reload critical section is short and a
-        # subprocess-based burst may serialize on fast hosts without
-        # producing a busy reject.
         burst = 8
-        max_attempts = 3
-        all_exit_codes: list[int] = []
-        busy_count = 0
-        for _attempt in range(max_attempts):
-            results = await asyncio.gather(
-                *[_run_rehash(config_path, env) for _ in range(burst)],
-                return_exceptions=True,
-            )
-
-            exit_codes: list[int] = []
-            for r in results:
-                if isinstance(r, Exception):
-                    continue
-                exit_codes.append(r[0])
-
-            all_exit_codes.extend(exit_codes)
-            busy_count = sum(1 for ec in all_exit_codes if ec == 4)
-            if busy_count >= 1:
-                break
-
-        assert len(all_exit_codes) >= burst, (
-            f"expected at least {burst} exit codes, got {len(all_exit_codes)}: "
-            f"{all_exit_codes}"
+        results = await asyncio.gather(
+            *[_run_rehash(config_path, env) for _ in range(burst)],
+            return_exceptions=True,
         )
 
-        assert busy_count >= 1, (
-            f"expected at least one busy (exit=4) in concurrent burst, "
-            f"got {all_exit_codes}"
+        exit_codes: list[int] = []
+        for r in results:
+            if isinstance(r, Exception):
+                continue
+            exit_codes.append(r[0])
+
+        assert len(exit_codes) >= burst, (
+            f"expected at least {burst} exit codes, got {len(exit_codes)}: {exit_codes}"
         )
 
         for ec in exit_codes:
@@ -1051,6 +1077,22 @@ async def test_d3_concurrent_reload_burst_rejects_busy(tmp_path: Any) -> None:
             )
 
         assert proc.returncode is None, "server process died"
+
+        # Post-burst rehash must still work; this proves the
+        # admission lock was released and the generation is still
+        # reloadable after the burst.
+        _write_config(
+            config_path,
+            server_port=server_port,
+            upstream_port=upstream_port,
+            inflight_penalty=900_000,
+        )
+        post_exit, post_stdout, post_stderr = await _run_rehash(config_path, env)
+        assert post_exit == 0, (
+            f"post-burst rehash failed: exit={post_exit} "
+            f"stdout={post_stdout!r} stderr={post_stderr!r}"
+        )
+        assert proc.returncode is None, "server process died after post-burst rehash"
     finally:
         drain.cancel()
         with contextlib.suppress(asyncio.CancelledError):
