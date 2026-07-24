@@ -195,12 +195,19 @@ jobs:
             tests/unit/test_process_transition_plan.py \
             tests/unit/test_reload_manager.py \
             tests/unit/test_reload_diagnostics_matrix.py \
+            tests/unit/test_accepted_finalization_state_machine.py \
             tests/integration/reload/test_plan_017_lease_condition.py \
             tests/integration/reload/test_plan_018_transition_ownership.py \
             tests/integration/reload/test_plan_018_accepted_finalization.py \
             tests/integration/reload/test_plan_018_retirement_retry.py \
             tests/integration/reload/test_plan_018_database_commit_failure.py \
             tests/integration/reload/test_plan_018_gate_repair.py \
+            tests/integration/reload/test_plan_019_finalization_retry.py \
+            tests/integration/reload/test_plan_019_finalization_retention.py \
+            tests/integration/reload/test_plan_019_shutdown_drain.py \
+            tests/integration/reload/test_plan_019_acceptance_boundary.py \
+            tests/integration/reload/test_plan_019_database_invalidation.py \
+            tests/integration/reload/test_plan_019_transition_prefix.py \
             tests/integration/reload/test_pending_swap_visibility.py \
             tests/integration/reload/test_diagnostics_matrix.py \
             -q --tb=short
