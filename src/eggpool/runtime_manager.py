@@ -1239,6 +1239,7 @@ class RuntimeManager:
         self._acquire_id = 0  # monotonic tie-breaker for lease diagnostics
         self._synthetic_generation_digest: str = ""
         self._retirement_tasks: dict[int, asyncio.Task[None]] = {}  # Phase 3
+        self._close_counts: dict[int, dict[str, int]] = {}
         self._pending_swap: PendingGenerationSwap | None = None
         # Plan 017 Workstream A: predicate-based condition for lease
         # admission.  Replaces the event-based clear/set pattern that
@@ -1749,10 +1750,16 @@ class RuntimeManager:
         crashing.
         """
         generation = slot.generation
+
+        def record_close_attempt(resource_name: str) -> None:
+            by_resource = self._close_counts.setdefault(generation.generation_id, {})
+            by_resource[resource_name] = by_resource.get(resource_name, 0) + 1
+
         # 1. Stop background-task scheduling first so no new ticks fire
         #    while we drain in-flight tasks.
         supervisor = generation.supervisor
         if supervisor is not None:
+            record_close_attempt("supervisor")
             try:
                 await supervisor.stop_all()
             except Exception as exc:  # noqa: BLE001 -- close path must not raise
@@ -1766,6 +1773,7 @@ class RuntimeManager:
         #    DNS or backend state with the pool.
         client_pool = cast("ProviderClientPool | None", generation.client_pool)
         if client_pool is not None:
+            record_close_attempt("client_pool")
             try:
                 await _safe_aclose(client_pool)
             except Exception as exc:  # noqa: BLE001
@@ -1779,6 +1787,7 @@ class RuntimeManager:
             "OutboundClientManager | None", generation.outbound_manager
         )
         if outbound_manager is not None:
+            record_close_attempt("outbound_manager")
             try:
                 await _safe_aclose(outbound_manager)
             except Exception as exc:  # noqa: BLE001
@@ -1789,6 +1798,7 @@ class RuntimeManager:
                 )
         dns_backend = cast("Any | None", generation.dns_backend)
         if dns_backend is not None:
+            record_close_attempt("dns_backend")
             try:
                 await _safe_aclose(dns_backend)
             except Exception as exc:  # noqa: BLE001
@@ -1859,6 +1869,13 @@ class RuntimeManager:
                     list(self._retirement_tasks.values()),
                     timeout=2.0,
                 )
+
+    def close_counts(self) -> dict[int, dict[str, int]]:
+        """Return exact per-generation close-attempt counts for diagnostics."""
+        return {
+            generation_id: dict(counts)
+            for generation_id, counts in self._close_counts.items()
+        }
 
     # -- defensive gate release --------------------------------------------
 

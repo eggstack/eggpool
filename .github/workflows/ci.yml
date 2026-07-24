@@ -172,7 +172,7 @@ jobs:
 
   # ------------------------------------------------------------------
   # 4c. Plan 018 — Reload atomicity closure corrective pass tests.
-  #     Runs the Plan 018/019/020 test command on a Python 3.11+3.12 matrix.
+  #     Runs the Plan 018/019/020/021 test command on a Python 3.11+3.12 matrix.
   # ------------------------------------------------------------------
   plan-018-reload-closure:
     runs-on: ubuntu-latest
@@ -188,7 +188,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --frozen --extra dev
 
-      - name: Plan 018/019/020 reload closure tests
+      - name: Plan 018/019/020/021 reload closure tests
         run: |
           uv run pytest \
             tests/unit/test_runtime_manager.py \
@@ -196,6 +196,7 @@ jobs:
             tests/unit/test_reload_manager.py \
             tests/unit/test_reload_diagnostics_matrix.py \
             tests/unit/test_accepted_finalization_state_machine.py \
+            tests/unit/test_plan_021_terminal_guards.py \
             tests/integration/reload/test_plan_017_lease_condition.py \
             tests/integration/reload/test_plan_018_transition_ownership.py \
             tests/integration/reload/test_plan_018_accepted_finalization.py \
@@ -218,6 +219,10 @@ jobs:
             tests/integration/reload/test_plan_020_database_outcome_matrix.py \
             tests/integration/reload/test_plan_020_retention_close_counts.py \
             tests/integration/reload/test_plan_020_diagnostics_reconciliation.py \
+            tests/integration/reload/test_plan_021_acceptance_accounting.py \
+            tests/integration/reload/test_plan_021_transition_prefix_production.py \
+            tests/integration/reload/test_plan_021_database_outcomes.py \
+            tests/integration/reload/test_plan_021_shutdown_adoption.py \
             tests/integration/reload/test_pending_swap_visibility.py \
             tests/integration/reload/test_diagnostics_matrix.py \
             -q --tb=short

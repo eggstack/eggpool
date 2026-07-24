@@ -90,7 +90,7 @@ async def test_retry_pending_status_distinguishable(
         rm.TEST_INJECT_RETIREMENT_FAILURE = None
 
     # Status is retry_pending, not completed.
-    assert result.finalization_status == "retry_pending"
+    assert result.finalization_status == "retirement_schedule_failed"
     assert result.finalization_next_step is not None
     assert result.finalization_attempt_count >= 1
 
@@ -126,7 +126,7 @@ async def test_snapshot_counters_match_result_fields(
     snap = rm.snapshot()
 
     # The result has finalization fields.
-    assert result.finalization_status == "retry_pending"
+    assert result.finalization_status == "retirement_schedule_failed"
     assert result.finalization_attempt_count >= 1
     assert result.finalization_failure_count >= 1
     assert result.old_generation_id is not None

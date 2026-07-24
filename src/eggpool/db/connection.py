@@ -173,6 +173,8 @@ class Database:
         # can target a specific connection without affecting others.
         self._test_inject_before_commit: Exception | None = None
         self._test_inject_commit_call: Exception | None = None
+        self._test_inject_rollback_call: Exception | None = None
+        self._test_inject_in_transaction_before_rollback: bool | None = None
         # Connection-invalidation state (Plan 018 Workstream E).
         # Set when a commit failure leaves the connection in an
         # indeterminate state; subsequent transaction() calls raise
@@ -241,6 +243,17 @@ class Database:
     def set_test_inject_commit_call(self, exc: Exception | None) -> None:
         """Instance-scoped test hook for commit-call failure injection."""
         self._test_inject_commit_call = exc
+
+    def set_test_inject_rollback_call(self, exc: Exception | None) -> None:
+        """Instance-scoped test hook for deterministic rollback failure."""
+        self._test_inject_rollback_call = exc
+
+    def set_test_inject_in_transaction_before_rollback(
+        self,
+        value: bool | None,
+    ) -> None:
+        """Override the observed transaction state for commit recovery tests."""
+        self._test_inject_in_transaction_before_rollback = value
 
     @staticmethod
     def _build_read_only_uri(path: str) -> tuple[str, bool]:
@@ -860,14 +873,22 @@ class Database:
                     in_transaction_after_rollback: bool | None = None
 
                     try:
-                        in_transaction_before_rollback = getattr(
-                            self._conn, "in_transaction", None
+                        in_transaction_before_rollback = (
+                            self._test_inject_in_transaction_before_rollback
+                            if self._test_inject_in_transaction_before_rollback
+                            is not None
+                            else getattr(self._conn, "in_transaction", None)
                         )
+                        self._test_inject_in_transaction_before_rollback = None
                         rollback_attempted = True
                         if (
                             in_transaction_before_rollback is not None
                             and in_transaction_before_rollback
                         ):
+                            rollback_injected = self._test_inject_rollback_call
+                            self._test_inject_rollback_call = None
+                            if rollback_injected is not None:
+                                raise rollback_injected
                             await self._conn.rollback()
                             in_transaction_after_rollback = getattr(
                                 self._conn, "in_transaction", None

@@ -28,11 +28,12 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import contextlib
 import logging
 import os
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Final
 
 from eggpool.config_reload_policy import (
@@ -85,9 +86,11 @@ from eggpool.control.accepted_finalization import (
     FINALIZATION_HISTORY_MAX,
     AcceptedFinalizationOutcome,
     AcceptedFinalizationRecord,
+    AcceptedFinalizationStep,
     AcceptedReloadFinalizationJob,
     FinalizationStatus,
 )
+from eggpool.errors import AcceptedFinalizationInvariantError
 from eggpool.reload_transaction import preflight_all_transitions
 from eggpool.runtime_manager import (
     RuntimeGenerationCandidate,
@@ -130,6 +133,33 @@ class _PreparedSwap:
     generation: RuntimeGeneration
     active_generation_id: int
     drain_timeout_s: float
+
+
+@dataclass(frozen=True)
+class AcceptedCommitContext:
+    """Immutable state handed from the commit boundary to finalization."""
+
+    transaction: ReloadTransaction
+    candidate: RuntimeGenerationCandidate
+    pending_swap: Any
+    transition_result: TransitionApplyResult | None
+    published_generation: RuntimeGeneration
+    old_generation_id: int | None
+    generation_id: int
+    changed_sections: tuple[str, ...]
+    started_at: float
+    digest_prefix: str
+
+
+@dataclass(frozen=True)
+class ReloadShutdownPreparation:
+    """Explicit ownership decision made before runtime shutdown."""
+
+    transaction_wait_completed: bool
+    unresolved_jobs: int
+    adopted_jobs: int
+    active_transaction_state: str | None
+    ownership_safe_for_runtime_shutdown: bool
 
 
 @dataclass(frozen=True)
@@ -460,6 +490,10 @@ class ReloadManager:
         #: this to wait for an in-flight transaction before closing
         #: process-owned dependencies.
         self._transaction_complete_event: asyncio.Event = asyncio.Event()
+        #: The control-request task currently executing ``reload()``.
+        #: Shutdown uses this handle to request bounded cancellation when
+        #: transaction waiting times out before acceptance.
+        self._active_reload_task: asyncio.Task[Any] | None = None
         #: Test-only seam — when set to an exception instance,
         #: ``_build_candidate_generation`` raises it at entry.
         self.TEST_INJECT_BUILD_FAILURE: Exception | None = None
@@ -482,6 +516,10 @@ class ReloadManager:
         #: the retirement scheduling section raises it (for testing
         #: retirement failure after acceptance).
         self.TEST_INJECT_RETIREMENT_FAILURE: Exception | None = None
+        #: Test-only persistent retirement failure used through drain/adoption.
+        self.TEST_PERSISTENT_RETIREMENT_FAILURE: Exception | None = None
+        #: Test-only seam for production-boundary transition-prefix tests.
+        self.TEST_INJECT_PROCESS_TRANSITION_PLAN: ProcessTransitionPlan | None = None
         #: Last abort cleanup diagnostics from a failed reload.
         self._last_cleanup_diagnostics: CleanupDiagnostics | None = None
         #: Current transaction (Phase 6) — ``None`` when idle.
@@ -503,6 +541,11 @@ class ReloadManager:
         self._finalization_history: collections.deque[AcceptedFinalizationRecord] = (
             collections.deque(maxlen=FINALIZATION_HISTORY_MAX)
         )
+        #: Shutdown-adopted jobs leave normal retry admission but remain
+        #: here until runtime shutdown confirms ownership transfer.
+        self._shutdown_adopted_finalization_jobs: dict[
+            str, AcceptedReloadFinalizationJob
+        ] = {}
 
     @property
     def operation_state(self) -> ReloadOperationState | None:
@@ -554,8 +597,9 @@ class ReloadManager:
         generation.  Returns the number of jobs that remain incomplete
         after the bounded retry.
         """
+        self._reconcile_completed_registered_jobs()
         pending = [
-            j for j in self._accepted_finalization_jobs.values() if not j.is_complete
+            j for j in self._accepted_finalization_jobs.values() if j.is_unresolved
         ]
         if not pending:
             return 0
@@ -614,7 +658,7 @@ class ReloadManager:
                         ),
                     )
         remaining = [
-            j for j in self._accepted_finalization_jobs.values() if not j.is_complete
+            j for j in self._accepted_finalization_jobs.values() if j.is_unresolved
         ]
         if remaining:
             for job in remaining:
@@ -627,6 +671,126 @@ class ReloadManager:
                     job.last_error_step,
                 )
         return len(remaining)
+
+    def _shutdown_adoption_outcome(
+        self,
+        job: AcceptedReloadFinalizationJob,
+    ) -> AcceptedFinalizationOutcome:
+        """Build the scalar outcome recorded when shutdown takes ownership."""
+        return AcceptedFinalizationOutcome(
+            completed=False,
+            next_step=job.step.value,
+            attempt_count=job.attempts,
+            failure_count=job.failure_count,
+            retry_attempt_count=job.retry_attempt_count,
+            retirement_retry_attempt_count=job.retirement_retry_attempt_count,
+            failed_step=job.last_error_step,
+            error_class=job.last_error_class,
+            error_message=job.last_error_message,
+            retry_permitted=False,
+            status=FinalizationStatus.SHUTDOWN_ADOPTED,
+        )
+
+    async def _adopt_unresolved_finalization_jobs(self) -> int:
+        """Move unresolved jobs out of normal admission into shutdown ownership."""
+        adopted = 0
+        for request_id, job in tuple(self._accepted_finalization_jobs.items()):
+            if not job.is_unresolved:
+                continue
+            await job.adopt_for_shutdown()
+            self._accepted_finalization_jobs.pop(request_id, None)
+            self._shutdown_adopted_finalization_jobs[request_id] = job
+            outcome = self._shutdown_adoption_outcome(job)
+            self._update_finalization_diagnostic(job, outcome)
+            self._schedule_finalization_event(
+                "reload_finalization_shutdown_adopted",
+                job,
+                outcome,
+            )
+            adopted += 1
+        return adopted
+
+    async def release_shutdown_adopted_references(self) -> int:
+        """Release adopted job references after runtime shutdown completes."""
+        released = 0
+        for request_id, job in tuple(self._shutdown_adopted_finalization_jobs.items()):
+            task = job.retained_task
+            if task is not None and not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+            job.release_references()
+            self._finalization_history.append(job.to_record())
+            self._shutdown_adopted_finalization_jobs.pop(request_id, None)
+            released += 1
+        return released
+
+    async def prepare_for_shutdown(
+        self,
+        *,
+        transaction_timeout_s: float = 5.0,
+        finalization_timeout_s: float = 10.0,
+    ) -> ReloadShutdownPreparation:
+        """Resolve reload ownership before the runtime manager is closed.
+
+        A transaction wait timeout is handled explicitly: the active reload
+        task receives one bounded cancellation request, and shutdown is
+        considered safe only after the transaction reference clears.  Any
+        accepted work that cannot finish is adopted into a separate registry
+        before runtime shutdown.
+        """
+        transaction_wait_completed = await self.wait_for_transaction_completion(
+            timeout_s=transaction_timeout_s,
+        )
+        if not transaction_wait_completed:
+            task = self._active_reload_task
+            current_task = asyncio.current_task()
+            if task is not None and task is not current_task and not task.done():
+                logger.warning(
+                    "Requesting bounded cancellation of reload during shutdown"
+                )
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, TimeoutError):
+                    await asyncio.wait_for(
+                        asyncio.shield(task),
+                        timeout=max(transaction_timeout_s, 0.1),
+                    )
+            transaction_wait_completed = await self.wait_for_transaction_completion(
+                timeout_s=max(transaction_timeout_s, 0.1),
+            )
+
+        active_transaction = self._current_transaction
+        if active_transaction is not None and not transaction_wait_completed:
+            return ReloadShutdownPreparation(
+                transaction_wait_completed=False,
+                unresolved_jobs=len(self._accepted_finalization_jobs),
+                adopted_jobs=0,
+                active_transaction_state=active_transaction.state.value,
+                ownership_safe_for_runtime_shutdown=False,
+            )
+
+        unresolved = await self.drain_finalization_jobs(
+            timeout_s=finalization_timeout_s,
+        )
+        adopted = 0
+        if unresolved:
+            adopted = await self._adopt_unresolved_finalization_jobs()
+        remaining_active = sum(
+            1 for job in self._accepted_finalization_jobs.values() if job.is_unresolved
+        )
+        return ReloadShutdownPreparation(
+            transaction_wait_completed=transaction_wait_completed,
+            unresolved_jobs=remaining_active,
+            adopted_jobs=adopted,
+            active_transaction_state=(
+                self._current_transaction.state.value
+                if self._current_transaction is not None
+                else None
+            ),
+            ownership_safe_for_runtime_shutdown=(
+                self._current_transaction is None and remaining_active == 0
+            ),
+        )
 
     def _ensure_accepted_owner_registered(
         self,
@@ -670,14 +834,191 @@ class ReloadManager:
             app=self._app,
             observer=self._observer,
             _reload_manager=self,
+            _on_attempt_done=self._schedule_finalization_reconciliation,
         )
         self._accepted_finalization_jobs[finalization_job.request_id] = finalization_job
         return finalization_job
+
+    def _schedule_finalization_reconciliation(
+        self,
+        job: AcceptedReloadFinalizationJob,
+        task: asyncio.Task[AcceptedFinalizationOutcome],
+    ) -> None:
+        """Schedule process-owned observation of a retained attempt.
+
+        The callback is intentionally non-blocking.  It remains attached
+        to the retained task even when every request waiter is cancelled,
+        so completion cannot depend on a particular control request.
+        """
+        try:
+            loop = task.get_loop()
+            if loop.is_closed():
+                return
+            loop.create_task(
+                self._observe_finalization_attempt(job, task),
+                name=f"observe-finalization-{job.request_id}",
+            )
+        except (RuntimeError, TypeError):
+            # The event loop may be closing during process teardown.  The
+            # shutdown preparation path remains the synchronous backstop.
+            logger.debug(
+                "Could not schedule finalization reconciliation for %s",
+                job.request_id,
+                exc_info=True,
+            )
+
+    @staticmethod
+    def _outcome_from_completed_task(
+        job: AcceptedReloadFinalizationJob,
+        task: asyncio.Task[AcceptedFinalizationOutcome],
+    ) -> AcceptedFinalizationOutcome:
+        """Extract a scalar outcome without allowing callback exceptions."""
+        try:
+            return task.result()
+        except BaseException as exc:
+            return AcceptedFinalizationOutcome(
+                completed=job.is_complete,
+                next_step=None if job.is_complete else job.step.value,
+                attempt_count=job.attempts,
+                failure_count=job.failure_count,
+                retry_attempt_count=job.retry_attempt_count,
+                retirement_retry_attempt_count=job.retirement_retry_attempt_count,
+                failed_step=job.last_error_step,
+                error_class=type(exc).__name__,
+                error_message=str(exc),
+                retry_permitted=False,
+                status=job.status,
+            )
+
+    async def _observe_finalization_attempt(
+        self,
+        job: AcceptedReloadFinalizationJob,
+        task: asyncio.Task[AcceptedFinalizationOutcome],
+    ) -> None:
+        """Reconcile one retained task from the process-owned callback."""
+        try:
+            outcome = self._outcome_from_completed_task(job, task)
+            self._reconcile_finalization_job(
+                job,
+                outcome,
+                observation_path="callback",
+            )
+        except Exception:
+            # A callback must never become an unhandled event-loop task.
+            logger.error(
+                "Finalization reconciliation failed for %s",
+                job.request_id,
+                exc_info=True,
+            )
+
+    def _reconcile_completed_registered_jobs(self) -> None:
+        """Synchronously sweep completed retained tasks before admission."""
+        for job in tuple(self._accepted_finalization_jobs.values()):
+            task = job.retained_task
+            if task is None or not task.done():
+                continue
+            outcome = self._outcome_from_completed_task(job, task)
+            try:
+                self._reconcile_finalization_job(
+                    job,
+                    outcome,
+                    observation_path="admission_sweep",
+                )
+            except Exception:
+                logger.error(
+                    "Completed finalization sweep failed for %s",
+                    job.request_id,
+                    exc_info=True,
+                )
+
+    def _record_reload_accepted_once(self, txn: ReloadTransaction) -> None:
+        """Increment accepted/committed counters at the acceptance boundary."""
+        if not txn.mark_acceptance_accounted():
+            return
+        self._counters = replace(
+            self._counters,
+            committed_reloads=self._counters.committed_reloads + 1,
+            accepted_reloads=self._counters.accepted_reloads + 1,
+        )
+
+    def _update_finalization_diagnostic(
+        self,
+        job: AcceptedReloadFinalizationJob,
+        outcome: AcceptedFinalizationOutcome,
+    ) -> None:
+        """Replace manager-visible immutable diagnostics after reconciliation."""
+        current = self._last_diagnostic_result
+        if current is None or current.request_id != job.request_id:
+            return
+        status = outcome.status.value
+        category = classify_result_category(
+            ok=True,
+            stage=current.terminal_stage,
+            finalization_status=status,
+        )
+        updated = replace(
+            current,
+            category=category,
+            counters=self._counters,
+            post_commit_finalization_pending=not outcome.completed,
+            ownership_transfer_pending=(
+                job.step is AcceptedFinalizationStep.REGISTERED
+            ),
+            mirror_update_pending=(
+                job.step is AcceptedFinalizationStep.OWNERSHIP_TRANSFERRED
+            ),
+            retirement_scheduling_pending=(
+                job.step is AcceptedFinalizationStep.RETIREMENT_SCHEDULING
+            ),
+            finalization_status=status,
+            finalization_next_step=outcome.next_step,
+            finalization_attempt_count=outcome.attempt_count,
+            finalization_failure_count=outcome.failure_count,
+            finalization_retry_attempt_count=outcome.retry_attempt_count,
+            finalization_last_error_step=outcome.failed_step,
+            finalization_last_error_class=outcome.error_class,
+            finalization_last_error_message=outcome.error_message,
+        )
+        self._last_diagnostic_result = updated
+        for index, record in enumerate(self._reload_history):
+            if record.request_id == job.request_id:
+                self._reload_history[index] = updated
+
+    def _schedule_finalization_event(
+        self,
+        event_type: str,
+        job: AcceptedReloadFinalizationJob,
+        outcome: AcceptedFinalizationOutcome,
+    ) -> None:
+        """Emit bounded lifecycle evidence without blocking reconciliation."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        transaction = getattr(job, "transaction", None)
+        loop.create_task(
+            self._safe_record_event(
+                event_type,
+                generation_id=job.generation_id,
+                digest_prefix=(transaction.digest_prefix if transaction else ""),
+                error=outcome.error_message,
+                finalization_status=outcome.status.value,
+                finalization_next_step=outcome.next_step,
+                finalization_attempt_count=outcome.attempt_count,
+                finalization_failure_count=outcome.failure_count,
+                finalization_retry_attempt_count=outcome.retry_attempt_count,
+                finalization_retirement_retry_attempt_count=(
+                    outcome.retirement_retry_attempt_count
+                ),
+            )
+        )
 
     def _reconcile_finalization_job(
         self,
         job: AcceptedReloadFinalizationJob,
         outcome: AcceptedFinalizationOutcome,
+        *,
+        observation_path: str = "inline",
     ) -> None:
         """Idempotently update counters and history for a finalization outcome.
 
@@ -693,101 +1034,104 @@ class ReloadManager:
         the inline-path, admission-retry-path, and drain-path
         observations idempotent.
         """
-        previous_attempt_count = getattr(job, "_reconciled_attempt_count", 0)
-        if not job.is_complete:
-            # Still pending.  Count the failures observed so far as
-            # ``accepted_finalization_failures`` if this is the first
-            # observation.  Subsequent observations of the same
-            # failure do not double-count.
-            if not getattr(job, "_failures_accounted", False):
-                object.__setattr__(job, "_failures_accounted", True)
-                if outcome.failure_count > 0:
-                    self._counters = ReloadCounters(
-                        total_requests=self._counters.total_requests,
-                        admitted_operations=self._counters.admitted_operations,
-                        busy_rejections=self._counters.busy_rejections,
-                        committed_reloads=self._counters.committed_reloads,
-                        noop_outcomes=self._counters.noop_outcomes,
-                        ignored_only_outcomes=self._counters.ignored_only_outcomes,
-                        validation_rejections=self._counters.validation_rejections,
-                        restart_required_rejections=self._counters.restart_required_rejections,
-                        prepare_failures=self._counters.prepare_failures,
-                        commit_failures=self._counters.commit_failures,
-                        cancellations=self._counters.cancellations,
-                        compensation_failures=self._counters.compensation_failures,
-                        retirement_failures=self._counters.retirement_failures,
-                        accepted_reloads=self._counters.accepted_reloads,
-                        fully_finalized_reloads=self._counters.fully_finalized_reloads,
-                        accepted_finalization_failures=(
-                            self._counters.accepted_finalization_failures
-                            + outcome.failure_count
-                        ),
-                        accepted_finalization_retries=self._counters.accepted_finalization_retries,
-                        retirement_retry_count=self._counters.retirement_retry_count,
-                        accepted_finalization_failures_recovered=(
-                            self._counters.accepted_finalization_failures_recovered
-                        ),
-                        delayed_completion_count=self._counters.delayed_completion_count,
-                    )
-            return
-        if getattr(job, "_reconciled", False):
-            return
-        job.mark_reconciled()
-        new_attempt_count = outcome.attempt_count
-        retry_delta = max(0, new_attempt_count - 1 - previous_attempt_count)
-        retirement_retry_delta = max(
-            0,
-            outcome.retirement_retry_attempt_count
-            - (getattr(job, "_retirement_retry_accounted", 0)),
-        )
-        object.__setattr__(job, "_reconciled_attempt_count", new_attempt_count)
-        object.__setattr__(
-            job,
-            "_retirement_retry_accounted",
-            outcome.retirement_retry_attempt_count,
-        )
-        record = job.to_record()
-        self._finalization_history.append(record)
-        self._accepted_finalization_jobs.pop(job.request_id, None)
-        job.release_references()
-        is_delayed = new_attempt_count > 1
-        self._counters = ReloadCounters(
-            total_requests=self._counters.total_requests,
-            admitted_operations=self._counters.admitted_operations,
-            busy_rejections=self._counters.busy_rejections,
-            committed_reloads=self._counters.committed_reloads,
-            noop_outcomes=self._counters.noop_outcomes,
-            ignored_only_outcomes=self._counters.ignored_only_outcomes,
-            validation_rejections=self._counters.validation_rejections,
-            restart_required_rejections=self._counters.restart_required_rejections,
-            prepare_failures=self._counters.prepare_failures,
-            commit_failures=self._counters.commit_failures,
-            cancellations=self._counters.cancellations,
-            compensation_failures=self._counters.compensation_failures,
-            retirement_failures=self._counters.retirement_failures,
-            accepted_reloads=self._counters.accepted_reloads,
-            fully_finalized_reloads=self._counters.fully_finalized_reloads + 1,
-            accepted_finalization_failures=self._counters.accepted_finalization_failures,
+        cursor = job.accounting
+        deltas = {
+            "attempts": outcome.attempt_count - cursor.attempts,
+            "failures": outcome.failure_count - cursor.failures,
+            "retries": outcome.retry_attempt_count - cursor.retries,
+            "retirement_retries": (
+                outcome.retirement_retry_attempt_count - cursor.retirement_retries
+            ),
+        }
+        if any(value < 0 for value in deltas.values()):
+            raise AcceptedFinalizationInvariantError(
+                f"Finalization counters regressed for {job.request_id}: {deltas}",
+                request_id=job.request_id,
+                generation_id=job.generation_id,
+            )
+        cursor.attempts = outcome.attempt_count
+        cursor.failures = outcome.failure_count
+        cursor.retries = outcome.retry_attempt_count
+        cursor.retirement_retries = outcome.retirement_retry_attempt_count
+        self._counters = replace(
+            self._counters,
+            accepted_finalization_failures=(
+                self._counters.accepted_finalization_failures + deltas["failures"]
+            ),
             accepted_finalization_retries=(
-                self._counters.accepted_finalization_retries + retry_delta
+                self._counters.accepted_finalization_retries + deltas["retries"]
             ),
             retirement_retry_count=(
-                self._counters.retirement_retry_count + retirement_retry_delta
+                self._counters.retirement_retry_count + deltas["retirement_retries"]
             ),
+        )
+
+        if not outcome.completed:
+            job.mark_response_returned(completed=False)
+            self._update_finalization_diagnostic(job, outcome)
+            if deltas["failures"] > 0:
+                if outcome.status is FinalizationStatus.RETIREMENT_SCHEDULE_FAILED:
+                    event_type = "reload_retirement_schedule_failed"
+                elif outcome.status is FinalizationStatus.INVARIANT_FAILED:
+                    event_type = "reload_finalization_invariant_failed"
+                else:
+                    event_type = "reload_finalization_retry_failed"
+                self._schedule_finalization_event(event_type, job, outcome)
+            return
+
+        if cursor.completion_accounted:
+            return
+        cursor.completion_accounted = True
+        job.mark_completion_observed(observation_path)
+        self._counters = replace(
+            self._counters,
+            fully_finalized_reloads=self._counters.fully_finalized_reloads + 1,
             accepted_finalization_failures_recovered=(
                 self._counters.accepted_finalization_failures_recovered + 1
-                if outcome.failure_count > 0
+                if outcome.failure_count > 0 and not cursor.recovery_accounted
                 else self._counters.accepted_finalization_failures_recovered
             ),
             delayed_completion_count=(
                 self._counters.delayed_completion_count + 1
-                if is_delayed
+                if (
+                    not cursor.delayed_completion_accounted
+                    and (
+                        job.response_returned_before_completion
+                        or observation_path != "inline"
+                        or outcome.attempt_count > 1
+                    )
+                )
                 else self._counters.delayed_completion_count
             ),
         )
+        cursor.recovery_accounted = cursor.recovery_accounted or (
+            outcome.failure_count > 0
+        )
+        if (
+            job.response_returned_before_completion
+            or observation_path != "inline"
+            or outcome.attempt_count > 1
+        ):
+            cursor.delayed_completion_accounted = True
+        self._update_finalization_diagnostic(job, outcome)
+        job.mark_reconciled()
+        self._accepted_finalization_jobs.pop(job.request_id, None)
+        job.release_references()
+        self._finalization_history.append(job.to_record())
+        if observation_path != "inline" or outcome.attempt_count > 1:
+            self._schedule_finalization_event(
+                "reload_finalization_completed_delayed",
+                job,
+                outcome,
+            )
 
     def snapshot(self) -> dict[str, Any]:
         """Return reload state for diagnostics."""
+        # A done callback normally performs this work on the next loop
+        # turn.  The synchronous sweep is the defensive backstop for
+        # callers that inspect diagnostics or admission immediately after
+        # a retained task finishes.
+        self._reconcile_completed_registered_jobs()
         result: dict[str, Any] = {
             "operation_state": {
                 "stage": self._operation_state.stage,
@@ -927,7 +1271,9 @@ class ReloadManager:
             result["active_transaction"] = None
         # Plan 018/019: surface accepted finalization jobs and history.
         result["accepted_finalization_jobs"] = [
-            job.snapshot() for job in self._accepted_finalization_jobs.values()
+            job.snapshot()
+            for job in self._accepted_finalization_jobs.values()
+            if job.is_unresolved
         ]
         result["finalization_history"] = [
             {
@@ -944,11 +1290,17 @@ class ReloadManager:
                 "last_error_message": r.last_error_message,
                 "completed_at": r.completed_at,
                 "duration_s": r.duration_s,
+                "adopted_for_shutdown": r.adopted_for_shutdown,
+                "references_released": r.references_released,
+                "completion_observation_path": r.completion_observation_path,
             }
             for r in self._finalization_history
         ]
+        result["shutdown_adopted_finalization_jobs"] = [
+            job.snapshot() for job in self._shutdown_adopted_finalization_jobs.values()
+        ]
         result["unresolved_finalization_count"] = sum(
-            1 for j in self._accepted_finalization_jobs.values() if not j.is_complete
+            1 for j in self._accepted_finalization_jobs.values() if j.is_unresolved
         )
         # Phase 11: bounded reload history (most recent first).
         result["reload_history"] = [
@@ -999,6 +1351,132 @@ class ReloadManager:
             for d in reversed(self._reload_history)
         ]
         return result
+
+    async def _execute_accepted_phase(
+        self,
+        context: AcceptedCommitContext,
+        *,
+        warnings: tuple[ConfigValidationWarning, ...],
+    ) -> ReloadResult:
+        """Own the post-commit lifecycle after the rollback boundary.
+
+        This method is intentionally separate from the pre-acceptance
+        ``try``/``except`` region in :meth:`reload`.  Its acceptance
+        marker and accounting cannot be lexically governed by a handler
+        that performs precommit rollback or candidate cleanup.
+        """
+        txn = context.transaction
+        txn.mark_accepted()
+        self._record_reload_accepted_once(txn)
+
+        # Synchronous owner registration is the first operation after the
+        # acceptance fact and occurs before the first post-acceptance await.
+        finalization_job = self._ensure_accepted_owner_registered(
+            txn=txn,
+            candidate=context.candidate,
+            pending_swap=context.pending_swap,
+            transition_result=context.transition_result,
+            published_gen=context.published_generation,
+            generation_id=context.generation_id,
+            old_generation_id=context.old_generation_id,
+        )
+
+        self._set_stage(
+            ReloadOperationStage.RETIREMENT,
+            context.started_at,
+            context.generation_id,
+            context.digest_prefix,
+        )
+        try:
+            finalization_outcome = await finalization_job.run()
+        except AcceptedFinalizationInvariantError:
+            # The accepted generation remains authoritative, but an
+            # invariant failure must remain visible as unresolved
+            # finalization rather than entering precommit classification.
+            task = finalization_job.retained_task
+            if task is None or not task.done():
+                raise
+            finalization_outcome = self._outcome_from_completed_task(
+                finalization_job,
+                task,
+            )
+        if finalization_outcome.status is not FinalizationStatus.COMPLETED:
+            logger.warning(
+                "Accepted finalization pending for generation %d (status=%s step=%s)",
+                context.generation_id,
+                finalization_outcome.status.value,
+                finalization_outcome.next_step,
+            )
+        self._reconcile_finalization_job(
+            finalization_job,
+            finalization_outcome,
+            observation_path="inline",
+        )
+
+        self._set_stage(
+            ReloadOperationStage.IDLE,
+            context.started_at,
+            context.generation_id,
+            context.digest_prefix,
+        )
+        duration = time.monotonic() - context.started_at
+        logger.info(
+            "Reload committed: generation=%d duration=%.3fs sections=%s",
+            context.generation_id,
+            duration,
+            ",".join(context.changed_sections) or "(none)",
+        )
+
+        finalization_status = finalization_outcome.status.value
+        finalization_next_step = finalization_outcome.next_step
+        enriched_warnings = warnings
+        if finalization_status in ("retry_pending", "retirement_schedule_failed"):
+            enriched_warnings = warnings + (
+                ConfigValidationWarning(
+                    code="finalization_retry_pending",
+                    section="finalization",
+                    message=(
+                        f"Finalization retry pending at step {finalization_next_step}"
+                    ),
+                ),
+            )
+        diagnostic, wire_result = self._finalize_reload(
+            request_id=txn.request_id,
+            started_at=context.started_at,
+            txn=txn,
+            txn_state=txn.state,
+            ok=True,
+            stage=ReloadTerminalStage.RETIREMENT,
+            generation_id=context.generation_id,
+            digest_prefix=context.digest_prefix,
+            changed_sections=context.changed_sections,
+            ignored_sections=(),
+            restart_required_sections=(),
+            warnings=enriched_warnings,
+            publication_occurred=True,
+            persistence_committed=True,
+            process_transitions_applied=True,
+            finalization_status=finalization_status,
+            finalization_next_step=finalization_next_step,
+            finalization_attempt_count=finalization_outcome.attempt_count,
+            finalization_failure_count=finalization_outcome.failure_count,
+            finalization_retry_attempt_count=(finalization_outcome.retry_attempt_count),
+            finalization_last_error_step=finalization_outcome.failed_step,
+            finalization_last_error_class=finalization_outcome.error_class,
+            finalization_last_error_message=finalization_outcome.error_message,
+            old_generation_id=context.old_generation_id,
+            pending_swap_committed=True,
+            accepted_generation_authoritative=True,
+        )
+        self._last_diagnostic_result = diagnostic
+        await self._record_terminal_event(diagnostic)
+        await self._safe_record_event(
+            "reload_activated",
+            generation_id=context.generation_id,
+            digest_prefix=context.digest_prefix,
+            changed_sections=context.changed_sections,
+        )
+        return wire_result
 
     # -- public entry point ------------------------------------------------
 
@@ -1107,10 +1585,9 @@ class ReloadManager:
             # previous (possibly cancelled) reload and attempt bounded
             # completion.  A committed swap cannot be force-cleared, so
             # the new reload must wait for finalization to resolve.
+            self._reconcile_completed_registered_jobs()
             pending_jobs = [
-                j
-                for j in self._accepted_finalization_jobs.values()
-                if not j.is_complete
+                j for j in self._accepted_finalization_jobs.values() if j.is_unresolved
             ]
             if pending_jobs:
                 for job in pending_jobs:
@@ -1153,7 +1630,7 @@ class ReloadManager:
                 still_pending = [
                     j
                     for j in self._accepted_finalization_jobs.values()
-                    if not j.is_complete
+                    if j.is_unresolved
                 ]
                 if still_pending:
                     self._current_transaction = None
@@ -1183,6 +1660,7 @@ class ReloadManager:
                         + ", ".join(str(j.generation_id) for j in still_pending)
                     )
             self._reload_claimed = True
+            self._active_reload_task = asyncio.current_task()
             self._admitted_at = time.monotonic()
             # Phase 11: increment admitted operations.
             self._counters = ReloadCounters(
@@ -1544,9 +2022,8 @@ class ReloadManager:
                 expected_active_generation_id=expected_gen_id,
             )
             transition_result: TransitionApplyResult | None = None
-            # Plan 020 Workstream A1: split pre-acceptance and accepted
-            # regions so no except handler calls _abort_precommit_reload()
-            # after mark_accepted().
+            # Pre-acceptance commit region.  Acceptance is marked only
+            # after this rollback-capable try/except has exited.
             try:
                 # 9c: Enter SQLite transaction, apply persistence delta,
                 # stage the runtime swap (installs lease gate), then apply
@@ -1589,9 +2066,6 @@ class ReloadManager:
                     old_gen_id,
                     new_generation_id=published_gen.generation_id,
                 )
-                # Plan 017 Workstream D: the reload is now accepted —
-                # SQLite committed and runtime swap committed.
-                txn.mark_accepted()
             except asyncio.CancelledError:
                 # Plan 017 Workstream D: pre-acceptance cancellation.
                 # Route through the shared precommit abort helper.
@@ -1620,159 +2094,26 @@ class ReloadManager:
                 )
                 raise
 
-            # -- Accepted region (no _abort_precommit_reload) ----
-            # Plan 020 Workstream A2: create and register the
-            # finalization job synchronously BEFORE any
-            # post-acceptance await.  The job retains all state
-            # needed for idempotent retry.  This code is outside
-            # the pre-acceptance try/except so no handler calls
-            # _abort_precommit_reload().
-            finalization_job = self._ensure_accepted_owner_registered(
-                txn=txn,
+            accepted_context = AcceptedCommitContext(
+                transaction=txn,
                 candidate=candidate,
                 pending_swap=pending_swap,
                 transition_result=transition_result,
-                published_gen=published_gen,
-                generation_id=generation_id,
+                published_generation=published_gen,
                 old_generation_id=old_generation_id,
-            )
-
-            # -- Post-acceptance finalization (Workstream C/D) ----
-            # The reload is accepted.  The finalization job executes
-            # idempotent steps in order.  Failures are housekeeping
-            # only — the candidate remains authoritative.
-            self._set_stage(
-                ReloadOperationStage.RETIREMENT,
-                started_at,
-                generation_id,
-                digest_prefix,
-            )
-            # Plan 020 Workstream A3: on_retirement_started is now
-            # called inside the finalization job's OBSERVER_REPORTED
-            # step, not here.  The single run() call handles all
-            # observer interactions.
-            finalization_outcome = await finalization_job.run()
-            if finalization_outcome.status is FinalizationStatus.RETRY_PENDING:
-                logger.warning(
-                    "Accepted finalization retry pending for generation %d (step=%s)",
-                    generation_id,
-                    finalization_outcome.next_step,
-                )
-
-            # Plan 020 Workstream C2: reconcile counters and history
-            # exactly once via the centralized helper.
-            self._reconcile_finalization_job(finalization_job, finalization_outcome)
-
-            self._set_stage(
-                ReloadOperationStage.IDLE,
-                started_at,
-                generation_id,
-                digest_prefix,
-            )
-
-            duration = time.monotonic() - started_at
-            logger.info(
-                "Reload committed: generation=%d duration=%.3fs sections=%s",
-                generation_id,
-                duration,
-                ",".join(changed_sections) or "(none)",
-            )
-            # Plan 020 Workstream G3: increment reload-level counters
-            # inline.  ``committed_reloads`` and ``accepted_reloads`` are
-            # per-reload counters; the per-finalization counters are
-            # owned by ``_reconcile_finalization_job`` so the
-            # admission/drain observation paths can update them too.
-            self._counters = ReloadCounters(
-                total_requests=self._counters.total_requests,
-                admitted_operations=self._counters.admitted_operations,
-                busy_rejections=self._counters.busy_rejections,
-                committed_reloads=self._counters.committed_reloads + 1,
-                noop_outcomes=self._counters.noop_outcomes,
-                ignored_only_outcomes=self._counters.ignored_only_outcomes,
-                validation_rejections=self._counters.validation_rejections,
-                restart_required_rejections=self._counters.restart_required_rejections,
-                prepare_failures=self._counters.prepare_failures,
-                commit_failures=self._counters.commit_failures,
-                cancellations=self._counters.cancellations,
-                compensation_failures=self._counters.compensation_failures,
-                retirement_failures=self._counters.retirement_failures,
-                accepted_reloads=self._counters.accepted_reloads + 1,
-                fully_finalized_reloads=self._counters.fully_finalized_reloads,
-                accepted_finalization_failures=self._counters.accepted_finalization_failures,
-                accepted_finalization_retries=self._counters.accepted_finalization_retries,
-                retirement_retry_count=self._counters.retirement_retry_count,
-                accepted_finalization_failures_recovered=(
-                    self._counters.accepted_finalization_failures_recovered
-                ),
-                delayed_completion_count=self._counters.delayed_completion_count,
-            )
-            # Plan 020 Workstream D2: compute finalization status from outcome.
-            _finalization_status = finalization_outcome.status.value
-            _finalization_next_step = finalization_outcome.next_step
-            _finalization_attempt_count = finalization_outcome.attempt_count
-            _finalization_failure_count = finalization_outcome.failure_count
-            _finalization_retry_attempt_count = finalization_outcome.retry_attempt_count
-            _finalization_last_error_step = finalization_outcome.failed_step
-            _finalization_last_error_class = finalization_outcome.error_class
-            _finalization_last_error_message = finalization_outcome.error_message
-            # Add a warning for retry-pending finalization.
-            _enriched_warnings = warnings
-            if _finalization_status in (
-                "retry_pending",
-                "retirement_schedule_failed",
-            ):
-                _enriched_warnings = warnings + (
-                    ConfigValidationWarning(
-                        code="finalization_retry_pending",
-                        section="finalization",
-                        message=(
-                            f"Finalization retry pending at step "
-                            f"{_finalization_next_step}"
-                        ),
-                    ),
-                )
-            diagnostic, wire_result = self._finalize_reload(
-                request_id=txn.request_id,
+                generation_id=generation_id,
+                changed_sections=changed_sections,
                 started_at=started_at,
-                txn=txn,
-                txn_state=txn.state,
-                ok=True,
-                stage=ReloadTerminalStage.RETIREMENT,
-                generation_id=generation_id,
                 digest_prefix=digest_prefix,
-                changed_sections=changed_sections,
-                ignored_sections=(),
-                restart_required_sections=(),
-                warnings=_enriched_warnings,
-                publication_occurred=True,
-                persistence_committed=True,
-                process_transitions_applied=True,
-                finalization_status=_finalization_status,
-                finalization_next_step=_finalization_next_step,
-                finalization_attempt_count=_finalization_attempt_count,
-                finalization_failure_count=_finalization_failure_count,
-                finalization_retry_attempt_count=_finalization_retry_attempt_count,
-                finalization_last_error_step=_finalization_last_error_step,
-                finalization_last_error_class=_finalization_last_error_class,
-                finalization_last_error_message=_finalization_last_error_message,
-                old_generation_id=old_generation_id,
-                pending_swap_committed=True,
-                accepted_generation_authoritative=True,
             )
-            self._last_diagnostic_result = diagnostic
-            await self._record_terminal_event(diagnostic)
-            await self._safe_record_event(
-                "reload_activated",
-                generation_id=generation_id,
-                digest_prefix=digest_prefix,
-                changed_sections=changed_sections,
+            return await self._execute_accepted_phase(
+                accepted_context,
+                warnings=warnings,
             )
-            return wire_result
 
         except ReloadInProgressError:
             raise
         except ReloadPreparationError as exc:
-            duration = time.monotonic() - started_at
             error_stage = (
                 self._operation_state.stage
                 if self._operation_state
@@ -1869,7 +2210,6 @@ class ReloadManager:
             txn.mark_aborted()
             return wire_result
         except asyncio.CancelledError:
-            duration = time.monotonic() - started_at
             error_stage = (
                 self._operation_state.stage
                 if self._operation_state
@@ -1941,6 +2281,11 @@ class ReloadManager:
                 assert finalization_job is not None, (
                     "finalization job must be registered after acceptance"
                 )
+                # The request waiter is returning by cancellation before
+                # the retained attempt is known to be complete.  Record
+                # that fact for delayed-completion accounting; the
+                # process-owned callback remains authoritative afterward.
+                finalization_job.mark_response_returned(completed=False)
                 # Run a bounded shielded critical prefix to preserve
                 # ownership (transfer candidate if not yet transferred).
                 # Plan 020 Workstream B4: do NOT cancel the retained task
@@ -2076,7 +2421,6 @@ class ReloadManager:
                 txn.mark_aborted()
             raise
         except Exception as exc:
-            duration = time.monotonic() - started_at
             error_stage = (
                 self._operation_state.stage
                 if self._operation_state
@@ -2314,6 +2658,7 @@ class ReloadManager:
             await self._runtime_manager.ensure_reload_gate_released()
             # Release admission claim on every terminal path.
             self._current_transaction = None
+            self._active_reload_task = None
             async with self._claim_mutex:
                 self._reload_claimed = False
                 self._admitted_at = None
@@ -2695,6 +3040,12 @@ class ReloadManager:
         digest_prefix: str = "",
         changed_sections: tuple[str, ...] = (),
         error: str | None = None,
+        finalization_status: str | None = None,
+        finalization_next_step: str | None = None,
+        finalization_attempt_count: int | None = None,
+        finalization_failure_count: int | None = None,
+        finalization_retry_attempt_count: int | None = None,
+        finalization_retirement_retry_attempt_count: int | None = None,
     ) -> None:
         """Record an operational event for reload lifecycle tracking."""
         from eggpool.config_reload_policy import (
@@ -2713,6 +3064,22 @@ class ReloadManager:
             details["changed_sections"] = list(changed_sections)
         if error:
             details["error"] = sanitize_text_for_audit(error)
+        if finalization_status is not None:
+            details["finalization_status"] = finalization_status
+        if finalization_next_step is not None:
+            details["finalization_next_step"] = finalization_next_step
+        if finalization_attempt_count is not None:
+            details["finalization_attempt_count"] = finalization_attempt_count
+        if finalization_failure_count is not None:
+            details["finalization_failure_count"] = finalization_failure_count
+        if finalization_retry_attempt_count is not None:
+            details["finalization_retry_attempt_count"] = (
+                finalization_retry_attempt_count
+            )
+        if finalization_retirement_retry_attempt_count is not None:
+            details["finalization_retirement_retry_attempt_count"] = (
+                finalization_retirement_retry_attempt_count
+            )
         try:
             repo = OperationalEventRepository(self._process.db)
             await repo.record(event_type, details)
@@ -2904,6 +3271,8 @@ class ReloadManager:
         - Routing-trace guard reconfiguration
         - Effective state (app.state compatibility mirrors)
         """
+        if self.TEST_INJECT_PROCESS_TRANSITION_PLAN is not None:
+            return self.TEST_INJECT_PROCESS_TRANSITION_PLAN
         process = self._process
         process_supervisor = process.process_supervisor
         transitions: list[ProcessTransition] = []

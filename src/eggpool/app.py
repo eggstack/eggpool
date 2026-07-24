@@ -1428,37 +1428,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         reload_manager: ReloadManager | None = getattr(
             app.state, "reload_manager", None
         )
+        reload_shutdown_safe = True
         if reload_manager is not None:
-            # Plan 020 Workstream E1: wait for active reload transaction
-            # before draining finalization jobs.
             try:
-                await reload_manager.wait_for_transaction_completion(timeout_s=5.0)
-            except Exception:
-                logger.exception("Error waiting for reload transaction completion")
-            try:
-                unresolved = await reload_manager.drain_finalization_jobs(
-                    timeout_s=10.0,
+                shutdown_preparation = await reload_manager.prepare_for_shutdown(
+                    transaction_timeout_s=5.0,
+                    finalization_timeout_s=10.0,
                 )
-                if unresolved:
-                    logger.warning(
-                        "%d finalization job(s) unresolved after drain",
-                        unresolved,
+                if not shutdown_preparation.ownership_safe_for_runtime_shutdown:
+                    reload_shutdown_safe = False
+                    logger.error(
+                        "Reload ownership is not safe for runtime shutdown: %s",
+                        shutdown_preparation,
                     )
-                    # Plan 020 Workstream E2: adopt remaining jobs for shutdown.
-                    for job in getattr(
-                        reload_manager, "_accepted_finalization_jobs", {}
-                    ).values():
-                        if not job.is_complete:
-                            await job.adopt_for_shutdown()
             except Exception:
-                logger.exception("Error draining finalization jobs during shutdown")
+                reload_shutdown_safe = False
+                logger.exception("Error preparing reload ownership during shutdown")
 
         runtime_manager: RuntimeManager | None = getattr(
             app.state, "runtime_manager", None
         )
-        if runtime_manager is not None:
+        if runtime_manager is not None and reload_shutdown_safe:
             try:
                 await runtime_manager.shutdown()
+                if reload_manager is not None:
+                    await reload_manager.release_shutdown_adopted_references()
             except Exception:
                 logger.exception("Error shutting down runtime manager")
 
@@ -1487,8 +1481,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             except Exception:
                 logger.exception("Error flushing metrics buffer during shutdown")
 
+        # Generation-owned transports are closed exactly once by the
+        # RuntimeManager.  The app.state references are compatibility
+        # mirrors, not a second ownership path.
         client_pool: ProviderClientPool | None = getattr(app.state, "client_pool", None)
-        if client_pool is not None:
+        if client_pool is not None and runtime_manager is None:
             try:
                 await client_pool.close()
             except Exception:
@@ -1497,7 +1494,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         outbound_manager: OutboundClientManager | None = getattr(
             app.state, "outbound_manager", None
         )
-        if outbound_manager is not None:
+        if outbound_manager is not None and runtime_manager is None:
             try:
                 await outbound_manager.aclose()
             except Exception:

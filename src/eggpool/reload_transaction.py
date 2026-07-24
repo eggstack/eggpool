@@ -1126,6 +1126,7 @@ class ReloadTransaction:
         # SQLite commit and runtime swap commit succeed.  Post-acceptance
         # finalization failures must NOT call _abort_precommit_reload.
         self._reload_accepted: bool = False
+        self._acceptance_accounted: bool = False
         self._acceptance_state: ReloadAcceptanceState = (
             ReloadAcceptanceState.NOT_ACCEPTED
         )
@@ -1294,6 +1295,11 @@ class ReloadTransaction:
         return self._reload_accepted
 
     @property
+    def acceptance_accounted(self) -> bool:
+        """Whether manager-level accepted counters were recorded."""
+        return self._acceptance_accounted
+
+    @property
     def acceptance_state(self) -> ReloadAcceptanceState:
         """Plan 017 Workstream D5: explicit acceptance lifecycle state."""
         return self._acceptance_state
@@ -1339,6 +1345,22 @@ class ReloadTransaction:
             )
         self._reload_accepted = True
         self._acceptance_state = ReloadAcceptanceState.ACCEPTED
+
+    def mark_acceptance_accounted(self) -> bool:
+        """Record acceptance accounting exactly once.
+
+        Returns ``True`` only for the first call.  This fact is kept on
+        the transaction so a cancelled waiter cannot cause a second
+        increment when post-acceptance cleanup is observed later.
+        """
+        if self._acceptance_accounted:
+            return False
+        if not self._reload_accepted:
+            raise TransactionStateError(
+                "Cannot account acceptance before the reload is accepted"
+            )
+        self._acceptance_accounted = True
+        return True
 
     # -- State transitions --------------------------------------------------
 
@@ -1682,6 +1704,7 @@ class ReloadTransaction:
             "completed_at": self._completed_at,
             # Plan 017 Workstream D: acceptance and finalization facts.
             "reload_accepted": self._reload_accepted,
+            "acceptance_accounted": self._acceptance_accounted,
             "acceptance_state": self._acceptance_state.value,
             "accepted_finalization": {
                 "candidate_ownership_transferred": (

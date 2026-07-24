@@ -47,6 +47,8 @@ from typing import TYPE_CHECKING, Any
 from eggpool.errors import AcceptedFinalizationInvariantError
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from eggpool.reload_transaction import ReloadTransaction, TransitionApplyResult
     from eggpool.runtime_manager import (
         RuntimeGeneration,
@@ -125,6 +127,9 @@ class AcceptedFinalizationRecord:
     last_error_message: str | None
     completed_at: float
     duration_s: float
+    adopted_for_shutdown: bool = False
+    references_released: bool = False
+    completion_observation_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -147,6 +152,19 @@ class AcceptedFinalizationOutcome:
     error_message: str | None
     retry_permitted: bool
     status: FinalizationStatus
+
+
+@dataclass
+class FinalizationAccountingCursor:
+    """Manager-owned monotonic accounting cursor for one finalization job."""
+
+    attempts: int = 0
+    failures: int = 0
+    retries: int = 0
+    retirement_retries: int = 0
+    completion_accounted: bool = False
+    recovery_accounted: bool = False
+    delayed_completion_accounted: bool = False
 
 
 @dataclass
@@ -224,7 +242,21 @@ class AcceptedReloadFinalizationJob:
         default=None,
         repr=False,
     )
-    _released: bool = field(default=False, repr=False)
+    _on_attempt_done: (
+        Callable[
+            [AcceptedReloadFinalizationJob, asyncio.Task[AcceptedFinalizationOutcome]],
+            None,
+        ]
+        | None
+    ) = field(default=None, repr=False)
+    _adopted_for_shutdown: bool = field(default=False, repr=False)
+    _references_released: bool = field(default=False, repr=False)
+    _accounting: FinalizationAccountingCursor = field(
+        default_factory=FinalizationAccountingCursor,
+        repr=False,
+    )
+    _response_returned_before_completion: bool = field(default=False, repr=False)
+    _completion_observation_path: str | None = field(default=None, repr=False)
 
     # -- public properties ------------------------------------------------
 
@@ -288,6 +320,8 @@ class AcceptedReloadFinalizationJob:
         """Operator-visible finalization status."""
         if self.is_complete:
             return FinalizationStatus.COMPLETED
+        if self._adopted_for_shutdown:
+            return FinalizationStatus.SHUTDOWN_ADOPTED
         if self._step is AcceptedFinalizationStep.RETIREMENT_SCHEDULING:
             return FinalizationStatus.RETIREMENT_SCHEDULE_FAILED
         if self._last_error_class == "AcceptedFinalizationInvariantError":
@@ -309,11 +343,16 @@ class AcceptedReloadFinalizationJob:
         """
         if self.is_complete:
             return self._completed_outcome()
+        if self._adopted_for_shutdown:
+            return self._outcome(retry_permitted=False)
         async with self._run_lock:
             task = self._run_task
             if task is None or task.done():
                 task = asyncio.create_task(self._run_attempt())
                 self._run_task = task
+                if self._on_attempt_done is not None:
+                    callback = self._on_attempt_done
+                    task.add_done_callback(lambda done_task: callback(self, done_task))
         return await asyncio.shield(task)
 
     async def _run_attempt(self) -> AcceptedFinalizationOutcome:
@@ -358,6 +397,10 @@ class AcceptedReloadFinalizationJob:
                 self._step_observer_report,
             ),
             AcceptedFinalizationStep.OBSERVER_REPORTED: (
+                "retirement_scheduling_enter",
+                self._enter_retirement_scheduling,
+            ),
+            AcceptedFinalizationStep.RETIREMENT_SCHEDULING: (
                 "retirement_scheduling",
                 self._step_retirement_scheduling,
             ),
@@ -561,11 +604,18 @@ class AcceptedReloadFinalizationJob:
         production boundary, immediately before
         ``finalize_retirement()``.
         """
-        if self._step != AcceptedFinalizationStep.OBSERVER_REPORTED:
+        if self._step != AcceptedFinalizationStep.RETIREMENT_SCHEDULING:
             return
         # Plan 019 Workstream D1: retirement fault injection seam.
         # The seam is instance-scoped, one-shot, test-only.
         if self._reload_manager is not None:
+            persistent_inject = getattr(
+                self._reload_manager,
+                "TEST_PERSISTENT_RETIREMENT_FAILURE",
+                None,
+            )
+            if persistent_inject is not None:
+                raise persistent_inject
             inject = getattr(
                 self._reload_manager, "TEST_INJECT_RETIREMENT_FAILURE", None
             )
@@ -577,6 +627,12 @@ class AcceptedReloadFinalizationJob:
         self.transaction.accepted_finalization.retirement_scheduled = True
         self.transaction.mark_retirement_scheduled()
         self._step = AcceptedFinalizationStep.RETIREMENT_SCHEDULED
+
+    async def _enter_retirement_scheduling(self) -> None:
+        """Enter the retirement scheduling cursor before attempting it."""
+        if self._step != AcceptedFinalizationStep.OBSERVER_REPORTED:
+            return
+        self._step = AcceptedFinalizationStep.RETIREMENT_SCHEDULING
 
     async def _step_transaction_completion(self) -> None:
         """Mark the transaction as fully completed."""
@@ -602,13 +658,48 @@ class AcceptedReloadFinalizationJob:
         manager prunes it; the manager uses ``adopted_for_shutdown``
         to guarantee idempotent close semantics.
         """
-        # Idempotent: a single marker is enough.
-        self._released = True
+        # Idempotent: adoption is independent from reference release.
+        self._adopted_for_shutdown = True
 
     @property
     def adopted_for_shutdown(self) -> bool:
         """True once shutdown has adopted ownership."""
-        return self._released
+        return self._adopted_for_shutdown
+
+    @property
+    def references_released(self) -> bool:
+        """True once live operational references have been cleared."""
+        return self._references_released
+
+    @property
+    def retained_task(self) -> asyncio.Task[AcceptedFinalizationOutcome] | None:
+        """Return the retained attempt task, if one has been created."""
+        return self._run_task
+
+    @property
+    def accounting(self) -> FinalizationAccountingCursor:
+        """Return the manager-owned monotonic accounting cursor."""
+        return self._accounting
+
+    @property
+    def response_returned_before_completion(self) -> bool:
+        """Whether the original reload waiter returned before completion."""
+        return self._response_returned_before_completion
+
+    @property
+    def completion_observation_path(self) -> str | None:
+        """How completion was first observed, if it has completed."""
+        return self._completion_observation_path
+
+    def mark_response_returned(self, *, completed: bool) -> None:
+        """Record whether the original waiter returned before completion."""
+        if not completed:
+            self._response_returned_before_completion = True
+
+    def mark_completion_observed(self, observation_path: str) -> None:
+        """Record the first process-owned completion observation path."""
+        if self._completion_observation_path is None:
+            self._completion_observation_path = observation_path
 
     # -- reference lifecycle -----------------------------------------------
 
@@ -619,9 +710,9 @@ class AcceptedReloadFinalizationJob:
         dropping from the active registry, clear strong references to
         operational objects.  The job retains only diagnostic scalars.
         """
-        if self._released:
+        if self._references_released:
             return
-        self._released = True
+        self._references_released = True
         self.candidate = None  # type: ignore[assignment]
         self.pending_swap = None  # type: ignore[assignment]
         self.transition_result = None
@@ -629,6 +720,7 @@ class AcceptedReloadFinalizationJob:
         self.app = None
         self.observer = None  # type: ignore[assignment]
         self.transaction = None  # type: ignore[assignment]
+        self._on_attempt_done = None
 
     def mark_reconciled(self) -> None:
         """Mark the job as reconciled by the manager.
@@ -668,8 +760,20 @@ class AcceptedReloadFinalizationJob:
             "last_error_message": self._last_error_message,
             "completed_at": self._completed_at,
             "duration_s": duration_s,
-            "released": self._released,
+            "released": self._references_released,
+            "adopted_for_shutdown": self._adopted_for_shutdown,
+            "references_released": self._references_released,
             "reconciled": self._reconciled,
+            "retained_task_done": (
+                self._run_task.done() if self._run_task is not None else None
+            ),
+            "completion_observation_path": self._completion_observation_path,
+            "accounted_attempt_count": self._accounting.attempts,
+            "accounted_failure_count": self._accounting.failures,
+            "accounted_retry_attempt_count": self._accounting.retries,
+            "accounted_retirement_retry_attempt_count": (
+                self._accounting.retirement_retries
+            ),
         }
 
     def to_record(self) -> AcceptedFinalizationRecord:
@@ -700,6 +804,9 @@ class AcceptedReloadFinalizationJob:
             last_error_message=self._last_error_message,
             completed_at=self._completed_at or 0.0,
             duration_s=duration_s,
+            adopted_for_shutdown=self._adopted_for_shutdown,
+            references_released=self._references_released,
+            completion_observation_path=self._completion_observation_path,
         )
 
 
@@ -726,6 +833,7 @@ __all__ = [
     "AcceptedFinalizationHealth",
     "AcceptedFinalizationOutcome",
     "AcceptedFinalizationRecord",
+    "FinalizationAccountingCursor",
     "AcceptedFinalizationStep",
     "AcceptedReloadFinalizationJob",
     "FinalizationStatus",

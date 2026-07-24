@@ -45,13 +45,11 @@ async def test_commit_failure_rollback_success(
     err = exc_info.value
     assert err.rollback_attempted is True
     assert err.rollback_succeeded is True
-
-    # If in_transaction was False after rollback, the outcome is rolled_back.
-    if err.outcome == "rolled_back":
-        # Connection is reusable.
-        async with db.transaction():
-            result = await db.execute_returning("SELECT 42")
-            assert result is not None
+    assert err.outcome == "rolled_back"
+    # Connection is reusable.
+    async with db.transaction():
+        result = await db.execute_returning("SELECT 42")
+        assert result is not None
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +71,7 @@ async def test_commit_failure_indeterminate_state(
     db = reload_harness.db
 
     db.set_test_inject_commit_call(RuntimeError("diagnostic test failure"))
+    db.set_test_inject_rollback_call(RuntimeError("rollback unavailable"))
 
     with pytest.raises(DatabaseCommitError) as exc_info:
         async with db.transaction():
@@ -80,17 +79,14 @@ async def test_commit_failure_indeterminate_state(
 
     err = exc_info.value
     assert err.rollback_attempted is True
-    assert isinstance(err.outcome, str)
-    assert err.outcome in ("rolled_back", "indeterminate")
-
-    # If indeterminate, connection is invalidated.
-    if err.outcome == "indeterminate":
-        assert err.connection_invalidated is True
-        assert db._invalidated is True
-        # Subsequent transaction raises DatabaseConnectionInvalidatedError.
-        with pytest.raises(DatabaseConnectionInvalidatedError):
-            async with db.transaction():
-                await db.execute_returning("SELECT 1")
+    assert err.rollback_succeeded is False
+    assert err.outcome == "indeterminate"
+    assert err.connection_invalidated is True
+    assert db._invalidated is True
+    # Subsequent transaction raises DatabaseConnectionInvalidatedError.
+    with pytest.raises(DatabaseConnectionInvalidatedError):
+        async with db.transaction():
+            await db.execute_returning("SELECT 1")
 
 
 # ---------------------------------------------------------------------------
@@ -117,8 +113,7 @@ async def test_commit_failure_diagnostic_fields(
     assert isinstance(err.rollback_attempted, bool)
     assert isinstance(err.rollback_succeeded, bool)
     assert isinstance(err.connection_invalidated, bool)
-    assert isinstance(err.outcome, str)
-    assert err.outcome in ("rolled_back", "indeterminate")
+    assert err.outcome == "rolled_back"
     assert err.rollback_attempted is True
 
 
@@ -137,6 +132,7 @@ async def test_connection_state_after_invalidation(
     db = reload_harness.db
 
     db.set_test_inject_commit_call(RuntimeError("state summary test"))
+    db.set_test_inject_rollback_call(RuntimeError("rollback unavailable"))
 
     with pytest.raises(DatabaseCommitError):
         async with db.transaction():
@@ -147,7 +143,6 @@ async def test_connection_state_after_invalidation(
     assert "connection_state" in state
     assert "reconnect_required" in state
 
-    # If connection was invalidated, reconnect_required is True.
-    if db._invalidated:
-        assert state["reconnect_required"] is True
-        assert state["connection_state"] == "invalidated"
+    assert db._invalidated is True
+    assert state["reconnect_required"] is True
+    assert state["connection_state"] == "invalidated"

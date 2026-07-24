@@ -46,6 +46,7 @@ class ReloadResultCategory(enum.Enum):
     FAILED_RUNTIME_STAGE_ROLLBACK = "failed_runtime_stage_rollback"
     POST_COMMIT_FINALIZATION_PENDING = "post_commit_finalization_pending"
     RETIREMENT_SCHEDULE_FAILED = "retirement_schedule_failed"
+    SHUTDOWN_ADOPTED = "shutdown_adopted"
     ABORTED_CANCELLED = "aborted_cancelled"
     ABORTED_SHUTDOWN = "aborted_shutdown"
     COMPENSATION_FAILED = "compensation_failed"
@@ -257,6 +258,8 @@ def classify_result_category(
         return ReloadResultCategory.SUCCESS_IGNORED_ONLY
     # Plan 020 Workstream D2: accepted-but-pending outcomes are
     # classified distinctly from fully finalized success.
+    if finalization_status == "shutdown_adopted":
+        return ReloadResultCategory.SHUTDOWN_ADOPTED
     if finalization_status == "retirement_schedule_failed":
         return ReloadResultCategory.RETIREMENT_SCHEDULE_FAILED
     if finalization_status == "retry_pending":

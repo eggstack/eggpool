@@ -164,7 +164,7 @@ async def test_retirement_failure_keeps_job_unresolved(
     assert gen2_id != gen1_id
 
     # Finalization status is retry_pending (job stuck at retirement).
-    assert result2.finalization_status == "retry_pending"
+    assert result2.finalization_status == "retirement_schedule_failed"
     assert result2.pending_swap_committed is True
 
     # Job is still in the active registry.

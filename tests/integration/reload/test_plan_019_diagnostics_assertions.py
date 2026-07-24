@@ -56,7 +56,7 @@ async def test_retry_pending_reload_has_finalization_status(
         rm.TEST_INJECT_RETIREMENT_FAILURE = None
 
     # The result should indicate retry_pending finalization.
-    assert result2.finalization_status == "retry_pending"
+    assert result2.finalization_status == "retirement_schedule_failed"
     assert result2.finalization_next_step is not None
     assert result2.finalization_attempt_count >= 1
     assert result2.old_generation_id is not None

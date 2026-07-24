@@ -1062,6 +1062,11 @@ class TestDeterministicConcurrency:
             "reload_restart_required_rejected",
             "reload_digest_mismatch",
             "reload_reconciliation_failure",
+            "reload_finalization_retry_failed",
+            "reload_retirement_schedule_failed",
+            "reload_finalization_invariant_failed",
+            "reload_finalization_completed_delayed",
+            "reload_finalization_shutdown_adopted",
             # Terminal diagnostic events (constructed as
             # f"reload_terminal_{category.value}" for each
             # ReloadResultCategory member).
