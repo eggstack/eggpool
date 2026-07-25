@@ -11,20 +11,13 @@ from eggpool.metrics.thinking import (
 )
 
 
-@pytest.fixture
-async def _reset_counter() -> None:  # type: ignore[misc]
-    counter = get_counter()
-    await counter.reset()
-    yield
-    await counter.reset()
-
-
 class TestProviderControlCounters:
     """Tests for provider_mapped/provider_dropped/provider_rejected counters."""
 
     @pytest.mark.asyncio
-    async def test_increment_provider_mapped(self, _reset_counter: None) -> None:
+    async def test_increment_provider_mapped(self) -> None:
         counter = get_counter()
+        await counter.reset()
         await counter.increment_provider_mapped(
             client_protocol="openai",
             provider_id="test-provider",
@@ -36,8 +29,9 @@ class TestProviderControlCounters:
         assert snap["counters"][key] == 1
 
     @pytest.mark.asyncio
-    async def test_increment_provider_dropped(self, _reset_counter: None) -> None:
+    async def test_increment_provider_dropped(self) -> None:
         counter = get_counter()
+        await counter.reset()
         await counter.increment_provider_dropped(
             client_protocol="anthropic",
             provider_id="minimax",
@@ -48,8 +42,9 @@ class TestProviderControlCounters:
         assert snap["counters"][key] == 1
 
     @pytest.mark.asyncio
-    async def test_increment_provider_rejected(self, _reset_counter: None) -> None:
+    async def test_increment_provider_rejected(self) -> None:
         counter = get_counter()
+        await counter.reset()
         await counter.increment_provider_rejected(
             client_protocol="openai",
             provider_id="test-provider",
@@ -64,7 +59,9 @@ class TestRecordThinkingEventProviderDecisions:
     """Tests for record_thinking_event with provider control decisions."""
 
     @pytest.mark.asyncio
-    async def test_provider_mapped_event(self, _reset_counter: None) -> None:
+    async def test_provider_mapped_event(self) -> None:
+        counter = get_counter()
+        await counter.reset()
         event = ThinkingMetricEvent(
             requested=True,
             client_protocol="openai",
@@ -79,15 +76,15 @@ class TestRecordThinkingEventProviderDecisions:
             decision="provider_mapped",
         )
         await record_thinking_event(event)
-        counter = get_counter()
         snap = await counter.snapshot()
         assert snap["total"] >= 1
-        # Check that provider_mapped counter was incremented.
         found = any(k.startswith("provider_mapped|") for k in snap["counters"])
         assert found
 
     @pytest.mark.asyncio
-    async def test_provider_rejected_event(self, _reset_counter: None) -> None:
+    async def test_provider_rejected_event(self) -> None:
+        counter = get_counter()
+        await counter.reset()
         event = ThinkingMetricEvent(
             requested=True,
             client_protocol="openai",
@@ -102,13 +99,14 @@ class TestRecordThinkingEventProviderDecisions:
             decision="provider_rejected",
         )
         await record_thinking_event(event)
-        counter = get_counter()
         snap = await counter.snapshot()
         found = any(k.startswith("provider_rejected|") for k in snap["counters"])
         assert found
 
     @pytest.mark.asyncio
-    async def test_provider_dropped_event(self, _reset_counter: None) -> None:
+    async def test_provider_dropped_event(self) -> None:
+        counter = get_counter()
+        await counter.reset()
         event = ThinkingMetricEvent(
             requested=True,
             client_protocol="anthropic",
@@ -123,7 +121,6 @@ class TestRecordThinkingEventProviderDecisions:
             decision="provider_dropped",
         )
         await record_thinking_event(event)
-        counter = get_counter()
         snap = await counter.snapshot()
         found = any(k.startswith("provider_dropped|") for k in snap["counters"])
         assert found
