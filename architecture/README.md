@@ -4078,3 +4078,64 @@ high-concurrency general host deployments. Operator runbook
 sequence and safe mitigation priorities. Tests:
 `tests/soak/test_workload_profiles.py`, `tests/soak/test_stability_assertions.py`,
 `tests/soak/test_resource_plateau.py`, `tests/soak/test_db_consistency_audit.py`.
+
+## Error-Isolation Reproducer and Invariant Baseline (Plan 023)
+
+Phase 1 of the upstream error isolation roadmap (`plans/022-upstream-error-isolation-and-hotpath-hardening-roadmap.md`).
+Observational, test-infrastructure focused — does not change production routing, failure classification, health policy, finalization ownership, database recovery, or payload semantics.
+Establishes the deterministic mock upstream, state-audit fixtures, cancellation/database fault seams, JSON operation counters, and performance baselines used by Plans 024–030.
+
+### Mock upstream contract
+
+`tests/helpers/mock_upstream.py` provides `MockUpstream` — a `respx`-backed mock upstream service supporting OpenAI `/chat/completions` and Anthropic `/messages` endpoints.
+Declarative `MockResponseSpec` for configurable status, headers, JSON body, text body, SSE stream chunks, transport errors, delayed headers/body, and connection drop.
+`MockUpstreamRule` matches by model, reasoning_effort, has_thinking, request sequence, and custom predicate.
+`CapturedRequest` captures model, thinking/reasoning fields, body bytes, sequence number — tests assert on structured fields, never on application logs.
+Nine MiniMax-M3 scenario presets via `minimax_thinking_rules()`: no thinking success, accepted thinking success, unsupported 400, unsupported 422, misleading 404, error-then-unrelated-success, error-then-minimax-success, streaming rejected, connection drop.
+
+### Canonical request fixtures
+
+`tests/helpers/request_fixtures.py` provides 18+ immutable request payloads covering every thinking-control variant: OpenAI `reasoning_effort` (low/medium/high/xhigh/unknown/null/omitted), nested `reasoning` forms, Anthropic `thinking` with `budget_tokens`, historical `reasoning_content`, provider-qualified model IDs, streaming variants, tool-use, and cache-control fixtures.
+`copy_fixture()` returns deep copies so tests cannot mutate shared state.
+Parametrize-ready lists: `OPENAI_REASONING_EFFORT_VARIANTS`, `NESTED_REASONING_VARIANTS`, `ANTHROPIC_THINKING_VARIANTS`.
+
+### State-audit snapshot
+
+`tests/support/state_audit.py` provides `RequestStateAuditSnapshot` — captures `DurableFacts` (8 SQLite row counts) and `RuntimeFacts` (12 runtime fields) before and after a request.
+`before.diff(after)` produces a `StateAuditDiff` with five categories: `request_history_changes`, `runtime_ownership_changes`, `health_changes`, `durable_backoff_changes`, `database_connection_changes`.
+`diff.is_clean` detects leaked reservations, active counts, health state, or database connection changes.
+
+### Cancellation seams
+
+`tests/support/cancellation_seams.py` provides `CancellationSeamRegistry` with 11 named `CancellationPoint` entries along the request lifecycle: before request row, after request row before selection, after selection claim, after dispatch commit, before upstream send, after upstream headers, before finalization, during finalization transaction, after finalization before release, during response render, midstream after chunk.
+Seams fire `CancelledError` exactly once and become inert. Tests check `was_triggered()`.
+
+### Database fault seams
+
+`Database` (`src/eggpool/db/connection.py`) exposes class-level test injection hooks: `TEST_INJECT_BEFORE_COMMIT_CALL`, `set_test_inject_commit_call()`, `set_test_inject_rollback_call()`, `set_test_inject_in_transaction_before_rollback()`.
+`tests/support/reload_faults.py` provides `ReloadFaultInjector` for reload-stage faults.
+Each test forces exactly one outcome (no multiple-possible-outcome assertions).
+
+### JSON operation counters
+
+`tests/support/json_counters.py` provides `JSONOperationCounters` — monkey-patches `eggpool.jsonx.loads` and `dumps_bytes` with category counters.
+Six categories: request_decode/encode, response_decode/encode, stream_event_decode/encode.
+Thread-safe, install/uninstall context, `CounterSnapshot` frozen dataclass with `total_decode`, `total_encode`, `total`.
+Near-zero overhead when not installed (guards on `_installed` flag).
+
+### Performance and resource baselines
+
+`tests/perf/test_plan_023_request_path_baseline.py` — serial and concurrent latency baselines (p50/p95/p99), RSS, thread count, FD count, asyncio task count.
+`tests/soak/test_plan_023_error_isolation_baseline.py` — mixed success/error soak with resource plateau validation.
+Baseline artifact: `artifacts/plan-023-baseline.md`.
+
+### Test files
+
+- `tests/unit/test_plan_023_state_audit.py` — state-audit snapshot and diff correctness
+- `tests/unit/test_plan_023_cancellation_seams.py` — cancellation seam lifecycle
+- `tests/unit/test_plan_023_database_fault_matrix.py` — database fault injection matrix
+- `tests/unit/test_plan_023_json_operation_counters.py` — JSON counter install/uninstall/contexts
+- `tests/integration/test_plan_023_minimax_thinking_reproducer.py` — MiniMax-M3 scenario reproducer
+- `tests/integration/test_plan_023_error_isolation_matrix.py` — error isolation state-audit matrix
+- `tests/perf/test_plan_023_request_path_baseline.py` — latency/resource baselines
+- `tests/soak/test_plan_023_error_isolation_baseline.py` — error-isolation soak baseline
