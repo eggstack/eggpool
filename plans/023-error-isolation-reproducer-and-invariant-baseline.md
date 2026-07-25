@@ -1,7 +1,7 @@
 # Error-Isolation Reproducer and Invariant Baseline
 
 Date: 2026-07-25
-Status: implementation handoff
+Status: completed
 
 Parent roadmap:
 

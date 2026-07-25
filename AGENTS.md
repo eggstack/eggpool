@@ -40,6 +40,7 @@ CI runs 7 parallel jobs:
 | reload-control | 3.11, 3.12 | `pytest tests/integration/reload/` |
 | plan-016-corrective | 3.11, 3.12 | Plan 016/017 focused test command (see below) |
 | plan-018-reload-closure | 3.11, 3.12 | Plan 018/019/020 reload closure tests (see below) |
+| plan-023-error-isolation | 3.11, 3.12 | Plan 023 error-isolation reproducer tests (see below) |
 | performance | 3.12 | `pytest -m performance` |
 | soak-audit | 3.12 | `pytest -m soak` + `audit_xfail_skips.py` |
 
@@ -112,6 +113,18 @@ uv run pytest tests/unit/test_generation_factory.py -v
 # Phase 6 transactional rehash tests (transaction state machine, commit
 # protocol, compensation, cancellation shielding, fault injection)
 uv run pytest tests/unit/test_reload_manager.py tests/unit/test_reload_failure_injection.py tests/unit/test_rehash_d3_failure_injection_closure.py tests/unit/test_phase6_fault_injection.py -v
+
+# Plan 023 — Error-isolation reproducer and invariant baseline (mock upstream,
+# state audit, cancellation seams, database faults, JSON counters, baselines)
+uv run pytest \
+    tests/unit/test_plan_023_state_audit.py \
+    tests/unit/test_plan_023_cancellation_seams.py \
+    tests/unit/test_plan_023_database_fault_matrix.py \
+    tests/unit/test_plan_023_json_operation_counters.py \
+    tests/integration/test_plan_023_minimax_thinking_reproducer.py \
+    tests/integration/test_plan_023_error_isolation_matrix.py \
+    tests/soak/test_plan_023_error_isolation_baseline.py \
+    tests/perf/test_plan_023_request_path_baseline.py -v
 
 # Model-info identity subset (tiered matching, fresh-DB service, evidence API,
 # safety, migration 0049, OpenRouter contract, deployment-suffix tier, source
