@@ -41,7 +41,7 @@ class ProviderControlPolicyConfig(BaseModel):
         ),
     )
     unknown_contract: Literal["reject", "allow_with_warning"] = Field(
-        default="reject",
+        default="allow_with_warning",
         description=(
             "How to handle requests when the provider's thinking contract "
             "is unknown. 'reject' returns HTTP 400. 'allow_with_warning' "

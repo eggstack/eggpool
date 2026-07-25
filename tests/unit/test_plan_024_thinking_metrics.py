@@ -11,8 +11,8 @@ from eggpool.metrics.thinking import (
 )
 
 
-@pytest.fixture(autouse=True)
-async def _reset_counter() -> None:
+@pytest.fixture
+async def _reset_counter() -> None:  # type: ignore[misc]
     counter = get_counter()
     await counter.reset()
     yield
@@ -23,7 +23,7 @@ class TestProviderControlCounters:
     """Tests for provider_mapped/provider_dropped/provider_rejected counters."""
 
     @pytest.mark.asyncio
-    async def test_increment_provider_mapped(self) -> None:
+    async def test_increment_provider_mapped(self, _reset_counter: None) -> None:
         counter = get_counter()
         await counter.increment_provider_mapped(
             client_protocol="openai",
@@ -36,7 +36,7 @@ class TestProviderControlCounters:
         assert snap["counters"][key] == 1
 
     @pytest.mark.asyncio
-    async def test_increment_provider_dropped(self) -> None:
+    async def test_increment_provider_dropped(self, _reset_counter: None) -> None:
         counter = get_counter()
         await counter.increment_provider_dropped(
             client_protocol="anthropic",
@@ -48,7 +48,7 @@ class TestProviderControlCounters:
         assert snap["counters"][key] == 1
 
     @pytest.mark.asyncio
-    async def test_increment_provider_rejected(self) -> None:
+    async def test_increment_provider_rejected(self, _reset_counter: None) -> None:
         counter = get_counter()
         await counter.increment_provider_rejected(
             client_protocol="openai",
@@ -64,7 +64,7 @@ class TestRecordThinkingEventProviderDecisions:
     """Tests for record_thinking_event with provider control decisions."""
 
     @pytest.mark.asyncio
-    async def test_provider_mapped_event(self) -> None:
+    async def test_provider_mapped_event(self, _reset_counter: None) -> None:
         event = ThinkingMetricEvent(
             requested=True,
             client_protocol="openai",
@@ -87,7 +87,7 @@ class TestRecordThinkingEventProviderDecisions:
         assert found
 
     @pytest.mark.asyncio
-    async def test_provider_rejected_event(self) -> None:
+    async def test_provider_rejected_event(self, _reset_counter: None) -> None:
         event = ThinkingMetricEvent(
             requested=True,
             client_protocol="openai",
@@ -108,7 +108,7 @@ class TestRecordThinkingEventProviderDecisions:
         assert found
 
     @pytest.mark.asyncio
-    async def test_provider_dropped_event(self) -> None:
+    async def test_provider_dropped_event(self, _reset_counter: None) -> None:
         event = ThinkingMetricEvent(
             requested=True,
             client_protocol="anthropic",

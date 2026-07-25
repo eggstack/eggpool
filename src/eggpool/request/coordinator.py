@@ -3624,7 +3624,9 @@ class RequestCoordinator:
         :class:`CapabilityError` so callers can finalize the attempt.
 
         This stage runs for both native and transcoded paths, and for
-        both streaming and non-streaming requests.
+        both streaming and non-streaming requests.  When the client
+        protocol matches the upstream protocol (native path), unknown
+        contracts pass through — the upstream will reject if needed.
         """
         from eggpool.catalog.capabilities import ThinkingRequestIntent
         from eggpool.transcoder.builtin_contracts import resolve_control_contract
@@ -3655,6 +3657,13 @@ class RequestCoordinator:
             model_id=context.model_id,
             protocol=context.upstream_protocol or context.protocol,
         )
+
+        # For native paths (client protocol == upstream protocol), only
+        # apply normalization when we have a definitive contract.  Unknown
+        # contracts pass through — the upstream will reject if needed.
+        is_native = context.protocol == (context.upstream_protocol or context.protocol)
+        if is_native and contract.mode == "unknown":
+            return
 
         # Build the adaptation policy from config.
         policy = ProviderControlPolicy()
