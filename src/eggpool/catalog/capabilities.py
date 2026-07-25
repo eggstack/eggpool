@@ -45,6 +45,12 @@ CapabilitySource = Literal[
     "unknown",
 ]
 
+# Literal type for thinking control contract modes — used in casts.
+_ThinkingControlMode = Literal[
+    "unknown", "none", "fixed", "effort", "budget", "effort_or_budget"
+]
+_HistoricalReasoningContent = Literal["unknown", "accepted", "required", "rejected"]
+
 # ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------
@@ -61,6 +67,96 @@ class ThinkingClientControls(BaseModel):
     response_fields: list[str] = Field(default_factory=list)
     stream_delta_fields: list[str] = Field(default_factory=list)
     response_block_types: list[str] = Field(default_factory=list)
+
+
+class ThinkingControlContract(BaseModel):
+    """Explicit provider-bound contract for thinking/reasoning controls.
+
+    Distinguishes *whether the model produces reasoning* from
+    *whether this provider deployment accepts client-selectable
+    effort or budget controls*.  This eliminates the previous
+    ambiguity where an empty ``supported_efforts`` list could mean
+    both "unknown metadata" and "known fixed behaviour."
+
+    Control modes:
+
+    - ``"unknown"``: metadata absent; policy decides best-effort routing.
+    - ``"none"``: reasoning controls not accepted; reasoning not available.
+    - ``"fixed"``: model may reason, but client cannot select effort/budget.
+    - ``"effort"``: a named effort field is accepted.
+    - ``"budget"``: an explicit token budget is accepted.
+    - ``"effort_or_budget"``: both effort and budget are accepted.
+    """
+
+    mode: Literal[
+        "unknown", "none", "fixed", "effort", "budget", "effort_or_budget"
+    ] = "unknown"
+    request_fields: list[str] = Field(default_factory=list)
+    accepted_efforts: list[str] = Field(default_factory=list)
+    effort_aliases: dict[str, str] = Field(default_factory=dict)
+    effort_to_budget_tokens: dict[str, int] | None = None
+    explicit_budget_min: int | None = None
+    explicit_budget_max: int | None = None
+    historical_reasoning_content: Literal[
+        "unknown", "accepted", "required", "rejected"
+    ] = "unknown"
+    source: CapabilitySource = "unknown"
+
+
+def infer_control_contract(capability: ThinkingCapability) -> ThinkingControlContract:
+    """Infer a :class:`ThinkingControlContract` from legacy capability fields.
+
+    Existing capability records may not carry an explicit
+    ``control_contract``.  This function derives one conservatively
+    from the legacy ``status``, ``supported_efforts``, and budget
+    fields so downstream code can always inspect the contract without
+    branching on its presence.
+    """
+    if capability.control_contract.mode != "unknown":
+        return capability.control_contract
+
+    status = capability.status
+    efforts = capability.supported_efforts
+    budget_min = capability.budget_tokens_min
+    budget_max = capability.budget_tokens_max
+
+    if status == "unsupported":
+        return ThinkingControlContract(
+            mode="none",
+            source=capability.source,
+        )
+
+    if efforts:
+        contract = ThinkingControlContract(
+            mode="effort",
+            accepted_efforts=list(efforts),
+            source=capability.source,
+        )
+        if capability.effort_to_budget_tokens is not None:
+            contract.effort_to_budget_tokens = dict(
+                capability.effort_to_budget_tokens,
+            )
+        if budget_min is not None:
+            contract.explicit_budget_min = budget_min
+        if budget_max is not None:
+            contract.explicit_budget_max = budget_max
+        return contract
+
+    if budget_min is not None or budget_max is not None:
+        return ThinkingControlContract(
+            mode="budget",
+            explicit_budget_min=budget_min,
+            explicit_budget_max=budget_max,
+            source=capability.source,
+        )
+
+    if status == "supported":
+        return ThinkingControlContract(
+            mode="unknown",
+            source=capability.source,
+        )
+
+    return ThinkingControlContract(source=capability.source)
 
 
 class ThinkingCapability(BaseModel):
@@ -81,6 +177,9 @@ class ThinkingCapability(BaseModel):
     budget_tokens_max: int | None = None
     supported_efforts: list[str] = Field(default_factory=list)
     effort_to_budget_tokens: dict[str, int] | None = None
+    control_contract: ThinkingControlContract = Field(
+        default_factory=ThinkingControlContract,
+    )
     notes: str | None = None
 
 
@@ -189,6 +288,11 @@ def merge_thinking_capabilities(
     )
     notes = override.notes if override.notes is not None else base.notes
 
+    # Control contract: override wins when non-default.
+    contract = base.control_contract
+    if override.control_contract.mode != "unknown":
+        contract = override.control_contract
+
     return ThinkingCapability(
         status=merged_status,
         source=merged_source,
@@ -198,6 +302,7 @@ def merge_thinking_capabilities(
         budget_tokens_max=budget_max,
         supported_efforts=supported_efforts,
         effort_to_budget_tokens=effort,
+        control_contract=contract,
         notes=notes,
     )
 
@@ -382,6 +487,33 @@ def serialize_thinking_for_models(
     if capability.effort_to_budget_tokens is not None:
         result["effort_to_budget_tokens"] = dict(capability.effort_to_budget_tokens)
 
+    # Provider-bound control contract — always emit when mode is not
+    # "unknown" so clients and operators can see the explicit contract.
+    contract = infer_control_contract(capability)
+    if contract.mode != "unknown":
+        contract_dict: dict[str, object] = {"mode": contract.mode}
+        if contract.request_fields:
+            contract_dict["request_fields"] = list(contract.request_fields)
+        if contract.accepted_efforts:
+            contract_dict["accepted_efforts"] = list(contract.accepted_efforts)
+        if contract.effort_aliases:
+            contract_dict["effort_aliases"] = dict(contract.effort_aliases)
+        if contract.effort_to_budget_tokens is not None:
+            contract_dict["effort_to_budget_tokens"] = dict(
+                contract.effort_to_budget_tokens,
+            )
+        if contract.explicit_budget_min is not None:
+            contract_dict["explicit_budget_min"] = contract.explicit_budget_min
+        if contract.explicit_budget_max is not None:
+            contract_dict["explicit_budget_max"] = contract.explicit_budget_max
+        if contract.historical_reasoning_content != "unknown":
+            contract_dict["historical_reasoning_content"] = (
+                contract.historical_reasoning_content
+            )
+        if contract.source != "unknown":
+            contract_dict["source"] = contract.source
+        result["control_contract"] = contract_dict
+
     # Per-provider status breakdown for aggregate (collapsed) entries.
     if provider_statuses:
         result["providers"] = dict(provider_statuses)
@@ -489,6 +621,55 @@ def thinking_override_to_capability(
     if isinstance(supported_efforts, list):
         raw_supported_efforts = cast("list[object]", supported_efforts)
         supported_effort_list = [str(v) for v in raw_supported_efforts]
+
+    # Parse optional control_contract from override dict.
+    contract_raw = override.get("control_contract")
+    control_contract = ThinkingControlContract()
+    if isinstance(contract_raw, dict):
+        cc = cast("dict[str, object]", contract_raw)
+        cc_mode = str(cc.get("mode", "unknown"))
+        cc_source_raw = cc.get("source")
+        cc_source: CapabilitySource = (
+            cast("CapabilitySource", str(cc_source_raw))
+            if cc_source_raw is not None
+            else cap_source
+        )
+        cc_fields_raw = cast("list[object] | None", cc.get("request_fields"))
+        cc_fields = (
+            [str(f) for f in cc_fields_raw] if isinstance(cc_fields_raw, list) else []
+        )
+        cc_efforts_raw = cast("list[object] | None", cc.get("accepted_efforts"))
+        cc_efforts = (
+            [str(f) for f in cc_efforts_raw] if isinstance(cc_efforts_raw, list) else []
+        )
+        cc_aliases_raw = cc.get("effort_aliases")
+        cc_aliases: dict[str, str] = {}
+        if isinstance(cc_aliases_raw, dict):
+            raw_aliases = cast("dict[str, object]", cc_aliases_raw)
+            cc_aliases = {str(k): str(v) for k, v in raw_aliases.items()}
+        cc_eb_raw = cc.get("effort_to_budget_tokens")
+        cc_eb: dict[str, int] | None = None
+        if isinstance(cc_eb_raw, dict):
+            raw_eb = cast("dict[str, object]", cc_eb_raw)
+            cc_eb = {str(k): int(v) for k, v in raw_eb.items()}  # type: ignore[arg-type]
+        cc_bmin = cc.get("explicit_budget_min")
+        cc_bmax = cc.get("explicit_budget_max")
+        cc_hist = cc.get("historical_reasoning_content", "unknown")
+        control_contract = ThinkingControlContract(
+            mode=cast("_ThinkingControlMode", cc_mode),
+            request_fields=cc_fields,
+            accepted_efforts=cc_efforts,
+            effort_aliases=cc_aliases,
+            effort_to_budget_tokens=cc_eb,
+            explicit_budget_min=(cc_bmin if isinstance(cc_bmin, int) else None),
+            explicit_budget_max=(cc_bmax if isinstance(cc_bmax, int) else None),
+            historical_reasoning_content=cast(
+                "_HistoricalReasoningContent",
+                str(cc_hist),
+            ),
+            source=cc_source,
+        )
+
     return ThinkingCapability(
         status=cap_status,
         source=cap_source,
@@ -497,6 +678,7 @@ def thinking_override_to_capability(
         budget_tokens_max=budget_max if isinstance(budget_max, int) else None,
         supported_efforts=supported_effort_list,
         effort_to_budget_tokens=effort_dict,
+        control_contract=control_contract,
         notes=str(notes) if notes is not None else None,
     )
 
@@ -639,6 +821,71 @@ def dict_to_model_capabilities(data: dict[str, object]) -> ModelCapabilities:
                     ),
                 )
 
+    # Parse provider-bound control contract.
+    contract_raw = tr.get("control_contract")
+    control_contract = ThinkingControlContract()
+    if isinstance(contract_raw, dict):
+        cc_dict = cast("dict[str, object]", contract_raw)
+        cc_mode = str(cc_dict.get("mode", "unknown"))
+        cc_source_raw = cc_dict.get("source")
+        cc_source: CapabilitySource = (
+            cast("CapabilitySource", str(cc_source_raw))
+            if cc_source_raw is not None
+            else "unknown"
+        )
+        cc_request_fields_raw = cast(
+            "list[object] | None",
+            cc_dict.get("request_fields"),
+        )
+        cc_request_fields = (
+            [str(f) for f in cc_request_fields_raw]
+            if isinstance(cc_request_fields_raw, list)
+            else []
+        )
+        cc_accepted_efforts_raw = cast(
+            "list[object] | None",
+            cc_dict.get("accepted_efforts"),
+        )
+        cc_accepted_efforts = (
+            [str(f) for f in cc_accepted_efforts_raw]
+            if isinstance(cc_accepted_efforts_raw, list)
+            else []
+        )
+        cc_effort_aliases_raw = cc_dict.get("effort_aliases")
+        cc_effort_aliases: dict[str, str] = {}
+        if isinstance(cc_effort_aliases_raw, dict):
+            raw_aliases_2 = cast("dict[str, object]", cc_effort_aliases_raw)
+            cc_effort_aliases = {str(k): str(v) for k, v in raw_aliases_2.items()}
+        cc_effort_budget_raw = cc_dict.get("effort_to_budget_tokens")
+        cc_effort_budget: dict[str, int] | None = None
+        if isinstance(cc_effort_budget_raw, dict):
+            raw_eb_2 = cast("dict[str, object]", cc_effort_budget_raw)
+            cc_effort_budget = {
+                str(k): int(v)  # type: ignore[arg-type]
+                for k, v in raw_eb_2.items()
+            }
+        cc_budget_min_raw = cc_dict.get("explicit_budget_min")
+        cc_budget_max_raw = cc_dict.get("explicit_budget_max")
+        cc_historical_raw = cc_dict.get("historical_reasoning_content", "unknown")
+        control_contract = ThinkingControlContract(
+            mode=cast("_ThinkingControlMode", cc_mode),
+            request_fields=cc_request_fields,
+            accepted_efforts=cc_accepted_efforts,
+            effort_aliases=cc_effort_aliases,
+            effort_to_budget_tokens=cc_effort_budget,
+            explicit_budget_min=(
+                cc_budget_min_raw if isinstance(cc_budget_min_raw, int) else None
+            ),
+            explicit_budget_max=(
+                cc_budget_max_raw if isinstance(cc_budget_max_raw, int) else None
+            ),
+            historical_reasoning_content=cast(
+                "_HistoricalReasoningContent",
+                str(cc_historical_raw),
+            ),
+            source=cc_source,
+        )
+
     return ModelCapabilities(
         thinking=ThinkingCapability(
             status=cast("CapabilityStatus", tc_status),
@@ -649,6 +896,7 @@ def dict_to_model_capabilities(data: dict[str, object]) -> ModelCapabilities:
             budget_tokens_max=bmax_raw if isinstance(bmax_raw, int) else None,
             supported_efforts=supported_efforts,
             effort_to_budget_tokens=effort_dict,
+            control_contract=control_contract,
             notes=str(notes_raw) if notes_raw is not None else None,
         ),
     )
@@ -687,6 +935,28 @@ def model_capabilities_to_dict(capabilities: ModelCapabilities) -> dict[str, obj
         thinking_dict["supported_efforts"] = list(tc.supported_efforts)
     if tc.effort_to_budget_tokens is not None:
         thinking_dict["effort_to_budget_tokens"] = dict(tc.effort_to_budget_tokens)
+    if tc.control_contract.mode != "unknown":
+        cc = tc.control_contract
+        contract_dict: dict[str, object] = {"mode": cc.mode}
+        if cc.request_fields:
+            contract_dict["request_fields"] = list(cc.request_fields)
+        if cc.accepted_efforts:
+            contract_dict["accepted_efforts"] = list(cc.accepted_efforts)
+        if cc.effort_aliases:
+            contract_dict["effort_aliases"] = dict(cc.effort_aliases)
+        if cc.effort_to_budget_tokens is not None:
+            contract_dict["effort_to_budget_tokens"] = dict(cc.effort_to_budget_tokens)
+        if cc.explicit_budget_min is not None:
+            contract_dict["explicit_budget_min"] = cc.explicit_budget_min
+        if cc.explicit_budget_max is not None:
+            contract_dict["explicit_budget_max"] = cc.explicit_budget_max
+        if cc.historical_reasoning_content != "unknown":
+            contract_dict["historical_reasoning_content"] = (
+                cc.historical_reasoning_content
+            )
+        if cc.source != "unknown":
+            contract_dict["source"] = cc.source
+        thinking_dict["control_contract"] = contract_dict
     if tc.notes is not None:
         thinking_dict["notes"] = tc.notes
 
@@ -710,6 +980,25 @@ class ThinkingRequestRequirement:
     fields: list[str]
     requested_effort: str | None = None
     requested_budget_tokens: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ThinkingRequestIntent:
+    """Normalized immutable record of the original client's thinking intent.
+
+    Stored in :class:`ProxyRequestContext` so provider adaptation uses
+    the original client intent rather than re-reading already-translated
+    fields.  This prevents an intermediate fallback budget from becoming
+    falsely authoritative.
+    """
+
+    requested_effort: str | None = None
+    requested_effort_original: str | None = None
+    requested_budget_tokens: int | None = None
+    request_fields: tuple[str, ...] = ()
+    has_historical_reasoning_content: bool = False
+    client_requests_new_reasoning: bool = False
+    client_protocol: str = ""
 
 
 def classify_thinking_request(

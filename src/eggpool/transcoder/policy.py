@@ -20,6 +20,44 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class ProviderControlPolicyConfig(BaseModel):
+    """Configuration for provider-bound thinking control adaptation.
+
+    Controls how EggPool adapts thinking/reasoning controls when the
+    selected provider's capability contract does not accept them.
+
+    This section lives under ``[transcoder.provider_control_policy]``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    unsupported_control: Literal["reject", "warn_drop", "map_if_known"] = Field(
+        default="reject",
+        description=(
+            "How to handle thinking controls that the provider contract "
+            "does not accept. 'reject' returns HTTP 400 locally. "
+            "'warn_drop' removes the unsupported control and forwards. "
+            "'map_if_known' uses only explicit contract aliases."
+        ),
+    )
+    unknown_contract: Literal["reject", "allow_with_warning"] = Field(
+        default="reject",
+        description=(
+            "How to handle requests when the provider's thinking contract "
+            "is unknown. 'reject' returns HTTP 400. 'allow_with_warning' "
+            "forwards unchanged but records the decision."
+        ),
+    )
+    allow_compatibility_retry: bool = Field(
+        default=False,
+        description=(
+            "When true, allow at most one compatibility retry per request "
+            "when a thinking control is rejected, before any response "
+            "bytes are emitted. Disabled by default."
+        ),
+    )
+
+
 class CapabilityPolicy(BaseModel):
     """Policy for capability-aware routing decisions.
 
@@ -276,5 +314,14 @@ class TranscoderPolicy(BaseModel):
             "Configurable field names for OpenAI-compatible reasoning "
             "content output. Controls non-streaming and streaming field "
             "emission."
+        ),
+    )
+
+    provider_control_policy: ProviderControlPolicyConfig = Field(
+        default_factory=ProviderControlPolicyConfig,
+        description=(
+            "Provider-bound thinking control adaptation policy. Controls "
+            "how thinking controls are adapted when the selected provider's "
+            "capability contract does not accept them."
         ),
     )

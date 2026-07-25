@@ -1,7 +1,7 @@
 # Provider-Bound Thinking-Control Normalization
 
 Date: 2026-07-25
-Status: implementation handoff
+Status: completed
 
 Parent roadmap:
 

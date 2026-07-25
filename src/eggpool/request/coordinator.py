@@ -488,6 +488,7 @@ class ProxyRequestContext:
     transcode_required: bool = False
     transcode_context: TranscodeContext | None = None
     thinking_trace: dict[str, Any] | None = None
+    thinking_intent: Any | None = None  # ThinkingRequestIntent | None
     segmentation: Any | None = None
     segmentation_not_collected: bool = False
     compression_observation: Any | None = None
@@ -1566,6 +1567,23 @@ class RequestCoordinator:
                 await _thinking_counter.increment_requested(
                     client_protocol=thinking_req.client_protocol,
                 )
+                # Build normalized immutable intent from original client request.
+                from eggpool.catalog.capabilities import ThinkingRequestIntent
+
+                _has_history = "reasoning_content" in thinking_req.fields
+                _has_new_reasoning = any(
+                    f in ("reasoning_effort", "thinking", "thinking_budget")
+                    for f in thinking_req.fields
+                )
+                context.thinking_intent = ThinkingRequestIntent(
+                    requested_effort=thinking_req.requested_effort,
+                    requested_effort_original=thinking_req.requested_effort,
+                    requested_budget_tokens=thinking_req.requested_budget_tokens,
+                    request_fields=tuple(thinking_req.fields),
+                    has_historical_reasoning_content=_has_history,
+                    client_requests_new_reasoning=_has_new_reasoning,
+                    client_protocol=thinking_req.client_protocol,
+                )
                 context.thinking_trace = {
                     "requested": True,
                     "client_protocol": thinking_req.client_protocol,
@@ -1578,6 +1596,8 @@ class RequestCoordinator:
                     "upstream_protocol": None,
                     "upstream_fields": [],
                     "decision": "none",
+                    "provider_control_decision": None,
+                    "provider_control_warnings": [],
                 }
             _capability_policy: dict[str, str] | None = None
             if self._transcoder_policy is not None and hasattr(
@@ -3553,31 +3573,144 @@ class RequestCoordinator:
         context: ProxyRequestContext,
         selected: SelectedAttempt,
     ) -> None:
-        """Apply provider-specific thinking-budget overrides before dispatch.
+        """Apply provider-specific thinking control normalization before dispatch.
 
-        Centralises the selected-provider recompute so streaming and
-        non-streaming dispatch paths run identical logic. Strict-policy
-        rejections from :func:`resolve_thinking_budget` propagate as
-        :class:`CapabilityError`; callers MUST wrap this method with
-        :meth:`_finalize_selected_capability_rejection` so the durable
-        attempt row, in-memory reservation, active request count, and
-        health-manager slot are released before the error is re-raised.
+        Runs two stages after provider selection:
 
-        This helper is a no-op when the request is not transcoded, when
-        no provider was resolved, or when the upstream body lacks the
-        ``thinking`` block the recompute needs to overwrite.
+        1. **Budget recompute** (existing): re-resolves ``thinking.budget_tokens``
+           against the selected provider's capability using original client intent.
+        2. **Provider control normalization** (Plan 024): validates and adapts
+           thinking controls against the selected provider's control contract.
+
+        Both stages run for native and transcoded paths.  Strict-policy
+        rejections propagate as :class:`CapabilityError`; callers MUST
+        wrap this method with
+        :meth:`_finalize_selected_capability_rejection` so durable
+        attempt state is cleaned up before the error is re-raised.
         """
-        if not context.transcode_required or not selected.provider_id:
+        if not selected.provider_id:
             return
         thinking_capability = self._resolve_selected_thinking_capability(
             model_id=context.model_id,
             provider_id=selected.provider_id,
         )
-        self._recompute_thinking_budget_for_selected_provider(
+        # Stage 1: budget recompute (only for transcoded paths).
+        if context.transcode_required:
+            self._recompute_thinking_budget_for_selected_provider(
+                context=context,
+                selected=selected,
+                thinking_capability=thinking_capability,
+            )
+        # Stage 2: provider control normalization (always runs when
+        # thinking controls are present, regardless of transcode_required).
+        self._adapt_provider_thinking_controls(
             context=context,
             selected=selected,
             thinking_capability=thinking_capability,
         )
+
+    def _adapt_provider_thinking_controls(
+        self,
+        *,
+        context: ProxyRequestContext,
+        selected: SelectedAttempt,
+        thinking_capability: ThinkingCapability,
+    ) -> None:
+        """Validate and adapt thinking controls against the provider contract.
+
+        Runs after budget recompute and before upstream dispatch.  Uses the
+        original client intent (Workstream D) rather than re-reading
+        already-translated fields.  On rejection, raises
+        :class:`CapabilityError` so callers can finalize the attempt.
+
+        This stage runs for both native and transcoded paths, and for
+        both streaming and non-streaming requests.
+        """
+        from eggpool.catalog.capabilities import ThinkingRequestIntent
+        from eggpool.transcoder.builtin_contracts import resolve_control_contract
+        from eggpool.transcoder.provider_adaptation import (
+            ProviderControlPolicy,
+            adapt_thinking_controls,
+        )
+
+        intent = context.thinking_intent
+        if not isinstance(intent, ThinkingRequestIntent):
+            return
+        if not intent.client_requests_new_reasoning:
+            return
+
+        # Resolve the effective control contract.
+        provider_url = ""
+        if selected.provider_id:
+            entry = self._catalog.cache.get_provider_model_entry(
+                context.model_id,
+                selected.provider_id,
+            )
+            if entry is not None:
+                provider_url = str(entry.get("base_url", ""))
+
+        contract = resolve_control_contract(
+            capability=thinking_capability,
+            provider_base_url=provider_url,
+            model_id=context.model_id,
+            protocol=context.upstream_protocol or context.protocol,
+        )
+
+        # Build the adaptation policy from config.
+        policy = ProviderControlPolicy()
+        if self._transcoder_policy is not None and hasattr(
+            self._transcoder_policy,
+            "provider_control_policy",
+        ):
+            pcp = self._transcoder_policy.provider_control_policy
+            policy = ProviderControlPolicy(
+                unsupported_control=pcp.unsupported_control,
+                unknown_contract=pcp.unknown_contract,
+                allow_compatibility_retry=pcp.allow_compatibility_retry,
+            )
+
+        # Decode the current upstream body for adaptation.
+        body = context.upstream_body
+        if body is None:
+            body = context.original_body
+        try:
+            payload_obj: object = jsonx_loads(body)
+        except (ValueError, TypeError):
+            return
+        if not isinstance(payload_obj, dict):
+            return
+
+        # Override the capability's control_contract with the resolved one.
+        adapted_capability = thinking_capability.model_copy(deep=True)
+        adapted_capability.control_contract = contract
+
+        result = adapt_thinking_controls(
+            payload=payload_obj,  # type: ignore[arg-type]
+            client_protocol=context.protocol,
+            model_id=context.model_id,
+            provider_id=selected.provider_id or "",
+            capability=adapted_capability,
+            intent=intent,
+            policy=policy,
+        )
+
+        # Update the thinking trace with adaptation results.
+        if context.thinking_trace is not None:
+            context.thinking_trace["provider_control_decision"] = result.decision
+            context.thinking_trace["provider_control_warnings"] = [
+                {"kind": w.kind, "detail": w.detail, "field": w.field_name}
+                for w in result.warnings
+            ]
+            if result.changed:
+                context.thinking_trace["upstream_fields"] = list(
+                    result.emitted_controls,
+                )
+
+        # If the adaptation changed the payload, re-serialize.
+        if result.changed:
+            from eggpool.jsonx import dumps_bytes as jsonx_dumps_bytes
+
+            context.upstream_body = jsonx_dumps_bytes(result.payload)  # type: ignore[arg-type]
 
     def _apply_synthetic_cache_controls(
         self,

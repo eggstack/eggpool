@@ -44,6 +44,9 @@ _VALID_DECISIONS: frozenset[str] = frozenset(
         "unsupported_capability",
         "passthrough",
         "none",
+        "provider_mapped",
+        "provider_dropped",
+        "provider_rejected",
     }
 )
 
@@ -155,6 +158,39 @@ class ThinkingMetricsCounter:
         async with self._lock:
             self._counters[key] = self._counters.get(key, 0) + 1
 
+    async def increment_provider_mapped(
+        self,
+        *,
+        client_protocol: str,
+        provider_id: str,
+        model_id: str,
+    ) -> None:
+        key = f"provider_mapped|{client_protocol}|{provider_id}|{model_id}"
+        async with self._lock:
+            self._counters[key] = self._counters.get(key, 0) + 1
+
+    async def increment_provider_dropped(
+        self,
+        *,
+        client_protocol: str,
+        provider_id: str,
+        model_id: str,
+    ) -> None:
+        key = f"provider_dropped|{client_protocol}|{provider_id}|{model_id}"
+        async with self._lock:
+            self._counters[key] = self._counters.get(key, 0) + 1
+
+    async def increment_provider_rejected(
+        self,
+        *,
+        client_protocol: str,
+        provider_id: str,
+        model_id: str,
+    ) -> None:
+        key = f"provider_rejected|{client_protocol}|{provider_id}|{model_id}"
+        async with self._lock:
+            self._counters[key] = self._counters.get(key, 0) + 1
+
     # -- Query / lifecycle ---------------------------------------------------
 
     async def snapshot(self) -> dict[str, Any]:
@@ -261,6 +297,24 @@ async def record_thinking_event(event: ThinkingMetricEvent) -> None:
     elif decision in ("passthrough", "none", "clamped"):
         # clamped is tracked separately when budget_clamped is True
         pass
+    elif decision == "provider_mapped":
+        await counter.increment_provider_mapped(
+            client_protocol=event.client_protocol,
+            provider_id="unknown",
+            model_id="unknown",
+        )
+    elif decision == "provider_dropped":
+        await counter.increment_provider_dropped(
+            client_protocol=event.client_protocol,
+            provider_id="unknown",
+            model_id="unknown",
+        )
+    elif decision == "provider_rejected":
+        await counter.increment_provider_rejected(
+            client_protocol=event.client_protocol,
+            provider_id="unknown",
+            model_id="unknown",
+        )
 
     if event.budget_clamped:
         await counter.increment_budget_clamped(
