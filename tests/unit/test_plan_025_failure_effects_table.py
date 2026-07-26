@@ -1,0 +1,405 @@
+"""Plan 025 — Failure effects decision table tests.
+
+Validates the pure classifier against every row of the effects matrix
+from the plan, covering 400, 401, 402, 403 quota/non-quota, model-like
+and generic 404, 408, 409, 422, 429, all relevant 5xx statuses,
+transport exceptions, client cancellation, midstream failure, capability
+errors, finalization failures, and database failures.
+
+Run with::
+
+    uv run pytest tests/unit/test_plan_025_failure_effects_table.py -v
+"""
+
+from __future__ import annotations
+
+from eggpool.failure.classifier import classify_failure_effects
+from eggpool.failure.observation import FailureObservation
+from eggpool.failure.signal import FailureSignal
+
+
+def _obs(
+    *,
+    source: str = "upstream_http",
+    status_code: int | None = None,
+    error_class: str | None = None,
+    provider_id: str | None = "openai",
+    account_name: str | None = "acct-1",
+    model_id: str | None = "gpt-4o",
+    upstream_model_id: str | None = None,
+    client_protocol: str = "openai",
+    upstream_protocol: str = "openai",
+    response_signal: FailureSignal | None = None,
+    retry_after_s: float | None = None,
+    response_started: bool = True,
+) -> FailureObservation:
+    return FailureObservation(
+        source=source,
+        status_code=status_code,
+        error_class=error_class,
+        provider_id=provider_id,
+        account_name=account_name,
+        model_id=model_id,
+        upstream_model_id=upstream_model_id,
+        client_protocol=client_protocol,
+        upstream_protocol=upstream_protocol,
+        response_signal=response_signal,
+        retry_after_s=retry_after_s,
+        response_started=response_started,
+    )
+
+
+class TestFailureEffectsMatrix:
+    """Full status/body/error-class matrix tests."""
+
+    # --- Client validation (request-local) ---
+
+    def test_client_validation(self) -> None:
+        obs = _obs(source="client_validation")
+        fx = classify_failure_effects(obs)
+        assert fx.retry is False
+        assert fx.account_effect == "none"
+        assert fx.model_effect == "none"
+        assert fx.circuit_penalty is False
+        assert fx.persist_backoff is False
+        assert fx.release_probe_only is True
+        assert fx.evidence_class == "client_validation"
+
+    # --- Context limit / capability rejection ---
+
+    def test_context_limit_from_signal(self) -> None:
+        obs = _obs(
+            response_signal=FailureSignal.CONTEXT_LIMIT_EXCEEDED,
+            status_code=400,
+        )
+        fx = classify_failure_effects(obs)
+        assert fx.retry is False
+        assert fx.account_effect == "none"
+        assert fx.model_effect == "none"
+        assert fx.circuit_penalty is False
+        assert fx.release_probe_only is True
+
+    def test_context_limit_from_error_class(self) -> None:
+        obs = _obs(error_class="ContextLimitExceeded", status_code=400)
+        fx = classify_failure_effects(obs)
+        assert fx.account_effect == "none"
+        assert fx.model_effect == "none"
+        assert fx.release_probe_only is True
+
+    def test_unsupported_thinking_control(self) -> None:
+        obs = _obs(
+            response_signal=FailureSignal.UNSUPPORTED_REQUEST_CONTROL,
+            status_code=400,
+        )
+        fx = classify_failure_effects(obs)
+        assert fx.account_effect == "none"
+        assert fx.model_effect == "none"
+        assert fx.release_probe_only is True
+
+    def test_capability_rejection_from_error_class(self) -> None:
+        obs = _obs(error_class="CapabilityError", status_code=400)
+        fx = classify_failure_effects(obs)
+        assert fx.account_effect == "none"
+        assert fx.model_effect == "none"
+        assert fx.release_probe_only is True
+
+    # --- HTTP 400 ---
+
+    def test_http_400_validation(self) -> None:
+        obs = _obs(status_code=400)
+        fx = classify_failure_effects(obs)
+        assert fx.retry is False
+        assert fx.retry_scope == "none"
+        assert fx.client_outcome == "client_error"
+        assert fx.account_effect == "none"
+        assert fx.model_effect == "none"
+        assert fx.circuit_penalty is False
+        assert fx.persist_backoff is False
+
+    # --- HTTP 401 ---
+
+    def test_http_401_auth_failure(self) -> None:
+        obs = _obs(status_code=401)
+        fx = classify_failure_effects(obs)
+        assert fx.retry is False
+        assert fx.retry_scope == "other_account"
+        assert fx.client_outcome == "client_error"
+        assert fx.account_effect == "disable_auth"
+        assert fx.model_effect == "none"
+        assert fx.circuit_penalty is True
+        assert fx.persist_backoff is True
+        assert fx.backoff_reason == "authentication_failed"
+        assert fx.backoff_until is None  # terminal
+
+    # --- HTTP 402 ---
+
+    def test_http_402_quota(self) -> None:
+        obs = _obs(status_code=402)
+        fx = classify_failure_effects(obs)
+        assert fx.retry is False
+        assert fx.retry_scope == "other_account"
+        assert fx.account_effect == "quota"
+        assert fx.model_effect == "none"
+        assert fx.persist_backoff is True
+        assert fx.backoff_reason == "quota_exhausted"
+        assert fx.backoff_until is not None
+
+    # --- HTTP 403 quota signal ---
+
+    def test_http_403_quota_signal(self) -> None:
+        obs = _obs(
+            status_code=403,
+            response_signal=FailureSignal.QUOTA_EXHAUSTED,
+        )
+        fx = classify_failure_effects(obs)
+        assert fx.retry_scope == "other_account"
+        assert fx.account_effect == "quota"
+        assert fx.persist_backoff is True
+        assert fx.backoff_reason == "quota_exhausted"
+
+    # --- HTTP 403 auth signal ---
+
+    def test_http_403_auth_signal(self) -> None:
+        obs = _obs(
+            status_code=403,
+            response_signal=FailureSignal.AUTHENTICATION_FAILED,
+        )
+        fx = classify_failure_effects(obs)
+        assert fx.account_effect == "disable_auth"
+        assert fx.circuit_penalty is True
+
+    # --- HTTP 403 no evidence ---
+
+    def test_http_403_no_evidence(self) -> None:
+        obs = _obs(status_code=403)
+        fx = classify_failure_effects(obs)
+        assert fx.retry is False
+        assert fx.account_effect == "none"
+        assert fx.model_effect == "none"
+        assert fx.circuit_penalty is False
+        assert fx.persist_backoff is False
+        assert fx.release_probe_only is True
+
+    # --- HTTP 404 model-specific ---
+
+    def test_http_404_model_absent_runtime(self) -> None:
+        obs = _obs(
+            status_code=404,
+            response_signal=FailureSignal.MODEL_ABSENT,
+        )
+        fx = classify_failure_effects(obs)
+        assert fx.retry_scope == "other_account"
+        assert fx.account_effect == "none"
+        assert fx.model_effect == "quarantine"
+        assert fx.persist_backoff is True
+        assert fx.backoff_reason == "model_unavailable"
+        assert fx.backoff_until is not None  # bounded
+
+    def test_http_404_model_absent_authoritative(self) -> None:
+        obs = _obs(
+            status_code=404,
+            response_signal=FailureSignal.MODEL_ABSENT,
+            source="provider_catalog",
+        )
+        fx = classify_failure_effects(obs)
+        assert fx.model_effect == "terminal_withdrawal"
+        assert fx.backoff_until is None  # terminal
+
+    def test_http_404_model_unavailable_error_class(self) -> None:
+        obs = _obs(status_code=404, error_class="ModelUnavailable")
+        fx = classify_failure_effects(obs)
+        assert fx.model_effect == "quarantine"
+
+    # --- HTTP 404 generic ---
+
+    def test_http_404_generic(self) -> None:
+        obs = _obs(status_code=404)
+        fx = classify_failure_effects(obs)
+        assert fx.retry is False
+        assert fx.account_effect == "none"
+        assert fx.model_effect == "none"
+        assert fx.persist_backoff is False
+        assert fx.release_probe_only is True
+
+    # --- HTTP 408 ---
+
+    def test_http_408_timeout(self) -> None:
+        obs = _obs(status_code=408)
+        fx = classify_failure_effects(obs)
+        assert fx.retry is True
+        assert fx.retry_scope == "other_account"
+        assert fx.client_outcome == "timeout"
+        assert fx.account_effect == "cooldown"
+        assert fx.model_effect == "none"
+        assert fx.circuit_penalty is True
+        assert fx.persist_backoff is True
+        assert fx.backoff_reason == "connect_timeout"
+
+    # --- HTTP 409 / 422 ---
+
+    def test_http_409_provider_specific(self) -> None:
+        obs = _obs(status_code=409)
+        fx = classify_failure_effects(obs)
+        assert fx.retry is False
+        assert fx.account_effect == "none"
+        assert fx.model_effect == "none"
+        assert fx.release_probe_only is True
+
+    def test_http_422_provider_specific(self) -> None:
+        obs = _obs(status_code=422)
+        fx = classify_failure_effects(obs)
+        assert fx.retry is False
+        assert fx.account_effect == "none"
+        assert fx.model_effect == "none"
+        assert fx.release_probe_only is True
+
+    # --- HTTP 429 ---
+
+    def test_http_429_rate_limited(self) -> None:
+        obs = _obs(status_code=429)
+        fx = classify_failure_effects(obs)
+        assert fx.retry is True
+        assert fx.retry_scope == "other_account"
+        assert fx.account_effect == "rate_limit"
+        assert fx.model_effect == "none"
+        assert fx.circuit_penalty is False
+        assert fx.persist_backoff is True
+        assert fx.backoff_reason == "rate_limited"
+        assert fx.backoff_until is not None
+
+    def test_http_429_with_retry_after(self) -> None:
+        obs = _obs(status_code=429, retry_after_s=120.0)
+        fx = classify_failure_effects(obs)
+        assert fx.backoff_until is not None
+
+    # --- HTTP 5xx ---
+
+    def test_http_500_server_error(self) -> None:
+        obs = _obs(status_code=500)
+        fx = classify_failure_effects(obs)
+        assert fx.retry is True
+        assert fx.retry_scope == "other_account"
+        assert fx.client_outcome == "upstream_error"
+        assert fx.account_effect == "cooldown"
+        assert fx.circuit_penalty is True
+        assert fx.persist_backoff is True
+        assert fx.backoff_reason == "upstream_server_error"
+
+    def test_http_502_bad_gateway(self) -> None:
+        obs = _obs(status_code=502)
+        fx = classify_failure_effects(obs)
+        assert fx.retry is True
+        assert fx.account_effect == "cooldown"
+        assert fx.circuit_penalty is True
+
+    def test_http_503_service_unavailable(self) -> None:
+        obs = _obs(status_code=503)
+        fx = classify_failure_effects(obs)
+        assert fx.retry is True
+        assert fx.account_effect == "cooldown"
+        assert fx.circuit_penalty is True
+
+    def test_http_504_gateway_timeout(self) -> None:
+        obs = _obs(status_code=504)
+        fx = classify_failure_effects(obs)
+        assert fx.retry is True
+        assert fx.account_effect == "cooldown"
+        assert fx.circuit_penalty is True
+
+    # --- Client cancellation ---
+
+    def test_client_cancellation(self) -> None:
+        obs = _obs(
+            source="stream",
+            response_signal=None,
+            response_started=False,
+        )
+        fx = classify_failure_effects(obs)
+        assert fx.retry is False
+        assert fx.account_effect == "none"
+        assert fx.model_effect == "none"
+        assert fx.circuit_penalty is False
+        assert fx.persist_backoff is False
+        assert fx.release_probe_only is True
+
+    # --- Midstream transport failure ---
+
+    def test_midstream_transport_failure(self) -> None:
+        obs = _obs(
+            source="stream",
+            response_signal=FailureSignal.TRANSPORT_FAILURE,
+            response_started=True,
+        )
+        fx = classify_failure_effects(obs)
+        assert fx.retry is False
+        assert fx.account_effect == "failure"
+        assert fx.model_effect == "none"
+        assert fx.circuit_penalty is True
+        assert fx.persist_backoff is True
+        assert fx.backoff_reason == "connection_failure"
+
+    # --- Transport failure ---
+
+    def test_transport_failure(self) -> None:
+        obs = _obs(source="transport")
+        fx = classify_failure_effects(obs)
+        assert fx.retry is False
+        assert fx.account_effect == "failure"
+        assert fx.model_effect == "none"
+        assert fx.circuit_penalty is True
+        assert fx.persist_backoff is True
+        assert fx.backoff_reason == "connection_failure"
+
+    # --- Finalization/database failures ---
+
+    def test_finalization_failure(self) -> None:
+        obs = _obs(source="finalization")
+        fx = classify_failure_effects(obs)
+        assert fx.retry is False
+        assert fx.account_effect == "none"
+        assert fx.model_effect == "none"
+        assert fx.circuit_penalty is False
+        assert fx.persist_backoff is False
+        assert fx.release_probe_only is True
+
+    def test_database_failure(self) -> None:
+        obs = _obs(source="database")
+        fx = classify_failure_effects(obs)
+        assert fx.retry is False
+        assert fx.account_effect == "none"
+        assert fx.model_effect == "none"
+        assert fx.circuit_penalty is False
+        assert fx.persist_backoff is False
+        assert fx.release_probe_only is True
+
+    # --- Unknown fallback ---
+
+    def test_unknown_status_code(self) -> None:
+        obs = _obs(status_code=999)
+        fx = classify_failure_effects(obs)
+        assert fx.retry is False
+        assert fx.account_effect == "none"
+        assert fx.model_effect == "none"
+        assert fx.circuit_penalty is False
+        assert fx.persist_backoff is False
+        assert fx.release_probe_only is True
+        assert fx.evidence_class == "unknown_fallback"
+
+
+class TestMandatoryDefault:
+    """Unknown validation produces zero shared-state effects."""
+
+    def test_no_status_no_signal(self) -> None:
+        obs = _obs(source="upstream_http", status_code=None, response_signal=None)
+        fx = classify_failure_effects(obs)
+        assert fx.account_effect == "none"
+        assert fx.model_effect == "none"
+        assert fx.circuit_penalty is False
+        assert fx.persist_backoff is False
+        assert fx.release_probe_only is True
+
+    def test_no_error_class(self) -> None:
+        obs = _obs(error_class=None, status_code=500)
+        fx = classify_failure_effects(obs)
+        assert fx.account_effect != "none"  # 5xx does penalize
+        assert fx.circuit_penalty is True
