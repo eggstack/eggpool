@@ -4144,30 +4144,31 @@ Baseline artifact: `artifacts/plan-023-baseline.md`.
 
 Phase 2 of the upstream error isolation roadmap. Adds an explicit provider-bound request-contract layer so thinking/reasoning controls are validated and normalized after provider/account selection, regardless of whether protocol transcoding is required.
 
-### ThinkingControlContract
+### Workstream A — Capability schema (`ThinkingControlContract`)
 
 `src/eggpool/catalog/capabilities.py` defines `ThinkingControlContract` — a structured contract that explicitly answers whether the model/provider produces reasoning, whether the client can control reasoning, which wire fields are accepted, which effort labels are accepted, whether an explicit token budget is accepted, and what aliases or mappings are safe.
 
 Control modes: `unknown`, `none`, `fixed`, `effort`, `budget`, `effort_or_budget`.
 
-`infer_control_contract()` derives a contract conservatively from legacy `ThinkingCapability` fields when no explicit contract is present. Existing capability records without a `control_contract` continue to deserialize without failure.
+`infer_control_contract()` derives a contract conservatively from legacy `ThinkingCapability` fields when no explicit contract is present. Existing capability records without a `control_contract` continue to deserialize without failure. Manual overrides deterministically outrank built-in and discovered metadata. Collapsed model IDs retain provider-specific contracts via URL-pattern matching on the selected provider.
 
-### ThinkingRequestIntent
-
-`ThinkingRequestIntent` (frozen dataclass in `capabilities.py`) captures the original client's thinking intent before any translation or adaptation. Stored in `ProxyRequestContext.thinking_intent`, it prevents intermediate translations from becoming falsely authoritative. Fields: `requested_effort`, `requested_effort_original`, `requested_budget_tokens`, `request_fields`, `has_historical_reasoning_content`, `client_requests_new_reasoning`, `client_protocol`.
-
-### ProviderRequestAdaptation
+### Workstream B — Adaptation result type (`ProviderRequestAdaptation`)
 
 `src/eggpool/transcoder/provider_adaptation.py` defines the pure adaptation result and function:
 
 - `ProviderRequestAdaptation` — typed result with `payload`, `changed`, `decision` (`passthrough`/`mapped`/`dropped`/`rejected`), `requested_controls`, `emitted_controls`, `warnings`.
 - `adapt_thinking_controls()` — pure function that validates/normalizes controls against the provider contract. Does not touch runtime health, database state, routing, or logging.
+- Rejection raises `CapabilityError` (HTTP 400) — no upstream attempt.
 
-### Post-selection normalization stage
+### Workstream C — Post-selection normalization stage
 
-`_adapt_provider_thinking_controls()` in the coordinator runs after provider selection and budget recompute, before upstream dispatch. Runs for both native and transcoded paths. Uses the original client intent (ThinkingRequestIntent) rather than re-reading already-translated fields.
+`_adapt_provider_thinking_controls()` in the coordinator (`src/eggpool/request/coordinator.py`) runs after provider selection and budget recompute, before upstream dispatch. Runs for both native and transcoded paths. When the client protocol matches the upstream protocol (native path), unknown contracts pass through — the upstream will reject if needed. Uses the original client intent (ThinkingRequestIntent) rather than re-reading already-translated fields.
 
-### Built-in contracts
+### Workstream D — Original client intent (`ThinkingRequestIntent`)
+
+`ThinkingRequestIntent` (frozen dataclass in `capabilities.py`) captures the original client's thinking intent before any translation or adaptation. Stored in `ProxyRequestContext.thinking_intent`, it prevents intermediate translations from becoming falsely authoritative. Fields: `requested_effort`, `requested_effort_original`, `requested_budget_tokens`, `request_fields`, `has_historical_reasoning_content`, `client_requests_new_reasoning`, `client_protocol`.
+
+### Workstream E — Built-in contracts
 
 `src/eggpool/transcoder/builtin_contracts.py` contains manually curated contracts for known provider deployments:
 
@@ -4178,11 +4179,11 @@ Control modes: `unknown`, `none`, `fixed`, `effort`, `budget`, `effort_or_budget
 | Anthropic native | `api.anthropic.com` | `*` | anthropic | effort_or_budget |
 | OpenAI native | `api.openai.com` | `*` | openai | effort |
 
-Contract precedence: operator overrides > built-in contracts > inferred from legacy fields.
+Contract precedence: operator overrides > built-in contracts > inferred from legacy fields. `resolve_control_contract()` implements the three-tier resolution.
 
-### Adaptation policy
+### Workstream F — Adaptation policy config
 
-`[transcoder.provider_control_policy]` config section:
+`[transcoder.provider_control_policy]` config section (`ProviderControlPolicyConfig` in `src/eggpool/transcoder/policy.py`):
 
 - `unsupported_control`: `reject` (default) | `warn_drop` | `map_if_known`
 - `unknown_contract`: `reject` (default) | `allow_with_warning`
@@ -4190,14 +4191,22 @@ Contract precedence: operator overrides > built-in contracts > inferred from leg
 
 Strict transcoding/loss policy takes precedence over any warn/drop setting.
 
-### Observability
+### Workstream G — Compatibility retry (deferred)
 
-Thinking trace extended with `provider_control_decision` and `provider_control_warnings` fields. New counters in `ThinkingMetricsCounter`: `provider_mapped`, `provider_dropped`, `provider_rejected` (pipe-delimited label keys with protocol/provider/model).
+Optional one-time compatibility retry. The `allow_compatibility_retry` config field exists but defaults to `False`. No retry logic is wired into the adaptation pipeline. When implemented, it must be one-shot, allowlisted, pre-body, and health-neutral.
 
-### Test files
+### Workstream H — Observability
+
+Thinking trace extended with `provider_control_decision` and `provider_control_warnings` fields. New counters in `ThinkingMetricsCounter`: `provider_mapped`, `provider_dropped`, `provider_rejected` (pipe-delimited label keys with protocol/provider/model). No prompt or reasoning content is persisted.
+
+### Workstream I — Tests
 
 - `tests/unit/test_plan_024_thinking_control_contract.py` — contract schema, inference, merge, serialize, round-trip
 - `tests/unit/test_plan_024_provider_request_adaptation.py` — adaptation decisions (passthrough, reject, drop, map)
 - `tests/unit/test_plan_024_builtin_contracts.py` — built-in contract lookup and resolution
+- `tests/unit/test_plan_024_native_provider_normalization.py` — native-path adaptation, skip logic, contract resolution
+- `tests/unit/test_plan_024_transcoded_provider_normalization.py` — transcoded-path adaptation, historical content preservation
 - `tests/unit/test_plan_024_thinking_trace.py` — ThinkingRequestIntent construction
 - `tests/unit/test_plan_024_thinking_metrics.py` — provider control counters
+- `tests/integration/test_plan_024_opencode_minimax_contract.py` — end-to-end OpenCode Go MiniMax-M3 contract, distinct MiniMax native behavior, collapsed model contracts, no durable state changes
+- `tests/integration/test_plan_024_compatibility_retry.py` — compatibility retry deferral verification

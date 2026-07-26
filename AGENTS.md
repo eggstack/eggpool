@@ -127,13 +127,18 @@ uv run pytest \
     tests/perf/test_plan_023_request_path_baseline.py -v
 
 # Plan 024 — Provider-bound thinking-control normalization (contract,
-# adaptation, builtin contracts, metrics, trace)
+# adaptation, builtin contracts, native/transcoded normalization,
+# opencode-minimax contract, compatibility retry, metrics, trace)
 uv run pytest \
     tests/unit/test_plan_024_thinking_control_contract.py \
     tests/unit/test_plan_024_provider_request_adaptation.py \
     tests/unit/test_plan_024_builtin_contracts.py \
+    tests/unit/test_plan_024_native_provider_normalization.py \
+    tests/unit/test_plan_024_transcoded_provider_normalization.py \
     tests/unit/test_plan_024_thinking_trace.py \
-    tests/unit/test_plan_024_thinking_metrics.py -v
+    tests/unit/test_plan_024_thinking_metrics.py \
+    tests/integration/test_plan_024_opencode_minimax_contract.py \
+    tests/integration/test_plan_024_compatibility_retry.py -v
 
 # Model-info identity subset (tiered matching, fresh-DB service, evidence API,
 # safety, migration 0049, OpenRouter contract, deployment-suffix tier, source

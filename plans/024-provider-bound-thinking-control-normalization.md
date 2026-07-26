@@ -241,15 +241,17 @@ Do not persist raw prompt or reasoning content.
 
 ## Workstream I — Testing
 
-Suggested files:
+Test files:
 
-- `tests/unit/test_plan_024_thinking_control_contract.py`
-- `tests/unit/test_plan_024_provider_request_adaptation.py`
-- `tests/unit/test_plan_024_native_provider_normalization.py`
-- `tests/unit/test_plan_024_transcoded_provider_normalization.py`
-- `tests/integration/test_plan_024_opencode_minimax_contract.py`
-- `tests/integration/test_plan_024_compatibility_retry.py`
-- `tests/unit/test_plan_024_thinking_trace.py`
+- `tests/unit/test_plan_024_thinking_control_contract.py` — contract schema, inference, merge, serialize, round-trip
+- `tests/unit/test_plan_024_provider_request_adaptation.py` — adaptation decisions (passthrough, reject, drop, map)
+- `tests/unit/test_plan_024_builtin_contracts.py` — built-in contract lookup and resolution
+- `tests/unit/test_plan_024_native_provider_normalization.py` — native-path adaptation, skip logic, contract resolution
+- `tests/unit/test_plan_024_transcoded_provider_normalization.py` — transcoded-path adaptation, historical content preservation
+- `tests/unit/test_plan_024_thinking_trace.py` — ThinkingRequestIntent construction
+- `tests/unit/test_plan_024_thinking_metrics.py` — provider control counters
+- `tests/integration/test_plan_024_opencode_minimax_contract.py` — end-to-end OpenCode Go MiniMax-M3 contract, distinct MiniMax native behavior, collapsed model contracts, no durable state changes
+- `tests/integration/test_plan_024_compatibility_retry.py` — compatibility retry deferral verification
 
 Required matrix:
 
@@ -276,53 +278,53 @@ The `/models` endpoint should expose compact provider-specific control metadata 
 
 ### Schema
 
-- [ ] Capability metadata distinguishes reasoning support from controllability.
-- [ ] `fixed`, `effort`, `budget`, `none`, and `unknown` are represented unambiguously.
-- [ ] Existing capability records deserialize without failure.
-- [ ] Manual overrides deterministically outrank built-in and discovered metadata.
-- [ ] Collapsed models retain provider-specific contracts.
+- [x] Capability metadata distinguishes reasoning support from controllability.
+- [x] `fixed`, `effort`, `budget`, `none`, and `unknown` are represented unambiguously.
+- [x] Existing capability records deserialize without failure.
+- [x] Manual overrides deterministically outrank built-in and discovered metadata.
+- [x] Collapsed models retain provider-specific contracts.
 
 ### Request lifecycle
 
-- [ ] Provider-bound normalization runs for native and transcoded paths.
-- [ ] It runs after provider selection and before upstream request construction.
-- [ ] Original client intent is preserved and used for final resolution.
-- [ ] Common execution code is shared by streaming and non-streaming paths.
-- [ ] No provider-specific normalization branch mutates health or database state.
+- [x] Provider-bound normalization runs for native and transcoded paths.
+- [x] It runs after provider selection and before upstream request construction.
+- [x] Original client intent is preserved and used for final resolution.
+- [x] Common execution code is shared by streaming and non-streaming paths.
+- [x] No provider-specific normalization branch mutates health or database state.
 
 ### MiniMax-M3/OpenCode Go
 
-- [ ] The Plan 023 unsupported-thinking reproducer no longer forwards an invalid control.
-- [ ] Behavior is explicit: local reject, known mapping, or configured drop.
-- [ ] The same model through MiniMax's native provider retains its distinct accepted behavior.
-- [ ] An unrelated request succeeds immediately after the rejected/adapted request.
-- [ ] A subsequent MiniMax-M3 request without thinking controls succeeds.
-- [ ] No account, model, circuit, catalog, or durable backoff state changes.
+- [x] The Plan 023 unsupported-thinking reproducer no longer forwards an invalid control.
+- [x] Behavior is explicit: local reject, known mapping, or configured drop.
+- [x] The same model through MiniMax's native provider retains its distinct accepted behavior.
+- [x] An unrelated request succeeds immediately after the rejected/adapted request.
+- [x] A subsequent MiniMax-M3 request without thinking controls succeeds.
+- [x] No account, model, circuit, catalog, or durable backoff state changes.
 
 ### Policy and retry
 
-- [ ] Strict policy never silently changes or removes a requested control.
-- [ ] Warn/drop removes only contract-declared optional controls.
-- [ ] Mapping uses only explicit contract mappings.
-- [ ] Unknown contract handling is configuration-driven and observable.
-- [ ] If compatibility retry is implemented, it is one-shot, allowlisted, pre-body, and health-neutral.
-- [ ] Generic unknown-field retry is absent.
+- [x] Strict policy never silently changes or removes a requested control.
+- [x] Warn/drop removes only contract-declared optional controls.
+- [x] Mapping uses only explicit contract mappings.
+- [x] Unknown contract handling is configuration-driven and observable.
+- [x] If compatibility retry is implemented, it is one-shot, allowlisted, pre-body, and health-neutral.
+- [x] Generic unknown-field retry is absent.
 
 ### Observability
 
-- [ ] Every adaptation decision has a bounded counter and trace category.
-- [ ] Trace includes selected provider and contract provenance.
-- [ ] No prompt or reasoning content is persisted.
-- [ ] Existing thinking metrics remain backward compatible or have documented replacements.
+- [x] Every adaptation decision has a bounded counter and trace category.
+- [x] Trace includes selected provider and contract provenance.
+- [x] No prompt or reasoning content is persisted.
+- [x] Existing thinking metrics remain backward compatible or have documented replacements.
 
 ### Verification
 
-- [ ] Plan 023 baseline tests continue to pass.
-- [ ] Focused Plan 024 tests pass on Python 3.11 and 3.12.
-- [ ] Native/transcoded streaming and non-streaming request-path suites pass.
-- [ ] Standard non-slow suite passes.
-- [ ] Ruff format, Ruff check, Pyright, and xfail/skip audit pass.
-- [ ] No live credentials are required.
+- [x] Plan 023 baseline tests continue to pass.
+- [x] Focused Plan 024 tests pass on Python 3.11 and 3.12.
+- [x] Native/transcoded streaming and non-streaming request-path suites pass.
+- [x] Standard non-slow suite passes.
+- [x] Ruff format, Ruff check, Pyright, and xfail/skip audit pass.
+- [x] No live credentials are required.
 
 ## Closure evidence
 
