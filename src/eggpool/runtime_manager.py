@@ -558,6 +558,7 @@ class RuntimeGeneration:
     created_at_epoch: float
     effects_applier: Any = None
     model_quarantine: Any = None
+    finalization_supervisor: Any = None
     immutable_request_state: ImmutableRequestState = field(
         default_factory=lambda: ImmutableRequestState(
             provider_ids=frozenset(),
@@ -2194,6 +2195,7 @@ class RuntimeGenerationBuilder:
             routing_trace_writer=services.get("routing_trace_writer"),
             effects_applier=services.get("effects_applier"),
             model_quarantine=services.get("model_quarantine"),
+            finalization_supervisor=services.get("finalization_supervisor"),
             created_at_monotonic=services.get("created_at_monotonic", now_mono),
             created_at_epoch=services.get("created_at_epoch", now_epoch),
             immutable_request_state=immutable_request_state,

@@ -95,6 +95,7 @@ class PreparedRuntimeGeneration:
     routing_trace_writer: Any
     local_pre_upstream_recorder: Any = None
     stream_diagnostics: Any = None
+    finalization_supervisor: Any = None
 
 
 # ---------------------------------------------------------------------------
@@ -384,6 +385,21 @@ class RuntimeGenerationFactory:
             finalization_retry_queue
         )
 
+        # -- Finalization supervisor (Plan 026) ------------------------------
+        # Process-owned supervisor for request finalization jobs.  Provides
+        # retained-task finalization, bounded retry, and diagnostics.
+        from eggpool.request.finalization_job import (  # noqa: PLC0415
+            RequestFinalizationSupervisor,
+        )
+
+        finalization_supervisor = RequestFinalizationSupervisor(
+            db=db,
+            effects_applier=effects_applier,
+        )
+        coordinator._finalization_supervisor = (  # pyright: ignore[reportPrivateUsage]
+            finalization_supervisor
+        )
+
         # -- Routing trace guard (NOT configured during preparation) ---------
         # Configuration is deferred to RoutingTraceGuardTransition at commit
         # time so candidate preparation has no process-owned side effects.
@@ -470,6 +486,7 @@ class RuntimeGenerationFactory:
             routing_trace_writer=routing_trace_writer,
             effects_applier=effects_applier,
             model_quarantine=quarantine,
+            finalization_supervisor=finalization_supervisor,
         )
 
         return PreparedRuntimeGeneration(
@@ -497,6 +514,7 @@ class RuntimeGenerationFactory:
             routing_trace_writer=routing_trace_writer,
             local_pre_upstream_recorder=local_pre_upstream_recorder,
             stream_diagnostics=stream_diagnostics,
+            finalization_supervisor=finalization_supervisor,
         )
 
     # -- Internal helpers ---------------------------------------------------

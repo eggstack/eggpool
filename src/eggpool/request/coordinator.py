@@ -658,6 +658,7 @@ class RequestCoordinator:
         self._compression_policy = compression_policy
         self._stream_diagnostics = stream_diagnostics or get_stream_diagnostics()
         self._finalization_retry_queue = finalization_retry_queue
+        self._finalization_supervisor: Any = None
         if routing_trace_guard is None:
             from eggpool.request.routing_trace_guard import (
                 get_routing_trace_guard,
@@ -2909,6 +2910,36 @@ class RequestCoordinator:
             True if upstream_include_usage is None else upstream_include_usage
         )
 
+        # Plan 026: register a process-owned finalization job before the
+        # inner generator.  The job is registered synchronously so it
+        # exists before any cancellation-sensitive await.  The retained
+        # task owns finalization even when every request waiter is
+        # cancelled.
+        fin_supervisor = self._finalization_supervisor
+        fin_job: Any = None
+        if fin_supervisor is not None:
+            from eggpool.request.finalization_job import (
+                FinalizationIdentity,
+            )
+
+            fin_identity = FinalizationIdentity(
+                proxy_request_id=context.request_id,
+                db_request_id=selected.db_request_id,
+                attempt_id=selected.attempt_id,
+                reservation_id=selected.reservation_id,
+                account_id=selected.account_id,
+                account_name=selected.account_name,
+                provider_id=selected.provider_id,
+                model_id=selected.model_id,
+                client_protocol=context.protocol,
+                upstream_protocol=context.upstream_protocol,
+                attempt_number=selected.attempt_number,
+            )
+            fin_job = fin_supervisor.register_or_get(
+                fin_identity,
+                "pending_stream",
+            )
+
         async def _stream() -> AsyncIterator[bytes]:
             nonlocal bytes_emitted, first_byte_ms
             try:
@@ -3048,17 +3079,13 @@ class RequestCoordinator:
                 # Skip if _execute_upstream already finalized (the CancelledError
                 # propagates here after the outer handler runs).
                 #
-                # Shield the finalizer from ASGI task cancellation and
-                # cap the wait with a short timeout.  When the client
-                # disconnects mid-stream the generator is cancelled;
-                # without shielding, the finalizer task is killed
-                # while waiting on the SQLite connection lock and the
-                # request leaks as ``pending`` with an active
-                # reservation.  The 10 s ceiling guarantees we do not
-                # block the event loop indefinitely even if the lock
-                # is heavily contended; the periodic stale-request
-                # finalizer in ``app._finalize_stale_requests`` is the
-                # outer safety net for anything that escapes this path.
+                # Plan 026: when a process-owned finalization supervisor is
+                # available, the retained finalization job owns cleanup even
+                # when every request waiter is cancelled.  The job was
+                # registered before the inner generator, so it exists in the
+                # supervisor's registry regardless of cancellation timing.
+                # ``fin_job.run()`` uses ``asyncio.shield`` internally; the
+                # retained task continues after the caller is cancelled.
                 observer.flush()
                 usage_result = observer.usage
                 if not context.client_metadata.get("_cancelled_finalized"):
@@ -3072,143 +3099,160 @@ class RequestCoordinator:
                         connect_ms=cancel_connect_ms_value,
                         read_ms=cancel_read_ms_value,
                     )
-                    try:
-                        await asyncio.wait_for(
-                            asyncio.shield(
-                                finalizer.finalize(
-                                    selected,
-                                    FinalizationData(
-                                        outcome=FinalizationOutcome.CLIENT_CANCELLED,
-                                        first_byte_ms=(
-                                            int(first_byte_ms)
-                                            if first_byte_ms > 0
-                                            else None
-                                        ),
-                                        upstream_latency_ms=cancel_latency_total,
-                                        bytes_emitted=bytes_emitted,
-                                        input_tokens=usage_result.input_tokens,
-                                        output_tokens=usage_result.output_tokens,
-                                        cache_read_tokens=usage_result.cache_read_tokens,
-                                        cache_write_tokens=(
-                                            usage_result.cache_creation_tokens
-                                        ),
-                                        reasoning_tokens=usage_result.reasoning_tokens,
-                                        thinking_characters=(
-                                            usage_result.thinking_characters
-                                        ),
-                                        bytes_received=len(context.original_body),
-                                        upstream_connect_ms=cancel_connect_ms_value,
-                                        upstream_read_ms=cancel_read_ms_value,
-                                        coordinator_overhead_ms=cancel_overhead_ms_value,
-                                        provider_cost_microdollars=(
-                                            usage_result.reported_cost_microdollars
-                                        ),
-                                        provider_cost_source=(
-                                            usage_result.reported_cost_source
-                                        ),
-                                        upstream_protocol=context.upstream_protocol,
-                                        thinking_trace_json=_serialize_thinking_trace(
-                                            context.thinking_trace
-                                        ),
-                                        normalized_usage=_build_normalized_usage(
-                                            usage=usage_result,
-                                            raw_payload=None,
-                                            protocol=context.upstream_protocol,
-                                            provider_id=selected.provider_id,
-                                            model_id=selected.model_id,
-                                            is_streaming=True,
-                                        ),
-                                        transcoded=(
-                                            context.transcode_context is not None
-                                        ),
-                                        segmentation=context.segmentation,
-                                        segmentation_not_collected=context.segmentation_not_collected,
-                                        compression_observation=context.compression_observation,
-                                        compression_result=context.compression_result,
-                                        resolved_compression_policy=context.resolved_compression_policy,
-                                        synthetic_cache_result=context.synthetic_cache_result,
-                                    ),
-                                )
-                            ),
-                            timeout=10.0,
-                        )
-                    except TimeoutError:
-                        logger.error(
-                            "Finalizer timed out for cancelled stream %s; "
-                            "request %s may leak as pending",
-                            context.request_id,
-                            selected.db_request_id,
-                        )
-                        self._stream_diagnostics.record_outcome(
-                            STREAM_OUTCOME_FINALIZER_TIMEOUT,
-                            proxy_request_id=context.request_id,
-                            db_request_id=selected.db_request_id,
-                            provider_id=selected.provider_id,
-                            account_name=selected.account_name,
-                            model_id=selected.model_id,
+                    fin_data = FinalizationData(
+                        outcome=FinalizationOutcome.CLIENT_CANCELLED,
+                        first_byte_ms=(
+                            int(first_byte_ms) if first_byte_ms > 0 else None
+                        ),
+                        upstream_latency_ms=cancel_latency_total,
+                        bytes_emitted=bytes_emitted,
+                        input_tokens=usage_result.input_tokens,
+                        output_tokens=usage_result.output_tokens,
+                        cache_read_tokens=usage_result.cache_read_tokens,
+                        cache_write_tokens=(usage_result.cache_creation_tokens),
+                        reasoning_tokens=usage_result.reasoning_tokens,
+                        thinking_characters=(usage_result.thinking_characters),
+                        bytes_received=len(context.original_body),
+                        upstream_connect_ms=cancel_connect_ms_value,
+                        upstream_read_ms=cancel_read_ms_value,
+                        coordinator_overhead_ms=cancel_overhead_ms_value,
+                        provider_cost_microdollars=(
+                            usage_result.reported_cost_microdollars
+                        ),
+                        provider_cost_source=(usage_result.reported_cost_source),
+                        upstream_protocol=context.upstream_protocol,
+                        thinking_trace_json=_serialize_thinking_trace(
+                            context.thinking_trace
+                        ),
+                        normalized_usage=_build_normalized_usage(
+                            usage=usage_result,
+                            raw_payload=None,
                             protocol=context.upstream_protocol,
-                            elapsed_ms=cancel_latency_total,
-                            bytes_emitted=bytes_emitted,
-                            first_byte_ms=(
-                                int(first_byte_ms) if first_byte_ms > 0 else None
-                            ),
-                            upstream_connect_ms=cancel_connect_ms_value,
-                            upstream_header_ms=self._upstream_header_ms(context),
-                            upstream_read_ms=cancel_read_ms_value,
-                            attempt=selected.attempt_number,
-                        )
-                        await self._enqueue_finalization_retry(
-                            selected,
-                            context,
-                            outcome="CLIENT_CANCELLED",
-                        )
-                    except Exception:
-                        logger.exception(
-                            "Finalizer failed for cancelled stream %s",
-                            context.request_id,
-                        )
-                        self._stream_diagnostics.record_outcome(
-                            STREAM_OUTCOME_FINALIZER_FAILED,
-                            proxy_request_id=context.request_id,
-                            db_request_id=selected.db_request_id,
                             provider_id=selected.provider_id,
-                            account_name=selected.account_name,
                             model_id=selected.model_id,
-                            protocol=context.upstream_protocol,
-                            elapsed_ms=cancel_latency_total,
-                            bytes_emitted=bytes_emitted,
-                            first_byte_ms=(
-                                int(first_byte_ms) if first_byte_ms > 0 else None
-                            ),
-                            upstream_connect_ms=cancel_connect_ms_value,
-                            upstream_header_ms=self._upstream_header_ms(context),
-                            upstream_read_ms=cancel_read_ms_value,
-                            attempt=selected.attempt_number,
+                            is_streaming=True,
+                        ),
+                        transcoded=(context.transcode_context is not None),
+                        segmentation=context.segmentation,
+                        segmentation_not_collected=context.segmentation_not_collected,
+                        compression_observation=context.compression_observation,
+                        compression_result=context.compression_result,
+                        resolved_compression_policy=context.resolved_compression_policy,
+                        synthetic_cache_result=context.synthetic_cache_result,
+                    )
+                    if fin_job is not None:
+                        # Process-owned path: populate the job and call
+                        # run().  The retained task owns finalization even
+                        # after the caller is cancelled.
+                        fin_job.finalization_data = fin_data
+                        fin_job.set_dependencies(
+                            finalizer=finalizer,
+                            selected=selected,
+                            effects_applier=getattr(self, "_effects_applier", None),
+                            router=getattr(self, "_router", None),
+                            quota_estimator=getattr(self, "_quota_estimator", None),
+                            health_manager=getattr(self, "_health_manager", None),
+                            stream_diagnostics=self._stream_diagnostics,
                         )
-                        await self._enqueue_finalization_retry(
-                            selected,
-                            context,
-                            outcome="CLIENT_CANCELLED",
-                        )
+                        try:
+                            await fin_job.run()
+                        except TimeoutError:
+                            logger.error(
+                                "Finalization job timed out for "
+                                "cancelled stream %s; retained task "
+                                "continues",
+                                context.request_id,
+                            )
+                        except Exception:
+                            logger.exception(
+                                "Finalization job failed for "
+                                "cancelled stream %s; retained task "
+                                "continues",
+                                context.request_id,
+                            )
                     else:
-                        self._stream_diagnostics.record_outcome(
-                            STREAM_OUTCOME_CLIENT_CANCELLED,
-                            proxy_request_id=context.request_id,
-                            db_request_id=selected.db_request_id,
-                            provider_id=selected.provider_id,
-                            account_name=selected.account_name,
-                            model_id=selected.model_id,
-                            protocol=context.upstream_protocol,
-                            elapsed_ms=cancel_latency_total,
-                            bytes_emitted=bytes_emitted,
-                            first_byte_ms=(
-                                int(first_byte_ms) if first_byte_ms > 0 else None
-                            ),
-                            upstream_connect_ms=cancel_connect_ms_value,
-                            upstream_header_ms=self._upstream_header_ms(context),
-                            upstream_read_ms=cancel_read_ms_value,
-                            attempt=selected.attempt_number,
-                        )
+                        # Legacy path: shielded finalizer with 10s timeout.
+                        try:
+                            await asyncio.wait_for(
+                                asyncio.shield(finalizer.finalize(selected, fin_data)),
+                                timeout=10.0,
+                            )
+                        except TimeoutError:
+                            logger.error(
+                                "Finalizer timed out for cancelled stream %s; "
+                                "request %s may leak as pending",
+                                context.request_id,
+                                selected.db_request_id,
+                            )
+                            self._stream_diagnostics.record_outcome(
+                                STREAM_OUTCOME_FINALIZER_TIMEOUT,
+                                proxy_request_id=context.request_id,
+                                db_request_id=selected.db_request_id,
+                                provider_id=selected.provider_id,
+                                account_name=selected.account_name,
+                                model_id=selected.model_id,
+                                protocol=context.upstream_protocol,
+                                elapsed_ms=cancel_latency_total,
+                                bytes_emitted=bytes_emitted,
+                                first_byte_ms=(
+                                    int(first_byte_ms) if first_byte_ms > 0 else None
+                                ),
+                                upstream_connect_ms=cancel_connect_ms_value,
+                                upstream_header_ms=self._upstream_header_ms(context),
+                                upstream_read_ms=cancel_read_ms_value,
+                                attempt=selected.attempt_number,
+                            )
+                            await self._enqueue_finalization_retry(
+                                selected,
+                                context,
+                                outcome="CLIENT_CANCELLED",
+                            )
+                        except Exception:
+                            logger.exception(
+                                "Finalizer failed for cancelled stream %s",
+                                context.request_id,
+                            )
+                            self._stream_diagnostics.record_outcome(
+                                STREAM_OUTCOME_FINALIZER_FAILED,
+                                proxy_request_id=context.request_id,
+                                db_request_id=selected.db_request_id,
+                                provider_id=selected.provider_id,
+                                account_name=selected.account_name,
+                                model_id=selected.model_id,
+                                protocol=context.upstream_protocol,
+                                elapsed_ms=cancel_latency_total,
+                                bytes_emitted=bytes_emitted,
+                                first_byte_ms=(
+                                    int(first_byte_ms) if first_byte_ms > 0 else None
+                                ),
+                                upstream_connect_ms=cancel_connect_ms_value,
+                                upstream_header_ms=self._upstream_header_ms(context),
+                                upstream_read_ms=cancel_read_ms_value,
+                                attempt=selected.attempt_number,
+                            )
+                            await self._enqueue_finalization_retry(
+                                selected,
+                                context,
+                                outcome="CLIENT_CANCELLED",
+                            )
+                    self._stream_diagnostics.record_outcome(
+                        STREAM_OUTCOME_CLIENT_CANCELLED,
+                        proxy_request_id=context.request_id,
+                        db_request_id=selected.db_request_id,
+                        provider_id=selected.provider_id,
+                        account_name=selected.account_name,
+                        model_id=selected.model_id,
+                        protocol=context.upstream_protocol,
+                        elapsed_ms=cancel_latency_total,
+                        bytes_emitted=bytes_emitted,
+                        first_byte_ms=(
+                            int(first_byte_ms) if first_byte_ms > 0 else None
+                        ),
+                        upstream_connect_ms=cancel_connect_ms_value,
+                        upstream_header_ms=self._upstream_header_ms(context),
+                        upstream_read_ms=cancel_read_ms_value,
+                        attempt=selected.attempt_number,
+                    )
                 raise
             except Exception as exc:
                 # Midstream error - finalize, no retry

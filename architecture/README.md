@@ -79,6 +79,7 @@ Key invariants:
 - Pre-body failures can retry; no retry after first downstream byte emitted
 - Every retryable failed attempt must reach terminal state before the next attempt
 - Each attempt reservation is released exactly once via `AttemptFinalizer`
+- **Process-owned request finalization (Plan 026)**: streaming cancellation finalization is owned by a retained `RequestFinalizationJob` registered before the inner stream generator; on `CancelledError`, the retained task completes finalization independently of request waiters, replacing the fragile `asyncio.wait_for(asyncio.shield(...), timeout=10)` pattern. The `RequestFinalizationSupervisor` provides bounded registry, diagnostics, startup reconciliation, and shutdown drain.
 - The same URL composition rules apply to catalog fetch and chat dispatch
 - **Structured observability persistence (migrations 0026-0029)** every `request_attempts` row carries provider/model/protocol/retry_category/latency/bytes/streamed/is_retry_outcome; every routing decision is persisted to `routing_decisions` in the same transaction as the `request_attempts` INSERT; safety-net tasks (`_crash_recovery`, `_finalize_stale_requests_once`, `reconcile_expired_reservations`) record `operational_events` rows inside the same transaction as the durable state mutation; latency is decomposed into `upstream_connect_ms / upstream_read_ms / coordinator_overhead_ms` so the dashboard can distinguish network vs upstream vs eggpool-side bottlenecks
 - **Runtime metrics are best-effort and process-local** — the `/api/stats/runtime` endpoint and `eggpool runtime-status` CLI command gather process topology, memory, background task state, database health, OS load average (`os.getloadavg` + normalized per-core), and a bounded rolling-window dispatch-overhead distribution via `DispatchOverheadRecorder` (`src/eggpool/runtime_dispatch.py`); failed probes return `null` rather than raising, `probe_errors` is capped to 16 truncated entries, and the endpoint is always auth-gated even with a public dashboard
@@ -3047,6 +3048,15 @@ cancellation path used to fall back to the broad 60-second
 `_finalize_stale_requests_once` sweep. `FinalizationRetryQueue`
 (`src/eggpool/request/finalization_queue.py`) closes that gap:
 
+**Plan 026 update**: when a `RequestFinalizationSupervisor` is
+available (wired through `RuntimeGenerationFactory`), the streaming
+cancellation path uses a process-owned `RequestFinalizationJob`
+instead of the fragile `asyncio.wait_for(asyncio.shield(...),
+timeout=10)` pattern. The job is registered before the inner stream
+generator; on `CancelledError`, the retained task owns finalization
+even when every request waiter is cancelled. The legacy shielded path
+remains as a fallback when no supervisor is available.
+
 - **Bounded** (`max_entries = 1024` default). Overflow drops a new
   entry and increments `dropped_overflow`.
 - **Idempotent**. Re-enqueuing an existing `enqueue_token` is a no-op.
@@ -4210,3 +4220,54 @@ Thinking trace extended with `provider_control_decision` and `provider_control_w
 - `tests/unit/test_plan_024_thinking_metrics.py` — provider control counters
 - `tests/integration/test_plan_024_opencode_minimax_contract.py` — end-to-end OpenCode Go MiniMax-M3 contract, distinct MiniMax native behavior, collapsed model contracts, no durable state changes
 - `tests/integration/test_plan_024_compatibility_retry.py` — compatibility retry deferral verification
+
+## Typed Failure Effects and Bounded Model Quarantine (Plan 025)
+
+Phase 3 of the upstream error isolation roadmap. Centralizes the consequences of request and upstream failures into one typed, test-pinned decision. Replaces first-observation indefinite model withdrawal with bounded, provider/account/model/protocol-scoped quarantine that requires corroboration before becoming terminal and automatically clears on recovery.
+
+### Key components
+
+- `FailureObservation` (`src/eggpool/failure/observation.py`) — immutable input record with source, status_code, error_class, provider/account/model scope, response_signal, retry_after, and response_started.
+- `FailureEffects` (`src/eggpool/failure/effects.py`) — immutable decision output with retry, retry_scope, client_outcome, account_effect, model_effect, circuit_penalty, persist_backoff, backoff_reason/until, release_probe_only, and evidence_class.
+- `classify_failure_effects()` (`src/eggpool/failure/classifier.py`) — single pure classifier with table-driven decision logic covering every status/body/error-class matrix row.
+- `ModelQuarantine` (`src/eggpool/failure/quarantine.py`) — state machine (`healthy → suspected → quarantined → terminal_withdrawn`) keyed by (provider_id, account_id, canonical_model_id, upstream_model_id, upstream_protocol).
+- `EffectsApplier` (`src/eggpool/failure/applier.py`) — applies effects exactly once per attempt via idempotency key.
+- `extract_failure_signal()` (`src/eggpool/failure/signal_extract.py`) — bounded conservative signal extraction from response bodies.
+
+### Tests
+
+- `tests/unit/test_plan_025_failure_effects_table.py` — pure classifier unit tests
+- `tests/unit/test_plan_025_failure_signal_extraction.py` — signal extraction tests
+- `tests/unit/test_plan_025_model_quarantine_state_machine.py` — state machine transitions
+- `tests/unit/test_plan_025_effects_idempotency.py` — applier idempotency
+- `tests/unit/test_plan_025_quarantine_hydration.py` — hydration from SQLite
+- `tests/unit/test_plan_025_quarantine_cli.py` — operator CLI
+- `tests/integration/test_plan_025_error_isolation.py` — error isolation matrix
+- `tests/integration/test_plan_025_cross_provider_quarantine.py` — cross-provider quarantine
+- `tests/integration/test_plan_025_closure_evidence.py` — end-to-end pipeline verification
+
+## Process-Owned Request Finalization (Plan 026)
+
+Makes selected-attempt cleanup independent of the client request task. Once EggPool has durably created a request, attempt, or reservation and claimed runtime ownership, one retained process-owned finalization job must own terminal reconciliation until every durable and in-memory obligation has either completed or entered a bounded, observable retry state.
+
+### Design principle
+
+`asyncio.shield()` alone is not ownership. A shielded coroutine may continue after the outer task is cancelled, while the outer task skips subsequent cleanup. Eggpool must retain the finalization task in process-owned state, observe its completion independently of request waiters, reconcile completion exactly once, and keep bounded retry ownership when durable finalization cannot complete immediately.
+
+### Key components
+
+- `FinalizationIdentity` (`src/eggpool/request/finalization_job.py`) — immutable frozen dataclass containing all data needed to finalize without querying mutable request context.
+- `FinalizationProgress` — progress state machine (`created → durable_finalization_pending → durable_finalized → runtime_release_pending → runtime_released → analytics_pending → completed`); only `completed` is terminal.
+- `AttemptRuntimeLease` — idempotent runtime ownership token tracking active-count, quota-reservation, and health-probe acquisition/release facts.
+- `RequestFinalizationJob` — process-owned job with retained `asyncio.Task`, single-flight `run()` via `asyncio.shield`, concurrent-caller sharing, and completion callback.
+- `RequestFinalizationSupervisor` — bounded, deduplicated registry of active jobs with process-owned completion reconciliation, bounded history deque (scalar-only records), startup stale-state reconciliation, and shutdown drain/adopt.
+
+### Streaming cancellation integration
+
+The coordinator registers a finalization job before the inner stream generator. On `CancelledError`, the retained task owns finalization even when every request waiter is cancelled, replacing the fragile `asyncio.wait_for(asyncio.shield(...), timeout=10)` pattern. The `RuntimeGeneration` dataclass carries `finalization_supervisor` wired through `RuntimeGenerationFactory`.
+
+### Tests
+
+- `tests/unit/test_plan_026_runtime_ownership_token.py` — identity, lease, release semantics
+- `tests/unit/test_plan_026_finalization_state_machine.py` — progress, concurrent callers, cancellation safety
+- `tests/unit/test_plan_026_finalization_supervisor.py` — registry, drain, startup reconciliation, diagnostics
