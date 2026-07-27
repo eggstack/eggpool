@@ -37,6 +37,31 @@ aiosqlite wrapper with:
 - Transaction management: `async with db.transaction():`
 - Readiness probes: `probe_writable()` with owned transactions
 - `Database.vacuum()` — only sanctioned path for VACUUM
+- Plan 027: `DatabaseLifecycleState` enum with explicit states
+  (`disconnected → connecting → ready → invalidating → invalidated →
+  recovering → reconciling → ready / failed_closed → shutting_down`)
+- Plan 027: `connection_epoch` incremented on every successful `connect()`
+  for epoch-tracking in long-lived components
+- Plan 027: `writes_admitted` / `reads_admitted` cached admission facts
+- Plan 027: `_safe_rollback()` helper with bounded diagnostics
+- Plan 027: `AmbiguousDatabaseOperation` frozen dataclass for
+  indeterminate commit outcomes
+
+### `db/recovery.py` — DatabaseRecoveryController
+
+Plan 027: Process-owned single-flight recovery controller.
+
+- Receives invalidation notifications from `Database`
+- Stops admission of new correctness-critical writes
+- Marks readiness false for the duration of recovery
+- Detaches and closes the suspect connection with bounded timeout
+- Opens a fresh connection and re-runs migrations (in-memory DBs)
+  or verifies schema compatibility (file-backed DBs)
+- Runs a writable probe to confirm the replacement connection is usable
+- Reconciles ambiguous operations via built-in reconcilers
+- Retries with bounded exponential backoff (`[database.recovery]` config)
+- Single-flight: concurrent callers join the same recovery attempt
+- `RecoverySnapshot` for diagnostics (state, attempts, waiters, reasons)
 
 ### `db/repositories.py`
 

@@ -4271,3 +4271,39 @@ The coordinator registers a finalization job before the inner stream generator. 
 - `tests/unit/test_plan_026_runtime_ownership_token.py` — identity, lease, release semantics
 - `tests/unit/test_plan_026_finalization_state_machine.py` — progress, concurrent callers, cancellation safety
 - `tests/unit/test_plan_026_finalization_supervisor.py` — registry, drain, startup reconciliation, diagnostics
+
+## Database Connection Recovery (Plan 027)
+
+Allows EggPool to recover safely from an invalidated or indeterminate SQLite connection without requiring a process restart. The process detaches a suspect connection, opens a replacement, reconciles ambiguous operations, and restores readiness.
+
+### Design principle
+
+Fail closed on uncertain transaction outcome, but recover the process automatically. Never reuse an indeterminate connection. Never blindly replay a transaction whose commit may have succeeded. Reconcile using durable identities and state predicates.
+
+### Key components
+
+- `DatabaseLifecycleState` enum (`src/eggpool/db/connection.py`) — explicit state machine (`disconnected → connecting → ready → invalidating → invalidated → recovering → reconciling → ready / failed_closed → shutting_down`).
+- `connection_epoch` property — incremented on every successful `connect()` so long-lived components detect replacement.
+- `DatabaseRecoveryController` (`src/eggpool/db/recovery.py`) — single-flight recovery with bounded retry/escalation, reason-class tracking, and `RecoverySnapshot` diagnostics.
+- `AmbiguousDatabaseOperation` — frozen dataclass capturing indeterminate commit metadata for dispatch/finalization reconciliation.
+- `DatabaseRollbackError` — typed error when ROLLBACK itself fails after a body exception, distinct from `DatabaseCommitError`.
+- `_safe_rollback()` helper with bounded diagnostics.
+- `[database.recovery]` config section with `max_attempts`, `initial_backoff_ms`, `max_backoff_ms`, `reconciliation_timeout_s`, `fail_process_on_exhaustion`.
+- Wired into `ProcessRuntime.recovery_controller`, app.py startup/shutdown, `/readyz` recovery-state degradation.
+- `WritableProbe.force_probe_nowait()` for recovery-cycle refresh.
+
+### Recovery flow
+
+1. `Database._invalidate_connection()` transitions through `INVALIDATING → INVALIDATED` and notifies the recovery controller.
+2. The controller starts a single-flight recovery task; concurrent callers join the same attempt.
+3. The suspect connection is closed and a replacement opened.
+4. For in-memory DBs, migrations are re-run; for file-backed DBs, schema compatibility is verified.
+5. A writable probe confirms the replacement connection is usable.
+6. Ambiguous operations are reconciled via built-in reconcilers (`dispatch`, `finalization`, `boundary`).
+7. On success, `writes_admitted` and `reads_admitted` are restored; readiness recovers.
+8. On exhaustion, the database enters `failed_closed` state with precise diagnostics.
+
+### Tests
+
+- `tests/unit/test_plan_027_database_lifecycle.py` — state machine, epoch tracking, ambiguous ops, diagnostics
+- `tests/unit/test_plan_027_recovery_singleflight.py` — concurrent waiters, retry, shutdown, snapshot
