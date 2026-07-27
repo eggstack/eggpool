@@ -1444,7 +1444,7 @@ class TestAppStateAuditEnforcementPhase7:
         readyz_start = source.find("async def readyz(")
         assert readyz_start != -1, "readyz handler not found"
         # Find the end of readyz (next @app.get or next function def)
-        readyz_section = source[readyz_start : readyz_start + 3000]
+        readyz_section = source[readyz_start : readyz_start + 4000]
         assert "runtime_manager.active_snapshot()" in readyz_section, (
             "readyz must use runtime_manager.active_snapshot()"
             " for generation-owned checks"
