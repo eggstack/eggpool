@@ -10,8 +10,27 @@ demonstrates recovery.
 
 from __future__ import annotations
 
+from eggpool.failure.applier import AppliedEffects, EffectsApplier
 from eggpool.failure.effects import FailureEffects
 from eggpool.failure.observation import FailureObservation
+from eggpool.failure.quarantine import (
+    EvidenceProvenance,
+    ModelQuarantine,
+    QuarantineEntry,
+    QuarantineState,
+    entry_from_row,
+)
 from eggpool.failure.signal import FailureSignal
 
-__all__ = ["FailureEffects", "FailureObservation", "FailureSignal"]
+__all__ = [
+    "AppliedEffects",
+    "EffectsApplier",
+    "EvidenceProvenance",
+    "FailureEffects",
+    "FailureObservation",
+    "FailureSignal",
+    "ModelQuarantine",
+    "QuarantineEntry",
+    "QuarantineState",
+    "entry_from_row",
+]

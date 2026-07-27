@@ -250,6 +250,23 @@ class RuntimeGenerationFactory:
         # -- Hydrate persisted backoffs into health manager -----------------
         await _hydrate_health_from_backoffs(account_backoff_repo, health_manager)
 
+        # -- Plan 025: bounded model quarantine ------------------------------
+        # The quarantine state machine is generation-owned and survives the
+        # lifetime of the active generation.  Durable state is read from
+        # ``model_quarantine`` table on hydration and written back when
+        # effects are applied.
+        from eggpool.db.repositories import ModelQuarantineRepository
+        from eggpool.failure import EffectsApplier, ModelQuarantine
+
+        model_quarantine_repo = ModelQuarantineRepository(db)
+        quarantine = ModelQuarantine()
+        try:
+            for row in await model_quarantine_repo.list_all():
+                entry = _quarantine_entry_from_row(row)
+                quarantine.hydrate_entry(entry)
+        except Exception:
+            logger.exception("model_quarantine: hydration failed; starting empty")
+
         # -- Catalog service -----------------------------------------------
         ping_repo = PingRepository(db)
         catalog = CatalogService(
@@ -274,6 +291,7 @@ class RuntimeGenerationFactory:
             registry,
             catalog,
             health_manager,
+            quarantine=quarantine,
         )
 
         # -- Load model price overrides into estimator ----------------------
@@ -300,6 +318,18 @@ class RuntimeGenerationFactory:
 
         # -- Stream diagnostics (process-wide singleton) --------------------
         stream_diagnostics = get_stream_diagnostics()
+
+        # -- Plan 025: typed failure effects applier ---------------------
+        # Built here so the coordinator's :func:`_apply_health_transition`
+        # can route through the typed classifier.  The applier captures
+        # the same health_manager/quarantine/catalog cache the
+        # coordinator uses for the legacy ``classify_failure_category``
+        # path; it never falls back to silent category reclassification.
+        effects_applier = EffectsApplier(
+            health_manager=health_manager,
+            quarantine=quarantine,
+            catalog_cache=catalog.cache,
+        )
 
         # -- Request coordinator --------------------------------------------
         coordinator = RequestCoordinator(
@@ -335,6 +365,8 @@ class RuntimeGenerationFactory:
             use_dispatch_writer=(
                 process.dispatch_writer is not None and config.dispatch_writer.enabled
             ),
+            effects_applier=effects_applier,
+            quarantine=quarantine,
         )
 
         # -- Finalization retry queue ---------------------------------------
@@ -436,6 +468,8 @@ class RuntimeGenerationFactory:
             finalization_retry_queue=finalization_retry_queue,
             routing_trace_guard=routing_trace_guard,
             routing_trace_writer=routing_trace_writer,
+            effects_applier=effects_applier,
+            model_quarantine=quarantine,
         )
 
         return PreparedRuntimeGeneration(
@@ -473,6 +507,7 @@ class RuntimeGenerationFactory:
         registry: AccountRegistry,
         catalog: CatalogService,
         health_manager: HealthManager,
+        quarantine: Any | None = None,
     ) -> Router:
         """Construct and configure a Router from config."""
         from eggpool.routing.config import routing_stale_after_s  # noqa: PLC0415
@@ -506,8 +541,8 @@ class RuntimeGenerationFactory:
             missing_account_recovery_callback=_schedule_missing_account_recovery,
             missing_account_recovery_min_interval_s=float(
                 config.models.refresh_interval_s,
-            )
-            / 2.0,
+            ),
+            quarantine=quarantine,
         )
 
         # Wire routing config into scorer and estimator
@@ -673,3 +708,10 @@ async def _hydrate_health_from_backoffs(
             health.cooldown_until = time.time() + remaining
             health.health_state = "cooldown"
             health.is_healthy = False
+
+
+def _quarantine_entry_from_row(row: dict[str, object]) -> Any:
+    """Convert a quarantine repository row into a :class:`QuarantineEntry`."""
+    from eggpool.failure import entry_from_row  # noqa: PLC0415
+
+    return entry_from_row(row)

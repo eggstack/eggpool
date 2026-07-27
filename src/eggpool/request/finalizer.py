@@ -20,6 +20,12 @@ from eggpool.db.repositories import (
     RequestRepository,
     ReservationRepository,
 )
+from eggpool.failure import (
+    EffectsApplier,
+    FailureObservation,
+    ModelQuarantine,
+)
+from eggpool.failure.classifier import classify_failure_effects
 from eggpool.health.health_manager import classify_failure_category
 from eggpool.security.redaction import (
     MAX_REDACTED_ERROR_DETAIL_CHARS,
@@ -185,6 +191,8 @@ class RequestFinalizer:
         health_manager: HealthManager | None = None,
         persist_error_detail: bool = False,
         metrics_coalescer: Any | None = None,  # noqa: ANN401
+        effects_applier: EffectsApplier | None = None,
+        quarantine: ModelQuarantine | None = None,
     ) -> None:
         self._db = db
         self._request_repo = request_repo
@@ -197,6 +205,12 @@ class RequestFinalizer:
         self._health_manager = health_manager
         self._persist_error_detail = persist_error_detail
         self._metrics_coalescer = metrics_coalescer
+        # Plan 025: typed failure effects applier.  When the
+        # coordinator has already applied effects for the same
+        # attempt identity, ``effects_applier.apply_once`` is a
+        # no-op so the finalizer never double-penalizes health.
+        self._effects_applier = effects_applier
+        self._quarantine = quarantine
 
     async def finalize(
         self,
@@ -1020,19 +1034,27 @@ class RequestFinalizer:
                 mid = _get_model_id(selected)
                 if data.outcome == FinalizationOutcome.COMPLETED:
                     self._health_manager.record_success(selected.account_name, mid)
+                    self._clear_quarantine_on_success(selected, mid)
                 elif data.outcome in (
                     FinalizationOutcome.UPSTREAM_ERROR,
                     FinalizationOutcome.TIMEOUT,
                     FinalizationOutcome.INTERRUPTED,
                 ):
-                    category = classify_failure_category(
-                        data.error_class, data.status_code
+                    applied = self._apply_finalizer_failure_effects(
+                        selected=selected,
+                        mid=mid,
+                        error_class=data.error_class,
+                        status_code=data.status_code,
                     )
-                    self._health_manager.record_failure(
-                        selected.account_name,
-                        model_id=mid,
-                        reason=category.value,
-                    )
+                    if not applied:
+                        category = classify_failure_category(
+                            data.error_class, data.status_code
+                        )
+                        self._health_manager.record_failure(
+                            selected.account_name,
+                            model_id=mid,
+                            reason=category.value,
+                        )
                 elif data.outcome in (
                     FinalizationOutcome.CLIENT_CANCELLED,
                     FinalizationOutcome.CLIENT_ERROR,
@@ -1108,6 +1130,74 @@ class RequestFinalizer:
         if outcome == FinalizationOutcome.CLIENT_CANCELLED:
             return "cancelled"
         return "error"
+
+    def _apply_finalizer_failure_effects(
+        self,
+        *,
+        selected: Any,
+        mid: str,
+        error_class: str | None,
+        status_code: int | None,
+    ) -> bool:
+        """Apply Plan 025 typed effects for a finalization failure.
+
+        Returns ``True`` when the effects applier consumed the
+        failure (whether or not it mutated state), ``False`` when
+        no applier is wired — the caller falls back to the legacy
+        :func:`classify_failure_category` path.
+        """
+        if self._effects_applier is None or self._health_manager is None:
+            return False
+        provider_id = getattr(selected, "provider_id", None) or "unknown"
+        upstream_protocol = getattr(selected, "protocol", None) or "openai"
+        client_protocol = upstream_protocol
+        observation = FailureObservation(
+            source="upstream_http",
+            status_code=status_code,
+            error_class=error_class,
+            provider_id=provider_id,
+            account_name=selected.account_name,
+            model_id=mid,
+            upstream_model_id=mid,
+            client_protocol=client_protocol,
+            upstream_protocol=upstream_protocol,
+            response_signal=None,
+            retry_after_s=None,
+            response_started=False,
+        )
+        effects = classify_failure_effects(observation)
+        attempt_key = (
+            f"finalize|{selected.account_name}|{mid}|{provider_id}"
+            f"|{upstream_protocol}|{status_code}|{error_class or ''}"
+        )
+        self._effects_applier.apply_once(
+            attempt_key=attempt_key,
+            observation=observation,
+            effects=effects,
+        )
+        return True
+
+    def _clear_quarantine_on_success(self, selected: Any, mid: str) -> None:
+        """Clear bounded quarantine on successful completion.
+
+        Successful traffic demonstrates recovery from bounded
+        quarantine; the finalizer is the authoritative place to
+        record that.  Operator-disabled entries and terminal
+        withdrawals remain unaffected.
+        """
+        if self._effects_applier is None:
+            return
+        provider_id = getattr(selected, "provider_id", None)
+        upstream_protocol = getattr(selected, "protocol", None) or "openai"
+        if not provider_id or not mid:
+            return
+        self._effects_applier.clear_on_success(
+            provider_id=provider_id,
+            account_id=selected.account_name,
+            canonical_model_id=mid,
+            upstream_model_id=mid,
+            upstream_protocol=upstream_protocol,
+        )
 
 
 def _get_model_id(selected: Any) -> str:

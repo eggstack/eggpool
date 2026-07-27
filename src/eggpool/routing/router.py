@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from eggpool.accounts.state import AccountRuntimeState
     from eggpool.catalog.capabilities import ThinkingRequestRequirement
     from eggpool.catalog.service import CatalogService
+    from eggpool.failure import ModelQuarantine
     from eggpool.health.health_manager import HealthManager
 
 logger = logging.getLogger(__name__)
@@ -208,11 +209,13 @@ class Router:
         fairness_scope: str = "provider_model_protocol",
         missing_account_recovery_callback: Callable[[str], None] | None = None,
         missing_account_recovery_min_interval_s: float = 60.0,
+        quarantine: ModelQuarantine | None = None,
     ) -> None:
         self._registry = registry
         self._catalog = catalog
         self._quota_estimator = quota_estimator or QuotaEstimator()
         self._health_manager = health_manager
+        self._quarantine = quarantine
         self._stale_after_s = stale_after_s
         self._local_quota_mode = local_quota_mode
         self._fairness_mode = fairness_mode
@@ -1152,6 +1155,7 @@ class Router:
         capability_policy: dict[str, str] | None = None,
     ) -> RoutingCandidates:
         """Return eligible runtime states and indexes for a routing decision."""
+        upstream_protocol = protocol or "openai"
         eligible = get_eligible_accounts(
             self._registry.get_enabled_states(),
             model_id,
@@ -1166,6 +1170,8 @@ class Router:
             local_quota_mode=self._local_quota_mode,
             thinking_requirement=thinking_requirement,
             capability_policy=capability_policy,
+            quarantine=self._quarantine,
+            upstream_protocol=upstream_protocol,
         )
         if exclude_accounts:
             eligible = [

@@ -44,6 +44,12 @@ from eggpool.errors import (
     UpstreamError,
     UpstreamExhaustedError,
 )
+from eggpool.failure import (
+    EffectsApplier,
+    FailureObservation,
+    ModelQuarantine,
+)
+from eggpool.failure.classifier import classify_failure_effects
 from eggpool.health.health_manager import (
     FailureCategory,
     classify_failure_category,
@@ -603,6 +609,8 @@ class RequestCoordinator:
         selection_claim_diagnostics: SelectionClaimDiagnostics | None = None,
         dispatch_writer: Any | None = None,  # noqa: ANN401
         use_dispatch_writer: bool = False,
+        effects_applier: EffectsApplier | None = None,
+        quarantine: ModelQuarantine | None = None,
     ) -> None:
         self._registry = registry
         self._catalog = catalog
@@ -661,6 +669,20 @@ class RequestCoordinator:
         self._dispatch_writer = dispatch_writer
         self._use_dispatch_writer = use_dispatch_writer and dispatch_writer is not None
 
+        # Plan 025: typed failure effects applier + bounded quarantine.
+        # The factory constructs and injects these; legacy tests may
+        # instantiate the coordinator without them, so fall back to a
+        # default applier that uses the health_manager + catalog cache.
+        self._quarantine = quarantine if quarantine is not None else ModelQuarantine()
+        if effects_applier is not None:
+            self._effects_applier: EffectsApplier | None = effects_applier
+        else:
+            self._effects_applier = EffectsApplier(
+                health_manager=health_manager,
+                quarantine=self._quarantine,
+                catalog_cache=catalog.cache,
+            )
+
         # Build the attempt finalizer with all dependencies
         self._attempt_finalizer = AttemptFinalizer(
             db=db,
@@ -682,6 +704,8 @@ class RequestCoordinator:
             health_manager=health_manager,
             persist_error_detail=persist_error_detail,
             metrics_coalescer=metrics_coalescer,
+            effects_applier=self._effects_applier,
+            quarantine=self._quarantine,
         )
 
     async def _enqueue_finalization_retry(
@@ -1155,7 +1179,12 @@ class RequestCoordinator:
                 # Apply health transitions only when the attempt transitioned
                 if result.attempt_transitioned:
                     await self._apply_health_transition(
-                        selected.account_name, err, context.model_id
+                        selected.account_name,
+                        err,
+                        context.model_id,
+                        provider_id=selected.provider_id,
+                        upstream_protocol=context.upstream_protocol,
+                        client_protocol=context.protocol,
                     )
                     health_applied = True
                 # If no other accounts are eligible, don't retry — pass
@@ -1194,8 +1223,61 @@ class RequestCoordinator:
                 # failures, 429 rate limits, 402 quota exhausted) so the
                 # circuit breaker can open. Mark ``health_applied`` so
                 # ``_handle_exhausted`` does not double-apply the same
-                # failure through the finalizer.
-                if self._health_manager is not None:
+                # failure through the finalizer.  Plan 025: when an
+                # effects applier is wired, route through the typed
+                # effects classifier so the same decision table
+                # governs retryable and non-retryable failures.
+                if (
+                    self._effects_applier is not None
+                    and self._health_manager is not None
+                ):
+                    observation = FailureObservation(
+                        source="upstream_http",
+                        status_code=err.status_code,
+                        error_class=None,
+                        provider_id=selected.provider_id,
+                        account_name=selected.account_name,
+                        model_id=context.model_id,
+                        upstream_model_id=context.model_id,
+                        client_protocol=context.protocol,
+                        upstream_protocol=context.upstream_protocol,
+                        response_signal=None,
+                        retry_after_s=None,
+                        response_started=False,
+                    )
+                    effects = classify_failure_effects(observation)
+                    attempt_key = (
+                        f"nonretry|{selected.account_name}|{context.model_id}"
+                        f"|{selected.provider_id}|{context.upstream_protocol}"
+                        f"|{err.status_code}"
+                    )
+                    if (
+                        self._effects_applier.apply_once(
+                            attempt_key=attempt_key,
+                            observation=observation,
+                            effects=effects,
+                        )
+                        is not None
+                    ):
+                        health_applied = True
+                    if effects.persist_backoff and effects.backoff_reason:
+                        await self._persist_backoff(
+                            account_name=selected.account_name,
+                            model_id=context.model_id
+                            if effects.model_effect
+                            in ("quarantine", "terminal_withdrawal")
+                            else None,
+                            reason=effects.backoff_reason,
+                            status_code=err.status_code,
+                            error_class=None,
+                            backoff_until=effects.backoff_until,
+                            consecutive_failures=(
+                                self._health_manager.get_account_health(
+                                    selected.account_name
+                                ).consecutive_failures
+                            ),
+                        )
+                elif self._health_manager is not None:
                     category = classify_failure_category(None, err.status_code)
                     if category == FailureCategory.AUTHENTICATION_FAILED:
                         self._health_manager.record_failure(
@@ -1639,6 +1721,33 @@ class RequestCoordinator:
         eligible_account_names = plan.eligible_names
         ranked_candidates = plan.ranked_candidates
 
+        # Plan 025: surface quarantine exclusions in the routing
+        # trace so the dashboard distinguishes bounded quarantine
+        # from circuit-breaker rejections.  Quarantined candidates
+        # are not in ``ranked_candidates`` (eligibility already
+        # filtered them) so we look at the broader enabled-state
+        # set and record a synthetic exclusion for any account
+        # currently under active quarantine.  This is purely
+        # informational — the eligibility filter has already
+        # removed them from the candidate set.
+        quarantine_exclusions: list[RoutingExclusion] = []
+        for state in self._registry.get_enabled_states():
+            account_provider = self._catalog.cache.get_provider_for_account(state.name)
+            check_provider = account_provider or context.provider_id or "unknown"
+            if self._quarantine.is_model_quarantined(
+                provider_id=check_provider,
+                account_id=state.name,
+                canonical_model_id=context.model_id,
+                upstream_model_id=context.model_id,
+                upstream_protocol=context.upstream_protocol,
+            ):
+                quarantine_exclusions.append(
+                    RoutingExclusion(
+                        account_name=state.name,
+                        reason="model_quarantined",
+                    )
+                )
+
         if not eligible_account_names:
             # Phase 5: distinguish pre-dispatch unavailability
             # from post-retry exhaustion. ``build_routing_plan``
@@ -2079,7 +2188,7 @@ class RequestCoordinator:
                         attempted_excluded_count=len(exclude),
                         top_score=top_score_value,
                         top_score_account_name=top_score_account_name,
-                        exclusions=tuple(exclusions),
+                        exclusions=tuple(exclusions + quarantine_exclusions),
                         score_components=score_components,
                     )
                     from eggpool.observability.routing_trace_writer import (
@@ -3997,9 +4106,33 @@ class RequestCoordinator:
         account_name: str,
         err: _RetryableUpstreamError,
         model_id: str,
+        provider_id: str | None = None,
+        upstream_protocol: str = "openai",
+        client_protocol: str = "openai",
     ) -> None:
-        """Apply health transitions for a failed account."""
+        """Apply health transitions for a failed account.
+
+        Plan 025: route the failure through the typed effects
+        classifier and apply the resulting
+        :class:`FailureEffects` exactly once via
+        :class:`EffectsApplier`.  Backwards compatibility: the legacy
+        :func:`classify_failure_category` path is preserved as the
+        no-applier fallback so test doubles that inject a ``None``
+        applier still produce the same final state machine
+        transitions.
+        """
         if self._health_manager is None:
+            return
+
+        if self._effects_applier is not None:
+            await self._apply_failure_effects(
+                account_name=account_name,
+                model_id=model_id,
+                provider_id=provider_id,
+                upstream_protocol=upstream_protocol,
+                client_protocol=client_protocol,
+                err=err,
+            )
             return
 
         category = classify_failure_category(err.error_class, err.status_code)
@@ -4075,6 +4208,103 @@ class RequestCoordinator:
                 account_name
             ).consecutive_failures,
         )
+
+    async def _apply_failure_effects(
+        self,
+        *,
+        account_name: str,
+        model_id: str,
+        provider_id: str | None,
+        upstream_protocol: str,
+        client_protocol: str,
+        err: _RetryableUpstreamError,
+    ) -> None:
+        """Apply Plan 025 typed failure effects via :class:`EffectsApplier`.
+
+        Builds a :class:`FailureObservation` from the upstream error
+        and routes it through the pure effects classifier.  Effects
+        are applied once per attempt identity and backoff is
+        persisted using the existing :func:`_persist_backoff` helper
+        so the SQLite contract is unchanged.
+        """
+        if self._effects_applier is None:
+            return
+
+        observation = FailureObservation(
+            source="upstream_http",
+            status_code=err.status_code,
+            error_class=err.error_class,
+            provider_id=provider_id,
+            account_name=account_name,
+            model_id=model_id,
+            upstream_model_id=model_id,
+            client_protocol=client_protocol,
+            upstream_protocol=upstream_protocol,
+            response_signal=None,
+            retry_after_s=err.retry_after,
+            response_started=False,
+        )
+        effects = classify_failure_effects(observation)
+
+        attempt_key = (
+            f"attempt|{account_name}|{model_id}|{provider_id or ''}"
+            f"|{upstream_protocol}|{err.status_code}|{err.error_class or ''}"
+        )
+
+        # The applier mutates health manager / quarantine / circuit
+        # breaker exactly once.  We only need to persist backoff and
+        # update runtime state below.
+        self._effects_applier.apply_once(
+            attempt_key=attempt_key,
+            observation=observation,
+            effects=effects,
+        )
+
+        # Persist backoff using the same helper as the legacy path.
+        if effects.persist_backoff and effects.backoff_reason:
+            await self._persist_backoff(
+                account_name=account_name,
+                model_id=model_id
+                if effects.model_effect in ("quarantine", "terminal_withdrawal")
+                else None,
+                reason=effects.backoff_reason,
+                status_code=err.status_code,
+                error_class=err.error_class,
+                backoff_until=effects.backoff_until,
+                consecutive_failures=(
+                    self._health_manager.get_account_health(
+                        account_name
+                    ).consecutive_failures
+                    if self._health_manager is not None
+                    else 0
+                ),
+            )
+
+        # Update runtime state with the normalized category so the
+        # routing layer can still observe failure counts even when the
+        # effects-applier handles health transitions.
+        state = self._registry.get_state(account_name)
+        if state is not None and effects.account_effect != "none":
+            state.record_failure(
+                effects.backoff_reason or effects.evidence_class,
+                cooldown_seconds=self._quota_exhausted_cooldown_seconds,
+                rate_limit_retry_after=err.retry_after
+                if effects.account_effect == "rate_limit"
+                else None,
+            )
+
+        # Clear the bound probe slot for request-local paths when the
+        # applier didn't already (model_effect != none already releases
+        # via _apply_model_effect; release_probe_only paths release via
+        # _apply_probe_release).  This branch is a no-op when the
+        # applier already released the slot, because
+        # ``release_request`` is idempotent on the half-open flag.
+        if (
+            effects.release_probe_only
+            and effects.account_effect == "none"
+            and self._health_manager is not None
+        ):
+            self._health_manager.release_request(account_name)
 
     async def _persist_backoff(
         self,

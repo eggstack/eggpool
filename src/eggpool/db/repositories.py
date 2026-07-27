@@ -1948,3 +1948,313 @@ class AccountBackoffRepository:
                 entry["backoff_until_epoch"] = _iso_to_epoch(entry.get("backoff_until"))
                 result.setdefault(int(entry["account_id"]), []).append(entry)
         return result
+
+
+class ModelQuarantineRepository:
+    """Persistence for bounded model quarantine state (Plan 025).
+
+    The :class:`eggpool.failure.quarantine.ModelQuarantine` in-memory
+    state machine needs durable backing so a restart does not silently
+    re-enable a model that has been observed failing.  This repository
+    persists the exact scope key (provider_id, account_id,
+    canonical_model_id, upstream_model_id, upstream_protocol), state,
+    observation counters, expiry, and clear tracking.
+
+    Writes are always wrapped in ``async with db.transaction():``;
+    readers use ``fetch_all`` which acquire the connection lock
+    independently.
+    """
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    @staticmethod
+    def _scope_key(
+        provider_id: str,
+        account_id: str,
+        canonical_model_id: str,
+        upstream_model_id: str | None,
+        upstream_protocol: str,
+    ) -> tuple[str, str, str, str | None, str]:
+        return (
+            provider_id,
+            account_id,
+            canonical_model_id,
+            upstream_model_id,
+            upstream_protocol,
+        )
+
+    async def upsert_observation(
+        self,
+        *,
+        provider_id: str,
+        account_id: str,
+        canonical_model_id: str,
+        upstream_model_id: str | None,
+        upstream_protocol: str,
+        state: str,
+        evidence_provenance: str,
+        reason: str,
+        first_observed_epoch: float,
+        last_observed_epoch: float,
+        observation_count: int,
+        expiry_epoch: float | None,
+        last_status_code: int | None,
+        last_error_class: str | None,
+    ) -> None:
+        """Record or refresh a quarantine observation row.
+
+        On first observation ``observation_count=1`` and the row is
+        INSERTed.  Subsequent observations UPDATE the existing row,
+        bumping ``observation_count``, ``last_observed``, ``expiry``,
+        and the latest status/error class evidence.
+        """
+        expiry_iso = _epoch_to_iso(expiry_epoch) if expiry_epoch is not None else None
+        first_iso = _epoch_to_iso(first_observed_epoch)
+        last_iso = _epoch_to_iso(last_observed_epoch)
+        scope = self._scope_key(
+            provider_id,
+            account_id,
+            canonical_model_id,
+            upstream_model_id,
+            upstream_protocol,
+        )
+        async with self._db.transaction():
+            existing = await self._db.fetch_one(
+                """
+                SELECT id, observation_count, first_observed FROM model_quarantine
+                WHERE provider_id = ? AND account_id = ? AND canonical_model_id = ?
+                  AND upstream_model_id IS ?
+                  AND upstream_protocol = ?
+                """,
+                scope,
+            )
+            if existing is None:
+                await self._db.execute_insert(
+                    """
+                    INSERT INTO model_quarantine (
+                        provider_id, account_id, canonical_model_id,
+                        upstream_model_id, upstream_protocol,
+                        state, evidence_provenance, reason,
+                        first_observed, last_observed, observation_count,
+                        expiry, last_status_code, last_error_class
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        provider_id,
+                        account_id,
+                        canonical_model_id,
+                        upstream_model_id,
+                        upstream_protocol,
+                        state,
+                        evidence_provenance,
+                        reason,
+                        first_iso,
+                        last_iso,
+                        observation_count,
+                        expiry_iso,
+                        last_status_code,
+                        last_error_class,
+                    ),
+                )
+            else:
+                await self._db.execute_write(
+                    """
+                    UPDATE model_quarantine SET
+                        state = ?,
+                        evidence_provenance = ?,
+                        reason = ?,
+                        last_observed = ?,
+                        observation_count = ?,
+                        expiry = ?,
+                        last_status_code = ?,
+                        last_error_class = ?,
+                        cleared_at = NULL,
+                        clear_reason = NULL,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (
+                        state,
+                        evidence_provenance,
+                        reason,
+                        last_iso,
+                        observation_count,
+                        expiry_iso,
+                        last_status_code,
+                        last_error_class,
+                        int(existing["id"]),
+                    ),
+                )
+
+    async def mark_cleared(
+        self,
+        *,
+        provider_id: str,
+        account_id: str,
+        canonical_model_id: str,
+        upstream_model_id: str | None,
+        upstream_protocol: str,
+        clear_reason: str,
+        cleared_epoch: float,
+    ) -> int:
+        """Mark a quarantine row cleared (state=healthy) and return rowcount.
+
+        ``clear_reason`` distinguishes successful request clears,
+        catalog reappearance clears, and operator clears so the audit
+        trail is preserved.  The row is not deleted; ``state`` is set
+        to ``healthy`` and ``cleared_at``/``clear_reason`` are recorded
+        so the audit history survives restarts.
+        """
+        cleared_iso = _epoch_to_iso(cleared_epoch)
+        scope = self._scope_key(
+            provider_id,
+            account_id,
+            canonical_model_id,
+            upstream_model_id,
+            upstream_protocol,
+        )
+        async with self._db.transaction():
+            return int(
+                await self._db.execute_write(
+                    """
+                    UPDATE model_quarantine SET
+                        state = 'healthy',
+                        cleared_at = ?,
+                        clear_reason = ?,
+                        expiry = NULL,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE provider_id = ? AND account_id = ? AND canonical_model_id = ?
+                      AND upstream_model_id IS ?
+                      AND upstream_protocol = ?
+                    """,
+                    (cleared_iso, clear_reason, *scope),
+                )
+            )
+
+    async def list_active(
+        self,
+        *,
+        now: float | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """Return currently-active (suspected/quarantined/terminal_withdrawn) rows.
+
+        Expired bounded entries (``expiry <= now`` and ``state !=
+        'healthy'`` and ``state != 'terminal_withdrawn'``) are excluded
+        so callers can render a snapshot of what is actually suppressed.
+        Terminal rows are always included because they never expire.
+        """
+        if now is None:
+            now = time.time()
+        now_iso = _epoch_to_iso(now)
+        rows = await self._db.fetch_all(
+            """
+            SELECT id, provider_id, account_id, canonical_model_id,
+                   upstream_model_id, upstream_protocol, state,
+                   evidence_provenance, reason, first_observed,
+                   last_observed, observation_count, expiry, cleared_at,
+                   clear_reason, last_status_code, last_error_class
+            FROM model_quarantine
+            WHERE state != 'healthy'
+              AND (expiry IS NULL OR expiry > ? OR state = 'terminal_withdrawn')
+            ORDER BY state, last_observed DESC
+            LIMIT ?
+            """,
+            (now_iso, limit),
+        )
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            entry = dict(row)
+            entry["first_observed_epoch"] = _iso_to_epoch(entry.get("first_observed"))
+            entry["last_observed_epoch"] = _iso_to_epoch(entry.get("last_observed"))
+            entry["expiry_epoch"] = _iso_to_epoch(entry.get("expiry"))
+            entry["cleared_at_epoch"] = _iso_to_epoch(entry.get("cleared_at"))
+            results.append(entry)
+        return results
+
+    async def list_all(self, *, limit: int = 5000) -> list[dict[str, Any]]:
+        """Return every quarantine row for startup hydration.
+
+        Used by the startup hydration path.  Expired rows are
+        included so the audit trail survives restart; the in-memory
+        state machine's :meth:`is_model_quarantined` performs its own
+        expiry check at access time.
+        """
+        rows = await self._db.fetch_all(
+            """
+            SELECT id, provider_id, account_id, canonical_model_id,
+                   upstream_model_id, upstream_protocol, state,
+                   evidence_provenance, reason, first_observed,
+                   last_observed, observation_count, expiry, cleared_at,
+                   clear_reason, last_status_code, last_error_class
+            FROM model_quarantine
+            ORDER BY last_observed DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            entry = dict(row)
+            entry["first_observed_epoch"] = _iso_to_epoch(entry.get("first_observed"))
+            entry["last_observed_epoch"] = _iso_to_epoch(entry.get("last_observed"))
+            entry["expiry_epoch"] = _iso_to_epoch(entry.get("expiry"))
+            entry["cleared_at_epoch"] = _iso_to_epoch(entry.get("cleared_at"))
+            results.append(entry)
+        return results
+
+    async def expire_old(self, *, now: float | None = None) -> int:
+        """Delete expired bounded quarantine rows; returns count removed.
+
+        Terminal rows (``state = 'terminal_withdrawn'``) and any
+        row that has been marked cleared are preserved.  Only
+        suspected/quarantined rows whose ``expiry <= now`` are
+        removed; their audit trail lives in the row's
+        ``cleared_at``/``clear_reason`` already.
+        """
+        if now is None:
+            now = time.time()
+        now_iso = _epoch_to_iso(now)
+        async with self._db.transaction():
+            return int(
+                await self._db.execute_write(
+                    """
+                    DELETE FROM model_quarantine
+                    WHERE expiry IS NOT NULL
+                      AND expiry <= ?
+                      AND state IN ('suspected', 'quarantined')
+                    """,
+                    (now_iso,),
+                )
+            )
+
+    async def delete_row(
+        self,
+        *,
+        provider_id: str,
+        account_id: str,
+        canonical_model_id: str,
+        upstream_model_id: str | None,
+        upstream_protocol: str,
+    ) -> int:
+        """Delete a single quarantine row; returns rowcount."""
+        scope = self._scope_key(
+            provider_id,
+            account_id,
+            canonical_model_id,
+            upstream_model_id,
+            upstream_protocol,
+        )
+        async with self._db.transaction():
+            return int(
+                await self._db.execute_write(
+                    """
+                    DELETE FROM model_quarantine
+                    WHERE provider_id = ? AND account_id = ? AND canonical_model_id = ?
+                      AND upstream_model_id IS ?
+                      AND upstream_protocol = ?
+                    """,
+                    scope,
+                )
+            )

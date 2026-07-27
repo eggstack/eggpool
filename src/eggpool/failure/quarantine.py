@@ -517,7 +517,7 @@ class ModelQuarantine:
         self._entries[key] = entry
 
     def _expire_entry(self, key: str, entry: QuarantineEntry, now: float) -> None:
-        """Mark an entry as expired and remove it."""
+        """Mark an entry as expired and remove it from the dict."""
         logger.debug(
             "model_quarantine: expired model=%s provider=%s account=%s state=%s",
             entry.canonical_model_id,
@@ -526,3 +526,75 @@ class ModelQuarantine:
             entry.state.value,
         )
         del self._entries[key]
+
+
+def entry_from_row(row: dict[str, object]) -> QuarantineEntry:
+    """Construct a :class:`QuarantineEntry` from a repository row.
+
+    The :class:`eggpool.db.repositories.ModelQuarantineRepository` returns
+    plain dicts with epoch floats (no SQLite timestamp parsing).  This
+    helper centralises the conversion so callers do not need to know
+    about :class:`EvidenceProvenance` or :class:`QuarantineState` enum
+    parsing.  Unknown enum values default to the safest choice
+    (``HEALTHY``/``RUNTIME_HTTP``) so a future schema migration that
+    adds a state cannot crash startup hydration.
+    """
+    state_str = str(row.get("state", "healthy"))
+    try:
+        state = QuarantineState(state_str)
+    except ValueError:
+        state = QuarantineState.HEALTHY
+    provenance_str = str(row.get("evidence_provenance", "runtime_http"))
+    try:
+        provenance = EvidenceProvenance(provenance_str)
+    except ValueError:
+        provenance = EvidenceProvenance.RUNTIME_HTTP
+
+    def _epoch(value: object) -> float | None:
+        if value is None:
+            return None
+        try:
+            return float(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None
+
+    def _int(value: object) -> int | None:
+        if value is None:
+            return None
+        try:
+            return int(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None
+
+    upstream_model_id = row.get("upstream_model_id")
+    if upstream_model_id is not None and not isinstance(upstream_model_id, str):
+        upstream_model_id = str(upstream_model_id)
+
+    upstream_protocol = str(row.get("upstream_protocol", "openai"))
+    if not upstream_protocol:
+        upstream_protocol = "openai"
+
+    return QuarantineEntry(
+        state=state,
+        provider_id=str(row.get("provider_id", "")),
+        account_id=str(row.get("account_id", "")),
+        canonical_model_id=str(row.get("canonical_model_id", "")),
+        upstream_model_id=upstream_model_id,
+        upstream_protocol=upstream_protocol,
+        evidence_provenance=provenance,
+        reason=str(row.get("reason", "")),
+        first_observed=_epoch(row.get("first_observed_epoch")) or 0.0,
+        last_observed=_epoch(row.get("last_observed_epoch")) or 0.0,
+        observation_count=_int(row.get("observation_count")) or 0,
+        expiry=_epoch(row.get("expiry_epoch")),
+        cleared_at=_epoch(row.get("cleared_at_epoch")),
+        clear_reason=(
+            str(row["clear_reason"]) if row.get("clear_reason") is not None else None
+        ),
+        last_status_code=_int(row.get("last_status_code")),
+        last_error_class=(
+            str(row["last_error_class"])
+            if row.get("last_error_class") is not None
+            else None
+        ),
+    )

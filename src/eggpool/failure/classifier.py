@@ -448,7 +448,7 @@ def classify_failure_effects(obs: FailureObservation) -> FailureEffects:
             circuit_penalty=False,
             persist_backoff=True,
             backoff_reason="rate_limited",
-            backoff_until=_now() + max(1.0, retry_after),
+            backoff_until=_now() + retry_after,
             release_probe_only=False,
             evidence_class="http_429_rate_limited",
         )

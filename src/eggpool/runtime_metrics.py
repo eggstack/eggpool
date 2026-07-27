@@ -242,6 +242,9 @@ class RuntimeMetricsService:
         # Thinking/reasoning observability counters
         result["thinking_metrics"] = await self._snapshot_thinking_metrics(probe_errors)
 
+        # Plan 025 — typed failure effects and bounded quarantine counters
+        result["failure_effects"] = await self._snapshot_failure_effects(probe_errors)
+
         result["model_info"] = await self._snapshot_model_info(probe_errors)
 
         result["dashboard_telemetry"] = self._snapshot_dashboard_telemetry(probe_errors)
@@ -785,6 +788,33 @@ class RuntimeMetricsService:
                 probe_errors, f"Thinking metrics snapshot failed: {exc}"
             )
             return {"total": 0, "counters": {}, "label_breakdown": {}}
+
+    async def _snapshot_failure_effects(
+        self, probe_errors: list[str]
+    ) -> dict[str, Any]:
+        """Best-effort snapshot of Plan 025 failure-effects counters.
+
+        Distinguishes request-local validation, bounded quarantine
+        events, and terminal withdrawals without re-scoring raw
+        status codes.  Returns a stable empty dict when no
+        counters have been recorded yet (the counter singleton
+        always exists but may be empty).
+        """
+        from eggpool.metrics.failure_effects import get_counter
+
+        try:
+            counter = get_counter()
+            return await counter.snapshot()
+        except Exception as exc:
+            _append_probe_error(
+                probe_errors, f"Failure-effects metrics snapshot failed: {exc}"
+            )
+            return {
+                "total": 0,
+                "counters": {},
+                "label_breakdown": {},
+                "categories": {},
+            }
 
     async def _snapshot_model_info(self, probe_errors: list[str]) -> dict[str, Any]:
         """Best-effort snapshot of the model-info subsystem."""

@@ -547,7 +547,8 @@ def build_callback_factories_for_specs(
                 )
 
                 async with leased_runtime(runtime_manager) as gen:
-                    await gen.catalog.refresh()
+                    result = await gen.catalog.refresh()
+                    await _clear_quarantine_on_catalog_reappearance(gen, result)
 
             factories[name] = _catalog_refresh_factory
 
@@ -1014,6 +1015,104 @@ def _register_update_checker(
         interval_s=float(update_checker.check_interval_s),
         run_immediately=True,
     )
+
+
+__all__ = [
+    "TaskRegistrationContext",
+    "TaskSpecDiff",
+    "TaskTransitionResult",
+    "apply_spec_diff",
+    "build_task_specs",
+    "compute_spec_diff",
+]
+
+
+async def _clear_quarantine_on_catalog_reappearance(
+    gen: Any,  # noqa: ANN401
+    result: Any,  # noqa: ANN401
+) -> None:
+    """Clear quarantine entries when a model reappears in the catalog.
+
+    Plan 025 (Workstream D) requires that authoritative catalog
+    reappearance clears bounded quarantine entries.  The catalog
+    refresh returns ``new_model_ids`` (model-level) and
+    ``changed_provider_keys`` (per-provider).  For each
+    reappearing ``(model_id, provider_id)`` pair we resolve the
+    accounts that serve that provider and call
+    :meth:`EffectsApplier.clear_authoritative_reappearance` for
+    each scope key.
+
+    Best-effort: never raises.  Quarantine clearing is an
+    observability/recovery concern; if it fails the catalog
+    refresh still completed successfully.
+    """
+    try:
+        from eggpool.failure import (
+            EffectsApplier,
+            ModelQuarantine,
+        )
+    except ImportError:
+        return
+
+    quarantine = getattr(gen, "model_quarantine", None)
+    if not isinstance(quarantine, ModelQuarantine):
+        return
+    applier = getattr(gen, "effects_applier", None)
+    if not isinstance(applier, EffectsApplier):
+        return
+
+    new_model_ids: frozenset[str] = getattr(result, "new_model_ids", frozenset())
+    changed_provider_keys: frozenset[tuple[str, str]] = getattr(
+        result, "changed_provider_keys", frozenset()
+    )
+
+    # Models that newly appear (or whose provider key changed)
+    reapparition_pairs: set[tuple[str, str]] = set()
+    for model_id in new_model_ids:
+        for provider_id, entry_model_id in changed_provider_keys:
+            if entry_model_id == model_id:
+                reapparition_pairs.add((model_id, provider_id))
+    for key_tuple in changed_provider_keys:
+        reapparition_pairs.add(key_tuple)
+
+    registry = getattr(gen, "registry", None)
+    if registry is None:
+        return
+
+    for model_id, provider_id in reapparition_pairs:
+        # AccountRegistry exposes the reverse lookup from
+        # provider → enabled accounts.  Iterate and clear each
+        # scope key so per-account quarantine is fully cleared.
+        for account_name in _accounts_for_provider(registry, provider_id):
+            applier.clear_authoritative_reappearance(
+                provider_id=provider_id,
+                account_id=account_name,
+                canonical_model_id=model_id,
+                upstream_model_id=model_id,
+                upstream_protocol="openai",
+            )
+
+
+def _accounts_for_provider(registry: Any, provider_id: str) -> list[str]:  # noqa: ANN401
+    """Return account names served by *provider_id*.
+
+    Wraps the registry lookup so the periodic task factory remains
+    usable against test doubles that do not implement
+    ``get_accounts_for_provider``.
+    """
+    fn = getattr(registry, "get_accounts_for_provider", None)
+    if fn is None:
+        return []
+    try:
+        states = fn(provider_id)
+    except Exception:
+        return []
+    names: list[str] = []
+    for state in states or ():
+        name = getattr(state, "name", None)
+        if isinstance(name, str):
+            names.append(name)
+    return names
 
 
 __all__ = [

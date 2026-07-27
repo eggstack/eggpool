@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from eggpool.accounts.state import AccountRuntimeState
     from eggpool.catalog.cache import ModelCatalogCache
     from eggpool.catalog.capabilities import ThinkingRequestRequirement
+    from eggpool.failure import ModelQuarantine
     from eggpool.health.health_manager import HealthManager
     from eggpool.quota.estimation import QuotaEstimator
 
@@ -49,6 +50,8 @@ def get_eligible_accounts(
     local_quota_mode: str = "score_only",
     thinking_requirement: ThinkingRequestRequirement | None = None,
     capability_policy: dict[str, str] | None = None,
+    quarantine: ModelQuarantine | None = None,
+    upstream_protocol: str = "openai",
 ) -> list[AccountRuntimeState]:
     """Get accounts eligible for routing a specific model.
 
@@ -139,6 +142,25 @@ def get_eligible_accounts(
             state.name, model_id
         ):
             continue
+
+        # Plan 025: skip accounts/models under active bounded
+        # quarantine.  Quarantine is keyed by
+        # (provider_id, account_id, canonical_model_id,
+        # upstream_model_id, upstream_protocol).  When the catalog
+        # exposes a provider for this account, use that; otherwise
+        # fall back to the requested ``provider_id`` so account
+        # routes under a specific provider still match.
+        if quarantine is not None:
+            account_provider = catalog.get_provider_for_account(state.name)
+            check_provider = account_provider or provider_id or "unknown"
+            if quarantine.is_model_quarantined(
+                provider_id=check_provider,
+                account_id=state.name,
+                canonical_model_id=model_id,
+                upstream_model_id=model_id,
+                upstream_protocol=upstream_protocol,
+            ):
+                continue
 
         if use_precomputed_support:
             if state.name not in supporting_accounts:
