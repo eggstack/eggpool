@@ -265,3 +265,20 @@ class DatabaseWritableProbe:
         """
         await self._do_probe()
         return await self.snapshot()
+
+    def force_probe_nowait(self) -> None:
+        """Schedule an immediate probe without awaiting its result.
+
+        Used by the database recovery controller to refresh the
+        readiness snapshot after a successful recovery cycle.  The
+        probe runs on the worker task and updates the cached
+        snapshot asynchronously.  No-op when the probe is not
+        running.
+        """
+        if not self._running:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(self._do_probe(), name="eggpool:db_writable_probe_forced")

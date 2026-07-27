@@ -17,6 +17,31 @@ logger = logging.getLogger(__name__)
 SCHEMA_DIR = Path(__file__).parent / "schema"
 
 
+def _expected_schema_version(schemas_dir: Path) -> int:
+    """Compute the highest migration version expected on disk.
+
+    The value is the highest numeric prefix among ``*.sql`` files in
+    the schema directory.  Used by the database recovery controller
+    to verify that a replacement connection sees the same schema as
+    the suspect connection; a mismatch indicates the database file
+    changed under us.
+    """
+    if not schemas_dir.exists():
+        return 0
+    max_version = 0
+    for path in schemas_dir.glob("*.sql"):
+        try:
+            version = int(path.stem.split("_", 1)[0])
+        except (ValueError, IndexError):
+            continue
+        if version > max_version:
+            max_version = version
+    return max_version
+
+
+EXPECTED_SCHEMA_VERSION: int = _expected_schema_version(SCHEMA_DIR)
+
+
 def _split_statements(sql: str) -> list[str]:
     """Split a SQL migration using SQLite's own completeness parser.
 

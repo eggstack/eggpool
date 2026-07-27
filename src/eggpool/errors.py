@@ -82,6 +82,44 @@ class DatabaseConnectionInvalidatedError(DatabaseError):
     """
 
 
+class DatabaseRollbackError(DatabaseError):
+    """Raised when the SQLite ROLLBACK call itself fails.
+
+    Plan 027 Workstream D — ``transaction()`` distinguishes a
+    rollback failure from a commit failure so callers see the
+    original cause of the orphaned-transaction problem.  The
+    connection is detached and closed before this error is raised;
+    subsequent ``transaction()`` calls raise
+    :class:`DatabaseConnectionInvalidatedError`.
+
+    Attributes:
+        rollback_attempted: True if a rollback was attempted.
+        rollback_succeeded: True if the rollback completed successfully.
+        transaction_still_active: True if ``in_transaction`` remains True
+            after the rollback attempt; ``None`` when indeterminate.
+        connection_invalidated: True if the connection has been
+            detached and closed.
+        original_exception: The exception raised by ``rollback()``.
+    """
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        rollback_attempted: bool = False,
+        rollback_succeeded: bool = False,
+        transaction_still_active: bool | None = None,
+        connection_invalidated: bool = False,
+        original_exception: BaseException | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.rollback_attempted = rollback_attempted
+        self.rollback_succeeded = rollback_succeeded
+        self.transaction_still_active = transaction_still_active
+        self.connection_invalidated = connection_invalidated
+        self.original_exception = original_exception
+
+
 class UpstreamError(AggregatorError):
     """Base exception for upstream API errors."""
 

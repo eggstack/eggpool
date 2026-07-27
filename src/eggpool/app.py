@@ -871,6 +871,22 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     )
     app.state.process = process
 
+    # 6c. DatabaseRecoveryController (Plan 027).  Bound to the
+    # primary database now, before the readiness probe is started,
+    # so the controller can notify the probe on recovery cycle
+    # completion.  The controller survives generation swaps because
+    # it is process-owned.
+    if config.database.recovery.enabled:
+        from eggpool.db.recovery import DatabaseRecoveryController  # noqa: PLC0415
+
+        recovery_controller = DatabaseRecoveryController(
+            db=db,
+            config=config.database.recovery,
+            readiness_probe=None,  # patched in after step 21c
+        )
+        process.recovery_controller = recovery_controller
+        app.state.recovery_controller = recovery_controller
+
     # Operator warning: when dashboard reads must share the primary
     # connection, they queue behind the request path and amplify lock
     # contention under high concurrency.  This is informational, not
@@ -1210,6 +1226,13 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     process.readiness_probe = readiness_probe
     app.state.readiness_probe = readiness_probe
 
+    # 21c.1. Wire the recovery controller to the readiness probe so
+    # the controller can refresh the cached snapshot after a
+    # successful recovery cycle.  No-op when recovery is disabled.
+    recovery_controller: Any = getattr(process, "recovery_controller", None)
+    if recovery_controller is not None:
+        recovery_controller.readiness_probe = readiness_probe
+
     # 22. Transcoding status
     if config.transcoder.enabled is False:
         logger.warning(
@@ -1511,6 +1534,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             except Exception:
                 logger.exception("Error stopping readiness probe during shutdown")
 
+        # Plan 027 — stop the recovery controller before closing the
+        # database so no recovery attempt races with the disconnect.
+        recovery_controller: Any = getattr(app.state, "recovery_controller", None)
+        if recovery_controller is not None:
+            try:
+                await recovery_controller.shutdown()
+            except Exception:
+                logger.exception(
+                    "Error stopping database recovery controller during shutdown"
+                )
+
         # Drain the dispatch writer before closing the database so
         # committed intents are not lost.
         dispatch_writer: Any = getattr(app.state, "dispatch_writer", None)
@@ -1763,6 +1797,25 @@ def create_app(
         if db is None or db._conn is None:  # pyright: ignore[reportPrivateUsage]
             return Response(
                 content='{"status":"degraded","reason":"database not connected"}',
+                status_code=503,
+                media_type="application/json",
+            )
+
+        # Plan 027 — surface database recovery state in the readiness
+        # response.  When the recovery controller is mid-recovery or
+        # has failed closed, readiness reports degraded so the
+        # orchestrator does not route traffic to a poisoned process.
+        recovery_controller: Any = getattr(app.state, "recovery_controller", None)
+        if (
+            recovery_controller is not None
+            and not recovery_controller.admission_admitted
+        ):
+            state_value = recovery_controller.state.value
+            return Response(
+                content=(
+                    f'{{"status":"degraded",'
+                    f'"reason":"database recovery {state_value}"}}'
+                ),
                 status_code=503,
                 media_type="application/json",
             )

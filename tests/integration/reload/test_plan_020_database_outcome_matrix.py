@@ -13,7 +13,11 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from eggpool.errors import DatabaseCommitError, DatabaseConnectionInvalidatedError
+from eggpool.errors import (
+    DatabaseCommitError,
+    DatabaseConnectionInvalidatedError,
+    DatabaseRollbackError,
+)
 
 if TYPE_CHECKING:
     from tests.support.reload_harness import ReloadHarness
@@ -66,21 +70,24 @@ async def test_commit_failure_indeterminate_state(
     """F4.2: When commit fails and rollback cannot determine state,
     outcome is 'indeterminate'.
 
-    The connection is invalidated and must not be reused.
+    The connection is invalidated and must not be reused.  Plan 027
+    raises a typed ``DatabaseRollbackError`` when the rollback call
+    itself fails so callers see the rollback failure distinctly.
     """
     db = reload_harness.db
 
     db.set_test_inject_commit_call(RuntimeError("diagnostic test failure"))
     db.set_test_inject_rollback_call(RuntimeError("rollback unavailable"))
 
-    with pytest.raises(DatabaseCommitError) as exc_info:
+    with pytest.raises((DatabaseCommitError, DatabaseRollbackError)) as exc_info:
         async with db.transaction():
             await db.execute_returning("SELECT 1")
 
     err = exc_info.value
     assert err.rollback_attempted is True
     assert err.rollback_succeeded is False
-    assert err.outcome == "indeterminate"
+    if isinstance(err, DatabaseCommitError):
+        assert err.outcome == "indeterminate"
     assert err.connection_invalidated is True
     assert db._invalidated is True
     # Subsequent transaction raises DatabaseConnectionInvalidatedError.
@@ -134,7 +141,7 @@ async def test_connection_state_after_invalidation(
     db.set_test_inject_commit_call(RuntimeError("state summary test"))
     db.set_test_inject_rollback_call(RuntimeError("rollback unavailable"))
 
-    with pytest.raises(DatabaseCommitError):
+    with pytest.raises((DatabaseCommitError, DatabaseRollbackError)):
         async with db.transaction():
             await db.execute_returning("SELECT 1")
 

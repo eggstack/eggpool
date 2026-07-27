@@ -13,7 +13,7 @@ import pytest
 
 from eggpool.catalog.pricing import PriceRepository
 from eggpool.constants import SQLITE_INTEGER_MAX
-from eggpool.db.connection import Database
+from eggpool.db.connection import Database, DatabaseLifecycleState
 from eggpool.db.migrations import MigrationRunner
 from eggpool.db.repositories import PriceSnapshotRepository
 from eggpool.errors import DatabaseError
@@ -238,6 +238,21 @@ async def test_concurrent_readers_during_write() -> None:
         db1._last_rollback_succeeded = False  # type: ignore[reportPrivateUsage]
         db1._last_in_transaction_before_rollback = None  # type: ignore[reportPrivateUsage]
         db1._last_in_transaction_after_rollback = None  # type: ignore[reportPrivateUsage]
+        db1._connection_epoch = 1  # type: ignore[reportPrivateUsage]
+        db1._lifecycle_state = DatabaseLifecycleState.READY  # type: ignore[reportPrivateUsage]
+        db1._invalidated_reason_class = None  # type: ignore[reportPrivateUsage]
+        db1._recovering_lock = asyncio.Lock()  # type: ignore[reportPrivateUsage]
+        db1._ambiguous_operations = collections.deque(maxlen=128)  # type: ignore[reportPrivateUsage]
+        db1._recovery_controller = None  # type: ignore[reportPrivateUsage]
+        db1._writes_admitted = True  # type: ignore[reportPrivateUsage]
+        db1._reads_admitted = True  # type: ignore[reportPrivateUsage]
+        db1._generation_replaced_at = None  # type: ignore[reportPrivateUsage]
+        db1._recovery_count = 0  # type: ignore[reportPrivateUsage]
+        db1._rollback_failure_count = 0  # type: ignore[reportPrivateUsage]
+        db1._rollback_success_count = 0  # type: ignore[reportPrivateUsage]
+        db1._refresh_idle_connection_lock = (
+            Database._refresh_idle_connection_lock.__get__(db1, Database)
+        )  # type: ignore[reportPrivateUsage]
         db2 = Database.__new__(Database)
         db2._conn = conn2  # type: ignore[reportPrivateUsage]
         db2._path = db_uri  # type: ignore[reportPrivateUsage]
@@ -273,6 +288,21 @@ async def test_concurrent_readers_during_write() -> None:
         db2._last_rollback_succeeded = False  # type: ignore[reportPrivateUsage]
         db2._last_in_transaction_before_rollback = None  # type: ignore[reportPrivateUsage]
         db2._last_in_transaction_after_rollback = None  # type: ignore[reportPrivateUsage]
+        db2._connection_epoch = 1  # type: ignore[reportPrivateUsage]
+        db2._lifecycle_state = DatabaseLifecycleState.READY  # type: ignore[reportPrivateUsage]
+        db2._invalidated_reason_class = None  # type: ignore[reportPrivateUsage]
+        db2._recovering_lock = asyncio.Lock()  # type: ignore[reportPrivateUsage]
+        db2._ambiguous_operations = collections.deque(maxlen=128)  # type: ignore[reportPrivateUsage]
+        db2._recovery_controller = None  # type: ignore[reportPrivateUsage]
+        db2._writes_admitted = True  # type: ignore[reportPrivateUsage]
+        db2._reads_admitted = True  # type: ignore[reportPrivateUsage]
+        db2._generation_replaced_at = None  # type: ignore[reportPrivateUsage]
+        db2._recovery_count = 0  # type: ignore[reportPrivateUsage]
+        db2._rollback_failure_count = 0  # type: ignore[reportPrivateUsage]
+        db2._rollback_success_count = 0  # type: ignore[reportPrivateUsage]
+        db2._refresh_idle_connection_lock = (
+            Database._refresh_idle_connection_lock.__get__(db2, Database)
+        )  # type: ignore[reportPrivateUsage]
 
         await _run_migrations(db1)
 

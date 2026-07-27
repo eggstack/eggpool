@@ -16,7 +16,11 @@ import pytest_asyncio
 
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
-from eggpool.errors import DatabaseCommitError, DatabaseConnectionInvalidatedError
+from eggpool.errors import (
+    DatabaseCommitError,
+    DatabaseConnectionInvalidatedError,
+    DatabaseRollbackError,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -90,10 +94,15 @@ class TestDatabaseFaultMatrix:
             test_db.set_test_inject_in_transaction_before_rollback(None)
 
     async def test_rollback_raises_after_body_failure(self, test_db: Database) -> None:
-        """ROLLBACK injection raises after transaction body failure."""
+        """ROLLBACK injection raises after transaction body failure.
+
+        Plan 027 — a rollback failure after a body failure is raised
+        as a typed ``DatabaseRollbackError`` so callers see the
+        rollback failure distinctly from the original body exception.
+        """
         test_db.set_test_inject_rollback_call(OSError("simulated rollback fail"))
         try:
-            with pytest.raises((DatabaseCommitError, OSError)):
+            with pytest.raises((DatabaseCommitError, OSError, DatabaseRollbackError)):
                 async with test_db.transaction():
                     await test_db.execute_write(_TEST_INSERT)
                     raise DatabaseCommitError("body failure")

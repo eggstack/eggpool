@@ -342,6 +342,16 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "readiness_probe.initial_probe": ReloadDisposition.RESTART_REQUIRED,
     "readiness_probe.interval_s": ReloadDisposition.RESTART_REQUIRED,
     "readiness_probe.timeout_s": ReloadDisposition.RESTART_REQUIRED,
+    # Plan 027 — database recovery is process-owned and survives
+    # generation swaps.  Recovery controls are LIVE so operators can
+    # tune retry counts and timeouts without restart.
+    "database.recovery": ReloadDisposition.LIVE,
+    "database.recovery.enabled": ReloadDisposition.LIVE,
+    "database.recovery.max_attempts": ReloadDisposition.LIVE,
+    "database.recovery.initial_backoff_ms": ReloadDisposition.LIVE,
+    "database.recovery.max_backoff_ms": ReloadDisposition.LIVE,
+    "database.recovery.reconciliation_timeout_s": ReloadDisposition.LIVE,
+    "database.recovery.fail_process_on_exhaustion": ReloadDisposition.LIVE,
 }
 
 

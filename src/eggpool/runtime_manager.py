@@ -487,6 +487,7 @@ class ProcessRuntime:
     maintenance_state: Any = None  # noqa: ANN401 — MaintenanceState
     event_loop_lag_monitor: Any = None  # noqa: ANN401 — EventLoopLagMonitor
     readiness_probe: Any = None  # noqa: ANN401 — DatabaseWritableProbe
+    recovery_controller: Any = None  # noqa: ANN401 — DatabaseRecoveryController (Plan 027)
 
 
 # ---------------------------------------------------------------------------
