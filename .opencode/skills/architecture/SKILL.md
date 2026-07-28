@@ -600,32 +600,28 @@ clean / 1 on violation, and is pinned by
 - `models refresh` synchronizes configured accounts via `AccountRepository.sync_from_config` before refreshing the catalog, so cached account/model relationships match normal application startup
 - The CLI has a two-tier entry point: `eggpool.cli:main` is a tiny bootstrap that dispatches `croncheck` and `ensure-running` through the stdlib-only `eggpool.fastcli` fast path, then falls through to the heavy Click CLI in `eggpool.cli_full` for everything else. See **Fast-Path CLI** above
 
-## CI Partitioning and Test Infrastructure (Phase 12)
+## CI
 
-### CI Job Groups
+Two GitHub Actions jobs on every PR:
 
-CI runs 6 parallel jobs:
-
-| Job | Python | Command |
-|-----|--------|---------|
-| lint | 3.12 | `ruff format --check` + `ruff check` |
-| typecheck | 3.12 | `pyright src/ scripts/` |
-| unit-integration | 3.11, 3.12 | `pytest -m "not slow and not performance and not soak and not extended_soak and not live"` |
-| reload-control | 3.11, 3.12 | `pytest tests/integration/reload/` |
-| performance | 3.12 | `pytest -m performance` |
-| soak-audit | 3.12 | `pytest -m soak` + `audit_xfail_skips.py` |
+| Job | Python | What it does |
+|-----|--------|-------------|
+| `check` | 3.12 | ruff format + ruff check + pyright + canonical test suite |
+| `compat-311` | 3.11 | `pytest tests/smoke/` — package import, config, DB migration, one request through real Eggpool, CLI |
 
 ### Test Markers
 
 | Marker | Purpose |
 |--------|---------|
-| `integration` | Integration tests requiring real services |
-| `reload` | Reload correctness baseline tests |
-| `performance` | Performance contract and benchmark tests |
-| `soak` | Short PR soak and resource plateau tests |
-| `extended_soak` | Extended scheduled soak (manual/cron only) |
 | `slow` | Tests exceeding normal CI budget |
+| `performance` | Manually invoked real-runtime performance checks |
+| `live` | Opt-in live provider/network verification tests |
+| `extended_soak` | Extended manual stability mode (not PR CI) |
+| `soak` | Manually invoked real-runtime duration/resource checks |
 | `network` | Tests requiring network access |
+| `request_path` | Routing, transcoding, finalization tests |
+| `dashboard` | Dashboard and cache-page rendering tests |
+| `reload` | Reload/rehash transaction and lifecycle tests |
 
 ### Fault Injection Matrix (28 tests)
 
@@ -665,11 +661,6 @@ Defined in `docs/resource-plateau-tolerances.md`:
 - **Reservations/pending**: exactly 0 after quiescence
 - **Writer/trace/finalization queues**: must drain after load stops
 
-### Skip/XFail Audit
+### Pytest Configuration
 
-`scripts/audit_xfail_skips.py` scans all test files for non-strict xfails and unconditional skips. Existing exemptions require:
-- Rationale explaining why the invariant can't be tested strictly
-- Reference to the strict test that covers the same invariant
-- Expiry or removal criteria
-
-The audit runs in the soak-audit CI job and must pass for every commit.
+`xfail_strict = true` and `--strict-markers` are configured in `pyproject.toml`. Standard pytest behavior replaces the former custom skip/xfail audit.

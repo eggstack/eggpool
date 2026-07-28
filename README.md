@@ -223,41 +223,29 @@ The dashboard `/models` page shows enriched model metadata from provider catalog
 
 ```bash
 uv sync --extra dev      # install dependencies
-uv run pytest            # run all tests
+
+# Before-push check (matches primary CI job)
 uv run ruff format --check src/ tests/ scripts/
 uv run ruff check src/ tests/ scripts/
 uv run pyright src/ scripts/
+uv run pytest \
+  -m "not slow and not performance and not soak and not extended_soak and not live and not network" \
+  -q --tb=short --maxfail=1
 
 # Optional `orjson` backend for the JSON helper (transcoding hot paths)
 uv sync --extra fast     # or: uv pip install 'eggpool[fast]'
-
-# High-concurrency streaming reproducer (no real providers needed)
-uv run python scripts/repro_high_concurrency_streams.py --concurrency 50 --cancel-rate 0.25
-
-# Skip/xfail audit
-uv run python scripts/audit_xfail_skips.py
 ```
 
-### CI Partitions
+### CI
 
-CI runs 6 parallel jobs on Python 3.11+3.12:
+Two GitHub Actions jobs on every PR:
 
-| Job | Python | Description |
+| Job | Python | What it does |
 |-----|--------|-------------|
-| lint | 3.12 | ruff format + check |
-| typecheck | 3.12 | pyright strict |
-| unit-integration | 3.11, 3.12 | `not reload and not soak` |
-| reload-control | 3.11, 3.12 | `-m reload` |
-| performance | 3.12 | `-m performance` |
-| soak-audit | 3.12 | `-m soak` + `audit_xfail_skips.py` |
+| `check` | 3.12 | ruff format + ruff check + pyright + canonical test suite |
+| `compat-311` | 3.11 | `pytest tests/smoke/` — package import, config, DB migration, one request through real Eggpool, CLI |
 
-### Test Markers
-
-- `integration`, `reload`, `network`, `soak` — CI partition markers
-- `request_path`, `dashboard`, `performance`, `slow`, `extended_soak` — feature markers
-
-See `AGENTS.md` for focused test subset commands including the
-dispatch-stability baseline (`tests/perf/test_dispatch_baseline.py`).
+See `AGENTS.md` for focused test subset commands.
 
 ## Agent Configuration
 

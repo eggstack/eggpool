@@ -56,7 +56,6 @@ dev = [
     "pytest-cov",
     "respx",
     "coverage[toml]",
-    "pre-commit",
 ]
 # ``fast`` enables the orjson-backed JSON helper used by the transcoding
 # hot paths.  EggPool falls back to the stdlib implementation when this
@@ -121,17 +120,24 @@ exclude = ["tests"]
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
-# Run subsets: pytest -m request_path, pytest -m dashboard, pytest -m performance
+xfail_strict = true
+addopts = "--strict-markers"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "cache_compression_replay_full: full cache compression replay matrix",
+    "performance: manually invoked real-runtime performance checks",
+    "live: opt-in live provider/network verification tests",
+    "extended_soak: extended manual stability mode (not PR CI)",
+    "soak: manually invoked real-runtime duration/resource checks",
+    "network: tests requiring network access or external services",
     "request_path: request-path correctness tests (routing, transcoding, finalization)",
     "dashboard: dashboard and cache-page rendering tests",
-    "performance: performance baseline and regression tests",
-    "live: opt-in live external-source verification tests",
-    "extended_soak: strict early-vs-late stability gates (extended-soak mode only)",
-    "integration: integration tests requiring full component wiring",
     "reload: reload/rehash transaction and lifecycle tests",
-    "network: tests requiring network access or external services",
-    "soak: short deterministic soak tests for PR CI (distinct from extended_soak)",
+    "integration: integration tests requiring full component wiring",
+    "cache_compression_replay_full: full cache compression replay matrix",
+    "perf_baseline: performance baseline and regression tests",
+    "slow_writer_burst: slow-writer burst fairness tests",
+    "resource_plateau: resource plateau validation tests",
+    "stability_assertion: stability assertion tests",
+    "workload_profile: workload profile tests",
+    "unit: unit tests",
 ]

@@ -181,20 +181,26 @@ def _match_key(
         return False, 0
 
     # Provider ID match (highest specificity).
-    if key.provider_id_pattern and provider_id and re.search(
-        key.provider_id_pattern, provider_id, re.I
+    if (
+        key.provider_id_pattern
+        and provider_id
+        and re.search(key.provider_id_pattern, provider_id, re.I)
     ):
         return True, 3
 
     # Provider kind match.
-    if key.provider_kind_pattern and provider_kind and re.search(
-        key.provider_kind_pattern, provider_kind, re.I
+    if (
+        key.provider_kind_pattern
+        and provider_kind
+        and re.search(key.provider_kind_pattern, provider_kind, re.I)
     ):
         return True, 2
 
     # Base URL pattern match (lowest specificity, compatibility).
-    if key.provider_base_url_pattern and provider_base_url and re.search(
-        key.provider_base_url_pattern, provider_base_url, re.I
+    if (
+        key.provider_base_url_pattern
+        and provider_base_url
+        and re.search(key.provider_base_url_pattern, provider_base_url, re.I)
     ):
         return True, 1
 
@@ -314,12 +320,12 @@ def validate_no_ambiguous_contracts() -> list[str]:
                 and b_has_kind
                 and a.key.provider_kind_pattern == b.key.provider_kind_pattern
             ):
-                    errors.append(
-                        f"Ambiguous: same priority={a.key.priority} and "
-                        f"identical kind pattern={a.key.provider_kind_pattern!r}: "
-                        f"{a.key} vs {b.key}"
-                    )
-                    continue
+                errors.append(
+                    f"Ambiguous: same priority={a.key.priority} and "
+                    f"identical kind pattern={a.key.provider_kind_pattern!r}: "
+                    f"{a.key} vs {b.key}"
+                )
+                continue
 
             # Check URL+model+protocol overlap.
             protocol_match = (
