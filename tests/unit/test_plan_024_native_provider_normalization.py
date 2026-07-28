@@ -205,28 +205,26 @@ class TestNativeContractResolution:
     """Verify contract resolution for native provider URLs."""
 
     def test_opencode_go_native_resolves_fixed(self) -> None:
-        """OpenCode Go MiniMax-M3 → fixed contract."""
+        """OpenCode Go MiniMax-M3 → fixed contract (by provider ID)."""
         cap = ThinkingCapability(status="supported")
         contract = resolve_control_contract(
             capability=cap,
-            provider_base_url="https://api.minimax.io/anthropic/v1",
+            provider_id="opencode-go",
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
         assert contract.mode == "fixed"
 
     def test_minimax_native_resolves_effort(self) -> None:
-        """MiniMax native endpoint → effort contract."""
+        """MiniMax native provider ID → effort contract."""
         cap = ThinkingCapability(status="supported")
         contract = resolve_control_contract(
             capability=cap,
-            provider_base_url="https://api.minimax.io/anthropic/v1/messages",
+            provider_id="minimax",
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        # Both OpenCode Go and MiniMax native URL patterns match
-        # api.minimax.io — the OpenCode Go contract matches first.
-        assert contract.mode == "fixed"
+        assert contract.mode == "effort"
 
     def test_unknown_provider_infers_from_legacy(self) -> None:
         """Unknown provider + legacy fields → inferred contract."""

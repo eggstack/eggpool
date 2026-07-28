@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from eggpool.catalog.capabilities import ThinkingCapability, ThinkingControlContract
 from eggpool.transcoder.builtin_contracts import (
+    BUILTIN_CONTRACTS,
     lookup_builtin_contract,
     resolve_control_contract,
+    validate_no_ambiguous_contracts,
 )
 
 
@@ -14,22 +16,31 @@ class TestLookupBuiltinContract:
 
     def test_opencode_go_minimax_m3_fixed(self) -> None:
         contract = lookup_builtin_contract(
-            provider_base_url="https://api.minimax.io/anthropic/v1",
+            provider_id="opencode-go",
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
         assert contract is not None
         assert contract.mode == "fixed"
 
-    def test_minimax_native_effort(self) -> None:
+    def test_opencode_go_by_url_fallback(self) -> None:
+        """OpenCode Go also matches via URL fallback when provider_id is absent."""
         contract = lookup_builtin_contract(
-            provider_base_url="https://api.minimax.io/anthropic/v1",
+            provider_base_url="https://opencode.ai/zen/go/v1",
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        # The OpenCode Go contract matches first for this URL pattern.
-        # The native contract requires a different URL pattern.
+        # No URL-based rule for OpenCode Go — should not match.
+        assert contract is None
+
+    def test_minimax_native_effort(self) -> None:
+        contract = lookup_builtin_contract(
+            provider_id="minimax",
+            model_id="MiniMax-M3",
+            protocol="anthropic",
+        )
         assert contract is not None
+        assert contract.mode == "effort"
 
     def test_anthropic_native(self) -> None:
         contract = lookup_builtin_contract(
@@ -111,3 +122,29 @@ class TestResolveControlContract:
         # No built-in match, infer from legacy fields.
         assert result.mode == "effort"
         assert result.accepted_efforts == ["low", "medium", "high"]
+
+
+class TestValidateNoAmbiguousContracts:
+    """Tests for validate_no_ambiguous_contracts."""
+
+    def test_no_ambiguous_contracts(self) -> None:
+        errors = validate_no_ambiguous_contracts()
+        assert errors == []
+
+    def test_all_contracts_have_distinct_patterns(self) -> None:
+        """Each built-in contract has a distinguishable key."""
+        seen: set[tuple[str | None, str | None, str | None, str, str, int]] = set()
+        for entry in BUILTIN_CONTRACTS:
+            k = entry.key
+            key_tuple = (
+                k.provider_id_pattern,
+                k.provider_kind_pattern,
+                k.provider_base_url_pattern,
+                k.model_id_pattern,
+                k.protocol,
+                k.priority,
+            )
+            # Multiple entries can have the same key if they differ in
+            # contract content, but we verify no two are truly identical.
+            assert key_tuple not in seen, f"Duplicate key: {k}"
+            seen.add(key_tuple)

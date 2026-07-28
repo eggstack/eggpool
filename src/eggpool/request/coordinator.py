@@ -3775,8 +3775,17 @@ class RequestCoordinator:
             if entry is not None:
                 provider_url = str(entry.get("base_url", ""))
 
+        # Resolve provider kind for contract matching.
+        provider_kind = resolve_selected_provider_kind(
+            self._catalog,
+            selected,
+            config=self._config,
+        )
+
         contract = resolve_control_contract(
             capability=thinking_capability,
+            provider_id=selected.provider_id or "",
+            provider_kind=provider_kind,
             provider_base_url=provider_url,
             model_id=context.model_id,
             protocol=context.upstream_protocol or context.protocol,

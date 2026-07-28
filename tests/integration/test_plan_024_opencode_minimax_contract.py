@@ -95,11 +95,11 @@ class TestOpenCodeGoMiniMaxM3Contract:
     """OpenCode Go MiniMax-M3: fixed contract — no client-selectable controls."""
 
     def test_contract_resolves_to_fixed(self) -> None:
-        """OpenCode Go MiniMax-M3 resolves to mode=fixed."""
+        """OpenCode Go MiniMax-M3 resolves to mode=fixed by provider ID."""
         cap = ThinkingCapability(status="supported")
         contract = resolve_control_contract(
             capability=cap,
-            provider_base_url="https://api.minimax.io/anthropic/v1",
+            provider_id="opencode-go",
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
@@ -112,7 +112,7 @@ class TestOpenCodeGoMiniMaxM3Contract:
         cap = ThinkingCapability(status="supported")
         contract = resolve_control_contract(
             capability=cap,
-            provider_base_url="https://api.minimax.io/anthropic/v1",
+            provider_id="opencode-go",
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
@@ -138,7 +138,7 @@ class TestOpenCodeGoMiniMaxM3Contract:
         cap = ThinkingCapability(status="supported")
         contract = resolve_control_contract(
             capability=cap,
-            provider_base_url="https://api.minimax.io/anthropic/v1",
+            provider_id="opencode-go",
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
@@ -164,7 +164,7 @@ class TestOpenCodeGoMiniMaxM3Contract:
         cap = ThinkingCapability(status="supported")
         contract = resolve_control_contract(
             capability=cap,
-            provider_base_url="https://api.minimax.io/anthropic/v1",
+            provider_id="opencode-go",
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
@@ -189,7 +189,7 @@ class TestOpenCodeGoMiniMaxM3Contract:
         cap = ThinkingCapability(status="supported")
         contract = resolve_control_contract(
             capability=cap,
-            provider_base_url="https://api.minimax.io/anthropic/v1",
+            provider_id="opencode-go",
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
@@ -227,7 +227,7 @@ class TestOpenCodeGoMiniMaxM3Contract:
         cap = ThinkingCapability(status="supported")
         contract = resolve_control_contract(
             capability=cap,
-            provider_base_url="https://api.minimax.io/anthropic/v1",
+            provider_id="opencode-go",
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
@@ -269,52 +269,29 @@ class TestMiniMaxNativeDistinctContract:
     """MiniMax native provider has a different contract from OpenCode Go."""
 
     def test_minimax_native_resolves_effort(self) -> None:
-        """MiniMax native endpoint resolves to effort contract (not fixed)."""
-        from eggpool.catalog.capabilities import ThinkingControlContract
-
-        # The native contract requires a different URL pattern.
-        # OpenCode Go matches api.minimax.io/* → fixed.
-        # MiniMax native matches minimax.io/anthropic/* → effort.
-        # Since both match api.minimax.io, the OpenCode Go contract wins.
-        # To get the native contract, we need an explicit override.
+        """MiniMax native provider ID resolves to effort contract (not fixed)."""
+        cap = ThinkingCapability(status="supported")
         contract = resolve_control_contract(
-            capability=ThinkingCapability(
-                status="supported",
-                control_contract=ThinkingControlContract(
-                    mode="effort",
-                    accepted_efforts=["low", "medium", "high"],
-                    effort_aliases={"med": "medium"},
-                    source="manual_override",
-                ),
-            ),
-            provider_base_url="https://api.minimax.io/anthropic/v1",
+            capability=cap,
+            provider_id="minimax",
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        # Explicit override wins over built-in.
         assert contract.mode == "effort"
         assert "low" in contract.accepted_efforts
 
-    def test_effort_accepted_with_native_override(self) -> None:
-        """With an explicit effort override, effort is accepted."""
-        from eggpool.catalog.capabilities import ThinkingControlContract
-
-        cap = ThinkingCapability(
-            status="supported",
-            control_contract=ThinkingControlContract(
-                mode="effort",
-                accepted_efforts=["low", "medium", "high"],
-                effort_aliases={"med": "medium"},
-                source="manual_override",
-            ),
-        )
+    def test_effort_accepted_with_native_provider(self) -> None:
+        """With native MiniMax provider ID, effort is accepted."""
+        cap = ThinkingCapability(status="supported")
         contract = resolve_control_contract(
             capability=cap,
-            provider_base_url="https://api.minimax.io/anthropic/v1",
+            provider_id="minimax",
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
         assert contract.mode == "effort"
+        adapted_cap = cap.model_copy(deep=True)
+        adapted_cap.control_contract = contract
 
         intent = _make_intent(effort="high", fields=("reasoning_effort",))
         result = adapt_thinking_controls(
@@ -322,7 +299,7 @@ class TestMiniMaxNativeDistinctContract:
             client_protocol="openai",
             model_id="MiniMax-M3",
             provider_id="minimax",
-            capability=cap,
+            capability=adapted_cap,
             intent=intent,
             policy=ProviderControlPolicy(),
         )
@@ -343,13 +320,13 @@ class TestCollapsedModelContractResolution:
         cap = ThinkingCapability(status="supported")
         contract_collapsed = resolve_control_contract(
             capability=cap,
-            provider_base_url="https://api.minimax.io/anthropic/v1",
+            provider_id="opencode-go",
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
         contract_suffixed = resolve_control_contract(
             capability=cap,
-            provider_base_url="https://api.minimax.io/anthropic/v1",
+            provider_id="opencode-go",
             model_id="MiniMax-M3/opencode-go",
             protocol="anthropic",
         )
@@ -358,29 +335,27 @@ class TestCollapsedModelContractResolution:
         assert contract_collapsed.mode == "fixed"
 
     def test_same_model_different_providers_different_contracts(self) -> None:
-        """Same model with different provider URLs → different contracts."""
+        """Same model with different provider IDs → different contracts."""
         cap = ThinkingCapability(status="supported")
 
         # OpenCode Go → fixed
         contract_opencode = resolve_control_contract(
             capability=cap,
-            provider_base_url="https://api.minimax.io/anthropic/v1",
+            provider_id="opencode-go",
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
 
-        # Unknown provider → inferred from legacy fields
-        contract_unknown = resolve_control_contract(
+        # MiniMax native → effort
+        contract_minimax = resolve_control_contract(
             capability=cap,
-            provider_base_url="https://unknown.example.com/v1",
+            provider_id="minimax",
             model_id="MiniMax-M3",
-            protocol="openai",
+            protocol="anthropic",
         )
 
-        # OpenCode Go has a known fixed contract; unknown provider infers.
         assert contract_opencode.mode == "fixed"
-        # Unknown provider with status=supported and no efforts → unknown.
-        assert contract_unknown.mode == "unknown"
+        assert contract_minimax.mode == "effort"
 
 
 # ---------------------------------------------------------------------------
@@ -396,7 +371,7 @@ class TestNoDurableStateChanges:
         cap = ThinkingCapability(status="supported")
         contract = resolve_control_contract(
             capability=cap,
-            provider_base_url="https://api.minimax.io/anthropic/v1",
+            provider_id="opencode-go",
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
