@@ -620,6 +620,7 @@ class TestHealthIdempotency:
             model_id = "gpt-4"
             attempt_id = _attempt_id
             reservation_id = _reservation_id
+            account_id = 1
             estimated_microdollars = 100000
             attempt_number = 1
 

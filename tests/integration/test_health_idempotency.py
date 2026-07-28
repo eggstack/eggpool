@@ -79,12 +79,14 @@ class _MockSelected:
         model_id: str,
         attempt_id: int,
         reservation_id: str,
+        account_id: int = 0,
     ) -> None:
         self.db_request_id = db_request_id
         self.account_name = account_name
         self.model_id = model_id
         self.attempt_id = attempt_id
         self.reservation_id = reservation_id
+        self.account_id = account_id
         self.estimated_microdollars = 100000
         self.attempt_number = 1
 
@@ -115,6 +117,7 @@ async def test_duplicate_finalization_no_duplicate_event() -> None:
         model_id="gpt-4",
         attempt_id=attempt_id,
         reservation_id=reservation_id,
+        account_id=account_id,
     )
 
     # First finalization
@@ -178,6 +181,7 @@ async def test_health_already_applied_prevents_double_count() -> None:
         model_id="gpt-4",
         attempt_id=attempt_id,
         reservation_id=reservation_id,
+        account_id=account_id,
     )
 
     # Finalize with health_already_applied=True
