@@ -850,9 +850,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # blocking startup on a large database.
     if config.database.path != ":memory:":
         try:
-            integrity_rows = await db.execute_pragma(
-                "PRAGMA quick_check"
-            )
+            integrity_rows = await db.execute_pragma("PRAGMA quick_check")
             integrity_result = (
                 str(integrity_rows[0][0]) if integrity_rows else "unknown"
             )

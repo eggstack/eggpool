@@ -273,13 +273,9 @@ class MetricsWriteCoalescer:
             # Plan 027 Workstream H: wait for writes to be admitted
             # before attempting persistence.
             if not self._db.writes_admitted:
-                admitted = await self._db.wait_for_writes_admitted(
-                    timeout_s=10.0
-                )
+                admitted = await self._db.wait_for_writes_admitted(timeout_s=10.0)
                 if not admitted:
-                    return FlushResult(
-                        error_class="WritesNotAdmitted"
-                    )
+                    return FlushResult(error_class="WritesNotAdmitted")
             with self._thread_lock:
                 buffer_snapshot = self._buffer
                 event_count = self._pending_events

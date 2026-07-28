@@ -388,9 +388,7 @@ class RoutingTraceWriter:
         # Plan 027 Workstream H: wait for writes to be admitted
         # before attempting persistence.
         if not self._db.writes_admitted:
-            admitted = await self._db.wait_for_writes_admitted(
-                timeout_s=10.0
-            )
+            admitted = await self._db.wait_for_writes_admitted(timeout_s=10.0)
             if not admitted:
                 self._dropped_flush_error += len(batch)
                 return

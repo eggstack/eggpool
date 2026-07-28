@@ -103,9 +103,7 @@ class AttemptFinalizer:
                 operation_id=str(attempt_id),
                 operation_kind="attempt_finalization",
                 connection_epoch=self._db.connection_epoch,
-                idempotency_keys=(
-                    ("reservation_id", reservation_id),
-                ),
+                idempotency_keys=(("reservation_id", reservation_id),),
                 intended_status="completed",
                 precondition_facts=(),
                 created_at_monotonic=time.monotonic(),

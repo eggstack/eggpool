@@ -386,9 +386,7 @@ class Database:
         """Return the number of successful rollbacks."""
         return self._rollback_success_count
 
-    async def wait_for_writes_admitted(
-        self, timeout_s: float = 30.0
-    ) -> bool:
+    async def wait_for_writes_admitted(self, timeout_s: float = 30.0) -> bool:
         """Wait until writes are admitted after recovery.
 
         Background writers call this before attempting writes to
@@ -442,9 +440,7 @@ class Database:
         """
         self._ambiguous_operations.append(op)
 
-    def set_pending_ambiguous_operation(
-        self, op: AmbiguousDatabaseOperation
-    ) -> None:
+    def set_pending_ambiguous_operation(self, op: AmbiguousDatabaseOperation) -> None:
         """Attach an ambiguous-operation descriptor to the next transaction.
 
         The ``transaction()`` context manager records this descriptor
@@ -1421,9 +1417,7 @@ class Database:
                         outcome == "indeterminate"
                         and self._pending_ambiguous_op is not None
                     ):
-                        self.record_ambiguous_operation(
-                            self._pending_ambiguous_op
-                        )
+                        self.record_ambiguous_operation(self._pending_ambiguous_op)
                         self._pending_ambiguous_op = None
                     self._last_rollback_attempted = rollback_attempted
                     self._last_rollback_succeeded = rollback_succeeded
