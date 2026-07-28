@@ -286,6 +286,53 @@ jobs:
           if-no-files-found: ignore
 
   # ------------------------------------------------------------------
+  # 4c. Plan 030 — Integrated hardening, soak, rollout, and closure
+  #     Runs the Plan 030 test command on a Python 3.11+3.12 matrix.
+  #     Covers architecture audit, canonical scenario, failure-effects
+  #     matrix, cancellation race matrix, database fault recovery,
+  #     quarantine lifecycle, performance comparison, resource soak,
+  #     and config validation.
+  # ------------------------------------------------------------------
+  plan-030-integration-closure:
+    runs-on: ubuntu-latest
+    needs: [lint]
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --frozen --extra dev
+
+      - name: Run Plan 030 focused tests
+        run: >
+          uv run pytest
+          tests/unit/test_plan_030_architecture_audit.py
+          tests/unit/test_plan_030_config_validation.py
+          tests/integration/test_plan_030_canonical_scenario.py
+          tests/integration/test_plan_030_failure_effects_matrix.py
+          tests/integration/test_plan_030_cancellation_race_matrix.py
+          tests/integration/test_plan_030_quarantine_lifecycle.py
+          tests/integration/test_plan_030_database_fault_recovery.py
+          tests/perf/test_plan_030_performance_comparison.py
+          tests/soak/test_plan_030_resource_soak.py
+          -q --tb=short
+
+      - name: Upload test logs on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: plan-030-integration-closure-logs-py${{ matrix.python-version }}
+          path: |
+            .pytest_cache/
+            *.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # ------------------------------------------------------------------
   # 5. Performance — bounded perf-contract tests (3.12 only)
   # ------------------------------------------------------------------
   performance:

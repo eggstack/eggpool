@@ -104,8 +104,6 @@ from eggpool.request.selection_claim_diagnostics import (  # noqa: F401  (Milest
 from eggpool.request.stream_diagnostics import (
     STREAM_OUTCOME_CLIENT_CANCELLED,
     STREAM_OUTCOME_COMPLETED,
-    STREAM_OUTCOME_FINALIZER_FAILED,
-    STREAM_OUTCOME_FINALIZER_TIMEOUT,
     STREAM_OUTCOME_UPSTREAM_MIDSTREAM_ERROR,
     StreamDiagnostics,
     classify_httpx_error_class,
@@ -721,55 +719,6 @@ class RequestCoordinator:
             effects_applier=self._effects_applier,
             quarantine=self._quarantine,
         )
-
-    async def _enqueue_finalization_retry(
-        self,
-        selected: SelectedAttempt,
-        context: ProxyRequestContext,
-        *,
-        outcome: str,
-    ) -> bool:
-        """Queue a finalization retry for *selected* when the immediate
-        shielded finalizer could not complete inside its 10s timeout.
-
-        Returns ``True`` when the entry was enqueued, ``False`` when no
-        retry queue is wired or the entry was rejected (overflow,
-        duplicate, or stale age).  Best-effort: never raises.
-        """
-        if self._finalization_retry_queue is None:
-            return False
-        try:
-            from eggpool.request.finalization_queue import FinalizationRetryEntry
-        except Exception:
-            return False
-        try:
-            entry = FinalizationRetryEntry(
-                enqueue_token=(
-                    f"{selected.db_request_id}:{selected.attempt_id}:{outcome}"
-                ),
-                request_id=context.request_id,
-                db_request_id=selected.db_request_id,
-                attempt_id=selected.attempt_id,
-                reservation_id=selected.reservation_id,
-                account_id=selected.account_id,
-                account_name=selected.account_name,
-                api_key=selected.api_key,
-                model_id=selected.model_id,
-                estimated_tokens=selected.estimated_tokens,
-                estimated_microdollars=selected.estimated_microdollars,
-                attempt_number=selected.attempt_number,
-                provider_id=selected.provider_id,
-                protocol=context.upstream_protocol,
-                outcome=outcome,
-            )
-            return await self._finalization_retry_queue.enqueue(entry)
-        except Exception:
-            logger.debug(
-                "Failed to enqueue finalization retry for %s",
-                context.request_id,
-                exc_info=True,
-            )
-            return False
 
     def _get_client(
         self,
@@ -3179,7 +3128,10 @@ class RequestCoordinator:
                     if fin_job is not None:
                         # Process-owned path: populate the job and call
                         # run().  The retained task owns finalization even
-                        # after the caller is cancelled.
+                        # after the caller is cancelled.  This is the sole
+                        # finalization path for cancelled streams — the
+                        # legacy shielded-finalizer-with-timeout path has
+                        # been removed (Plan 026/030 closure).
                         fin_job.finalization_data = fin_data
                         fin_job.set_dependencies(
                             finalizer=finalizer,
@@ -3207,70 +3159,16 @@ class RequestCoordinator:
                                 context.request_id,
                             )
                     else:
-                        # Legacy path: shielded finalizer with 10s timeout.
-                        try:
-                            await asyncio.wait_for(
-                                asyncio.shield(finalizer.finalize(selected, fin_data)),
-                                timeout=10.0,
-                            )
-                        except TimeoutError:
-                            logger.error(
-                                "Finalizer timed out for cancelled stream %s; "
-                                "request %s may leak as pending",
-                                context.request_id,
-                                selected.db_request_id,
-                            )
-                            self._stream_diagnostics.record_outcome(
-                                STREAM_OUTCOME_FINALIZER_TIMEOUT,
-                                proxy_request_id=context.request_id,
-                                db_request_id=selected.db_request_id,
-                                provider_id=selected.provider_id,
-                                account_name=selected.account_name,
-                                model_id=selected.model_id,
-                                protocol=context.upstream_protocol,
-                                elapsed_ms=cancel_latency_total,
-                                bytes_emitted=bytes_emitted,
-                                first_byte_ms=(
-                                    int(first_byte_ms) if first_byte_ms > 0 else None
-                                ),
-                                upstream_connect_ms=cancel_connect_ms_value,
-                                upstream_header_ms=self._upstream_header_ms(context),
-                                upstream_read_ms=cancel_read_ms_value,
-                                attempt=selected.attempt_number,
-                            )
-                            await self._enqueue_finalization_retry(
-                                selected,
-                                context,
-                                outcome="CLIENT_CANCELLED",
-                            )
-                        except Exception:
-                            logger.exception(
-                                "Finalizer failed for cancelled stream %s",
-                                context.request_id,
-                            )
-                            self._stream_diagnostics.record_outcome(
-                                STREAM_OUTCOME_FINALIZER_FAILED,
-                                proxy_request_id=context.request_id,
-                                db_request_id=selected.db_request_id,
-                                provider_id=selected.provider_id,
-                                account_name=selected.account_name,
-                                model_id=selected.model_id,
-                                protocol=context.upstream_protocol,
-                                elapsed_ms=cancel_latency_total,
-                                bytes_emitted=bytes_emitted,
-                                first_byte_ms=(
-                                    int(first_byte_ms) if first_byte_ms > 0 else None
-                                ),
-                                upstream_connect_ms=cancel_connect_ms_value,
-                                upstream_header_ms=self._upstream_header_ms(context),
-                                upstream_read_ms=cancel_read_ms_value,
-                                attempt=selected.attempt_number,
-                            )
-                            await self._enqueue_finalization_retry(
-                                selected,
-                                context,
-                                outcome="CLIENT_CANCELLED",
-                            )
+                        # Finalization supervisor not wired (legacy test
+                        # doubles only).  Record the cancellation outcome;
+                        # the process-owned supervisor is the production
+                        # path and is always available in real deployments.
+                        logger.warning(
+                            "Finalization supervisor not available for "
+                            "cancelled stream %s; outcome recorded without "
+                            "retained task",
+                            context.request_id,
+                        )
                     self._stream_diagnostics.record_outcome(
                         STREAM_OUTCOME_CLIENT_CANCELLED,
                         proxy_request_id=context.request_id,

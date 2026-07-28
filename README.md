@@ -22,6 +22,10 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Dispatch timing: distinct `local_pre_upstream` (full EggPool-side) and `dispatch_overhead` (coordinator-internal) metrics with cadence drift diagnostics for background tasks
 - Durable dispatch write pipeline: process-owned microbatching writer for concurrent dispatch intents with bounded queue, adaptive batching, and diagnostics
 - Bounded observability: request-coherent span sampling (5% default), bounded rolling-window metrics, and constant-bounded snapshot cost regardless of uptime
+- Error isolation: provider-specific validation errors (e.g. unsupported MiniMax-M3 thinking through OpenCode Go) are contained to a single request — no account/model/circuit/quarantine penalties, no restart or database deletion required
+- Process-owned finalization: cancelled streams are reconciled by a retained process-owned job, not the client request task
+- Database recovery: automatic connection recovery with single-flight reconciliation, fail-closed on exhaustion
+- Bounded model quarantine: TTL-based suspected/quarantined state with corroboration thresholds and automatic recovery
 - Designed for lightweight deployments (Raspberry Pi, SBCs)
 
 ## Quick Start

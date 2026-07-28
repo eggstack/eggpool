@@ -72,7 +72,8 @@ Each component has a dedicated deep-dive document:
 | 12 | **External Integrations** | OpenCode, Claude Code, Aider, Codex, 8+ tools | [deep-dive-integrations.md](deep-dive-integrations.md) |
 | 13 | **Security** | Header redaction, API key auth, constant-time compare | [deep-dive-security.md](deep-dive-security.md) |
 | 14 | **Cache & Compression** | Observability, safe compression, synthetic cache, tuning | [deep-dive-cache-compression.md](deep-dive-cache-compression.md) |
-| 15 | **Deployment & Operations** | Systemd, scripts, install, operational tools | [deep-dive-deployment.md](deep-dive-deployment.md) |
+| 15 | **Failure Effects & Quarantine** | Typed failure effects, bounded model quarantine, signal extraction | [deep-dive-health.md](deep-dive-health.md) |
+| 16 | **Deployment & Operations** | Systemd, scripts, install, operational tools | [deep-dive-deployment.md](deep-dive-deployment.md) |
 
 ## Key Architecture Patterns
 

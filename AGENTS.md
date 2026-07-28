@@ -265,6 +265,48 @@ uv run pytest tests/soak/test_extended_stability_gates.py -m extended_soak -v
 # Skip/xfail audit — must pass for CI soak-audit job
 uv run python scripts/audit_xfail_skips.py
 
+# Plan 030 — Integrated hardening, soak, rollout, and closure
+# (architecture audit, canonical scenario, failure-effects matrix,
+# cancellation race matrix, database fault recovery, quarantine
+# lifecycle, performance comparison, resource soak, config validation)
+uv run pytest \
+    tests/unit/test_plan_030_architecture_audit.py \
+    tests/unit/test_plan_030_config_validation.py \
+    tests/integration/test_plan_030_canonical_scenario.py \
+    tests/integration/test_plan_030_failure_effects_matrix.py \
+    tests/integration/test_plan_030_cancellation_race_matrix.py \
+    tests/integration/test_plan_030_quarantine_lifecycle.py \
+    tests/integration/test_plan_030_database_fault_recovery.py \
+    tests/perf/test_plan_030_performance_comparison.py \
+    tests/soak/test_plan_030_resource_soak.py -v
+
+# Plan 030 — Architecture audit only (Workstream A)
+uv run pytest tests/unit/test_plan_030_architecture_audit.py -v
+
+# Plan 030 — Canonical end-to-end scenario (Workstream B)
+uv run pytest tests/integration/test_plan_030_canonical_scenario.py -v
+
+# Plan 030 — Failure-effects matrix (Workstream D)
+uv run pytest tests/integration/test_plan_030_failure_effects_matrix.py -v
+
+# Plan 030 — Cancellation race matrix (Workstream E)
+uv run pytest tests/integration/test_plan_030_cancellation_race_matrix.py -v
+
+# Plan 030 — Database fault recovery (Workstream F)
+uv run pytest tests/integration/test_plan_030_database_fault_recovery.py -v
+
+# Plan 030 — Quarantine lifecycle (Workstream G)
+uv run pytest tests/integration/test_plan_030_quarantine_lifecycle.py -v
+
+# Plan 030 — Performance comparison (Workstream H)
+uv run pytest tests/perf/test_plan_030_performance_comparison.py -m performance -v
+
+# Plan 030 — Resource soak (Workstream I)
+uv run pytest tests/soak/test_plan_030_resource_soak.py -m soak -v
+
+# Plan 030 — Config validation (Workstream K)
+uv run pytest tests/unit/test_plan_030_config_validation.py -v
+
 # Reload consistency audit (Plan 014 / Workstream G4)
 uv run pytest tests/unit/test_audit_reload_consistency.py -v
 uv run python scripts/audit_reload_consistency.py \
