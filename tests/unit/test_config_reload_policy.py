@@ -129,6 +129,16 @@ class TestPolicyDefaults:
             "metrics.flush_interval_s",
             # Detailed span sample rate reconfigured via generation rebuild.
             "metrics.detailed_span_sample_rate",
+            "metrics.dispatch_spans.sample_rate",
+            # Plan 027 — database recovery is process-owned and survives
+            # generation swaps; all recovery fields are LIVE.
+            "database.recovery",
+            "database.recovery.enabled",
+            "database.recovery.max_attempts",
+            "database.recovery.initial_backoff_ms",
+            "database.recovery.max_backoff_ms",
+            "database.recovery.reconciliation_timeout_s",
+            "database.recovery.fail_process_on_exhaustion",
             # Backup enabled state and scheduling fields reconfigured
             # via process supervisor.
             "backup.enabled",
@@ -1204,6 +1214,17 @@ LIVE_FIELD_CONSUMERS: dict[str, tuple[str, ...]] = {
     # Detailed span sample rate consumed by the generation-owned
     # ``DispatchSpanRecorder`` rebuilt on config change.
     "metrics.detailed_span_sample_rate": ("DispatchSpanRecorder",),
+    "metrics.dispatch_spans.sample_rate": ("DispatchSpanRecorder",),
+    # Plan 027 — database recovery is process-owned; all recovery
+    # fields are consumed by the ``DatabaseRecoveryController`` which
+    # reads them from the candidate config on rehash.
+    "database.recovery": ("DatabaseRecoveryController",),
+    "database.recovery.enabled": ("DatabaseRecoveryController",),
+    "database.recovery.max_attempts": ("DatabaseRecoveryController",),
+    "database.recovery.initial_backoff_ms": ("DatabaseRecoveryController",),
+    "database.recovery.max_backoff_ms": ("DatabaseRecoveryController",),
+    "database.recovery.reconciliation_timeout_s": ("DatabaseRecoveryController",),
+    "database.recovery.fail_process_on_exhaustion": ("DatabaseRecoveryController",),
     # Milestone D2: model-info scheduling fields reconfigured via the
     # process supervisor; toggling ``enabled`` adds/removes the task,
     # changing ``refresh_interval_s`` replaces it with the new cadence.

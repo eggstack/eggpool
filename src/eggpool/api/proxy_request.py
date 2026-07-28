@@ -288,11 +288,16 @@ async def handle_proxy_request(
     # the ``ProxyRequestContext`` and ``_send_upstream_request`` can
     # compute ``local_pre_upstream_ms`` from this anchor.
     request_received_monotonic_ns = time.perf_counter_ns()
+    # Generate the proxy request ID early so it can be used for
+    # request-coherent span sampling (Plan 029, Workstream H) before
+    # any spans are recorded.
+    proxy_request_id = str(uuid.uuid4())
     request_state = getattr(request, "state", None)
     if request_state is not None:
         with contextlib.suppress(AttributeError):
             # Some test doubles disallow attribute assignment; ignore.
             request_state.request_received_monotonic_ns = request_received_monotonic_ns
+            request_state.proxy_request_id = proxy_request_id
     # Acquire a generation lease so the active generation cannot be
     # retired while this request is in flight.  For streaming responses
     # the lease is transferred to ``wrap_stream_with_lease`` which
@@ -335,6 +340,16 @@ async def handle_proxy_request(
             getattr(request.app.state, "dispatch_span_recorder", None),
         )
 
+    # Plan 029, Workstream H: request-coherent span sampling.
+    # The sampling decision is deterministic and stable per request ID
+    # so that one sampled request records all spans (coherent trace).
+    # If the request is not sampled, pass ``None`` as the span recorder
+    # so all ``_span`` calls become no-ops.
+    if span_recorder is not None and hasattr(span_recorder, "should_sample_request"):
+        sampled = span_recorder.should_sample_request(proxy_request_id)  # type: ignore[union-attr]
+        if not sampled:
+            span_recorder = None
+
     try:
         return await _handle_proxy_request_inner(
             request,
@@ -350,6 +365,7 @@ async def handle_proxy_request(
                 )
                 or request_received_monotonic_ns
             ),
+            proxy_request_id=proxy_request_id,
         )
     finally:
         # For non-streaming error paths the lease is still held here.
@@ -366,6 +382,7 @@ async def _handle_proxy_request_inner(
     lease: GenerationLease | None,
     *,
     request_received_monotonic_ns: int | None = None,
+    proxy_request_id: str | None = None,
 ) -> Response:
     """Inner handler body; called within the lease's try/finally."""
     with _span(span_recorder, SPAN_AUTH):
@@ -534,7 +551,7 @@ async def _handle_proxy_request_inner(
         )
     is_stream = bool(stream_value)
 
-    request_id = str(uuid.uuid4())
+    request_id = proxy_request_id or str(uuid.uuid4())
     transcode_ctx = TranscodeContext(
         request_id=request_id,
         client_protocol=endpoint.protocol,

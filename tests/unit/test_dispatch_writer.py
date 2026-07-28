@@ -552,25 +552,40 @@ class TestDiagnostics:
                 "state",
                 "queue_depth",
                 "max_queue_depth",
+                "occupancy_ratio",
                 "submitted_total",
                 "persisted_total",
                 "cancelled_total",
                 "cancelled_before_claim_total",
+                "cancelled_after_claim_total",
                 "cancelled_after_commit_total",
                 "failed_total",
+                "failed_batches_total",
                 "reconciliation_total",
+                "saturation_count",
+                "submit_timeout_count",
                 "batch_count",
                 "batch_size_p50",
                 "batch_size_p95",
                 "batch_size_max",
-                "batch_wait_ms_p50",
-                "batch_wait_ms_p95",
                 "transaction_ms_p50",
                 "transaction_ms_p95",
+                "queue_age_ms_p50",
+                "queue_age_ms_p95",
+                "batch_formation_wait_ms_p50",
+                "batch_formation_wait_ms_p95",
+                "enqueue_wait_ms_p50",
+                "enqueue_wait_ms_p95",
+                "result_delivery_ms_p50",
+                "result_delivery_ms_p95",
+                "intent_end_to_end_ms_p50",
+                "intent_end_to_end_ms_p95",
                 "queue_depth_p50",
                 "queue_depth_max",
+                "oldest_intent_age_ms",
                 "last_batch_at",
                 "last_batch_size",
+                "sample_window",
             }
             assert set(snap.keys()) == expected_keys
         finally:
@@ -1412,19 +1427,37 @@ class TestCancellationExtended:
             )
             writer.start()
 
-            # Submit a batch of intents
+            # Use a gate so we can control when persist_dispatch_bundles
+            # completes, ensuring the drain has claimed the intents but
+            # not yet delivered results.
+            gate = asyncio.Event()
+
+            original_persist = persist_dispatch_bundles
+
+            async def _gated_persist(*args: Any, **kwargs: Any) -> Any:
+                results = await original_persist(*args, **kwargs)
+                await gate.wait()
+                return results
+
             cancel_target = _make_intent(proxy_request_id="req-cancel-claim")
             cancel_future = await _enqueue_intent(writer, cancel_target)
             other = _make_intent(proxy_request_id="req-cancel-other")
             other_future = await _enqueue_intent(writer, other)
 
-            # Let the drain process the batch
-            await asyncio.sleep(0.05)
+            with patch(
+                "eggpool.request.dispatch_writer.persist_dispatch_bundles",
+                side_effect=_gated_persist,
+            ):
+                # Wait for the drain to claim and persist the batch
+                await asyncio.sleep(0.05)
 
-            # Set cancelled after claim but before we read the result.
-            # The writer's _persist_batch checks cancelled.is_set() after
-            # commit and raises DispatchIntentCancelledError for the caller.
-            cancel_target.cancelled.set()
+                # Set cancelled after commit but before results are delivered.
+                # The writer's _persist_batch checks cancelled.is_set() after
+                # commit and raises DispatchIntentCancelledError for the caller.
+                cancel_target.cancelled.set()
+
+                # Release the gate so results are delivered
+                gate.set()
 
             # The other intent should still succeed
             other_result = await _await_submit(other_future)
@@ -2221,16 +2254,33 @@ class TestCancellationAfterCommitBeforeDelivery:
             )
             writer.start()
 
+            # Use a gate to control when persist completes, ensuring
+            # the drain has committed but not yet delivered results.
+            gate = asyncio.Event()
+            original_persist = persist_dispatch_bundles
+
+            async def _gated_persist(*args: Any, **kwargs: Any) -> Any:
+                results = await original_persist(*args, **kwargs)
+                await gate.wait()
+                return results
+
             target = _make_intent(proxy_request_id="req-cancel-during")
             target_future = await _enqueue_intent(writer, target)
             other = _make_intent(proxy_request_id="req-cancel-during-other")
             other_future = await _enqueue_intent(writer, other)
 
-            # Let the drain process the batch
-            await asyncio.sleep(0.05)
+            with patch(
+                "eggpool.request.dispatch_writer.persist_dispatch_bundles",
+                side_effect=_gated_persist,
+            ):
+                # Wait for the drain to claim and persist the batch
+                await asyncio.sleep(0.05)
 
-            # Set cancelled after claim
-            target.cancelled.set()
+                # Set cancelled after commit but before results are delivered
+                target.cancelled.set()
+
+                # Release the gate so results are delivered
+                gate.set()
 
             # Other intent succeeds
             other_result = await _await_submit(other_future)
@@ -2288,17 +2338,30 @@ class TestDiagnosticCountersExtended:
                 db, max_batch_size=4, max_batch_wait_ms=50.0
             )
             writer.start()
-            # Submit two intents so the drain claims both into a batch.
-            # Set cancelled after the drain has claimed but during the
-            # persist/commit window so the after-commit path fires.
+            # Use a gate to control when persist completes, ensuring
+            # the drain has committed but not yet delivered results.
+            gate = asyncio.Event()
+            original_persist = persist_dispatch_bundles
+
+            async def _gated_persist(*args: Any, **kwargs: Any) -> Any:
+                results = await original_persist(*args, **kwargs)
+                await gate.wait()
+                return results
+
             target = _make_intent(proxy_request_id="req-ctr-postcommit")
             other = _make_intent(proxy_request_id="req-ctr-postcommit-other")
             target_future = await _enqueue_intent(writer, target)
             other_future = await _enqueue_intent(writer, other)
-            # Let the drain claim both into the batch
-            await asyncio.sleep(0.05)
-            # Set cancelled after claim but before result delivery
-            target.cancelled.set()
+            with patch(
+                "eggpool.request.dispatch_writer.persist_dispatch_bundles",
+                side_effect=_gated_persist,
+            ):
+                # Let the drain claim both into the batch
+                await asyncio.sleep(0.05)
+                # Set cancelled after commit but before result delivery
+                target.cancelled.set()
+                # Release the gate so results are delivered
+                gate.set()
             # Other intent should still succeed
             other_result = await _await_submit(other_future)
             assert other_result.db_request_id
@@ -2799,7 +2862,7 @@ class TestConfigFieldClassification:
         dispatch_writer_fields = {
             k: v for k, v in _FIELD_DISPOSITION.items() if "dispatch_writer" in k
         }
-        assert len(dispatch_writer_fields) == 12  # 6 fields × 2 paths
+        assert len(dispatch_writer_fields) == 18  # 9 fields × 2 paths
 
         for field_path, disposition in dispatch_writer_fields.items():
             assert disposition == ReloadDisposition.RESTART_REQUIRED, (

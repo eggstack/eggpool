@@ -51,7 +51,7 @@ Request-path code obtains `GenerationLease` via `wrap_stream_with_lease` or `lea
 Bounded rolling-window timing recorders:
 - **`DispatchOverheadRecorder`**: coordinator-internal slice (context_build → httpx send)
 - **`LocalPreUpstreamRecorder`**: full EggPool-side window (ASGI entry → upstream dispatch)
-- **`DispatchSpanRecorder`**: 200-sample dispatch span telemetry
+- **`DispatchSpanRecorder`**: 200-sample dispatch span telemetry with request-coherent sampling (5% default; configurable via `[metrics.dispatch_spans].sample_rate`)
 
 Both use monotonic/performance clocks. Metrics additive: `local_pre_upstream` includes context_build, body parsing, validation, segmentation, compression, and coordinator overhead; `dispatch_overhead` covers only coordinator-internal selection/persistence/dispatch.
 

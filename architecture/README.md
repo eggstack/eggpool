@@ -2022,7 +2022,9 @@ The writer is process-owned (on `ProcessRuntime`, not
 Configuration lives under `[database.dispatch_writer]` with all
 fields restart-required.  Runtime diagnostics are exposed via
 `/api/stats/runtime` `dispatch_writer` (queue depth, batch sizes,
-timing, error counts).
+timing, error counts).  All sample storage uses bounded
+`deque(maxlen=sample_window)`; snapshot p95 remains stable after
+1M synthetic batches (Plan 029).
 
 New modules:
 - `src/eggpool/request/dispatch_intent.py` — immutable
@@ -2857,15 +2859,28 @@ Default `mode = "sampled"` keeps write pressure low on default installs (Raspber
 `DispatchSpanRecorder` (`src/eggpool/runtime_dispatch.py`) snapshots now
 copy sample lists under the lock so concurrent appends/evictions cannot
 mutate the snapshot during percentile computation. The recorder accepts
-a `detailed_span_sample_rate` parameter (default `1.0`; range
-`0.0–1.0`) that deterministically samples records via a counter-based
-check — when `< 1.0`, only every Nth record is kept, reducing
-instrumentation pressure on high-throughput installs. The field is
-configurable under `[metrics]` as `detailed_span_sample_rate` and is
-marked `LIVE` so `eggpool rehash` can adjust it without a restart.
+a `detailed_span_sample_rate` parameter (default `0.05`; range
+`0.0–1.0`) that uses **request-coherent sampling**: a deterministic
+SHA-256 hash of the request ID produces a stable per-request decision
+so that one sampled request records all spans (coherent trace), rather
+than an independent decision per span (which produces partial traces).
+The decision is propagated to the coordinator's shared recorder instance
+via a `ContextVar` so coordinator-internal spans respect the same
+decision without each caller passing the flag explicitly.
+
+The field is configurable under `[metrics.dispatch_spans].sample_rate`
+with `[metrics.dispatch_spans].window_size` for the rolling-window size.
+The legacy `[metrics].detailed_span_sample_rate` is deprecated but
+overrides `dispatch_spans.sample_rate` when set to a non-`1.0` value.
+Both are marked `LIVE` so `eggpool rehash` can adjust them without a
+restart. `sampled_count` and `unsampled_count` counters are exposed in
+the snapshot so operators can interpret the sampling distribution.
+
 Spans with no recorded samples appear in the snapshot with all numeric
 fields `None` so callers can distinguish "span did not run" from "span
-ran in zero nanoseconds".
+ran in zero nanoseconds". Coarse metrics (`DispatchOverheadRecorder`,
+`LocalPreUpstreamRecorder`) remain always-on and bounded regardless of
+the sampling rate.
 
 ### Phase 6 — Low-Power Dashboard Performance Optimization
 

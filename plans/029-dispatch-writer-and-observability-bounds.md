@@ -1,7 +1,7 @@
 # Dispatch Writer and Observability Bounds
 
 Date: 2026-07-25
-Status: implementation handoff
+Status: completed
 
 Parent roadmap:
 

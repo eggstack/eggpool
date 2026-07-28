@@ -2527,7 +2527,7 @@ class RequestCoordinator:
                     if isinstance(err_payload, dict) or err_payload is None:
                         _status, err_body, err_warnings = transcoder.reencode_error(
                             response.status_code,
-                            cast("dict[str, Any] | None", err_payload),
+                            err_payload,
                             context.transcode_context,
                         )
                         resp_body = encode_json_body(err_body)

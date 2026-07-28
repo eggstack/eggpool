@@ -141,6 +141,13 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "database.dispatch_writer.shutdown_drain_timeout_s": (
         ReloadDisposition.RESTART_REQUIRED
     ),
+    "database.dispatch_writer.sample_window": ReloadDisposition.RESTART_REQUIRED,
+    "database.dispatch_writer.low_pressure_batch_wait_ms": (
+        ReloadDisposition.RESTART_REQUIRED
+    ),
+    "database.dispatch_writer.high_pressure_batch_wait_ms": (
+        ReloadDisposition.RESTART_REQUIRED
+    ),
     # Also support top-level dispatch_writer shorthand for convenience
     "dispatch_writer.enabled": ReloadDisposition.RESTART_REQUIRED,
     "dispatch_writer.max_queue_depth": ReloadDisposition.RESTART_REQUIRED,
@@ -148,6 +155,9 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "dispatch_writer.max_batch_wait_ms": ReloadDisposition.RESTART_REQUIRED,
     "dispatch_writer.enqueue_timeout_ms": ReloadDisposition.RESTART_REQUIRED,
     "dispatch_writer.shutdown_drain_timeout_s": ReloadDisposition.RESTART_REQUIRED,
+    "dispatch_writer.sample_window": ReloadDisposition.RESTART_REQUIRED,
+    "dispatch_writer.low_pressure_batch_wait_ms": ReloadDisposition.RESTART_REQUIRED,
+    "dispatch_writer.high_pressure_batch_wait_ms": ReloadDisposition.RESTART_REQUIRED,
     # ---- models catalog refresh cadence ----
     # Request-path-visible subset: the candidate builder rebuilds the
     # catalog and re-registers periodic tasks per generation so these
@@ -246,6 +256,8 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     # task with the candidate config's interval on reload.
     "metrics.flush_interval_s": ReloadDisposition.LIVE,
     "metrics.detailed_span_sample_rate": ReloadDisposition.LIVE,
+    "metrics.dispatch_spans.sample_rate": ReloadDisposition.LIVE,
+    "metrics.dispatch_spans.window_size": ReloadDisposition.RESTART_REQUIRED,
     "metrics.max_buffered_events": ReloadDisposition.RESTART_REQUIRED,
     "metrics.timeseries_bucket_s": ReloadDisposition.RESTART_REQUIRED,
     "metrics.trace_sample_rate": ReloadDisposition.RESTART_REQUIRED,

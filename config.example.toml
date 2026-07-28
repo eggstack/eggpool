@@ -316,6 +316,19 @@ rollup_retain_days = 90
 cleanup_interval_s = 86400
 cleanup_max_rows_per_pass = 5000
 
+# ─── Dispatch span instrumentation (Plan 029) ──────────────────────
+# Fine-grained per-span latency instrumentation for the proxy request
+# and coordinator hot path. Coarse dispatch-overhead metrics remain
+# always-on; detailed spans use request-coherent sampling so one
+# sampled request records all spans (coherent trace).
+# [metrics.dispatch_spans]
+# sample_rate = 0.05        # 5% of requests; 0.0 = coarse only, 1.0 = all
+# window_size = 200         # rolling-window samples per span
+
+# Deprecated: use [metrics.dispatch_spans].sample_rate instead.
+# When set to a non-1.0 value, overrides dispatch_spans.sample_rate.
+# detailed_span_sample_rate = 0.05
+
 # ─── Low-wear profile for microSD / Raspberry Pi ──────────────────
 # Uncomment this block when running from microSD and dashboard traces
 # are not critical. Trades detailed trace fidelity and dashboard

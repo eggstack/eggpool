@@ -949,8 +949,11 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             max_queue_depth=config.dispatch_writer.max_queue_depth,
             max_batch_size=config.dispatch_writer.max_batch_size,
             max_batch_wait_ms=config.dispatch_writer.max_batch_wait_ms,
+            low_pressure_batch_wait_ms=config.dispatch_writer.low_pressure_batch_wait_ms,
+            high_pressure_batch_wait_ms=config.dispatch_writer.high_pressure_batch_wait_ms,
             enqueue_timeout_ms=config.dispatch_writer.enqueue_timeout_ms,
             shutdown_drain_timeout_s=config.dispatch_writer.shutdown_drain_timeout_s,
+            sample_window=config.dispatch_writer.sample_window,
         )
         dispatch_writer.start()
     process.dispatch_writer = dispatch_writer

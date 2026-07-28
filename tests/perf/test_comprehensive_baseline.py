@@ -389,10 +389,10 @@ class TestComprehensiveBaseline:
                     "queue_depth": writer_snap.get("queue_depth", 0),
                     "batch_count": writer_snap.get("batch_count", 0),
                     "batch_size_max": writer_snap.get("batch_size_max", 0),
-                    "batch_wait_ms_p50": writer_snap.get("batch_wait_ms_p50", 0),
-                    "batch_wait_ms_p95": writer_snap.get("batch_wait_ms_p95", 0),
                     "transaction_ms_p50": writer_snap.get("transaction_ms_p50", 0),
                     "transaction_ms_p95": writer_snap.get("transaction_ms_p95", 0),
+                    "queue_age_ms_p50": writer_snap.get("queue_age_ms_p50", 0),
+                    "queue_age_ms_p95": writer_snap.get("queue_age_ms_p95", 0),
                     "persisted_total": writer_snap.get("persisted_total", 0),
                 },
                 "reload_timing": {

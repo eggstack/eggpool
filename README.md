@@ -21,6 +21,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - High-concurrency stream stability: bounded retry queue, lock-contention diagnostics, and an OpenCode-specific operator playbook for sustained coding-agent streaming loads
 - Dispatch timing: distinct `local_pre_upstream` (full EggPool-side) and `dispatch_overhead` (coordinator-internal) metrics with cadence drift diagnostics for background tasks
 - Durable dispatch write pipeline: process-owned microbatching writer for concurrent dispatch intents with bounded queue, adaptive batching, and diagnostics
+- Bounded observability: request-coherent span sampling (5% default), bounded rolling-window metrics, and constant-bounded snapshot cost regardless of uptime
 - Designed for lightweight deployments (Raspberry Pi, SBCs)
 
 ## Quick Start

@@ -133,12 +133,40 @@ class DispatchWriterConfig(BaseModel):
     max_queue_depth: int = Field(default=256, ge=16, le=4096)
     max_batch_size: int = Field(default=32, ge=1, le=256)
     max_batch_wait_ms: float = Field(default=50.0, gt=0.0, le=500.0)
+    low_pressure_batch_wait_ms: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=50.0,
+        description="Coalescing delay (ms) when queue is empty/low pressure.",
+    )
+    high_pressure_batch_wait_ms: float = Field(
+        default=5.0,
+        ge=0.0,
+        le=500.0,
+        description="Maximum batch wait (ms) under high pressure.",
+    )
     enqueue_timeout_ms: float = Field(default=5_000.0, gt=0.0, le=60_000.0)
     shutdown_drain_timeout_s: float = Field(
         default=5.0,
         gt=0.0,
         le=30.0,
     )
+    sample_window: int = Field(
+        default=2048,
+        ge=64,
+        le=65536,
+        description="Maximum rolling-window samples retained for diagnostics.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_wait_ordering(self) -> DispatchWriterConfig:
+        if self.low_pressure_batch_wait_ms > self.high_pressure_batch_wait_ms:
+            raise ValueError(
+                "low_pressure_batch_wait_ms must be <= high_pressure_batch_wait_ms"
+            )
+        if self.high_pressure_batch_wait_ms > self.max_batch_wait_ms:
+            raise ValueError("high_pressure_batch_wait_ms must be <= max_batch_wait_ms")
+        return self
 
 
 class DatabaseRecoveryConfig(BaseModel):
@@ -475,6 +503,41 @@ class LimitsConfig(BaseModel):
     monthly_microdollars: int = Field(default=60_000_000, gt=0)
 
 
+class DispatchSpansConfig(BaseModel):
+    """Configuration for fine-grained dispatch-span instrumentation.
+
+    Plan 029, Workstream H: request-coherent sampling replaces
+    per-span counter-based sampling.  ``sample_rate`` is a
+    deterministic, request-level decision (stable per request ID)
+    so that one sampled request records all relevant spans,
+    preserving a coherent trace.
+
+    Coarse metrics (``DispatchOverheadRecorder``,
+    ``LocalPreUpstreamRecorder``) remain always-on and bounded
+    regardless of this setting.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    sample_rate: float = Field(
+        default=0.05,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Fraction of requests for which detailed dispatch spans are "
+            "recorded (0.0-1.0). 0.0 = coarse dispatch only; 1.0 = full "
+            "detail. Deterministic by request ID so one sampled request "
+            "records all spans (coherent trace)."
+        ),
+    )
+    window_size: int = Field(
+        default=200,
+        ge=1,
+        le=10_000,
+        description="Rolling-window sample count retained per span.",
+    )
+
+
 class MetricsConfig(BaseModel):
     """Controls observability write buffering for reduced microSD wear.
 
@@ -500,14 +563,20 @@ class MetricsConfig(BaseModel):
     rollup_retain_days: int = Field(default=90, gt=0)
     cleanup_interval_s: int = Field(default=86_400, gt=0)
     cleanup_max_rows_per_pass: int = Field(default=5000, gt=0)
+    dispatch_spans: DispatchSpansConfig = Field(
+        default_factory=DispatchSpansConfig,
+        description="Fine-grained dispatch-span instrumentation (Plan 029).",
+    )
     detailed_span_sample_rate: float = Field(
-        default=1.0,
+        default=0.05,
         ge=0.0,
         le=1.0,
         description=(
+            "Deprecated: use ``[metrics.dispatch_spans].sample_rate`` instead. "
             "Fraction of detailed dispatch spans to record (0.0-1.0). "
             "1.0 = full detail; 0.0 = coarse dispatch only. "
-            "Deterministic by request ID."
+            "Deterministic by request ID. Maintained for backward "
+            "compatibility; overrides ``dispatch_spans.sample_rate`` when set."
         ),
     )
 

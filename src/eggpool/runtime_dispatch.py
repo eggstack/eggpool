@@ -3,17 +3,37 @@
 Stores only nanosecond durations in a bounded rolling window; never
 persists, never logs, and never touches request identity, bodies, or
 auth headers.
+
+Plan 029 — Workstream H: fine-grained spans use deterministic
+request-level sampling.  ``should_sample_request`` makes a stable
+decision per request ID so that one sampled request records all
+relevant spans (coherent trace), rather than an independent decision
+per span (which produces partial traces).  Coarse metrics
+(``DispatchOverheadRecorder``, ``LocalPreUpstreamRecorder``) remain
+always-on and bounded.
 """
 
 from __future__ import annotations
 
+import hashlib
 import threading
 import time
 from collections import deque
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 
 _SpanKey = str
+
+# Plan 029, Workstream H: per-request sampling decision propagated via
+# a ContextVar so the coordinator's span recording (which uses the
+# shared ``DispatchSpanRecorder`` instance) can respect the decision
+# made in ``handle_proxy_request``.  ``None`` means "not set" (e.g.
+# direct unit-test calls to ``record_ns``); ``False`` means the
+# current request was not sampled; ``True`` means it was.
+_request_sampled: ContextVar[bool | None] = ContextVar(
+    "eggpool_dispatch_span_sampled", default=None
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,16 +272,21 @@ class DispatchSpanRecorder:
     - ``_lock`` serialises append / snapshot to prevent concurrent
       deque mutation.  The lock is held only for the brief append
       (``deque.append``) or the snapshot copy (``list(state.samples)``).
-    - ``_sample_counter`` is incremented *outside* the lock.  A benign
-      race (two threads incrementing simultaneously) slightly overshoots
-      the target sample rate but cannot cause double-counting or data
-      corruption — the counter is purely advisory.
     - Per-span state is lazily created under the lock so concurrent
       first-touch for different span keys does not leak.
+
+    Request-coherent sampling (Plan 029, Workstream H)
+    --------------------------------------------------
+    ``should_sample_request`` makes a deterministic, stable decision
+    per request ID using a SHA-256 hash.  When the rate is < 1.0,
+    only sampled requests have their spans recorded, preserving a
+    coherent trace.  The decision does not use per-span random number
+    generation.  ``sampled_count`` and ``unsampled_count`` are
+    incremented so operators can interpret distributions.
     """
 
     def __init__(
-        self, window_size: int = 200, detailed_span_sample_rate: float = 1.0
+        self, window_size: int = 200, detailed_span_sample_rate: float = 0.05
     ) -> None:
         if window_size < 1:
             raise ValueError("window_size must be at least 1")
@@ -271,28 +296,77 @@ class DispatchSpanRecorder:
         self._lock = threading.Lock()
         self._window_size = window_size
         self._detailed_span_sample_rate = detailed_span_sample_rate
-        self._sample_counter = 0
+        self._sampled_count = 0
+        self._unsampled_count = 0
 
     @property
     def window_size(self) -> int:
         return self._window_size
 
+    @property
+    def detailed_span_sample_rate(self) -> float:
+        return self._detailed_span_sample_rate
+
+    def should_sample_request(self, request_id: str) -> bool:
+        """Deterministic, request-coherent sampling decision.
+
+        Returns ``True`` when all spans for this request should be
+        recorded, ``False`` when the request should be skipped.
+        The decision is stable for a given ``request_id`` and does
+        not use per-span random number generation.
+
+        When ``detailed_span_sample_rate`` is 1.0 every request is
+        sampled; when 0.0 none are.  Otherwise a SHA-256 hash of
+        the request ID is normalised to [0, 1) and compared against
+        the rate.
+
+        ``sampled_count`` and ``unsampled_count`` are incremented
+        so operators can interpret the sampling distribution.
+
+        The decision is also stored in a :class:`ContextVar` so
+        that :meth:`record_ns` (called from the coordinator's
+        shared recorder instance) can respect it without each
+        caller needing to pass the flag explicitly.
+        """
+        rate = self._detailed_span_sample_rate
+        if rate >= 1.0:
+            self._sampled_count += 1
+            _request_sampled.set(True)
+            return True
+        if rate <= 0.0:
+            self._unsampled_count += 1
+            _request_sampled.set(False)
+            return False
+        digest = hashlib.sha256(request_id.encode("utf-8")).digest()
+        # Use first 8 bytes as a uint64, normalise to [0, 1).
+        val = int.from_bytes(digest[:8], "big") / (2**64)
+        if val < rate:
+            self._sampled_count += 1
+            _request_sampled.set(True)
+            return True
+        self._unsampled_count += 1
+        _request_sampled.set(False)
+        return False
+
+    def sampled_unsampled_counts(self) -> tuple[int, int]:
+        """Return ``(sampled_count, unsampled_count)`` for diagnostics."""
+        return self._sampled_count, self._unsampled_count
+
     def record_ns(self, span: str, elapsed_ns: int) -> None:
         """Record an elapsed duration in nanoseconds for ``span``.
 
         Negative or zero values are ignored so callers can pass through
-        uninitialised timers without scrubbing.  When
-        ``detailed_span_sample_rate`` < 1.0, records are
-        deterministically sampled via a counter-based check.
+        uninitialised timers without scrubbing.  Request-coherent
+        sampling is applied via the :class:`ContextVar` set by
+        :meth:`should_sample_request`: if the current request was not
+        sampled, this method is a no-op.  When the ContextVar is
+        unset (``None`` — e.g. direct unit-test calls), recording
+        proceeds unconditionally for backward compatibility.
         """
         if elapsed_ns <= 0:
             return
-        if self._detailed_span_sample_rate < 1.0:
-            self._sample_counter += 1
-            if (
-                self._sample_counter % 1000
-            ) / 1000.0 >= self._detailed_span_sample_rate:
-                return
+        if _request_sampled.get() is False:
+            return
         with self._lock:
             state = self._spans.get(span)
             if state is None:
@@ -321,6 +395,9 @@ class DispatchSpanRecorder:
         deterministic output.  All sample lists are copied under the
         lock so concurrent appends/evictions cannot mutate the
         snapshot during percentile computation.
+
+        Includes ``sampled_count`` and ``unsampled_count`` so operators
+        can interpret the sampling distribution (Plan 029, Workstream H).
         """
         with self._lock:
             keys = sorted(self._spans.keys())
@@ -333,7 +410,12 @@ class DispatchSpanRecorder:
             rows.append(
                 _summarize_from_samples(key, self._window_size, samples).as_dict()
             )
-        return {"window_size": self._window_size, "spans": rows}
+        return {
+            "window_size": self._window_size,
+            "spans": rows,
+            "sampled_count": self._sampled_count,
+            "unsampled_count": self._unsampled_count,
+        }
 
     def snapshot_for_spans(self, spans: list[str]) -> dict[str, Any]:
         """Snapshot only the requested span keys (safer for fixed schemas).
@@ -356,7 +438,12 @@ class DispatchSpanRecorder:
             rows.append(
                 _summarize_from_samples(key, self._window_size, samples).as_dict()
             )
-        return {"window_size": self._window_size, "spans": rows}
+        return {
+            "window_size": self._window_size,
+            "spans": rows,
+            "sampled_count": self._sampled_count,
+            "unsampled_count": self._unsampled_count,
+        }
 
 
 def _summarize_from_samples(

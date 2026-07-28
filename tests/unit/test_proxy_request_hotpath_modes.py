@@ -325,7 +325,7 @@ class TestSafeModeEndToEnd:
     async def test_safe_mode_calls_apply_once_and_analyzer_zero(
         self, monkeypatch: Any
     ) -> None:
-        recorder = DispatchSpanRecorder(window_size=200)
+        recorder = DispatchSpanRecorder(window_size=200, detailed_span_sample_rate=1.0)
         coordinator = _CapturingCoordinator()
         app = _build_state(
             mode="safe",
@@ -394,7 +394,7 @@ class TestObserveModeEndToEnd:
     async def test_observe_mode_calls_analyze_once_and_apply_zero(
         self, monkeypatch: Any
     ) -> None:
-        recorder = DispatchSpanRecorder(window_size=200)
+        recorder = DispatchSpanRecorder(window_size=200, detailed_span_sample_rate=1.0)
         coordinator = _CapturingCoordinator()
         app = _build_state(
             mode="observe",
@@ -456,7 +456,7 @@ class TestDisabledCompressionEndToEnd:
     async def test_disabled_skips_segmentation_analyzer_and_apply(
         self, monkeypatch: Any
     ) -> None:
-        recorder = DispatchSpanRecorder(window_size=200)
+        recorder = DispatchSpanRecorder(window_size=200, detailed_span_sample_rate=1.0)
         coordinator = _CapturingCoordinator()
         app = _build_state(
             mode="observe",

@@ -309,9 +309,15 @@ class RuntimeGenerationFactory:
 
         # -- Dispatch recorders ---------------------------------------------
         dispatch_overhead_recorder = DispatchOverheadRecorder(window_size=100)
+        # Plan 029, Workstream H: request-coherent span sampling.
+        # ``detailed_span_sample_rate`` is deprecated but overrides
+        # ``dispatch_spans.sample_rate`` for backward compatibility.
+        span_sample_rate = config.metrics.detailed_span_sample_rate
+        if span_sample_rate == 1.0:
+            span_sample_rate = config.metrics.dispatch_spans.sample_rate
         dispatch_span_recorder = DispatchSpanRecorder(
-            window_size=200,
-            detailed_span_sample_rate=config.metrics.detailed_span_sample_rate,
+            window_size=config.metrics.dispatch_spans.window_size,
+            detailed_span_sample_rate=span_sample_rate,
         )
 
         # -- Local pre-upstream recorder ------------------------------------
