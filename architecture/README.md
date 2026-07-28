@@ -4042,46 +4042,6 @@ every result category, counter, stage, and snapshot field.
   not rename them without a coordinated update to the dashboard,
   the runtime JSON contract, and the playbook.
 
-### Reload consistency audit (Plan 014 / Workstream G4)
-
-`scripts/audit_reload_consistency.py` is an offline cross-layer
-auditor that proves the active generation's configured providers,
-accounts, task specs, and routing-trace writer mode agree with what
-actually exists in the SQLite database and the running process. The
-script catches drift introduced by a reload that committed the
-runtime pointer swap but did not apply the persistence delta (or
-vice versa).
-
-Three checks run by default:
-
-* `provider_rows_vs_active_config` — The `providers` table must
-  contain every active provider with matching `base_url` and
-  `protocols`. A provider present in the snapshot but missing from
-  the DB (or a row marked disabled while the snapshot says enabled)
-  is reported as a violation.
-* `account_rows_vs_active_config` — The `accounts` table must
-  contain every active account with matching `provider_id`,
-  `enabled`, and `weight`. Drift on any field is a violation.
-* `task_specs_vs_active_registry` — When the environment variable
-  `EGGPOOL_AUDIT_TASK_SPECS_ACTIVE` is populated (a comma-separated
-  list of task spec names reported live by the process supervisor),
-  every configured task spec must be present in that list. The check
-  is silent in offline audit contexts.
-
-Optional flags:
-
-* `--live-writer` — additionally compares the routing-trace writer's
-  live mode (read from the `EGGPOOL_LIVE_TRACE_MODE` env var) against
-  the active generation's `routing.trace.mode`.
-* `--emit-snapshot-template` — prints a blank snapshot JSON template
-  for operators building a snapshot from a non-standard introspection
-  source.
-
-The script exits 0 when clean, 1 on any violation, 2 on usage error.
-Output is a single JSON document (`passed`, `violations[*]`) suitable
-for CI consumption. Programmatic invariants are pinned by
-`tests/unit/test_audit_reload_consistency.py`.
-
 ## Dispatch Stability Milestone G — Soak Validation, Rollout, and Operational Closure
 
 Proves that dispatch latency, database queues, background tasks, runtime

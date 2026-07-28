@@ -29,15 +29,11 @@ on:
           - short
           - standard
           - long
-  schedule:
-    # Sundays at 02:00 UTC
-    - cron: "0 2 * * 0"
-
 env:
   PYTHONHASHSEED: "0"
   TZ: UTC
 
-# Manual/scheduled only — never blocks PRs from external runners.
+# Manual only — never blocks PRs from external runners.
 concurrency:
   group: extended-soak
   cancel-in-progress: true
@@ -47,7 +43,7 @@ jobs:
   # Short soak (30 min) — full coverage on Python 3.12
   # ------------------------------------------------------------------
   soak-short:
-    if: inputs.duration == 'short' || (!inputs.duration && github.event_name == 'schedule')
+    if: inputs.duration == 'short'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -98,7 +94,7 @@ jobs:
   # Standard soak (60 min) — dispatch stability + full workload profiles
   # ------------------------------------------------------------------
   soak-standard:
-    if: inputs.duration == 'standard' || (!inputs.duration && github.event_name == 'schedule')
+    if: inputs.duration == 'standard'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:

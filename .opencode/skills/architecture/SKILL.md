@@ -584,17 +584,6 @@ through this typed subclass (and any other exception that exposes an
 exception message string. Never add new ad-hoc `"digest mismatch" in
 str(exc).lower()` checks.
 
-### Reload Consistency Audit
-
-`scripts/audit_reload_consistency.py` performs offline cross-layer
-checks: the active generation's configured providers, accounts, task
-specs, and routing-trace writer mode must agree with the SQLite
-database and the live process. Drift indicates a reload that
-committed the runtime pointer swap but did not apply the persistence
-delta (or vice versa). The script reads JSON snapshots, exits 0 on
-clean / 1 on violation, and is pinned by
-`tests/unit/test_audit_reload_consistency.py`.
-
 ## CLI Commands
 
 - `models refresh` synchronizes configured accounts via `AccountRepository.sync_from_config` before refreshing the catalog, so cached account/model relationships match normal application startup
