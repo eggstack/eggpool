@@ -34,6 +34,8 @@ from tests.integration.test_rehash_streaming_swap import (
     _write_config,
 )
 
+pytestmark = pytest.mark.reload
+
 # Canonical keys every ``--json`` output must contain (from
 # ``cli_rehash_format.py``).
 _EXPECTED_JSON_KEYS: frozenset[str] = frozenset(

@@ -719,16 +719,17 @@ class RequestFinalizer:
                 account_id: int | None = getattr(selected, "account_id", None)
                 if account_id is not None:
                     event_repo = AccountEventRepository(self._db)
-                    await event_repo.record(
-                        account_id=account_id,
-                        event_type=data.outcome.value,
-                        details=json.dumps(
-                            {
-                                "error_class": data.error_class,
-                                "status_code": data.status_code,
-                            }
-                        ),
-                    )
+                    async with self._db.transaction():
+                        await event_repo.record(
+                            account_id=account_id,
+                            event_type=data.outcome.value,
+                            details=json.dumps(
+                                {
+                                    "error_class": data.error_class,
+                                    "status_code": data.status_code,
+                                }
+                            ),
+                        )
             except (
                 asyncio.CancelledError,
                 SystemExit,

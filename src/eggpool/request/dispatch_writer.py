@@ -213,6 +213,11 @@ class DispatchPersistenceWriter:
             return
         self._state = _WriterState.DRAINING
         if self._drain_task is not None:
+            # A drain loop blocked on an empty queue has no producer left
+            # to wake it after the state transition.  Cancel that idle wait
+            # immediately instead of consuming the full shutdown timeout.
+            if self._queue.empty() and not self._drain_task.done():
+                self._drain_task.cancel()
             try:
                 await asyncio.wait_for(
                     self._drain_task,
@@ -252,10 +257,20 @@ class DispatchPersistenceWriter:
         self._submitted_total += 1
 
         try:
-            loop.call_soon_threadsafe(self._enqueue_from_event_loop, qi)
+            loop.call_soon_threadsafe(self._schedule_enqueue, loop, qi)
         except RuntimeError as exc:
+            self._failed_total += 1
+            qi.future.set_exception(DispatchQueueClosedError("Event loop is closed"))
             raise DispatchQueueClosedError("Event loop is closed") from exc
         return future
+
+    def _schedule_enqueue(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        qi: _QueuedIntent,
+    ) -> None:
+        """Create the async enqueue task on the writer's event loop."""
+        loop.create_task(self._enqueue_from_event_loop(qi))
 
     async def _enqueue_from_event_loop(self, qi: _QueuedIntent) -> None:
         """Actually place the intent on the queue from the event loop."""

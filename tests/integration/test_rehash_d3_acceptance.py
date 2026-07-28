@@ -36,6 +36,8 @@ from tests.integration.test_rehash_streaming_swap import (
     _write_config,
 )
 
+pytestmark = pytest.mark.reload
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

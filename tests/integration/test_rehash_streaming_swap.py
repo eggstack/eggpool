@@ -48,6 +48,8 @@ from typing import Any
 import httpx
 import pytest
 
+pytestmark = pytest.mark.reload
+
 
 def _fingerprint(value: str) -> str:
     """Return a safe SHA-256 fingerprint for a secret value (never log raw)."""

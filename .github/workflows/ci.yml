@@ -70,7 +70,7 @@ jobs:
       - name: Run unit and integration tests
         run: >
           uv run pytest
-          -m "not slow and not performance and not soak and not extended_soak and not live"
+          -m "not slow and not performance and not soak and not extended_soak and not live and not reload"
           --ignore=tests/integration/reload/
           -q --tb=short
           ${{ matrix.python-version == '3.11' && '-vv --capture=tee-sys -o faulthandler_timeout=300 --durations=25' || '' }}
@@ -106,7 +106,11 @@ jobs:
       - run: uv sync --frozen --extra dev
 
       - name: Run reload/rehash and control-plane tests
-        run: uv run pytest tests/integration/reload/ -q --tb=short
+        run: >
+          uv run pytest
+          tests/integration/reload/
+          tests/integration/test_rehash*.py
+          -q --tb=short
 
       - name: Upload test logs on failure
         if: always()

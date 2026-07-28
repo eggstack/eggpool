@@ -36,6 +36,8 @@ from tests.integration.test_rehash_streaming_swap import (
     _write_config,
 )
 
+pytestmark = pytest.mark.reload
+
 
 def _make_env(tmp_path: Any) -> dict[str, str]:
     """Return an env dict with a private XDG state home."""

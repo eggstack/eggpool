@@ -1471,6 +1471,10 @@ class RuntimeManager:
         """
         deadline = time.monotonic() + GENERATION_LEASE_TIMEOUT_S
         async with self._lease_condition:
+            if self._active is None and not self._shutdown_in_progress:
+                raise RuntimeManagerLeaseExhaustedError(
+                    "No active runtime generation is installed"
+                )
             self._lease_gate_waiters += 1
             try:
                 remaining = deadline - time.monotonic()

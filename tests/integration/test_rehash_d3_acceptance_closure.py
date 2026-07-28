@@ -52,6 +52,8 @@ from tests.integration.test_rehash_streaming_swap import (
     _wait_healthy,
 )
 
+pytestmark = pytest.mark.reload
+
 auth: dict[str, str] = {"Authorization": "Bearer test-rehash-key"}
 
 
