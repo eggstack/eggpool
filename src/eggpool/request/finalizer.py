@@ -66,6 +66,69 @@ class FinalizationOutcome(StrEnum):
 
 
 @dataclass(slots=True)
+class _FinalizationDiagnosticSnapshot:
+    """Precomputed diagnostic fields for the finalization transaction.
+
+    Plan 028 Workstream G: all JSON serialization and attribute
+    extraction happens BEFORE the ``BEGIN IMMEDIATE`` transaction so
+    the SQLite write-lock is held only for the actual DML statements.
+    """
+
+    # Segmentation
+    segmentation_status: str = "empty_request"
+    stable_prefix_hash: str | None = None
+    request_shape_hash: str | None = None
+    stable_prefix_estimated_tokens: int | None = None
+    semi_stable_estimated_tokens: int | None = None
+    volatile_estimated_tokens: int | None = None
+    stable_prefix_bytes: int | None = None
+    semi_stable_bytes: int | None = None
+    volatile_bytes: int | None = None
+    segmentation_summary_json: str | None = None
+    # Compression observation
+    compression_status: str = "disabled"
+    compression_mode: str | None = None
+    compression_candidate_count: int = 0
+    compression_eligible_candidate_count: int = 0
+    compression_suppressed_candidate_count: int = 0
+    compression_estimated_original_tokens: int | None = None
+    compression_estimated_compressed_tokens: int | None = None
+    compression_estimated_savings_tokens: int | None = None
+    compression_analyzer_latency_ms: float | None = None
+    compression_warning_count: int = 0
+    compression_reason_code_counts_json: str | None = None
+    compression_summary_json: str | None = None
+    # Compression result
+    compression_applied: int = 0
+    compression_transform_count: int = 0
+    compression_transforms_by_reason_json: str | None = None
+    compression_original_tokens: int | None = None
+    compression_compressed_tokens: int | None = None
+    compression_savings_tokens: int | None = None
+    compression_pre_stable_prefix_hash: str | None = None
+    compression_post_stable_prefix_hash: str | None = None
+    compression_stable_prefix_preserved: int = 1
+    compression_warnings_json: str | None = None
+    compression_latency_ms: float = 0.0
+    compression_failed_fallback: int = 0
+    compression_applied_summary_json: str | None = None
+    # Resolved compression policy
+    compression_policy_name: str | None = None
+    compression_policy_source: str | None = None
+    compression_policy_warnings_json: str | None = None
+    # Synthetic cache
+    synthetic_cache_status: str | None = None
+    synthetic_cache_dry_run: int = 1
+    synthetic_cache_candidate_count: int = 0
+    synthetic_cache_applied_count: int = 0
+    synthetic_cache_warning_count: int = 0
+    synthetic_cache_warnings_json: str | None = None
+    synthetic_cache_policy_name: str | None = None
+    synthetic_cache_policy_source: str | None = None
+    synthetic_cache_summary_json: str | None = None
+
+
+@dataclass(slots=True)
 class FinalizationData:
     """Input data for finalizing a request."""
 
@@ -494,350 +557,25 @@ class RequestFinalizer:
                 operation_id=selected.db_request_id,
                 operation_kind="request_finalization",
                 connection_epoch=self._db.connection_epoch,
-                idempotency_keys=(
-                    ("attempt_number", str(selected.attempt_number)),
-                ),
+                idempotency_keys=(("attempt_number", str(selected.attempt_number)),),
                 intended_status=self._outcome_to_status(data.outcome),
                 precondition_facts=(),
                 created_at_monotonic=time.monotonic(),
                 reconciliation_strategy="finalization",
             )
         )
+
+        # Plan 028 Workstream G: precompute ALL diagnostic serialization
+        # outside the BEGIN IMMEDIATE critical section.  This keeps the
+        # SQLite write-lock held only for the actual DML statements,
+        # reducing contention on the single writer connection.
+        diag = self._precompute_finalization_diagnostics(data)
+        db_request_id = selected.db_request_id
+        status = self._outcome_to_status(data.outcome)
+        retry_count = max(0, selected.attempt_number - 1)
+
         async with self._db.transaction():
             # 3. Finalize request only if pending (idempotent)
-            db_request_id = selected.db_request_id
-            status = self._outcome_to_status(data.outcome)
-            retry_count = max(0, selected.attempt_number - 1)
-
-            # Phase 2 segmentation summary.  The finalizer is the single
-            # source of truth for persistence of the segmentation
-            # fields; the coordinator attaches the SegmentationResult
-            # to ``data.segmentation`` (or leaves it ``None`` for
-            # callers that did not run the segmenter — historical
-            # behaviour).  Field names mirror migration 0041.
-            segmentation_obj = data.segmentation
-            if data.segmentation_not_collected:
-                segmentation_status_value = "not_collected"
-            else:
-                segmentation_status_value = "empty_request"
-            stable_prefix_hash_value: str | None = None
-            request_shape_hash_value: str | None = None
-            stable_prefix_estimated_tokens_value: int | None = None
-            semi_stable_estimated_tokens_value: int | None = None
-            volatile_estimated_tokens_value: int | None = None
-            stable_prefix_bytes_value: int | None = None
-            semi_stable_bytes_value: int | None = None
-            volatile_bytes_value: int | None = None
-            segmentation_summary_json_value: str | None = None
-            if segmentation_obj is not None:
-                segmentation_status_value = str(
-                    getattr(segmentation_obj, "status", "empty_request")
-                )
-                stable_prefix_hash_value = getattr(
-                    segmentation_obj, "stable_prefix_hash", None
-                )
-                request_shape_hash_value = getattr(
-                    segmentation_obj, "request_shape_hash", None
-                )
-                stable_prefix_estimated_tokens_value = getattr(
-                    segmentation_obj, "stable_prefix_estimated_tokens", None
-                )
-                semi_stable_estimated_tokens_value = getattr(
-                    segmentation_obj, "semi_stable_estimated_tokens", None
-                )
-                volatile_estimated_tokens_value = getattr(
-                    segmentation_obj, "volatile_estimated_tokens", None
-                )
-                stable_prefix_bytes_value = getattr(
-                    segmentation_obj, "stable_prefix_bytes", None
-                )
-                semi_stable_bytes_value = getattr(
-                    segmentation_obj, "semi_stable_bytes", None
-                )
-                volatile_bytes_value = getattr(segmentation_obj, "volatile_bytes", None)
-                try:
-                    from eggpool.transcoder.segmentation import (
-                        segmentation_summary_json,
-                    )
-
-                    segmentation_summary_json_value = segmentation_summary_json(
-                        segmentation_obj
-                    )
-                except (TypeError, ValueError):
-                    segmentation_summary_json_value = None
-
-            # Phase 4 compression observation.  The finalizer is the
-            # single source of truth for persistence of the
-            # compression fields; the coordinator attaches the
-            # :class:`CompressionObservation` to
-            # ``data.compression_observation`` (or leaves it
-            # ``None`` for callers that did not run the analyzer —
-            # historical behaviour, or when ``[compression] enabled =
-            # false``).  Field names mirror migration 0042.
-            compression_obj = data.compression_observation
-            compression_status_value = "disabled"
-            compression_mode_value: str | None = None
-            compression_candidate_count_value = 0
-            compression_eligible_candidate_count_value = 0
-            compression_suppressed_candidate_count_value = 0
-            compression_estimated_original_tokens_value: int | None = None
-            compression_estimated_compressed_tokens_value: int | None = None
-            compression_estimated_savings_tokens_value: int | None = None
-            compression_analyzer_latency_ms_value: float | None = None
-            compression_warning_count_value = 0
-            compression_reason_code_counts_json_value: str | None = None
-            compression_summary_json_value: str | None = None
-            if compression_obj is not None:
-                compression_status_value = "observed"
-                compression_mode_value = str(
-                    getattr(compression_obj, "mode", "observe")
-                )
-                compression_candidate_count_value = int(
-                    getattr(compression_obj, "candidate_count", 0) or 0
-                )
-                compression_eligible_candidate_count_value = int(
-                    getattr(compression_obj, "eligible_candidate_count", 0) or 0
-                )
-                compression_suppressed_candidate_count_value = int(
-                    getattr(compression_obj, "suppressed_candidate_count", 0) or 0
-                )
-                compression_estimated_original_tokens_value = getattr(
-                    compression_obj, "estimated_original_tokens", None
-                )
-                compression_estimated_compressed_tokens_value = getattr(
-                    compression_obj, "estimated_compressed_tokens", None
-                )
-                compression_estimated_savings_tokens_value = getattr(
-                    compression_obj, "estimated_savings_tokens", None
-                )
-                latency_value = getattr(compression_obj, "analyzer_latency_ms", None)
-                if isinstance(latency_value, (int, float)):
-                    compression_analyzer_latency_ms_value = float(latency_value)
-                warnings_value = getattr(compression_obj, "warnings", None)
-                if isinstance(warnings_value, (list, tuple)):
-                    warnings_seq: list[object] = list(
-                        warnings_value  # type: ignore[arg-type]
-                    )
-                    compression_warning_count_value = len(warnings_seq)
-                try:
-                    reason_counts = getattr(compression_obj, "reason_code_counts", None)
-                    if reason_counts is not None:
-                        compression_reason_code_counts_json_value = json.dumps(
-                            dict(reason_counts),
-                            default=str,
-                            sort_keys=True,
-                        )
-                except (TypeError, ValueError):
-                    compression_reason_code_counts_json_value = None
-                try:
-                    to_json = getattr(compression_obj, "to_summary_json", None)
-                    if callable(to_json):
-                        summary_value = to_json()
-                        if isinstance(summary_value, str):
-                            compression_summary_json_value = summary_value
-                except (TypeError, ValueError):
-                    compression_summary_json_value = None
-
-            # Phase 5 safe-suffix compression result.  The finalizer
-            # reads a duck-typed :class:`CompressionResult` from
-            # ``data.compression_result`` (or ``None`` when the
-            # applier did not run).  Field names mirror migration 0043.
-            compression_result_obj = data.compression_result
-            compression_applied_value = 0
-            compression_transform_count_value = 0
-            compression_transforms_by_reason_json_value: str | None = None
-            compression_original_tokens_value: int | None = None
-            compression_compressed_tokens_value: int | None = None
-            compression_savings_tokens_value: int | None = None
-            compression_pre_stable_prefix_hash_value: str | None = None
-            compression_post_stable_prefix_hash_value: str | None = None
-            compression_stable_prefix_preserved_value = 1
-            compression_warnings_json_value: str | None = None
-            compression_latency_ms_value = 0.0
-            compression_failed_fallback_value = 0
-            compression_applied_summary_json_value: str | None = None
-            if compression_result_obj is not None:
-                compression_applied_value = (
-                    1 if getattr(compression_result_obj, "applied", False) else 0
-                )
-                compression_transform_count_value = int(
-                    getattr(compression_result_obj, "transform_count", 0) or 0
-                )
-                transforms_by_reason = getattr(
-                    compression_result_obj, "transforms_by_reason", None
-                )
-                if transforms_by_reason is not None:
-                    try:
-                        compression_transforms_by_reason_json_value = json.dumps(
-                            dict(transforms_by_reason),
-                            default=str,
-                            sort_keys=True,
-                            ensure_ascii=False,
-                        )
-                    except (TypeError, ValueError):
-                        compression_transforms_by_reason_json_value = None
-                compression_original_tokens_value = getattr(
-                    compression_result_obj, "original_tokens", None
-                )
-                if isinstance(compression_original_tokens_value, (int, float)):
-                    compression_original_tokens_value = int(
-                        compression_original_tokens_value
-                    )
-                else:
-                    compression_original_tokens_value = None
-                compression_compressed_tokens_value = getattr(
-                    compression_result_obj, "compressed_tokens", None
-                )
-                if isinstance(compression_compressed_tokens_value, (int, float)):
-                    compression_compressed_tokens_value = int(
-                        compression_compressed_tokens_value
-                    )
-                else:
-                    compression_compressed_tokens_value = None
-                compression_savings_tokens_value = getattr(
-                    compression_result_obj, "savings_tokens", None
-                )
-                if isinstance(compression_savings_tokens_value, (int, float)):
-                    compression_savings_tokens_value = int(
-                        compression_savings_tokens_value
-                    )
-                else:
-                    compression_savings_tokens_value = None
-                compression_pre_stable_prefix_hash_value = getattr(
-                    compression_result_obj, "pre_stable_prefix_hash", None
-                )
-                compression_post_stable_prefix_hash_value = getattr(
-                    compression_result_obj, "post_stable_prefix_hash", None
-                )
-                compression_stable_prefix_preserved_value = (
-                    1
-                    if getattr(
-                        compression_result_obj,
-                        "stable_prefix_preserved",
-                        True,
-                    )
-                    else 0
-                )
-                warnings_raw = getattr(compression_result_obj, "warnings", None)
-                if isinstance(warnings_raw, (list, tuple)):
-                    try:
-                        warnings_seq: list[object] = list(
-                            warnings_raw,  # type: ignore[arg-type]
-                        )
-                        compression_warnings_json_value = json.dumps(
-                            warnings_seq,
-                            default=str,
-                            ensure_ascii=False,
-                        )
-                    except (TypeError, ValueError):
-                        compression_warnings_json_value = None
-                latency_val = getattr(compression_result_obj, "latency_ms", 0.0)
-                if isinstance(latency_val, (int, float)):
-                    compression_latency_ms_value = float(latency_val)
-                compression_failed_fallback_value = (
-                    1
-                    if getattr(compression_result_obj, "failed_fallback", False)
-                    else 0
-                )
-                if compression_applied_value:
-                    to_json = getattr(compression_result_obj, "summary_json", None)
-                    if to_json is not None:
-                        compression_applied_summary_json_value = (
-                            to_json if isinstance(to_json, str) else None
-                        )
-
-            # Phase 6 resolved compression policy.  The finalizer
-            # extracts audit fields from the duck-typed
-            # :class:`ResolvedCompressionPolicy` on
-            # ``data.resolved_compression_policy``.  The resolved
-            # config itself was used by the analyzer and the
-            # applier upstream; we only persist the audit metadata
-            # so dashboards can group requests by the resolved
-            # policy without re-running the resolver.  When the
-            # resolver did not run (compression disabled or legacy
-            # path), all three columns render as ``NULL`` /
-            # ``'[]'`` per the migration defaults.
-            resolved_policy_obj = data.resolved_compression_policy
-            compression_policy_name_value: str | None = None
-            compression_policy_source_value: str | None = None
-            compression_policy_warnings_json_value: str | None = None
-            if resolved_policy_obj is not None:
-                name_attr = getattr(resolved_policy_obj, "name", None)
-                if isinstance(name_attr, str) and name_attr:
-                    compression_policy_name_value = name_attr
-                source_attr = getattr(resolved_policy_obj, "source", None)
-                if isinstance(source_attr, str) and source_attr:
-                    compression_policy_source_value = source_attr
-                warnings_attr = getattr(resolved_policy_obj, "warnings", None)
-                if isinstance(warnings_attr, (list, tuple)):
-                    seq: list[str] = [str(w) for w in warnings_attr]  # type: ignore[arg-type]
-                    try:
-                        compression_policy_warnings_json_value = json.dumps(
-                            seq,
-                            ensure_ascii=False,
-                        )
-                    except (TypeError, ValueError):
-                        compression_policy_warnings_json_value = None
-
-            # Phase 9: extract synthetic cache-controls audit metadata
-            # from the duck-typed ``SyntheticCacheResult`` attached to
-            # the finalization data.  The result is informational only;
-            # the mutated payload was already applied upstream (in
-            # ``handle_proxy_request``) so the request body the
-            # upstream actually saw carries the synthetic hints.
-            synthetic_cache_obj = getattr(data, "synthetic_cache_result", None)
-            synthetic_cache_status_value: str | None = None
-            synthetic_cache_dry_run_value: int = 1
-            synthetic_cache_candidate_count_value: int = 0
-            synthetic_cache_applied_count_value: int = 0
-            synthetic_cache_warning_count_value: int = 0
-            synthetic_cache_warnings_json_value: str | None = None
-            synthetic_cache_policy_name_value: str | None = None
-            synthetic_cache_policy_source_value: str | None = None
-            synthetic_cache_summary_json_value: str | None = None
-            if synthetic_cache_obj is not None:
-                status_attr = getattr(synthetic_cache_obj, "status", None)
-                if isinstance(status_attr, str) and status_attr:
-                    synthetic_cache_status_value = status_attr
-                dry_run_attr = getattr(synthetic_cache_obj, "dry_run", None)
-                if isinstance(dry_run_attr, bool):
-                    synthetic_cache_dry_run_value = 1 if dry_run_attr else 0
-                candidate_count_attr = getattr(
-                    synthetic_cache_obj, "candidate_count", 0
-                )
-                if isinstance(candidate_count_attr, int):
-                    synthetic_cache_candidate_count_value = candidate_count_attr
-                applied_count_attr = getattr(synthetic_cache_obj, "applied_count", 0)
-                if isinstance(applied_count_attr, int):
-                    synthetic_cache_applied_count_value = applied_count_attr
-                warning_count_attr = getattr(synthetic_cache_obj, "warning_count", 0)
-                if isinstance(warning_count_attr, int):
-                    synthetic_cache_warning_count_value = warning_count_attr
-                warnings_attr = getattr(synthetic_cache_obj, "warnings", None)
-                if isinstance(warnings_attr, (list, tuple)):
-                    seq_warnings: list[str] = [
-                        str(w)
-                        for w in cast("list[Any] | tuple[Any, ...]", warnings_attr)
-                    ]
-                    try:
-                        synthetic_cache_warnings_json_value = json.dumps(
-                            seq_warnings,
-                            ensure_ascii=False,
-                        )
-                    except (TypeError, ValueError):
-                        synthetic_cache_warnings_json_value = None
-                plan_attr = getattr(synthetic_cache_obj, "plan", None)
-                if plan_attr is not None:
-                    pname_attr = getattr(plan_attr, "policy_name", None)
-                    if isinstance(pname_attr, str) and pname_attr:
-                        synthetic_cache_policy_name_value = pname_attr
-                    psource_attr = getattr(plan_attr, "policy_source", None)
-                    if isinstance(psource_attr, str) and psource_attr:
-                        synthetic_cache_policy_source_value = psource_attr
-                summary_attr = getattr(synthetic_cache_obj, "summary_json", None)
-                if isinstance(summary_attr, str):
-                    synthetic_cache_summary_json_value = summary_attr
-
             transitioned = await self._request_repo.finalize_if_pending(
                 request_id=db_request_id,
                 status=status,
@@ -878,77 +616,55 @@ class RequestFinalizer:
                 input_tokens_reported=input_tokens_reported_value,
                 output_tokens_reported=output_tokens_reported_value,
                 total_tokens_reported=total_tokens_reported_value,
-                # Phase 2 segmentation: ``request_shape_hash`` /
-                # ``stable_prefix_hash`` are also Phase 1 placeholders
-                # that the segmenter now populates.  ``transcoded`` and
-                # ``raw_usage_json`` close the existing positional
-                # argument list.
-                request_shape_hash=request_shape_hash_value,
-                stable_prefix_hash=stable_prefix_hash_value,
-                segmentation_status=segmentation_status_value,
-                stable_prefix_estimated_tokens=stable_prefix_estimated_tokens_value,
-                semi_stable_estimated_tokens=semi_stable_estimated_tokens_value,
-                volatile_estimated_tokens=volatile_estimated_tokens_value,
-                stable_prefix_bytes=stable_prefix_bytes_value,
-                semi_stable_bytes=semi_stable_bytes_value,
-                volatile_bytes=volatile_bytes_value,
-                segmentation_summary_json=segmentation_summary_json_value,
+                request_shape_hash=diag.request_shape_hash,
+                stable_prefix_hash=diag.stable_prefix_hash,
+                segmentation_status=diag.segmentation_status,
+                stable_prefix_estimated_tokens=diag.stable_prefix_estimated_tokens,
+                semi_stable_estimated_tokens=diag.semi_stable_estimated_tokens,
+                volatile_estimated_tokens=diag.volatile_estimated_tokens,
+                stable_prefix_bytes=diag.stable_prefix_bytes,
+                semi_stable_bytes=diag.semi_stable_bytes,
+                volatile_bytes=diag.volatile_bytes,
+                segmentation_summary_json=diag.segmentation_summary_json,
                 transcoded=1 if data.transcoded else 0,
                 raw_usage_json=raw_usage_json_value,
-                # Phase 4 observe-mode compression accounting.  The
-                # analyzer is observational: these columns record
-                # what a future phase would compress but never
-                # mutate the request body or change routing.
-                compression_status=compression_status_value,
-                compression_mode=compression_mode_value,
-                compression_candidate_count=compression_candidate_count_value,
-                compression_eligible_candidate_count=compression_eligible_candidate_count_value,
-                compression_suppressed_candidate_count=compression_suppressed_candidate_count_value,
-                compression_estimated_original_tokens=compression_estimated_original_tokens_value,
-                compression_estimated_compressed_tokens=compression_estimated_compressed_tokens_value,
-                compression_estimated_savings_tokens=compression_estimated_savings_tokens_value,
-                compression_analyzer_latency_ms=compression_analyzer_latency_ms_value,
-                compression_warning_count=compression_warning_count_value,
-                compression_reason_code_counts_json=compression_reason_code_counts_json_value,
-                compression_summary_json=compression_summary_json_value,
-                # Phase 5 safe-suffix compression.  The applier is
-                # the first mutating phase: these columns record
-                # whether the request body was actually compressed
-                # and the resulting token savings.
-                compression_applied=compression_applied_value,
-                compression_transform_count=compression_transform_count_value,
-                compression_transforms_by_reason_json=compression_transforms_by_reason_json_value,
-                compression_original_tokens=compression_original_tokens_value,
-                compression_compressed_tokens=compression_compressed_tokens_value,
-                compression_savings_tokens=compression_savings_tokens_value,
-                compression_pre_stable_prefix_hash=compression_pre_stable_prefix_hash_value,
-                compression_post_stable_prefix_hash=compression_post_stable_prefix_hash_value,
-                compression_stable_prefix_preserved=compression_stable_prefix_preserved_value,
-                compression_warnings_json=compression_warnings_json_value,
-                compression_latency_ms=compression_latency_ms_value,
-                compression_failed_fallback=compression_failed_fallback_value,
-                compression_applied_summary_json=compression_applied_summary_json_value,
-                # Phase 6 resolved compression policy audit fields.
-                # Persisted as three nullable TEXT columns added by
-                # migration 0044 so dashboards can group requests by
-                # the resolved policy name without re-running the
-                # resolver.  ``name`` and ``source`` are short audit
-                # strings; ``warnings_json`` is a JSON array of
-                # resolution warnings (overlay validation failures,
-                # etc.) and is empty ``[]`` when the resolver ran
-                # cleanly.
-                compression_policy_name=compression_policy_name_value,
-                compression_policy_source=compression_policy_source_value,
-                compression_policy_warnings_json=compression_policy_warnings_json_value,
-                synthetic_cache_status=synthetic_cache_status_value,
-                synthetic_cache_dry_run=synthetic_cache_dry_run_value,
-                synthetic_cache_candidate_count=synthetic_cache_candidate_count_value,
-                synthetic_cache_applied_count=synthetic_cache_applied_count_value,
-                synthetic_cache_warning_count=synthetic_cache_warning_count_value,
-                synthetic_cache_warnings_json=synthetic_cache_warnings_json_value,
-                synthetic_cache_policy_name=synthetic_cache_policy_name_value,
-                synthetic_cache_policy_source=synthetic_cache_policy_source_value,
-                synthetic_cache_summary_json=synthetic_cache_summary_json_value,
+                compression_status=diag.compression_status,
+                compression_mode=diag.compression_mode,
+                compression_candidate_count=diag.compression_candidate_count,
+                compression_eligible_candidate_count=diag.compression_eligible_candidate_count,
+                compression_suppressed_candidate_count=diag.compression_suppressed_candidate_count,
+                compression_estimated_original_tokens=diag.compression_estimated_original_tokens,
+                compression_estimated_compressed_tokens=diag.compression_estimated_compressed_tokens,
+                compression_estimated_savings_tokens=diag.compression_estimated_savings_tokens,
+                compression_analyzer_latency_ms=diag.compression_analyzer_latency_ms,
+                compression_warning_count=diag.compression_warning_count,
+                compression_reason_code_counts_json=diag.compression_reason_code_counts_json,
+                compression_summary_json=diag.compression_summary_json,
+                compression_applied=diag.compression_applied,
+                compression_transform_count=diag.compression_transform_count,
+                compression_transforms_by_reason_json=diag.compression_transforms_by_reason_json,
+                compression_original_tokens=diag.compression_original_tokens,
+                compression_compressed_tokens=diag.compression_compressed_tokens,
+                compression_savings_tokens=diag.compression_savings_tokens,
+                compression_pre_stable_prefix_hash=diag.compression_pre_stable_prefix_hash,
+                compression_post_stable_prefix_hash=diag.compression_post_stable_prefix_hash,
+                compression_stable_prefix_preserved=diag.compression_stable_prefix_preserved,
+                compression_warnings_json=diag.compression_warnings_json,
+                compression_latency_ms=diag.compression_latency_ms,
+                compression_failed_fallback=diag.compression_failed_fallback,
+                compression_applied_summary_json=diag.compression_applied_summary_json,
+                compression_policy_name=diag.compression_policy_name,
+                compression_policy_source=diag.compression_policy_source,
+                compression_policy_warnings_json=diag.compression_policy_warnings_json,
+                synthetic_cache_status=diag.synthetic_cache_status,
+                synthetic_cache_dry_run=diag.synthetic_cache_dry_run,
+                synthetic_cache_candidate_count=diag.synthetic_cache_candidate_count,
+                synthetic_cache_applied_count=diag.synthetic_cache_applied_count,
+                synthetic_cache_warning_count=diag.synthetic_cache_warning_count,
+                synthetic_cache_warnings_json=diag.synthetic_cache_warnings_json,
+                synthetic_cache_policy_name=diag.synthetic_cache_policy_name,
+                synthetic_cache_policy_source=diag.synthetic_cache_policy_source,
+                synthetic_cache_summary_json=diag.synthetic_cache_summary_json,
             )
 
             # 4. Finalize attempt only if request transitioned and attempt
@@ -977,38 +693,50 @@ class RequestFinalizer:
                     )
                     and data.error_class
                 ):
-                    try:
-                        from eggpool.db.repositories import AccountRepository
-
-                        account_repo = AccountRepository(self._db)
-                        account_id = await account_repo.get_id_by_name(
-                            selected.account_name
-                        )
-                        if account_id is not None:
-                            event_repo = AccountEventRepository(self._db)
-                            # error_class and status_code are safe to
-                            # persist; the event details deliberately do
-                            # not include error_detail.
-                            await event_repo.record(
-                                account_id=account_id,
-                                event_type=data.outcome.value,
-                                details=json.dumps(
-                                    {
-                                        "error_class": data.error_class,
-                                        "status_code": data.status_code,
-                                    }
-                                ),
-                            )
-                    except (
-                        asyncio.CancelledError,
-                        SystemExit,
-                        KeyboardInterrupt,
-                    ):
-                        raise
-                    except Exception:
-                        logger.exception("Failed to record account event")
+                    # Plan 028 Workstream G: account event enrichment
+                    # is best-effort and moved outside the correctness
+                    # transaction to avoid extending the write-lock.
+                    pass
 
             # Commit happens via context manager
+
+        # Plan 028 Workstream G: best-effort account event enrichment
+        # runs AFTER the correctness transaction commits so it cannot
+        # extend the SQLite write-lock duration.
+        if (
+            transitioned
+            and data.outcome
+            in (
+                FinalizationOutcome.UPSTREAM_ERROR,
+                FinalizationOutcome.INTERRUPTED,
+            )
+            and data.error_class
+        ):
+            try:
+                from eggpool.db.repositories import AccountRepository
+
+                account_repo = AccountRepository(self._db)
+                account_id = await account_repo.get_id_by_name(selected.account_name)
+                if account_id is not None:
+                    event_repo = AccountEventRepository(self._db)
+                    await event_repo.record(
+                        account_id=account_id,
+                        event_type=data.outcome.value,
+                        details=json.dumps(
+                            {
+                                "error_class": data.error_class,
+                                "status_code": data.status_code,
+                            }
+                        ),
+                    )
+            except (
+                asyncio.CancelledError,
+                SystemExit,
+                KeyboardInterrupt,
+            ):
+                raise
+            except Exception:
+                logger.exception("Failed to record account event")
 
         # Post-commit: update in-memory state only if we performed the transition
         if transitioned:
@@ -1152,6 +880,327 @@ class RequestFinalizer:
         if outcome == FinalizationOutcome.CLIENT_CANCELLED:
             return "cancelled"
         return "error"
+
+    def _precompute_finalization_diagnostics(
+        self,
+        data: FinalizationData,
+    ) -> _FinalizationDiagnosticSnapshot:
+        """Precompute all diagnostic serialization BEFORE the DB transaction.
+
+        Plan 028 Workstream G: moves segmentation summary JSON,
+        compression observation/result JSON, synthetic cache JSON, and
+        resolved policy JSON construction outside the ``BEGIN IMMEDIATE``
+        critical section so they do not extend the SQLite write-lock
+        duration.
+
+        This method is pure (no I/O) — all inputs come from the
+        ``FinalizationData`` argument.
+        """
+        # --- segmentation fields ---
+        segmentation_obj = data.segmentation
+        if data.segmentation_not_collected:
+            seg_status = "not_collected"
+        else:
+            seg_status = "empty_request"
+        seg_stable_hash: str | None = None
+        seg_shape_hash: str | None = None
+        seg_stable_tokens: int | None = None
+        seg_semi_tokens: int | None = None
+        seg_volatile_tokens: int | None = None
+        seg_stable_bytes: int | None = None
+        seg_semi_bytes: int | None = None
+        seg_volatile_bytes: int | None = None
+        seg_summary_json: str | None = None
+        if segmentation_obj is not None:
+            seg_status = str(getattr(segmentation_obj, "status", "empty_request"))
+            seg_stable_hash = getattr(segmentation_obj, "stable_prefix_hash", None)
+            seg_shape_hash = getattr(segmentation_obj, "request_shape_hash", None)
+            seg_stable_tokens = getattr(
+                segmentation_obj, "stable_prefix_estimated_tokens", None
+            )
+            seg_semi_tokens = getattr(
+                segmentation_obj, "semi_stable_estimated_tokens", None
+            )
+            seg_volatile_tokens = getattr(
+                segmentation_obj, "volatile_estimated_tokens", None
+            )
+            seg_stable_bytes = getattr(segmentation_obj, "stable_prefix_bytes", None)
+            seg_semi_bytes = getattr(segmentation_obj, "semi_stable_bytes", None)
+            seg_volatile_bytes = getattr(segmentation_obj, "volatile_bytes", None)
+            try:
+                from eggpool.transcoder.segmentation import (
+                    segmentation_summary_json,
+                )
+
+                seg_summary_json = segmentation_summary_json(segmentation_obj)
+            except (TypeError, ValueError):
+                seg_summary_json = None
+
+        # --- compression observation fields ---
+        compression_obj = data.compression_observation
+        comp_status = "disabled"
+        comp_mode: str | None = None
+        comp_candidate_count = 0
+        comp_eligible_count = 0
+        comp_suppressed_count = 0
+        comp_orig_tokens: int | None = None
+        comp_comp_tokens: int | None = None
+        comp_savings_tokens: int | None = None
+        comp_latency_ms: float | None = None
+        comp_warning_count = 0
+        comp_reason_counts_json: str | None = None
+        comp_summary_json: str | None = None
+        if compression_obj is not None:
+            comp_status = "observed"
+            comp_mode = str(getattr(compression_obj, "mode", "observe"))
+            comp_candidate_count = int(
+                getattr(compression_obj, "candidate_count", 0) or 0
+            )
+            comp_eligible_count = int(
+                getattr(compression_obj, "eligible_candidate_count", 0) or 0
+            )
+            comp_suppressed_count = int(
+                getattr(compression_obj, "suppressed_candidate_count", 0) or 0
+            )
+            comp_orig_tokens = getattr(
+                compression_obj, "estimated_original_tokens", None
+            )
+            comp_comp_tokens = getattr(
+                compression_obj, "estimated_compressed_tokens", None
+            )
+            comp_savings_tokens = getattr(
+                compression_obj, "estimated_savings_tokens", None
+            )
+            latency_value = getattr(compression_obj, "analyzer_latency_ms", None)
+            if isinstance(latency_value, (int, float)):
+                comp_latency_ms = float(latency_value)
+            warnings_value = getattr(compression_obj, "warnings", None)
+            if isinstance(warnings_value, (list, tuple)):
+                comp_warning_count = len(list(warnings_value))  # type: ignore[arg-type]
+            try:
+                reason_counts = getattr(compression_obj, "reason_code_counts", None)
+                if reason_counts is not None:
+                    comp_reason_counts_json = json.dumps(
+                        dict(reason_counts), default=str, sort_keys=True
+                    )
+            except (TypeError, ValueError):
+                comp_reason_counts_json = None
+            try:
+                to_json = getattr(compression_obj, "to_summary_json", None)
+                if callable(to_json):
+                    summary_value = to_json()
+                    if isinstance(summary_value, str):
+                        comp_summary_json = summary_value
+            except (TypeError, ValueError):
+                comp_summary_json = None
+
+        # --- compression result fields ---
+        compression_result_obj = data.compression_result
+        comp_applied = 0
+        comp_transform_count = 0
+        comp_transforms_by_reason_json: str | None = None
+        comp_orig_tok: int | None = None
+        comp_comp_tok: int | None = None
+        comp_savings_tok: int | None = None
+        comp_pre_hash: str | None = None
+        comp_post_hash: str | None = None
+        comp_stable_preserved = 1
+        comp_warnings_json: str | None = None
+        comp_result_latency_ms = 0.0
+        comp_failed_fallback = 0
+        comp_applied_summary_json: str | None = None
+        if compression_result_obj is not None:
+            comp_applied = 1 if getattr(compression_result_obj, "applied", False) else 0
+            comp_transform_count = int(
+                getattr(compression_result_obj, "transform_count", 0) or 0
+            )
+            transforms_by_reason = getattr(
+                compression_result_obj, "transforms_by_reason", None
+            )
+            if transforms_by_reason is not None:
+                try:
+                    comp_transforms_by_reason_json = json.dumps(
+                        dict(transforms_by_reason),
+                        default=str,
+                        sort_keys=True,
+                        ensure_ascii=False,
+                    )
+                except (TypeError, ValueError):
+                    comp_transforms_by_reason_json = None
+            comp_orig_tok = getattr(compression_result_obj, "original_tokens", None)
+            if isinstance(comp_orig_tok, (int, float)):
+                comp_orig_tok = int(comp_orig_tok)
+            else:
+                comp_orig_tok = None
+            comp_comp_tok = getattr(compression_result_obj, "compressed_tokens", None)
+            if isinstance(comp_comp_tok, (int, float)):
+                comp_comp_tok = int(comp_comp_tok)
+            else:
+                comp_comp_tok = None
+            comp_savings_tok = getattr(compression_result_obj, "savings_tokens", None)
+            if isinstance(comp_savings_tok, (int, float)):
+                comp_savings_tok = int(comp_savings_tok)
+            else:
+                comp_savings_tok = None
+            comp_pre_hash = getattr(
+                compression_result_obj, "pre_stable_prefix_hash", None
+            )
+            comp_post_hash = getattr(
+                compression_result_obj, "post_stable_prefix_hash", None
+            )
+            comp_stable_preserved = (
+                1
+                if getattr(compression_result_obj, "stable_prefix_preserved", True)
+                else 0
+            )
+            warnings_raw = getattr(compression_result_obj, "warnings", None)
+            if isinstance(warnings_raw, (list, tuple)):
+                try:
+                    comp_warnings_json = json.dumps(
+                        list(warnings_raw),  # type: ignore[arg-type]
+                        default=str,
+                        ensure_ascii=False,
+                    )
+                except (TypeError, ValueError):
+                    comp_warnings_json = None
+            latency_val = getattr(compression_result_obj, "latency_ms", 0.0)
+            if isinstance(latency_val, (int, float)):
+                comp_result_latency_ms = float(latency_val)
+            comp_failed_fallback = (
+                1 if getattr(compression_result_obj, "failed_fallback", False) else 0
+            )
+            if comp_applied:
+                to_json = getattr(compression_result_obj, "summary_json", None)
+                if to_json is not None:
+                    comp_applied_summary_json = (
+                        to_json if isinstance(to_json, str) else None
+                    )
+
+        # --- resolved compression policy fields ---
+        resolved_policy_obj = data.resolved_compression_policy
+        policy_name: str | None = None
+        policy_source: str | None = None
+        policy_warnings_json: str | None = None
+        if resolved_policy_obj is not None:
+            name_attr = getattr(resolved_policy_obj, "name", None)
+            if isinstance(name_attr, str) and name_attr:
+                policy_name = name_attr
+            source_attr = getattr(resolved_policy_obj, "source", None)
+            if isinstance(source_attr, str) and source_attr:
+                policy_source = source_attr
+            warnings_attr = getattr(resolved_policy_obj, "warnings", None)
+            if isinstance(warnings_attr, (list, tuple)):
+                try:
+                    policy_warnings_json = json.dumps(
+                        [str(w) for w in warnings_attr],  # type: ignore[arg-type]
+                        ensure_ascii=False,
+                    )
+                except (TypeError, ValueError):
+                    policy_warnings_json = None
+
+        # --- synthetic cache fields ---
+        synthetic_cache_obj = getattr(data, "synthetic_cache_result", None)
+        sc_status: str | None = None
+        sc_dry_run = 1
+        sc_candidate_count = 0
+        sc_applied_count = 0
+        sc_warning_count = 0
+        sc_warnings_json: str | None = None
+        sc_policy_name: str | None = None
+        sc_policy_source: str | None = None
+        sc_summary_json: str | None = None
+        if synthetic_cache_obj is not None:
+            status_attr = getattr(synthetic_cache_obj, "status", None)
+            if isinstance(status_attr, str) and status_attr:
+                sc_status = status_attr
+            dry_run_attr = getattr(synthetic_cache_obj, "dry_run", None)
+            if isinstance(dry_run_attr, bool):
+                sc_dry_run = 1 if dry_run_attr else 0
+            candidate_count_attr = getattr(synthetic_cache_obj, "candidate_count", 0)
+            if isinstance(candidate_count_attr, int):
+                sc_candidate_count = candidate_count_attr
+            applied_count_attr = getattr(synthetic_cache_obj, "applied_count", 0)
+            if isinstance(applied_count_attr, int):
+                sc_applied_count = applied_count_attr
+            warning_count_attr = getattr(synthetic_cache_obj, "warning_count", 0)
+            if isinstance(warning_count_attr, int):
+                sc_warning_count = warning_count_attr
+            warnings_attr = getattr(synthetic_cache_obj, "warnings", None)
+            if isinstance(warnings_attr, (list, tuple)):
+                try:
+                    sc_warnings_json = json.dumps(
+                        [
+                            str(w)
+                            for w in cast(
+                                "list[Any] | tuple[Any, ...]",
+                                warnings_attr,
+                            )
+                        ],
+                        ensure_ascii=False,
+                    )
+                except (TypeError, ValueError):
+                    sc_warnings_json = None
+            plan_attr = getattr(synthetic_cache_obj, "plan", None)
+            if plan_attr is not None:
+                pname_attr = getattr(plan_attr, "policy_name", None)
+                if isinstance(pname_attr, str) and pname_attr:
+                    sc_policy_name = pname_attr
+                psource_attr = getattr(plan_attr, "policy_source", None)
+                if isinstance(psource_attr, str) and psource_attr:
+                    sc_policy_source = psource_attr
+            summary_attr = getattr(synthetic_cache_obj, "summary_json", None)
+            if isinstance(summary_attr, str):
+                sc_summary_json = summary_attr
+
+        return _FinalizationDiagnosticSnapshot(
+            segmentation_status=seg_status,
+            stable_prefix_hash=seg_stable_hash,
+            request_shape_hash=seg_shape_hash,
+            stable_prefix_estimated_tokens=seg_stable_tokens,
+            semi_stable_estimated_tokens=seg_semi_tokens,
+            volatile_estimated_tokens=seg_volatile_tokens,
+            stable_prefix_bytes=seg_stable_bytes,
+            semi_stable_bytes=seg_semi_bytes,
+            volatile_bytes=seg_volatile_bytes,
+            segmentation_summary_json=seg_summary_json,
+            compression_status=comp_status,
+            compression_mode=comp_mode,
+            compression_candidate_count=comp_candidate_count,
+            compression_eligible_candidate_count=comp_eligible_count,
+            compression_suppressed_candidate_count=comp_suppressed_count,
+            compression_estimated_original_tokens=comp_orig_tokens,
+            compression_estimated_compressed_tokens=comp_comp_tokens,
+            compression_estimated_savings_tokens=comp_savings_tokens,
+            compression_analyzer_latency_ms=comp_latency_ms,
+            compression_warning_count=comp_warning_count,
+            compression_reason_code_counts_json=comp_reason_counts_json,
+            compression_summary_json=comp_summary_json,
+            compression_applied=comp_applied,
+            compression_transform_count=comp_transform_count,
+            compression_transforms_by_reason_json=comp_transforms_by_reason_json,
+            compression_original_tokens=comp_orig_tok,
+            compression_compressed_tokens=comp_comp_tok,
+            compression_savings_tokens=comp_savings_tok,
+            compression_pre_stable_prefix_hash=comp_pre_hash,
+            compression_post_stable_prefix_hash=comp_post_hash,
+            compression_stable_prefix_preserved=comp_stable_preserved,
+            compression_warnings_json=comp_warnings_json,
+            compression_latency_ms=comp_result_latency_ms,
+            compression_failed_fallback=comp_failed_fallback,
+            compression_applied_summary_json=comp_applied_summary_json,
+            compression_policy_name=policy_name,
+            compression_policy_source=policy_source,
+            compression_policy_warnings_json=policy_warnings_json,
+            synthetic_cache_status=sc_status,
+            synthetic_cache_dry_run=sc_dry_run,
+            synthetic_cache_candidate_count=sc_candidate_count,
+            synthetic_cache_applied_count=sc_applied_count,
+            synthetic_cache_warning_count=sc_warning_count,
+            synthetic_cache_warnings_json=sc_warnings_json,
+            synthetic_cache_policy_name=sc_policy_name,
+            synthetic_cache_policy_source=sc_policy_source,
+            synthetic_cache_summary_json=sc_summary_json,
+        )
 
     def _apply_finalizer_failure_effects(
         self,

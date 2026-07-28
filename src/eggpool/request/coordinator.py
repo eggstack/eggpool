@@ -510,6 +510,10 @@ class ProxyRequestContext:
     estimated_context_input_tokens: int | None = None
     # F7: parsed payload cache — created once, avoids repeated json.loads.
     parsed_payload: ParsedRequestPayload | None = None
+    # Plan 028: typed provider-bound lifecycle object.  When set,
+    # ``body_for_upstream`` delegates to ``provider_bound.provider_bytes``
+    # so the serialized body is produced exactly once after all transforms.
+    provider_bound: Any | None = None  # ProviderBoundRequest | None
 
     def __post_init__(self) -> None:
         if not self.upstream_protocol:
@@ -517,7 +521,16 @@ class ProxyRequestContext:
 
     @property
     def body_for_upstream(self) -> bytes:
-        """Return the dispatch body, preserving original client bytes separately."""
+        """Return the dispatch body, preserving original client bytes separately.
+
+        Plan 028: when a ``ProviderBoundRequest`` is attached, its
+        ``provider_bytes`` (serialized exactly once after the transform
+        pipeline) is the authoritative dispatch body.
+        """
+        if self.provider_bound is not None:
+            pb_bytes = self.provider_bound.provider_bytes
+            if pb_bytes is not None:
+                return pb_bytes
         return self.original_body if self.upstream_body is None else self.upstream_body
 
 
@@ -2028,9 +2041,7 @@ class RequestCoordinator:
                             operation_id=context.request_id,
                             operation_kind="dispatch_selection",
                             connection_epoch=self._db.connection_epoch,
-                            idempotency_keys=(
-                                ("attempt_number", str(attempt_number)),
-                            ),
+                            idempotency_keys=(("attempt_number", str(attempt_number)),),
                             intended_status="selected",
                             precondition_facts=(
                                 ("account_id", str(claim_identity.account_id)),
@@ -2522,30 +2533,32 @@ class RequestCoordinator:
                     attempt_count=attempt_num,
                 )
 
-            # Success path
+            # Success path — Plan 028: single-decode lifecycle via
+            # ParsedUpstreamResponse.  The response body is parsed once
+            # and shared across usage extraction, normalized usage
+            # construction, and response transcoding.
             body = response.content
             resp_headers = filter_response_headers(response.headers)
             elapsed_ms = self._elapsed_ms(context)
 
-            usage = self._extract_non_stream_usage(
-                context.upstream_protocol, body, provider_id=selected.provider_id
+            from eggpool.request.parsed_upstream_response import (
+                build_parsed_upstream_response,
             )
-            # Re-decode the body for the normalized usage layer.  The
-            # extractor above already produces a StreamUsageResult
-            # with zero-vs-coerced semantics; the normalized layer
-            # needs the raw ``usage`` object so it can distinguish
-            # missing fields from explicit zeros.  Decode failures
-            # fall back to the per-counter stream result.
-            raw_response_payload: dict[str, Any] | None
-            try:
-                raw_response_payload = jsonx_loads(body)
-            except ValueError:
-                raw_response_payload = None
+
+            parsed_response = build_parsed_upstream_response(
+                status_code=response.status_code,
+                headers=resp_headers,
+                raw_body=body,
+            )
+
+            usage = self._extract_non_stream_usage_from_parsed(
+                context.upstream_protocol,
+                parsed_response,
+                provider_id=selected.provider_id,
+            )
             normalized_usage = _build_normalized_usage(
                 usage=usage,
-                raw_payload=raw_response_payload
-                if isinstance(raw_response_payload, dict)
-                else None,
+                raw_payload=parsed_response.parsed_dict,
                 protocol=context.upstream_protocol,
                 provider_id=selected.provider_id,
                 model_id=selected.model_id,
@@ -2613,12 +2626,11 @@ class RequestCoordinator:
                 reasons=list(_TRANSIENT_BACKOFF_REASONS),
             )
 
-            # Phase 2: decode upstream success response to client protocol
+            # Phase 2: decode upstream success response to client protocol.
+            # Plan 028: reuse the already-parsed response instead of
+            # re-parsing body bytes.
             if transcoder is not None and context.transcode_context is not None:
-                try:
-                    upstream_payload = jsonx_loads(body)
-                except ValueError:
-                    upstream_payload = None
+                upstream_payload = parsed_response.parsed_dict
                 if isinstance(upstream_payload, dict):
                     _features = (
                         self._transcoder_policy.features
@@ -2626,7 +2638,7 @@ class RequestCoordinator:
                         else None
                     )
                     translated, decode_warnings = transcoder.decode_response(
-                        cast("dict[str, Any]", upstream_payload),
+                        upstream_payload,
                         context.transcode_context,
                         features=_features,
                         reasoning_field_names=(
@@ -3418,6 +3430,43 @@ class RequestCoordinator:
             return None
 
         data_dict = cast("dict[str, Any]", data)
+
+        if protocol == "anthropic":
+            return extract_anthropic_response_usage(
+                data_dict,
+                provider_id=provider_id,
+            )
+
+        return extract_openai_response_usage(
+            data_dict,
+            provider_id=provider_id,
+        )
+
+    def _extract_non_stream_usage_from_parsed(
+        self,
+        protocol: str,
+        parsed: Any,  # ParsedUpstreamResponse
+        *,
+        provider_id: str | None = None,
+    ) -> StreamUsageResult | None:
+        """Extract usage from an already-parsed upstream response.
+
+        Plan 028: reads from ``parsed.parsed_dict`` instead of
+        re-parsing raw bytes, eliminating the duplicate decode in the
+        non-streaming success path.  Falls back to the byte-accepting
+        wrapper when parsing has not yet been attempted or failed.
+        """
+        data_dict = parsed.parsed_dict
+        if data_dict is None:
+            if parsed.parse_status == "parsed":
+                return None
+            # Parsing not yet attempted or failed — fall back to the
+            # byte-based extractor so behaviour is identical.
+            return self._extract_non_stream_usage(
+                protocol,
+                parsed.raw_body,
+                provider_id=provider_id,
+            )
 
         if protocol == "anthropic":
             return extract_anthropic_response_usage(

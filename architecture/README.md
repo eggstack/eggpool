@@ -4307,3 +4307,40 @@ Fail closed on uncertain transaction outcome, but recover the process automatica
 
 - `tests/unit/test_plan_027_database_lifecycle.py` — state machine, epoch tracking, ambiguous ops, diagnostics
 - `tests/unit/test_plan_027_recovery_singleflight.py` — concurrent waiters, retry, shutdown, snapshot
+
+## Provider Payload Lifecycle and Hot-Path Consolidation (Plan 028)
+
+Reduces request-path CPU, allocations, serialization work, and SQLite writer-lock duration without changing protocol behavior. Consolidates provider-bound request transformations around one decoded payload lifecycle, consolidates non-stream response processing around one decoded response lifecycle, and moves avoidable lookups and best-effort work outside correctness-critical transactions.
+
+### Design principles
+
+1. Parse once, transform in memory, encode once.
+2. Preserve raw bytes for exact passthrough.
+3. Do not mutate shared client payload objects.
+4. Avoid work when no consumer needs it.
+5. Keep provider-bound transforms ordered and explicit.
+6. Shorten global SQLite writer critical sections.
+
+### Key components
+
+- `ProviderBoundRequest` (`src/eggpool/request/provider_bound_request.py`) — typed lifecycle object owned by one proxy request; carries `client_payload` (immutable), `provider_payload` (copy-on-write via `set_provider_payload`), `provider_bytes` (serialized once), `payload_generation` counter, and `SegmentationValidityKey` for cache reuse.
+- `SegmentationValidityKey` / `PreparedTranscodeValidityKey` — frozen dataclass compound keys that make segmentation and transcode reuse deterministic.
+- `TransformPipeline` (`src/eggpool/request/transform_pipeline.py`) — ordered post-selection transform pipeline with declarative `TransformMeta`, `TransformResult`, and `run_transform_pipeline()` orchestrator that short-circuits on rejection.
+- `ParsedUpstreamResponse` (`src/eggpool/request/parsed_upstream_response.py`) — single-decode lifecycle for non-streaming upstream responses; lazily parses body once and provides `parsed_dict`, `parse_status`, and `header_value()` accessors.
+- `ProxyRequestContext.provider_bound` field — attaches the `ProviderBoundRequest` to the request context so `body_for_upstream` delegates to `provider_bound.provider_bytes`.
+- `RequestCoordinator._extract_non_stream_usage_from_parsed()` — reads from `ParsedUpstreamResponse.parsed_dict` instead of re-parsing bytes, eliminating duplicate JSON decode in the non-streaming success path.
+- `RequestFinalizer._precompute_finalization_diagnostics()` — precomputes all diagnostic serialization outside the `BEGIN IMMEDIATE` transaction, and moves best-effort account event enrichment post-commit.
+
+### Non-streaming response lifecycle
+
+Before Plan 028, the non-streaming success path parsed the upstream response body independently for usage extraction, normalized usage construction, and response transcoding. After Plan 028, a single `ParsedUpstreamResponse` is created once and shared across all consumers — each consumer reads from the same decoded representation without re-parsing.
+
+### Finalization transaction shortening
+
+All diagnostic serialization (segmentation summary JSON, compression observation/result JSON, synthetic cache JSON, resolved policy JSON) is precomputed in `_precompute_finalization_diagnostics()` before the `BEGIN IMMEDIATE` transaction. The transaction only executes the DML statements. Best-effort account event enrichment runs after the correctness transaction commits.
+
+### Tests
+
+- `tests/unit/test_plan_028_provider_bound_request.py` — lifecycle object, validity keys, payload mutation, segmentation caching
+- `tests/unit/test_plan_028_transform_pipeline.py` — pipeline ordering, passthrough, mutation, rejection, warning accumulation
+- `tests/unit/test_plan_028_parsed_upstream_response.py` — lazy parsing, dict/list/invalid distinction, header lookup

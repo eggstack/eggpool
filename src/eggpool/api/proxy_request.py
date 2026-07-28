@@ -49,6 +49,7 @@ from eggpool.request.limits import (
 )
 from eggpool.request.parsed_payload import ParsedRequestPayload
 from eggpool.request.payload_utils import estimate_padded_size
+from eggpool.request.provider_bound_request import ProviderBoundRequest
 from eggpool.routing.provider import parse_model_provider
 from eggpool.runtime_dispatch import (
     SPAN_AUTH,
@@ -791,6 +792,16 @@ async def _handle_proxy_request_inner(
     precomputed_context_input_tokens = estimate_context_input_tokens(body, payload)
 
     with _span(span_recorder, SPAN_CONTEXT_BUILD):
+        # Plan 028: create a typed provider-bound lifecycle object so
+        # the coordinator and downstream consumers read from a single
+        # authoritative decoded payload instead of re-parsing bytes.
+        provider_bound = ProviderBoundRequest(
+            client_bytes=body,
+            client_payload=payload,
+            client_protocol=endpoint.protocol,
+            model_id=model_id,
+        )
+
         context = ProxyRequestContext(
             request_id=request_id,
             protocol=endpoint.protocol,
@@ -819,6 +830,7 @@ async def _handle_proxy_request_inner(
             thinking_requirement=precomputed_thinking_req,
             estimated_context_input_tokens=precomputed_context_input_tokens,
             parsed_payload=parsed_payload,
+            provider_bound=provider_bound,
         )
 
     if segmentation_result is not None:
