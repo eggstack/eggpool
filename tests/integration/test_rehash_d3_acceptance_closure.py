@@ -733,8 +733,13 @@ async def test_d3_resolve_apply_outcome_does_not_restart_healthy_server(
         def _is_healthy() -> bool:
             return True
 
-        applied, message = connect_mod.resolve_apply_outcome(
-            config_path, health_check=_is_healthy
+        # The helper is synchronous in production CLI use and calls
+        # ``asyncio.run`` internally. Keep it off pytest-asyncio's running
+        # loop so a rejected nested run cannot leak an unawaited coroutine.
+        applied, message = await asyncio.to_thread(
+            connect_mod.resolve_apply_outcome,
+            config_path,
+            health_check=_is_healthy,
         )
 
         # Must NOT have restarted the server.  The message must

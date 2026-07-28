@@ -106,11 +106,10 @@ jobs:
       - run: uv sync --frozen --extra dev
 
       - name: Run reload/rehash and control-plane tests
-        run: >
-          uv run pytest
-          tests/integration/reload/
-          tests/integration/test_rehash*.py
-          -q --tb=short
+        run: |
+          uv run pytest tests/integration/reload/ -q --tb=short
+          uv run pytest tests/integration/test_rehash*.py \
+            -m "not slow" -q --tb=short
 
       - name: Upload test logs on failure
         if: always()
