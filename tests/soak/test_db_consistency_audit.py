@@ -1,4 +1,4 @@
-"""Database consistency audit tests (Workstream G7).
+"""Database consistency audit tests: verifies ConsistencyAuditor invariant checking.
 
 Tests the ConsistencyAuditor for correct invariant checking across
 various lifecycle states.

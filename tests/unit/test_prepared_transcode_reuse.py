@@ -1,10 +1,10 @@
-"""Tests for Plan 028 — PreparedTranscodeValidityKey and transcode reuse.
+"""PreparedTranscodeValidityKey and transcode reuse tests.
 
-Workstream C: prepared transcode stores decoded translated payload as the
-primary artifact; encoded bytes are optional cache output valid only for a
-specific transform generation; selected-provider thinking normalization can
-modify decoded output without parsing bytes; feature/policy changes or
-selected-provider overrides invalidate reuse deterministically.
+Prepared transcode stores decoded translated payload as the primary
+artifact; encoded bytes are optional cache output valid only for a
+specific transform generation; selected-provider thinking normalization
+can modify decoded output without parsing bytes; feature/policy changes
+or selected-provider overrides invalidate reuse deterministically.
 """
 
 from __future__ import annotations

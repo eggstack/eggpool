@@ -1,11 +1,7 @@
-"""Plan 023 — JSON operation counters (unit).
+"""JSON operation counters (unit).
 
 Validates the ``JSONOperationCounters`` counting layer: install/uninstall,
 context switching, snapshot/reset, and thread safety.
-
-Run with::
-
-    uv run pytest tests/unit/test_plan_023_json_operation_counters.py -v
 """
 
 from __future__ import annotations

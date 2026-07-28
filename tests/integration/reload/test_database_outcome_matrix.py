@@ -1,4 +1,4 @@
-"""Plan 020 Workstream F4 — Deterministic database outcome matrix.
+"""Deterministic database outcome matrix.
 
 Provides separate tests for each commit failure branch:
   1. Commit failure + confirmed rollback success → outcome="rolled_back"
@@ -70,9 +70,9 @@ async def test_commit_failure_indeterminate_state(
     """F4.2: When commit fails and rollback cannot determine state,
     outcome is 'indeterminate'.
 
-    The connection is invalidated and must not be reused.  Plan 027
-    raises a typed ``DatabaseRollbackError`` when the rollback call
-    itself fails so callers see the rollback failure distinctly.
+    The connection is invalidated and must not be reused.  A typed
+    ``DatabaseRollbackError`` is raised when the rollback call itself
+    fails so callers see the rollback failure distinctly.
     """
     db = reload_harness.db
 

@@ -1,4 +1,4 @@
-"""JSON operation counters for Plan 023 parse/encode instrumentation.
+"""JSON operation counters for parse/encode instrumentation.
 
 Provides a test-only counting layer around ``eggpool.jsonx`` that tracks
 decode/encode operations by direction and lifecycle stage.  Disabled or

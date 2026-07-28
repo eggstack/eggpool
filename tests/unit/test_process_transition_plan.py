@@ -1,4 +1,4 @@
-"""ProcessTransitionPlan regression tests (Plan 015 Milestone D5).
+"""ProcessTransitionPlan regression tests.
 
 Verifies that writer/guard/effective transitions apply even when task
 specs are empty and the process supervisor is absent.

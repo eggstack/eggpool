@@ -1,4 +1,4 @@
-"""Plan 029 — Workstream H: request-coherent dispatch-span sampling.
+"""Request-coherent dispatch-span sampling tests.
 
 Verifies that:
 

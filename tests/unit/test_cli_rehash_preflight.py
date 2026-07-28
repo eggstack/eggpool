@@ -1,4 +1,4 @@
-"""Tests for the ``rehash`` preflight CLI command (Workstream A6)."""
+"""Tests for the ``rehash`` preflight CLI command."""
 
 from __future__ import annotations
 

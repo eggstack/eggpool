@@ -1,4 +1,4 @@
-"""Tests for Plan 024 — Native provider normalization.
+"""Native provider normalization tests.
 
 Verifies that provider-bound thinking control adaptation runs correctly
 on native (non-transcoded) request paths, including the skip logic for

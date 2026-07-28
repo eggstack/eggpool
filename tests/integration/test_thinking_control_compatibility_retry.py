@@ -1,9 +1,7 @@
-"""Plan 024 — Compatibility retry (deferred).
+"""Thinking-control compatibility retry deferral tests.
 
-Workstream G (optional one-time compatibility retry) was explicitly
-deferred in the initial implementation.  The ``allow_compatibility_retry``
-configuration field exists but defaults to ``False``.  No retry logic
-is wired into the adaptation pipeline.
+The ``allow_compatibility_retry`` configuration field exists but defaults
+to ``False``.  No retry logic is wired into the adaptation pipeline.
 
 This file verifies the deferral contract:
 
@@ -11,14 +9,6 @@ This file verifies the deferral contract:
 - Strict policy disables retry regardless of config.
 - When the config is disabled, no retry signature is set on adaptation
   results.
-
-When Workstream G is implemented, this file should be expanded with
-full retry lifecycle tests (one-shot, allowlisted, pre-body,
-health-neutral).
-
-Run with::
-
-    uv run pytest tests/integration/test_plan_024_compatibility_retry.py -v
 """
 
 from __future__ import annotations

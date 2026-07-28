@@ -1,4 +1,4 @@
-"""Request-level state audit snapshot for Plan 023 error-isolation tests.
+"""Request-level state audit snapshot for error-isolation tests.
 
 Captures every durable and in-memory ownership surface before and after
 a single request so tests can assert that failed/cancelled requests do not

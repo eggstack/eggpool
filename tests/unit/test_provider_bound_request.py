@@ -1,4 +1,4 @@
-"""Tests for Plan 028 — ProviderBoundRequest lifecycle object."""
+"""ProviderBoundRequest lifecycle tests."""
 
 from __future__ import annotations
 

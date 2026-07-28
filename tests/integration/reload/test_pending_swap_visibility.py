@@ -1,4 +1,4 @@
-"""Candidate visibility tests during staged swap (Plan 015 Milestone D2).
+"""Candidate visibility tests during staged swap.
 
 Verifies that while the lease gate is active during a staged swap, new
 requests cannot acquire the candidate generation, and that after rollback

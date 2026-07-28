@@ -1,4 +1,4 @@
-"""Tests for Plan 028 — Transform pipeline."""
+"""Transform pipeline tests."""
 
 from __future__ import annotations
 

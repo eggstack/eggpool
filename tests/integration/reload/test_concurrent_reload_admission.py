@@ -1,30 +1,13 @@
-"""Plan 016 Workstream I1 — deterministic in-process replacements.
+"""Deterministic in-process concurrent reload admission tests.
 
-The two Plan 015 entries that were allowlisted in
-``scripts/audit_xfail_skips.py`` were:
+``test_concurrent_reload_admission_deterministic`` calls the harness reload
+twice in parallel and asserts the second call either raises
+``RuntimeManagerSwapInProgressError`` or returns a busy wire result.
 
-1. ``tests/integration/test_rehash_d3_operator_workflow.py:283`` —
-   subprocess-based concurrent rehash test that needed up to 5
-   attempts to hit the admission guard on fast hosts.
-2. ``tests/integration/test_rehash_d3_acceptance.py:1067`` —
-   drain-timeout unconditional skip with default ``drain_timeout_s``
-   of 300 seconds.
-
-Plan 016 mandates both be replaced by deterministic in-process
-tests so the audit script can drop the allowlist entries.  This
-file is that replacement.
-
-For (1): ``test_concurrent_reload_admission_deterministic`` calls
-the harness reload twice in parallel and asserts the second call
-either raises ``RuntimeManagerSwapInProgressError`` or returns a
-busy wire result (the second is the user-visible form of the
-first).  Either outcome proves the admission guard fired
-deterministically.
-
-For (2): ``test_drain_timeout_forces_retirement_close`` injects a
-short ``drain_timeout_s`` on the reload manager, holds a lease
-deliberately, triggers a rehash, and verifies the old generation
-drains within a CI-friendly deadline (3s).
+``test_drain_timeout_forces_retirement_close`` injects a short
+``drain_timeout_s`` on the reload manager, holds a lease deliberately,
+triggers a rehash, and verifies the old generation drains within a
+CI-friendly deadline.
 """
 
 from __future__ import annotations
@@ -48,9 +31,8 @@ async def test_concurrent_reload_admission_deterministic(
     Replaces the subprocess-based ``test_d3_operator_concurrent_busy``
     (which needed up to 5 attempts on fast hosts) with a
     deterministic in-process check.  The admission guard is now
-    fail-closed under ``RuntimeManager._lock`` (Plan 016 Workstream
-    A), so the second reload observes ``ok=False`` and a busy
-    rejection immediately.
+    fail-closed under ``RuntimeManager._lock``, so the second
+    reload observes ``ok=False`` and a busy rejection immediately.
 
     We drive the admission claim directly through the reload
     manager's ``_try_admit`` path so the test stays bounded and does
@@ -132,7 +114,7 @@ async def test_drain_timeout_forces_retirement_close(
 async def test_cancellation_before_commit_rolls_back_swap(
     reload_harness: ReloadHarness,
 ) -> None:
-    """Plan 016 Workstream C3: cancellation-acquired pre-commit path.
+    """Cancellation-acquired pre-commit path.
 
     When the reload task is cancelled BEFORE commit, the
     precommit cleanup owner (``_abort_precommit_reload``) must
@@ -174,7 +156,7 @@ async def test_cancellation_before_commit_rolls_back_swap(
 async def test_post_publication_compensation_with_active_candidate(
     reload_harness: ReloadHarness,
 ) -> None:
-    """Plan 016 Workstream E2: compensation accepts the new generation.
+    """Compensation accepts the new generation when candidate is already active.
 
     When the candidate slot is already the active slot (i.e. the
     reload was accepted before housekeeping failed), the
@@ -200,7 +182,7 @@ async def test_post_publication_compensation_with_active_candidate(
 async def test_diagnostic_snapshot_includes_progress_flags(
     reload_harness: ReloadHarness,
 ) -> None:
-    """Plan 016 Workstream H2/H3: snapshot surfaces progress flags.
+    """Snapshot surfaces progress flags.
 
     After a successful reload, the ``snapshot()`` output includes
     ``pending_swap_state``, ``lease_admission_gated``,

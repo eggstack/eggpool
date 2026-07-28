@@ -1,10 +1,8 @@
-"""Plan 017 — Acceptance and finalization separation closure tests.
+"""Acceptance and finalization separation closure tests.
 
-Tests for Workstream D:
-- Acceptance requires SQLite + runtime commit
-- Post-acceptance exception handling
-- Idempotent finalization retry
-- Retirement scheduling not lost
+Tests that acceptance requires SQLite + runtime commit, post-acceptance
+exception handling, idempotent finalization retry, and retirement
+scheduling is not lost.
 """
 
 from __future__ import annotations

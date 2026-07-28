@@ -1,4 +1,4 @@
-"""Plan 020 Workstream F1 — Acceptance-window fault matrix.
+"""Acceptance-window fault matrix.
 
 For each post-acceptance fault seam, assert zero rollback, zero transition
 rollback, zero candidate abort, transaction not in aborting/aborted.

@@ -1,4 +1,4 @@
-"""Plan 026 — Finalization supervisor startup/shutdown and diagnostics."""
+"""Finalization supervisor startup/shutdown and diagnostics."""
 
 from __future__ import annotations
 

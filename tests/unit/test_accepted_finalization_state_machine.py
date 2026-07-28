@@ -1,4 +1,4 @@
-"""Plan 019/020 Workstream A — Accepted-finalization state machine tests.
+"""Accepted-finalization state machine tests.
 
 Verifies progress/health separation, single-flight execution, retained
 task semantics, step-resume semantics, cancellation safety, and the
@@ -60,7 +60,7 @@ def _make_job(
 
 
 # ---------------------------------------------------------------------------
-# Workstream A1: is_complete is true only for COMPLETED
+# is_complete is true only for COMPLETED
 # ---------------------------------------------------------------------------
 
 
@@ -101,7 +101,7 @@ class TestIsCompleteOnlyForCompleted:
 
 
 # ---------------------------------------------------------------------------
-# Workstream A2: failure leaves the step unchanged
+# failure leaves the step unchanged
 # ---------------------------------------------------------------------------
 
 
@@ -135,7 +135,7 @@ class TestFailureLeavesStepUnchanged:
 
 
 # ---------------------------------------------------------------------------
-# Workstream A2: retry executes the failed step
+# retry executes the failed step
 # ---------------------------------------------------------------------------
 
 
@@ -177,7 +177,7 @@ class TestRetryExecutesFailedStep:
 
 
 # ---------------------------------------------------------------------------
-# Workstream A2: later steps don't execute before the failed step
+# later steps don't execute before the failed step
 # ---------------------------------------------------------------------------
 
 
@@ -205,7 +205,7 @@ class TestNoStepSkipping:
 
 
 # ---------------------------------------------------------------------------
-# Workstream B1: single-flight execution via retained task
+# single-flight execution via retained task
 # ---------------------------------------------------------------------------
 
 
@@ -258,7 +258,7 @@ class TestSingleFlightExecution:
 
 
 # ---------------------------------------------------------------------------
-# Workstream B3: cancellation of a waiter does not cancel the task
+# cancellation of a waiter does not cancel the task
 # ---------------------------------------------------------------------------
 
 
@@ -300,7 +300,7 @@ class TestCancellationSafety:
 
 
 # ---------------------------------------------------------------------------
-# Workstream C4: clear stale error state after successful retry
+# clear stale error state after successful retry
 # ---------------------------------------------------------------------------
 
 
@@ -339,7 +339,7 @@ class TestClearStaleErrorState:
 
 
 # ---------------------------------------------------------------------------
-# Workstream B5: no path can skip all step bodies and assign COMPLETED
+# no path can skip all step bodies and assign COMPLETED
 # ---------------------------------------------------------------------------
 
 
@@ -385,7 +385,7 @@ class TestNoSkipToCompleted:
 
 
 # ---------------------------------------------------------------------------
-# Workstream A: snapshot and diagnostics
+# snapshot and diagnostics
 # ---------------------------------------------------------------------------
 
 
@@ -460,7 +460,7 @@ class TestJobDiagnostics:
 
 
 class TestReleaseReferences:
-    """Workstream C3: release_references clears operational objects."""
+    """release_references clears operational objects."""
 
     def test_release_clears_references(self) -> None:
         job = _make_job()

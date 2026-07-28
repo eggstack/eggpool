@@ -1,4 +1,4 @@
-"""Plan 026 — Finalization state machine and supervisor tests."""
+"""Finalization state machine and supervisor tests."""
 
 from __future__ import annotations
 

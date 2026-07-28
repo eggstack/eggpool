@@ -1,7 +1,7 @@
-"""Plan 019 Workstream F — Acceptance boundary tests.
+"""Acceptance boundary tests.
 
-F2: Defensive accepted guard to _abort_precommit_reload.
-F4: Post-acceptance exception proves zero rollback/abort calls.
+Verifies defensive accepted guard to _abort_precommit_reload and that
+post-acceptance exceptions prove zero rollback/abort calls.
 """
 
 from __future__ import annotations

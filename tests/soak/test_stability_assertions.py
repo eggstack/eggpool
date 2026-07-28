@@ -1,4 +1,6 @@
-"""Stability assertion tests for soak validation (Workstream G4).
+"""Stability assertion tests for soak validation.
+
+Verifies early/late window comparison and measurement validation.
 
 Defines the early/late window comparison framework and validates the
 measurement infrastructure. Strict stability ratio enforcement (p95 <=

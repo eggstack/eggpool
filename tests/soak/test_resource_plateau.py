@@ -1,4 +1,4 @@
-"""Resource plateau validation tests (Workstream G5).
+"""Resource plateau validation tests: verifies runtime resources plateau after warm-up.
 
 Verifies that RSS, file descriptors, threads, tasks, and other
 runtime resources plateau after warm-up and do not grow unboundedly.

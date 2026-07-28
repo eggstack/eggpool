@@ -1,4 +1,4 @@
-"""Plan 027 Workstream B — Recovery single-flight tests.
+"""Recovery single-flight tests.
 
 Verifies that concurrent invalidation notifications join the same
 recovery attempt rather than triggering parallel reconnects.

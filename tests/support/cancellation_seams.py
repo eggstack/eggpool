@@ -1,4 +1,4 @@
-"""Deterministic cancellation seam hooks for Plan 023.
+"""Deterministic cancellation seam hooks.
 
 Provides eleven named cancellation points along the request lifecycle.
 Each seam is a callable that, when set on :class:`CancellationSeamRegistry`,

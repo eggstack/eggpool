@@ -1,4 +1,4 @@
-"""Plan 029 — Workstream J: metric cardinality bounds.
+"""Metric cardinality bounds tests.
 
 Verifies that:
 

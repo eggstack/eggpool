@@ -1,4 +1,4 @@
-"""Plan 021 acceptance accounting and process-owned reconciliation proofs."""
+"""Acceptance accounting and process-owned reconciliation proofs."""
 
 from __future__ import annotations
 

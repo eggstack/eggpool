@@ -1,4 +1,4 @@
-"""Plan 028 — Protocol matrix integration tests.
+"""Protocol matrix integration tests.
 
 Verifies that native and transcoded non-stream/stream requests produce
 identical response semantics through the consolidated pipeline.  Tests
@@ -11,10 +11,6 @@ finalization, covering:
 - OpenAI-to-Anthropic transcoded stream
 - Error response passthrough (400)
 - Thinking control normalization passthrough
-
-Run with::
-
-    uv run pytest tests/integration/test_plan_028_protocol_matrix.py -v
 """
 
 from __future__ import annotations

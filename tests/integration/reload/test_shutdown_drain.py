@@ -1,6 +1,6 @@
-"""Plan 019 Workstream E — Shutdown drain tests.
+"""Shutdown drain tests.
 
-E4: Shutdown integration tests for finalization drain.
+Shutdown integration tests for finalization drain:
 - Successful drain: fail-once retirement, clear seam, drain retries and completes.
 - Persistent failure: drain times out, old slot is still accessible.
 """

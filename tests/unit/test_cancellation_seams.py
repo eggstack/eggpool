@@ -1,11 +1,7 @@
-"""Plan 023 — Cancellation seam unit tests.
+"""Cancellation seam unit tests.
 
 Validates that the ``CancellationSeamRegistry`` fires exactly once at
 the named point, is deterministic, and supports reset.
-
-Run with::
-
-    uv run pytest tests/unit/test_plan_023_cancellation_seams.py -v
 """
 
 from __future__ import annotations

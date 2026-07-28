@@ -1,4 +1,4 @@
-"""Plan 021 deterministic database commit-outcome closure tests."""
+"""Deterministic database commit-outcome closure tests."""
 
 from __future__ import annotations
 

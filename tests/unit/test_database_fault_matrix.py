@@ -1,12 +1,8 @@
-"""Plan 023 — Database fault injection matrix (unit).
+"""Database fault injection matrix (unit).
 
 Exercises the deterministic database fault seams provided by
 ``Database.set_test_inject_*`` hooks.  Covers BEGIN, write, COMMIT,
 ROLLBACK, invalidation-close, and subsequent-use failures.
-
-Run with::
-
-    uv run pytest tests/unit/test_plan_023_database_fault_matrix.py -v
 """
 
 from __future__ import annotations
@@ -96,7 +92,7 @@ class TestDatabaseFaultMatrix:
     async def test_rollback_raises_after_body_failure(self, test_db: Database) -> None:
         """ROLLBACK injection raises after transaction body failure.
 
-        Plan 027 — a rollback failure after a body failure is raised
+        A rollback failure after a body failure is raised
         as a typed ``DatabaseRollbackError`` so callers see the
         rollback failure distinctly from the original body exception.
         """

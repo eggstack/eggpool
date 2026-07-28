@@ -1,8 +1,8 @@
-"""Tests for Plan 028 — Segmentation reuse and invalidation.
+"""Segmentation reuse and invalidation tests.
 
-Workstream D: segmentation is only reused when payload generation,
-protocol, and segmentation policy version are unchanged. A payload
-mutation or protocol change must invalidate the cached segmentation.
+Segmentation is only reused when payload generation, protocol, and
+segmentation policy version are unchanged. A payload mutation or protocol
+change must invalidate the cached segmentation.
 """
 
 from __future__ import annotations

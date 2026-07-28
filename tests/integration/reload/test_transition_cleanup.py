@@ -1,9 +1,7 @@
-"""Plan 017 — Transition cleanup and precommit ownership closure tests.
+"""Transition cleanup and precommit ownership closure tests.
 
-Tests for Workstreams B and C:
-- Transition rollback correctness
-- Candidate resource close exactly once
-- PrecommitAbortOutcome structured diagnostics
+Tests transition rollback correctness, candidate resource close exactly
+once, and PrecommitAbortOutcome structured diagnostics.
 """
 
 from __future__ import annotations

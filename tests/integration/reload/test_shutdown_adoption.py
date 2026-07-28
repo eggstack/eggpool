@@ -1,8 +1,8 @@
-"""Plan 019 closure gates #13, #14 — Shutdown adoption and close-once.
+"""Shutdown adoption and close-once tests.
 
-E2/E4: When finalization drain times out, runtime_manager.shutdown()
-adopts the old slot from the committed pending swap and closes it.
-Both old and active generations close exactly once.
+When finalization drain times out, runtime_manager.shutdown() adopts the
+old slot from the committed pending swap and closes it.  Both old and
+active generations close exactly once.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Tests for Plan 024 — Transcoded provider normalization.
+"""Transcoded provider normalization tests.
 
 Verifies that provider-bound thinking control adaptation runs correctly
 on transcoded request paths (where client protocol differs from upstream

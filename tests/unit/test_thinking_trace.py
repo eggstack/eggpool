@@ -1,4 +1,4 @@
-"""Tests for Plan 024 — Thinking trace updates."""
+"""Thinking trace updates tests."""
 
 from __future__ import annotations
 

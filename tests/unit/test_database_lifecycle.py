@@ -1,7 +1,7 @@
-"""Plan 027 Workstream A — Database lifecycle state tests.
+"""Database lifecycle state tests.
 
 Verifies the explicit lifecycle state machine, connection epoch
-tracking, and the diagnostics surface introduced by Plan 027.
+tracking, and the diagnostics surface.
 """
 
 from __future__ import annotations

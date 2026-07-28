@@ -1,4 +1,4 @@
-"""Plan 024 — OpenCode Go MiniMax-M3 contract (integration).
+"""OpenCode Go MiniMax-M3 thinking-control contract end-to-end tests.
 
 End-to-end verification that the OpenCode Go MiniMax-M3 thinking-control
 contract is correctly resolved and applied through the full pipeline:
@@ -6,8 +6,6 @@ contract resolution → adaptation → payload modification.
 
 Covers acceptance criteria:
 
-- The Plan 023 unsupported-thinking reproducer no longer forwards an
-  invalid control.
 - Behavior is explicit: local reject, known mapping, or configured drop.
 - The same model through MiniMax's native provider retains its distinct
   accepted behavior.
@@ -16,10 +14,6 @@ Covers acceptance criteria:
 - A subsequent MiniMax-M3 request without thinking controls succeeds.
 - No account, model, circuit, catalog, or durable backoff state changes.
 - Collapsed models retain provider-specific contracts.
-
-Run with::
-
-    uv run pytest tests/integration/test_plan_024_opencode_minimax_contract.py -v
 """
 
 from __future__ import annotations

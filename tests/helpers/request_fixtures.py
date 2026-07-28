@@ -1,4 +1,4 @@
-"""Canonical request fixtures for Plan 023 error-isolation reproducer.
+"""Canonical request fixtures for error-isolation reproducer.
 
 Provides immutable request payloads covering every thinking-control variant
 that EggPool clients may send.  Fixtures are returned as fresh copies on

@@ -1,12 +1,8 @@
-"""Plan 025 — Quarantine hydration tests.
+"""Quarantine hydration tests.
 
 Validates that quarantine entries can be hydrated from durable storage,
 that expired entries are skipped during hydration, and that the state
 machine reproduces the same unexpired state after restart.
-
-Run with::
-
-    uv run pytest tests/unit/test_plan_025_quarantine_hydration.py -v
 """
 
 from __future__ import annotations

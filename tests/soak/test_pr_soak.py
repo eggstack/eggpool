@@ -1,4 +1,4 @@
-"""Short PR soak test (Workstream D).
+"""Short PR soak test: bounded deterministic soak for CI regression detection.
 
 A bounded deterministic soak test suitable for normal CI (target: < 5
 minutes).  Exercises the core reload/lifecycle/streaming/dispatch paths

@@ -1,11 +1,7 @@
-"""Plan 032 — Provider contract keying and precedence (unit).
+"""Provider contract keying and precedence (unit).
 
 Tests the extended ProviderContractKey matching, deterministic precedence,
 and operator override behavior for built-in contracts.
-
-Run with::
-
-    uv run pytest tests/unit/test_plan_032_provider_contract_keying.py -v
 """
 
 from __future__ import annotations

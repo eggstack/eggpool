@@ -1,9 +1,8 @@
-"""Plan 019 Workstream H — Deterministic database invalidation tests.
+"""Deterministic database invalidation tests.
 
-H1: Forces commit failure deterministically and verifies connection
-invalidation behavior.
-
-H2: Canonical ownership-state fallback with lowercase string normalization.
+Forces commit failure deterministically and verifies connection invalidation
+behavior, and validates canonical ownership-state fallback with lowercase
+string normalization.
 """
 
 from __future__ import annotations

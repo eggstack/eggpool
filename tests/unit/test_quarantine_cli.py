@@ -1,11 +1,7 @@
-"""Plan 025 — Quarantine diagnostics and operator interface tests.
+"""Quarantine diagnostics and operator interface tests.
 
 Validates read-only diagnostics for active model quarantine and
 evidence, including listing, scope inspection, and manual clearing.
-
-Run with::
-
-    uv run pytest tests/unit/test_plan_025_quarantine_cli.py -v
 """
 
 from __future__ import annotations

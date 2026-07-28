@@ -1,4 +1,4 @@
-"""Tests for Plan 024 — Built-in provider contracts."""
+"""Built-in provider contracts tests."""
 
 from __future__ import annotations
 

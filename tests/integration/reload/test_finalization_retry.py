@@ -1,10 +1,9 @@
-"""Plan 019 Workstream B — Finalization retry with transition failure.
+"""Finalization retry with transition failure.
 
-B3: Fail-once production test with two applied transitions.
-A succeeds, B fails on first finalize and succeeds on second.
-Proves: (1) first run stops at transition finalization,
-(2) observer and retirement not invoked, (3) job unresolved,
-(4) retry calls only B, (5) job advances, (6) COMPLETED only
+Fail-once production test with two applied transitions.  A succeeds, B fails
+on first finalize and succeeds on second.  Proves: (1) first run stops at
+transition finalization, (2) observer and retirement not invoked, (3) job
+unresolved, (4) retry calls only B, (5) job advances, (6) COMPLETED only
 after B succeeds.
 """
 

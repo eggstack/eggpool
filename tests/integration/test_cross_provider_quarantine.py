@@ -1,11 +1,7 @@
-"""Plan 025 — Cross-provider quarantine isolation integration tests.
+"""Cross-provider quarantine isolation tests.
 
 Validates that quarantine on one provider/account does not suppress
 traffic on other providers/accounts/protocols.
-
-Run with::
-
-    uv run pytest tests/integration/test_plan_025_cross_provider_quarantine.py -v
 """
 
 from __future__ import annotations

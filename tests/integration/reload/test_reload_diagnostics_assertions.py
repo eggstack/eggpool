@@ -1,6 +1,6 @@
-"""Plan 019 closure gates #17, #18 — Finalization status and counter assertions.
+"""Finalization status and counter assertions.
 
-G1/G2/G3: ReloadResult.finalization_status and counters are truthful.
+ReloadResult.finalization_status and counters are truthful:
 - retry_pending when finalization is unresolved
 - completed when fully finalized
 - counters advance only on actual completion
@@ -191,11 +191,10 @@ async def test_accepted_finalization_retries_counter(
 ) -> None:
     """retry_attempt_count counter increments when a retry actually runs.
 
-    Plan 020 Workstream C1: ``accepted_finalization_retries`` counts
-    attempts after the first.  To trigger a retry we must admit a new
-    reload while the previous job is still pending — the admission
-    retry path calls the job's ``run()`` which now executes a real
-    retry attempt.
+    ``accepted_finalization_retries`` counts attempts after the first.
+    To trigger a retry we must admit a new reload while the previous
+    job is still pending — the admission retry path calls the job's
+    ``run()`` which now executes a real retry attempt.
     """
     rm = reload_harness.reload_manager
 

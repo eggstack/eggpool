@@ -1,4 +1,4 @@
-"""Plan 018 Workstream F — Gate repair tests.
+"""Gate repair tests.
 
 Verifies that ensure_reload_gate_released does not increment
 publication_epoch, and that a staged swap cannot be ungated directly.
@@ -67,9 +67,9 @@ def _build_generation(gen_id: int) -> RuntimeGeneration:
 async def test_ensure_gate_released_does_not_increment_epoch() -> None:
     """ensure_reload_gate_released does not increment publication_epoch.
 
-    Plan 018 Workstream F2/F3: defensive gate repair must not bump
-    the publication epoch — only install_initial() and
-    PendingGenerationSwap.commit() may increment the epoch.
+    Defensive gate repair must not bump the publication epoch — only
+    install_initial() and PendingGenerationSwap.commit() may increment
+    the epoch.
     """
     async with ReloadHarness() as harness:
         rm = harness.runtime_manager
@@ -100,9 +100,8 @@ async def test_ensure_gate_released_does_not_increment_epoch() -> None:
 async def test_staged_swap_cannot_be_ungated_directly() -> None:
     """A staged swap prevents direct gate release.
 
-    Plan 018 Workstream F2: when a staged swap is present, defensive
-    gate repair must NOT clear the gate because the swap must be resolved
-    through rollback or commit.
+    When a staged swap is present, defensive gate repair must NOT clear
+    the gate because the swap must be resolved through rollback or commit.
     """
     async with ReloadHarness() as harness:
         rm = harness.runtime_manager

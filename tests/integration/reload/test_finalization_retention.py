@@ -1,6 +1,6 @@
-"""Plan 019 Workstream C — Finalization retention and reference lifecycle tests.
+"""Finalization retention and reference lifecycle tests.
 
-C5: 100-reload retention test proving no monotonic retained-job growth,
+100-reload retention test proving no monotonic retained-job growth,
 weak references collectible, close counts exactly once, and bounded history.
 """
 

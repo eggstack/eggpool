@@ -1,4 +1,4 @@
-"""Plan 020 Workstream F2 — Real single-flight tests.
+"""Real single-flight tests.
 
 Proves:
   - Two concurrent callers share one attempt task and one attempt count increment.

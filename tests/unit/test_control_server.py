@@ -923,12 +923,12 @@ class TestIntegration:
 
 
 # ---------------------------------------------------------------------------
-# Plan 016 Workstream G — peer-credential fail-closed
+# Peer-credential fail-closed
 # ---------------------------------------------------------------------------
 
 
 class TestPeerCredentialFailClosed:
-    """Plan 016 Workstream G1: the peer-cred helper must fail closed.
+    """The peer-cred helper must fail closed.
 
     Previously the helper silently returned on missing sockets,
     insufficient peer-cred data, or ``OSError`` from the kernel —
@@ -1037,7 +1037,7 @@ class TestPeerCredentialFailClosed:
 
         Verifies that when ``_reject_unmatched_peer_uid`` raises, the
         handler does NOT call ``_process_request`` and closes the
-        writer cleanly.  This is the Workstream G2 invariant: a
+        writer cleanly.  A
         rejected connection cannot reach the request path.
         """
         from eggpool.control.server import (

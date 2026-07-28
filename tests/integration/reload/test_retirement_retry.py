@@ -1,4 +1,4 @@
-"""Plan 018 Workstream D — Retirement retry tests.
+"""Retirement retry tests.
 
 Verifies that retirement failure retains the original old generation ID
 and that retrying retirement closes the old generation.

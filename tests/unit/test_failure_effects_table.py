@@ -1,14 +1,10 @@
-"""Plan 025 — Failure effects decision table tests.
+"""Failure effects decision table tests.
 
-Validates the pure classifier against every row of the effects matrix
-from the plan, covering 400, 401, 402, 403 quota/non-quota, model-like
-and generic 404, 408, 409, 422, 429, all relevant 5xx statuses,
-transport exceptions, client cancellation, midstream failure, capability
-errors, finalization failures, and database failures.
-
-Run with::
-
-    uv run pytest tests/unit/test_plan_025_failure_effects_table.py -v
+Validates the pure classifier against every row of the effects matrix,
+covering 400, 401, 402, 403 quota/non-quota, model-like and generic
+404, 408, 409, 422, 429, all relevant 5xx statuses, transport
+exceptions, client cancellation, midstream failure, capability errors,
+finalization failures, and database failures.
 """
 
 from __future__ import annotations

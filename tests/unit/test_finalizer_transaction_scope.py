@@ -1,4 +1,4 @@
-"""Tests for Plan 028 — Transaction scope (Workstream G).
+"""Finalizer transaction scope tests.
 
 Verifies that the finalizer precomputes diagnostic serialization outside
 the BEGIN IMMEDIATE transaction, uses the integer account_id directly

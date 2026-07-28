@@ -1,4 +1,4 @@
-"""Tests for Plan 024 — Thinking metrics provider control counters."""
+"""Thinking metrics provider control counters tests."""
 
 from __future__ import annotations
 

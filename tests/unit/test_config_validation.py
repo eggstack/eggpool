@@ -1,4 +1,4 @@
-"""Tests for ``eggpool.config_validation`` (Milestone A, Workstream A1+A2+A3)."""
+"""Tests for ``eggpool.config_validation``."""
 
 from __future__ import annotations
 

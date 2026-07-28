@@ -1,4 +1,4 @@
-"""Plan 027 Workstream G — Finalization reconciliation tests.
+"""Finalization reconciliation tests.
 
 Verifies the finalization reconciler (``_reconcile_finalization``) in
 ``src/eggpool/db/recovery.py`` and the production wiring of

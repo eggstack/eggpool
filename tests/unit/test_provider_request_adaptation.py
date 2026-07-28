@@ -1,4 +1,4 @@
-"""Tests for Plan 024 — Provider request adaptation."""
+"""Provider request adaptation tests."""
 
 from __future__ import annotations
 

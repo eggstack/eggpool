@@ -1,4 +1,4 @@
-"""Reusable mock upstream service for error-isolation reproducer (Plan 023).
+"""Reusable mock upstream service for error-isolation reproducer.
 
 Extends the existing mock SSE/provider infrastructure (``respx`` +
 ``httpx.Response`` with async generators) rather than adding a parallel
@@ -474,7 +474,7 @@ def _unrelated_success(model: str = "gpt-4") -> MockResponseSpec:
 def minimax_scenario_rules(scenario: str) -> list[MockUpstreamRule]:
     """Return rules for a single named MiniMax-M3 scenario.
 
-    Each scenario maps to one of the nine required Workstream A scenarios.
+    Each scenario maps to one of the nine required MiniMax-M3 scenarios.
     Tests can use this to set up a focused rule set for a single scenario
     without overlapping matchers.
     """
@@ -586,7 +586,7 @@ def minimax_scenario_rules(scenario: str) -> list[MockUpstreamRule]:
 def minimax_thinking_rules() -> list[MockUpstreamRule]:
     """Return the canonical MiniMax-M3 thinking-control rule set.
 
-    Covers all nine required scenarios from Plan 023 Workstream A:
+    Covers all nine required scenarios:
 
     1. No thinking field: successful response.
     2. Accepted thinking field/value: successful response.

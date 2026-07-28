@@ -1,12 +1,8 @@
-"""Plan 025 — Error isolation integration tests.
+"""Request error isolation tests.
 
 Validates that request-local failures (capability rejection, context
 limit, unsupported thinking, client cancellation) produce zero
 shared-state effects, and that provider failures are properly isolated.
-
-Run with::
-
-    uv run pytest tests/integration/test_plan_025_error_isolation.py -v
 """
 
 from __future__ import annotations

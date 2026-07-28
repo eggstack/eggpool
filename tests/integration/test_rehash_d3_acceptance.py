@@ -1,9 +1,9 @@
-"""D3 release-validation acceptance tests for live config rehash.
+"""Release-validation acceptance tests for live config rehash.
 
-Exercises the canonical process-level acceptance scenarios from the
-D3 plan (Phase 2) that are NOT already covered by
-``test_rehash_streaming_swap.py``.  Imports all mock upstream, config,
-and CLI helpers from the canonical test file to avoid duplication.
+Exercises the canonical process-level acceptance scenarios that are NOT
+already covered by ``test_rehash_streaming_swap.py``.  Imports all mock
+upstream, config, and CLI helpers from the canonical test file to avoid
+duplication.
 
 Each test runs a real ``eggpool serve --verbose`` subprocess with a
 deterministic mock upstream, exercises a specific rehash scenario, and
@@ -1018,8 +1018,7 @@ async def test_d3_concurrent_reload_burst_stays_healthy(tmp_path: Any) -> None:
     where the reload preparation is blocked on an ``asyncio.Event`` so
     contention is observed deterministically.  This E2E test is the
     smoke layer: it proves the subprocess + control-socket path is
-    robust, not that busy is always observed under a real burst.
-    """
+    robust, not that busy is always observed under a real burst."""
     state = _MockState()
     upstream = _make_mock_server(state)
     upstream_port = upstream.server_address[1]
@@ -1084,8 +1083,8 @@ async def test_d3_concurrent_reload_burst_stays_healthy(tmp_path: Any) -> None:
 async def test_d3_retirement_timeout_closes_resources(tmp_path: Any) -> None:
     """Old generation resources close after drain timeout.
 
-    Plan 016 Workstream I1: the deterministic, in-process equivalent
-    lives in ``tests/integration/reload/test_plan_016_corrective_replacements.py``
+    The deterministic, in-process equivalent lives in
+    ``tests/integration/reload/``
     (``test_drain_timeout_forces_retirement_close``).  This subprocess
     smoke test was previously skipped because the default
     ``drain_timeout_s=300s`` exceeds the CI budget.  The harness

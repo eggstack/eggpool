@@ -1,4 +1,4 @@
-"""Plan 017 — Lease condition and lost-wakeup closure tests.
+"""Lease condition and lost-wakeup closure tests.
 
 Proves that:
 - A notification cannot be lost between predicate evaluation and waiting

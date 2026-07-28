@@ -473,8 +473,7 @@ class TestTransactionStateMachine:
         )
         assert txn.state == TransactionState.PROCESS_TRANSITIONS_PREPARED
 
-        # Plan 016 Workstream D5: preflight always runs before commit
-        # state is recorded.
+        # Preflight always runs before commit state is recorded.
         txn.mark_process_transitions_preflighted([])
         assert txn.state == TransactionState.PROCESS_TRANSITIONS_PREFLIGHTED
 

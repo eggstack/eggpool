@@ -1,4 +1,4 @@
-"""Tests for the reload-policy and diff modules (Workstream A4+A5)."""
+"""Tests for the reload-policy and diff modules."""
 
 from __future__ import annotations
 
@@ -130,7 +130,7 @@ class TestPolicyDefaults:
             # Detailed span sample rate reconfigured via generation rebuild.
             "metrics.detailed_span_sample_rate",
             "metrics.dispatch_spans.sample_rate",
-            # Plan 027 — database recovery is process-owned and survives
+            # Database recovery is process-owned and survives
             # generation swaps; all recovery fields are LIVE.
             "database.recovery",
             "database.recovery.enabled",
@@ -1215,7 +1215,7 @@ LIVE_FIELD_CONSUMERS: dict[str, tuple[str, ...]] = {
     # ``DispatchSpanRecorder`` rebuilt on config change.
     "metrics.detailed_span_sample_rate": ("DispatchSpanRecorder",),
     "metrics.dispatch_spans.sample_rate": ("DispatchSpanRecorder",),
-    # Plan 027 — database recovery is process-owned; all recovery
+    # Database recovery is process-owned; all recovery
     # fields are consumed by the ``DatabaseRecoveryController`` which
     # reads them from the candidate config on rehash.
     "database.recovery": ("DatabaseRecoveryController",),

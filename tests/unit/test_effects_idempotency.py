@@ -1,11 +1,7 @@
-"""Plan 025 — Effects idempotency tests.
+"""Effects idempotency tests.
 
 Validates that the EffectsApplier applies effects exactly once per
 attempt key and that retried finalizations do not double-penalize.
-
-Run with::
-
-    uv run pytest tests/unit/test_plan_025_effects_idempotency.py -v
 """
 
 from __future__ import annotations

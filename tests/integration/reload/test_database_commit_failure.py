@@ -1,4 +1,4 @@
-"""Plan 018 Workstream E — Database commit failure tests.
+"""Database commit failure tests.
 
 Verifies that confirmed rollback keeps the connection usable and that
 indeterminate commit invalidates the connection.

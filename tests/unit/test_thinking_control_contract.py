@@ -1,4 +1,4 @@
-"""Tests for Plan 024 — ThinkingControlContract schema and inference."""
+"""ThinkingControlContract schema and inference tests."""
 
 from __future__ import annotations
 

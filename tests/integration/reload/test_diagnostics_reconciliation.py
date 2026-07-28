@@ -1,4 +1,4 @@
-"""Plan 020 Workstreams D, C — Diagnostics and counter reconciliation.
+"""Diagnostics and counter reconciliation tests.
 
 Tests:
   1. Calling _reconcile_finalization_job twice with the same outcome does NOT

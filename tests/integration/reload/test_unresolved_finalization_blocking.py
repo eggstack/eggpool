@@ -1,4 +1,4 @@
-"""Plan 019 closure gate #8 — Admission blocking on unresolved finalization.
+"""Admission blocking on unresolved finalization.
 
 A new reload cannot bypass unresolved accepted finalization.  When a
 finalization job remains non-complete, the admission path retries it

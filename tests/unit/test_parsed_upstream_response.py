@@ -1,4 +1,4 @@
-"""Tests for Plan 028 — ParsedUpstreamResponse lifecycle."""
+"""ParsedUpstreamResponse lifecycle tests."""
 
 from __future__ import annotations
 

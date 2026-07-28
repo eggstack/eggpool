@@ -1,4 +1,4 @@
-"""Plan 027 Workstream H — Background writer admission gate.
+"""Background writer admission gate during database recovery.
 
 Verifies that background writers (dispatch, routing trace, metrics)
 pause during database recovery and resume after the connection is

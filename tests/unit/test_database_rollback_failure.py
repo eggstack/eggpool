@@ -1,4 +1,4 @@
-"""Plan 027 Workstream D — Rollback failure invalidation tests.
+"""Rollback failure invalidation tests.
 
 Verifies that rollback failures after body exceptions or commit failures
 correctly invalidate the connection, raise the right typed error, and

@@ -1,4 +1,4 @@
-"""Phase 7 — operator-workflow integration tests for ``eggpool rehash``.
+"""Operator-workflow integration tests for ``eggpool rehash``.
 
 Exercises the operator-facing CLI commands end-to-end against a real
 ``eggpool serve`` subprocess and mock upstream.
@@ -286,15 +286,13 @@ async def test_d3_operator_dead_server_exit3(tmp_path: Any) -> None:
 async def test_d3_operator_concurrent_busy(tmp_path: Any) -> None:
     """Four concurrent rehash calls: at least one returns exit 4 (BUSY).
 
-    Plan 016 Workstream I1: the original subprocess-based test was
-    unable to deterministically hit the admission guard on fast hosts
-    (required up to 5 attempts).  The deterministic, in-process
-    equivalent lives in
-    ``tests/integration/reload/test_plan_016_corrective_replacements.py``
-    (``test_concurrent_reload_admission_deterministic``).  This
+    The original subprocess-based test was unable to deterministically
+    hit the admission guard on fast hosts (required up to 5 attempts).
+    The deterministic, in-process equivalent lives in the reload test
+    suite (``test_concurrent_reload_admission_deterministic``).  This
     subprocess-based test is retained as a smoke test of the busy
     operator-workflow path; it now passes deterministically thanks
-    to the Workstream A atomic admission claim.
+    to the atomic admission claim.
     """
     state = _MockState()
     upstream = _make_mock_server(state)

@@ -1,4 +1,4 @@
-"""Plan 021 production-boundary A/B/C transition-prefix proof."""
+"""Production-boundary A/B/C transition-prefix proof."""
 
 from __future__ import annotations
 

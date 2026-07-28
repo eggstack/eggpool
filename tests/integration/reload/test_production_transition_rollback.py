@@ -1,4 +1,4 @@
-"""Plan 020 Workstream F3 — Production A/B/C transition-prefix rollback.
+"""Production A/B/C transition-prefix rollback.
 
 Injects TEST_INJECT_TRANSITION_APPLY_FAILURE through the full
 ReloadManager.reload() integration path.  Transition A applies

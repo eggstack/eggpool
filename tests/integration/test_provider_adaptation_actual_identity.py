@@ -1,4 +1,4 @@
-"""Plan 032 — OpenCode Go MiniMax-M3 actual identity (integration).
+"""OpenCode Go MiniMax-M3 thinking-control contract identity tests.
 
 Exercises the production adaptation method with real SelectedAttempt-shaped
 objects and the production resolver, verifying that:
@@ -7,10 +7,6 @@ objects and the production resolver, verifying that:
 - Streaming and non-streaming use the same contract decision
 - Strict reject and warn-drop policies work correctly
 - Subsequent plain requests succeed after rejections
-
-Run with::
-
-    uv run pytest tests/integration/test_plan_032_opencode_minimax_actual_identity.py -v
 """
 
 from __future__ import annotations

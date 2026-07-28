@@ -1,4 +1,6 @@
-"""Workload profiles for soak testing (Workstream G1).
+"""Workload profiles for soak testing.
+
+Canonical profiles for dispatch stability validation.
 
 Defines eight canonical workload profiles with fixed random seeds
 and deterministic mock upstream behavior. Each profile exercises a

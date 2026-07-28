@@ -1,4 +1,4 @@
-"""SQLite commit-failure injection tests (Plan 015 Milestone D1).
+"""SQLite commit-failure injection tests.
 
 Verifies that a publish failure (via TEST_INJECT_PUBLISH_FAILURE) rolls
 back the entire transaction and leaves active generation ID, config digest,
@@ -117,7 +117,7 @@ async def test_publish_failure_does_not_leak_resources(
 
 
 # ---------------------------------------------------------------------------
-# Plan 016 Workstream F — true SQLite COMMIT bypass injection
+# True SQLite COMMIT bypass injection
 # ---------------------------------------------------------------------------
 
 

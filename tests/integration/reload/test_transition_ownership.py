@@ -1,4 +1,4 @@
-"""Plan 018 Workstream A — TransitionApplyResult ownership tests.
+"""TransitionApplyResult ownership tests.
 
 Verifies that the production reload path constructs TransitionApplyResult
 before apply_all(), that partial rollback is retryable, and that
@@ -102,8 +102,8 @@ def _make_plan(transitions: tuple[ProcessTransition, ...]) -> object:
 async def test_transition_result_created_before_apply_all() -> None:
     """TransitionApplyResult is created in the reload owner before apply_all().
 
-    Verifies Workstream A1: the production path constructs the result
-    object before calling apply_all(), so ownership is explicit.
+    The production path constructs the result object before calling
+    apply_all(), so ownership is explicit.
     """
     create_order: list[str] = []
     original_init = TransitionApplyResult.__init__

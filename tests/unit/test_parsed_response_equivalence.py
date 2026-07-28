@@ -1,4 +1,4 @@
-"""Tests for Plan 028 — Response equivalence (Workstream I).
+"""ParsedUpstreamResponse equivalence tests.
 
 Verifies that the consolidated ParsedUpstreamResponse produces identical
 results to the legacy byte-parsing approach for every required consumer:

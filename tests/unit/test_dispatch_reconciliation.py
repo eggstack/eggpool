@@ -1,4 +1,4 @@
-"""Plan 027 Workstream F — Dispatch reconciliation tests.
+"""Dispatch reconciliation tests.
 
 Verifies the dispatch reconciler (``_reconcile_dispatch``), the
 pending-ambiguous-operation lifecycle, and the production wiring

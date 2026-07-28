@@ -1,14 +1,13 @@
-"""Plan 020 Workstream F6 — Real weak-reference retention.
+"""Real weak-reference retention tests.
 
-Enhanced version of Plan 019's retention test:
-  1. Run 100+ successful alternating reloads
-  2. Capture weak references to candidate, pending swap, transaction,
-     published generation, and old generation from selected iterations
-  3. Force garbage collection
-  4. Assert weak references are cleared after completion
-  5. Assert active registry is empty
-  6. Assert history is bounded
-  7. Assert each retired resource closes exactly once
+1. Run 100+ successful alternating reloads
+2. Capture weak references to candidate, pending swap, transaction,
+   published generation, and old generation from selected iterations
+3. Force garbage collection
+4. Assert weak references are cleared after completion
+5. Assert active registry is empty
+6. Assert history is bounded
+7. Assert each retired resource closes exactly once
 """
 
 from __future__ import annotations

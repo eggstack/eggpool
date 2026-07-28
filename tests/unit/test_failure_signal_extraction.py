@@ -1,11 +1,7 @@
-"""Plan 025 — Failure signal extraction tests.
+"""Failure signal extraction tests.
 
 Validates the bounded, conservative signal extractor against known
 provider response patterns.
-
-Run with::
-
-    uv run pytest tests/unit/test_plan_025_failure_signal_extraction.py -v
 """
 
 from __future__ import annotations

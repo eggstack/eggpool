@@ -1,4 +1,4 @@
-"""Plan 026 — Runtime ownership token and finalization identity tests."""
+"""Runtime ownership token and finalization identity tests."""
 
 from __future__ import annotations
 

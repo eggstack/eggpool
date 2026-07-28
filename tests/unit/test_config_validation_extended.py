@@ -1,6 +1,7 @@
-"""Plan 030 — Configuration and migration validation (Workstream K).
+"""Configuration and migration validation tests.
 
-Test:
+Tests:
+
 - Old configuration with no new fields.
 - New provider-control policy fields.
 - Model capability overrides.
@@ -14,10 +15,6 @@ Test:
 
 ``eggpool check-config`` must validate all new configuration before
 startup or rehash.
-
-Run with::
-
-    uv run pytest tests/unit/test_plan_030_config_validation.py -v
 """
 
 from __future__ import annotations

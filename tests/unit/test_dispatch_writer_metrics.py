@@ -1,4 +1,4 @@
-"""Plan 029 — Workstream A: dispatch writer metric semantics and sample counts.
+"""Dispatch writer metric semantics and sample counts.
 
 Verifies that:
 

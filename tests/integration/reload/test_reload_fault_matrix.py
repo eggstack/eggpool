@@ -1,4 +1,4 @@
-"""Complete fault-injection matrix for the reload transaction (Workstream C).
+"""Complete fault-injection matrix for the reload transaction.
 
 Covers every stage of the Phase 6 transactional flow:
 

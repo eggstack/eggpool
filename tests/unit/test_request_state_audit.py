@@ -1,11 +1,7 @@
-"""Plan 023 — State audit snapshot unit tests.
+"""State audit snapshot unit tests.
 
 Validates that the ``RequestStateAuditSnapshot`` captures the right
 surfaces and produces deterministic diffs.
-
-Run with::
-
-    uv run pytest tests/unit/test_plan_023_state_audit.py -v
 """
 
 from __future__ import annotations

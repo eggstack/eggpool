@@ -1,4 +1,4 @@
-"""Plan 027 — Readiness probe integration during recovery.
+"""Readiness probe integration during database recovery.
 
 Verifies that the /readyz probe correctly reports degraded status
 during database recovery and returns to ready after recovery

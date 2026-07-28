@@ -1,12 +1,8 @@
-"""Plan 025 — Model quarantine state machine tests.
+"""Model quarantine state machine tests.
 
 Validates the bounded quarantine lifecycle: healthy → suspected →
 quarantined → terminal_withdrawn, with TTL expiry, corroboration,
 success clearing, and catalog reappearance clearing.
-
-Run with::
-
-    uv run pytest tests/unit/test_plan_025_model_quarantine_state_machine.py -v
 """
 
 from __future__ import annotations

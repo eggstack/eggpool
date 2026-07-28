@@ -102,17 +102,13 @@ uv run pyright src/ scripts/
 
 - **pytest** with pytest-asyncio (strict mode), `xfail_strict = true`, `--strict-markers`
 - **respx** for HTTPX upstream mocking
-- Tests in `tests/unit/`, `tests/integration/`, `tests/smoke/`, `tests/perf/`, `tests/soak/`, `tests/live/`, `tests/contract/`
+- Tests in `tests/unit/`, `tests/integration/`, `tests/smoke/`, `tests/perf/`, `tests/soak/`, `tests/contract/`
 
 ```bash
 # Run all tests (canonical CI suite)
 uv run pytest \
   -m "not slow and not performance and not soak and not extended_soak and not live and not network" \
   -q --tb=short --maxfail=1
-
-# Run with coverage
-uv run coverage run -m pytest
-uv run coverage report
 ```
 
 ### Test Markers
@@ -122,12 +118,13 @@ Defined in `pyproject.toml` and applied at the module level via `pytestmark`:
 - **`slow`** — marks tests as slow (deselect with `-m "not slow"`)
 - **`performance`** — manually invoked real-runtime performance checks
 - **`live`** — opt-in live provider/network verification tests
+- **`network`** — tests requiring network access or external services
 - **`extended_soak`** — extended manual stability mode (not PR CI)
 - **`soak`** — manually invoked real-runtime duration/resource checks
-- **`network`** — tests requiring network access or external services
 - **`request_path`** — routing, transcoding, finalization tests
 - **`dashboard`** — dashboard and cache-page rendering tests
 - **`reload`** — reload/rehash transaction and lifecycle tests
+- **`integration`** — integration tests requiring full component wiring
 
 ### Provider Contract Tests
 
@@ -140,6 +137,22 @@ uv run pytest tests/unit/test_contract.py tests/unit/test_contract_urls.py -v
 ```bash
 uv run pytest tests/integration/reload/ -v
 ```
+
+### Smoke Suite
+
+```bash
+uv run pytest tests/smoke/ -q --tb=short --maxfail=1
+```
+
+The smoke suite covers: package import, config parsing, invalid config rejection, check-config validation, DB migration, one non-stream request, one streaming request, CLI help.
+
+### Release
+
+Manual release procedure — no automated release workflow. See `docs/releasing.md`.
+
+### Runtime Validation
+
+Manual risk-based validation on target SBC hardware. See `docs/releasing.md` § Risk-Based SBC Validation.
 
 ## Code Style
 

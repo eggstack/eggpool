@@ -1,6 +1,6 @@
-"""Plan 019 Workstream H — Production transition-prefix rollback tests.
+"""Production transition-prefix rollback tests.
 
-H3: Full integration path proving A/B/C transition-prefix rollback through
+Full integration path proving A/B/C transition-prefix rollback through
 TransitionApplyResult.  Transition A applies, B fails, C never runs.
 Rollback restores A exactly once, old generation remains active,
 and subsequent reload succeeds.

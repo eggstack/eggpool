@@ -162,13 +162,13 @@ class TestHarnessFullReloadDiagnostics:
             "cancellations",
             "compensation_failures",
             "retirement_failures",
-            # Plan 019 Workstream G3: finalization counters.
+            # Finalization counters.
             "accepted_reloads",
             "fully_finalized_reloads",
             "accepted_finalization_failures",
             "accepted_finalization_retries",
             "retirement_retry_count",
-            # Plan 020 Workstream C2: completion reconciliation counters.
+            # Completion reconciliation counters.
             "accepted_finalization_failures_recovered",
             "delayed_completion_count",
         }

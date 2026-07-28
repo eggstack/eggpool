@@ -1,4 +1,4 @@
-"""Plan 021 shutdown ownership and exact close-count proofs."""
+"""Shutdown ownership and exact close-count proofs."""
 
 from __future__ import annotations
 

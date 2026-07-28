@@ -1,4 +1,4 @@
-"""Plan 027 — Runtime reconnect after invalidation.
+"""Database reconnect after connection invalidation.
 
 End-to-end recovery flow: connection invalidation → recovery
 controller → replacement connection → resumed operations.

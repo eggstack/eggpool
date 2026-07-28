@@ -1,8 +1,7 @@
-"""Plan 020 Workstreams E1, E2, E4 — Shutdown transaction ordering.
+"""Shutdown transaction ordering tests.
 
-E1: Shutdown waits for the active transaction before draining jobs.
-E2: Shutdown timeout triggers adoption.
-E4: Close-once behavior after shutdown adoption.
+Shutdown waits for the active transaction before draining jobs, timeout
+triggers adoption, and close-once behavior is verified after adoption.
 
 Test cases:
   1. Shutdown with no active transaction completes quickly.

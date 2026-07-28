@@ -1,11 +1,7 @@
-"""Plan 032 — Built-in contract ambiguity validation (unit).
+"""Built-in contract ambiguity validation (unit).
 
 Tests that validate_no_ambiguous_contracts() correctly detects ambiguous
 built-in rules that would fail at runtime.
-
-Run with::
-
-    uv run pytest tests/unit/test_plan_032_builtin_contract_ambiguity.py -v
 """
 
 from __future__ import annotations

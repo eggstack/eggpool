@@ -1,4 +1,4 @@
-"""Plan 018 Workstream C — Accepted-finalization job tests.
+"""Accepted-finalization job tests.
 
 Verifies that accepted reloads create an executable finalization job,
 that the job is registered before post-acceptance awaits, that it resumes
