@@ -49,9 +49,7 @@ def _build_config() -> AppConfig:
             "database": {"path": ":memory:"},
             "upstream": {"base_url": UPSTREAM_BASE},
             "models": {"startup_refresh": False, "refresh_interval_s": 0},
-            "accounts": [
-                {"name": "smoke-acct", "api_key_env": "SMOKE_UPSTREAM_KEY"}
-            ],
+            "accounts": [{"name": "smoke-acct", "api_key_env": "SMOKE_UPSTREAM_KEY"}],
             "dashboard": {"enabled": False},
         }
     )
