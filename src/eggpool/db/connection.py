@@ -308,6 +308,11 @@ class Database:
         # be admitted.  Mirrors ``_lifecycle_state`` for call-site
         # convenience (snapshots, hot-path checks).
         self._writes_admitted: bool = False
+        # Plan 027 Workstream H: async event that background writers
+        # can await before attempting writes.  Set when writes are
+        # admitted, cleared on invalidation, and re-set after
+        # successful recovery.
+        self._writes_admitted_event: asyncio.Event = asyncio.Event()
         # Cached fact: whether read-only stats queries remain safe.
         # During recovery, the replacement connection is being probed
         # and reads must not run through it until the probe completes.
@@ -326,6 +331,12 @@ class Database:
         # connection invalidation.  Surfaced via ``diagnostics()`` so
         # operators can correlate anomalies.
         self._rollback_failure_count: int = 0
+        # Plan 027 Workstream E/F/G: callers set this before entering
+        # a correctness-critical transaction so that an indeterminate
+        # commit outcome records the operation for post-recovery
+        # reconciliation.  The transaction() context manager reads
+        # and clears it on indeterminate failure.
+        self._pending_ambiguous_op: AmbiguousDatabaseOperation | None = None
         # Counter incremented on every successful rollback.  Bounded
         # by the lifetime of the connection.
         self._rollback_success_count: int = 0
@@ -375,6 +386,26 @@ class Database:
         """Return the number of successful rollbacks."""
         return self._rollback_success_count
 
+    async def wait_for_writes_admitted(
+        self, timeout_s: float = 30.0
+    ) -> bool:
+        """Wait until writes are admitted after recovery.
+
+        Background writers call this before attempting writes to
+        avoid hitting an invalidated connection.  Returns ``True``
+        if writes are now admitted, ``False`` on timeout.
+        """
+        if self._writes_admitted:
+            return True
+        try:
+            await asyncio.wait_for(
+                self._writes_admitted_event.wait(),
+                timeout=timeout_s,
+            )
+            return True
+        except TimeoutError:
+            return False
+
     def attach_recovery_controller(self, controller: Any) -> None:
         """Attach the process-owned :class:`DatabaseRecoveryController`.
 
@@ -410,6 +441,25 @@ class Database:
         bounded in cardinality).
         """
         self._ambiguous_operations.append(op)
+
+    def set_pending_ambiguous_operation(
+        self, op: AmbiguousDatabaseOperation
+    ) -> None:
+        """Attach an ambiguous-operation descriptor to the next transaction.
+
+        The ``transaction()`` context manager records this descriptor
+        when the commit outcome is indeterminate.  Callers must set
+        this *before* entering ``async with self.transaction():``.
+        """
+        self._pending_ambiguous_op = op
+
+    def clear_pending_ambiguous_operation(self) -> None:
+        """Clear the pending ambiguous-operation descriptor.
+
+        Called by ``transaction()`` after recording or when the commit
+        succeeds.  Also callable by the caller on the happy path.
+        """
+        self._pending_ambiguous_op = None
 
     def _transition_state(self, new_state: DatabaseLifecycleState) -> None:
         """Transition the lifecycle state, validating the move.
@@ -491,6 +541,7 @@ class Database:
             self._connection_epoch += 1
             self._writes_admitted = True
             self._reads_admitted = True
+            self._writes_admitted_event.set()
             self._transition_state(DatabaseLifecycleState.READY)
         except asyncio.CancelledError:
             await self._close_failed_connection()
@@ -500,6 +551,7 @@ class Database:
             await self._close_failed_connection()
             self._writes_admitted = False
             self._reads_admitted = False
+            self._writes_admitted_event.clear()
             self._transition_state(DatabaseLifecycleState.FAILED_CLOSED)
             raise DatabaseError(f"Failed to connect to database: {exc}") from exc
 
@@ -622,6 +674,7 @@ class Database:
             self._conn = None
         self._writes_admitted = False
         self._reads_admitted = False
+        self._writes_admitted_event.clear()
 
     async def _invalidate_connection(self, reason: str) -> None:
         """Detach and close the connection after indeterminate state.
@@ -651,6 +704,7 @@ class Database:
         self._invalidated_at = time.monotonic()
         self._writes_admitted = False
         self._reads_admitted = False
+        self._writes_admitted_event.clear()
         with suppress(Exception):
             await asyncio.wait_for(conn_to_close.close(), timeout=5.0)
         self._transition_state(DatabaseLifecycleState.INVALIDATED)
@@ -1260,6 +1314,12 @@ class Database:
                         f"connection epoch changed during transaction "
                         f"(begin={begin_epoch}, current={self._connection_epoch})"
                     )
+                    # Plan 027: record the pending ambiguous operation
+                    # before raising so the recovery controller can
+                    # reconcile it after a replacement connection is opened.
+                    if self._pending_ambiguous_op is not None:
+                        self.record_ambiguous_operation(self._pending_ambiguous_op)
+                        self._pending_ambiguous_op = None
                     raise DatabaseCommitError(
                         "Connection was replaced while transaction was open",
                         rollback_attempted=False,
@@ -1300,6 +1360,12 @@ class Database:
                     await self._commit_connection()
                 except Exception as exc:
                     commit_exc = exc
+
+                # Plan 027: clear the pending ambiguous operation on
+                # the happy path (commit succeeded) so it is not
+                # spuriously recorded on a later failure.
+                if commit_exc is None:
+                    self._pending_ambiguous_op = None
 
                 if commit_exc is not None:
                     rollback_attempted = False
@@ -1347,6 +1413,18 @@ class Database:
 
                     outcome = "rolled_back" if rollback_succeeded else "indeterminate"
                     self._last_commit_outcome = outcome
+                    # Plan 027 Workstream E/F/G: record the pending
+                    # ambiguous operation so the recovery controller
+                    # can reconcile it after a replacement connection
+                    # is opened.
+                    if (
+                        outcome == "indeterminate"
+                        and self._pending_ambiguous_op is not None
+                    ):
+                        self.record_ambiguous_operation(
+                            self._pending_ambiguous_op
+                        )
+                        self._pending_ambiguous_op = None
                     self._last_rollback_attempted = rollback_attempted
                     self._last_rollback_succeeded = rollback_succeeded
                     self._last_in_transaction_before_rollback = (

@@ -331,6 +331,26 @@ class DispatchPersistenceWriter:
         if not batch:
             return
 
+        # Plan 027 Workstream H: wait for writes to be admitted
+        # before attempting persistence.  If the database is
+        # recovering, background writes pause until recovery completes.
+        if not self._db.writes_admitted:
+            admitted = await self._db.wait_for_writes_admitted(
+                timeout_s=30.0
+            )
+            if not admitted:
+                logger.warning(
+                    "Batch %d (%d intents) dropped: writes not admitted",
+                    self._batch_counter + 1,
+                    len(batch),
+                )
+                error = DispatchTransactionError(
+                    "Writes not admitted during recovery"
+                )
+                for qi in batch:
+                    self._fail_one(qi, error)
+                return
+
         self._batch_counter += 1
         batch_id = self._batch_counter
         batch_size = len(batch)

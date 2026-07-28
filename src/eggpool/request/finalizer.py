@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, cast
@@ -481,6 +482,27 @@ class RequestFinalizer:
                 except (TypeError, ValueError):
                     raw_usage_json_value = None
 
+        # Plan 027: attach an ambiguous-operation descriptor so that
+        # an indeterminate commit outcome is recorded for post-recovery
+        # reconciliation.
+        from eggpool.db.connection import (  # noqa: PLC0415
+            AmbiguousDatabaseOperation,
+        )
+
+        self._db.set_pending_ambiguous_operation(
+            AmbiguousDatabaseOperation(
+                operation_id=selected.db_request_id,
+                operation_kind="request_finalization",
+                connection_epoch=self._db.connection_epoch,
+                idempotency_keys=(
+                    ("attempt_number", str(selected.attempt_number)),
+                ),
+                intended_status=self._outcome_to_status(data.outcome),
+                precondition_facts=(),
+                created_at_monotonic=time.monotonic(),
+                reconciliation_strategy="finalization",
+            )
+        )
         async with self._db.transaction():
             # 3. Finalize request only if pending (idempotent)
             db_request_id = selected.db_request_id

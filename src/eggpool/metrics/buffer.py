@@ -270,6 +270,16 @@ class MetricsWriteCoalescer:
         # _thread_lock protects against concurrent record_usage() callers;
         # _async_lock serialises against other flush coroutines.
         async with self._async_lock:
+            # Plan 027 Workstream H: wait for writes to be admitted
+            # before attempting persistence.
+            if not self._db.writes_admitted:
+                admitted = await self._db.wait_for_writes_admitted(
+                    timeout_s=10.0
+                )
+                if not admitted:
+                    return FlushResult(
+                        error_class="WritesNotAdmitted"
+                    )
             with self._thread_lock:
                 buffer_snapshot = self._buffer
                 event_count = self._pending_events

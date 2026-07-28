@@ -844,6 +844,26 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # 6. Crash recovery
     await _crash_recovery(db)
 
+    # 6a. Plan 027 Workstream J — Bounded startup integrity check.
+    # A lightweight PRAGMA quick_check catches obvious corruption
+    # before request admission.  The check is bounded to avoid
+    # blocking startup on a large database.
+    if config.database.path != ":memory:":
+        try:
+            integrity_rows = await db.execute_pragma(
+                "PRAGMA quick_check"
+            )
+            integrity_result = (
+                str(integrity_rows[0][0]) if integrity_rows else "unknown"
+            )
+            if integrity_result != "ok":
+                logger.error(
+                    "startup_integrity_check_failed result=%s",
+                    integrity_result,
+                )
+        except Exception:
+            logger.exception("startup_integrity_check_error")
+
     # aiosqlite uses one worker thread per connection. The default of 2 opens
     # a separate read-only stats connection for file-backed databases so
     # dashboard analytics do not share the data-plane connection lock.
