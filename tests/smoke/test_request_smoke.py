@@ -41,13 +41,17 @@ def _set_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def _build_config() -> AppConfig:
     return AppConfig.from_dict(
         {
-            "server": {"api_key_env": "SMOKE_UPSTREAM_KEY"},
-            "host": "127.0.0.1",
-            "port": 0,
+            "server": {
+                "api_key_env": "SMOKE_UPSTREAM_KEY",
+                "host": "127.0.0.1",
+                "port": 0,
+            },
             "database": {"path": ":memory:"},
             "upstream": {"base_url": UPSTREAM_BASE},
             "models": {"startup_refresh": False, "refresh_interval_s": 0},
-            "accounts": [{"name": "smoke-acct", "api_key_env": "SMOKE_UPSTREAM_KEY"}],
+            "accounts": [
+                {"name": "smoke-acct", "api_key_env": "SMOKE_UPSTREAM_KEY"}
+            ],
             "dashboard": {"enabled": False},
         }
     )
@@ -135,7 +139,7 @@ async def app() -> AsyncGenerator[FastAPI]:
 
     yield application
 
-    await db.close()
+    await db.disconnect()
     await httpx_client.aclose()
 
 
@@ -156,7 +160,7 @@ async def test_openai_nonstream_smoke(app: FastAPI) -> None:
         ],
         "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
     }
-    respx.post(f"{UPSTREAM_BASE}/v1/chat/completions").mock(
+    respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
         return_value=httpx.Response(200, json=upstream_response)
     )
 
