@@ -713,10 +713,10 @@ class RequestFinalizer:
             and data.error_class
         ):
             try:
-                from eggpool.db.repositories import AccountRepository
-
-                account_repo = AccountRepository(self._db)
-                account_id = await account_repo.get_id_by_name(selected.account_name)
+                # Plan 028 Workstream G: reuse the integer account_id
+                # already resolved during account selection instead of
+                # issuing a redundant SELECT by name.
+                account_id: int | None = getattr(selected, "account_id", None)
                 if account_id is not None:
                     event_repo = AccountEventRepository(self._db)
                     await event_repo.record(

@@ -21,6 +21,8 @@ from eggpool.request.transform_pipeline import (
     TransformContext,
     TransformMeta,
     TransformResult,
+    build_provider_transforms,
+    run_provider_transforms,
     run_transform_pipeline,
     serialize_provider_payload,
 )
@@ -39,7 +41,9 @@ __all__ = [
     "TransformMeta",
     "TransformResult",
     "build_parsed_upstream_response",
+    "build_provider_transforms",
     "estimate_padded_size",
+    "run_provider_transforms",
     "run_transform_pipeline",
     "serialize_provider_payload",
 ]

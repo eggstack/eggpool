@@ -2358,15 +2358,15 @@ class RequestCoordinator:
         # attempt, releases the reservation, decrements the active
         # request count, and frees the health slot before re-raising so
         # the proxy layer renders an HTTP 400 with no leaked state.
+        #
+        # Plan 028 Workstream B: both streaming and non-streaming paths
+        # share one ordered provider transform pipeline.
         try:
-            self._apply_selected_provider_transcode_adjustments(
-                context=context,
-                selected=selected,
+            from eggpool.request.transform_pipeline import (
+                run_provider_transforms,
             )
-            self._apply_synthetic_cache_controls(
-                context=context,
-                selected=selected,
-            )
+
+            run_provider_transforms(self, context, selected)
         except CapabilityError as err:
             await self._finalize_selected_capability_rejection(
                 context=context,
@@ -2473,10 +2473,23 @@ class RequestCoordinator:
                 error_class=type(err).__name__,
             ) from err
 
+        # Plan 028: single-decode lifecycle via ParsedUpstreamResponse.
+        # Created once after aread() completes so both error and success
+        # paths share one decoded representation — no redundant parses.
+        resp_headers = filter_response_headers(response.headers)
+        from eggpool.request.parsed_upstream_response import (
+            build_parsed_upstream_response,
+        )
+
+        parsed_response = build_parsed_upstream_response(
+            status_code=response.status_code,
+            headers=resp_headers,
+            raw_body=response.content,
+        )
+
         # Check for upstream errors before consuming body
         try:
             if response.status_code >= 400:
-                resp_headers = filter_response_headers(response.headers)
                 resp_body = response.content
 
                 # Check if this is retryable
@@ -2506,12 +2519,11 @@ class RequestCoordinator:
                 await self._finalize_non_retryable(
                     context, selected, response.status_code, resp_headers, resp_body
                 )
-                # Phase 2: re-render upstream error in client protocol
+                # Phase 2: re-render upstream error in client protocol.
+                # Plan 028: reuse the already-parsed response instead of
+                # re-parsing raw bytes via jsonx_loads().
                 if transcoder is not None and context.transcode_context is not None:
-                    try:
-                        err_payload = jsonx_loads(resp_body)
-                    except ValueError:
-                        err_payload = None
+                    err_payload = parsed_response.parsed_dict
                     if isinstance(err_payload, dict) or err_payload is None:
                         _status, err_body, err_warnings = transcoder.reencode_error(
                             response.status_code,
@@ -2533,23 +2545,11 @@ class RequestCoordinator:
                     attempt_count=attempt_num,
                 )
 
-            # Success path — Plan 028: single-decode lifecycle via
-            # ParsedUpstreamResponse.  The response body is parsed once
-            # and shared across usage extraction, normalized usage
-            # construction, and response transcoding.
-            body = response.content
-            resp_headers = filter_response_headers(response.headers)
+            # Success path — Plan 028: reuse the already-parsed response
+            # for usage extraction, normalized usage construction, and
+            # response transcoding.
+            body = parsed_response.raw_body
             elapsed_ms = self._elapsed_ms(context)
-
-            from eggpool.request.parsed_upstream_response import (
-                build_parsed_upstream_response,
-            )
-
-            parsed_response = build_parsed_upstream_response(
-                status_code=response.status_code,
-                headers=resp_headers,
-                raw_body=body,
-            )
 
             usage = self._extract_non_stream_usage_from_parsed(
                 context.upstream_protocol,
@@ -2588,7 +2588,7 @@ class RequestCoordinator:
                     thinking_characters=usage.thinking_characters if usage else 0,
                     first_byte_ms=first_byte_ms,
                     upstream_latency_ms=elapsed_ms,
-                    bytes_emitted=len(body),
+                    bytes_emitted=len(parsed_response.raw_body),
                     upstream_request_id=upstream_req_id,
                     upstream_connect_ms=upstream_connect_ms,
                     upstream_read_ms=upstream_read_ms,
@@ -2694,15 +2694,15 @@ class RequestCoordinator:
         # attempt, releases the reservation, decrements the active
         # request count, and frees the health slot before re-raising so
         # the proxy layer renders an HTTP 400 with no leaked state.
+        #
+        # Plan 028 Workstream B: both streaming and non-streaming paths
+        # share one ordered provider transform pipeline.
         try:
-            self._apply_selected_provider_transcode_adjustments(
-                context=context,
-                selected=selected,
+            from eggpool.request.transform_pipeline import (
+                run_provider_transforms,
             )
-            self._apply_synthetic_cache_controls(
-                context=context,
-                selected=selected,
-            )
+
+            run_provider_transforms(self, context, selected)
         except CapabilityError as err:
             await self._finalize_selected_capability_rejection(
                 context=context,
