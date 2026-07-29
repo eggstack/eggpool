@@ -40,7 +40,10 @@ from collections import deque
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -52,8 +55,8 @@ logger = logging.getLogger("dispatch_soak")
 # Version / schema
 # ---------------------------------------------------------------------------
 
-SCHEMA_VERSION = 1
-SCRIPT_VERSION = "2.0.0"
+SCHEMA_VERSION = 2
+SCRIPT_VERSION = "2.1.0"
 
 
 def _validate_duration(value: str) -> int:
@@ -721,6 +724,9 @@ class WindowMetrics:
     start_time: float
     end_time: float = 0.0
     request_count: int = 0
+    success_count: int = 0
+    stream_success_count: int = 0
+    nonstream_success_count: int = 0
     error_count: int = 0
     dispatch_latencies_ms: list[float] = field(  # pyright: ignore[reportUnknownVariableType]
         default_factory=list
@@ -740,6 +746,12 @@ class WindowMetrics:
     def throughput_rps(self) -> float:
         return self.request_count / self.duration_s if self.duration_s > 0 else 0.0
 
+    @property
+    def observed_error_rate(self) -> float:
+        if self.request_count == 0:
+            return 0.0
+        return self.error_count / self.request_count
+
     def percentile(self, p: float) -> float:
         if not self.dispatch_latencies_ms:
             return 0.0
@@ -754,7 +766,11 @@ class WindowMetrics:
             "end_time": self.end_time,
             "duration_s": round(self.duration_s, 3),
             "request_count": self.request_count,
+            "success_count": self.success_count,
+            "stream_success_count": self.stream_success_count,
+            "nonstream_success_count": self.nonstream_success_count,
             "error_count": self.error_count,
+            "observed_error_rate": round(self.observed_error_rate, 4),
             "throughput_rps": round(self.throughput_rps, 3),
             "dispatch_p50_ms": round(self.percentile(0.50), 2),
             "dispatch_p95_ms": round(self.percentile(0.95), 2),
@@ -826,11 +842,64 @@ class PollingStats:
         }
 
 
+# ---------------------------------------------------------------------------
+# Pure gate evaluators
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class QuiescenceResult:
+    """Outcome of a bounded post-load quiescence poll."""
+
+    snapshot: MetricsSnapshot | None
+    drained: bool
+    attempts: int
+    elapsed_s: float
+    failure_reason: str | None
+    pending_requests: int | None = None
+    active_reservations: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RatioGateResult:
+    """Result of evaluating a single latency ratio cap."""
+
+    passed: bool
+    early_ms: float | None
+    late_ms: float | None
+    ratio: float | None
+    limit: float
+    failure_reason: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class WorkloadGateResult:
+    """Result of evaluating the per-window useful-work gate."""
+
+    passed: bool
+    failure_reasons: tuple[str, ...]
+    early_attempts: int
+    late_attempts: int
+    early_successes: int
+    late_successes: int
+    early_errors: int
+    late_errors: int
+    early_error_rate: float
+    late_error_rate: float
+    expected_error_rate: float
+    allowed_error_fraction: float
+
+
 def evaluate_drain_gate(
     final_snapshot: MetricsSnapshot | None,
     max_pending: int,
     max_active: int,
 ) -> tuple[bool, str | None]:
+    """Evaluate the drain gate against a final post-load snapshot.
+
+    Fails closed on a missing snapshot, unavailable fields, or pending /
+    active-reservation counts above the configured limits.
+    """
     if final_snapshot is None:
         return False, "no final runtime snapshot"
     if (
@@ -850,6 +919,123 @@ def evaluate_drain_gate(
     )
 
 
+def evaluate_ratio_gate(
+    early_value: float | None,
+    late_value: float | None,
+    *,
+    limit: float,
+    label: str,
+) -> RatioGateResult:
+    """Apply a direct late/early ratio cap.
+
+    Fails closed when either value is unavailable, when the early baseline
+    is non-positive, or when the ratio exceeds the supplied direct cap.
+    The ratio cap is applied directly — it is **not** an additive increase.
+    """
+    if early_value is None or late_value is None:
+        return RatioGateResult(
+            passed=False,
+            early_ms=early_value,
+            late_ms=late_value,
+            ratio=None,
+            limit=limit,
+            failure_reason=f"{label}: latency samples unavailable",
+        )
+    if early_value <= 0:
+        return RatioGateResult(
+            passed=False,
+            early_ms=early_value,
+            late_ms=late_value,
+            ratio=None,
+            limit=limit,
+            failure_reason=f"{label}: early baseline non-positive ({early_value:.2f})",
+        )
+    ratio = late_value / early_value
+    if ratio <= limit:
+        return RatioGateResult(
+            passed=True,
+            early_ms=early_value,
+            late_ms=late_value,
+            ratio=ratio,
+            limit=limit,
+            failure_reason=None,
+        )
+    return RatioGateResult(
+        passed=False,
+        early_ms=early_value,
+        late_ms=late_value,
+        ratio=ratio,
+        limit=limit,
+        failure_reason=f"{label}: ratio={ratio:.4f} exceeds limit={limit:.4f}",
+    )
+
+
+def evaluate_workload_gate(
+    early: WindowMetrics,
+    late: WindowMetrics,
+    *,
+    expected_error_rate: float,
+    require_stream_and_nonstream: bool = False,
+) -> WorkloadGateResult:
+    """Require useful per-window work and bounded error rates.
+
+    Each window must have at least one completed attempt and one
+    successful request. Zero-error profiles (expected_error_rate == 0)
+    reject any unexpected error. Configured-error profiles tolerate up
+    to ``min(0.25, expected_error_rate + 0.10)`` errors per request.
+    """
+    reasons: list[str] = []
+
+    if early.request_count == 0:
+        reasons.append("early window: zero attempts")
+    if late.request_count == 0:
+        reasons.append("late window: zero attempts")
+    if early.success_count == 0:
+        reasons.append("early window: zero successes")
+    if late.success_count == 0:
+        reasons.append("late window: zero successes")
+
+    allowed_error_fraction = min(0.25, expected_error_rate + 0.10)
+
+    if expected_error_rate <= 0.0:
+        if early.error_count > 0:
+            reasons.append(f"early window: {early.error_count} unexpected errors")
+        if late.error_count > 0:
+            reasons.append(f"late window: {late.error_count} unexpected errors")
+    else:
+        if early.observed_error_rate > allowed_error_fraction:
+            reasons.append(
+                f"early window: error rate {early.observed_error_rate:.4f} "
+                f"exceeds allowed fraction {allowed_error_fraction:.4f}"
+            )
+        if late.observed_error_rate > allowed_error_fraction:
+            reasons.append(
+                f"late window: error rate {late.observed_error_rate:.4f} "
+                f"exceeds allowed fraction {allowed_error_fraction:.4f}"
+            )
+
+    if require_stream_and_nonstream:
+        if early.stream_success_count + late.stream_success_count == 0:
+            reasons.append("no streaming successes across windows")
+        if early.nonstream_success_count + late.nonstream_success_count == 0:
+            reasons.append("no non-streaming successes across windows")
+
+    return WorkloadGateResult(
+        passed=not reasons,
+        failure_reasons=tuple(reasons),
+        early_attempts=early.request_count,
+        late_attempts=late.request_count,
+        early_successes=early.success_count,
+        late_successes=late.success_count,
+        early_errors=early.error_count,
+        late_errors=late.error_count,
+        early_error_rate=early.observed_error_rate,
+        late_error_rate=late.observed_error_rate,
+        expected_error_rate=expected_error_rate,
+        allowed_error_fraction=allowed_error_fraction,
+    )
+
+
 def _write_atomic_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -857,11 +1043,30 @@ def _write_atomic_json(path: Path, data: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
+def _gate_passed(value: Any) -> bool:
+    """Return ``True`` only if ``value`` represents a passing gate."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, dict):
+        gate_dict: dict[str, Any] = value  # type: ignore[redundant-cast]
+        return gate_dict.get("passed") is True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Load generator
 # ---------------------------------------------------------------------------
 
 _thread_lock = threading.Lock()
+
+# Exceptions that the load generator treats as expected stream-consumption
+# errors and accounts as request errors rather than re-raising.
+_EXPECTED_STREAM_EXC: tuple[type[BaseException], ...] = (
+    asyncio.CancelledError,
+    ConnectionError,
+    TimeoutError,
+    OSError,
+)
 
 
 async def _generate_load(
@@ -875,20 +1080,37 @@ async def _generate_load(
     window: WindowMetrics,
     cancelled_flag: asyncio.Event,
     generation_counter: list[int],
+    request_shapes: Iterable[str] | None = None,
 ) -> None:
     """Generate load against the running EggPool server until deadline."""
     import httpx
 
     sem = asyncio.Semaphore(profile.concurrency)
     chunk_counts: list[int] = []
+    shape_iterator: Iterable[str] | None = (
+        iter(request_shapes) if request_shapes is not None else None
+    )
 
     async with httpx.AsyncClient(
         base_url=f"http://127.0.0.1:{base_url}",
         timeout=httpx.Timeout(120.0, connect=10.0, read=120.0, write=30.0, pool=30.0),
     ) as client:
 
+        def _next_shape() -> str:
+            if shape_iterator is None:
+                return (
+                    "stream" if rng.random() < profile.streaming_ratio else "nonstream"
+                )
+            try:
+                return next(shape_iterator)
+            except StopIteration:
+                return (
+                    "stream" if rng.random() < profile.streaming_ratio else "nonstream"
+                )
+
         async def _dispatch_one(idx: int) -> None:
-            streaming = rng.random() < profile.streaming_ratio
+            shape = _next_shape()
+            streaming = shape == "stream"
             body: dict[str, Any] = {
                 "model": "gpt-4",
                 "messages": [
@@ -904,20 +1126,36 @@ async def _generate_load(
                     headers={"Authorization": f"Bearer {api_key}"},
                 )
                 elapsed_ms = (time.monotonic() - t0) * 1000
-                with _thread_lock:
-                    window.request_count += 1
-                    window.dispatch_latencies_ms.append(elapsed_ms)
-                    if resp.status_code >= 400:
-                        window.error_count += 1
-
+                http_ok = resp.status_code < 400
+                stream_consumed_ok = False
                 if streaming and resp.status_code == 200:
                     chunks = 0
                     try:
                         async for _ in resp.aiter_bytes():
                             chunks += 1
+                        stream_consumed_ok = True
+                    except _EXPECTED_STREAM_EXC:
+                        stream_consumed_ok = False
                     except Exception:
-                        pass
+                        stream_consumed_ok = False
                     chunk_counts.append(chunks)
+
+                success = http_ok and (not streaming or stream_consumed_ok)
+                with _thread_lock:
+                    window.request_count += 1
+                    window.dispatch_latencies_ms.append(elapsed_ms)
+                    if success:
+                        window.success_count += 1
+                        if streaming:
+                            window.stream_success_count += 1
+                        else:
+                            window.nonstream_success_count += 1
+                    else:
+                        window.error_count += 1
+            except _EXPECTED_STREAM_EXC:
+                with _thread_lock:
+                    window.request_count += 1
+                    window.error_count += 1
             except Exception:
                 with _thread_lock:
                     window.request_count += 1
@@ -958,6 +1196,92 @@ async def _generate_load(
 # ---------------------------------------------------------------------------
 
 
+async def collect_runtime_snapshot(
+    *,
+    client: Any,
+    api_key: str,
+    upstream_state: MockUpstreamState,
+    db_path: str,
+    eggpool_pid: int,
+    start_time: float,
+    polling_stats: PollingStats,
+    include_summary: bool = True,
+) -> MetricsSnapshot:
+    """Collect one runtime snapshot from EggPool.
+
+    Used by both the periodic poller and the bounded quiescence poll.
+    Nullable fields are reported as ``None`` when the runtime endpoint
+    returns no value or the call fails. This helper never synthesises
+    zero on parse or fetch failure.
+    """
+    us = upstream_state.snapshot()
+
+    if include_summary:
+        try:
+            r = await client.get(
+                "/api/stats/summary",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            if r.status_code == 200:
+                polling_stats.summary_successes += 1
+            else:
+                polling_stats.summary_failures += 1
+                polling_stats.last_error = f"summary HTTP {r.status_code}"
+        except Exception as exc:
+            polling_stats.summary_failures += 1
+            polling_stats.last_error = str(exc)[:200]
+
+    pending: int | None = None
+    active_resv: int | None = None
+    db_lock_p95: float | None = None
+    db_lock_max: float | None = None
+    db_lock_count: int | None = None
+
+    try:
+        r = await client.get(
+            "/api/stats/runtime",
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        if r.status_code == 200:
+            rt = r.json()
+            contention = rt.get("contention", {})
+            if contention:
+                db_lock_p95 = contention.get("lock_wait_p95_ms")
+                db_lock_max = contention.get("lock_wait_max_ms")
+                db_lock_count = contention.get("lock_wait_sample_count")
+            routing_runtime = rt.get("routing_runtime", {})
+            pending = routing_runtime.get("pending_count")
+            active_resv = routing_runtime.get("active_reservations_count")
+            polling_stats.runtime_successes += 1
+        else:
+            polling_stats.runtime_failures += 1
+            polling_stats.last_error = f"runtime HTTP {r.status_code}"
+    except Exception as exc:
+        polling_stats.runtime_failures += 1
+        polling_stats.last_error = str(exc)[:200]
+
+    db_size = 0
+    if os.path.exists(db_path):
+        db_size = os.path.getsize(db_path)
+
+    rss = read_process_rss_bytes(eggpool_pid)
+
+    return MetricsSnapshot(
+        timestamp=time.time(),
+        elapsed_s=time.monotonic() - start_time,
+        upstream_requests=us["request_count"],
+        upstream_errors=us["error_count"],
+        upstream_avg_latency_ms=us["avg_latency_ms"],
+        pending_requests=pending,
+        active_reservations=active_resv,
+        db_size_bytes=db_size,
+        rss_bytes=rss,
+        db_lock_wait_p95_ms=db_lock_p95,
+        db_lock_wait_max_ms=db_lock_max,
+        db_lock_wait_sample_count=db_lock_count,
+    )
+
+
 async def _poll_dashboard(
     *,
     base_url: str,
@@ -980,76 +1304,113 @@ async def _poll_dashboard(
         timeout=httpx.Timeout(30.0),
     ) as client:
         while time.monotonic() < deadline and not cancelled_flag.is_set():
-            us = upstream_state.snapshot()
-
-            pending: int | None = None
-            active_resv: int | None = None
-            try:
-                r = await client.get(
-                    "/api/stats/summary",
-                    headers={"Authorization": f"Bearer {api_key}"},
-                )
-                if r.status_code == 200:
-                    r.json()
-                    polling_stats.summary_successes += 1
-                else:
-                    polling_stats.summary_failures += 1
-                    polling_stats.last_error = f"summary HTTP {r.status_code}"
-            except Exception as exc:
-                polling_stats.summary_failures += 1
-                polling_stats.last_error = str(exc)[:200]
-
-            db_lock_p95: float | None = None
-            db_lock_max: float | None = None
-            db_lock_count: int | None = None
-            try:
-                r = await client.get(
-                    "/api/stats/runtime",
-                    headers={"Authorization": f"Bearer {api_key}"},
-                )
-                if r.status_code == 200:
-                    rt = r.json()
-                    contention = rt.get("contention", {})
-                    if contention:
-                        db_lock_p95 = contention.get("lock_wait_p95_ms")
-                        db_lock_max = contention.get("lock_wait_max_ms")
-                        db_lock_count = contention.get("lock_wait_sample_count")
-                    routing_runtime = rt.get("routing_runtime", {})
-                    pending = routing_runtime.get("pending_count")
-                    active_resv = routing_runtime.get("active_reservations_count")
-                    polling_stats.runtime_successes += 1
-                else:
-                    polling_stats.runtime_failures += 1
-                    polling_stats.last_error = f"runtime HTTP {r.status_code}"
-            except Exception as exc:
-                polling_stats.runtime_failures += 1
-                polling_stats.last_error = str(exc)[:200]
-
-            db_size = 0
-            if os.path.exists(db_path):
-                db_size = os.path.getsize(db_path)
-
-            rss = read_process_rss_bytes(eggpool_pid)
-
-            snap = MetricsSnapshot(
-                timestamp=time.time(),
-                elapsed_s=time.monotonic() - start_time,
-                upstream_requests=us["request_count"],
-                upstream_errors=us["error_count"],
-                upstream_avg_latency_ms=us["avg_latency_ms"],
-                pending_requests=pending,
-                active_reservations=active_resv,
-                db_size_bytes=db_size,
-                rss_bytes=rss,
-                db_lock_wait_p95_ms=db_lock_p95,
-                db_lock_wait_max_ms=db_lock_max,
-                db_lock_wait_sample_count=db_lock_count,
+            snap = await collect_runtime_snapshot(
+                client=client,
+                api_key=api_key,
+                upstream_state=upstream_state,
+                db_path=db_path,
+                eggpool_pid=eggpool_pid,
+                start_time=start_time,
+                polling_stats=polling_stats,
+                include_summary=True,
             )
             metrics.append(snap)
 
             remaining = deadline - time.monotonic()
             if remaining > 0 and not cancelled_flag.is_set():
                 await asyncio.sleep(min(poll_interval_s, remaining))
+
+
+async def wait_for_runtime_quiescence(
+    *,
+    base_url: str,
+    api_key: str,
+    upstream_state: MockUpstreamState,
+    db_path: str,
+    eggpool_pid: int,
+    start_time: float,
+    polling_stats: PollingStats,
+    timeout_s: float,
+    poll_interval_s: float,
+    max_pending: int,
+    max_active: int,
+) -> QuiescenceResult:
+    """Poll runtime state after late load stops, until drained or timeout.
+
+    Returns a :class:`QuiescenceResult` describing the post-load
+    observation. Missing or unavailable runtime data fails closed — the
+    returned ``drained`` value is ``False`` and ``failure_reason``
+    captures the cause.
+    """
+    import httpx
+
+    deadline = time.monotonic() + timeout_s
+    attempts = 0
+    first_attempt = True
+    failure_reason: str | None = None
+    final_snap: MetricsSnapshot | None = None
+    pending_observed: int | None = None
+    active_observed: int | None = None
+    started = time.monotonic()
+
+    async with httpx.AsyncClient(
+        base_url=f"http://127.0.0.1:{base_url}",
+        timeout=httpx.Timeout(30.0),
+    ) as client:
+        while True:
+            attempts += 1
+            snap = await collect_runtime_snapshot(
+                client=client,
+                api_key=api_key,
+                upstream_state=upstream_state,
+                db_path=db_path,
+                eggpool_pid=eggpool_pid,
+                start_time=start_time,
+                polling_stats=polling_stats,
+                include_summary=first_attempt,
+            )
+            first_attempt = False
+            final_snap = snap
+
+            if snap.pending_requests is None or snap.active_reservations is None:
+                failure_reason = "drain metrics unavailable"
+            else:
+                pending_observed = snap.pending_requests
+                active_observed = snap.active_reservations
+                if (
+                    snap.pending_requests <= max_pending
+                    and snap.active_reservations <= max_active
+                ):
+                    return QuiescenceResult(
+                        snapshot=snap,
+                        drained=True,
+                        attempts=attempts,
+                        elapsed_s=time.monotonic() - started,
+                        failure_reason=None,
+                        pending_requests=snap.pending_requests,
+                        active_reservations=snap.active_reservations,
+                    )
+
+            if time.monotonic() >= deadline:
+                if failure_reason is None:
+                    failure_reason = (
+                        f"drain timeout after {attempts} attempts: "
+                        f"pending={pending_observed} active={active_observed}"
+                    )
+                break
+
+            remaining = deadline - time.monotonic()
+            await asyncio.sleep(min(poll_interval_s, remaining))
+
+    return QuiescenceResult(
+        snapshot=final_snap,
+        drained=False,
+        attempts=attempts,
+        elapsed_s=time.monotonic() - started,
+        failure_reason=failure_reason,
+        pending_requests=pending_observed,
+        active_reservations=active_observed,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1164,24 +1525,81 @@ def _sqlite_offline_audit(db_path: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Main soak runner
+# Public run-configuration dataclass and orchestration entry point
 # ---------------------------------------------------------------------------
 
 
-async def _run_soak(args: argparse.Namespace) -> int:
-    profile_name: str = args.profile
-    duration_seconds: int = args.duration_seconds
-    output_path = Path(args.output)
-    seed: int = args.seed
+@dataclass(frozen=True)
+class ValidationRunConfig:
+    """Parsed configuration for one runtime validation run."""
+
+    profile_name: str
+    duration_seconds: int
+    output_path: Path
+    seed: int
+
+
+def build_run_config(args: argparse.Namespace) -> ValidationRunConfig:
+    return ValidationRunConfig(
+        profile_name=args.profile,
+        duration_seconds=args.duration_seconds,
+        output_path=Path(args.output),
+        seed=args.seed,
+    )
+
+
+@dataclass
+class ValidationResult:
+    """Final result of a runtime validation run."""
+
+    passed: bool
+    failure_reasons: list[str]
+    output_path: Path
+    duration_s: float
+    return_code: int
+
+
+async def run_validation(
+    config: ValidationRunConfig,
+    *,
+    duration_plan: DurationPlan | None = None,
+    health_timeout_s: float = 45.0,
+    quiescence_timeout_s: float | None = None,
+    request_shapes: Iterable[str] | None = None,
+) -> ValidationResult:
+    """Execute one runtime validation run.
+
+    The CLI entry point builds ``duration_plan`` from ``--duration-seconds``
+    and uses production defaults. Tests pass narrow test-only
+    dependencies (``duration_plan``, ``quiescence_timeout_s``,
+    ``request_shapes``) without expanding the public CLI.
+    """
+    profile_name = config.profile_name
+    seed = config.seed
+    duration_seconds = config.duration_seconds
+    output_path = config.output_path
 
     if profile_name not in PROFILES:
         print(f"Unknown profile: {profile_name}", file=sys.stderr)
         print(f"Available: {', '.join(sorted(PROFILES))}", file=sys.stderr)
-        return 1
+        return ValidationResult(
+            passed=False,
+            failure_reasons=[f"unknown profile: {profile_name}"],
+            output_path=output_path,
+            duration_s=0.0,
+            return_code=1,
+        )
 
     profile = PROFILES[profile_name]
-    plan = build_duration_plan(float(duration_seconds))
+    plan = (
+        duration_plan
+        if duration_plan is not None
+        else build_duration_plan(float(duration_seconds))
+    )
     rng = random.Random(seed)
+
+    if quiescence_timeout_s is None:
+        quiescence_timeout_s = 15.0 if profile_name == "sbc-reference" else 10.0
 
     environment = _collect_environment()
     logger.info("Environment: %s", json.dumps(_redact_dict(environment), indent=2))
@@ -1203,7 +1621,6 @@ async def _run_soak(args: argparse.Namespace) -> int:
     api_key = f"soak-key-{seed % 10000:04d}"
     server_port = _free_port()
 
-    # Start mock upstream
     mock_state = MockUpstreamState(
         chunks_per_stream=profile.chunks_per_stream,
         chunk_delay_s=profile.chunk_delay_s,
@@ -1239,7 +1656,7 @@ async def _run_soak(args: argparse.Namespace) -> int:
     proc = await _start_eggpool(config_path, str(process_log_path), env)
 
     try:
-        healthy = await _wait_healthy(server_port, timeout=45.0)
+        healthy = await _wait_healthy(server_port, timeout=health_timeout_s)
         if not healthy:
             logger.error("EggPool did not become healthy within timeout")
             _write_atomic_json(
@@ -1262,7 +1679,13 @@ async def _run_soak(args: argparse.Namespace) -> int:
                     },
                 },
             )
-            return 10
+            return ValidationResult(
+                passed=False,
+                failure_reasons=["EggPool did not become healthy within timeout"],
+                output_path=output_path,
+                duration_s=0.0,
+                return_code=10,
+            )
         logger.info("EggPool is healthy (PID %d)", proc.pid)
 
         start_time = time.monotonic()
@@ -1284,6 +1707,7 @@ async def _run_soak(args: argparse.Namespace) -> int:
             window=WindowMetrics(name="warmup", start_time=start_time),
             cancelled_flag=cancelled_flag,
             generation_counter=gen_counter,
+            request_shapes=request_shapes,
         )
 
         # --- Early window ---
@@ -1301,6 +1725,7 @@ async def _run_soak(args: argparse.Namespace) -> int:
             window=early_window,
             cancelled_flag=cancelled_flag,
             generation_counter=gen_counter,
+            request_shapes=request_shapes,
         )
         early_poll = _poll_dashboard(
             base_url=str(server_port),
@@ -1343,6 +1768,7 @@ async def _run_soak(args: argparse.Namespace) -> int:
             window=late_window,
             cancelled_flag=cancelled_flag,
             generation_counter=gen_counter,
+            request_shapes=request_shapes,
         )
         late_poll = _poll_dashboard(
             base_url=str(server_port),
@@ -1365,98 +1791,178 @@ async def _run_soak(args: argparse.Namespace) -> int:
             late_window.throughput_rps,
         )
 
-        total_duration_s = time.monotonic() - start_time
+        measurement_duration_s = time.monotonic() - start_time
+
+        # --- Bounded post-load quiescence ---
+        quiescence = await wait_for_runtime_quiescence(
+            base_url=str(server_port),
+            api_key=api_key,
+            upstream_state=mock_state,
+            db_path=db_path,
+            eggpool_pid=proc.pid,
+            start_time=start_time,
+            polling_stats=polling_stats,
+            timeout_s=quiescence_timeout_s,
+            poll_interval_s=1.0,
+            max_pending=plan.max_pending_requests,
+            max_active=plan.max_active_reservations,
+        )
 
         # --- Collect process RSS snapshot ---
         rss_end = read_process_rss_bytes(proc.pid)
 
         # --- Gate evaluation ---
-        gate_status: dict[str, Any] = {}
         failure_reasons: list[str] = []
+        gates: dict[str, Any] = {}
 
-        # Throughput decline
-        if early_window.throughput_rps > 0:
+        # Workload gate — must run before ratio / throughput evaluation
+        # so we never compute gates from empty samples.
+        require_both_shapes = profile_name == "sbc-reference" and duration_seconds >= 60
+        workload = evaluate_workload_gate(
+            early_window,
+            late_window,
+            expected_error_rate=profile.error_rate,
+            require_stream_and_nonstream=require_both_shapes,
+        )
+        gates["workload"] = {
+            "passed": workload.passed,
+            "failure_reasons": list(workload.failure_reasons),
+            "early": {
+                "attempts": workload.early_attempts,
+                "successes": workload.early_successes,
+                "errors": workload.early_errors,
+                "observed_error_rate": round(workload.early_error_rate, 4),
+            },
+            "late": {
+                "attempts": workload.late_attempts,
+                "successes": workload.late_successes,
+                "errors": workload.late_errors,
+                "observed_error_rate": round(workload.late_error_rate, 4),
+            },
+            "expected_error_rate": workload.expected_error_rate,
+            "allowed_error_fraction": round(workload.allowed_error_fraction, 4),
+        }
+        if not workload.passed:
+            failure_reasons.extend(workload.failure_reasons)
+
+        # Throughput decline — requires useful work in both windows
+        if workload.passed and early_window.throughput_rps > 0:
             throughput_ratio = late_window.throughput_rps / early_window.throughput_rps
             throughput_pass = throughput_ratio >= (1.0 - plan.throughput_decline_limit)
+            gates["throughput"] = {
+                "early_rps": round(early_window.throughput_rps, 3),
+                "late_rps": round(late_window.throughput_rps, 3),
+                "ratio": round(throughput_ratio, 4),
+                "decline_limit": plan.throughput_decline_limit,
+                "passed": throughput_pass,
+                "failure_reason": (
+                    None
+                    if throughput_pass
+                    else (
+                        f"throughput ratio {throughput_ratio:.4f} "
+                        f"below limit {1.0 - plan.throughput_decline_limit:.4f}"
+                    )
+                ),
+            }
+            if not throughput_pass:
+                failure_reasons.append(str(gates["throughput"]["failure_reason"]))
         else:
-            throughput_ratio = 0.0
-            throughput_pass = early_window.request_count == 0
-        gate_status["throughput_decline"] = round(throughput_ratio, 4)
-        gate_status["throughput_decline_limit"] = plan.throughput_decline_limit
-        gate_status["throughput_decline_pass"] = throughput_pass
-        if not throughput_pass:
-            failure_reasons.append(
-                f"throughput decline: ratio={throughput_ratio:.4f} "
-                f"limit={plan.throughput_decline_limit}"
-            )
+            gates["throughput"] = {
+                "early_rps": round(early_window.throughput_rps, 3),
+                "late_rps": round(late_window.throughput_rps, 3),
+                "ratio": None,
+                "decline_limit": plan.throughput_decline_limit,
+                "passed": False,
+                "failure_reason": ("no early/late throughput samples to compare"),
+            }
+            failure_reasons.append(str(gates["throughput"]["failure_reason"]))
 
-        # Dispatch latency ratio
+        # Dispatch latency ratio — direct caps
         early_p95 = early_window.percentile(0.95)
         late_p95 = late_window.percentile(0.95)
-        p95_ratio = late_p95 / early_p95 if early_p95 > 0 else 0.0
-        p95_pass = p95_ratio <= (1.0 + plan.dispatch_p95_ratio_limit)
-        gate_status["dispatch_p95_ratio"] = round(p95_ratio, 4)
-        gate_status["dispatch_p95_ratio_limit"] = plan.dispatch_p95_ratio_limit
-        gate_status["dispatch_p95_pass"] = p95_pass
-        if not p95_pass:
-            failure_reasons.append(
-                f"dispatch p95 ratio: {p95_ratio:.4f} "
-                f"limit={plan.dispatch_p95_ratio_limit}"
-            )
+        p95 = evaluate_ratio_gate(
+            early_p95 if workload.passed else None,
+            late_p95 if workload.passed else None,
+            limit=plan.dispatch_p95_ratio_limit,
+            label="dispatch_p95",
+        )
+        gates["dispatch_p95"] = {
+            "early_ms": round(p95.early_ms, 2) if p95.early_ms is not None else None,
+            "late_ms": round(p95.late_ms, 2) if p95.late_ms is not None else None,
+            "ratio": round(p95.ratio, 4) if p95.ratio is not None else None,
+            "ratio_limit": p95.limit,
+            "passed": p95.passed,
+            "failure_reason": p95.failure_reason,
+        }
+        if not p95.passed:
+            failure_reasons.append(p95.failure_reason or "dispatch_p95 failed")
 
         early_p99 = early_window.percentile(0.99)
         late_p99 = late_window.percentile(0.99)
-        p99_ratio = late_p99 / early_p99 if early_p99 > 0 else 0.0
-        p99_pass = p99_ratio <= (1.0 + plan.dispatch_p99_ratio_limit)
-        gate_status["dispatch_p99_ratio"] = round(p99_ratio, 4)
-        gate_status["dispatch_p99_ratio_limit"] = plan.dispatch_p99_ratio_limit
-        gate_status["dispatch_p99_pass"] = p99_pass
-        if not p99_pass:
-            failure_reasons.append(
-                f"dispatch p99 ratio: {p99_ratio:.4f} "
-                f"limit={plan.dispatch_p99_ratio_limit}"
-            )
+        p99 = evaluate_ratio_gate(
+            early_p99 if workload.passed else None,
+            late_p99 if workload.passed else None,
+            limit=plan.dispatch_p99_ratio_limit,
+            label="dispatch_p99",
+        )
+        gates["dispatch_p99"] = {
+            "early_ms": round(p99.early_ms, 2) if p99.early_ms is not None else None,
+            "late_ms": round(p99.late_ms, 2) if p99.late_ms is not None else None,
+            "ratio": round(p99.ratio, 4) if p99.ratio is not None else None,
+            "ratio_limit": p99.limit,
+            "passed": p99.passed,
+            "failure_reason": p99.failure_reason,
+        }
+        if not p99.passed:
+            failure_reasons.append(p99.failure_reason or "dispatch_p99 failed")
 
-        final_snap = metrics[-1] if metrics else None
-        drain_pass, drain_reason = evaluate_drain_gate(
-            final_snap, plan.max_pending_requests, plan.max_active_reservations
-        )
-        gate_status["pending_at_end"] = (
-            final_snap.pending_requests if final_snap else None
-        )
-        gate_status["active_reservations_at_end"] = (
-            final_snap.active_reservations if final_snap else None
-        )
-        gate_status["drain_pass"] = drain_pass
-        if drain_reason:
-            failure_reasons.append(drain_reason)
+        # Drain gate — bounded post-load quiescence observation
+        gates["quiescence"] = {
+            "drained": quiescence.drained,
+            "attempts": quiescence.attempts,
+            "elapsed_seconds": round(quiescence.elapsed_s, 3),
+            "pending_requests": quiescence.pending_requests,
+            "active_reservations": quiescence.active_reservations,
+            "failure_reason": quiescence.failure_reason,
+            "passed": quiescence.drained,
+        }
+        gates["drain_pass"] = quiescence.drained
+        if not quiescence.drained:
+            failure_reasons.append(
+                quiescence.failure_reason or "runtime drain observation failed"
+            )
 
         rss_pass = True
         if profile.rss_required and rss_end is None:
             rss_pass = False
             failure_reasons.append("child RSS unavailable")
-        gate_status["rss_available"] = rss_end is not None
-        gate_status["rss_required"] = profile.rss_required
-        gate_status["rss_pass"] = rss_pass
+        gates["rss"] = {
+            "available": rss_end is not None,
+            "required": profile.rss_required,
+            "passed": rss_pass,
+        }
 
         audit = _sqlite_offline_audit(db_path)
-        gate_status["sqlite_audit_pass"] = audit["passed"]
-        gate_status["sqlite_audit_violations"] = audit.get("violations", [])
+        gates["database_audit"] = {
+            "passed": audit["passed"],
+            "violations": audit.get("violations", []),
+        }
         if not audit["passed"]:
             failure_reasons.append(f"sqlite audit: {audit.get('violations', [])}")
 
         all_passed = all(
-            gate_status.get(k, True) is True
-            for k in [
-                "throughput_decline_pass",
-                "dispatch_p95_pass",
-                "dispatch_p99_pass",
-                "drain_pass",
-                "rss_pass",
-                "sqlite_audit_pass",
-            ]
+            v.get("passed", True) is True
+            for v in (
+                gates["workload"],
+                gates["throughput"],
+                gates["dispatch_p95"],
+                gates["dispatch_p99"],
+                gates["quiescence"],
+                gates["rss"],
+                gates["database_audit"],
+            )
         )
-        gate_status["all_passed"] = all_passed
+        gates["all_passed"] = all_passed
 
         # --- Collect early/late RSS samples ---
         early_rss_samples = [
@@ -1486,7 +1992,8 @@ async def _run_soak(args: argparse.Namespace) -> int:
             "profile": profile_name,
             "seed": seed,
             "requested_duration_seconds": duration_seconds,
-            "actual_duration_seconds": round(total_duration_s, 2),
+            "measurement_duration_seconds": round(measurement_duration_s, 2),
+            "quiescence_duration_seconds": round(quiescence.elapsed_s, 3),
             "platform": {
                 "system": environment.get("system", "unknown"),
                 "arch": environment.get("arch", "unknown"),
@@ -1500,7 +2007,7 @@ async def _run_soak(args: argparse.Namespace) -> int:
             },
             "early": early_window.to_dict(),
             "late": late_window.to_dict(),
-            "gates": gate_status,
+            "gates": gates,
             "database_audit": audit,
             "polling": polling_stats.to_dict(),
         }
@@ -1513,17 +2020,21 @@ async def _run_soak(args: argparse.Namespace) -> int:
         print("=" * 72)
         print(f"Profile: {profile_name}")
         print(f"Seed:    {seed}")
-        print(f"Duration: {total_duration_s:.0f}s (requested {duration_seconds}s)")
+        print(
+            f"Duration: {measurement_duration_s:.0f}s (requested {duration_seconds}s)"
+        )
         print(f"Git SHA: {environment.get('git_sha', 'unknown')}")
         print()
         print("Early Window:")
         print(f"  Requests: {early_window.request_count}")
+        print(f"  Successes: {early_window.success_count}")
         print(f"  Throughput: {early_window.throughput_rps:.2f} req/s")
         print(f"  Dispatch p95: {early_p95:.1f}ms  p99: {early_p99:.1f}ms")
         print(f"  Errors: {early_window.error_count}")
         print()
         print("Late Window:")
         print(f"  Requests: {late_window.request_count}")
+        print(f"  Successes: {late_window.success_count}")
         print(f"  Throughput: {late_window.throughput_rps:.2f} req/s")
         print(f"  Dispatch p95: {late_p95:.1f}ms  p99: {late_p99:.1f}ms")
         print(f"  Errors: {late_window.error_count}")
@@ -1534,18 +2045,24 @@ async def _run_soak(args: argparse.Namespace) -> int:
             print("RSS (child): unavailable")
         print()
         print("Gates:")
-        for k in [
-            "throughput_decline_pass",
-            "dispatch_p95_pass",
-            "dispatch_p99_pass",
-            "drain_pass",
-            "rss_pass",
-            "sqlite_audit_pass",
+        for key in [
+            "workload",
+            "throughput",
+            "dispatch_p95",
+            "dispatch_p99",
+            "quiescence",
+            "rss",
+            "database_audit",
             "all_passed",
         ]:
-            v = gate_status.get(k, "N/A")
-            mark = "PASS" if v is True else ("FAIL" if v is False else str(v))
-            print(f"  {k}: {mark}")
+            value: Any = gates.get(key, "N/A")
+            if key == "all_passed":
+                mark = "PASS" if value is True else "FAIL"
+                print(f"  {key}: {mark}")
+            else:
+                passed_value = _gate_passed(value)
+                mark = "PASS" if passed_value is True else "FAIL"
+                print(f"  {key}: {mark}")
         if failure_reasons:
             print()
             print("Failure reasons:")
@@ -1555,7 +2072,14 @@ async def _run_soak(args: argparse.Namespace) -> int:
         print(f"Output: {output_path}")
         print("=" * 72)
 
-        return 0 if all_passed else 1
+        return_code = 0 if all_passed else 1
+        return ValidationResult(
+            passed=all_passed,
+            failure_reasons=failure_reasons,
+            output_path=output_path,
+            duration_s=measurement_duration_s + quiescence.elapsed_s,
+            return_code=return_code,
+        )
 
     finally:
         logger.info("Terminating EggPool (PID %d)...", proc.pid)
@@ -1617,8 +2141,8 @@ def main() -> int:
         datefmt="%H:%M:%S",
     )
 
-    rc = asyncio.run(_run_soak(args))
-    return rc
+    result = asyncio.run(run_validation(build_run_config(args)))
+    return result.return_code
 
 
 if __name__ == "__main__":
