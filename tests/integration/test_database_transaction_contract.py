@@ -470,9 +470,8 @@ class TestLegacyExecuteRemoved:
     """The legacy public ``execute()`` wrapper has been removed."""
 
     def test_legacy_execute_attribute_absent(self) -> None:
-        assert not hasattr(Database, "execute"), (
-            "Database.execute() is deprecated; remove it from production code."
-        )
+        with pytest.raises(AttributeError):
+            Database.execute  # noqa: B018
 
 
 class TestAccountRepositorySync:

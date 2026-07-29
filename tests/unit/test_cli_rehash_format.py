@@ -1,7 +1,7 @@
 """Snapshot tests for the ``eggpool rehash`` CLI JSON and human output contract.
 
-Workstream 4 (CLI/JSON contract tightening) pins the exact shape of
-machine-readable and human-readable output for every ``rehash`` outcome.
+Pins the exact shape of machine-readable and human-readable output for
+every ``rehash`` outcome.
 """
 
 from __future__ import annotations

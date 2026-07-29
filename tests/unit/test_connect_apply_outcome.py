@@ -1,8 +1,8 @@
 """Tests for resolve_apply_outcome helper.
 
-The safe-fallback policy (Workstream 3) requires that a healthy server
-is never silently restarted when the control socket happens to be
-unavailable.  These tests pin every branch of the decision tree.
+The safe-fallback policy requires that a healthy server is never
+silently restarted when the control socket happens to be unavailable.
+These tests pin every branch of the decision tree.
 """
 
 from __future__ import annotations

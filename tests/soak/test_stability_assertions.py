@@ -39,7 +39,7 @@ pytestmark = [pytest.mark.soak, pytest.mark.stability_assertion]
 
 UPSTREAM_BASE = "https://soak-test-upstream.example.com"
 
-# Workstream G4 stability ratio thresholds (enforced in multi-hour soaks)
+# Stability ratio thresholds (enforced in multi-hour soaks)
 DISPATCH_P95_RATIO_LIMIT = 1.20
 DISPATCH_P99_RATIO_LIMIT = 1.50
 DB_LOCK_P95_RATIO_LIMIT = 1.25
@@ -352,7 +352,7 @@ class TestQueueDrainInvariant:
 class TestStabilityRatioReference:
     """Reference stability ratio tests for multi-hour soak runs.
 
-    These tests document the Workstream G4 thresholds but use lenient
+    These tests document the stability ratio thresholds but use lenient
     tolerances suitable for CI. The strict ratios (p95 <= 1.20x,
     p99 <= 1.50x, throughput decline <= 10%) are enforced only in
     multi-hour soak runs with file-backed SQLite where the database

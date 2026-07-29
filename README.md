@@ -203,6 +203,7 @@ The dashboard `/models` page shows enriched model metadata from provider catalog
 | Deployment (install, systemd, production) | [docs/deployment.md](docs/deployment.md) |
 | Provider catalog & configuration | [docs/providers.md](docs/providers.md) |
 | Backup & restore | [docs/backup-restore.md](docs/backup-restore.md) |
+| Release procedure | [docs/releasing.md](docs/releasing.md) |
 | Per-account outbound proxy | [docs/proxy.md](docs/proxy.md) |
 | Model context limits | [docs/model-limits.md](docs/model-limits.md) |
 | Raspberry Pi setup | [docs/raspberry-pi.md](docs/raspberry-pi.md) |

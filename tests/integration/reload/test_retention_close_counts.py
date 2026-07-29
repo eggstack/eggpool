@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import gc
 import weakref
 from typing import TYPE_CHECKING
@@ -119,15 +120,15 @@ async def test_release_references_clears_after_completion(
 
     rm = reload_harness.reload_manager
 
-    # Check history records — they should not retain live objects.
+    # Check history records — they should contain only scalar fields.
     for record in rm._finalization_history:
-        # The record should be a plain dataclass with scalar fields only.
-        assert not hasattr(record, "candidate")
-        assert not hasattr(record, "pending_swap")
-        assert not hasattr(record, "transaction")
-        assert not hasattr(record, "published_generation")
-        assert not hasattr(record, "app")
-        assert not hasattr(record, "observer")
+        for field in dataclasses.fields(record):
+            value = getattr(record, field.name)
+            assert isinstance(value, (str, int, float, type(None), bool)), (
+                f"Record field {field.name!r} has non-scalar type "
+                f"{type(value).__name__}; history records must not retain "
+                "live operational objects"
+            )
 
 
 # ---------------------------------------------------------------------------

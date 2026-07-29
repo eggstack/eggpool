@@ -214,13 +214,11 @@ async def test_finalization_history_truthful(
 
     # History records should have truthful scalar fields.
     for record in rm._finalization_history:
-        assert isinstance(record, object)
-        assert hasattr(record, "request_id")
-        assert hasattr(record, "generation_id")
-        assert hasattr(record, "completion_status")
-        assert hasattr(record, "attempts")
-        assert hasattr(record, "failure_count")
-        assert hasattr(record, "retry_attempt_count")
-        assert hasattr(record, "completed_at")
+        assert isinstance(record.request_id, str)
+        assert isinstance(record.generation_id, int)
+        assert isinstance(record.completion_status, str)
         assert isinstance(record.attempts, int)
+        assert isinstance(record.failure_count, int)
+        assert isinstance(record.retry_attempt_count, int)
+        assert isinstance(record.completed_at, float)
         assert record.attempts >= 1
