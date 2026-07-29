@@ -301,13 +301,15 @@ checksum bundle is generated.
 ### Running validation
 
 ```bash
-# Short validation (60 seconds)
+# Short validation (30 seconds — proves public CLI/output contract
+# without burdening ordinary CI with a 5-minute runtime)
 uv run python scripts/run_dispatch_stability_soak.py \
   --profile sbc-reference \
-  --duration-seconds 60 \
-  --output /tmp/eggpool-validation.json
+  --duration-seconds 30 \
+  --seed 42 \
+  --output /tmp/eggpool-runtime-validation.json
 
-# Standard SBC validation (5 minutes)
+# Standard SBC validation (5 minutes) on representative hardware
 uv run python scripts/run_dispatch_stability_soak.py \
   --profile sbc-reference \
   --duration-seconds 300 \
@@ -315,18 +317,48 @@ uv run python scripts/run_dispatch_stability_soak.py \
   --output /tmp/eggpool-runtime-validation.json
 ```
 
+The requested `--duration-seconds` covers warm-up, the two measurement
+windows, and the inter-window drain. A bounded final quiescence poll adds
+a small amount of wall-clock time after late load stops and is reported
+separately under `quiescence_duration_seconds`. Quiescence is the
+correctness drain allowance, not part of the requested measurement
+duration.
+
 ### Interpreting output
 
 The JSON output contains:
 
 - `passed` / `failure_reasons` — pass/fail gating with reasons
 - `process` — Eggpool child PID and RSS (bytes, measured from child process)
-- `early` / `late` — window metrics (throughput, latency percentiles, errors)
-- `gates` — per-criterion pass/fail (throughput decline, dispatch p95/p99, drain, RSS, SQLite audit)
+- `early` / `late` — window metrics (throughput, latency percentiles,
+  success/error counts, observed error rate)
+- `gates` — structured per-criterion pass/fail blocks:
+  - `workload` — useful-work gate (per-window attempts, successes, errors,
+    configured-vs-observed error rate, dual-shape coverage for
+    `sbc-reference` at ≥60 seconds)
+  - `throughput` — late/early RPS ratio against
+    `throughput_decline_limit`
+  - `dispatch_p95` / `dispatch_p99` — direct late/early ratio caps
+    (early_ms, late_ms, ratio, ratio_limit, passed, failure_reason)
+  - `quiescence` — post-load bounded drain observation
+    (drained, attempts, elapsed_seconds, pending_requests,
+    active_reservations, failure_reason)
+  - `rss` — RSS availability / required gate
+  - `database_audit` — offline SQLite lifecycle invariant check
+- `database_audit` — SQLite lifecycle invariants (independent from runtime)
 - `polling` — bounded dashboard polling diagnostics
 
-Unavailable metrics are reported as `null`, never zero. Required metrics that
-are unavailable cause the run to fail with a descriptive reason.
+`dispatch_p95_ratio_limit` and `dispatch_p99_ratio_limit` are direct ratio
+caps: `late_value / early_value <= limit` must hold. Recommended values
+are `1.50` (p95) and `2.00` (p99) for short functional validation, and
+`1.30` / `1.80` for longer-duration runs. Empty latency windows,
+non-positive early baselines, missing runtime data, zero attempts, and
+zero successes all fail closed.
+
+Final drain state is collected from a bounded post-load quiescence poll,
+not from `metrics[-1]`. Unavailable metrics are reported as `null`, never
+zero. Required metrics that are unavailable cause the run to fail with a
+descriptive reason.
 
 ## Extended Stability Gates
 

@@ -105,6 +105,22 @@ Manual release procedure — no automated release workflow. See `docs/releasing.
 
 Manual risk-based validation on target SBC hardware. See `docs/releasing.md` § Risk-Based SBC Validation.
 
+The runner (`scripts/run_dispatch_stability_soak.py`) emits a single JSON
+output file. Gates include a per-window workload gate (useful attempts and
+successes, configured-vs-observed error rate, dual-shape coverage for
+`sbc-reference` at ≥60 s), direct late/early dispatch p95/p99 ratio caps
+(`ratio <= ratio_limit`, not `1.0 + ratio_limit`), a bounded post-load
+quiescence poll that the final drain gate consults (not `metrics[-1]`),
+the RSS availability gate, and the offline SQLite lifecycle audit.
+Unreachable samples, non-positive early baselines, missing runtime data,
+zero attempts, and zero successes all fail closed.
+
+A short real-process smoke lives at
+`tests/integration/test_runtime_validation_process_smoke.py` and runs the
+production startup, load, polling, and cleanup code paths through
+`run_validation()` with a compact `DurationPlan`. The public CLI gains no
+test-only options.
+
 ## File Organization
 
 - Source: `src/eggpool/`

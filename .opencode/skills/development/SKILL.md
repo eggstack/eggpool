@@ -154,6 +154,25 @@ Manual release procedure — no automated release workflow. See `docs/releasing.
 
 Manual risk-based validation on target SBC hardware. See `docs/releasing.md` § Risk-Based SBC Validation.
 
+The runner (`scripts/run_dispatch_stability_soak.py`) is a process-level
+real-Eggpool tool — it starts a real `eggpool serve` subprocess against a
+local mock upstream, drives load through the actual coordinator path,
+performs a bounded post-load quiescence poll, and emits one JSON file.
+Gates include a workload gate (per-window successes, configured-vs-observed
+error rate, dual-shape coverage for `sbc-reference` at ≥60 s), direct
+late/early dispatch p95/p99 ratio caps (`ratio <= ratio_limit`, not
+`1.0 + ratio_limit`), bounded post-load quiescence, the RSS availability
+gate, and the offline SQLite lifecycle audit. Unreachable samples,
+non-positive early baselines, missing runtime data, zero attempts, and
+zero successes all fail closed.
+
+A short real-process smoke test
+(`tests/integration/test_runtime_validation_process_smoke.py`) runs the
+production code paths through `run_validation()` with a compact
+`DurationPlan` and asserts both streaming and non-streaming successes,
+quiescence drain, one JSON file, and bounded wall-clock duration. The
+public CLI gains no test-only options.
+
 ## Code Style
 
 - Python 3.11+ with `from __future__ import annotations` in all files

@@ -535,6 +535,21 @@ Long-running deployments — especially Raspberry Pi / SBC nodes — must keep s
 - `scripts/verify_upstream_auth.py` is operator-only: it bypasses EggPool to confirm the configured key works directly upstream
 - Pyright in CI covers `src/` AND `scripts/`; narrow type annotations with `cast` or `Any` rather than excluding a file
 
+### Runtime Validation Runner
+
+The runtime-validation runner (`scripts/run_dispatch_stability_soak.py`) is the canonical SBC-target validation tool. The runner starts a real Eggpool subprocess against a local mock upstream, exercises a workload, polls runtime metrics, performs a bounded post-load quiescence check, writes one atomic JSON output file, and exits.
+
+- **Public CLI** (`--profile`, `--duration-seconds`, `--output`, `--seed`, `-v`); minimum duration is 30 seconds; production default is 300 seconds. No `--mode` or other test-only flags.
+- **Gate semantics**:
+  - **Workload gate** — per-window `request_count > 0` and `success_count > 0`; zero-error profiles reject any unexpected error; configured-error profiles tolerate `min(0.25, expected_error_rate + 0.10)`. `sbc-reference` at `duration_seconds >= 60` requires both `stream_success_count > 0` and `nonstream_success_count > 0`.
+  - **Latency ratio caps** — `dispatch_p95_ratio_limit` and `dispatch_p99_ratio_limit` are direct late/early ratio caps (`ratio <= ratio_limit`); the previous `1.0 + ratio_limit` additive increase is gone. Empty early/late samples and non-positive early baselines fail closed.
+  - **Drain gate** — final drain state comes from a bounded post-load quiescence poll (`wait_for_runtime_quiescence`), not from `metrics[-1]`. The drain gate fails closed when runtime data is missing or pending/reservation counts exceed the configured limits.
+  - **Workload gate participates in `all_passed`** alongside throughput, p95/p99, quiescence, RSS, and SQLite audit gates.
+- **Internal test seam** — `run_validation()` accepts narrow `DurationPlan`, `health_timeout_s`, `quiescence_timeout_s`, and `request_shapes` dependencies without expanding the public CLI.
+- **Process-level smoke** — `tests/integration/test_runtime_validation_process_smoke.py` starts and stops a real Eggpool subprocess through the production code path with a compact `DurationPlan`, asserts both stream and non-stream successes, one JSON output file, no manifest/JSONL/Markdown siblings, and bounded wall-clock duration.
+- **Schema version** — bumped to `2` for the restructured output (separate `workload`, `throughput`, `dispatch_p95`, `dispatch_p99`, `quiescence`, `rss`, `database_audit` sections; explicit `quiescence_duration_seconds`).
+- **Manual workflow** — `.github/workflows/extended-soak.yml` remains `workflow_dispatch`-only, single Python 3.12 job, no matrix, no schedule, one JSON artifact.
+
 ## Live Configuration Rehash
 
 `config_validation.py` is the single reusable validation contract used by both `check-config` and `rehash`. It is Click-free and never raises `SystemExit`; every failure is a typed subclass of `ConfigValidationError` (`ConfigFileAccessError`, `ConfigParseError`, `ConfigSchemaError`, `ConfigStartupAuthError`, `ConfigAccountCredentialError`, `ConfigInternalError`). The helper returns a `ConfigValidationResult` carrying two distinct hashes: `content_digest` (SHA-256 of the exact config bytes) for time-of-check/time-of-use drift detection, and `runtime_fingerprint` (a deterministic, secret-safe canonical hash for no-op detection and diagnostics). Secret fields are redacted to `"<redacted>"` before any hash computation or log emission.
