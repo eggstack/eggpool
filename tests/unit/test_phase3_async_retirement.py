@@ -631,5 +631,8 @@ class TestWaitForRetirement:
         with pytest.raises(asyncio.TimeoutError):
             await manager.wait_for_retirement(0, timeout_s=0.1)
 
+        # Release the held lease so retirement can complete quickly.
+        await _held.release()
+
         # Cleanup: shutdown will force-close everything
         await manager.shutdown()

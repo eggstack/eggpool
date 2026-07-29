@@ -705,7 +705,7 @@ class TestControlClient:
     @pytest.mark.asyncio
     async def test_handles_timeout(self, socket_dir: Path) -> None:
         async def _slow_handler(request: ControlRequest) -> ControlResponse:
-            await asyncio.sleep(10)
+            await asyncio.sleep(1)
             return ControlResponse(
                 protocol_version=PROTOCOL_VERSION,
                 request_id=request.request_id,

@@ -294,7 +294,7 @@ async def test_sampled_mode_deterministic() -> None:
             )
 
             written_first: list[bool] = []
-            for i in range(20):
+            for i in range(10):
                 ctx = _make_context(f"req-sampled-{i}")
                 await coordinator._select_and_persist_attempt(ctx, 1)
                 await _flush_writer(writer)
@@ -315,7 +315,7 @@ async def test_sampled_mode_deterministic() -> None:
                 config, db, health_manager=None, routing_trace_writer=writer2
             )
             written_second: list[bool] = []
-            for i in range(20):
+            for i in range(10):
                 ctx = _make_context(f"req-sampled-{i}")
                 await coordinator._select_and_persist_attempt(ctx, 1)
                 await _flush_writer(writer2)

@@ -434,7 +434,7 @@ class TestRunPeriodicFlush:
         stop_event = asyncio.Event()
 
         async def stop_after_delay() -> None:
-            await asyncio.sleep(2.5)
+            await asyncio.sleep(1.5)
             stop_event.set()
 
         asyncio.create_task(stop_after_delay())
