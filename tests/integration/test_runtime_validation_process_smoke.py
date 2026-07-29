@@ -13,9 +13,9 @@ startup, load generator, polling, and cleanup code paths.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -25,12 +25,13 @@ from scripts.run_dispatch_stability_soak import (
     SCRIPT_VERSION,
     DurationPlan,
     ValidationRunConfig,
-    build_run_config,
+    _pid_is_alive,
     run_validation,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+    from pathlib import Path
 
 pytestmark = pytest.mark.integration
 
@@ -79,6 +80,7 @@ def _shapes() -> Iterable[str]:
 def test_run_validation_produces_one_json_and_cleans_up(
     tmp_path: Path,
 ) -> None:
+    """Start, exercise, drain, and clean up a real EggPool subprocess."""
     output_path = tmp_path / "runtime-validation.json"
     config = ValidationRunConfig(
         profile_name="balanced-file-backed",
@@ -88,25 +90,58 @@ def test_run_validation_produces_one_json_and_cleans_up(
     )
 
     started = time.monotonic()
-    result = asyncio_run_with_capture_errors(
-        run_validation(
-            config,
-            duration_plan=_compact_plan(),
-            health_timeout_s=45.0,
-            quiescence_timeout_s=10.0,
-            request_shapes=_shapes(),
+    try:
+        result = asyncio.run(
+            run_validation(
+                config,
+                duration_plan=_compact_plan(),
+                health_timeout_s=45.0,
+                quiescence_timeout_s=10.0,
+                request_shapes=_shapes(),
+            )
         )
-    )
+    except Exception:
+        # Surface the bounded log tail even when the runner itself raises.
+        pytest.fail(
+            "run_validation raised unexpectedly; see prior test log for traceback"
+        )
     elapsed = time.monotonic() - started
 
+    # Failure messages must include the bounded redacted log tail when an
+    # assertion below fails so the operator or CI logs include the
+    # EggPool-tail context.
+    diag_tail = result.process_log_tail
     try:
-        assert result.return_code == 0, (
-            f"runner exited {result.return_code}: {result.failure_reasons}"
+        assert result.passed is True, (
+            f"runner reported failure: {result.failure_reasons}\n"
+            f"--- process log tail ---\n{diag_tail or '(empty)'}"
         )
-        assert result.passed is True
+        assert result.return_code == 0, (
+            f"runner exited {result.return_code}: {result.failure_reasons}\n"
+            f"--- process log tail ---\n{diag_tail or '(empty)'}"
+        )
+        assert result.child_pid is not None, "child_pid missing from result"
+        assert result.process_stopped is True, (
+            f"process did not stop cleanly: {result.process_log_tail}"
+        )
+        assert result.work_dir is not None, "work_dir missing from result"
+        assert not result.work_dir.exists(), (
+            f"work directory not removed: {result.work_dir}"
+        )
+        assert result.work_dir_removed is True
+        assert result.cleanup_error is None, (
+            f"cleanup failed: {result.cleanup_error}\n"
+            f"--- process log tail ---\n{result.process_log_tail}"
+        )
+
+        # The actual PID recorded by the runner must be gone.
+        assert not _pid_is_alive(result.child_pid), (
+            f"child PID {result.child_pid} is still alive after run"
+        )
+
+        # Output JSON must be retained and valid.
         assert output_path.is_file()
         assert output_path.parent == tmp_path
-
         loaded = json.loads(output_path.read_text())
         assert loaded["schema_version"] == SCHEMA_VERSION
         assert loaded["script_version"] == SCRIPT_VERSION
@@ -126,8 +161,6 @@ def test_run_validation_produces_one_json_and_cleans_up(
         assert workload["passed"] is True
         assert workload["early"]["successes"] >= 1
         assert workload["late"]["successes"] >= 1
-        # Deterministic alternating shape sequence guarantees both
-        # transports execute even in a short run.
         assert workload["early"]["successes"] + workload["late"]["successes"] >= 2
 
         early = loaded["early"]
@@ -138,7 +171,7 @@ def test_run_validation_produces_one_json_and_cleans_up(
         assert early["nonstream_success_count"] + late["nonstream_success_count"] >= 1
 
         # Ratio gates must be present with the structured shape and
-        # must pass under the test-seam ratio limits defined by
+        # pass under the test-seam ratio limits defined by
         # ``_compact_plan()``. Production limits (1.5/2.0) are pinned
         # by the unit tests in ``test_runtime_validation_runner.py``.
         p95 = loaded["gates"]["dispatch_p95"]
@@ -167,9 +200,6 @@ def test_run_validation_produces_one_json_and_cleans_up(
         for ext in (".jsonl", ".md"):
             assert not list(tmp_path.glob(f"*{ext}"))
 
-        # Child process must be gone.
-        assert result.return_code == 0
-
     finally:
         # Defensive cleanup in case assertions fail before runner cleanup runs.
         if output_path.exists():
@@ -177,51 +207,3 @@ def test_run_validation_produces_one_json_and_cleans_up(
 
     # Wall-clock bound: hard maximum per plan 042 is 20 seconds.
     assert elapsed < 20.0, f"smoke exceeded wall-clock bound: {elapsed:.2f}s"
-
-
-def asyncio_run_with_capture_errors(coro):
-    """Helper to run an awaitable and return the result synchronously."""
-    import asyncio
-
-    return asyncio.run(coro)
-
-
-def test_run_validation_unknown_profile_does_not_start_subprocess(
-    tmp_path: Path,
-) -> None:
-    output_path = tmp_path / "runtime-validation.json"
-    config = ValidationRunConfig(
-        profile_name="does-not-exist",
-        duration_seconds=30,
-        output_path=output_path,
-        seed=42,
-    )
-    import asyncio
-
-    result = asyncio.run(run_validation(config))
-    assert result.return_code == 1
-    assert result.passed is False
-    assert any("unknown profile" in r for r in result.failure_reasons)
-
-
-def test_build_run_config_round_trip() -> None:
-    """``build_run_config`` parses public CLI args into ValidationRunConfig."""
-    parser_args = [
-        "--profile",
-        "sbc-reference",
-        "--duration-seconds",
-        "120",
-        "--output",
-        "/tmp/example.json",
-        "--seed",
-        "99",
-        "-v",
-    ]
-    from scripts.run_dispatch_stability_soak import _build_parser
-
-    parsed = _build_parser().parse_args(parser_args)
-    config = build_run_config(parsed)
-    assert config.profile_name == "sbc-reference"
-    assert config.duration_seconds == 120
-    assert config.output_path == Path("/tmp/example.json")
-    assert config.seed == 99

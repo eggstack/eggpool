@@ -1,7 +1,7 @@
 # Runtime Validation Gate Corrective Closure
 
 Date: 2026-07-29
-Status: completed — corrective closure landed at b5959ed8; both ordinary CI jobs green on that commit; canonical 60s sbc-reference run all gates pass
+Status: final corrective closure pending — see Plan 043
 
 Parent plans:
 

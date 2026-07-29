@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -40,7 +41,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -112,6 +113,48 @@ def _redact_dict(d: dict[str, Any]) -> dict[str, Any]:
         else:
             out[k] = v
     return out
+
+
+def _optional_number(value: Any) -> float | None:
+    """Return ``value`` as float when it is a real number, else ``None``.
+
+    Booleans are excluded so they are never silently treated as numeric
+    metrics. Strings are rejected; runtime endpoint payloads must ship
+    numeric values when the metric is available.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _optional_int(value: Any) -> int | None:
+    """Return ``value`` as int when it is a real integer, else ``None``.
+
+    Booleans are excluded. Floats with no fractional part are accepted
+    and truncated to int. Strings without ``int``-compatible content
+    yield ``None``.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None
+
+
+def _extract_dict_section(payload: Any, path: tuple[str, ...]) -> dict[str, Any] | None:
+    """Walk a dotted path of dict keys; return the typed dict or ``None``."""
+    current: Any = payload
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)  # type: ignore[reportUnknownMemberType]
+    if isinstance(current, dict):
+        return cast("dict[str, Any]", current)
+    return None
 
 
 def _git_sha() -> str:
@@ -890,35 +933,6 @@ class WorkloadGateResult:
     allowed_error_fraction: float
 
 
-def evaluate_drain_gate(
-    final_snapshot: MetricsSnapshot | None,
-    max_pending: int,
-    max_active: int,
-) -> tuple[bool, str | None]:
-    """Evaluate the drain gate against a final post-load snapshot.
-
-    Fails closed on a missing snapshot, unavailable fields, or pending /
-    active-reservation counts above the configured limits.
-    """
-    if final_snapshot is None:
-        return False, "no final runtime snapshot"
-    if (
-        final_snapshot.pending_requests is None
-        or final_snapshot.active_reservations is None
-    ):
-        return False, "drain metrics unavailable"
-    if (
-        final_snapshot.pending_requests <= max_pending
-        and final_snapshot.active_reservations <= max_active
-    ):
-        return True, None
-    return (
-        False,
-        f"drain: pending={final_snapshot.pending_requests} "
-        f"reservations={final_snapshot.active_reservations}",
-    )
-
-
 def evaluate_ratio_gate(
     early_value: float | None,
     late_value: float | None,
@@ -1243,15 +1257,24 @@ async def collect_runtime_snapshot(
             headers={"Authorization": f"Bearer {api_key}"},
         )
         if r.status_code == 200:
-            rt = r.json()
-            contention = rt.get("contention", {})
-            if contention:
-                db_lock_p95 = contention.get("lock_wait_p95_ms")
-                db_lock_max = contention.get("lock_wait_max_ms")
-                db_lock_count = contention.get("lock_wait_sample_count")
-            routing_runtime = rt.get("routing_runtime", {})
-            pending = routing_runtime.get("pending_count")
-            active_resv = routing_runtime.get("active_reservations_count")
+            rt_payload: Any = r.json()
+            contention_section = _extract_dict_section(rt_payload, ("db", "contention"))
+            if contention_section is not None:
+                db_lock_p95 = _optional_number(
+                    contention_section.get("lock_wait_p95_ms")
+                )
+                db_lock_max = _optional_number(
+                    contention_section.get("lock_wait_max_ms")
+                )
+                db_lock_count = _optional_int(
+                    contention_section.get("lock_wait_sample_count")
+                )
+            routing_section = _extract_dict_section(rt_payload, ("routing_runtime",))
+            if routing_section is not None:
+                pending = _optional_int(routing_section.get("pending_count"))
+                active_resv = _optional_int(
+                    routing_section.get("active_reservations_count")
+                )
             polling_stats.runtime_successes += 1
         else:
             polling_stats.runtime_failures += 1
@@ -1475,6 +1498,125 @@ def _terminate_eggpool(proc: subprocess.Popen[str], *, timeout: float = 10.0) ->
         proc.wait(timeout=5.0)
 
 
+_PROCESS_LOG_TAIL_MAX_LINES = 100
+_PROCESS_LOG_TAIL_MAX_BYTES = 16 * 1024
+
+
+def _read_process_log_tail(
+    log_path: Path, *, max_lines: int = _PROCESS_LOG_TAIL_MAX_LINES
+) -> str:
+    """Return a bounded, redacted tail of the Eggpool process log.
+
+    Used by tests for diagnostics; not written into the retained JSON.
+    Returns an empty string when the log is missing or unreadable.
+    """
+    if not log_path.exists():
+        return ""
+    try:
+        raw = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    lines = raw.splitlines()
+    tail = lines[-max_lines:] if len(lines) > max_lines else lines
+    joined = "\n".join(tail)
+    if len(joined.encode("utf-8")) > _PROCESS_LOG_TAIL_MAX_BYTES:
+        joined = joined.encode("utf-8")[:_PROCESS_LOG_TAIL_MAX_BYTES].decode(
+            "utf-8", errors="replace"
+        )
+    return _redact(joined)
+
+
+def _pid_is_alive(pid: int) -> bool:  # pyright: ignore[reportUnusedFunction]
+    """Return ``True`` if a process with ``pid`` is observable on this host.
+
+    Used by tests to confirm the runner actually terminated the child.
+    Permissions errors are treated conservatively as ``alive`` so we do
+    not falsely claim a process is gone when the platform refuses the
+    probe.
+    """
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _cleanup_run_artifacts(
+    *,
+    proc: subprocess.Popen[str] | None,
+    process_log_path: Path,
+    work_dir: Path,
+    upstream_server: Any | None,
+) -> tuple[str, bool | None, bool | None, str | None]:
+    """One cleanup path used by every run_validation exit branch.
+
+    Returns ``(process_log_tail, process_stopped, work_dir_removed,
+    cleanup_error)``. None of the values are written to the retained
+    JSON; the caller is responsible for placing them on the internal
+    ValidationResult.
+    """
+    log_tail = _read_process_log_tail(process_log_path)
+
+    process_stopped: bool | None
+    if proc is None:
+        process_stopped = None
+    else:
+        _terminate_eggpool(proc)
+        process_stopped = proc.poll() is not None
+
+    if upstream_server is not None:
+        with contextlib.suppress(Exception):
+            upstream_server.shutdown()
+
+    work_dir_removed: bool | None = None
+    cleanup_error: str | None = None
+    try:
+        shutil.rmtree(work_dir)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        cleanup_error = f"work directory cleanup failed: {exc}"
+
+    work_dir_removed = not work_dir.exists()
+
+    return log_tail, process_stopped, work_dir_removed, cleanup_error
+
+
+def _populate_cleanup_diagnostics(
+    result: ValidationResult,
+    *,
+    proc: subprocess.Popen[str] | None,
+    process_log_path: Path,
+    work_dir: Path,
+    upstream_server: Any | None,
+) -> None:
+    """Attach cleanup diagnostics to ``result`` in place.
+
+    This is the canonical cleanup entry point; every exit branch must
+    call it. The runner does not retain the work directory on error
+    paths; the bounded log tail is the diagnostic surface.
+    """
+    log_tail, process_stopped, work_dir_removed, cleanup_error = _cleanup_run_artifacts(
+        proc=proc,
+        process_log_path=process_log_path,
+        work_dir=work_dir,
+        upstream_server=upstream_server,
+    )
+    result.process_log_tail = log_tail
+    if proc is not None:
+        result.child_pid = proc.pid
+    result.process_stopped = process_stopped
+    result.work_dir = work_dir
+    result.work_dir_removed = work_dir_removed
+    result.cleanup_error = cleanup_error
+
+
 # ---------------------------------------------------------------------------
 # SQLite offline audit
 # ---------------------------------------------------------------------------
@@ -1550,13 +1692,24 @@ def build_run_config(args: argparse.Namespace) -> ValidationRunConfig:
 
 @dataclass
 class ValidationResult:
-    """Final result of a runtime validation run."""
+    """Final result of a runtime validation run.
+
+    Diagnostic fields (``child_pid``, ``work_dir``, ``process_log_tail``,
+    ``process_stopped``, ``work_dir_removed``, ``cleanup_error``) are
+    Python-internal; they are not written into the retained JSON output.
+    """
 
     passed: bool
     failure_reasons: list[str]
     output_path: Path
     duration_s: float
     return_code: int
+    child_pid: int | None = None
+    work_dir: Path | None = None
+    process_log_tail: str = ""
+    process_stopped: bool | None = None
+    work_dir_removed: bool | None = None
+    cleanup_error: str | None = None
 
 
 async def run_validation(
@@ -1655,6 +1808,14 @@ async def run_validation(
     logger.info("Starting EggPool on port %d...", server_port)
     proc = await _start_eggpool(config_path, str(process_log_path), env)
 
+    result = ValidationResult(
+        passed=False,
+        failure_reasons=[],
+        output_path=output_path,
+        duration_s=0.0,
+        return_code=1,
+    )
+
     try:
         healthy = await _wait_healthy(server_port, timeout=health_timeout_s)
         if not healthy:
@@ -1679,13 +1840,11 @@ async def run_validation(
                     },
                 },
             )
-            return ValidationResult(
-                passed=False,
-                failure_reasons=["EggPool did not become healthy within timeout"],
-                output_path=output_path,
-                duration_s=0.0,
-                return_code=10,
-            )
+            result.passed = False
+            result.failure_reasons = ["EggPool did not become healthy within timeout"]
+            result.duration_s = 0.0
+            result.return_code = 10
+            return result
         logger.info("EggPool is healthy (PID %d)", proc.pid)
 
         start_time = time.monotonic()
@@ -2073,19 +2232,21 @@ async def run_validation(
         print("=" * 72)
 
         return_code = 0 if all_passed else 1
-        return ValidationResult(
-            passed=all_passed,
-            failure_reasons=failure_reasons,
-            output_path=output_path,
-            duration_s=measurement_duration_s + quiescence.elapsed_s,
-            return_code=return_code,
-        )
+        result.passed = all_passed
+        result.failure_reasons = failure_reasons
+        result.duration_s = measurement_duration_s + quiescence.elapsed_s
+        result.return_code = return_code
+        return result
 
     finally:
         logger.info("Terminating EggPool (PID %d)...", proc.pid)
-        _terminate_eggpool(proc)
-        upstream_server.shutdown()
-        shutil.rmtree(work_dir, ignore_errors=True)
+        _populate_cleanup_diagnostics(
+            result,
+            proc=proc,
+            process_log_path=process_log_path,
+            work_dir=work_dir,
+            upstream_server=upstream_server,
+        )
 
 
 # ---------------------------------------------------------------------------

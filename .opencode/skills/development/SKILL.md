@@ -171,7 +171,11 @@ A short real-process smoke test
 production code paths through `run_validation()` with a compact
 `DurationPlan` and asserts both streaming and non-streaming successes,
 quiescence drain, one JSON file, and bounded wall-clock duration. The
-public CLI gains no test-only options.
+smoke receives internal `ValidationResult` cleanup fields and asserts
+the actual recorded child PID is gone (`pid_is_alive`) and the actual
+`eggpool-soak-*` work directory is removed; cleanup failures and a
+bounded redacted process log tail appear in assertion messages only on
+failure. The public CLI gains no test-only options.
 
 ## Code Style
 

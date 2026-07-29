@@ -118,8 +118,13 @@ zero attempts, and zero successes all fail closed.
 A short real-process smoke lives at
 `tests/integration/test_runtime_validation_process_smoke.py` and runs the
 production startup, load, polling, and cleanup code paths through
-`run_validation()` with a compact `DurationPlan`. The public CLI gains no
-test-only options.
+`run_validation()` with a compact `DurationPlan`. The smoke receives
+internal `ValidationResult` cleanup fields (`child_pid`, `work_dir`,
+`process_log_tail`, `process_stopped`, `work_dir_removed`,
+`cleanup_error`) and asserts the actual recorded PID is gone and the
+actual `eggpool-soak-*` work directory is removed. The bounded redacted
+process log tail appears in assertion messages only on failure. The
+public CLI gains no test-only options.
 
 ## File Organization
 
