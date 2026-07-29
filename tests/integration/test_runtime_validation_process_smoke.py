@@ -39,16 +39,18 @@ def _compact_plan() -> DurationPlan:
     """Compact positive-duration plan for the in-process smoke.
 
     Phases are short but strictly positive so the same production code
-    paths run end-to-end without artificial sleeps or skips. Wall-clock
-    budget is well under the documented 10-second preferred target.
+    paths run end-to-end without artificial sleeps or skips. Windows are
+    long enough to gather a steady-state sample on cold-start CI runners
+    where the first burst is slower than subsequent bursts. Wall-clock
+    budget stays well under the documented 20-second hard maximum.
     """
     return DurationPlan(
-        total_s=4.0,
-        warmup_s=0.5,
-        early_window_s=1.0,
-        drain_s=0.3,
-        late_window_s=1.0,
-        poll_interval_s=0.2,
+        total_s=12.0,
+        warmup_s=1.0,
+        early_window_s=4.0,
+        drain_s=1.0,
+        late_window_s=4.0,
+        poll_interval_s=0.5,
         dispatch_p95_ratio_limit=1.50,
         dispatch_p99_ratio_limit=2.00,
         throughput_decline_limit=0.20,
