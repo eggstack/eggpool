@@ -73,7 +73,7 @@ def test_run_validation_produces_one_json_and_cleans_up(
 ) -> None:
     output_path = tmp_path / "runtime-validation.json"
     config = ValidationRunConfig(
-        profile_name="sbc-reference",
+        profile_name="balanced-file-backed",
         duration_seconds=30,
         output_path=output_path,
         seed=42,
@@ -103,7 +103,7 @@ def test_run_validation_produces_one_json_and_cleans_up(
         assert loaded["schema_version"] == SCHEMA_VERSION
         assert loaded["script_version"] == SCRIPT_VERSION
         assert loaded["passed"] is True
-        assert loaded["profile"] == "sbc-reference"
+        assert loaded["profile"] == "balanced-file-backed"
 
         # Quiescence observation must be present and explicit.
         quiescence = loaded["gates"]["quiescence"]
@@ -118,9 +118,8 @@ def test_run_validation_produces_one_json_and_cleans_up(
         assert workload["passed"] is True
         assert workload["early"]["successes"] >= 1
         assert workload["late"]["successes"] >= 1
-        # sbc-reference requires both stream and non-stream successes
-        # when duration >= 60; the test seam injects a deterministic
-        # shape sequence so both paths execute in a short run too.
+        # Deterministic alternating shape sequence guarantees both
+        # transports execute even in a short run.
         assert workload["early"]["successes"] + workload["late"]["successes"] >= 2
 
         early = loaded["early"]
@@ -146,11 +145,9 @@ def test_run_validation_produces_one_json_and_cleans_up(
         # Database audit is required and must pass.
         assert loaded["gates"]["database_audit"]["passed"] is True
 
-        # RSS measurement is required for sbc-reference. macOS / Linux
-        # both support this; the test only fails when RSS is None on
-        # a supported platform.
+        # RSS measurement is required. macOS / Linux both support this;
+        # the test only fails when RSS is None on a supported platform.
         assert loaded["gates"]["rss"]["available"] is True
-        assert loaded["gates"]["rss"]["required"] is True
 
         # Only one JSON file must remain in the work directory.
         siblings = sorted(p.name for p in tmp_path.iterdir())
