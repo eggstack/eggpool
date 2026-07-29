@@ -1,7 +1,7 @@
 # Test, CI, and Release Reduction Closure
 
 Date: 2026-07-28
-Status: complete
+Status: corrective closure pending — see Plan 041
 
 Parent plan:
 

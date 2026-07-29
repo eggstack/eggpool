@@ -86,5 +86,24 @@ Run the target-device runtime validation when:
 uv run python scripts/run_dispatch_stability_soak.py \
   --profile sbc-reference \
   --duration-seconds 300 \
+  --seed 42 \
   --output /tmp/eggpool-runtime-validation.json
 ```
+
+`--output` names a single JSON file, not a directory. The output is written
+atomically and contains:
+
+- `passed` / `failure_reasons` for pass/fail gating
+- `process.eggpool_pid`, `process.rss_start_bytes`, `process.rss_end_bytes`,
+  `process.rss_peak_bytes` — RSS is measured from the Eggpool child process,
+  not the runner. On Linux, `/proc/<pid>/status` VmRSS is parsed; on macOS/BSD,
+  `ps -o rss=` is used. Both report bytes (KiB * 1024).
+- `early` / `late` window metrics (throughput, latency percentiles, errors)
+- `gates` for each stability criterion
+- `polling` for bounded dashboard polling diagnostics
+
+Unavailable metrics are reported as `null`, never as zero. A required metric
+that is unavailable causes the run to fail with a descriptive reason.
+
+GitHub workflow timing is diagnostic only — representative SBC output is
+authoritative for target performance claims.

@@ -21,10 +21,14 @@ on:
         default: "42"
         type: string
       duration-seconds:
-        description: "Duration in seconds (default 1800)"
+        description: "Validation duration"
         required: false
         default: "1800"
-        type: string
+        type: choice
+        options:
+          - "300"
+          - "1800"
+          - "3600"
 
 env:
   PYTHONHASHSEED: "0"
@@ -37,7 +41,7 @@ concurrency:
 jobs:
   soak:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 65
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
@@ -53,13 +57,13 @@ jobs:
             --profile "${{ inputs.profile || 'balanced-file-backed' }}" \
             --duration-seconds "${{ inputs.duration-seconds || '1800' }}" \
             --seed "${{ inputs.seed || '42' }}" \
-            --output /tmp/eggpool-soak-result.json
+            --output /tmp/eggpool-runtime-validation.json
 
       - name: Upload soak result
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: soak-result
-          path: /tmp/eggpool-soak-result.json
+          path: /tmp/eggpool-runtime-validation.json
           retention-days: 30
           if-no-files-found: ignore

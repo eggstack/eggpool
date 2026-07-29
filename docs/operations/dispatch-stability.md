@@ -279,55 +279,59 @@ eggpool restart
 See [config-profiles.md](../config-profiles.md) for evidence-based
 configuration profiles for different deployment targets.
 
-## Soak Runner
+## Runtime Validation Runner
 
-The dispatch stability soak runner (`scripts/run_dispatch_stability_soak.py`)
+The runtime validation runner (`scripts/run_dispatch_stability_soak.py`)
 validates long-running dispatch stability across canonical workload profiles.
 
-### Run modes
+### Supported options
 
-- **`smoke`** — quick validation (~5 minutes). Runs the
-  `balanced-file-backed` profile and asserts stability ratio gates.
-- **`extended`** — longer validation (~30+ minutes). Runs multiple
-  profiles with extended stability gates.
-- **`ci`** — fast gate for CI pipelines. Runs a minimal subset.
-
-### Running a soak
-
-```bash
-# Smoke test (default profile)
-uv run python scripts/run_dispatch_stability_soak.py \
-  --profile balanced-file-backed \
-  --mode smoke \
-  --output artifacts/dispatch-soak/smoke
-
-# Extended validation
-uv run python scripts/run_dispatch_stability_soak.py \
-  --profile balanced-file-backed \
-  --mode extended \
-  --output artifacts/dispatch-soak/extended
+```
+--profile PROFILE          Soak profile (default: balanced-file-backed)
+--duration-seconds INT     Total duration in seconds (default: 300, minimum: 30)
+--output FILE              Output JSON file path (default: /tmp/eggpool-runtime-validation.json)
+--seed INT                 Deterministic random seed (default: 42)
+-v / --verbose             Enable verbose logging
 ```
 
-### Interpreting artifacts
+`--output` names a single JSON file, not a directory. The output is written
+atomically (tmp → replace). No manifest, Markdown summary, JSONL series, or
+checksum bundle is generated.
 
-Soak runner output goes to the `--output` directory. Key artifacts:
+### Running validation
 
-- `summary.json` — aggregated stability metrics (dispatch p95/p99,
-  early/late window comparison, stability ratios)
-- `stability_gates.json` — pass/fail for each gate (dispatch p95
-  ≤ 1.20x, p99 ≤ 1.50x early vs late)
-- `resource_plateau.json` — RSS, thread count, reservation cleanup
-  validation
-- `db_consistency.json` — database lifecycle invariant checks
+```bash
+# Short validation (60 seconds)
+uv run python scripts/run_dispatch_stability_soak.py \
+  --profile sbc-reference \
+  --duration-seconds 60 \
+  --output /tmp/eggpool-validation.json
 
-A soak passes when all stability gates report `pass` and no resource
-plateau violations are detected.
+# Standard SBC validation (5 minutes)
+uv run python scripts/run_dispatch_stability_soak.py \
+  --profile sbc-reference \
+  --duration-seconds 300 \
+  --seed 42 \
+  --output /tmp/eggpool-runtime-validation.json
+```
+
+### Interpreting output
+
+The JSON output contains:
+
+- `passed` / `failure_reasons` — pass/fail gating with reasons
+- `process` — Eggpool child PID and RSS (bytes, measured from child process)
+- `early` / `late` — window metrics (throughput, latency percentiles, errors)
+- `gates` — per-criterion pass/fail (throughput decline, dispatch p95/p99, drain, RSS, SQLite audit)
+- `polling` — bounded dashboard polling diagnostics
+
+Unavailable metrics are reported as `null`, never zero. Required metrics that
+are unavailable cause the run to fail with a descriptive reason.
 
 ## Extended Stability Gates
 
 Extended stability gates (`tests/soak/test_extended_stability_gates.py`)
-run only in `extended_soak` mode and validate long-duration behavior
-that cannot be caught in short tests:
+validate long-duration behavior that cannot be caught in short tests:
 
 - Dispatch latency stability over extended windows
 - Resource plateau validation (memory, threads, file descriptors)

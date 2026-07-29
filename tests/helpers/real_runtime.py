@@ -1,12 +1,15 @@
 """Reusable real-runtime test fixture for Eggpool integration tests.
 
-Provides an async context manager that enters the actual Eggpool ASGI
-application with a temporary file-backed SQLite database, migrations
-applied, upstream interception via respx, and clean shutdown.
+Provides a small factory :func:`build_runtime_app` that wires up the
+actual Eggpool ASGI application with a temporary file-backed SQLite
+database, migrations applied, upstream interception via respx, and clean
+shutdown.  The :func:`real_runtime_app` pytest fixture delegates to this
+factory.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -38,38 +41,132 @@ if TYPE_CHECKING:
 UPSTREAM_BASE = "https://real-runtime-upstream.example.com"
 
 
-def _build_config(tmp_db: str = ":memory:") -> AppConfig:
-    return AppConfig.from_dict(
-        {
-            "server": {
-                "api_key_env": "REAL_RUNTIME_KEY",
-                "host": "127.0.0.1",
-                "port": 0,
-            },
-            "database": {"path": tmp_db},
-            "upstream": {"base_url": UPSTREAM_BASE},
-            "models": {"startup_refresh": False, "refresh_interval_s": 0},
-            "accounts": [
-                {"name": "rt-acct-1", "api_key_env": "REAL_RUNTIME_KEY"},
-                {"name": "rt-acct-2", "api_key_env": "REAL_RUNTIME_KEY"},
-            ],
-            "dashboard": {"enabled": False},
-        }
-    )
+# ---------------------------------------------------------------------------
+# Spec: describes what the factory should wire up
+# ---------------------------------------------------------------------------
 
 
-@pytest_asyncio.fixture()
-async def real_runtime_app(
-    tmp_path: Any,
-    monkeypatch: pytest.MonkeyPatch,
-) -> AsyncGenerator[FastAPI, None]:
-    """Provide an actual Eggpool ASGI application with real components.
+@dataclass(frozen=True, slots=True)
+class ModelSpec:
+    """A model to seed into the catalog cache."""
 
-    Yields a tuple of (app, httpx.AsyncClient using ASGITransport).
+    model_id: str
+    protocol: str = "openai"
+    capabilities: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderSpec:
+    """A provider with static models and account bindings."""
+
+    provider_id: str
+    base_url: str = UPSTREAM_BASE
+    protocols: tuple[str, ...] = ("openai",)
+    static_models: tuple[ModelSpec, ...] = ()
+    account_names: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeAppSpec:
+    """Describes a runtime app to build.
+
+    Call :func:`build_runtime_app` with a spec to get a fully wired
+    ``FastAPI`` application.
     """
-    monkeypatch.setenv("REAL_RUNTIME_KEY", "rt-test-key")
 
-    config = _build_config(tmp_db=str(tmp_path / "test.db"))
+    account_names: tuple[str, ...] = ("rt-acct-1", "rt-acct-2")
+    models: tuple[ModelSpec, ...] = (ModelSpec(model_id="gpt-4", protocol="openai"),)
+    providers: tuple[ProviderSpec, ...] = ()
+    transcoder_overrides: dict[str, Any] = field(default_factory=dict)
+
+
+# Default spec matching the original real_runtime_app behavior
+DEFAULT_SPEC = RuntimeAppSpec()
+
+
+# ---------------------------------------------------------------------------
+# Factory
+# ---------------------------------------------------------------------------
+
+
+def _build_config_from_spec(
+    spec: RuntimeAppSpec,
+    tmp_db: str,
+) -> AppConfig:
+    """Build an AppConfig from a RuntimeAppSpec."""
+    accounts = [
+        {"name": name, "api_key_env": "REAL_RUNTIME_KEY"} for name in spec.account_names
+    ]
+
+    providers_dict: dict[str, Any] = {}
+    for prov in spec.providers:
+        static_models_list = [
+            {"id": m.model_id, "protocol": m.protocol} for m in prov.static_models
+        ]
+        providers_dict[prov.provider_id] = {
+            "id": prov.provider_id,
+            "base_url": prov.base_url,
+            "protocols": list(prov.protocols),
+            "static_models": static_models_list,
+            "accounts": [
+                {
+                    "name": name,
+                    "api_key_env": "REAL_RUNTIME_KEY",
+                    "enabled": True,
+                    "weight": 1.0,
+                }
+                for name in prov.account_names
+            ],
+        }
+
+    config_dict: dict[str, Any] = {
+        "server": {
+            "api_key_env": "REAL_RUNTIME_KEY",
+            "host": "127.0.0.1",
+            "port": 0,
+        },
+        "database": {"path": tmp_db},
+        "upstream": {"base_url": UPSTREAM_BASE},
+        "models": {"startup_refresh": False, "refresh_interval_s": 0},
+        "accounts": accounts,
+        "dashboard": {"enabled": False},
+    }
+    if spec.transcoder_overrides:
+        config_dict["transcoder"] = spec.transcoder_overrides
+    if providers_dict:
+        config_dict["providers"] = providers_dict
+
+    return AppConfig.from_dict(config_dict)
+
+
+@dataclass(slots=True)
+class RuntimeAppResult:
+    """Result of :func:`build_runtime_app`.  Holds all wired components."""
+
+    application: FastAPI
+    db: Database
+    httpx_client: httpx.AsyncClient
+    registry: AccountRegistry
+    catalog: CatalogService
+    router: Router
+    health_manager: HealthManager
+    coordinator: RequestCoordinator
+
+
+async def build_runtime_app(
+    spec: RuntimeAppSpec = DEFAULT_SPEC,
+    *,
+    tmp_path: Any,
+    env_key: str = "REAL_RUNTIME_KEY",
+    env_value: str = "rt-test-key",
+) -> RuntimeAppResult:
+    """Wire up and return a fully configured Eggpool runtime app.
+
+    This is the single source of truth for test-fixture component wiring.
+    Both the :func:`real_runtime_app` fixture and specialized fixtures
+    (e.g. MiniMax isolation) should delegate here.
+    """
+    config = _build_config_from_spec(spec, tmp_db=str(tmp_path / "test.db"))
     application = create_app(config)
 
     db = Database(path=str(tmp_path / "test.db"))
@@ -80,20 +177,17 @@ async def real_runtime_app(
     await runner.run()
 
     async with db.transaction():
-        await db.execute_write(
-            "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-            "VALUES (?, ?, 1, 1.0)",
-            ("rt-acct-1", "REAL_RUNTIME_KEY"),
-        )
-        await db.execute_write(
-            "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-            "VALUES (?, ?, 1, 1.0)",
-            ("rt-acct-2", "REAL_RUNTIME_KEY"),
-        )
-        await db.execute_write(
-            "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
-            ("gpt-4", "openai"),
-        )
+        for name in spec.account_names:
+            await db.execute_write(
+                "INSERT INTO accounts (name, api_key_env, enabled, weight) "
+                "VALUES (?, ?, 1, 1.0)",
+                (name, env_key),
+            )
+        for model in spec.models:
+            await db.execute_write(
+                "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+                (model.model_id, model.protocol),
+            )
 
     httpx_client = httpx.AsyncClient(
         base_url=config.upstream.base_url,
@@ -145,17 +239,63 @@ async def real_runtime_app(
     )
     application.state.coordinator = coordinator
 
-    catalog.cache.load_model(
-        model_id="gpt-4",
-        display_name="GPT-4",
-        protocol="openai",
-        capabilities={},
-        source_metadata={},
+    # Seed catalog with models
+    for model in spec.models:
+        catalog.cache.load_model(
+            model_id=model.model_id,
+            display_name=model.model_id,
+            protocol=model.protocol,
+            capabilities=model.capabilities,
+            source_metadata={},
+        )
+        for name in spec.account_names:
+            catalog.cache.add_account_support(model.model_id, name)
+
+    # Seed provider-model entries
+    for prov in spec.providers:
+        for name in prov.account_names:
+            if name in spec.account_names:
+                catalog.cache.set_account_provider(name, prov.provider_id)
+                catalog.cache.update_from_account(
+                    name,
+                    prov.provider_id,
+                    [
+                        {
+                            "model_id": m.model_id,
+                            "display_name": m.model_id,
+                            "protocol": m.protocol,
+                            "capabilities": m.capabilities,
+                            "source_metadata": {},
+                        }
+                        for m in prov.static_models
+                    ],
+                )
+
+    return RuntimeAppResult(
+        application=application,
+        db=db,
+        httpx_client=httpx_client,
+        registry=registry,
+        catalog=catalog,
+        router=router,
+        health_manager=health_manager,
+        coordinator=coordinator,
     )
-    catalog.cache.add_account_support("gpt-4", "rt-acct-1")
-    catalog.cache.add_account_support("gpt-4", "rt-acct-2")
 
-    yield application
 
-    await db.disconnect()
-    await httpx_client.aclose()
+# ---------------------------------------------------------------------------
+# Pytest fixture (delegates to factory)
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture()
+async def real_runtime_app(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncGenerator[FastAPI, None]:
+    """Provide an actual Eggpool ASGI application with real components."""
+    monkeypatch.setenv("REAL_RUNTIME_KEY", "rt-test-key")
+    result = await build_runtime_app(tmp_path=tmp_path)
+    yield result.application
+    await result.db.disconnect()
+    await result.httpx_client.aclose()

@@ -153,9 +153,10 @@ async def test_d3_operator_restart_required_rejects(tmp_path: Any) -> None:
         assert await _wait_healthy(server_port), "server did not become healthy"
 
         # Change a RESTART_REQUIRED field
+        replacement_port = _free_port()
         _write_config(
             config_path,
-            server_port=server_port + 999,
+            server_port=replacement_port,
             upstream_port=upstream_port,
         )
 

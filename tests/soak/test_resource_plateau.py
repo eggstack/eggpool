@@ -18,8 +18,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import resource
+import sys
 import threading
 from typing import TYPE_CHECKING
 
@@ -37,13 +37,21 @@ pytestmark = [pytest.mark.soak, pytest.mark.resource_plateau]
 UPSTREAM_BASE = "https://soak-test-upstream.example.com"
 
 
-def _get_rss_bytes() -> int:
-    """Get current RSS in bytes."""
-    usage = resource.getrusage(resource.RUSAGE_SELF)
-    # ru_maxrss is in bytes on Linux, kilobytes on macOS
-    if os.uname().sysname == "Darwin":
-        return usage.ru_maxrss * 1024
-    return usage.ru_maxrss
+def _get_rss_bytes() -> int | None:
+    """Get current RSS in bytes.
+
+    ru_maxrss is in KiB on Linux and bytes on macOS.
+    Returns None if measurement fails.
+    """
+    try:
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        if sys.platform == "darwin":
+            return int(usage.ru_maxrss)
+        if sys.platform.startswith("linux"):
+            return int(usage.ru_maxrss) * 1024
+    except (AttributeError, ValueError, OSError):
+        pass
+    return None
 
 
 def _get_thread_count() -> int:
@@ -159,7 +167,12 @@ class TestResourcePlateau:
                     response = await soak_coordinator.execute(context)
                     if response.stream_iterator is not None:
                         await _consume_stream(response.stream_iterator)
-                rss_samples.append(_get_rss_bytes())
+                sample = _get_rss_bytes()
+                if sample is not None:
+                    rss_samples.append(sample)
+
+        if not rss_samples:
+            pytest.skip("RSS measurement unavailable on this platform")
 
         # After warm-up (first cycle), RSS should not grow dramatically
         # Allow up to 50% growth from first to last sample

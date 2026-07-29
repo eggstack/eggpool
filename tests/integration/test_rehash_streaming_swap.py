@@ -591,9 +591,10 @@ async def test_restart_required_rejects_rehash(tmp_path: Any) -> None:
         assert await _wait_healthy(server_port), "server did not become healthy"
 
         # Rewrite config to change server.port (restart-required field)
+        replacement_port = _free_port()
         _write_config(
             config_path,
-            server_port=server_port + 999,
+            server_port=replacement_port,
             upstream_port=upstream_port,
         )
 

@@ -26,8 +26,6 @@ from eggpool.transcoder.provider_adaptation import (
     adapt_thinking_controls,
 )
 
-pytestmark = [pytest.mark.integration, pytest.mark.request_path]
-
 
 def _capability_fixed() -> ThinkingCapability:
     return ThinkingCapability(
@@ -62,7 +60,6 @@ class TestCompatibilityRetryDeferred:
         cap = _capability_fixed()
         intent = _intent_effort()
 
-        # warn_drop policy: effort is dropped, not rejected.
         result = adapt_thinking_controls(
             payload={"model": "test", "reasoning_effort": "high"},
             client_protocol="openai",
@@ -82,7 +79,6 @@ class TestCompatibilityRetryDeferred:
         cap = _capability_fixed()
         intent = _intent_effort()
 
-        # Even with allow_compatibility_retry=True, reject policy raises.
         with pytest.raises(CapabilityError):
             adapt_thinking_controls(
                 payload={"model": "test", "reasoning_effort": "high"},

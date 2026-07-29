@@ -703,7 +703,7 @@ class RuntimeMetricsService:
                     COUNT(*) AS active_count,
                     COALESCE(SUM(reserved_microdollars), 0) AS total_reserved
                 FROM reservations
-                WHERE expires_at > unixepoch('now')
+                WHERE status = 'active'
                 """
             )
             if res_row:

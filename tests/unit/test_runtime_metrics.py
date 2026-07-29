@@ -527,6 +527,33 @@ async def test_routing_runtime_pending_health(db: Database) -> None:
     assert routing["reserved_microdollars"] == 0
 
 
+@pytest.mark.asyncio
+async def test_routing_runtime_excludes_released_reservations(db: Database) -> None:
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT INTO accounts (id, name, api_key_env) "
+            "VALUES (1, 'test-acct', 'KEY')"
+        )
+        await db.execute_write(
+            "INSERT INTO models (model_id, protocol) VALUES ('gpt-4', 'openai')"
+        )
+        await db.execute_write(
+            "INSERT INTO requests "
+            "(account_id, model_id, status, started_at) "
+            "VALUES (1, 'gpt-4', 'completed', datetime('now'))"
+        )
+        await db.execute_write(
+            "INSERT INTO reservations "
+            "(request_id, account_id, model_id, reserved_microdollars, status) "
+            "VALUES (1, 1, 'gpt-4', 100, 'released')"
+        )
+
+    routing = (await _make_service(db).snapshot())["routing_runtime"]
+
+    assert routing["active_reservations_count"] == 0
+    assert routing["reserved_microdollars"] == 0
+
+
 # -- Probe errors do not leak secrets --------------------------------------
 
 

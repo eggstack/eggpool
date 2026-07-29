@@ -1,34 +1,32 @@
-"""Dispatch stability extended-soak runner.
+"""Dispatch stability runtime-validation runner.
 
 Runs a process-level, file-backed SQLite soak test of EggPool's dispatch
 stability.  Starts EggPool as a real ``eggpool serve --verbose`` subprocess
 with a deterministic local mock upstream, exercises dashboard/runtime metrics
-polling, and produces structured artifacts for release evidence.
+polling, and produces one concise JSON summary.
 
 Usage::
 
     uv run python scripts/run_dispatch_stability_soak.py \
-        --profile balanced-file-backed \
-        --mode nightly \
-        --output artifacts/dispatch-soak/nightly
+        --profile sbc-reference \
+        --duration-seconds 300 \
+        --output /tmp/eggpool-runtime-validation.json
 
 The runner never persists request content, provider secrets, or credential
-values.  All artifact paths, environment snapshots, and config dumps are
-redacted before writing.
+values.  All environment snapshots and config dumps are redacted before
+writing.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-import dataclasses
 import hashlib
 import json
 import logging
 import os
 import platform
 import random
-import resource
 import shutil
 import socket
 import sqlite3
@@ -55,7 +53,18 @@ logger = logging.getLogger("dispatch_soak")
 # ---------------------------------------------------------------------------
 
 SCHEMA_VERSION = 1
-SCRIPT_VERSION = "1.0.0"
+SCRIPT_VERSION = "2.0.0"
+
+
+def _validate_duration(value: str) -> int:
+    try:
+        ivalue = int(value)
+    except ValueError as err:
+        raise argparse.ArgumentTypeError(f"invalid integer: {value!r}") from err
+    if ivalue < 30:
+        raise argparse.ArgumentTypeError(f"must be at least 30, got {ivalue}")
+    return ivalue
+
 
 # ---------------------------------------------------------------------------
 # Utility: free port, fingerprint, redaction
@@ -115,23 +124,32 @@ def _git_sha() -> str:
         return "unknown"
 
 
-def _memory_total_bytes() -> int:
-    """Return total system memory in bytes (stdlib-only)."""
+def _memory_total_bytes() -> int | None:
+    """Return total system memory in bytes, or None on failure."""
     if hasattr(os, "sysconf") and "SC_PAGE_SIZE" in os.sysconf_names:
-        page_size = os.sysconf("SC_PAGE_SIZE")
-        page_count = os.sysconf("SC_PHYS_PAGES")
-        return page_size * page_count  # type: ignore[return-value]
-    # macOS fallback via ctypes
-    try:
-        import ctypes
+        try:
+            page_size = os.sysconf("SC_PAGE_SIZE")
+            page_count = os.sysconf("SC_PHYS_PAGES")
+            if page_size > 0 and page_count > 0:
+                return int(page_size * page_count)
+        except (TypeError, ValueError, OSError):
+            pass
+    if sys.platform == "darwin":
+        try:
+            import ctypes
 
-        buf = ctypes.create_string_buffer(8)
-        ctypes.CDLL("libc.so.1").sysctlbyname(
-            b"hw.memsize", buf, ctypes.pointer(ctypes.c_size_t(8)), None, 0
-        )
-        return struct.unpack("Q", buf)[0]
-    except Exception:
-        return 0
+            buf = ctypes.create_string_buffer(8)
+            ctypes.CDLL("libc.dylib").sysctlbyname(
+                b"hw.memsize",
+                buf,
+                ctypes.pointer(ctypes.c_size_t(8)),
+                None,
+                0,
+            )
+            return struct.unpack("Q", buf)[0]
+        except Exception:
+            return None
+    return None
 
 
 def _collect_environment() -> dict[str, Any]:
@@ -139,11 +157,114 @@ def _collect_environment() -> dict[str, Any]:
         "git_sha": _git_sha(),
         "python": sys.version.split()[0],
         "platform": platform.platform(),
+        "system": platform.system(),
         "arch": platform.machine(),
         "cpu_count": os.cpu_count(),
         "memory_total_bytes": _memory_total_bytes(),
-        "pid": os.getpid(),
     }
+
+
+# ---------------------------------------------------------------------------
+# Process RSS measurement (child PID)
+# ---------------------------------------------------------------------------
+
+
+def read_process_rss_bytes(pid: int) -> int | None:
+    """Return current RSS for the requested process in bytes.
+
+    Linux: parses VmRSS from /proc/<pid>/status (KiB, multiplied by 1024).
+    macOS/BSD: runs ``ps -o rss= -p <pid>`` (KiB, multiplied by 1024).
+    Returns None for missing process, malformed values, or unsupported OS.
+    Never returns 0 on failure.
+    """
+    if sys.platform == "linux":
+        try:
+            with open(f"/proc/{pid}/status", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        parts = line.split()
+                        if len(parts) >= 3 and parts[2].lower() in ("kb", "kib"):
+                            value = int(parts[1])
+                            if value > 0:
+                                return value * 1024
+                        return None
+        except (FileNotFoundError, PermissionError, ValueError, OSError):
+            return None
+        return None
+
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "rss=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            value = int(result.stdout.strip())
+            if value > 0:
+                return value * 1024
+    except (subprocess.SubprocessError, ValueError, OSError):
+        pass
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Duration planning
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class DurationPlan:
+    """Derived phase durations from a single total_s input."""
+
+    total_s: float
+    warmup_s: float
+    early_window_s: float
+    drain_s: float
+    late_window_s: float
+    poll_interval_s: float
+
+    dispatch_p95_ratio_limit: float
+    dispatch_p99_ratio_limit: float
+    throughput_decline_limit: float
+    max_pending_requests: int
+    max_active_reservations: int
+
+
+def build_duration_plan(total_s: float) -> DurationPlan:
+    """Derive bounded phases from total duration.
+
+    warm-up:   min(60s, max(5s, total * 10%))
+    drain:     min(30s, max(2s, total * 5%))
+    remaining: split equally between early and late windows
+    """
+    warmup_s = min(60.0, max(5.0, total_s * 0.10))
+    drain_s = min(30.0, max(2.0, total_s * 0.05))
+    remaining = total_s - warmup_s - drain_s
+    half_window = remaining / 2.0 if remaining > 0 else 1.0
+    early_window_s = max(half_window, 1.0)
+    late_window_s = max(half_window, 1.0)
+
+    if total_s <= 120:
+        poll_interval = 2.0
+    elif total_s <= 600:
+        poll_interval = 5.0
+    else:
+        poll_interval = 10.0
+
+    return DurationPlan(
+        total_s=total_s,
+        warmup_s=warmup_s,
+        early_window_s=early_window_s,
+        drain_s=drain_s,
+        late_window_s=late_window_s,
+        poll_interval_s=poll_interval,
+        dispatch_p95_ratio_limit=1.50 if total_s <= 300 else 1.30,
+        dispatch_p99_ratio_limit=2.00 if total_s <= 300 else 1.80,
+        throughput_decline_limit=0.20 if total_s <= 300 else 0.15,
+        max_pending_requests=0,
+        max_active_reservations=0,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -274,11 +395,10 @@ class MockUpstreamHandler(BaseHTTPRequestHandler):
                 state.latencies_ms.append(elapsed)  # pyright: ignore[reportUnknownMemberType]
             return
 
-        # Streaming
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "keep-alive")
+        self.send_header("Connection", "close")
         self.end_headers()
 
         n_chunks: int = 0
@@ -310,6 +430,7 @@ class MockUpstreamHandler(BaseHTTPRequestHandler):
         done_line = "data: [DONE]\n\n"
         self.wfile.write(done_line.encode())
         self.wfile.flush()
+        self.close_connection = True
 
         elapsed = (time.monotonic() - t0) * 1000
         with state.lock:  # pyright: ignore[reportUnknownMemberType]
@@ -447,6 +568,7 @@ class SoakProfile:
     metrics_flush_interval_s: float
     routing_trace_mode: str
     routing_trace_sample_rate: float
+    rss_required: bool = False
 
 
 PROFILES: dict[str, SoakProfile] = {
@@ -581,89 +703,10 @@ PROFILES: dict[str, SoakProfile] = {
         metrics_flush_interval_s=120.0,
         routing_trace_mode="off",
         routing_trace_sample_rate=0.0,
+        rss_required=True,
     ),
 }
 
-# ---------------------------------------------------------------------------
-# Duration modes
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class DurationMode:
-    name: str
-    description: str
-    warmup_s: float
-    early_window_s: float
-    late_window_s: float
-    total_s: float
-    poll_interval_s: float
-    # Gate thresholds
-    dispatch_p95_ratio_limit: float
-    dispatch_p99_ratio_limit: float
-    throughput_decline_limit: float
-    max_pending_requests: int
-    max_active_reservations: int
-
-
-DURATION_MODES: dict[str, DurationMode] = {
-    "smoke": DurationMode(
-        name="smoke",
-        description="2-5 minutes, developer-only harness verification",
-        warmup_s=30.0,
-        early_window_s=60.0,
-        late_window_s=60.0,
-        total_s=180.0,
-        poll_interval_s=5.0,
-        dispatch_p95_ratio_limit=1.50,
-        dispatch_p99_ratio_limit=2.00,
-        throughput_decline_limit=0.20,
-        max_pending_requests=0,
-        max_active_reservations=0,
-    ),
-    "ci": DurationMode(
-        name="ci",
-        description="10-30 minutes, bounded correctness and drain validation",
-        warmup_s=60.0,
-        early_window_s=300.0,
-        late_window_s=300.0,
-        total_s=900.0,
-        poll_interval_s=5.0,
-        dispatch_p95_ratio_limit=1.30,
-        dispatch_p99_ratio_limit=1.80,
-        throughput_decline_limit=0.15,
-        max_pending_requests=0,
-        max_active_reservations=0,
-    ),
-    "nightly": DurationMode(
-        name="nightly",
-        description="1-3 hours, file-backed early/late comparison",
-        warmup_s=300.0,
-        early_window_s=1800.0,
-        late_window_s=1800.0,
-        total_s=7200.0,
-        poll_interval_s=10.0,
-        dispatch_p95_ratio_limit=1.20,
-        dispatch_p99_ratio_limit=1.50,
-        throughput_decline_limit=0.10,
-        max_pending_requests=0,
-        max_active_reservations=0,
-    ),
-    "reference": DurationMode(
-        name="reference",
-        description="6-24 hours, release evidence on representative hardware",
-        warmup_s=600.0,
-        early_window_s=7200.0,
-        late_window_s=7200.0,
-        total_s=36000.0,
-        poll_interval_s=15.0,
-        dispatch_p95_ratio_limit=1.20,
-        dispatch_p99_ratio_limit=1.50,
-        throughput_decline_limit=0.10,
-        max_pending_requests=0,
-        max_active_reservations=0,
-    ),
-}
 
 # ---------------------------------------------------------------------------
 # Metrics collection
@@ -682,12 +725,12 @@ class WindowMetrics:
     dispatch_latencies_ms: list[float] = field(  # pyright: ignore[reportUnknownVariableType]
         default_factory=list
     )
-    pending_at_end: int = 0
-    active_reservations_at_end: int = 0
+    pending_at_end: int | None = None
+    active_reservations_at_end: int | None = None
     upstream_requests: int = 0
     upstream_errors: int = 0
     db_size_bytes: int = 0
-    rss_bytes: int = 0
+    rss_bytes: int | None = None
 
     @property
     def duration_s(self) -> float:
@@ -734,10 +777,10 @@ class MetricsSnapshot:
     upstream_requests: int
     upstream_errors: int
     upstream_avg_latency_ms: float
-    pending_requests: int
-    active_reservations: int
-    db_size_bytes: int
-    rss_bytes: int
+    pending_requests: int | None = None
+    active_reservations: int | None = None
+    db_size_bytes: int = 0
+    rss_bytes: int | None = None
     db_lock_wait_p95_ms: float | None = None
     db_lock_wait_max_ms: float | None = None
     db_lock_wait_sample_count: int | None = None
@@ -763,9 +806,62 @@ class MetricsSnapshot:
         return d
 
 
+@dataclass
+class PollingStats:
+    """Bounded diagnostics for dashboard/runtime polling."""
+
+    summary_successes: int = 0
+    summary_failures: int = 0
+    runtime_successes: int = 0
+    runtime_failures: int = 0
+    last_error: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "summary_successes": self.summary_successes,
+            "summary_failures": self.summary_failures,
+            "runtime_successes": self.runtime_successes,
+            "runtime_failures": self.runtime_failures,
+            "last_error": self.last_error,
+        }
+
+
+def evaluate_drain_gate(
+    final_snapshot: MetricsSnapshot | None,
+    max_pending: int,
+    max_active: int,
+) -> tuple[bool, str | None]:
+    if final_snapshot is None:
+        return False, "no final runtime snapshot"
+    if (
+        final_snapshot.pending_requests is None
+        or final_snapshot.active_reservations is None
+    ):
+        return False, "drain metrics unavailable"
+    if (
+        final_snapshot.pending_requests <= max_pending
+        and final_snapshot.active_reservations <= max_active
+    ):
+        return True, None
+    return (
+        False,
+        f"drain: pending={final_snapshot.pending_requests} "
+        f"reservations={final_snapshot.active_reservations}",
+    )
+
+
+def _write_atomic_json(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
 # ---------------------------------------------------------------------------
 # Load generator
 # ---------------------------------------------------------------------------
+
+_thread_lock = threading.Lock()
 
 
 async def _generate_load(
@@ -814,14 +910,13 @@ async def _generate_load(
                     if resp.status_code >= 400:
                         window.error_count += 1
 
-                # Consume streaming response fully (may timeout on connection close)
                 if streaming and resp.status_code == 200:
                     chunks = 0
                     try:
                         async for _ in resp.aiter_bytes():
                             chunks += 1
                     except Exception:
-                        pass  # ReadTimeout from mock upstream connection close
+                        pass
                     chunk_counts.append(chunks)
             except Exception:
                 with _thread_lock:
@@ -845,7 +940,6 @@ async def _generate_load(
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
 
-            # Inter-burst interval
             wait = profile.burst_interval_s * rng.uniform(0.8, 1.2)
             remaining = deadline - time.monotonic()
             if remaining > 0 and not cancelled_flag.is_set():
@@ -860,12 +954,6 @@ async def _generate_load(
 
 
 # ---------------------------------------------------------------------------
-# Thread-safe lock for metrics accumulation
-# ---------------------------------------------------------------------------
-
-_thread_lock = threading.Lock()
-
-# ---------------------------------------------------------------------------
 # Dashboard / runtime metrics poller
 # ---------------------------------------------------------------------------
 
@@ -878,9 +966,11 @@ async def _poll_dashboard(
     deadline: float,
     upstream_state: MockUpstreamState,
     db_path: str,
+    eggpool_pid: int,
     metrics: deque[MetricsSnapshot],
     cancelled_flag: asyncio.Event,
     start_time: float,
+    polling_stats: PollingStats,
 ) -> None:
     """Poll dashboard endpoints and collect metrics at a fixed cadence."""
     import httpx
@@ -892,24 +982,26 @@ async def _poll_dashboard(
         while time.monotonic() < deadline and not cancelled_flag.is_set():
             us = upstream_state.snapshot()
 
-            # Query EggPool stats
-            pending = 0
-            active_resv = 0
-            db_lock_p95 = None
-            db_lock_max = None
-            db_lock_count = None
+            pending: int | None = None
+            active_resv: int | None = None
             try:
                 r = await client.get(
                     "/api/stats/summary",
                     headers={"Authorization": f"Bearer {api_key}"},
                 )
                 if r.status_code == 200:
-                    data = r.json()
-                    pending = data.get("pending_requests", 0)
-                    active_resv = data.get("active_reservations", 0)
-            except Exception:
-                pass
+                    r.json()
+                    polling_stats.summary_successes += 1
+                else:
+                    polling_stats.summary_failures += 1
+                    polling_stats.last_error = f"summary HTTP {r.status_code}"
+            except Exception as exc:
+                polling_stats.summary_failures += 1
+                polling_stats.last_error = str(exc)[:200]
 
+            db_lock_p95: float | None = None
+            db_lock_max: float | None = None
+            db_lock_count: int | None = None
             try:
                 r = await client.get(
                     "/api/stats/runtime",
@@ -922,21 +1014,22 @@ async def _poll_dashboard(
                         db_lock_p95 = contention.get("lock_wait_p95_ms")
                         db_lock_max = contention.get("lock_wait_max_ms")
                         db_lock_count = contention.get("lock_wait_sample_count")
-            except Exception:
-                pass
+                    routing_runtime = rt.get("routing_runtime", {})
+                    pending = routing_runtime.get("pending_count")
+                    active_resv = routing_runtime.get("active_reservations_count")
+                    polling_stats.runtime_successes += 1
+                else:
+                    polling_stats.runtime_failures += 1
+                    polling_stats.last_error = f"runtime HTTP {r.status_code}"
+            except Exception as exc:
+                polling_stats.runtime_failures += 1
+                polling_stats.last_error = str(exc)[:200]
 
-            # DB file size
             db_size = 0
             if os.path.exists(db_path):
                 db_size = os.path.getsize(db_path)
 
-            # RSS
-            usage = resource.getrusage(resource.RUSAGE_SELF)
-            rss = (
-                usage.ru_maxrss * 1024
-                if platform.system() == "Darwin"
-                else usage.ru_maxrss
-            )
+            rss = read_process_rss_bytes(eggpool_pid)
 
             snap = MetricsSnapshot(
                 timestamp=time.time(),
@@ -1022,140 +1115,7 @@ def _terminate_eggpool(proc: subprocess.Popen[str], *, timeout: float = 10.0) ->
 
 
 # ---------------------------------------------------------------------------
-# Artifact writers
-# ---------------------------------------------------------------------------
-
-
-def _write_metrics_jsonl(path: Path, snapshots: list[MetricsSnapshot]) -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        for snap in snapshots:
-            f.write(json.dumps(snap.to_dict()) + "\n")
-
-
-def _compute_manifest(output_dir: Path) -> dict[str, str]:
-    manifest: dict[str, str] = {}
-    for p in sorted(output_dir.iterdir()):
-        if p.is_file() and p.name != "manifest.json":
-            h = hashlib.sha256(p.read_bytes()).hexdigest()
-            manifest[p.name] = h
-    return manifest
-
-
-def _write_manifest(output_dir: Path) -> None:
-    manifest = _compute_manifest(output_dir)
-    (output_dir / "manifest.json").write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-
-
-def _write_summary_md(
-    path: Path,
-    *,
-    profile_name: str,
-    mode_name: str,
-    environment: dict[str, Any],
-    early_window: WindowMetrics,
-    late_window: WindowMetrics,
-    gate_status: dict[str, Any],
-    total_duration_s: float,
-) -> None:
-    lines = [
-        "# Dispatch Stability Soak Summary",
-        "",
-        f"- **Profile**: {profile_name}",
-        f"- **Mode**: {mode_name}",
-        f"- **Git SHA**: {environment.get('git_sha', 'unknown')}",
-        f"- **Python**: {environment.get('python', 'unknown')}",
-        f"- **Platform**: {environment.get('platform', 'unknown')}",
-        f"- **Duration**: {total_duration_s:.0f}s",
-        "",
-        "## Windows",
-        "",
-        "| Metric | Early | Late | Ratio | Gate |",
-        "|--------|-------|------|-------|------|",
-    ]
-
-    for label, early_val, late_val, ratio_key, limit in [
-        (
-            "Requests",
-            early_window.request_count,
-            late_window.request_count,
-            "throughput_decline",
-            gate_status.get("throughput_decline_limit", 0),
-        ),
-    ]:
-        ratio = late_val / early_val if early_val > 0 else 0.0
-        passed = ratio >= (1.0 - limit) if ratio_key == "throughput_decline" else True
-        mark = "PASS" if passed else "FAIL"
-        lines.append(f"| {label} | {early_val} | {late_val} | {ratio:.3f} | {mark} |")
-
-    for label, early_val, late_val, _ratio_key, limit in [
-        (
-            "Dispatch p95 (ms)",
-            early_window.percentile(0.95),
-            late_window.percentile(0.95),
-            "dispatch_p95_ratio",
-            gate_status.get("dispatch_p95_ratio_limit", 0),
-        ),
-        (
-            "Dispatch p99 (ms)",
-            early_window.percentile(0.99),
-            late_window.percentile(0.99),
-            "dispatch_p99_ratio",
-            gate_status.get("dispatch_p99_ratio_limit", 0),
-        ),
-    ]:
-        ratio = late_val / early_val if early_val > 0 else 0.0
-        passed = ratio <= (1.0 + limit)
-        mark = "PASS" if passed else "FAIL"
-        lines.append(
-            f"| {label} | {early_val:.1f} | {late_val:.1f} | {ratio:.3f} | {mark} |"
-        )
-
-    lines.extend(
-        [
-            "",
-            "## Gate Status",
-            "",
-        ]
-    )
-    for k, v in gate_status.items():
-        mark = "PASS" if v is True else ("FAIL" if v is False else str(v))
-        lines.append(f"- **{k}**: {mark}")
-
-    lines.extend(
-        [
-            "",
-            "## Windows Detail",
-            "",
-            "### Early Window",
-            "",
-            f"- Duration: {early_window.duration_s:.0f}s",
-            f"- Requests: {early_window.request_count}",
-            f"- Errors: {early_window.error_count}",
-            f"- Throughput: {early_window.throughput_rps:.2f} req/s",
-            f"- Pending at end: {early_window.pending_at_end}",
-            f"- Active reservations at end: {early_window.active_reservations_at_end}",
-            f"- DB size: {early_window.db_size_bytes:,} bytes",
-            "",
-            "### Late Window",
-            "",
-            f"- Duration: {late_window.duration_s:.0f}s",
-            f"- Requests: {late_window.request_count}",
-            f"- Errors: {late_window.error_count}",
-            f"- Throughput: {late_window.throughput_rps:.2f} req/s",
-            f"- Pending at end: {late_window.pending_at_end}",
-            f"- Active reservations at end: {late_window.active_reservations_at_end}",
-            f"- DB size: {late_window.db_size_bytes:,} bytes",
-            "",
-        ],
-    )
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-# ---------------------------------------------------------------------------
-# SQLite offline audit (reads the file directly, no EggPool needed)
+# SQLite offline audit
 # ---------------------------------------------------------------------------
 
 
@@ -1172,7 +1132,6 @@ def _sqlite_offline_audit(db_path: str) -> dict[str, Any]:
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
 
-        # Check for pending requests
         cur.execute("SELECT COUNT(*) AS c FROM requests WHERE status = 'pending'")
         pending = cur.fetchone()["c"]
         if pending > 0:
@@ -1180,7 +1139,6 @@ def _sqlite_offline_audit(db_path: str) -> dict[str, Any]:
             result["violations"].append(f"{pending} pending requests remain")
         result["pending_requests"] = pending
 
-        # Check for active reservations
         cur.execute(
             "SELECT COUNT(*) AS c FROM reservations WHERE status = 'active' "
             "AND expires_at > unixepoch('now')"
@@ -1191,11 +1149,9 @@ def _sqlite_offline_audit(db_path: str) -> dict[str, Any]:
             result["violations"].append(f"{active} active reservations remain")
         result["active_reservations"] = active
 
-        # Total request count
         cur.execute("SELECT COUNT(*) AS c FROM requests")
         result["total_requests"] = cur.fetchone()["c"]
 
-        # Total attempt count
         cur.execute("SELECT COUNT(*) AS c FROM request_attempts")
         result["total_attempts"] = cur.fetchone()["c"]
 
@@ -1214,36 +1170,33 @@ def _sqlite_offline_audit(db_path: str) -> dict[str, Any]:
 
 async def _run_soak(args: argparse.Namespace) -> int:
     profile_name: str = args.profile
-    mode_name: str = args.mode
-    output_dir = Path(args.output)
+    duration_seconds: int = args.duration_seconds
+    output_path = Path(args.output)
     seed: int = args.seed
 
     if profile_name not in PROFILES:
         print(f"Unknown profile: {profile_name}", file=sys.stderr)
         print(f"Available: {', '.join(sorted(PROFILES))}", file=sys.stderr)
         return 1
-    if mode_name not in DURATION_MODES:
-        print(f"Unknown mode: {mode_name}", file=sys.stderr)
-        print(f"Available: {', '.join(sorted(DURATION_MODES))}", file=sys.stderr)
-        return 1
 
     profile = PROFILES[profile_name]
-    mode = DURATION_MODES[mode_name]
+    plan = build_duration_plan(float(duration_seconds))
     rng = random.Random(seed)
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    process_log_path = output_dir / "process.log"
-    metrics_jsonl_path = output_dir / "metrics.jsonl"
-    summary_json_path = output_dir / "summary.json"
-    summary_md_path = output_dir / "summary.md"
 
     environment = _collect_environment()
     logger.info("Environment: %s", json.dumps(_redact_dict(environment), indent=2))
+    logger.info(
+        "Duration plan: warmup=%.1fs early=%.1fs drain=%.1fs late=%.1fs",
+        plan.warmup_s,
+        plan.early_window_s,
+        plan.drain_s,
+        plan.late_window_s,
+    )
 
-    # Create working directory for DB and config
     work_dir = Path(tempfile.mkdtemp(prefix="eggpool-soak-"))
     logger.info("Working directory: %s", work_dir)
 
+    process_log_path = work_dir / "process.log"
     db_path = str(work_dir / "eggpool.db")
     config_path = str(work_dir / "config.toml")
 
@@ -1260,7 +1213,6 @@ async def _run_soak(args: argparse.Namespace) -> int:
     upstream_port = upstream_server.server_address[1]
     logger.info("Mock upstream on port %d", upstream_port)
 
-    # Write config
     _write_soak_config(
         Path(config_path),
         server_port=server_port,
@@ -1279,12 +1231,10 @@ async def _run_soak(args: argparse.Namespace) -> int:
         routing_trace_sample_rate=profile.routing_trace_sample_rate,
     )
 
-    # Environment for subprocess
     env = os.environ.copy()
     env["PYTHONHASHSEED"] = "0"
     env["TZ"] = "UTC"
 
-    # Start EggPool
     logger.info("Starting EggPool on port %d...", server_port)
     proc = await _start_eggpool(config_path, str(process_log_path), env)
 
@@ -1292,17 +1242,38 @@ async def _run_soak(args: argparse.Namespace) -> int:
         healthy = await _wait_healthy(server_port, timeout=45.0)
         if not healthy:
             logger.error("EggPool did not become healthy within timeout")
+            _write_atomic_json(
+                output_path,
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "script_version": SCRIPT_VERSION,
+                    "passed": False,
+                    "failure_reasons": [
+                        "EggPool did not become healthy within timeout"
+                    ],
+                    "git_sha": environment.get("git_sha", "unknown"),
+                    "profile": profile_name,
+                    "seed": seed,
+                    "requested_duration_seconds": duration_seconds,
+                    "platform": {
+                        "system": environment.get("system", "unknown"),
+                        "arch": environment.get("arch", "unknown"),
+                        "python": environment.get("python", "unknown"),
+                    },
+                },
+            )
             return 10
         logger.info("EggPool is healthy (PID %d)", proc.pid)
 
         start_time = time.monotonic()
         metrics: deque[MetricsSnapshot] = deque(maxlen=10000)
         cancelled_flag = asyncio.Event()
+        polling_stats = PollingStats()
+        gen_counter = [0]
 
         # --- Warm-up phase ---
-        logger.info("Warm-up phase: %.0fs", mode.warmup_s)
-        warmup_deadline = start_time + mode.warmup_s
-        gen_counter = [0]
+        logger.info("Warm-up phase: %.0fs", plan.warmup_s)
+        warmup_deadline = start_time + plan.warmup_s
         await _generate_load(
             base_url=str(server_port),
             api_key=api_key,
@@ -1316,7 +1287,7 @@ async def _run_soak(args: argparse.Namespace) -> int:
         )
 
         # --- Early window ---
-        logger.info("Early measurement window: %.0fs", mode.early_window_s)
+        logger.info("Early measurement window: %.0fs", plan.early_window_s)
         early_start = time.monotonic()
         early_window = WindowMetrics(name="early", start_time=early_start)
 
@@ -1324,7 +1295,7 @@ async def _run_soak(args: argparse.Namespace) -> int:
             base_url=str(server_port),
             api_key=api_key,
             profile=profile,
-            deadline=early_start + mode.early_window_s,
+            deadline=early_start + plan.early_window_s,
             rng=rng,
             metrics=metrics,
             window=early_window,
@@ -1334,13 +1305,15 @@ async def _run_soak(args: argparse.Namespace) -> int:
         early_poll = _poll_dashboard(
             base_url=str(server_port),
             api_key=api_key,
-            poll_interval_s=mode.poll_interval_s,
-            deadline=early_start + mode.early_window_s,
+            poll_interval_s=plan.poll_interval_s,
+            deadline=early_start + plan.early_window_s,
             upstream_state=mock_state,
             db_path=db_path,
+            eggpool_pid=proc.pid,
             metrics=metrics,
             cancelled_flag=cancelled_flag,
             start_time=start_time,
+            polling_stats=polling_stats,
         )
         await asyncio.gather(early_load, early_poll)
         early_window.end_time = time.monotonic()
@@ -1350,15 +1323,13 @@ async def _run_soak(args: argparse.Namespace) -> int:
             early_window.throughput_rps,
         )
 
-        # Drain period between windows
-        drain_s = min(30.0, mode.total_s * 0.01)
-        logger.info("Drain period: %.0fs", drain_s)
-        drain_deadline = time.monotonic() + drain_s
+        logger.info("Drain period: %.0fs", plan.drain_s)
+        drain_deadline = time.monotonic() + plan.drain_s
         while time.monotonic() < drain_deadline and not cancelled_flag.is_set():
             await asyncio.sleep(1.0)
 
         # --- Late window ---
-        logger.info("Late measurement window: %.0fs", mode.late_window_s)
+        logger.info("Late measurement window: %.0fs", plan.late_window_s)
         late_start = time.monotonic()
         late_window = WindowMetrics(name="late", start_time=late_start)
 
@@ -1366,7 +1337,7 @@ async def _run_soak(args: argparse.Namespace) -> int:
             base_url=str(server_port),
             api_key=api_key,
             profile=profile,
-            deadline=late_start + mode.late_window_s,
+            deadline=late_start + plan.late_window_s,
             rng=rng,
             metrics=metrics,
             window=late_window,
@@ -1376,13 +1347,15 @@ async def _run_soak(args: argparse.Namespace) -> int:
         late_poll = _poll_dashboard(
             base_url=str(server_port),
             api_key=api_key,
-            poll_interval_s=mode.poll_interval_s,
-            deadline=late_start + mode.late_window_s,
+            poll_interval_s=plan.poll_interval_s,
+            deadline=late_start + plan.late_window_s,
             upstream_state=mock_state,
             db_path=db_path,
+            eggpool_pid=proc.pid,
             metrics=metrics,
             cancelled_flag=cancelled_flag,
             start_time=start_time,
+            polling_stats=polling_stats,
         )
         await asyncio.gather(late_load, late_poll)
         late_window.end_time = time.monotonic()
@@ -1394,53 +1367,83 @@ async def _run_soak(args: argparse.Namespace) -> int:
 
         total_duration_s = time.monotonic() - start_time
 
+        # --- Collect process RSS snapshot ---
+        rss_end = read_process_rss_bytes(proc.pid)
+
         # --- Gate evaluation ---
         gate_status: dict[str, Any] = {}
+        failure_reasons: list[str] = []
 
         # Throughput decline
         if early_window.throughput_rps > 0:
             throughput_ratio = late_window.throughput_rps / early_window.throughput_rps
-            throughput_pass = throughput_ratio >= (1.0 - mode.throughput_decline_limit)
+            throughput_pass = throughput_ratio >= (1.0 - plan.throughput_decline_limit)
         else:
             throughput_ratio = 0.0
             throughput_pass = early_window.request_count == 0
         gate_status["throughput_decline"] = round(throughput_ratio, 4)
-        gate_status["throughput_decline_limit"] = mode.throughput_decline_limit
+        gate_status["throughput_decline_limit"] = plan.throughput_decline_limit
         gate_status["throughput_decline_pass"] = throughput_pass
+        if not throughput_pass:
+            failure_reasons.append(
+                f"throughput decline: ratio={throughput_ratio:.4f} "
+                f"limit={plan.throughput_decline_limit}"
+            )
 
         # Dispatch latency ratio
         early_p95 = early_window.percentile(0.95)
         late_p95 = late_window.percentile(0.95)
         p95_ratio = late_p95 / early_p95 if early_p95 > 0 else 0.0
-        p95_pass = p95_ratio <= (1.0 + mode.dispatch_p95_ratio_limit)
+        p95_pass = p95_ratio <= (1.0 + plan.dispatch_p95_ratio_limit)
         gate_status["dispatch_p95_ratio"] = round(p95_ratio, 4)
-        gate_status["dispatch_p95_ratio_limit"] = mode.dispatch_p95_ratio_limit
+        gate_status["dispatch_p95_ratio_limit"] = plan.dispatch_p95_ratio_limit
         gate_status["dispatch_p95_pass"] = p95_pass
+        if not p95_pass:
+            failure_reasons.append(
+                f"dispatch p95 ratio: {p95_ratio:.4f} "
+                f"limit={plan.dispatch_p95_ratio_limit}"
+            )
 
         early_p99 = early_window.percentile(0.99)
         late_p99 = late_window.percentile(0.99)
         p99_ratio = late_p99 / early_p99 if early_p99 > 0 else 0.0
-        p99_pass = p99_ratio <= (1.0 + mode.dispatch_p99_ratio_limit)
+        p99_pass = p99_ratio <= (1.0 + plan.dispatch_p99_ratio_limit)
         gate_status["dispatch_p99_ratio"] = round(p99_ratio, 4)
-        gate_status["dispatch_p99_ratio_limit"] = mode.dispatch_p99_ratio_limit
+        gate_status["dispatch_p99_ratio_limit"] = plan.dispatch_p99_ratio_limit
         gate_status["dispatch_p99_pass"] = p99_pass
+        if not p99_pass:
+            failure_reasons.append(
+                f"dispatch p99 ratio: {p99_ratio:.4f} "
+                f"limit={plan.dispatch_p99_ratio_limit}"
+            )
 
-        # Queue drain (final snapshot)
         final_snap = metrics[-1] if metrics else None
-        pending_final = final_snap.pending_requests if final_snap else 0
-        active_final = final_snap.active_reservations if final_snap else 0
-        drain_pass = (
-            pending_final <= mode.max_pending_requests
-            and active_final <= mode.max_active_reservations
+        drain_pass, drain_reason = evaluate_drain_gate(
+            final_snap, plan.max_pending_requests, plan.max_active_reservations
         )
-        gate_status["pending_at_end"] = pending_final
-        gate_status["active_reservations_at_end"] = active_final
+        gate_status["pending_at_end"] = (
+            final_snap.pending_requests if final_snap else None
+        )
+        gate_status["active_reservations_at_end"] = (
+            final_snap.active_reservations if final_snap else None
+        )
         gate_status["drain_pass"] = drain_pass
+        if drain_reason:
+            failure_reasons.append(drain_reason)
 
-        # Offline SQLite audit
+        rss_pass = True
+        if profile.rss_required and rss_end is None:
+            rss_pass = False
+            failure_reasons.append("child RSS unavailable")
+        gate_status["rss_available"] = rss_end is not None
+        gate_status["rss_required"] = profile.rss_required
+        gate_status["rss_pass"] = rss_pass
+
         audit = _sqlite_offline_audit(db_path)
         gate_status["sqlite_audit_pass"] = audit["passed"]
         gate_status["sqlite_audit_violations"] = audit.get("violations", [])
+        if not audit["passed"]:
+            failure_reasons.append(f"sqlite audit: {audit.get('violations', [])}")
 
         all_passed = all(
             gate_status.get(k, True) is True
@@ -1449,61 +1452,68 @@ async def _run_soak(args: argparse.Namespace) -> int:
                 "dispatch_p95_pass",
                 "dispatch_p99_pass",
                 "drain_pass",
+                "rss_pass",
                 "sqlite_audit_pass",
             ]
         )
         gate_status["all_passed"] = all_passed
 
-        # --- Write artifacts ---
-        _write_metrics_jsonl(metrics_jsonl_path, list(metrics))
+        # --- Collect early/late RSS samples ---
+        early_rss_samples = [
+            m.rss_bytes
+            for m in metrics
+            if m.rss_bytes is not None
+            and m.elapsed_s < plan.warmup_s + plan.early_window_s
+        ]
+        late_rss_samples = [
+            m.rss_bytes
+            for m in metrics
+            if m.rss_bytes is not None
+            and m.elapsed_s >= plan.warmup_s + plan.early_window_s + plan.drain_s
+        ]
+        rss_peak = max(
+            early_rss_samples + late_rss_samples,
+            default=None,
+        )
 
-        summary_data = {
+        # --- Build and write one atomic JSON file ---
+        result_data = {
             "schema_version": SCHEMA_VERSION,
             "script_version": SCRIPT_VERSION,
-            "environment": _redact_dict(environment),
-            "profile": dataclasses.asdict(profile),
-            "mode": dataclasses.asdict(mode),
+            "passed": all_passed,
+            "failure_reasons": failure_reasons,
+            "git_sha": environment.get("git_sha", "unknown"),
+            "profile": profile_name,
             "seed": seed,
-            "config": {
-                "server_port": server_port,
-                "upstream_port": upstream_port,
-                "db_path": db_path,
-                "working_directory": str(work_dir),
+            "requested_duration_seconds": duration_seconds,
+            "actual_duration_seconds": round(total_duration_s, 2),
+            "platform": {
+                "system": environment.get("system", "unknown"),
+                "arch": environment.get("arch", "unknown"),
+                "python": environment.get("python", "unknown"),
             },
-            "windows": {
-                "early": early_window.to_dict(),
-                "late": late_window.to_dict(),
+            "process": {
+                "eggpool_pid": proc.pid,
+                "rss_start_bytes": early_rss_samples[0] if early_rss_samples else None,
+                "rss_end_bytes": rss_end,
+                "rss_peak_bytes": rss_peak,
             },
-            "gate_status": gate_status,
-            "total_duration_s": round(total_duration_s, 2),
-            "metrics_samples": len(metrics),
+            "early": early_window.to_dict(),
+            "late": late_window.to_dict(),
+            "gates": gate_status,
+            "database_audit": audit,
+            "polling": polling_stats.to_dict(),
         }
-        summary_json_path.write_text(
-            json.dumps(summary_data, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
 
-        _write_summary_md(
-            summary_md_path,
-            profile_name=profile_name,
-            mode_name=mode_name,
-            environment=environment,
-            early_window=early_window,
-            late_window=late_window,
-            gate_status=gate_status,
-            total_duration_s=total_duration_s,
-        )
+        _write_atomic_json(output_path, result_data)
 
-        _write_manifest(output_dir)
-
-        # --- Print summary ---
+        # --- Print concise terminal summary ---
         print("\n" + "=" * 72)
         print("DISPATCH STABILITY SOAK COMPLETE")
         print("=" * 72)
         print(f"Profile: {profile_name}")
-        print(f"Mode:    {mode_name}")
         print(f"Seed:    {seed}")
-        print(f"Duration: {total_duration_s:.0f}s")
+        print(f"Duration: {total_duration_s:.0f}s (requested {duration_seconds}s)")
         print(f"Git SHA: {environment.get('git_sha', 'unknown')}")
         print()
         print("Early Window:")
@@ -1518,26 +1528,36 @@ async def _run_soak(args: argparse.Namespace) -> int:
         print(f"  Dispatch p95: {late_p95:.1f}ms  p99: {late_p99:.1f}ms")
         print(f"  Errors: {late_window.error_count}")
         print()
+        if rss_end is not None:
+            print(f"RSS (child): {rss_end:,} bytes")
+        else:
+            print("RSS (child): unavailable")
+        print()
         print("Gates:")
         for k in [
             "throughput_decline_pass",
             "dispatch_p95_pass",
             "dispatch_p99_pass",
             "drain_pass",
+            "rss_pass",
             "sqlite_audit_pass",
             "all_passed",
         ]:
             v = gate_status.get(k, "N/A")
             mark = "PASS" if v is True else ("FAIL" if v is False else str(v))
             print(f"  {k}: {mark}")
+        if failure_reasons:
+            print()
+            print("Failure reasons:")
+            for reason in failure_reasons:
+                print(f"  - {reason}")
         print()
-        print(f"Artifacts: {output_dir}")
+        print(f"Output: {output_path}")
         print("=" * 72)
 
         return 0 if all_passed else 1
 
     finally:
-        # Cleanup
         logger.info("Terminating EggPool (PID %d)...", proc.pid)
         _terminate_eggpool(proc)
         upstream_server.shutdown()
@@ -1561,15 +1581,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Soak test profile (default: balanced-file-backed)",
     )
     parser.add_argument(
-        "--mode",
-        choices=list(DURATION_MODES),
-        default="smoke",
-        help="Duration mode (default: smoke)",
+        "--duration-seconds",
+        type=_validate_duration,
+        default=300,
+        help="Total validation duration in seconds (default: 300, minimum: 30)",
     )
     parser.add_argument(
         "--output",
-        default="artifacts/dispatch-soak",
-        help="Output directory for artifacts (default: artifacts/dispatch-soak)",
+        default="/tmp/eggpool-runtime-validation.json",
+        help="Output JSON file path (default: /tmp/eggpool-runtime-validation.json)",
     )
     parser.add_argument(
         "--seed",

@@ -949,9 +949,10 @@ async def test_d3_mixed_live_plus_restart_rejected_atomically(
             gen_before = await _runtime_generation_id(client, server_port)
 
         # Change both LIVE and RESTART_REQUIRED fields atomically
+        replacement_port = _free_port()
         _write_config(
             config_path,
-            server_port=server_port + 999,  # RESTART_REQUIRED
+            server_port=replacement_port,  # RESTART_REQUIRED
             upstream_port=upstream_port,
             inflight_penalty=200_000,  # LIVE
         )
