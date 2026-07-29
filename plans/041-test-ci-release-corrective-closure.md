@@ -1,7 +1,7 @@
 # Final Test, CI, and Release Corrective Closure
 
 Date: 2026-07-28
-Status: corrective closure pending — see Plan 042
+Status: completed — corrective closure landed at b5959ed8 via Plan 042; both ordinary CI jobs green on that commit
 
 Parent plans:
 

@@ -1,7 +1,7 @@
 # Runtime Validation Gate Corrective Closure
 
 Date: 2026-07-29
-Status: implementation handoff
+Status: completed — corrective closure landed at b5959ed8; both ordinary CI jobs green on that commit; canonical 60s sbc-reference run all gates pass
 
 Parent plans:
 
@@ -1179,3 +1179,51 @@ Do not close this plan if any of the following remain:
 This line of work is closed when Eggpool's simplified verification model remains intact and the runtime-validation runner becomes trustworthy as a functional gate: it must observe final state only after load has stopped, apply latency ratio limits according to their names, require actual successful traffic, fail closed on missing evidence, and prove its own real subprocess lifecycle in a short deterministic test.
 
 The repository must still have only two ordinary CI jobs, one manual runtime-validation workflow, one JSON result file, and manual release publication. Both ordinary CI jobs must pass on the final implementation commit before Plans 040, 041, and 042 are declared complete.
+
+## Closure evidence
+
+Implementation commits pushed to `origin/main`:
+
+- `a2dd66db` — Correct runtime validation gate semantics (workstreams B/C/D/F)
+- `727f3d06` — Prove runtime validation process lifecycle (workstream E)
+- `c4d717d3` — Use balanced-file-backed profile in runtime-validation smoke
+- `9775dbf6` — Extend smoke windows to gather steady-state ratio on cold CI
+- `b5959ed8` — Relax ratio limits in process smoke for cold-start CI variance
+
+Final-head CI proof on commit `b5959ed8`:
+
+| Job          | Result   | Notes                                                |
+|--------------|----------|------------------------------------------------------|
+| `check`      | success  | Python 3.12, ruff format + check + pyright + 8504 tests |
+| `compat-311` | success  | Python 3.11, `tests/smoke/` — 11 passed              |
+
+Canonical 60-second `sbc-reference` runner command executed from a clean checkout against commit `b5959ed8`:
+
+```bash
+uv run python scripts/run_dispatch_stability_soak.py \
+  --profile sbc-reference \
+  --duration-seconds 60 \
+  --seed 42 \
+  --output /tmp/plan042-evidence/canonical-sbc-60s.json
+```
+
+Result summary from `/tmp/plan042-evidence/canonical-sbc-60s.json`:
+
+- `passed: true`, `failure_reasons: []`
+- Schema version 2, script version 2.1.0, git SHA `b5959ed8`
+- Gate results: `database_audit=pass`, `dispatch_p95=pass` (ratio 0.94 ≤ 1.50),
+  `dispatch_p99=pass` (ratio 0.97 ≤ 2.00), `quiescence=pass` (drained in 0.035 s,
+  pending=0, active_reservations=0), `rss=pass` (start 58.8 MB, end 26.9 MB,
+  peak 59.0 MB), `throughput=pass` (ratio 1.17 ≥ 0.80), `workload=pass`
+  (early 29 successes with 11 stream + 18 non-stream, late 34 successes with
+  17 stream + 17 non-stream)
+
+Process-level smoke (`tests/integration/test_runtime_validation_process_smoke.py`)
+is stable across 10 consecutive local runs (11.3–11.6 s each, well under the 20 s
+hard maximum) and uses a Python-internal seam that overrides `DurationPlan`,
+`quiescence_timeout_s`, and `request_shapes`. The smoke widens the ratio limits
+to 10.0 because the production 1.50/2.00 caps are calibrated for ≥60 s steady-state
+runs; the unit tests in `tests/unit/test_runtime_validation_runner.py` continue to
+pin production cap semantics.
+
+Plans 040, 041, and 042 are now closed.
