@@ -21,13 +21,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import contextlib
 import hashlib
 import json
 import logging
 import os
 import platform
 import random
+import re
 import shutil
 import socket
 import sqlite3
@@ -77,7 +77,6 @@ def _validate_duration(value: str) -> int:
 _CREDENTIAL_REDACT_PATTERNS: tuple[str, ...] = (
     "sk-",
     "Bearer ",
-    "key-",
     "token-",
     "password=",
     "secret=",
@@ -1502,8 +1501,61 @@ _PROCESS_LOG_TAIL_MAX_LINES = 100
 _PROCESS_LOG_TAIL_MAX_BYTES = 16 * 1024
 
 
+def _redact_log_line(line: str, *, secrets: Iterable[str] | None = None) -> str:
+    """Redact credential-bearing content within a single log line.
+
+    Processes each line independently so that a secret on one line does
+    not destroy unrelated diagnostic lines.
+    """
+    if not line:
+        return line
+    result = line
+    result = re.sub(
+        r"(Authorization:\s*Bearer\s+)(\S+)",
+        r"\1<redacted>",
+        result,
+        flags=re.IGNORECASE,
+    )
+    result = re.sub(
+        r"(api[_-]key\s*=\s*)([^\s,;]+)",
+        r"\1<redacted>",
+        result,
+        flags=re.IGNORECASE,
+    )
+    if secrets is not None:
+        for secret in secrets:
+            if secret and secret in result:
+                result = result.replace(secret, "<redacted>")
+    for pat in ("sk-", "token-", "password=", "secret="):
+        idx = result.lower().find(pat.lower())
+        while idx >= 0:
+            value_start = idx + len(pat)
+            value_end = value_start
+            while value_end < len(result) and result[value_end] not in (
+                " ",
+                "\t",
+                '"',
+                "'",
+                "\n",
+                "\r",
+                ",",
+                ";",
+                "}",
+                "]",
+                ">",
+            ):
+                value_end += 1
+            if value_end > value_start:
+                result = result[:value_start] + "<redacted>" + result[value_end:]
+            idx = result.lower().find(pat.lower(), value_start + len("<redacted>"))
+    return result
+
+
 def _read_process_log_tail(
-    log_path: Path, *, max_lines: int = _PROCESS_LOG_TAIL_MAX_LINES
+    log_path: Path,
+    *,
+    max_lines: int = _PROCESS_LOG_TAIL_MAX_LINES,
+    secrets: Iterable[str] | None = None,
 ) -> str:
     """Return a bounded, redacted tail of the Eggpool process log.
 
@@ -1518,12 +1570,13 @@ def _read_process_log_tail(
         return ""
     lines = raw.splitlines()
     tail = lines[-max_lines:] if len(lines) > max_lines else lines
-    joined = "\n".join(tail)
+    redacted = [_redact_log_line(ln, secrets=secrets) for ln in tail]
+    joined = "\n".join(redacted)
     if len(joined.encode("utf-8")) > _PROCESS_LOG_TAIL_MAX_BYTES:
         joined = joined.encode("utf-8")[:_PROCESS_LOG_TAIL_MAX_BYTES].decode(
             "utf-8", errors="replace"
         )
-    return _redact(joined)
+    return joined
 
 
 def _pid_is_alive(pid: int) -> bool:  # pyright: ignore[reportUnusedFunction]
@@ -1553,39 +1606,61 @@ def _cleanup_run_artifacts(
     process_log_path: Path,
     work_dir: Path,
     upstream_server: Any | None,
-) -> tuple[str, bool | None, bool | None, str | None]:
+    secrets: Iterable[str] | None = None,
+) -> tuple[str, bool | None, bool | None, tuple[str, ...]]:
     """One cleanup path used by every run_validation exit branch.
 
     Returns ``(process_log_tail, process_stopped, work_dir_removed,
-    cleanup_error)``. None of the values are written to the retained
+    cleanup_errors)``. None of the values are written to the retained
     JSON; the caller is responsible for placing them on the internal
     ValidationResult.
+
+    Every applicable cleanup step is attempted even when an earlier
+    step fails. Errors are collected deterministically.
     """
-    log_tail = _read_process_log_tail(process_log_path)
+    log_tail = _read_process_log_tail(process_log_path, secrets=secrets)
+
+    cleanup_errors: list[str] = []
 
     process_stopped: bool | None
     if proc is None:
         process_stopped = None
     else:
-        _terminate_eggpool(proc)
-        process_stopped = proc.poll() is not None
+        try:
+            _terminate_eggpool(proc)
+        except Exception as exc:
+            cleanup_errors.append(f"child termination failed: {exc}")
+        try:
+            process_stopped = proc.poll() is not None
+        except Exception as exc:
+            process_stopped = None
+            cleanup_errors.append(f"child poll failed: {exc}")
+        if process_stopped is False:
+            cleanup_errors.append("child process remained alive after termination")
 
     if upstream_server is not None:
-        with contextlib.suppress(Exception):
+        try:
             upstream_server.shutdown()
+        except Exception as exc:
+            cleanup_errors.append(f"mock upstream shutdown failed: {exc}")
+        try:
+            upstream_server.server_close()  # type: ignore[union-attr]
+        except Exception as exc:
+            cleanup_errors.append(f"mock upstream close failed: {exc}")
 
     work_dir_removed: bool | None = None
-    cleanup_error: str | None = None
     try:
         shutil.rmtree(work_dir)
     except FileNotFoundError:
         pass
     except OSError as exc:
-        cleanup_error = f"work directory cleanup failed: {exc}"
+        cleanup_errors.append(f"work directory cleanup failed: {exc}")
 
     work_dir_removed = not work_dir.exists()
+    if not work_dir_removed:
+        cleanup_errors.append("work directory remains after cleanup")
 
-    return log_tail, process_stopped, work_dir_removed, cleanup_error
+    return log_tail, process_stopped, work_dir_removed, tuple(cleanup_errors)
 
 
 def _populate_cleanup_diagnostics(
@@ -1595,6 +1670,7 @@ def _populate_cleanup_diagnostics(
     process_log_path: Path,
     work_dir: Path,
     upstream_server: Any | None,
+    secrets: Iterable[str] | None = None,
 ) -> None:
     """Attach cleanup diagnostics to ``result`` in place.
 
@@ -1602,11 +1678,14 @@ def _populate_cleanup_diagnostics(
     call it. The runner does not retain the work directory on error
     paths; the bounded log tail is the diagnostic surface.
     """
-    log_tail, process_stopped, work_dir_removed, cleanup_error = _cleanup_run_artifacts(
-        proc=proc,
-        process_log_path=process_log_path,
-        work_dir=work_dir,
-        upstream_server=upstream_server,
+    log_tail, process_stopped, work_dir_removed, cleanup_errors = (
+        _cleanup_run_artifacts(
+            proc=proc,
+            process_log_path=process_log_path,
+            work_dir=work_dir,
+            upstream_server=upstream_server,
+            secrets=secrets,
+        )
     )
     result.process_log_tail = log_tail
     if proc is not None:
@@ -1614,7 +1693,8 @@ def _populate_cleanup_diagnostics(
     result.process_stopped = process_stopped
     result.work_dir = work_dir
     result.work_dir_removed = work_dir_removed
-    result.cleanup_error = cleanup_error
+    result.cleanup_errors = cleanup_errors
+    result.cleanup_error = "; ".join(cleanup_errors) if cleanup_errors else None
 
 
 # ---------------------------------------------------------------------------
@@ -1695,8 +1775,9 @@ class ValidationResult:
     """Final result of a runtime validation run.
 
     Diagnostic fields (``child_pid``, ``work_dir``, ``process_log_tail``,
-    ``process_stopped``, ``work_dir_removed``, ``cleanup_error``) are
-    Python-internal; they are not written into the retained JSON output.
+    ``process_stopped``, ``work_dir_removed``, ``cleanup_error``,
+    ``cleanup_errors``) are Python-internal; they are not written into
+    the retained JSON output.
     """
 
     passed: bool
@@ -1710,6 +1791,7 @@ class ValidationResult:
     process_stopped: bool | None = None
     work_dir_removed: bool | None = None
     cleanup_error: str | None = None
+    cleanup_errors: tuple[str, ...] = ()
 
 
 async def run_validation(
@@ -1771,43 +1853,6 @@ async def run_validation(
     db_path = str(work_dir / "eggpool.db")
     config_path = str(work_dir / "config.toml")
 
-    api_key = f"soak-key-{seed % 10000:04d}"
-    server_port = _free_port()
-
-    mock_state = MockUpstreamState(
-        chunks_per_stream=profile.chunks_per_stream,
-        chunk_delay_s=profile.chunk_delay_s,
-        error_rate=profile.error_rate,
-    )
-    upstream_server = _start_mock_upstream(mock_state)
-    upstream_port = upstream_server.server_address[1]
-    logger.info("Mock upstream on port %d", upstream_port)
-
-    _write_soak_config(
-        Path(config_path),
-        server_port=server_port,
-        upstream_port=upstream_port,
-        db_path=db_path,
-        api_key=api_key,
-        server_threads=profile.server_threads,
-        db_worker_threads=profile.db_worker_threads,
-        dispatch_batch_size=profile.dispatch_batch_size,
-        dispatch_batch_wait_ms=profile.dispatch_batch_wait_ms,
-        maintenance_batch_size=profile.maintenance_batch_size,
-        maintenance_budget_ms=profile.maintenance_budget_ms,
-        metrics_write_mode=profile.metrics_write_mode,
-        metrics_flush_interval_s=profile.metrics_flush_interval_s,
-        routing_trace_mode=profile.routing_trace_mode,
-        routing_trace_sample_rate=profile.routing_trace_sample_rate,
-    )
-
-    env = os.environ.copy()
-    env["PYTHONHASHSEED"] = "0"
-    env["TZ"] = "UTC"
-
-    logger.info("Starting EggPool on port %d...", server_port)
-    proc = await _start_eggpool(config_path, str(process_log_path), env)
-
     result = ValidationResult(
         passed=False,
         failure_reasons=[],
@@ -1815,35 +1860,75 @@ async def run_validation(
         duration_s=0.0,
         return_code=1,
     )
+    result.work_dir = work_dir
+
+    api_key = ""
+    server_port = 0
+
+    proc: subprocess.Popen[str] | None = None  # type: ignore[type-arg]
+    upstream_server: HTTPServer | None = None
+    result_data: dict[str, Any] | None = None
 
     try:
+        api_key = f"soak-key-{seed % 10000:04d}"
+        server_port = _free_port()
+
+        mock_state = MockUpstreamState(
+            chunks_per_stream=profile.chunks_per_stream,
+            chunk_delay_s=profile.chunk_delay_s,
+            error_rate=profile.error_rate,
+        )
+        upstream_server = _start_mock_upstream(mock_state)
+        upstream_port = upstream_server.server_address[1]
+        logger.info("Mock upstream on port %d", upstream_port)
+
+        _write_soak_config(
+            Path(config_path),
+            server_port=server_port,
+            upstream_port=upstream_port,
+            db_path=db_path,
+            api_key=api_key,
+            server_threads=profile.server_threads,
+            db_worker_threads=profile.db_worker_threads,
+            dispatch_batch_size=profile.dispatch_batch_size,
+            dispatch_batch_wait_ms=profile.dispatch_batch_wait_ms,
+            maintenance_batch_size=profile.maintenance_batch_size,
+            maintenance_budget_ms=profile.maintenance_budget_ms,
+            metrics_write_mode=profile.metrics_write_mode,
+            metrics_flush_interval_s=profile.metrics_flush_interval_s,
+            routing_trace_mode=profile.routing_trace_mode,
+            routing_trace_sample_rate=profile.routing_trace_sample_rate,
+        )
+
+        env = os.environ.copy()
+        env["PYTHONHASHSEED"] = "0"
+        env["TZ"] = "UTC"
+
+        logger.info("Starting EggPool on port %d...", server_port)
+        proc = await _start_eggpool(config_path, str(process_log_path), env)
+
         healthy = await _wait_healthy(server_port, timeout=health_timeout_s)
         if not healthy:
             logger.error("EggPool did not become healthy within timeout")
-            _write_atomic_json(
-                output_path,
-                {
-                    "schema_version": SCHEMA_VERSION,
-                    "script_version": SCRIPT_VERSION,
-                    "passed": False,
-                    "failure_reasons": [
-                        "EggPool did not become healthy within timeout"
-                    ],
-                    "git_sha": environment.get("git_sha", "unknown"),
-                    "profile": profile_name,
-                    "seed": seed,
-                    "requested_duration_seconds": duration_seconds,
-                    "platform": {
-                        "system": environment.get("system", "unknown"),
-                        "arch": environment.get("arch", "unknown"),
-                        "python": environment.get("python", "unknown"),
-                    },
-                },
-            )
             result.passed = False
             result.failure_reasons = ["EggPool did not become healthy within timeout"]
             result.duration_s = 0.0
             result.return_code = 10
+            result_data = {
+                "schema_version": SCHEMA_VERSION,
+                "script_version": SCRIPT_VERSION,
+                "passed": False,
+                "failure_reasons": result.failure_reasons,
+                "git_sha": environment.get("git_sha", "unknown"),
+                "profile": profile_name,
+                "seed": seed,
+                "requested_duration_seconds": duration_seconds,
+                "platform": {
+                    "system": environment.get("system", "unknown"),
+                    "arch": environment.get("arch", "unknown"),
+                    "python": environment.get("python", "unknown"),
+                },
+            }
             return result
         logger.info("EggPool is healthy (PID %d)", proc.pid)
 
@@ -2141,7 +2226,7 @@ async def run_validation(
             default=None,
         )
 
-        # --- Build and write one atomic JSON file ---
+        # --- Build in-memory JSON payload ---
         result_data = {
             "schema_version": SCHEMA_VERSION,
             "script_version": SCRIPT_VERSION,
@@ -2170,8 +2255,6 @@ async def run_validation(
             "database_audit": audit,
             "polling": polling_stats.to_dict(),
         }
-
-        _write_atomic_json(output_path, result_data)
 
         # --- Print concise terminal summary ---
         print("\n" + "=" * 72)
@@ -2238,15 +2321,69 @@ async def run_validation(
         result.return_code = return_code
         return result
 
+    except asyncio.CancelledError:
+        raise
+
+    except Exception as exc:
+        logger.exception("Runtime validation internal error")
+        msg = f"runtime validation internal error: {type(exc).__name__}: {exc!s:.200}"
+        if msg not in result.failure_reasons:
+            result.failure_reasons.append(msg)
+        result.passed = False
+        if result.return_code == 0:
+            result.return_code = 12
+        if result_data is None:
+            result_data = {
+                "schema_version": SCHEMA_VERSION,
+                "script_version": SCRIPT_VERSION,
+                "passed": False,
+                "failure_reasons": result.failure_reasons,
+                "git_sha": environment.get("git_sha", "unknown"),
+                "profile": profile_name,
+                "seed": seed,
+                "requested_duration_seconds": duration_seconds,
+                "platform": {
+                    "system": environment.get("system", "unknown"),
+                    "arch": environment.get("arch", "unknown"),
+                    "python": environment.get("python", "unknown"),
+                },
+            }
+        else:
+            result_data["passed"] = False
+            if msg not in result_data["failure_reasons"]:
+                result_data["failure_reasons"].append(msg)
+        return result
+
     finally:
-        logger.info("Terminating EggPool (PID %d)...", proc.pid)
+        logger.info(
+            "Cleaning up (proc=%s, upstream=%s)...",
+            proc.pid if proc else None,
+            type(upstream_server).__name__ if upstream_server else None,
+        )
         _populate_cleanup_diagnostics(
             result,
             proc=proc,
             process_log_path=process_log_path,
             work_dir=work_dir,
             upstream_server=upstream_server,
+            secrets=[api_key] if api_key else None,
         )
+
+        if result.cleanup_errors:
+            result.passed = False
+            if result.return_code == 0:
+                result.return_code = 12
+            for cerr in result.cleanup_errors:
+                if cerr not in result.failure_reasons:
+                    result.failure_reasons.append(cerr)
+
+        if result_data is not None:
+            result_data["passed"] = result.passed
+            result_data["failure_reasons"] = result.failure_reasons
+            try:
+                _write_atomic_json(output_path, result_data)
+            except Exception as write_exc:
+                logger.warning("Failed to write JSON output: %s", write_exc)
 
 
 # ---------------------------------------------------------------------------

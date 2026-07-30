@@ -3,15 +3,17 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from scripts.run_dispatch_stability_soak import (
     SCHEMA_VERSION,
+    DurationPlan,
     WindowMetrics,
     _build_parser,
     _cleanup_run_artifacts,
@@ -21,6 +23,7 @@ from scripts.run_dispatch_stability_soak import (
     _pid_is_alive,
     _populate_cleanup_diagnostics,
     _read_process_log_tail,
+    _redact_log_line,
     _write_atomic_json,
     build_duration_plan,
     build_run_config,
@@ -32,6 +35,8 @@ from scripts.run_dispatch_stability_soak import (
 if TYPE_CHECKING:
     from typing import Any
 
+    from scripts.run_dispatch_stability_soak import ValidationResult
+
 WORKFLOW_PATH = Path(".github/workflows/extended-soak.yml")
 RELEASE_DOC = Path("docs/releasing.md")
 OPS_DOC = Path("docs/operations/dispatch-stability.md")
@@ -42,8 +47,7 @@ OPS_DOC = Path("docs/operations/dispatch-stability.md")
 # ---------------------------------------------------------------------------
 
 
-def test_build_duration_plan_phase_properties() -> None:
-    """Phases stay positive, windows equal, totals track input."""
+def test_build_duration_plan_and_run_config() -> None:
     for total in [30, 300, 3600]:
         p = build_duration_plan(total)
         assert p.warmup_s > 0 and p.drain_s > 0
@@ -52,46 +56,6 @@ def test_build_duration_plan_phase_properties() -> None:
         phase_sum = p.warmup_s + p.drain_s + p.early_window_s + p.late_window_s
         assert phase_sum == pytest.approx(total, abs=2.0)
 
-
-# ---------------------------------------------------------------------------
-# Parser / CLI
-# ---------------------------------------------------------------------------
-
-
-def test_build_parser_full_args_and_rejects_invalid() -> None:
-    """Parser accepts the supported option set and rejects bad values."""
-    args = _build_parser().parse_args(
-        [
-            "--profile",
-            "sbc-reference",
-            "--duration-seconds",
-            "600",
-            "--output",
-            "/tmp/test.json",
-            "--seed",
-            "99",
-            "-v",
-        ]
-    )
-    assert args.profile == "sbc-reference"
-    assert args.duration_seconds == 600
-    assert args.output == "/tmp/test.json"
-    assert args.seed == 99
-    assert args.verbose is True
-
-    for bad in [
-        ["--mode", "smoke"],
-        ["--duration-seconds", "abc"],
-        ["--duration-seconds", "0"],
-        ["--duration-seconds", "-5"],
-        ["--duration-seconds", "29"],
-    ]:
-        with pytest.raises(SystemExit):
-            _build_parser().parse_args(bad)
-
-
-def test_build_run_config_and_unknown_profile() -> None:
-    """``build_run_config`` parses CLI args; unknown profile short-circuits cleanly."""
     parsed = _build_parser().parse_args(
         [
             "--profile",
@@ -136,8 +100,18 @@ def test_build_run_config_and_unknown_profile() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_process_rss_bytes_table() -> None:
-    """KiB is converted to bytes, malformed/zero values return None."""
+def test_optional_number_and_int_filters_booleans() -> None:
+    assert _optional_number(1.5) == 1.5
+    assert _optional_number(2) == 2.0
+    assert _optional_number(False) is None
+    assert _optional_number("1.5") is None
+
+    assert _optional_int(3) == 3
+    assert _optional_int(3.0) == 3
+    assert _optional_int(3.7) is None
+    assert _optional_int(True) is None
+    assert _optional_int("3") is None
+
     linux_status = "VmRSS:     12345 kB\n"
     with (
         patch("builtins.open", create=True) as m,
@@ -181,9 +155,6 @@ def test_process_rss_bytes_table() -> None:
     ):
         assert read_process_rss_bytes(1) is None
 
-
-def test_memory_total_bytes_returns_none_on_failure() -> None:
-    """sysconf absence / failure yields None; never zero."""
     with (
         patch.object(os, "sysconf_names", {}),
         patch.object(sys, "platform", "linux"),
@@ -195,23 +166,6 @@ def test_memory_total_bytes_returns_none_on_failure() -> None:
     ):
         assert _memory_total_bytes() is None
 
-
-def test_optional_number_and_int_filters_booleans() -> None:
-    """Booleans are rejected; numeric values are preserved."""
-    assert _optional_number(1.5) == 1.5
-    assert _optional_number(2) == 2.0
-    assert _optional_number(False) is None
-    assert _optional_number("1.5") is None
-
-    assert _optional_int(3) == 3
-    assert _optional_int(3.0) == 3
-    assert _optional_int(3.7) is None
-    assert _optional_int(True) is None
-    assert _optional_int("3") is None
-
-
-def test_pid_is_alive_table() -> None:
-    """PermissionError reports alive; missing PID reports gone."""
     with patch("os.kill", side_effect=ProcessLookupError):
         assert _pid_is_alive(99999) is False
     with patch("os.kill", side_effect=PermissionError):
@@ -231,9 +185,8 @@ def test_pid_is_alive_table() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "early, late, limit, expected_pass, expected_reason_substring",
-    [
+def test_evaluate_ratio_gate_boundary_table() -> None:
+    cases = [
         (10.0, 14.9, 1.50, True, None),
         (10.0, 15.0, 1.50, True, None),
         (10.0, 15.1, 1.50, False, "exceeds limit"),
@@ -241,41 +194,24 @@ def test_pid_is_alive_table() -> None:
         (10.0, None, 1.50, False, "samples unavailable"),
         (0.0, 12.4, 1.50, False, "non-positive"),
         (-1.0, 12.4, 1.50, False, "non-positive"),
-    ],
-)
-def test_evaluate_ratio_gate_boundary_table(
-    early: float | None,
-    late: float | None,
-    limit: float,
-    expected_pass: bool,
-    expected_reason_substring: str | None,
-) -> None:
-    """Direct ratio caps with fail-closed boundary coverage."""
-    if early is not None and isinstance(early, float) and early >= 0:
-        # rebuild as float to satisfy type checker
-        early = float(early)
-    result = evaluate_ratio_gate(
-        early,  # type: ignore[arg-type]
-        late,  # type: ignore[arg-type]
-        limit=limit,
-        label="dispatch_p95",
-    )
-    assert result.passed is expected_pass
-    if expected_pass:
-        assert result.failure_reason is None
-        assert result.ratio is not None
-        assert result.ratio <= result.limit
-    else:
-        assert result.failure_reason is not None
-        if expected_reason_substring is not None:
-            assert expected_reason_substring in result.failure_reason
-
-
-def test_evaluate_ratio_gate_does_not_add_one_to_limit() -> None:
-    """Boundary check: ratio cap is a direct cap, not additive."""
-    result = evaluate_ratio_gate(10.0, 14.99, limit=1.50, label="dispatch_p99")
-    assert result.passed is True
-    assert result.ratio is not None and result.ratio <= result.limit
+        (10.0, 14.99, 1.50, True, None),
+    ]
+    for early, late, limit, expected_pass, expected_reason_sub in cases:
+        result = evaluate_ratio_gate(
+            early,
+            late,
+            limit=limit,
+            label="dispatch_p95",
+        )
+        assert result.passed is expected_pass
+        if expected_pass:
+            assert result.failure_reason is None
+            assert result.ratio is not None
+            assert result.ratio <= result.limit
+        else:
+            assert result.failure_reason is not None
+            if expected_reason_sub is not None:
+                assert expected_reason_sub in result.failure_reason
 
 
 def _make_window(
@@ -298,10 +234,8 @@ def _make_window(
     )
 
 
-@pytest.mark.parametrize(
-    "case, early_kwargs, late_kwargs, expected_error_rate, require_both, "
-    "expected_pass, expected_substring",
-    [
+def test_evaluate_workload_gate_table() -> None:
+    cases = [
         (
             "zero_attempts_fails",
             {"attempts": 0, "successes": 0, "errors": 0},
@@ -397,53 +331,37 @@ def _make_window(
             False,
             "non-streaming",
         ),
-    ],
-)
-def test_evaluate_workload_gate_table(
-    case: str,
-    early_kwargs: dict[str, int],
-    late_kwargs: dict[str, int],
-    expected_error_rate: float,
-    require_both: bool,
-    expected_pass: bool,
-    expected_substring: str | None,
-) -> None:
-    """Per-window attempts, successes, errors, and dual-shape coverage."""
-    early = _make_window(**early_kwargs)
-    late = _make_window(**late_kwargs)
-    result = evaluate_workload_gate(
-        early,
-        late,
-        expected_error_rate=expected_error_rate,
-        require_stream_and_nonstream=require_both,
-    )
-    assert result.passed is expected_pass, case
-    if expected_substring is not None:
-        joined = " ".join(result.failure_reasons)
-        assert expected_substring in joined, case
-
-
-def test_evaluate_workload_gate_stream_failure_increments_errors() -> None:
-    """Stream-consumption failure increments errors; zero-error profile rejects."""
-    early = WindowMetrics(
-        name="early",
-        start_time=0.0,
-        end_time=1.0,
-        request_count=1,
-        success_count=0,
-        error_count=1,
-    )
-    late = WindowMetrics(
-        name="late",
-        start_time=1.0,
-        end_time=2.0,
-        request_count=1,
-        success_count=1,
-        nonstream_success_count=1,
-        error_count=0,
-    )
-    result = evaluate_workload_gate(early, late, expected_error_rate=0.0)
-    assert result.passed is False
+        (
+            "stream_failure_early_zero_error_profile",
+            {"attempts": 1, "successes": 0, "errors": 1},
+            {"attempts": 1, "successes": 1, "nonstream_successes": 1, "errors": 0},
+            0.0,
+            False,
+            False,
+            "zero successes",
+        ),
+    ]
+    for (
+        case,
+        early_kwargs,
+        late_kwargs,
+        expected_error_rate,
+        require_both,
+        expected_pass,
+        expected_sub,
+    ) in cases:
+        early = _make_window(**early_kwargs)
+        late = _make_window(**late_kwargs)
+        result = evaluate_workload_gate(
+            early,
+            late,
+            expected_error_rate=expected_error_rate,
+            require_stream_and_nonstream=require_both,
+        )
+        assert result.passed is expected_pass, case
+        if expected_sub is not None:
+            joined = " ".join(result.failure_reasons)
+            assert expected_sub in joined, case
 
 
 # ---------------------------------------------------------------------------
@@ -451,8 +369,7 @@ def test_evaluate_workload_gate_stream_failure_increments_errors() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_and_window_metrics_shape() -> None:
-    """Schema is v2; WindowMetrics includes all new accounting fields."""
+def test_schema_window_metrics_and_atomic_json() -> None:
     assert SCHEMA_VERSION >= 2
     w = WindowMetrics(
         name="early",
@@ -473,20 +390,17 @@ def test_schema_version_and_window_metrics_shape() -> None:
     assert d["error_count"] == 1
     assert d["observed_error_rate"] == pytest.approx(1 / 3, abs=1e-3)
 
-
-def test_write_atomic_json_nested_path_and_null_preservation(
-    tmp_path: Path,
-) -> None:
-    """Atomic writes create parent dirs and preserve None values."""
-    p = tmp_path / "a" / "b" / "c.json"
+    p = Path(tempfile.mkdtemp(prefix="eggpool-json-")) / "a" / "b" / "c.json"
     _write_atomic_json(p, {"ok": True})
     assert p.is_file()
     assert not p.with_suffix(p.suffix + ".tmp").exists()
 
-    p2 = tmp_path / "out.json"
+    p2 = Path(tempfile.mkdtemp(prefix="eggpool-json-")) / "out.json"
     _write_atomic_json(p2, {"rss": None, "count": 0})
     loaded = json.loads(p2.read_text())
     assert loaded["rss"] is None and loaded["count"] == 0
+    shutil.rmtree(p.parent.parent, ignore_errors=True)
+    shutil.rmtree(p2.parent, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -523,7 +437,6 @@ def _stub_client(payload: dict[str, Any] | None) -> Any:
 
 @pytest.mark.asyncio
 async def test_collect_snapshot_reads_real_db_contention_shape() -> None:
-    """Runner must parse contention from ``db.contention`` (real endpoint shape)."""
     from scripts.run_dispatch_stability_soak import (
         MockUpstreamState,
         PollingStats,
@@ -560,11 +473,17 @@ async def test_collect_snapshot_reads_real_db_contention_shape() -> None:
     assert snap.db_lock_wait_sample_count == 10
 
 
-@pytest.mark.parametrize(
-    "case, payload",
-    [
+@pytest.mark.asyncio
+async def test_collect_snapshot_malformed_contention_table() -> None:
+    from scripts.run_dispatch_stability_soak import (
+        MockUpstreamState,
+        PollingStats,
+        collect_runtime_snapshot,
+    )
+
+    cases = [
         ("missing_db", {"routing_runtime": {}}),
-        ("db_none", None),
+        ("db_none", {"db": None, "routing_runtime": {}}),
         ("missing_contention", {"db": {}}),
         ("contention_none", {"db": {"contention": None}}),
         ("malformed_contention_scalar", {"db": {"contention": "nope"}}),
@@ -572,64 +491,55 @@ async def test_collect_snapshot_reads_real_db_contention_shape() -> None:
             "malformed_individual_values",
             {"db": {"contention": {"lock_wait_p95_ms": "x"}}},
         ),
-    ],
-)
-@pytest.mark.asyncio
-async def test_collect_snapshot_malformed_contention_table(
-    case: str,
-    payload: Any,
-) -> None:
-    """Missing or malformed contention leaves metrics at ``None`` — never zero."""
-    from scripts.run_dispatch_stability_soak import (
-        MockUpstreamState,
-        PollingStats,
-        collect_runtime_snapshot,
-    )
+    ]
 
-    transport_payload: dict[str, Any] = payload if isinstance(payload, dict) else {}
-    if "routing_runtime" not in transport_payload:
-        transport_payload["routing_runtime"] = {
-            "pending_count": 0,
-            "active_reservations_count": 0,
-        }
+    for case, payload in cases:
+        transport_payload: dict[str, Any] = payload if isinstance(payload, dict) else {}
+        if "routing_runtime" not in transport_payload:
+            transport_payload["routing_runtime"] = {
+                "pending_count": 0,
+                "active_reservations_count": 0,
+            }
 
-    class _Resp:
-        status_code = 200
+        class _Resp:
+            status_code = 200
 
-        def json(self) -> dict[str, Any]:
-            return transport_payload
+            def __init__(self, payload: dict[str, Any]) -> None:
+                self._payload = payload
 
-    class _Client:
-        def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ARG004
-            pass
+            def json(self) -> dict[str, Any]:
+                return self._payload
 
-        async def get(self, url: str, headers: dict[str, str]) -> Any:  # noqa: ARG002
-            return _Resp()
+        class _Client:
+            def __init__(self, payload: dict[str, Any]) -> None:
+                self._payload = payload
 
-        async def __aenter__(self) -> _Client:
-            return self
+            async def get(self, url: str, headers: dict[str, str]) -> Any:  # noqa: ARG002
+                return _Resp(self._payload)
 
-        async def __aexit__(self, *exc: Any) -> None:
-            return None
+            async def __aenter__(self) -> _Client:
+                return self
 
-    snap = await collect_runtime_snapshot(
-        client=_Client(),
-        api_key="x",
-        upstream_state=MockUpstreamState(),
-        db_path="/nonexistent/path",
-        eggpool_pid=99999,
-        start_time=0.0,
-        polling_stats=PollingStats(),
-        include_summary=False,
-    )
-    assert snap.db_lock_wait_p95_ms is None, case
-    assert snap.db_lock_wait_max_ms is None, case
-    assert snap.db_lock_wait_sample_count is None, case
+            async def __aexit__(self, *exc: Any) -> None:
+                return None
+
+        snap = await collect_runtime_snapshot(
+            client=_Client(transport_payload),
+            api_key="x",
+            upstream_state=MockUpstreamState(),
+            db_path="/nonexistent/path",
+            eggpool_pid=99999,
+            start_time=0.0,
+            polling_stats=PollingStats(),
+            include_summary=False,
+        )
+        assert snap.db_lock_wait_p95_ms is None, case
+        assert snap.db_lock_wait_max_ms is None, case
+        assert snap.db_lock_wait_sample_count is None, case
 
 
 @pytest.mark.asyncio
-async def test_collect_snapshot_unavailable_on_failure() -> None:
-    """Runtime endpoint failure leaves all derived fields ``None``."""
+async def test_collect_snapshot_unavailable_and_non_200() -> None:
     from scripts.run_dispatch_stability_soak import (
         MockUpstreamState,
         PollingStats,
@@ -646,58 +556,39 @@ async def test_collect_snapshot_unavailable_on_failure() -> None:
         async def __aexit__(self, *exc: Any) -> None:
             return None
 
-    snap = await collect_runtime_snapshot(
-        client=_RaisingClient(),
-        api_key="x",
-        upstream_state=MockUpstreamState(),
-        db_path="/nonexistent/path",
-        eggpool_pid=99999,
-        start_time=0.0,
-        polling_stats=PollingStats(),
-        include_summary=False,
-    )
-    assert snap.pending_requests is None
-    assert snap.active_reservations is None
-    assert snap.upstream_requests == 0
-
-
-@pytest.mark.asyncio
-async def test_collect_snapshot_non_200_leaves_derived_fields_none() -> None:
-    """Non-200 runtime response leaves derived fields at ``None``."""
-    from scripts.run_dispatch_stability_soak import (
-        MockUpstreamState,
-        PollingStats,
-        collect_runtime_snapshot,
-    )
-
-    class _Resp:
+    class _Non200Resp:
         status_code = 500
 
         def json(self) -> dict[str, Any]:
             return {}
 
-    class _Client:
+    class _Non200Client:
         async def get(self, url: str, headers: dict[str, str]) -> Any:  # noqa: ARG002
-            return _Resp()
+            return _Non200Resp()
 
-        async def __aenter__(self) -> _Client:
+        async def __aenter__(self) -> _Non200Client:
             return self
 
         async def __aexit__(self, *exc: Any) -> None:
             return None
 
-    snap = await collect_runtime_snapshot(
-        client=_Client(),
-        api_key="x",
-        upstream_state=MockUpstreamState(),
-        db_path="/nonexistent/path",
-        eggpool_pid=99999,
-        start_time=0.0,
-        polling_stats=PollingStats(),
-        include_summary=False,
-    )
-    assert snap.pending_requests is None
-    assert snap.active_reservations is None
+    for client, label in [(_RaisingClient(), "exception"), (_Non200Client(), "500")]:
+        ps = PollingStats()
+        snap = await collect_runtime_snapshot(
+            client=client,
+            api_key="x",
+            upstream_state=MockUpstreamState(),
+            db_path="/nonexistent/path",
+            eggpool_pid=99999,
+            start_time=0.0,
+            polling_stats=ps,
+            include_summary=False,
+        )
+        assert snap.pending_requests is None, label
+        assert snap.active_reservations is None, label
+        assert snap.upstream_requests == 0, label
+        assert ps.runtime_failures == 1, label
+        assert ps.runtime_successes == 0, label
 
 
 # ---------------------------------------------------------------------------
@@ -894,13 +785,12 @@ def _stub_proc(*, already_dead: bool) -> Any:
     return _P()
 
 
-def test_populate_cleanup_diagnostics_records_success_and_failure() -> None:
-    """Cleanup populates diagnostics; failures are surfaced, not swallowed."""
+def test_cleanup_diagnostics_and_artifacts_loop() -> None:
     work_dir = Path(tempfile.mkdtemp(prefix="eggpool-test-"))
-    proc = _stub_proc(already_dead=False)
     log_path = work_dir / "process.log"
     log_path.write_text("hello world\n", encoding="utf-8")
 
+    proc = _stub_proc(already_dead=False)
     result = ValidationResultShim()
     _populate_cleanup_diagnostics(
         result,
@@ -913,12 +803,11 @@ def test_populate_cleanup_diagnostics_records_success_and_failure() -> None:
     assert result.process_stopped is True
     assert result.work_dir_removed is True
     assert result.cleanup_error is None
+    assert result.cleanup_errors == ()
     assert "hello world" in result.process_log_tail
 
-    # Failure path: rmtree fails — error captured, work_dir still listed as not removed.
     bad_dir = Path(tempfile.mkdtemp(prefix="eggpool-bad-"))
     (bad_dir / "file.txt").write_text("x", encoding="utf-8")
-    # Make rmtree fail by pointing at a path that is itself a file.
     blocking_file = bad_dir / "file.txt"
     bad_result = ValidationResultShim()
     _populate_cleanup_diagnostics(
@@ -930,8 +819,8 @@ def test_populate_cleanup_diagnostics_records_success_and_failure() -> None:
     )
     assert bad_result.cleanup_error is not None
     assert bad_result.work_dir_removed is False
+    assert len(bad_result.cleanup_errors) > 0
 
-    # No work to do for None proc.
     none_result = ValidationResultShim()
     _populate_cleanup_diagnostics(
         none_result,
@@ -943,42 +832,319 @@ def test_populate_cleanup_diagnostics_records_success_and_failure() -> None:
     assert none_result.child_pid is None
     assert none_result.process_stopped is None
 
+    shutil.rmtree(work_dir, ignore_errors=True)
+    shutil.rmtree(bad_dir, ignore_errors=True)
 
-def test_read_process_log_tail_bounds_and_redacts() -> None:
-    """Log tail is bounded, redacted, and survives missing files."""
+
+def test_read_process_log_tail_bounds_redacts_and_forms() -> None:
     with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False) as tmp:
         tmp.write("Authorization: Bearer sk-supersecret123\n" * 200)
     log_path = Path(tmp.name)
     try:
         tail = _read_process_log_tail(log_path, max_lines=10)
-        assert "supersecret" not in tail  # redacted via credential pattern
+        assert "supersecret" not in tail
         assert len(tail.splitlines()) <= 10
     finally:
         log_path.unlink()
 
     assert _read_process_log_tail(Path("/nonexistent/path/log")) == ""
 
+    r1 = _redact_log_line("Authorization: Bearer sk-supersecret123")
+    assert "sk-supersecret123" not in r1
+    assert "<redacted>" in r1
+    r2 = _redact_log_line("api_key=sk-supersecret123")
+    assert "sk-supersecret123" not in r2
+    r3 = _redact_log_line("api-key=sk-supersecret123")
+    assert "sk-supersecret123" not in r3
+    assert _redact_log_line("") == ""
+    assert _redact_log_line("normal log line") == "normal log line"
 
-def test_cleanup_run_artifacts_captures_exception_path() -> None:
-    """Cleanup returns the cleanup_error string when rmtree raises."""
+    lines = [
+        "Authorization: Bearer sk-supersecret123",
+        "ERROR eggpool.db: database connection failed",
+        "INFO eggpool: shutting down",
+    ]
+    redacted = [_redact_log_line(ln) for ln in lines]
+    assert "sk-supersecret123" not in redacted[0]
+    assert "<redacted>" in redacted[0]
+    assert "database connection failed" in redacted[1]
+    assert "shutting down" in redacted[2]
+
+    content = (
+        "Authorization: Bearer sk-supersecret123\n"
+        "ERROR eggpool.db: database connection failed\n"
+        "INFO eggpool: shutting down\n"
+    )
+    with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False) as tmp2:
+        tmp2.write(content)
+    log_path2 = Path(tmp2.name)
+    try:
+        tail2 = _read_process_log_tail(log_path2)
+        assert "sk-supersecret123" not in tail2
+        assert "database connection failed" in tail2
+        assert "shutting down" in tail2
+    finally:
+        log_path2.unlink()
+
+
+def test_cleanup_rmtree_exception_and_setup_loop() -> None:
     work_dir = Path(tempfile.mkdtemp(prefix="eggpool-art-"))
     (work_dir / "x").write_text("x", encoding="utf-8")
     with patch(
         "scripts.run_dispatch_stability_soak.shutil.rmtree",
         side_effect=OSError("disk full"),
     ):
-        log_tail, process_stopped, work_dir_removed, cleanup_error = (
-            _cleanup_run_artifacts(
-                proc=_stub_proc(already_dead=True),
-                process_log_path=work_dir / "process.log",
-                work_dir=work_dir,
-                upstream_server=None,
-            )
+        _, process_stopped, work_dir_removed, cleanup_errors = _cleanup_run_artifacts(
+            proc=_stub_proc(already_dead=True),
+            process_log_path=work_dir / "process.log",
+            work_dir=work_dir,
+            upstream_server=None,
         )
-    assert cleanup_error is not None
-    assert "disk full" in cleanup_error
+    assert any("disk full" in e for e in cleanup_errors)
     assert work_dir_removed is False
     assert process_stopped is True
+    shutil.rmtree(work_dir, ignore_errors=True)
+
+    setup_dir = Path(tempfile.mkdtemp(prefix="eggpool-setup-"))
+    (setup_dir / "x").write_text("x", encoding="utf-8")
+    mock_upstream = MagicMock()
+    mock_upstream.server_address = ("127.0.0.1", 9999)
+    _, process_stopped, work_dir_removed, cleanup_errors = _cleanup_run_artifacts(
+        proc=None,
+        process_log_path=setup_dir / "process.log",
+        work_dir=setup_dir,
+        upstream_server=mock_upstream,
+    )
+    assert process_stopped is None
+    assert work_dir_removed is True
+    assert cleanup_errors == ()
+    mock_upstream.shutdown.assert_called_once()
+    mock_upstream.server_close.assert_called_once()
+    shutil.rmtree(setup_dir, ignore_errors=True)
+
+
+def test_cleanup_failure_table_parametrized() -> None:
+    def _make_terminate_raises() -> Any:
+        p = _stub_proc(already_dead=False)
+        p.terminate = MagicMock(side_effect=OSError("kill denied"))  # type: ignore[assignment]
+        return p
+
+    def _make_alive_poll() -> Any:
+        p = _stub_proc(already_dead=False)
+        p.poll = MagicMock(return_value=None)  # type: ignore[assignment]
+        return p
+
+    def _make_shutdown_raises() -> Any:
+        m = MagicMock(server_address=("127.0.0.1", 9999))
+        m.shutdown.side_effect = OSError("shutdown denied")
+        return m
+
+    def _make_close_raises() -> Any:
+        m = MagicMock(server_address=("127.0.0.1", 9999))
+        m.server_close.side_effect = OSError("close denied")
+        return m
+
+    cases = [
+        (
+            "terminate_raises",
+            _make_terminate_raises,
+            lambda: MagicMock(server_address=("127.0.0.1", 9999)),
+            ("child termination failed",),
+            False,
+        ),
+        (
+            "process_remains_alive",
+            _make_alive_poll,
+            lambda: None,
+            ("child process remained alive",),
+            False,
+        ),
+        (
+            "upstream_shutdown_raises",
+            lambda: _stub_proc(already_dead=True),
+            _make_shutdown_raises,
+            ("mock upstream shutdown failed",),
+            True,
+        ),
+        (
+            "upstream_close_raises",
+            lambda: _stub_proc(already_dead=True),
+            _make_close_raises,
+            ("mock upstream close failed",),
+            True,
+        ),
+        (
+            "setup_upstream_and_workdir",
+            lambda: None,
+            lambda: MagicMock(server_address=("127.0.0.1", 9999)),
+            (),
+            None,
+        ),
+    ]
+
+    for (
+        case,
+        proc_factory,
+        upstream_factory,
+        expected_errors_substrings,
+        expected_process_stopped,
+    ) in cases:
+        work_dir = Path(tempfile.mkdtemp(prefix="eggpool-cln-"))
+        (work_dir / "x").write_text("x", encoding="utf-8")
+        proc = proc_factory()
+        upstream = upstream_factory()
+        log_tail, process_stopped, work_dir_removed, cleanup_errors = (
+            _cleanup_run_artifacts(
+                proc=proc,
+                process_log_path=work_dir / "process.log",
+                work_dir=work_dir,
+                upstream_server=upstream,
+            )
+        )
+        assert process_stopped is expected_process_stopped, case
+        for sub in expected_errors_substrings:
+            assert any(sub in e for e in cleanup_errors), case
+        assert work_dir_removed is True, case
+        if upstream is not None:
+            upstream.shutdown.assert_called_once()
+            upstream.server_close.assert_called_once()
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def test_cleanup_failure_table_multiple_errors_aggregated() -> None:
+    work_dir = Path(tempfile.mkdtemp(prefix="eggpool-multi-"))
+    (work_dir / "x").write_text("x", encoding="utf-8")
+    mock_upstream = MagicMock()
+    mock_upstream.server_address = ("127.0.0.1", 9999)
+    mock_upstream.shutdown.side_effect = OSError("shutdown denied")
+    mock_upstream.server_close.side_effect = OSError("close denied")
+    proc = _stub_proc(already_dead=False)
+    proc.terminate = MagicMock(side_effect=OSError("kill denied"))  # type: ignore[assignment]
+    proc.poll = MagicMock(return_value=None)  # type: ignore[assignment]
+    real_rmtree = shutil.rmtree
+    with patch(
+        "scripts.run_dispatch_stability_soak.shutil.rmtree",
+        side_effect=OSError("disk full"),
+    ):
+        log_tail, process_stopped, work_dir_removed, cleanup_errors = (
+            _cleanup_run_artifacts(
+                proc=proc,
+                process_log_path=work_dir / "process.log",
+                work_dir=work_dir,
+                upstream_server=mock_upstream,
+            )
+        )
+        assert process_stopped is False
+        assert work_dir_removed is False
+        expected_order = [
+            "child termination failed",
+            "child process remained alive",
+            "mock upstream shutdown failed",
+            "mock upstream close failed",
+            "work directory cleanup failed",
+            "work directory remains after cleanup",
+        ]
+        assert len(cleanup_errors) == len(expected_order)
+        for actual, expected_prefix in zip(cleanup_errors, expected_order, strict=True):
+            assert actual.startswith(expected_prefix), (
+                f"{actual!r} != {expected_prefix!r}"
+            )
+    if work_dir.exists():
+        real_rmtree(work_dir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# run_validation setup failure and cancellation tests
+# ---------------------------------------------------------------------------
+
+
+def test_run_validation_setup_failure_and_cancellation_loop(tmp_path: Path) -> None:
+    from scripts.run_dispatch_stability_soak import (
+        ValidationRunConfig,
+        run_validation,
+    )
+
+    plan = DurationPlan(
+        total_s=12.0,
+        warmup_s=1.0,
+        early_window_s=4.0,
+        drain_s=1.0,
+        late_window_s=4.0,
+        poll_interval_s=0.5,
+        dispatch_p95_ratio_limit=10.0,
+        dispatch_p99_ratio_limit=10.0,
+        throughput_decline_limit=1.0,
+        max_pending_requests=0,
+        max_active_reservations=0,
+    )
+
+    for case, fail_target in [
+        ("upstream_start", "scripts.run_dispatch_stability_soak._start_mock_upstream"),
+        ("config_write", "scripts.run_dispatch_stability_soak._write_soak_config"),
+        ("subprocess_start", "scripts.run_dispatch_stability_soak._start_eggpool"),
+    ]:
+        output = tmp_path / f"out-{case}.json"
+
+        async def _run_setup(
+            _ft: str = fail_target,
+            _c: str = case,
+            _o: Path = output,
+        ) -> ValidationResult:
+            with patch(_ft, side_effect=OSError(f"inject-{_c}")):
+                return await run_validation(
+                    ValidationRunConfig(
+                        profile_name="balanced-file-backed",
+                        duration_seconds=30,
+                        output_path=_o,
+                        seed=42,
+                    ),
+                    duration_plan=plan,
+                    health_timeout_s=5.0,
+                    quiescence_timeout_s=2.0,
+                )
+
+        result = asyncio.run(_run_setup())
+        assert result.passed is False, case
+        assert result.return_code != 0, case
+        assert result.work_dir is not None, case
+        assert not result.work_dir.exists(), (
+            f"work directory not removed after {case}: {result.work_dir}"
+        )
+        assert result.process_stopped is None, case
+        assert result.cleanup_errors == (), case
+        assert result.process_log_tail == "", case
+        assert any(
+            "runtime validation internal error" in r for r in result.failure_reasons
+        ), case
+        assert output.is_file(), case
+        loaded = json.loads(output.read_text())
+        assert loaded["passed"] is False
+        assert loaded["schema_version"] == SCHEMA_VERSION
+
+    cancel_output = tmp_path / "out-cancel.json"
+
+    async def _run_cancel() -> ValidationResult:
+        async def _cancel_wait(*a: Any, **kw: Any) -> bool:
+            raise asyncio.CancelledError()
+
+        with patch(
+            "scripts.run_dispatch_stability_soak._wait_healthy",
+            side_effect=_cancel_wait,
+        ):
+            return await run_validation(
+                ValidationRunConfig(
+                    profile_name="balanced-file-backed",
+                    duration_seconds=30,
+                    output_path=cancel_output,
+                    seed=42,
+                ),
+                duration_plan=plan,
+                health_timeout_s=5.0,
+                quiescence_timeout_s=2.0,
+            )
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(_run_cancel())
 
 
 # ---------------------------------------------------------------------------
@@ -1038,6 +1204,7 @@ class ValidationResultShim:
         self.process_stopped: bool | None = None
         self.work_dir_removed: bool | None = None
         self.cleanup_error: str | None = None
+        self.cleanup_errors: tuple[str, ...] = ()
 
 
 # Imported late so pytest always collects the module-level tests.

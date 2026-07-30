@@ -115,6 +115,20 @@ the RSS availability gate, and the offline SQLite lifecycle audit.
 Unreachable samples, non-positive early baselines, missing runtime data,
 zero attempts, and zero successes all fail closed.
 
+The runner owns one outer lifecycle boundary: every fallible operation
+after work-directory creation (upstream start, config write, subprocess
+start, health check, workload, gates) is inside one `try/except/finally`.
+Partial setup failures clean every acquired resource. Unexpected exceptions
+are converted to a bounded `ValidationResult` with `return_code=12`.
+`CancelledError` propagates after cleanup. Cleanup aggregates errors from
+child termination, upstream shutdown/close, and directory removal — all
+steps are attempted even when earlier steps fail. A cleanup failure forces
+`passed=False` and a nonzero return code. The JSON payload and returned
+`ValidationResult` are reconciled in `finally` before a single atomic
+write. Process-log redaction is line-preserving: configured soak API keys
+are passed narrowly through `secrets=` to `_redact_log_line`, so a secret
+on one line does not destroy unrelated diagnostic lines.
+
 A short real-process smoke lives at
 `tests/integration/test_runtime_validation_process_smoke.py` and runs the
 production startup, load, polling, and cleanup code paths through
