@@ -67,7 +67,10 @@ class TestValidateAndRehash:
         _write_config(config)
         captured_messages: list[str] = []
         with (
-            patch("asyncio.run", side_effect=ConnectionRefusedError("no socket")),
+            patch(
+                "eggpool.control.client.ControlClient.reload",
+                side_effect=ConnectionRefusedError("no socket"),
+            ),
             pytest.raises(SystemExit) as exc_info,
         ):
             validate_and_rehash(
@@ -94,7 +97,10 @@ class TestValidateAndRehash:
         )
         captured_messages: list[str] = []
         with (
-            patch("asyncio.run", return_value=fake_response),
+            patch(
+                "eggpool.control.client.ControlClient.reload",
+                return_value=fake_response,
+            ),
             pytest.raises(SystemExit) as exc_info,
         ):
             validate_and_rehash(
@@ -122,7 +128,10 @@ class TestTryLiveRehash:
             retirement_pending=True,
             message="Live reload applied.",
         )
-        with patch("asyncio.run", return_value=fake_response):
+        with patch(
+            "eggpool.control.client.ControlClient.reload",
+            return_value=fake_response,
+        ):
             applied, message = try_live_rehash(str(config))
         assert applied is True
         assert "applied" in message.lower()

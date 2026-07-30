@@ -2330,8 +2330,7 @@ async def run_validation(
         if msg not in result.failure_reasons:
             result.failure_reasons.append(msg)
         result.passed = False
-        if result.return_code == 0:
-            result.return_code = 12
+        result.return_code = 12
         if result_data is None:
             result_data = {
                 "schema_version": SCHEMA_VERSION,
@@ -2371,8 +2370,7 @@ async def run_validation(
 
         if result.cleanup_errors:
             result.passed = False
-            if result.return_code == 0:
-                result.return_code = 12
+            result.return_code = 12
             for cerr in result.cleanup_errors:
                 if cerr not in result.failure_reasons:
                     result.failure_reasons.append(cerr)
@@ -2383,7 +2381,17 @@ async def run_validation(
             try:
                 _write_atomic_json(output_path, result_data)
             except Exception as write_exc:
-                logger.warning("Failed to write JSON output: %s", write_exc)
+                msg = (
+                    "runtime validation output write failed: "
+                    f"{type(write_exc).__name__}: {write_exc!s:.200}"
+                )
+                result.passed = False
+                result.return_code = 12
+                if msg not in result.failure_reasons:
+                    result.failure_reasons.append(msg)
+                result_data["passed"] = False
+                result_data["failure_reasons"] = result.failure_reasons
+                logger.warning("%s", msg)
 
 
 # ---------------------------------------------------------------------------

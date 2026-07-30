@@ -8,7 +8,7 @@ import os
 import os as _os
 import shutil as _shutil
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -1062,8 +1062,8 @@ class TestPeerCredentialFailClosed:
         server._path = Path("/tmp/unused.sock")
         server._server = None
 
-        reader = AsyncMock()
-        writer = AsyncMock()
+        reader = Mock()
+        writer = Mock()
         writer.get_extra_info.return_value = "test-peer"
         await server._handle_connection(reader, writer)
 

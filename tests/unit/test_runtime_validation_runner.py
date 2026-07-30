@@ -1060,6 +1060,7 @@ def test_cleanup_failure_table_multiple_errors_aggregated() -> None:
 
 def test_run_validation_setup_failure_and_cancellation_loop(tmp_path: Path) -> None:
     from scripts.run_dispatch_stability_soak import (
+        QuiescenceResult,
         ValidationRunConfig,
         run_validation,
     )
@@ -1105,7 +1106,7 @@ def test_run_validation_setup_failure_and_cancellation_loop(tmp_path: Path) -> N
 
         result = asyncio.run(_run_setup())
         assert result.passed is False, case
-        assert result.return_code != 0, case
+        assert result.return_code == 12, case
         assert result.work_dir is not None, case
         assert not result.work_dir.exists(), (
             f"work directory not removed after {case}: {result.work_dir}"
@@ -1121,6 +1122,129 @@ def test_run_validation_setup_failure_and_cancellation_loop(tmp_path: Path) -> N
         assert loaded["passed"] is False
         assert loaded["schema_version"] == SCHEMA_VERSION
 
+    for stale in (False, True):
+        output = tmp_path / f"out-write-failure-{stale}.json"
+        if stale:
+            output.write_text("stale result", encoding="utf-8")
+
+        async def _generate_load(**kwargs: Any) -> None:
+            window = kwargs["window"]
+            window.request_count = 1
+            window.success_count = 1
+            window.dispatch_latencies_ms = [1.0]
+
+        upstream = MagicMock(server_address=("127.0.0.1", 9999))
+        proc = _stub_proc(already_dead=True)
+        quiescence = QuiescenceResult(
+            snapshot=None,
+            drained=True,
+            attempts=1,
+            elapsed_s=0.0,
+            failure_reason=None,
+            pending_requests=0,
+            active_reservations=0,
+        )
+        clock = iter(range(1, 100))
+
+        async def _run_write_failure(
+            _upstream: Any = upstream,
+            _proc: Any = proc,
+            _quiescence: Any = quiescence,
+            _clock: Any = clock,
+            _output: Path = output,
+        ) -> ValidationResult:
+            from scripts.run_dispatch_stability_soak import run_validation
+
+            with (
+                patch(
+                    "scripts.run_dispatch_stability_soak._collect_environment",
+                    return_value={
+                        "git_sha": "test",
+                        "system": "test",
+                        "arch": "test",
+                        "python": "test",
+                    },
+                ),
+                patch(
+                    "scripts.run_dispatch_stability_soak._free_port", return_value=1234
+                ),
+                patch(
+                    "scripts.run_dispatch_stability_soak._start_mock_upstream",
+                    return_value=_upstream,
+                ),
+                patch("scripts.run_dispatch_stability_soak._write_soak_config"),
+                patch(
+                    "scripts.run_dispatch_stability_soak._start_eggpool",
+                    return_value=_proc,
+                ),
+                patch(
+                    "scripts.run_dispatch_stability_soak._wait_healthy",
+                    return_value=True,
+                ),
+                patch(
+                    "scripts.run_dispatch_stability_soak._generate_load",
+                    side_effect=_generate_load,
+                ),
+                patch("scripts.run_dispatch_stability_soak._poll_dashboard"),
+                patch(
+                    "scripts.run_dispatch_stability_soak.wait_for_runtime_quiescence",
+                    return_value=_quiescence,
+                ),
+                patch(
+                    "scripts.run_dispatch_stability_soak.read_process_rss_bytes",
+                    return_value=1024,
+                ),
+                patch(
+                    "scripts.run_dispatch_stability_soak._sqlite_offline_audit",
+                    return_value={"passed": True, "violations": []},
+                ),
+                patch(
+                    "scripts.run_dispatch_stability_soak.time.monotonic",
+                    side_effect=lambda: next(_clock),
+                ),
+                patch(
+                    "scripts.run_dispatch_stability_soak._write_atomic_json",
+                    side_effect=OSError("x" * 1000),
+                ),
+            ):
+                return await run_validation(
+                    ValidationRunConfig(
+                        profile_name="balanced-file-backed",
+                        duration_seconds=30,
+                        output_path=_output,
+                        seed=42,
+                    ),
+                    duration_plan=DurationPlan(
+                        total_s=0.0,
+                        warmup_s=0.0,
+                        early_window_s=0.0,
+                        drain_s=0.0,
+                        late_window_s=0.0,
+                        poll_interval_s=0.0,
+                        dispatch_p95_ratio_limit=10.0,
+                        dispatch_p99_ratio_limit=10.0,
+                        throughput_decline_limit=1.0,
+                        max_pending_requests=0,
+                        max_active_reservations=0,
+                    ),
+                    health_timeout_s=5.0,
+                    quiescence_timeout_s=0.0,
+                )
+
+        result = asyncio.run(_run_write_failure())
+        assert result.passed is False
+        assert result.return_code == 12
+        write_failures = [
+            reason
+            for reason in result.failure_reasons
+            if reason.startswith("runtime validation output write failed:")
+        ]
+        assert len(write_failures) == 1
+        assert len(write_failures[0]) <= 256
+        if stale:
+            assert output.read_text(encoding="utf-8") == "stale result"
+        else:
+            assert not output.exists()
     cancel_output = tmp_path / "out-cancel.json"
 
     async def _run_cancel() -> ValidationResult:
