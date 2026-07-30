@@ -1,240 +1,258 @@
 # Residual Upstream, Streaming, and Hot-Path Hardening Roadmap
 
 Date: 2026-07-30
-Status: implementation handoff
+Status: implementation handoff — verification scope revised
 Plan: 045
 
 Planning baseline:
 
 - `216e615d75269cc1471a920ae81ece9ef2d21802`
 
-Related historical plans:
+Related plans:
 
-- `plans/022-upstream-error-isolation-and-hotpath-hardening-roadmap.md`
-- `plans/031-upstream-hardening-corrective-roadmap.md`
-- Plans 032 through 038
-
-This roadmap supersedes only the closure claims from those plans that conflict with the residual defects identified at the planning baseline. It does not discard correct implementation already present in the failure-effects classifier, model quarantine, database recovery, retained finalization supervisor, provider client pool, runtime generation factory, or observability systems.
+- `plans/046-provider-thinking-control-normalization.md`
+- `plans/047-terminal-lifecycle-and-cancellation-safety.md`
+- `plans/048-stream-completion-and-premature-eof.md`
+- `plans/049-provider-timeout-policy-and-stream-diagnostics.md`
+- `plans/050-provider-bound-request-single-decode-lifecycle.md`
+- `plans/051-unified-sse-framing-and-transcode-hotpath.md`
+- `plans/052-selection-persistence-and-trace-hotpath.md`
+- `plans/053-real-runtime-validation-and-exact-head-closure.md`
+- `plans/054-test-suite-and-verification-reduction.md`
 
 ## Purpose
 
-Close the remaining request-local compatibility, streaming termination, cancellation cleanup, and data-plane hot-path defects without broadening Eggpool into production-scale infrastructure that is inappropriate for its private SBC deployment target.
+Close the remaining request-local compatibility, streaming termination, cancellation cleanup, and measured hot-path defects without rebuilding production-grade verification infrastructure around a private, LAN/SBC-oriented proxy.
 
-The motivating production symptoms are:
+The motivating defects remain:
 
-1. OpenCode Go MiniMax-M3 may reject a client-supplied thinking level even though native MiniMax accepts it.
-2. One upstream validation failure can leave enough runtime or durable state inconsistent that unrelated proxy traffic degrades until restart or database repair.
-3. Native MiniMax streams can end without a visible error and appear to have silently dropped.
-4. Transcoded streams and provider-bound request transforms perform avoidable duplicate parsing, serialization, allocation, and database work.
+1. OpenCode Go MiniMax-M3 may reject client thinking controls that native MiniMax accepts.
+2. An upstream validation or cancellation path can leave runtime ownership inconsistent and degrade later traffic.
+3. A native or transcoded stream can end cleanly at the transport layer before protocol completion and be reported as successful.
+4. Request and streaming paths perform avoidable duplicate parsing, serialization, database, and trace work.
 
-The final state must make an unsupported thinking control request-local, make every selected attempt terminate exactly once, distinguish valid protocol completion from premature clean EOF, expose provider-specific timeout evidence, and reduce measured dispatch/streaming overhead without removing capability.
+The corrective work is still required. The original verification model was not. This revision removes exhaustive Cartesian matrices, repeated fault campaigns, percentage latency gates in CI, mandatory soak runs, and closure-evidence bureaucracy.
+
+## Authoritative verification amendment
+
+Plan 054 is authoritative for testing, CI, performance validation, soak validation, handoff evidence, and closure mechanics across Plans 045–053.
+
+Where Plans 046–052 contain broader `Required tests`, performance matrices, repetition counts, exhaustive chunk-boundary cases, handoff tables, or evidence requirements, interpret them as candidate coverage, not cumulative mandatory work. Plan 054 supersedes those requirements with a fixed verification budget.
+
+The implementation must not add or preserve infrastructure merely to satisfy an older plan sentence.
+
+## Design center
+
+Eggpool is a private-deployment proxy intended primarily for SBC and LAN use. It is not an internet-facing multi-tenant control plane. The hardening target is therefore:
+
+- request-local upstream failures;
+- no persistent routing/database poisoning;
+- no silent stream success after truncation;
+- bounded local resources;
+- correct common provider/protocol behavior;
+- maintainable code and fast iteration.
+
+It is explicitly not:
+
+- adversarial public-internet fuzz coverage;
+- exhaustive provider/protocol permutation proof;
+- hyperscale concurrency certification;
+- formal exactly-once infrastructure beyond what the local process needs;
+- release-grade benchmark automation;
+- permanent evidence production.
 
 ## Governing principles
 
-1. Correctness precedes optimization.
-2. No upstream compatibility failure may poison unrelated account, model, circuit, reservation, routing, or database state.
-3. A terminal request outcome has exactly one owner.
-4. Cancellation cannot interrupt required cleanup after durable selection.
-5. A socket EOF is transport completion, not automatically protocol completion.
-6. Provider timeout changes must be based on classified observations, not speculation.
-7. The provider-bound request body is decoded once and serialized once after final mutation.
-8. Each upstream SSE byte is framed once, even when transcoding and usage observation are both active.
-9. Performance changes require before/after measurements through the real Eggpool proxy path.
-10. No phase may add broad CI matrices, evidence bureaucracy, or release automation.
+1. Correct the confirmed defect at the narrowest ownership boundary.
+2. Prefer deleting special cases over adding supervisors, registries, adapters, or policy layers.
+3. Reuse existing HTTPX, pytest, respx, SQLite, and runtime fixtures.
+4. Add one regression test near the defect and at most one real request-path smoke when layer interaction matters.
+5. Do not duplicate the same assertion across every protocol, streaming mode, policy mode, and Python version unless code paths are materially different.
+6. No property-test dependency, fuzz framework, benchmark framework, test scheduler, evidence manifest, or new CI matrix.
+7. No mandatory live provider credentials.
+8. Performance work is accepted primarily through deterministic operation removal and one optional local comparison, not noisy CI percentiles.
+9. No mandatory soak or long-running validation for ordinary development.
+10. Ordinary CI remains a small smoke gate; release and extended validation remain manual.
 
-## Non-goals
+## Revised phase sequence
 
-- Replacing SQLite.
-- Rewriting the router or quota model.
-- Replacing HTTPX/httpcore.
-- Adding new providers unrelated to the defects.
-- Retrying after downstream bytes have been emitted.
-- Treating every provider that omits a terminal marker as broken without a compatibility policy.
-- Raising the global timeout without provider evidence.
-- Enabling the dispatch writer by default solely for this roadmap.
-- Adding a second request model beside `ProviderBoundRequest`.
-- Reintroducing duplicate JSON or SSE parsers for observability.
-- Broad dashboard redesign.
-- Expanding ordinary CI beyond the repository's reduced verification model.
-- Requiring live MiniMax credentials for the deterministic acceptance suite.
+### Plan 054 — Test Suite and Verification Reduction
 
-## Phase sequence
+Apply this plan immediately as the verification contract for all subsequent phases. Reduce CI to one fast job, collapse or delete redundant tests and markers, remove mandatory soak/evidence apparatus, and establish a small canonical smoke suite.
 
-### Plan 046 — Provider Thinking-Control Normalization and Contract Resolution
+### Plan 046 — Provider Thinking-Control Normalization
 
-Correct fixed/effort contract adaptation, contract precedence, and OpenCode Go compatibility matching. Every supported input spelling must be deterministically rejected, dropped, or mapped before upstream dispatch.
+Correct the known fixed-contract control leaks and contract resolution ordering.
 
-Primary ownership boundary: provider thinking-control contract resolution and payload adaptation only.
+Verification budget:
 
-### Plan 047 — Single Terminal Owner and Cancellation-Safe Cleanup
+- table-driven unit coverage for the distinct field shapes;
+- one OpenCode Go reject/drop request-path case;
+- one native MiniMax preservation case;
+- no full cross-product of every field, policy, client protocol, stream mode, and contract kind.
 
-Remove double-finalization paths and move complete post-selection cleanup into a retained, idempotent terminal job. Ensure database state, quota reservations, active counts, and circuit probe ownership converge under cancellation and failure injection.
+### Plan 047 — Terminal Ownership and Cancellation Cleanup
 
-Primary ownership boundary: terminal lifecycle ownership and cleanup only.
+Remove the streaming 4xx double-finalization path and ensure complete cleanup survives request cancellation.
 
-### Plan 048 — Protocol Completion and Premature EOF Classification
+Implementation guidance:
 
-Track protocol terminal events and distinguish complete streams, clean premature EOF, malformed/incomplete EOF, transport exceptions, and client cancellation. Do not mark an incomplete stream completed merely because HTTPX iteration ended normally.
+- extend the existing retained finalization mechanism rather than creating another supervisor or persistence framework;
+- keep the terminal command/result shape no larger than required by actual cleanup call sites;
+- do not build generic workflow orchestration.
 
-Primary ownership boundary: streaming completion semantics only.
+Verification budget:
 
-### Plan 049 — Provider Timeout Policy and Stream Diagnostics
+- one upstream 4xx single-finalization regression;
+- one capability-rejection cancellation regression;
+- one post-durable-transition cancellation regression;
+- one subsequent-request-health smoke;
+- no cancellation at every await and no repeated 25-run campaign in ordinary tests.
 
-Separate first-byte, inter-chunk idle, connect, write, and pool timeout semantics where needed; expose structured provider-specific diagnostics; tune MiniMax only after evidence distinguishes idle timeout from premature EOF.
+### Plan 048 — Stream Completion and Premature EOF
 
-Primary ownership boundary: timeout configuration, classification, and observability only.
+Retain OpenAI `[DONE]` and Anthropic `message_stop`, and classify payload-without-terminal EOF as incomplete.
 
-### Plan 050 — Provider-Bound Request Single-Decode Lifecycle
+Verification budget:
 
-Make `ProviderBoundRequest` the authoritative decoded and serialized request state for post-selection transforms. Eliminate independent body decodes and re-encodes from thinking adaptation, synthetic cache controls, and stream-option injection.
+- canonical OpenAI and Anthropic completion;
+- one representative fragmented terminal frame;
+- one premature EOF before downstream bytes;
+- one premature EOF after downstream bytes;
+- one transcoded no-false-terminal case;
+- no every-byte-boundary matrix or fuzz/property corpus.
 
-Primary ownership boundary: request payload lifecycle only.
+### Plan 049 — Minimal Timeout Evidence and Provider Tuning
 
-### Plan 051 — Unified SSE Framing and Transcoded-Stream Hot Path
+First distinguish timeout exceptions from clean premature EOF using existing HTTPX semantics and bounded diagnostics.
 
-Introduce one incremental SSE framing pass shared by terminal observation, usage extraction, and transcoding. Remove duplicate UTF-8/SSE parsing and benchmark output frame coalescing without changing protocol behavior.
+Do not introduce separate first-byte, idle, and lifetime timer machinery unless captured evidence proves the current provider `read_timeout_s` cannot express the required behavior. A provider-specific read-timeout change is acceptable when the observed failure is actually `ReadTimeout`; no global increase is allowed.
 
-Primary ownership boundary: streaming parser/transcoder hot path only.
+Verification budget:
 
-### Plan 052 — Selection, Persistence, and Trace Hot-Path Reduction
+- old configuration remains valid;
+- one timeout classification case;
+- one premature-EOF-not-timeout case;
+- one provider-specific override case;
+- no accelerated 300-second simulation framework, timer state machine, or exhaustive timeout taxonomy unless implementation evidence requires it.
 
-Remove database awaits from the selection-claim lock, avoid diagnostic full-account scans for unsampled traces, and measure remaining lock/persistence overhead. Preserve all routing and durable-selection invariants.
+### Plan 050 — Single Provider Payload Lifecycle
 
-Primary ownership boundary: pre-upstream selection and diagnostic overhead only.
+Use one decoded provider payload through post-selection transforms and serialize once at dispatch.
 
-### Plan 053 — Real-Runtime Validation, Performance Gates, and Exact-Head Closure
+Prefer a simple authoritative dictionary plus final serialization over a large production mutation framework. A generation/freeze counter is permitted only where it prevents a demonstrated stale-byte defect; production mutation logs and test-only runtime telemetry are not required.
 
-Exercise all prior phases through the real Eggpool application path with deterministic mock providers, cancellation/fault matrices, native and transcoded streams, bounded concurrency, and SBC-appropriate performance/soak profiles. Record exact-head closure without adding a new evidence apparatus.
+Verification budget:
 
-Primary ownership boundary: integration validation, performance proof, documentation, and status closure only.
+- one native request;
+- one transcoded request;
+- one transformed request proving no repeated parse/encode;
+- one stale/final-body regression if needed;
+- no full native/transcoded × streaming/non-streaming × cache-policy matrix.
 
-## Dependency graph
+### Plan 051 — Shared SSE Framing
+
+Extract one bounded incremental SSE framer and share frames between completion observation and transcoding.
+
+Do not benchmark three output-coalescing architectures by default. Preserve the current emission strategy unless a simple local profile shows it is material. Do not add a lazy JSON envelope or frame abstraction beyond what the two consumers actually need.
+
+Verification budget:
+
+- one native observation case;
+- one OpenAI→Anthropic and one Anthropic→OpenAI transcode case;
+- one malformed/incomplete frame case;
+- one deterministic assertion that raw bytes are framed once;
+- optional local concurrency comparison, not a CI gate.
+
+### Plan 052 — Selection and Trace Hot-Path Cleanup
+
+Perform only the two confirmed low-risk changes:
+
+1. prehydrate the durable account identity needed under the selection lock;
+2. stop rescanning all accounts solely to construct discarded trace detail.
+
+Do not create a broad selection instrumentation suite, fairness benchmark matrix, or dispatch-writer comparison project.
+
+Verification budget:
+
+- one assertion that the database is not awaited under the claim lock;
+- one trace-off/unsampled no-extra-scan assertion;
+- one deterministic routing parity fixture;
+- one reload identity-map case only if production code changes that path.
+
+### Plan 053 — Lean Runtime Closure
+
+Run focused regressions, the reduced smoke suite, and one compact real-process/request-path smoke. Optional local/SBC measurement may be recorded, but soak, percentile gates, exact-head status-only commits, and evidence bundles are not closure requirements.
+
+## Dependency order
 
 ```text
-045 roadmap
-  |
-  +--> 046 control normalization
-  |
-  +--> 047 terminal ownership
-  |       |
-  |       +--> 048 stream completion semantics
-  |               |
-  |               +--> 049 timeout policy and diagnostics
-  |
-  +--> 050 provider-bound request lifecycle
-  |       |
-  |       +--> 051 unified SSE framing
-  |
-  +--> 052 selection/persistence hot path
+054 verification reduction applies immediately
 
-046 + 047 + 048 + 049 + 050 + 051 + 052
-  |
-  +--> 053 real-runtime validation and closure
+046 control normalization ----+
+047 terminal cleanup ---------+--> 053 lean closure
+048 stream completion --------+
+049 minimal timeout evidence -+
+050 single payload -----------+
+051 shared SSE framing -------+
+052 selection cleanup --------+
 ```
 
-Plan 046 and Plan 047 may begin independently. Plan 048 depends on the single-terminal-owner decisions from Plan 047. Plan 049 depends on Plan 048 because timeout evidence must not conflate premature EOF with idle timeout. Plan 050 may begin independently after its baseline measurements are captured. Plan 051 depends on Plan 048's terminal-state model and Plan 050's ownership boundaries. Plan 052 may proceed independently. Plan 053 is blocked on all implementation phases.
+Plans 046, 047, 050, and 052 may proceed independently. Plan 048 should follow the terminal-owner decision from Plan 047. Plan 049 follows Plan 048 so timeout and EOF are not conflated. Plan 051 consumes the completion model from Plan 048. Plan 053 closes the combined work.
 
-## Cross-phase invariants
+## Cross-phase correctness invariants
 
-Every phase must preserve these invariants:
-
-- A generic upstream 400/409/422 does not suppress an account or model without typed evidence.
-- Unsupported thinking controls create no shared health, quarantine, or backoff effect.
-- Every selected attempt reaches one durable terminal outcome.
-- Every reservation, active-count increment, and half-open probe acquisition is released exactly once.
-- Failure effects are applied at most once per attempt identity.
-- No retry occurs after downstream response bytes are emitted.
-- A pre-body retry excludes the already-attempted account and remains bounded.
-- The original client bytes remain available for audit-free request semantics but are never persisted as content.
+- Generic provider validation errors remain request-local unless typed evidence says otherwise.
+- Unsupported thinking controls do not suppress accounts or models.
+- Every selected attempt reaches one terminal state and releases its owned reservation/count/probe.
+- No retry occurs after downstream bytes are emitted.
+- Clean EOF is not success unless protocol completion or an explicit provider compatibility rule is present.
+- Original request content and credentials are not persisted in diagnostics.
 - Request and stream buffers remain bounded.
-- Diagnostics cannot terminate or alter an otherwise valid byte stream.
-- Provider-specific configuration remains backward compatible unless a plan explicitly documents migration.
-- Private SBC operation remains the design center; resource plateaus matter more than hyperscale throughput.
+- No database I/O is introduced under the selection claim lock.
+- No new background service, queue, supervisor, or database schema is introduced solely for verification.
 
-## Small-model execution contract
+## Verification budget
 
-Each phase plan is deliberately narrow. Implementers must:
+For each implementation phase:
 
-1. Read the roadmap and the current phase before editing code.
-2. Confirm the planning baseline against current `main`; if relevant code has changed, record the new baseline in the handoff note.
-3. Modify only the modules and tests required by the phase ownership boundary.
-4. Avoid opportunistic naming, formatting, or architecture cleanup.
-5. Add failing characterization tests before or with the fix.
-6. Use deterministic barriers/fault seams instead of sleep-based correctness tests.
-7. Preserve transition idempotency rather than relying on duplicate calls being harmless.
-8. Record exact commands and numeric results in the commit/PR handoff.
-9. Stop and document any newly discovered cross-phase defect instead of silently expanding scope.
-10. Never weaken an assertion merely to match current behavior.
+- normally modify no more than one focused unit test file and one smoke/integration file;
+- add no more than roughly 4–8 distinct regression cases unless materially separate code paths require more;
+- prefer parameterization over copied tests;
+- do not repeat a unit assertion through the real process unless integration can invalidate it;
+- do not require more than one deterministic cancellation point per materially different cleanup boundary;
+- do not add timing assertions to ordinary CI;
+- do not run live, network, performance, soak, or extended-soak tests in ordinary CI;
+- do not require retained evidence files.
 
-## Required validation layers
-
-The roadmap requires four layers of proof:
-
-### Unit and property-level proof
-
-- Provider contract matching and adaptation decision tables.
-- Terminal-event state transitions across arbitrary chunk boundaries.
-- Idempotent cleanup and effect application.
-- Timeout classification and configuration validation.
-- Provider-bound mutation generation and serialization counts.
-- SSE decoder bounds and malformed input behavior.
-
-### Real application-path integration proof
-
-Requests must enter Eggpool's ASGI endpoints and traverse real routing, selection, persistence, provider client, streaming generator, and finalization paths against deterministic local mock upstreams.
-
-Direct helper calls may supplement but cannot substitute for the canonical integration cases.
-
-### Performance proof
-
-Measure native and transcoded requests through Eggpool with:
-
-- warm and cold samples identified separately;
-- dispatch p50/p95/p99;
-- local pre-upstream p50/p95/p99;
-- stream CPU time or process CPU proxy;
-- JSON decode/encode counts;
-- SSE framing counts;
-- selection lock wait/hold;
-- SQLite persistence latency;
-- allocations or tracemalloc deltas where stable;
-- exact request counts and concurrency.
-
-### Resource/soak proof
-
-Run bounded short and standard profiles on ordinary developer/CI hardware and an optional extended local profile. Report actual duration and request count. Validate plateau behavior for RSS, tasks, threads, descriptors where supported, finalization registry, active requests, reservations, trace queues, and SQLite contention.
+These are complexity limits, not minimum test quotas. A phase may need fewer tests.
 
 ## Roadmap acceptance criteria
 
-- [ ] Plan 046 deterministically handles every supported thinking-control spelling and corrects contract ordering/matching.
-- [ ] Plan 047 establishes one terminal owner and proves cancellation-safe complete cleanup.
-- [ ] Plan 048 rejects or classifies premature clean EOF instead of recording success.
-- [ ] Plan 049 distinguishes first-byte, idle, transport, and premature-EOF outcomes and tunes providers only from evidence.
-- [ ] Plan 050 provides one decoded provider-bound payload and one final serialization.
-- [ ] Plan 051 performs one SSE framing pass per upstream byte and preserves native/transcoded parity.
-- [ ] Plan 052 removes database I/O from the selection-claim lock and avoids unsampled diagnostic scans.
-- [ ] Plan 053 validates the combined system through the real runtime and closes on the exact final implementation head.
-- [ ] No unrelated provider, routing, release, CI, or dashboard scope is added.
-- [ ] No ordinary CI matrix or committed evidence bundle is introduced.
+- [ ] Plan 054 establishes a smaller canonical CI/smoke contract and a concrete deletion plan for redundant tests and validation infrastructure.
+- [ ] Plan 046 prevents unsupported OpenCode Go thinking controls from reaching upstream while preserving native MiniMax behavior.
+- [ ] Plan 047 removes duplicate terminal ownership and closes the demonstrated cancellation cleanup gap.
+- [ ] Plan 048 distinguishes protocol completion from premature clean EOF.
+- [ ] Plan 049 classifies timeout versus EOF before any provider-specific timeout change.
+- [ ] Plan 050 removes repeated provider-body decode/encode work without creating a second request framework.
+- [ ] Plan 051 removes duplicate SSE framing without building a generalized streaming platform.
+- [ ] Plan 052 removes database-under-lock and discarded trace work only.
+- [ ] Plan 053 closes with focused regressions and a compact smoke, not an exhaustive matrix.
+- [ ] No new CI job, Python matrix, coverage threshold, benchmark service, soak gate, or evidence bundle is introduced.
+- [ ] The resulting ordinary development loop is faster and simpler than the current full non-slow-suite gate.
 
-## Explicit rejection conditions
+## Rejection conditions
 
-Do not close Plan 045 if any of the following remain:
+Do not close this roadmap if:
 
-- A fixed-thinking contract can forward `reasoning_effort`, `thinking.type`, `thinking.effort`, `thinking.budget_tokens`, or `thinking_budget` contrary to policy.
-- An unsupported effort value shares the same internal result as an already-valid value.
-- Contract priority can override a more-specific provider identity match.
-- A streaming HTTP 4xx or local capability rejection can enter two terminal finalization paths.
-- Cancellation can leave active counts, quota reservations, durable reservations, pending requests, or half-open probe ownership behind.
-- A clean EOF without a protocol terminal event is always marked completed.
-- MiniMax timeout changes are made without outcome classification data.
-- Provider transforms independently decode or serialize the same body.
-- The observer and transcoder independently frame the same SSE bytes.
-- Account ID database lookup occurs while the global selection-claim lock is held.
-- Unsampled requests scan all accounts solely to build a trace that will not be persisted.
-- Performance claims bypass Eggpool's proxy endpoint or omit exact request counts.
-- The final closure status references a commit before the last source or test change.
+- a known request can still poison unrelated routing/runtime state;
+- a truncated stream is still recorded as completed;
+- the fix adds a parallel finalization, request-payload, parser, or timeout framework without deleting equivalent legacy machinery;
+- implementation follows the old exhaustive test matrices despite Plan 054;
+- ordinary CI still runs the entire historical non-slow suite by default after Plan 054;
+- a mandatory performance percentage, soak duration, or evidence artifact blocks ordinary handoff;
+- test-support code grows materially for a narrowly scoped defect.
 
 ## Definition of done
 
-This roadmap is complete when provider-control compatibility failures are request-local and deterministic; selected-attempt cleanup is single-owner and cancellation-safe; streams require protocol-valid completion or expose a classified incomplete outcome; timeout behavior is provider-specific and evidence-driven; request and SSE processing perform one authoritative parse lifecycle; selection avoids unnecessary serialized work; all behavior is proven through the real Eggpool runtime; and the exact final head passes the repository's reduced canonical checks without adding verification bureaucracy.
+This roadmap is complete when the confirmed provider-control, terminal cleanup, premature EOF, and measured hot-path defects are corrected; the focused regressions and compact smoke suite pass; unrelated requests remain healthy after representative failures; and the repository has fewer mandatory tests, less validation machinery, and a faster single-job CI path than at the planning baseline.
