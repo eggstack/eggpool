@@ -42,6 +42,28 @@ class AdaptationWarning:
 
 
 @dataclass(frozen=True, slots=True)
+class ControlFieldAdaptation:
+    """Typed result of a single field-level adaptation.
+
+    Every field-level adapter returns one of these so the aggregate
+    adapter can derive a final :class:`ProviderRequestAdaptation`
+    without ambiguous ``None`` semantics.
+    """
+
+    disposition: Literal[
+        "unchanged",
+        "mapped",
+        "dropped",
+        "rejected",
+        "not_present",
+    ]
+    payload: dict[str, Any]
+    requested_field: str | None = None
+    emitted_field: str | None = None
+    warning: AdaptationWarning | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderRequestAdaptation:
     """Typed pure result of provider-bound thinking control adaptation.
 
@@ -258,7 +280,7 @@ def _handle_fixed_contract(
     policy: ProviderControlPolicy,
 ) -> ProviderRequestAdaptation:
     """Handle a contract where reasoning is fixed (no client controls)."""
-    if policy.unsupported_control == "reject":
+    if policy.unsupported_control in ("reject", "map_if_known"):
         return _reject(
             payload,
             model_id,
@@ -281,14 +303,26 @@ def _handle_fixed_contract(
     if isinstance(thinking_obj, dict):
         thinking_dict: dict[str, object] = dict(thinking_obj)  # type: ignore[arg-type]
         had_budget = "budget_tokens" in thinking_dict
+        had_type = "type" in thinking_dict
+        had_effort = "effort" in thinking_dict
         thinking_dict.pop("budget_tokens", None)
         thinking_dict.pop("type", None)
+        thinking_dict.pop("effort", None)
         if not thinking_dict:
             del new_payload["thinking"]
         else:
             new_payload["thinking"] = thinking_dict
         if had_budget:
             removed.append("thinking.budget_tokens")
+        if had_type:
+            removed.append("thinking.type")
+        if had_effort:
+            removed.append("thinking.effort")
+
+    # Remove top-level thinking_budget.
+    if "thinking_budget" in new_payload:
+        del new_payload["thinking_budget"]
+        removed.append("thinking_budget")
 
     if not removed:
         return ProviderRequestAdaptation(
@@ -330,30 +364,40 @@ def _handle_effort_budget_contract(
 
     for field_name in requested:
         if field_name == "reasoning_effort":
-            adapted = _adapt_reasoning_effort(
+            result = _adapt_reasoning_effort(
                 new_payload=new_payload,
                 contract=contract,
                 model_id=model_id,
                 provider_id=provider_id,
+                policy=policy,
+                intent=intent,
             )
-            if adapted is not None:
-                new_payload = adapted
+            if result.disposition == "not_present":
+                pass
+            elif result.disposition == "unchanged":
+                emitted.append("reasoning_effort")
+            elif result.disposition == "mapped":
+                new_payload = result.payload
                 changed = True
                 emitted.append("reasoning_effort")
-            else:
-                warnings.append(
-                    AdaptationWarning(
-                        kind="effort_mapped",
-                        field_name="reasoning_effort",
-                        detail=(
-                            f"effort {intent.requested_effort!r} mapped via contract"
-                        ),
-                    ),
+                if result.warning:
+                    warnings.append(result.warning)
+            elif result.disposition == "dropped":
+                new_payload = result.payload
+                changed = True
+                if result.warning:
+                    warnings.append(result.warning)
+            elif result.disposition == "rejected":
+                return _reject(
+                    new_payload,
+                    model_id,
+                    provider_id,
+                    "unsupported_effort",
+                    intent,
                 )
-                emitted.append("reasoning_effort")
 
         elif field_name == "thinking":
-            adapted = _adapt_thinking_block(
+            result = _adapt_thinking_block(
                 new_payload=new_payload,
                 contract=contract,
                 model_id=model_id,
@@ -361,24 +405,34 @@ def _handle_effort_budget_contract(
                 intent=intent,
                 policy=policy,
             )
-            if adapted is not None:
-                new_payload = adapted
+            if result.disposition == "not_present":
+                pass
+            elif result.disposition == "unchanged":
+                emitted.append("thinking")
+            elif result.disposition == "mapped":
+                new_payload = result.payload
                 changed = True
-                emitted.append("thinking")
-            else:
-                emitted.append("thinking")
+                if "thinking" in new_payload:
+                    emitted.append("thinking")
+                if result.warning:
+                    warnings.append(result.warning)
 
         elif field_name == "thinking_budget":
-            adapted = _adapt_thinking_budget(
+            result = _adapt_thinking_budget(
                 new_payload=new_payload,
                 contract=contract,
                 model_id=model_id,
                 provider_id=provider_id,
             )
-            if adapted is not None:
-                new_payload = adapted
-                changed = True
+            if result.disposition == "not_present":
+                pass
+            elif result.disposition == "unchanged":
                 emitted.append("thinking_budget")
+            elif result.disposition == "dropped":
+                new_payload = result.payload
+                changed = True
+                if result.warning:
+                    warnings.append(result.warning)
 
     decision: Literal["passthrough", "mapped", "dropped", "rejected"] = "passthrough"
     if changed:
@@ -403,30 +457,68 @@ def _adapt_reasoning_effort(
     contract: ThinkingControlContract,
     model_id: str,
     provider_id: str,
-) -> dict[str, Any] | None:
+    policy: ProviderControlPolicy,
+    intent: ThinkingRequestIntent,
+) -> ControlFieldAdaptation:
     """Adapt a reasoning_effort field against the contract.
 
-    Returns the modified payload or ``None`` if no change was needed.
+    Returns a typed :class:`ControlFieldAdaptation` so the caller can
+    distinguish ``unchanged`` (already valid) from ``dropped`` /
+    ``rejected`` (unsupported).
     """
     effort_value: object = new_payload.get("reasoning_effort")
     if not isinstance(effort_value, str):
-        return None
+        return ControlFieldAdaptation(disposition="not_present", payload=new_payload)
 
     normalized = effort_value.lower()
     # Check alias mapping.
     alias_target = contract.effort_aliases.get(normalized)
     if alias_target is not None:
-        new_payload = dict(new_payload)
-        new_payload["reasoning_effort"] = alias_target
-        return new_payload
+        modified = dict(new_payload)
+        modified["reasoning_effort"] = alias_target
+        return ControlFieldAdaptation(
+            disposition="mapped",
+            payload=modified,
+            requested_field="reasoning_effort",
+            emitted_field="reasoning_effort",
+            warning=AdaptationWarning(
+                kind="effort_mapped",
+                field_name="reasoning_effort",
+                detail=f"effort {effort_value!r} mapped to {alias_target!r}",
+            ),
+        )
 
     # Check if effort is accepted.
     accepted_normalized = {e.lower() for e in contract.accepted_efforts}
     if normalized in accepted_normalized:
-        return None  # already valid
+        return ControlFieldAdaptation(
+            disposition="unchanged",
+            payload=new_payload,
+            requested_field="reasoning_effort",
+            emitted_field="reasoning_effort",
+        )
 
-    # Effort not accepted — depends on policy.
-    return None
+    # Effort not accepted — reject or drop per policy.
+    if policy.unsupported_control in ("reject", "map_if_known"):
+        return ControlFieldAdaptation(
+            disposition="rejected",
+            payload=new_payload,
+            requested_field="reasoning_effort",
+        )
+
+    # warn_drop: remove the field.
+    modified = dict(new_payload)
+    del modified["reasoning_effort"]
+    return ControlFieldAdaptation(
+        disposition="dropped",
+        payload=modified,
+        requested_field="reasoning_effort",
+        warning=AdaptationWarning(
+            kind="thinking_control_dropped",
+            field_name="reasoning_effort",
+            detail=f"effort {effort_value!r} not accepted by contract",
+        ),
+    )
 
 
 def _adapt_thinking_block(
@@ -437,37 +529,47 @@ def _adapt_thinking_block(
     provider_id: str,
     intent: ThinkingRequestIntent,
     policy: ProviderControlPolicy,
-) -> dict[str, Any] | None:
+) -> ControlFieldAdaptation:
     """Adapt an Anthropic-style thinking block against the contract."""
     thinking_obj: object = new_payload.get("thinking")
     if not isinstance(thinking_obj, dict):
-        return None
+        return ControlFieldAdaptation(disposition="not_present", payload=new_payload)
 
     thinking_dict: dict[str, object] = dict(thinking_obj)  # type: ignore[arg-type]
-    changed = False
+    removed_fields: list[str] = []
 
     # If contract doesn't accept budget, remove it.
     budget_not_accepted = contract.mode not in ("budget", "effort_or_budget")
     if budget_not_accepted and "budget_tokens" in thinking_dict:
         del thinking_dict["budget_tokens"]
-        changed = True
+        removed_fields.append("thinking.budget_tokens")
 
     # If contract doesn't accept effort/type, remove them.
     if contract.mode not in ("effort", "effort_or_budget"):
         for key in ("type", "effort"):
             if key in thinking_dict:
                 del thinking_dict[key]
-                changed = True
+                removed_fields.append(f"thinking.{key}")
 
-    if not changed:
-        return None
+    if not removed_fields:
+        return ControlFieldAdaptation(disposition="unchanged", payload=new_payload)
 
-    new_payload = dict(new_payload)
+    modified = dict(new_payload)
     if thinking_dict:
-        new_payload["thinking"] = thinking_dict
+        modified["thinking"] = thinking_dict
     else:
-        del new_payload["thinking"]
-    return new_payload
+        del modified["thinking"]
+    return ControlFieldAdaptation(
+        disposition="mapped",
+        payload=modified,
+        requested_field="thinking",
+        emitted_field="thinking" if thinking_dict else None,
+        warning=AdaptationWarning(
+            kind="thinking_control_dropped",
+            field_name="thinking",
+            detail=f"removed fields: {removed_fields}",
+        ),
+    )
 
 
 def _adapt_thinking_budget(
@@ -476,16 +578,32 @@ def _adapt_thinking_budget(
     contract: ThinkingControlContract,
     model_id: str,
     provider_id: str,
-) -> dict[str, Any] | None:
+) -> ControlFieldAdaptation:
     """Adapt a top-level thinking_budget field against the contract."""
-    if (
-        contract.mode not in ("budget", "effort_or_budget")
-        and "thinking_budget" in new_payload
-    ):
-        new_payload = dict(new_payload)
-        del new_payload["thinking_budget"]
-        return new_payload
-    return None
+    if "thinking_budget" not in new_payload:
+        return ControlFieldAdaptation(disposition="not_present", payload=new_payload)
+
+    if contract.mode in ("budget", "effort_or_budget"):
+        return ControlFieldAdaptation(
+            disposition="unchanged",
+            payload=new_payload,
+            requested_field="thinking_budget",
+            emitted_field="thinking_budget",
+        )
+
+    # Budget not accepted — remove it.
+    modified = dict(new_payload)
+    del modified["thinking_budget"]
+    return ControlFieldAdaptation(
+        disposition="dropped",
+        payload=modified,
+        requested_field="thinking_budget",
+        warning=AdaptationWarning(
+            kind="thinking_control_dropped",
+            field_name="thinking_budget",
+            detail=f"contract mode {contract.mode!r} does not accept budget",
+        ),
+    )
 
 
 def _thinking_control_field_names() -> list[str]:

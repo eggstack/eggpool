@@ -178,7 +178,7 @@ public CLI gains no test-only options.
 - **Request finalization**: Process-owned finalization jobs ensure terminal cleanup independent of client request tasks. `RequestFinalizationSupervisor` manages bounded, deduplicated active jobs with shutdown drain/adopt.
 - **Database recovery**: `DatabaseRecoveryController` handles connection invalidation with single-flight recovery, bounded retry, and transaction reconciliation.
 - **Failure effects and quarantine**: `classify_failure_effects()` centralizes failure consequences. `ModelQuarantine` implements bounded quarantine state machine with corroboration before terminal withdrawal.
-- **Thinking control normalization**: Provider-bound `ThinkingControlContract` validates and normalizes thinking/reasoning controls after provider/account selection.
+- **Thinking control normalization**: Provider-bound `ThinkingControlContract` validates and normalizes thinking/reasoning controls after provider/account selection. `ControlFieldAdaptation` provides typed per-field dispositions (`unchanged`/`mapped`/`dropped`/`rejected`/`not_present`) so `emitted_controls` and warnings are truthful. Built-in contract resolution evaluates specificity before priority; OpenCode Go has both ID-based and URL-compatibility rules.
 - **Provider payload lifecycle**: `ProviderBoundRequest` manages decoded payload lifecycle with copy-on-write semantics. `TransformPipeline` runs ordered post-selection transforms.
 
 ## Gotchas

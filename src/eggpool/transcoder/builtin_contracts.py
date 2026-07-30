@@ -107,6 +107,28 @@ _MINIMAX_NATIVE_CONTRACT = BuiltinProviderContract(
     ),
 )
 
+# OpenCode Go URL compatibility — same fixed contract as the ID-based rule,
+# for providers configured with an OpenCode Go upstream URL but a
+# non-canonical provider ID.
+_OPENCODE_GO_URL_COMPAT_CONTRACT = BuiltinProviderContract(
+    key=ProviderContractKey(
+        provider_base_url_pattern=r".*opencode\.ai.*",
+        model_id_pattern=r".*minimax.*m3.*|.*m3.*minimax.*",
+        protocol="anthropic",
+        priority=10,
+    ),
+    contract=ThinkingControlContract(
+        mode="fixed",
+        request_fields=[],
+        accepted_efforts=[],
+        historical_reasoning_content="accepted",
+        source="manual_override",
+        effort_to_budget_tokens=None,
+        explicit_budget_min=None,
+        explicit_budget_max=None,
+    ),
+)
+
 # Anthropic native — full effort/budget control.
 _ANTHROPIC_NATIVE_CONTRACT = BuiltinProviderContract(
     key=ProviderContractKey(
@@ -151,6 +173,7 @@ _OPENAI_NATIVE_CONTRACT = BuiltinProviderContract(
 BUILTIN_CONTRACTS: tuple[BuiltinProviderContract, ...] = (
     _OPENCODE_GO_MINIMAX_CONTRACT,
     _MINIMAX_NATIVE_CONTRACT,
+    _OPENCODE_GO_URL_COMPAT_CONTRACT,
     _ANTHROPIC_NATIVE_CONTRACT,
     _OPENAI_NATIVE_CONTRACT,
 )
@@ -247,13 +270,17 @@ def lookup_builtin_contract(
     if not matches:
         return None
 
-    # Group by (priority, specificity) and find the best.
-    best_priority = min(m[0].key.priority for m in matches)
-    best_specificity = max(s for e, s in matches if e.key.priority == best_priority)
+    # Select by highest specificity first, then lowest priority within
+    # that specificity level.  This ensures a more-specific rule (e.g.
+    # provider_id match) always wins over a less-specific rule (e.g.
+    # URL match) even when the less-specific rule has a numerically
+    # lower priority.
+    best_specificity = max(s for _, s in matches)
+    best_priority = min(e.key.priority for e, s in matches if s == best_specificity)
     best = [
         e
         for e, s in matches
-        if e.key.priority == best_priority and s == best_specificity
+        if s == best_specificity and e.key.priority == best_priority
     ]
 
     if len(best) > 1:
@@ -298,9 +325,17 @@ def validate_no_ambiguous_contracts() -> list[str]:
     for i, a in enumerate(BUILTIN_CONTRACTS):
         for b in BUILTIN_CONTRACTS[i + 1 :]:
             # Two rules are ambiguous if they have the same priority
-            # AND their key patterns could overlap.  We check by
-            # testing a synthetic context that matches both.
+            # AND their key patterns could overlap at the same
+            # specificity level.  We check by testing a synthetic
+            # context that matches both.
             if a.key.priority != b.key.priority:
+                continue
+
+            # Rules at different specificity classes cannot be
+            # ambiguous — the more-specific rule always wins.
+            a_spec = _specificity_class(a.key)
+            b_spec = _specificity_class(b.key)
+            if a_spec != b_spec:
                 continue
 
             # Check if the more-specific patterns are subsets.
@@ -349,6 +384,21 @@ def validate_no_ambiguous_contracts() -> list[str]:
                 )
 
     return errors
+
+
+def _specificity_class(key: ProviderContractKey) -> int:
+    """Return the specificity class for ambiguity checking.
+
+    Rules at different specificity classes cannot be ambiguous because
+    the more-specific rule always wins at runtime.
+    """
+    if key.provider_id_pattern:
+        return 3
+    if key.provider_kind_pattern:
+        return 2
+    if key.provider_base_url_pattern:
+        return 1
+    return 0
 
 
 def resolve_control_contract(

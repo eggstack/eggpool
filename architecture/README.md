@@ -4141,6 +4141,7 @@ Control modes: `unknown`, `none`, `fixed`, `effort`, `budget`, `effort_or_budget
 
 `src/eggpool/transcoder/provider_adaptation.py` defines the pure adaptation result and function:
 
+- `ControlFieldAdaptation` — typed per-field result with `disposition` (`unchanged`/`mapped`/`dropped`/`rejected`/`not_present`), `payload`, `requested_field`, `emitted_field`, `warning`. Ensures `emitted_controls` and warnings are truthful.
 - `ProviderRequestAdaptation` — typed result with `payload`, `changed`, `decision` (`passthrough`/`mapped`/`dropped`/`rejected`), `requested_controls`, `emitted_controls`, `warnings`.
 - `adapt_thinking_controls()` — pure function that validates/normalizes controls against the provider contract. Does not touch runtime health, database state, routing, or logging.
 - Rejection raises `CapabilityError` (HTTP 400) — no upstream attempt.
@@ -4157,14 +4158,15 @@ Control modes: `unknown`, `none`, `fixed`, `effort`, `budget`, `effort_or_budget
 
 `src/eggpool/transcoder/builtin_contracts.py` contains manually curated contracts for known provider deployments:
 
-| Provider | URL Pattern | Model Pattern | Protocol | Mode |
-|----------|-------------|---------------|----------|------|
-| OpenCode Go MiniMax-M3 | `api.minimax.io` | `*minimax*m3*` | anthropic | fixed |
-| MiniMax native | `minimax.io/anthropic` | `*minimax*m3*` | anthropic | effort |
-| Anthropic native | `api.anthropic.com` | `*` | anthropic | effort_or_budget |
-| OpenAI native | `api.openai.com` | `*` | openai | effort |
+| Provider | ID Pattern | URL Pattern | Model Pattern | Protocol | Mode |
+|----------|------------|-------------|---------------|----------|------|
+| OpenCode Go MiniMax-M3 | `^opencode-go$` | — | `*minimax*m3*` | anthropic | fixed |
+| MiniMax native | `^minimax$` | — | `*minimax*m3*` | anthropic | effort |
+| OpenCode Go URL compat | — | `*opencode.ai*` | `*minimax*m3*` | anthropic | fixed |
+| Anthropic native | — | `*api.anthropic.com*` | `*` | anthropic | effort_or_budget |
+| OpenAI native | — | `*api.openai.com*` | `*` | openai | effort |
 
-Contract precedence: operator overrides > built-in contracts > inferred from legacy fields. `resolve_control_contract()` implements the three-tier resolution.
+Contract precedence: operator overrides > built-in contracts > inferred from legacy fields. `resolve_control_contract()` implements the three-tier resolution. Built-in matching evaluates specificity first (provider ID > provider kind > base URL), then lowest priority within specificity.
 
 ### Workstream F — Adaptation policy config
 
@@ -4174,7 +4176,7 @@ Contract precedence: operator overrides > built-in contracts > inferred from leg
 - `unknown_contract`: `reject` (default) | `allow_with_warning`
 - `allow_compatibility_retry`: `false` (default)
 
-Strict transcoding/loss policy takes precedence over any warn/drop setting.
+Strict transcoding/loss policy takes precedence over any warn/drop setting. `map_if_known` uses only explicit contract aliases/mappings; unmappable controls are rejected (same as `reject`) rather than silently passed through.
 
 ### Workstream G — Compatibility retry (deferred)
 
@@ -4195,6 +4197,30 @@ Thinking trace extended with `provider_control_decision` and `provider_control_w
 - `tests/unit/test_plan_024_thinking_metrics.py` — provider control counters
 - `tests/integration/test_plan_024_opencode_minimax_contract.py` — end-to-end OpenCode Go MiniMax-M3 contract, distinct MiniMax native behavior, collapsed model contracts, no durable state changes
 - `tests/integration/test_plan_024_compatibility_retry.py` — compatibility retry deferral verification
+
+## Provider Thinking-Control Normalization Closure (Plan 046)
+
+Closes six confirmed defects in the Plan 024 thinking-control adaptation layer, making field-level semantics total, typed, and deterministic.
+
+### Typed field dispositions
+
+`ControlFieldAdaptation` (`src/eggpool/transcoder/provider_adaptation.py`) replaces ambiguous `dict | None` returns from field-level adapters. Dispositions: `unchanged` (field accepted), `mapped` (alias/contract changed value), `dropped` (policy removed field), `rejected` (policy raises `CapabilityError`), `not_present` (field absent). This eliminates false "mapped" labels for unsupported efforts and ensures `emitted_controls` is a truthful subset of the final payload.
+
+### Fixed contract completeness
+
+`_handle_fixed_contract` now removes `thinking.type`, `thinking.effort`, and top-level `thinking_budget` in addition to `reasoning_effort` and `thinking.budget_tokens`. A type-only thinking block is observably dropped rather than silently passed through. `map_if_known` policy rejects unmappable controls (same as `reject` for fixed contracts).
+
+### Specificity-before-priority resolution
+
+`lookup_builtin_contract` now selects by highest specificity first, then lowest priority within that level. A provider ID match (specificity 3) always wins over a URL match (specificity 1) regardless of priority numbers.
+
+### OpenCode Go URL compatibility
+
+`_OPENCODE_GO_URL_COMPAT_CONTRACT` matches `.*opencode\.ai.*` for MiniMax-M3 models at specificity 1, providing the fixed contract for providers configured with an OpenCode Go upstream URL but a non-canonical provider ID. Exact provider ID remains more specific. Native MiniMax URLs (`api.minimax.io`) do not match.
+
+### Tests
+
+- `tests/unit/test_plan_046_thinking_control_normalization.py` — 42 tests covering all defects, control spellings, contract modes, policy dispositions, emitted-controls truthfulness, and non-dict safety
 
 ## Typed Failure Effects and Bounded Model Quarantine (Plan 025)
 

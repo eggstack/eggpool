@@ -62,26 +62,26 @@ class TestOpenCodeGoProviderIdentity:
 
 
 class TestOpenCodeGoUrlFallback:
-    """URL fallback for OpenCode Go requires provider identity to be absent."""
+    """URL fallback for OpenCode Go matches when provider_id is absent."""
 
-    def test_url_fallback_only_without_provider_id(self) -> None:
-        """URL pattern alone does not match OpenCode Go (no URL rule)."""
+    def test_url_fallback_resolves_fixed(self) -> None:
+        """URL pattern alone resolves the OpenCode Go fixed contract."""
         contract = lookup_builtin_contract(
             provider_base_url="https://opencode.ai/zen/go/v1",
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        # No URL-based rule for OpenCode Go — should not match.
-        assert contract is None
+        assert contract is not None
+        assert contract.mode == "fixed"
 
-    def test_minimax_url_fallback_matches_native(self) -> None:
+    def test_minimax_url_fallback_does_not_capture_native(self) -> None:
         """minimax.io URL fallback does NOT match OpenCode Go or native MiniMax."""
         contract = lookup_builtin_contract(
             provider_base_url="https://api.minimax.io/anthropic/v1",
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        # Neither OpenCode Go nor native MiniMax have URL rules anymore.
+        # Neither OpenCode Go nor native MiniMax have URL rules for minimax.io.
         assert contract is None
 
 
