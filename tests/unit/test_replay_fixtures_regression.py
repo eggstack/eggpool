@@ -151,7 +151,6 @@ def _assert_expected_segmentation(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.cache_compression_replay_full
 class TestFixtureTreeStructuralInvariants:
     """Every fixture must round-trip through expand + segment + safe-compress."""
 
@@ -263,7 +262,6 @@ class TestSegmentationInvariants:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.cache_compression_replay_full
 class TestSafeCompressionReplay:
     def test_openai_repeated_tool_output_applies_and_preserves_prefix(self) -> None:
         fixture = load_fixture("openai/repeated_tool_output")
@@ -309,7 +307,6 @@ class TestSafeCompressionReplay:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.cache_compression_replay_full
 class TestSyntheticCacheReplay:
     def test_anthropic_synthetic_apply_mode_preserves_native_cache(self) -> None:
         fixture = load_fixture("anthropic/system_blocks_native_cache")
@@ -419,7 +416,6 @@ class TestSyntheticCacheReplay:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.cache_compression_replay_full
 class TestTranscoderCacheStability:
     def test_openai_to_anthropic_preserves_native_cache_control(self) -> None:
         fixture = load_fixture("transcode/openai_client_to_anthropic_provider")
@@ -474,7 +470,6 @@ class TestTranscoderCacheStability:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.cache_compression_replay_full
 class TestReplayStructureInvariants:
     """Cross-cutting checks that span segment / compress / synthesis."""
 
@@ -534,7 +529,6 @@ class TestReplayStructureInvariants:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.cache_compression_replay_full
 class TestSyntheticCacheCoexistWithCompression:
     @pytest.fixture()
     def native_cache_fixture(self) -> dict[str, Any]:
@@ -585,7 +579,6 @@ class TestSyntheticCacheCoexistWithCompression:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.cache_compression_replay_full
 class TestFailClosedFallback:
     """When the safe applier detects an unexpected mutation path the
     caller must receive ``failed_fallback=True`` with the original payload."""
@@ -659,7 +652,6 @@ class TestFailClosedFallback:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.cache_compression_replay_full
 class TestRoutingGuardrailsReplay:
     """Verify adversarial cache / compression / synthetic / tuning metrics
     do not influence account selection.  This is a routing fixture that the
@@ -740,7 +732,6 @@ class TestRoutingGuardrailsReplay:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.cache_compression_replay_full
 class TestStatsReplay:
     SENTINELS = (
         "SYSTEM_POLICY_SENTINEL_DO_NOT_COMPRESS",
@@ -829,7 +820,6 @@ class TestStatsReplay:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.cache_compression_replay_full
 class TestSyntheticCacheFailurePaths:
     def test_apply_with_native_cache_does_not_mutate_other_blocks(self) -> None:
         fixture = load_fixture("anthropic/tool_schema_native_cache")
@@ -867,7 +857,6 @@ class TestSyntheticCacheFailurePaths:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.cache_compression_replay_full
 class TestFixtureSuppliedExpectations:
     """Walk every fixture, run the replay, and verify the recorded
     expectations against the bundle.  This is the one-stop regression
@@ -915,7 +904,6 @@ class TestFixtureSuppliedExpectations:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.cache_compression_replay_full
 class TestHarnessSurfaceSanity:
     def test_default_fixture_root_is_repo_relative(self) -> None:
         root = default_fixture_root()
@@ -942,7 +930,6 @@ class TestHarnessSurfaceSanity:
         assert cfg.synthetic_cache_controls.provider_kinds == ["anthropic"]
 
 
-@pytest.mark.cache_compression_replay_full
 def test_stats_queries_list_complete() -> None:
     """The replay suite tracks every public Phase 7 / Phase 9 / Phase 10
     queries helper so the harness coverage map does not drift."""

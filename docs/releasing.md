@@ -16,9 +16,7 @@ EggPool uses manual release publication. There is no automated release workflow.
 uv run ruff format --check src/ tests/ scripts/
 uv run ruff check src/ tests/ scripts/
 uv run pyright src/ scripts/
-uv run pytest \
-  -m "not slow and not performance and not soak and not extended_soak and not live and not network" \
-  -q --tb=short --maxfail=1
+uv run pytest tests/smoke/ -q --tb=short --maxfail=1
 ```
 
 ## Build

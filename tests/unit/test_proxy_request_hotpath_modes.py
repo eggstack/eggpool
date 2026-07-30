@@ -56,9 +56,6 @@ from eggpool.runtime_dispatch import (
 from eggpool.transcoder.compression import apply as apply_mod
 from eggpool.transcoder.compression.apply import _noop_result
 
-pytestmark = pytest.mark.request_path
-
-
 # ---------------------------------------------------------------------------
 # Test fakes / harness
 # ---------------------------------------------------------------------------

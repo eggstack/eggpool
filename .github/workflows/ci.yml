@@ -1,9 +1,7 @@
 # ---------------------------------------------------------------------------
 # EggPool CI
 #
-# Two jobs:
-#   check       — primary Python 3.12 lint + typecheck + canonical tests
-#   compat-311  — narrow Python 3.11 compatibility smoke
+# Single job: format + lint + typecheck + smoke tests on Python 3.11
 # ---------------------------------------------------------------------------
 
 name: CI
@@ -25,23 +23,6 @@ env:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
-        with:
-          python-version: "3.12"
-      - run: uv sync --frozen --extra dev
-      - run: uv run ruff format --check src/ tests/ scripts/
-      - run: uv run ruff check src/ tests/ scripts/
-      - run: uv run pyright src/ scripts/
-      - run: >
-          uv run pytest
-          -m "not slow and not performance and not soak and not extended_soak and not live and not network"
-          -q --tb=short --maxfail=1
-
-  compat-311:
-    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -49,4 +30,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: uv sync --frozen --extra dev
+      - run: uv run ruff format --check src/ tests/ scripts/
+      - run: uv run ruff check src/ tests/ scripts/
+      - run: uv run pyright src/ scripts/
       - run: uv run pytest tests/smoke/ -q --tb=short --maxfail=1

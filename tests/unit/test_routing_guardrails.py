@@ -36,8 +36,6 @@ from eggpool.transcoder.compression.policy_resolver import (
     resolve_compression_policy,
 )
 
-pytestmark = pytest.mark.request_path
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

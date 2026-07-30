@@ -20,8 +20,6 @@ from eggpool.request.finalizer import (
     RequestFinalizer,
 )
 
-pytestmark = pytest.mark.request_path
-
 
 async def _fresh_finalizer_db() -> tuple[
     Database,

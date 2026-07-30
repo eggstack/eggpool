@@ -38,8 +38,6 @@ from eggpool.observability.routing_trace_writer import (
 from eggpool.request.coordinator import ProxyRequestContext, RequestCoordinator
 from eggpool.routing.router import Router
 
-pytestmark = pytest.mark.request_path
-
 UPSTREAM_BASE = "https://trace-integ-test.example.com"
 
 

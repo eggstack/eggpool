@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import time
 from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import pytest
 from unittest.mock import patch
 
-import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -17,8 +19,6 @@ from eggpool.db.migrations import MigrationRunner
 from eggpool.models.config import AppConfig
 from eggpool.runtime_metrics import RuntimeMetricsService
 from eggpool.stats import StatsService
-
-pytestmark = pytest.mark.dashboard
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator

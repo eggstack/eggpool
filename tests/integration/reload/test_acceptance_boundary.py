@@ -25,7 +25,6 @@ if TYPE_CHECKING:
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_abort_precommit_rejects_accepted_transaction(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -48,7 +47,6 @@ async def test_abort_precommit_rejects_accepted_transaction(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_abort_precommit_allows_unaccepted_transaction(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -82,7 +80,6 @@ async def test_abort_precommit_allows_unaccepted_transaction(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_post_acceptance_exception_no_candidate_abort(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -115,7 +112,6 @@ async def test_post_acceptance_exception_no_candidate_abort(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_accepted_transaction_never_enters_aborting(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -140,7 +136,6 @@ async def test_accepted_transaction_never_enters_aborting(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_post_acceptance_reload_succeeds(
     reload_harness: ReloadHarness,
 ) -> None:

@@ -27,8 +27,6 @@ from eggpool.models.config import AppConfig
 from eggpool.request.coordinator import ProxyRequestContext, RequestCoordinator
 from eggpool.routing.router import Router
 
-pytestmark = pytest.mark.request_path
-
 
 async def _seed_accounts(
     db: Database,

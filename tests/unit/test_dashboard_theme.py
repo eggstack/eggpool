@@ -28,8 +28,6 @@ from eggpool.dashboard.theme import (
     translate_theme,
 )
 
-pytestmark = pytest.mark.dashboard
-
 if TYPE_CHECKING:
     from pathlib import Path
 

@@ -28,7 +28,6 @@ if TYPE_CHECKING:
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_reconciliation_idempotent_no_double_count(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -65,7 +64,6 @@ async def test_reconciliation_idempotent_no_double_count(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_retry_pending_status_distinguishable(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -106,7 +104,6 @@ async def test_retry_pending_status_distinguishable(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_snapshot_counters_match_result_fields(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -143,7 +140,6 @@ async def test_snapshot_counters_match_result_fields(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_delayed_completion_increments_correctly(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -178,7 +174,6 @@ async def test_delayed_completion_increments_correctly(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_accepted_reloads_counter_increments(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -200,7 +195,6 @@ async def test_accepted_reloads_counter_increments(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_finalization_history_truthful(
     reload_harness: ReloadHarness,
 ) -> None:

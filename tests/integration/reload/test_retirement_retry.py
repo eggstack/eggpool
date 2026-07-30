@@ -17,7 +17,6 @@ from tests.support.reload_harness import ReloadHarness
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_retirement_failure_retains_original_old_generation() -> None:
     """Retirement failure retains the original old generation and is retryable.
 
@@ -78,7 +77,6 @@ async def test_retirement_failure_retains_original_old_generation() -> None:
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_retirement_retry_schedules_exact_old_generation() -> None:
     """Retry of retirement scheduling closes the exact original old generation.
 

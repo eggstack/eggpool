@@ -30,7 +30,6 @@ if TYPE_CHECKING:
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_commit_failure_rollback_success(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -63,7 +62,6 @@ async def test_commit_failure_rollback_success(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_commit_failure_indeterminate_state(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -103,7 +101,6 @@ async def test_commit_failure_indeterminate_state(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_commit_failure_diagnostic_fields(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -131,7 +128,6 @@ async def test_commit_failure_diagnostic_fields(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_connection_state_after_invalidation(
     reload_harness: ReloadHarness,
 ) -> None:

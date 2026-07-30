@@ -24,7 +24,6 @@ class _BlockingCandidateObserver(ReloadObserver):
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_shutdown_adopts_persistent_retirement_failure(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -76,7 +75,6 @@ async def test_shutdown_adopts_persistent_retirement_failure(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_shutdown_timeout_cancels_preacceptance_and_restores_ownership(
     reload_harness: ReloadHarness,
 ) -> None:

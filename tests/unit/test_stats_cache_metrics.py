@@ -11,8 +11,6 @@ from eggpool.stats.cache_metrics import (
     derive_cache_metric_terms,
 )
 
-pytestmark = pytest.mark.dashboard
-
 
 class TestDeriveCacheMetricTerms:
     """derive_cache_metric_terms maps protocol-aware read/write/denominator."""

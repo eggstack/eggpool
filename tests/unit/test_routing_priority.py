@@ -14,8 +14,6 @@ from eggpool.catalog.cache import ModelCatalogCache
 from eggpool.models.config import AppConfig
 from eggpool.routing.router import Router, _group_by_priority
 
-pytestmark = pytest.mark.request_path
-
 
 class _MockCatalog:
     """Mock catalog with a single model across all configured accounts."""

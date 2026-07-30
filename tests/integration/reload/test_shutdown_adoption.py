@@ -24,7 +24,6 @@ if TYPE_CHECKING:
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_shutdown_adopts_old_slot_after_persistent_failure(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -86,7 +85,6 @@ async def test_shutdown_adopts_old_slot_after_persistent_failure(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_shutdown_closes_old_and_active_generations(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -124,7 +122,6 @@ async def test_shutdown_closes_old_and_active_generations(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_shutdown_after_successful_drain(
     reload_harness: ReloadHarness,
 ) -> None:

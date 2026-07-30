@@ -47,8 +47,6 @@ from eggpool.routing.router import Router
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
-pytestmark = pytest.mark.request_path
-
 UPSTREAM_BASE = "https://transcode-concurrency-test.example.com"
 
 # ---------------------------------------------------------------------------

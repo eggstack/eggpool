@@ -22,8 +22,6 @@ from eggpool.models.config import AppConfig
 from eggpool.quota.estimation import QuotaEstimator
 from eggpool.routing.router import Router
 
-pytestmark = pytest.mark.request_path
-
 
 def _make_registry() -> AccountRegistry:
     return AccountRegistry(

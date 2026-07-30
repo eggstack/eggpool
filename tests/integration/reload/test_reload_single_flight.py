@@ -82,7 +82,6 @@ def _make_blocking_job(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_concurrent_runners_share_one_task(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -131,7 +130,6 @@ async def test_concurrent_runners_share_one_task(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_cancel_waiter_does_not_cancel_attempt(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -178,7 +176,6 @@ async def test_cancel_waiter_does_not_cancel_attempt(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_timeout_does_not_cancel_attempt(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -222,7 +219,6 @@ async def test_timeout_does_not_cancel_attempt(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_retry_creates_new_task(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -294,7 +290,6 @@ async def test_retry_creates_new_task(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_run_returns_structured_outcome(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -323,7 +318,6 @@ async def test_run_returns_structured_outcome(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_completed_job_returns_completed_outcome(
     reload_harness: ReloadHarness,
 ) -> None:

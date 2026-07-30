@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-
 from eggpool.api.models import serialize_openai_model
-
-pytestmark = pytest.mark.dashboard
 
 
 def test_basic_model_serialization() -> None:

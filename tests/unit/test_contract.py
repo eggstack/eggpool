@@ -19,8 +19,6 @@ from eggpool.providers.contract import (
     compose_provider_url,
 )
 
-pytestmark = pytest.mark.request_path
-
 
 class TestComposeProviderUrl:
     def test_simple_base_and_path(self):

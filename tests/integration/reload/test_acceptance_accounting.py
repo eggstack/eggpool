@@ -30,7 +30,6 @@ class _BlockingPublishObserver(ReloadObserver):
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_cancelled_waiter_is_reconciled_by_process_owned_callback(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -80,7 +79,6 @@ async def test_cancelled_waiter_is_reconciled_by_process_owned_callback(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_completed_job_is_swept_before_admission(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -99,7 +97,6 @@ async def test_completed_job_is_swept_before_admission(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_failure_and_retry_counters_use_per_attempt_deltas(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -127,7 +124,6 @@ async def test_failure_and_retry_counters_use_per_attempt_deltas(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 @pytest.mark.slow()
 async def test_one_hundred_accepted_cancellations_do_not_retain_jobs(
     reload_harness: ReloadHarness,

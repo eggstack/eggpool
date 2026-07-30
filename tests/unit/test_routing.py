@@ -17,8 +17,6 @@ from eggpool.routing.config import routing_stale_after_s
 from eggpool.routing.eligibility import get_eligible_accounts
 from eggpool.routing.router import Router
 
-pytestmark = pytest.mark.request_path
-
 
 def test_eligible_accounts_basic() -> None:
     cache = ModelCatalogCache()

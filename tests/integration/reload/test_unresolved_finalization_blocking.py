@@ -29,7 +29,6 @@ if TYPE_CHECKING:
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_unresolved_finalization_blocks_new_reload(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -87,7 +86,6 @@ async def test_unresolved_finalization_blocks_new_reload(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_retry_before_admit_completes_resolved_job(
     reload_harness: ReloadHarness,
 ) -> None:

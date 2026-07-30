@@ -29,7 +29,6 @@ if TYPE_CHECKING:
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_drain_completes_fail_once_retirement(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -78,7 +77,6 @@ async def test_drain_completes_fail_once_retirement(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_drain_timeout_leaves_unresolved_jobs(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -118,7 +116,6 @@ async def test_drain_timeout_leaves_unresolved_jobs(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_drain_is_single_flight(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -175,7 +172,6 @@ async def test_drain_is_single_flight(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_drain_returns_zero_when_no_jobs(
     reload_harness: ReloadHarness,
 ) -> None:

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import time
+from typing import TYPE_CHECKING
 
-import pytest
+if TYPE_CHECKING:
+    import pytest
+
 import pytest_asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -12,8 +15,6 @@ from fastapi.testclient import TestClient
 from eggpool.api.update import register_update_routes
 from eggpool.models.config import AppConfig
 from eggpool.update_checker import UpdateChecker, UpdateInfo
-
-pytestmark = pytest.mark.dashboard
 
 
 def _build_config(*, api_key: str | None = "test-key-12345678") -> AppConfig:

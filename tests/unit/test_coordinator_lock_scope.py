@@ -52,8 +52,6 @@ from eggpool.runtime_dispatch import (
     DispatchSpanRecorder,
 )
 
-pytestmark = pytest.mark.request_path
-
 
 class _MockCatalog:
     def __init__(self, cache: ModelCatalogCache) -> None:

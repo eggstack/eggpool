@@ -53,8 +53,6 @@ from eggpool.request.selection_claim_diagnostics import (
 )
 from eggpool.routing.router import Router
 
-pytestmark = pytest.mark.slow_writer_burst
-
 _NUM_ACCOUNTS = 5
 _NUM_SELECTORS = 25
 

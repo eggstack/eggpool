@@ -18,8 +18,6 @@ from eggpool.api.proxy_request import (
     handle_proxy_request,
 )
 
-pytestmark = pytest.mark.request_path
-
 
 class _FakeCompressionPolicy:
     """Minimal ``[compression]`` config stub."""

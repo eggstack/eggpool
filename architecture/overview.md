@@ -186,7 +186,7 @@ Runtime configuration lives in `config.toml` + `.env` (API keys). Key sections:
 - **Contract**: Provider and transcoder contract tests
 - **Performance**: Baselines and regression guards
 - **Soak**: Long-running stability validation
-- **Markers**: `request_path`, `dashboard`, `performance`, `slow`, `cache_compression_replay_full`
+- **Markers**: `unit`, `integration`, `slow`, `performance`, `live`, `network`, `soak`
 
 ## Further Reading
 

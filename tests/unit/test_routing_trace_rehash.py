@@ -19,9 +19,6 @@ from eggpool.observability.routing_trace_writer import (
     RoutingTraceWriter,
 )
 
-pytestmark = pytest.mark.request_path
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

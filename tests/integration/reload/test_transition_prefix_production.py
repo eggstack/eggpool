@@ -35,7 +35,6 @@ class _TraceTransition(ProcessTransition):
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_transition_prefix_rollback_uses_real_reload_path(
     reload_harness: ReloadHarness,
 ) -> None:

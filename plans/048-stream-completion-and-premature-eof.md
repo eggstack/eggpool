@@ -1,7 +1,7 @@
 # Plan 048 — Protocol Completion and Premature EOF Classification
 
 Date: 2026-07-30
-Status: implementation handoff
+Status: closed at 3b8976d5
 Parent roadmap: `plans/045-upstream-streaming-hardening-hotpath-roadmap.md`
 Depends on: Plan 047 terminal ownership
 Planning baseline: `216e615d75269cc1471a920ae81ece9ef2d21802`

@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-
 from eggpool.dashboard.render import render_runtime
-
-pytestmark = pytest.mark.dashboard
 
 _MINIMAL_SNAPSHOT: dict = {
     "server": {},

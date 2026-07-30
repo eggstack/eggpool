@@ -31,7 +31,6 @@ if TYPE_CHECKING:
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_shutdown_no_active_transaction_completes_quickly(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -57,7 +56,6 @@ async def test_shutdown_no_active_transaction_completes_quickly(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_shutdown_waits_for_active_transaction(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -89,7 +87,6 @@ async def test_shutdown_waits_for_active_transaction(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_shutdown_timeout_triggers_adoption(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -143,7 +140,6 @@ async def test_shutdown_timeout_triggers_adoption(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_shutdown_closes_old_and_active_exactly_once(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -176,7 +172,6 @@ async def test_shutdown_closes_old_and_active_exactly_once(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_shutdown_after_successful_drain(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -219,7 +214,6 @@ async def test_shutdown_after_successful_drain(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_wait_for_transaction_timeout_returns_false(
     reload_harness: ReloadHarness,
 ) -> None:

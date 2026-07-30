@@ -63,7 +63,6 @@ def _build_generation(gen_id: int) -> RuntimeGeneration:
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_ensure_gate_released_does_not_increment_epoch() -> None:
     """ensure_reload_gate_released does not increment publication_epoch.
 
@@ -96,7 +95,6 @@ async def test_ensure_gate_released_does_not_increment_epoch() -> None:
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_staged_swap_cannot_be_ungated_directly() -> None:
     """A staged swap prevents direct gate release.
 
@@ -137,7 +135,6 @@ async def test_staged_swap_cannot_be_ungated_directly() -> None:
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_ensure_gate_released_noop_when_gate_clear() -> None:
     """ensure_reload_gate_released is a no-op when no gate is active."""
     async with ReloadHarness() as harness:
@@ -156,7 +153,6 @@ async def test_ensure_gate_released_noop_when_gate_clear() -> None:
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_commit_increments_epoch_exactly_once() -> None:
     """PendingGenerationSwap.commit() increments epoch exactly once."""
     async with ReloadHarness() as harness:

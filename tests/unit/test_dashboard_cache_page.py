@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import re
 
-import pytest
-
 from eggpool.dashboard.render import (
     CacheAdvancedState,
     _build_cache_advanced_state,
@@ -14,8 +12,6 @@ from eggpool.dashboard.render import (
     _render_request_shaping_summary_panel,
     render_cache,
 )
-
-pytestmark = pytest.mark.dashboard
 
 
 class TestRenderCacheBasic:

@@ -28,7 +28,6 @@ if TYPE_CHECKING:
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_100_reload_retention_bounded(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -86,7 +85,6 @@ async def test_100_reload_retention_bounded(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_release_references_clears_after_completion(
     reload_harness: ReloadHarness,
 ) -> None:

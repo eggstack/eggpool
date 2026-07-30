@@ -32,7 +32,6 @@ if TYPE_CHECKING:
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_publish_failure_after_staging_rolls_back(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -69,7 +68,6 @@ async def test_publish_failure_after_staging_rolls_back(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_post_acceptance_cancel_zero_rollback(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -105,7 +103,6 @@ async def test_post_acceptance_cancel_zero_rollback(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_observer_failure_does_not_propagate(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -134,7 +131,6 @@ async def test_observer_failure_does_not_propagate(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_retirement_failure_keeps_job_unresolved(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -189,7 +185,6 @@ async def test_retirement_failure_keeps_job_unresolved(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_successful_reload_post_acceptance_invariants(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -212,7 +207,6 @@ async def test_successful_reload_post_acceptance_invariants(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_old_generation_pending_retirement(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -243,7 +237,6 @@ async def test_old_generation_pending_retirement(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_post_acceptance_cancel_subsequent_reload(
     reload_harness: ReloadHarness,
 ) -> None:

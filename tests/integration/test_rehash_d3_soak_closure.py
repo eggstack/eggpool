@@ -58,8 +58,6 @@ from tests.integration.test_rehash_streaming_swap import (
     _write_config,
 )
 
-pytestmark = [pytest.mark.reload, pytest.mark.slow]
-
 NOOP_SOAK_RELOADS = 10
 POLICY_SOAK_RELOADS = 10
 MIXED_SOAK_RELOADS = 30

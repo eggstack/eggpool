@@ -1,7 +1,7 @@
 # Plan 051 — Unified SSE Framing and Transcoded-Stream Hot Path
 
 Date: 2026-07-30
-Status: implementation handoff
+Status: closed at 3b8976d5
 Parent roadmap: `plans/045-upstream-streaming-hardening-hotpath-roadmap.md`
 Depends on: Plan 048 completion model and Plan 050 provider-bound ownership
 Planning baseline: `216e615d75269cc1471a920ae81ece9ef2d21802`

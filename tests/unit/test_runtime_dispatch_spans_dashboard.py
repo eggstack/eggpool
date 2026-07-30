@@ -24,8 +24,6 @@ from eggpool.runtime_metrics import RuntimeMetricsService
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
-pytestmark = pytest.mark.dashboard
-
 
 def _make_span(
     span: str,

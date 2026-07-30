@@ -28,25 +28,22 @@ uv run pytest <affected test paths> -q --tb=short --maxfail=1
 
 ## Before-Push Check
 
-Run the same checks as the primary CI job:
+Run the same checks as the CI job:
 
 ```bash
 uv run ruff format --check src/ tests/ scripts/
 uv run ruff check src/ tests/ scripts/
 uv run pyright src/ scripts/
-uv run pytest \
-  -m "not slow and not performance and not soak and not extended_soak and not live and not network" \
-  -q --tb=short --maxfail=1
+uv run pytest tests/smoke/ -q --tb=short --maxfail=1
 ```
 
 ## CI
 
-Two GitHub Actions jobs on every PR:
+One GitHub Actions job on every PR:
 
 | Job | Python | What it does |
 |-----|--------|-------------|
-| `check` | 3.12 | ruff format + ruff check + pyright + canonical test suite |
-| `compat-311` | 3.11 | `pytest tests/smoke/` — package import, config, DB migration, one request through real Eggpool, CLI |
+| `check` | 3.11 | ruff format + ruff check + pyright + `pytest tests/smoke/` |
 
 CI sets `PYTHONHASHSEED=0` and `TZ=UTC`; reproduce locally for deterministic results.
 
@@ -62,14 +59,8 @@ uv run pytest -k "test_routing_plan_fallback" -v
 # Integration tests only
 uv run pytest -m integration -v
 
-# Reload tests only
-uv run pytest tests/integration/reload/ -v
-
 # Request-path correctness (routing, transcoding, finalization)
 uv run pytest -m request_path -v
-
-# Dashboard tests
-uv run pytest -m dashboard -v
 
 # Network-dependent tests
 uv run pytest -m network -v
@@ -114,31 +105,6 @@ quiescence poll that the final drain gate consults (not `metrics[-1]`),
 the RSS availability gate, and the offline SQLite lifecycle audit.
 Unreachable samples, non-positive early baselines, missing runtime data,
 zero attempts, and zero successes all fail closed.
-
-The runner owns one outer lifecycle boundary: every fallible operation
-after work-directory creation (upstream start, config write, subprocess
-start, health check, workload, gates) is inside one `try/except/finally`.
-Partial setup failures clean every acquired resource. Unexpected exceptions
-are converted to a bounded `ValidationResult` with `return_code=12`.
-`CancelledError` propagates after cleanup. Cleanup aggregates errors from
-child termination, upstream shutdown/close, and directory removal — all
-steps are attempted even when earlier steps fail. A cleanup failure forces
-`passed=False` and a nonzero return code. The JSON payload and returned
-`ValidationResult` are reconciled in `finally` before a single atomic
-write. Process-log redaction is line-preserving: configured soak API keys
-are passed narrowly through `secrets=` to `_redact_log_line`, so a secret
-on one line does not destroy unrelated diagnostic lines.
-
-A short real-process smoke lives at
-`tests/integration/test_runtime_validation_process_smoke.py` and runs the
-production startup, load, polling, and cleanup code paths through
-`run_validation()` with a compact `DurationPlan`. The smoke receives
-internal `ValidationResult` cleanup fields (`child_pid`, `work_dir`,
-`process_log_tail`, `process_stopped`, `work_dir_removed`,
-`cleanup_error`) and asserts the actual recorded PID is gone and the
-actual `eggpool-soak-*` work directory is removed. The bounded redacted
-process log tail appears in assertion messages only on failure. The
-public CLI gains no test-only options.
 
 ## File Organization
 

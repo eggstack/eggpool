@@ -81,7 +81,6 @@ def _emit_regression(
 
 
 @pytest.mark.asyncio
-@pytest.mark.perf_baseline
 async def test_segmentation_bounded_overhead() -> None:
     """Segmentation completes within reasonable time for various sizes.
 
@@ -136,7 +135,6 @@ async def test_segmentation_bounded_overhead() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.perf_baseline
 async def test_routing_eligibility_deterministic() -> None:
     """Same inputs produce same routing decisions.
 
@@ -201,7 +199,6 @@ async def test_routing_eligibility_deterministic() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.perf_baseline
 async def test_transcode_body_equivalence() -> None:
     """Verify transcoded bodies match expected JSON-normalized output.
 

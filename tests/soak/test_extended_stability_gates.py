@@ -55,7 +55,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-pytestmark = [pytest.mark.soak, pytest.mark.extended_soak]
+pytestmark = [pytest.mark.soak]
 
 UPSTREAM_BASE = "https://soak-test-upstream.example.com"
 

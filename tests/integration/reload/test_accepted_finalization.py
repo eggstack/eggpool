@@ -24,7 +24,6 @@ from tests.support.reload_harness import ReloadHarness
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_accepted_reload_creates_finalization_job(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -43,7 +42,6 @@ async def test_accepted_reload_creates_finalization_job(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_finalization_job_registered_before_post_acceptance_await() -> None:
     """The finalization job is registered before any post-acceptance mirror/finalize.
 
@@ -81,7 +79,6 @@ async def test_finalization_job_registered_before_post_acceptance_await() -> Non
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_finalization_job_resumes_from_incomplete_step() -> None:
     """A job with step set to MIRROR_UPDATED skips earlier steps.
 
@@ -180,7 +177,6 @@ async def test_finalization_job_resumes_from_incomplete_step() -> None:
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_post_acceptance_cancellation_retains_job() -> None:
     """Post-acceptance cancellation retains the finalization job and accepted state.
 

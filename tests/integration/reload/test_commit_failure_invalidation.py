@@ -26,7 +26,6 @@ if TYPE_CHECKING:
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_commit_failure_invalidates_connection_on_ambiguous_state(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -53,7 +52,6 @@ async def test_commit_failure_invalidates_connection_on_ambiguous_state(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_commit_failure_diagnostic_fields(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -76,7 +74,6 @@ async def test_commit_failure_diagnostic_fields(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_connection_invalidated_state_persists(
     reload_harness: ReloadHarness,
 ) -> None:

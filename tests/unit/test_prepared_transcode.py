@@ -11,8 +11,6 @@ import pytest
 from eggpool.api.proxy_request import TranscodePreflightResult, _tool_token_padding
 from eggpool.transcoder.prepared import RECOMPUTE_REASONS, PreparedTranscode
 
-pytestmark = pytest.mark.request_path
-
 
 def _make_preflight(
     translated_payload: dict | None = None,

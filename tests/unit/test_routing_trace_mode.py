@@ -27,8 +27,6 @@ from eggpool.observability.routing_trace_writer import RoutingTraceWriter
 from eggpool.request.coordinator import ProxyRequestContext, RequestCoordinator
 from eggpool.routing.router import Router
 
-pytestmark = pytest.mark.request_path
-
 if TYPE_CHECKING:
     from eggpool.health.health_manager import HealthManager
 

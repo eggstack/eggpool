@@ -23,7 +23,6 @@ if TYPE_CHECKING:
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_confirmed_rollbacks_keeps_connection_usable(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -55,7 +54,6 @@ async def test_confirmed_rollbacks_keeps_connection_usable(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_indeterminate_commit_invalidates_connection(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -97,7 +95,6 @@ async def test_indeterminate_commit_invalidates_connection(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_commit_failure_diagnostics_expose_state(
     reload_harness: ReloadHarness,
 ) -> None:

@@ -22,8 +22,6 @@ from eggpool.metrics.buffer import MetricsWriteCoalescer, UsageMetricEvent
 from eggpool.models.config import MetricsConfig
 from eggpool.stats.service import StatsService, TimeRange
 
-pytestmark = pytest.mark.dashboard
-
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 

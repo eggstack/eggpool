@@ -12,8 +12,6 @@ from eggpool.dashboard.telemetry import DashboardTelemetry
 from eggpool.db.connection import Database
 from eggpool.stats.service import StatsService, TimeRange
 
-pytestmark = pytest.mark.dashboard
-
 
 @pytest_asyncio.fixture()
 async def db() -> Database:

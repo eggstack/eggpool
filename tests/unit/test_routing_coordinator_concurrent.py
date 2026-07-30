@@ -43,8 +43,6 @@ from eggpool.quota.estimation import AccountQuota, QuotaEstimator
 from eggpool.request.coordinator import ProxyRequestContext, RequestCoordinator
 from eggpool.routing.router import Router
 
-pytestmark = pytest.mark.request_path
-
 
 class _MockCatalog:
     """Mock catalog service exposing only the ``cache`` attribute.

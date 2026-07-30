@@ -40,8 +40,6 @@ from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
 from eggpool.stats import queries
 
-pytestmark = pytest.mark.dashboard
-
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 

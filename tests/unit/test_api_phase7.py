@@ -28,8 +28,6 @@ from eggpool.models.config import AppConfig
 from eggpool.runtime_metrics import RuntimeMetricsService
 from eggpool.stats import StatsService
 
-pytestmark = pytest.mark.dashboard
-
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 

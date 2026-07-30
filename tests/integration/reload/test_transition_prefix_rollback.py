@@ -66,7 +66,6 @@ class _InstrumentedTransition(ProcessTransition):
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_abc_transition_prefix_rollback(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -128,7 +127,6 @@ async def test_abc_transition_prefix_rollback(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_transition_failure_preserves_old_generation(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -164,7 +162,6 @@ async def test_transition_failure_preserves_old_generation(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_candidate_close_after_transition_failure(
     reload_harness: ReloadHarness,
 ) -> None:

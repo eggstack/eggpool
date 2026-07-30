@@ -13,8 +13,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
-
 from eggpool.models.config import AppConfig
 from eggpool.transcoder.compression.policy import (
     CompressionConfig,
@@ -25,8 +23,6 @@ from eggpool.transcoder.compression.policy_resolver import (
     resolve_compression_policy,
 )
 from eggpool.transcoder.segmentation_guard import should_segment_request
-
-pytestmark = pytest.mark.request_path
 
 # ---------------------------------------------------------------------------
 # Helpers

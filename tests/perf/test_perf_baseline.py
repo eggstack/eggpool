@@ -171,7 +171,6 @@ def _emit_snapshot(
 
 
 @pytest.mark.asyncio
-@pytest.mark.perf_baseline
 async def test_native_openai_nonstreaming_request(
     perf_coordinator: RequestCoordinator,
 ) -> None:
@@ -211,7 +210,6 @@ async def test_native_openai_nonstreaming_request(
 
 
 @pytest.mark.asyncio
-@pytest.mark.perf_baseline
 async def test_native_anthropic_nonstreaming_request(
     perf_coordinator: RequestCoordinator,
 ) -> None:
@@ -251,7 +249,6 @@ async def test_native_anthropic_nonstreaming_request(
 
 
 @pytest.mark.asyncio
-@pytest.mark.perf_baseline
 async def test_transcode_openai_to_anthropic(
     perf_coordinator: RequestCoordinator,
 ) -> None:
@@ -311,7 +308,6 @@ async def test_transcode_openai_to_anthropic(
 
 
 @pytest.mark.asyncio
-@pytest.mark.perf_baseline
 async def test_transcode_anthropic_to_openai(
     perf_coordinator: RequestCoordinator,
 ) -> None:
@@ -379,7 +375,6 @@ async def test_transcode_anthropic_to_openai(
 
 
 @pytest.mark.asyncio
-@pytest.mark.perf_baseline
 async def test_segmentation_latency(
     perf_coordinator: RequestCoordinator,
 ) -> None:
@@ -431,7 +426,6 @@ async def test_segmentation_latency(
 
 
 @pytest.mark.asyncio
-@pytest.mark.perf_baseline
 async def test_routing_eligibility_latency(
     perf_coordinator: RequestCoordinator,
 ) -> None:
@@ -469,7 +463,6 @@ async def test_routing_eligibility_latency(
 
 
 @pytest.mark.asyncio
-@pytest.mark.perf_baseline
 async def test_retryable_failure_and_failover(
     perf_coordinator: RequestCoordinator,
 ) -> None:
@@ -503,7 +496,6 @@ async def test_retryable_failure_and_failover(
 
 
 @pytest.mark.asyncio
-@pytest.mark.perf_baseline
 async def test_thinking_request_supported(
     perf_coordinator: RequestCoordinator,
 ) -> None:

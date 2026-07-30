@@ -1,7 +1,7 @@
 # Residual Upstream, Streaming, and Hot-Path Hardening Roadmap
 
 Date: 2026-07-30
-Status: implementation handoff — verification scope revised
+Status: closed at 3b8976d5
 Plan: 045
 
 Planning baseline:

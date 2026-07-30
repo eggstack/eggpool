@@ -81,7 +81,6 @@ def _make_plan(transitions: tuple[ProcessTransition, ...]) -> MagicMock:
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_fail_once_transition_blocks_advancement(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -140,7 +139,6 @@ async def test_fail_once_transition_blocks_advancement(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_retry_advances_after_b_succeeds(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -206,7 +204,6 @@ async def test_retry_advances_after_b_succeeds(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_transition_finalization_pending_error_fields() -> None:
     """TransitionFinalizationPendingError carries correct diagnostic fields."""
     exc = TransitionFinalizationPendingError(

@@ -35,7 +35,6 @@ if TYPE_CHECKING:
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_100_reload_weak_reference_retention(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -110,7 +109,6 @@ async def test_100_reload_weak_reference_retention(
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_release_references_clears_after_completion(
     reload_harness: ReloadHarness,
 ) -> None:
@@ -174,7 +172,6 @@ def test_record_is_frozen_dataclass() -> None:
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_active_registry_empties_after_many_reloads(
     reload_harness: ReloadHarness,
 ) -> None:

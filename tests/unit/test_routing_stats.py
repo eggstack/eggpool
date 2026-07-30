@@ -19,8 +19,6 @@ from eggpool.db.repositories import RequestRepository, RoutingDecisionRepository
 from eggpool.stats import queries
 from eggpool.stats.service import StatsService, resolve_time_range
 
-pytestmark = pytest.mark.request_path
-
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 

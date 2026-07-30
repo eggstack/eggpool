@@ -98,7 +98,6 @@ def _make_plan(transitions: tuple[ProcessTransition, ...]) -> object:
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_transition_result_created_before_apply_all() -> None:
     """TransitionApplyResult is created in the reload owner before apply_all().
 
@@ -130,7 +129,6 @@ async def test_transition_result_created_before_apply_all() -> None:
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_partial_transition_rollback_retryable() -> None:
     """Partial rollback is retryable — only unrestored transitions are retried.
 
@@ -165,7 +163,6 @@ async def test_partial_transition_rollback_retryable() -> None:
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_rollback_retry_only_attempts_remaining() -> None:
     """When B rollback fails first, retry only attempts B again."""
     trans_a = _SuccessTransition("a")
@@ -208,7 +205,6 @@ async def test_rollback_retry_only_attempts_remaining() -> None:
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_finalize_outcome_returns_structured_result() -> None:
     """finalize_all() returns TransitionFinalizeOutcome with correct fields."""
     trans_a = _SuccessTransition("a")

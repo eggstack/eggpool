@@ -14,7 +14,6 @@ if TYPE_CHECKING:
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
-@pytest.mark.reload()
 async def test_commit_failure_driver_reports_no_active_transaction(
     reload_harness: ReloadHarness,
 ) -> None:

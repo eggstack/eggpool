@@ -32,7 +32,7 @@ from eggpool.request.coordinator import ProxyRequestContext, RequestCoordinator
 if TYPE_CHECKING:
     from eggpool.db.connection import Database
 
-pytestmark = [pytest.mark.soak, pytest.mark.resource_plateau]
+pytestmark = [pytest.mark.soak]
 
 UPSTREAM_BASE = "https://soak-test-upstream.example.com"
 

@@ -46,8 +46,6 @@ from eggpool.dashboard.render import (
     render_traces,
 )
 
-pytestmark = pytest.mark.dashboard
-
 
 class _HTMLTextExtractor(HTMLParser):
     """Extract text and check for unescaped content."""
@@ -2076,7 +2074,6 @@ class TestRenderBandwidthHeatmap:
         assert "No activity data" in html
 
     def test_invalid_value_field_raises(self) -> None:
-        import pytest
 
         with pytest.raises(ValueError, match="unsupported heatmap value_field"):
             _render_bandwidth_heatmap(

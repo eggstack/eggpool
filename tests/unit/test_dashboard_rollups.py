@@ -17,8 +17,6 @@ from eggpool.models.config import MetricsConfig
 from eggpool.stats import queries as stats_queries
 from eggpool.stats.service import StatsService, TimeRange, format_dt
 
-pytestmark = pytest.mark.dashboard
-
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
