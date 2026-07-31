@@ -28,6 +28,8 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from eggpool.constants import DEFAULT_PROVIDER_ID
+
 if TYPE_CHECKING:
     from eggpool.accounts.registry import AccountRegistry
     from eggpool.background import TaskSupervisor
@@ -235,6 +237,7 @@ class RuntimeGenerationFactory:
 
         # -- Account registry (generation-owned) ---------------------------
         registry = AccountRegistry(config)
+        account_identities = await _load_account_identities(db, registry)
 
         # -- Transcoder / compression policy snapshots ---------------------
         transcoder_policy = config.transcoder
@@ -374,6 +377,7 @@ class RuntimeGenerationFactory:
             ),
             effects_applier=effects_applier,
             quarantine=quarantine,
+            account_identities=account_identities,
         )
 
         # -- Finalization retry queue ---------------------------------------
@@ -732,6 +736,32 @@ async def _hydrate_health_from_backoffs(
             health.cooldown_until = time.time() + remaining
             health.health_state = "cooldown"
             health.is_healthy = False
+
+
+async def _load_account_identities(
+    db: Any,
+    registry: AccountRegistry,
+) -> dict[str, Any]:
+    """Load the immutable, non-secret account identities for a generation."""
+    from eggpool.accounts.registry import AccountRuntimeIdentity  # noqa: PLC0415
+    from eggpool.db.repositories import AccountRepository  # noqa: PLC0415
+
+    rows = await AccountRepository(db).list_enabled()
+    identities: dict[str, AccountRuntimeIdentity] = {}
+    for row in rows:
+        name = str(row["name"])
+        state = registry.get_state(name)
+        if state is None:
+            continue
+        identities[name] = AccountRuntimeIdentity(
+            account_id=int(row["id"]),
+            account_name=name,
+            provider_id=str(row.get("provider_id") or DEFAULT_PROVIDER_ID),
+            has_usable_credentials=registry.has_usable_credentials(name),
+            routing_priority=state.routing_priority,
+            weight=float(row.get("weight", state.weight)),
+        )
+    return identities
 
 
 def _quarantine_entry_from_row(row: dict[str, object]) -> Any:

@@ -135,7 +135,10 @@ class AccountRepository:
 
     async def list_enabled(self) -> list[dict[str, Any]]:
         """List all enabled accounts."""
-        rows = await self._db.fetch_all("SELECT * FROM accounts WHERE enabled = 1")
+        rows = await self._db.fetch_all(
+            "SELECT id, name, provider_id, enabled, weight "
+            "FROM accounts WHERE enabled = 1"
+        )
         return [dict(r) for r in rows]
 
 

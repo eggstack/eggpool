@@ -10,12 +10,14 @@ import sys
 import time
 import typing
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 
 # ThinkingCapability is imported at runtime (not TYPE_CHECKING) because the
 # per-provider capability lookup helpers instantiate it directly.
+from eggpool.accounts.registry import AccountRegistry, AccountRuntimeIdentity
 from eggpool.catalog.capabilities import (
     ThinkingCapability,
     ThinkingRequestRequirement,
@@ -164,7 +166,6 @@ from eggpool.transcoder.streaming import select_streaming_transcoder
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from eggpool.accounts.registry import AccountRegistry
     from eggpool.catalog.pricing import CostCalculator
     from eggpool.catalog.service import CatalogService
     from eggpool.db.connection import Database
@@ -651,6 +652,7 @@ class RequestCoordinator:
         use_dispatch_writer: bool = False,
         effects_applier: EffectsApplier | None = None,
         quarantine: ModelQuarantine | None = None,
+        account_identities: dict[str, AccountRuntimeIdentity] | None = None,
     ) -> None:
         self._registry = registry
         self._catalog = catalog
@@ -678,7 +680,12 @@ class RequestCoordinator:
             if selection_claim_diagnostics is not None
             else get_selection_claim_diagnostics()
         )
-        self._account_id_cache: dict[str, int] = {}
+        self._account_identities = MappingProxyType(dict(account_identities or {}))
+        self._account_id_cache: dict[str, int] = {
+            name: identity.account_id
+            for name, identity in self._account_identities.items()
+        }
+        self._account_identities_hydrated = account_identities is not None
         self._max_retry_attempts = max_retry_attempts
         self._quota_exhausted_cooldown_seconds = quota_exhausted_cooldown_seconds
         self._persist_error_detail = persist_error_detail
@@ -1665,6 +1672,29 @@ class RequestCoordinator:
         ):
             raise DatabaseError("Cannot persist: database repositories unavailable")
 
+        # Legacy/test coordinators may not be built by the runtime-generation
+        # factory. Hydrate once, before any claim lock is acquired, so the
+        # production path remains entirely in-memory during the claim.
+        if not self._account_identities_hydrated:
+            rows = await AccountRepository(self._db).list_enabled()
+            identities: dict[str, AccountRuntimeIdentity] = {}
+            for row in rows:
+                name = str(row["name"])
+                state = self._registry.get_state(name)
+                identities[name] = AccountRuntimeIdentity(
+                    account_id=int(row["id"]),
+                    account_name=name,
+                    provider_id=str(row.get("provider_id") or DEFAULT_PROVIDER_ID),
+                    has_usable_credentials=self._registry.has_usable_credentials(name),
+                    routing_priority=state.routing_priority if state else 0,
+                    weight=float(row.get("weight", 1.0)),
+                )
+            self._account_identities = MappingProxyType(identities)
+            self._account_id_cache = {
+                name: identity.account_id for name, identity in identities.items()
+            }
+            self._account_identities_hydrated = True
+
         # 0. Pre-lock computation: classify thinking requirement, estimate
         # reservation tokens, and build the routing plan.  These are pure
         # functions of the request body and the static registry/catalog
@@ -1780,24 +1810,6 @@ class RequestCoordinator:
         # currently under active quarantine.  This is purely
         # informational — the eligibility filter has already
         # removed them from the candidate set.
-        quarantine_exclusions: list[RoutingExclusion] = []
-        for state in self._registry.get_enabled_states():
-            account_provider = self._catalog.cache.get_provider_for_account(state.name)
-            check_provider = account_provider or context.provider_id or "unknown"
-            if self._quarantine.is_model_quarantined(
-                provider_id=check_provider,
-                account_id=state.name,
-                canonical_model_id=context.model_id,
-                upstream_model_id=context.model_id,
-                upstream_protocol=context.upstream_protocol,
-            ):
-                quarantine_exclusions.append(
-                    RoutingExclusion(
-                        account_name=state.name,
-                        reason="model_quarantined",
-                    )
-                )
-
         if not eligible_account_names:
             # Phase 5: distinguish pre-dispatch unavailability
             # from post-retry exhaustion. ``build_routing_plan``
@@ -1981,12 +1993,8 @@ class RequestCoordinator:
                             f"API key not available for account {account_name!r}"
                         )
 
-                    account_id = self._account_id_cache.get(account_name)
-                    if account_id is None:
-                        account_repo = AccountRepository(self._db)
-                        account_id = await account_repo.get_id_by_name(account_name)
-                        if account_id is not None:
-                            self._account_id_cache[account_name] = account_id
+                    identity = self._account_identities.get(account_name)
+                    account_id = identity.account_id if identity is not None else None
                     if account_id is None:
                         if self._health_manager is not None:
                             self._health_manager.release_request(account_name)
@@ -2200,15 +2208,9 @@ class RequestCoordinator:
         # failure cannot fail the dispatch.  The guard acts as a
         # pre-enqueue pressure signal to avoid adding trace pressure
         # while the DB is contended.
+        should_write_trace = self._should_write_routing_trace(context.request_id)
         with _maybe_span(self._dispatch_span_recorder, SPAN_ROUTING_TRACE_BUILD):
             trace_cfg = self._config.routing.trace if self._config is not None else None
-            trace_mode = trace_cfg.mode if trace_cfg is not None else "all"
-            should_write_trace = trace_mode != "off"
-            if should_write_trace and trace_mode == "sampled":
-                h = hashlib.sha256(context.request_id.encode()).digest()
-                should_write_trace = (
-                    int.from_bytes(h[:8], "big") / ((1 << 64) - 1)
-                ) < trace_cfg.sample_rate  # type: ignore[union-attr]
 
             trace_event: RoutingTraceEvent | None = None
             if should_write_trace:
@@ -2260,7 +2262,7 @@ class RequestCoordinator:
                         attempted_excluded_count=len(exclude),
                         top_score=top_score_value,
                         top_score_account_name=top_score_account_name,
-                        exclusions=tuple(exclusions + quarantine_exclusions),
+                        exclusions=tuple(exclusions) + plan.exclusions,
                         score_components=score_components,
                     )
                     from eggpool.observability.routing_trace_writer import (
@@ -2318,6 +2320,16 @@ class RequestCoordinator:
             protocol=context.protocol,
             streamed=context.streaming,
         )
+
+    def _should_write_routing_trace(self, request_id: str) -> bool:
+        """Decide trace sampling before constructing any trace details."""
+        trace_cfg = self._config.routing.trace if self._config is not None else None
+        if trace_cfg is None or trace_cfg.mode == "all":
+            return True
+        if trace_cfg.mode == "off":
+            return False
+        digest = hashlib.sha256(request_id.encode("utf-8")).digest()
+        return int.from_bytes(digest[:8], "big") / (2**64) < trace_cfg.sample_rate
 
     async def _execute_upstream(
         self,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from eggpool.accounts.state import AccountRuntimeState
@@ -15,6 +16,18 @@ if TYPE_CHECKING:
     from eggpool.models.config import AppConfig
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class AccountRuntimeIdentity:
+    """Immutable non-secret identity used by request-time selection."""
+
+    account_id: int
+    account_name: str
+    provider_id: str
+    has_usable_credentials: bool
+    routing_priority: int
+    weight: float
 
 
 def account_config_rows(config: AppConfig) -> list[dict[str, Any]]:

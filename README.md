@@ -22,6 +22,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - High-concurrency stream stability: bounded retry queue, lock-contention diagnostics, and an OpenCode-specific operator playbook for sustained coding-agent streaming loads
 - Protocol-aware stream completion: clean EOF is classified from upstream `[DONE]`/`message_stop` evidence; truncated streams are never recorded as successful
 - Dispatch timing: distinct `local_pre_upstream` (full EggPool-side) and `dispatch_overhead` (coordinator-internal) metrics with cadence drift diagnostics for background tasks
+- Selection hot path: generation-hydrated account identities keep SQLite outside the claim lock, while routing plans carry quarantine exclusions directly into sampled diagnostic traces
 - Durable dispatch write pipeline: process-owned microbatching writer for concurrent dispatch intents with bounded queue, adaptive batching, and diagnostics
 - Bounded observability: request-coherent span sampling (5% default), bounded rolling-window metrics, and constant-bounded snapshot cost regardless of uptime
 - Error isolation: provider-specific validation errors (e.g. unsupported MiniMax-M3 thinking through OpenCode Go) are contained to a single request — no account/model/circuit/quarantine penalties, no restart or database deletion required

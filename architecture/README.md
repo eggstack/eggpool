@@ -1911,8 +1911,10 @@ acquisitions per attempt:
    coordinator probes the circuit breaker (`SPAN_CIRCUIT_PROBE`) and
    resolves the per-attempt identity
    (`SPAN_ACCOUNT_LOOKUP`): API key, account id, provider id,
-   reservation cost. The result is captured into a frozen
-   `_ClaimIdentity` dataclass and the lock releases.
+   reservation cost. Account IDs/provider IDs come from the immutable,
+   generation-hydrated identity map; a cache miss never creates a
+   repository or awaits SQLite under this lock. The result is captured
+   into a frozen `_ClaimIdentity` dataclass and the lock releases.
 2. **Phase B** — durable commit, OUTSIDE the lock.
    `_persist_dispatch_bundle` opens its own
    `async with self._db.transaction():` and inserts the request,
@@ -2837,7 +2839,7 @@ Correctness-preserving performance pass that reduces redundant computation and D
 
 ### Phase 3 — Single-Pass Routing Plan
 
-`RoutingPlan` (`src/eggpool/routing/router.py`) is a frozen dataclass carrying `eligible_names`, `ranked_candidates`, `fairness_decision`, and `fairness_band_names`. `Router.build_routing_plan()` computes eligibility, tier grouping, scoring, ranking, and fairness rotation in one pass. The coordinator calls it once instead of the previous double-call pattern (`get_eligible_account_names()` + `select_accounts_for_failover()`), eliminating redundant `get_eligible_accounts()`, `_filter_mixed_collapsed_thinking()`, and `_maybe_trigger_missing_account_recovery()` invocations. This is the authoritative selection path — there is no fallback to the legacy `select_accounts()` path.
+`RoutingPlan` (`src/eggpool/routing/router.py`) is a frozen dataclass carrying `eligible_names`, `ranked_candidates`, `fairness_decision`, `fairness_band_names`, and structured `exclusions`. `Router.build_routing_plan()` computes eligibility, tier grouping, scoring, ranking, fairness rotation, and quarantine exclusions in one pass. The coordinator calls it once instead of the previous double-call pattern (`get_eligible_account_names()` + `select_accounts_for_failover()`), eliminating redundant `get_eligible_accounts()`, `_filter_mixed_collapsed_thinking()`, and `_maybe_trigger_missing_account_recovery()` invocations. This is the authoritative selection path — there is no fallback to the legacy `select_accounts()` path. Trace sampling is decided from the request ID before optional score/exclusion detail is built; off and unsampled requests create no trace event or score-component payload.
 
 ### Phase 4 — Configurable Routing Trace Write Pressure
 

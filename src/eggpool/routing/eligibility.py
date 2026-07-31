@@ -52,6 +52,7 @@ def get_eligible_accounts(
     capability_policy: dict[str, str] | None = None,
     quarantine: ModelQuarantine | None = None,
     upstream_protocol: str = "openai",
+    exclusion_sink: list[tuple[str, str]] | None = None,
 ) -> list[AccountRuntimeState]:
     """Get accounts eligible for routing a specific model.
 
@@ -160,6 +161,8 @@ def get_eligible_accounts(
                 upstream_model_id=model_id,
                 upstream_protocol=upstream_protocol,
             ):
+                if exclusion_sink is not None:
+                    exclusion_sink.append((state.name, "model_quarantined"))
                 continue
 
         if use_precomputed_support:

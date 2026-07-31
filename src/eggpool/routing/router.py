@@ -191,6 +191,7 @@ class RoutingPlan:
     ranked_candidates: list[tuple[AccountRuntimeState, RoutingScore]]
     fairness_decision: FairnessDecision | None
     fairness_band_names: frozenset[str]
+    exclusions: tuple[RoutingExclusion, ...] = ()
 
 
 class Router:
@@ -872,6 +873,7 @@ class Router:
         account names (for count/exhaustion checks) and the fully
         ranked candidate list (for circuit-breaker probing).
         """
+        eligibility_exclusions: list[tuple[str, str]] = []
         candidates = self._selection_candidates(
             model_id,
             exclude_accounts,
@@ -880,6 +882,7 @@ class Router:
             transcode_eligibility,
             thinking_requirement=thinking_requirement,
             capability_policy=capability_policy,
+            exclusion_sink=eligibility_exclusions,
         )
         tiers = candidates.tiered()
 
@@ -997,6 +1000,10 @@ class Router:
             ranked_candidates=ranked,
             fairness_decision=fairness_decision,
             fairness_band_names=fairness_band_names,
+            exclusions=tuple(
+                RoutingExclusion(account_name=name, reason=reason)
+                for name, reason in eligibility_exclusions
+            ),
         )
 
     async def select_accounts_for_failover(
@@ -1153,6 +1160,7 @@ class Router:
         transcode_eligibility: set[str] | None = None,
         thinking_requirement: ThinkingRequestRequirement | None = None,
         capability_policy: dict[str, str] | None = None,
+        exclusion_sink: list[tuple[str, str]] | None = None,
     ) -> RoutingCandidates:
         """Return eligible runtime states and indexes for a routing decision."""
         upstream_protocol = protocol or "openai"
@@ -1172,6 +1180,7 @@ class Router:
             capability_policy=capability_policy,
             quarantine=self._quarantine,
             upstream_protocol=upstream_protocol,
+            exclusion_sink=exclusion_sink,
         )
         if exclude_accounts:
             eligible = [
