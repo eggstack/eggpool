@@ -236,6 +236,7 @@ async def build_runtime_app(
         attempt_repo=attempt_repo,
         usage_window_repo=usage_window_repo,
         health_manager=health_manager,
+        transcoder_policy=config.transcoder,
     )
     application.state.coordinator = coordinator
 
