@@ -1022,6 +1022,7 @@ class RequestCoordinator:
                 attempt_id=selected.attempt_id,
                 reservation_id=selected.reservation_id,
                 data=AttemptFinalizationData(
+                    request_id=selected.db_request_id,
                     status_code=error.status_code,
                     error_class=error.error_class,
                     release_reason="attempt_retryable",
@@ -2140,6 +2141,7 @@ class RequestCoordinator:
                     attempt_id=progress.attempt_id,
                     reservation_id=progress.reservation_id,
                     data=AttemptFinalizationData(
+                        request_id=progress.db_request_id,
                         status_code=None,
                         error_class="PostCommitInterrupted",
                         release_reason="post_commit_interrupted",

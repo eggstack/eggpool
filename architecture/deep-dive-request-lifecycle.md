@@ -171,9 +171,16 @@ writer is single-loop only: `start()` captures the owner loop and submissions
 from another loop fail immediately.
 - No upstream request sent before dispatch bundle commit acknowledged
 
-### `request/finalization_queue.py` — FinalizationRetryQueue
+### `request/finalization_job.py` — RequestFinalizationSupervisor
 
-Bounded retry for escaped finalizations that didn't complete.
+The supervisor is the single process-owned terminal retry owner. It retains
+jobs by `(proxy_request_id, attempt_id)`, reports structured convergence facts,
+and schedules bounded retryable failures through one timer using configured
+backoff and maximum retry age. Capacity rejects before ownership transfer;
+there is no detached terminal task.
+
+`request/finalization_queue.py` remains only as a one-shot compatibility adapter
+for older integrations. It does not own retry counts, backoff, or drop policy.
 
 ### `request/stream_diagnostics.py` — StreamDiagnostics
 

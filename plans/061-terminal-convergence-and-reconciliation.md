@@ -1,7 +1,7 @@
 # Plan 061 — Terminal Convergence and Reconciliation
 
 Date: 2026-07-31
-Status: ready for implementation
+Status: implemented
 Parent roadmap: `plans/058-durable-convergence-exact-update-sbc-hotpath-roadmap.md`
 Predecessor: `plans/060-database-recovery-admission-and-ambiguity.md`
 Planning baseline: `8d9595aaf1ca761f2daea1671a09675e4bfe7ce9`
@@ -327,18 +327,18 @@ Recommended commits:
 
 ## Plan acceptance criteria
 
-- [ ] Request and attempt terminal statuses are canonical and shared with recovery.
-- [ ] `aiosqlite.Row` access uses direct named columns.
-- [ ] Request and attempt ambiguity strategies have distinct explicit identities.
-- [ ] Attempt reconciliation inspects attempt, owning request, and reservation.
-- [ ] Finalizers return structured durable/runtime convergence facts.
-- [ ] Already-terminal durable state is success/convergence, not retry failure.
-- [ ] The existing supervisor automatically performs bounded retries.
-- [ ] Retry age and backoff configuration are used.
-- [ ] Capacity saturation returns no detached untracked work.
-- [ ] The legacy retry queue has no contradictory retry/drop semantics.
-- [ ] Stale and startup reconciliation reuse canonical convergence.
-- [ ] No new durable queue, workflow engine, supervisor, migration, CI job, or soak harness is introduced.
+- [x] Request and attempt terminal statuses are canonical and shared with recovery.
+- [x] `aiosqlite.Row` access uses direct named columns.
+- [x] Request and attempt ambiguity strategies have distinct explicit identities.
+- [x] Attempt reconciliation inspects attempt, owning request, and reservation.
+- [x] Finalizers return structured durable/runtime convergence facts.
+- [x] Already-terminal durable state is success/convergence, not retry failure.
+- [x] The existing supervisor automatically performs bounded retries.
+- [x] Retry age and backoff configuration are used.
+- [x] Capacity saturation returns no detached untracked work.
+- [x] The legacy retry queue has no contradictory retry/drop semantics.
+- [x] Stale and startup reconciliation reuse canonical convergence.
+- [x] No new durable queue, workflow engine, supervisor, migration, CI job, or soak harness is introduced.
 
 ## Definition of done
 

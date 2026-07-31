@@ -294,3 +294,29 @@ class TestRequestFinalizationSupervisor:
         )
         snap = sup.snapshot()
         assert snap["counters"]["saturation_rejections"] == 1
+
+    @pytest.mark.asyncio
+    async def test_retryable_failure_is_scheduled_and_converges(self) -> None:
+        """The supervisor retries a failed job without an external drain."""
+        sup = self._make_supervisor(
+            retry_backoff_base_s=0.01,
+            retry_backoff_cap_s=0.01,
+            max_retry_age_s=1.0,
+        )
+        job = sup.register_or_get(_make_identity(), "client_cancelled")
+        calls = 0
+
+        async def _fail_once() -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("transient")
+
+        job._execute_durable_finalization = _fail_once  # type: ignore[method-assign]
+        with pytest.raises(RuntimeError, match="transient"):
+            await job.run()
+        await asyncio.sleep(0.05)
+        assert calls == 2
+        assert job.is_complete
+        assert sup.active_count == 0
+        await sup.shutdown(timeout_s=1.0)

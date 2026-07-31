@@ -174,6 +174,62 @@ async def test_reconcile_finalization_weird_status_remains_unresolved(
     assert outcome == "unresolved_conflict"
 
 
+async def test_reconcile_attempt_checks_owner_and_reservation(
+    test_db: Database,
+) -> None:
+    """Attempt recovery uses the attempt/request/reservation identity tuple."""
+    from eggpool.db.recovery import _reconcile_attempt_finalization
+
+    request_id = await _create_request(test_db, status="pending")
+    async with test_db.transaction():
+        attempt_id = await test_db.execute_insert(
+            "INSERT INTO request_attempts "
+            "(request_id, attempt_number, account_id) VALUES (?, ?, ?)",
+            (request_id, 1, 1),
+        )
+        reservation_id = await test_db.execute_insert(
+            "INSERT INTO reservations "
+            "(request_id, account_id, model_id, status) VALUES (?, ?, ?, ?)",
+            (request_id, 1, "test-model-req-test-001", "released"),
+        )
+        await test_db.execute_write(
+            "UPDATE request_attempts SET completed_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (attempt_id,),
+        )
+    op = AmbiguousDatabaseOperation(
+        operation_kind="attempt_finalization",
+        connection_epoch=test_db.connection_epoch,
+        operation_id=str(attempt_id),
+        idempotency_keys=(
+            ("request_id", str(request_id)),
+            ("attempt_id", str(attempt_id)),
+            ("reservation_id", str(reservation_id)),
+        ),
+        intended_status="completed",
+        precondition_facts=(),
+        created_at_monotonic=time.monotonic(),
+        reconciliation_strategy="attempt_finalization",
+    )
+    assert await _reconcile_attempt_finalization(test_db, op) == "committed"
+    mismatched = AmbiguousDatabaseOperation(
+        operation_kind=op.operation_kind,
+        connection_epoch=op.connection_epoch,
+        operation_id=op.operation_id,
+        idempotency_keys=(
+            ("request_id", "999999"),
+            ("attempt_id", str(attempt_id)),
+            ("reservation_id", str(reservation_id)),
+        ),
+        intended_status=op.intended_status,
+        precondition_facts=(),
+        created_at_monotonic=time.monotonic(),
+        reconciliation_strategy=op.reconciliation_strategy,
+    )
+    assert await _reconcile_attempt_finalization(test_db, mismatched) == (
+        "unresolved_conflict"
+    )
+
+
 async def test_reconcile_finalization_empty_deque_yields_nothing(
     test_db: Database,
 ) -> None:

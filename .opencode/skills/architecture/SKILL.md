@@ -126,7 +126,12 @@ Plus `RuntimeManagerLeaseExhaustedError` (RuntimeError, mapped to HTTP 503).
 
 ## Request Finalization
 
-`RequestFinalizationJob` keyed by `(proxy_request_id, attempt_id)`. `RequestFinalizationSupervisor` drains on shutdown. Retryable attempts use coordinator-retained cleanup with 128-entry capacity.
+`RequestFinalizationJob` keyed by `(proxy_request_id, attempt_id)`. `RequestFinalizationSupervisor` is the sole process-owned retry owner and uses one bounded timer with configured retry age/backoff. `FinalizationResult` distinguishes durable terminal state, durable transition, reservation convergence, and runtime cleanup. Retryable attempts use coordinator-retained cleanup with 128-entry capacity.
+
+Request and attempt recovery descriptors use distinct strategies and explicit
+identities; canonical terminal status sets live in
+`request/terminal_status.py`. Unknown status or identity mismatch remains
+unresolved and keeps recovery fail-closed.
 
 ## Streaming Completion
 

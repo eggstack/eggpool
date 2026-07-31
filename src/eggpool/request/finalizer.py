@@ -557,11 +557,16 @@ class RequestFinalizer:
             operation_id=selected.db_request_id,
             operation_kind="request_finalization",
             connection_epoch=self._db.connection_epoch,
-            idempotency_keys=(("attempt_number", str(selected.attempt_number)),),
+            idempotency_keys=(
+                ("request_id", str(selected.db_request_id)),
+                ("attempt_id", str(selected.attempt_id)),
+                ("reservation_id", str(selected.reservation_id)),
+                ("attempt_number", str(selected.attempt_number)),
+            ),
             intended_status=self._outcome_to_status(data.outcome),
             precondition_facts=(),
             created_at_monotonic=time.monotonic(),
-            reconciliation_strategy="finalization",
+            reconciliation_strategy="request_finalization",
         )
 
         # Plan 028 Workstream G: precompute ALL diagnostic serialization

@@ -3092,14 +3092,14 @@ keys are: `lock_wait_p50_ms`, `lock_wait_p95_ms`, `lock_wait_p99_ms`,
 configured threshold the routing-trace guardrail skips its diagnostic
 writes — see below.
 
-### Finalization retry queue
+### Terminal finalization convergence
 
 The shielded immediate finalizer inside
 `_build_stream_generator` is capped at 10 seconds. When SQLite lock
 contention delays the immediate finalization past that ceiling, the
 cancellation path used to fall back to the broad 60-second
-`_finalize_stale_requests_once` sweep. `FinalizationRetryQueue`
-(`src/eggpool/request/finalization_queue.py`) closes that gap:
+`_finalize_stale_requests_once` sweep. `RequestFinalizationSupervisor`
+(`src/eggpool/request/finalization_job.py`) closes that gap:
 
 **Plan 026 update**: when a `RequestFinalizationSupervisor` is
 available (wired through `RuntimeGenerationFactory`), the streaming
@@ -3110,22 +3110,21 @@ generator; on `CancelledError`, the retained task owns finalization
 even when every request waiter is cancelled. The legacy shielded path
 remains as a fallback when no supervisor is available.
 
-- **Bounded** (`max_entries = 1024` default). Overflow drops a new
-  entry and increments `dropped_overflow`.
-- **Idempotent**. Re-enqueuing an existing `enqueue_token` is a no-op.
-  Re-finalizing an already-terminal request returns `False` and the
-  queue treats it as a successful drain.
-- **Periodic drain** owned by `TaskSupervisor`. Active cadence
-  `1.5s` when the queue is non-empty; idle cadence `15s`. The first
-  tick is delayed by `initial_delay_s=5.0` so startup does not collide
-  with the rest of the supervisor work.
-- **Age-bounded**. Entries older than `max_age_s = 120` are dropped
-  and counted under `dropped_age` so an entry that never converges
-  cannot block the queue indefinitely.
-- **Retry-bounded**. Entries that fail to finalize are re-queued up to
-  4 times before being dropped. The queue never applies provider
-  health penalties — `CLIENT_CANCELLED` finalizations skip the
-  penalty path entirely.
+- **Structured**. `FinalizationResult` distinguishes durable terminal state,
+  whether this invocation transitioned it, reservation convergence, and
+  runtime cleanup completion. Already-terminal durable state is converged,
+  not a retry failure.
+- **One owner**. Retryable failures are scheduled by one supervisor timer with
+  capped exponential backoff and maximum retry age. Capacity rejects before
+  ownership transfer; detached terminal work is never returned.
+- **Explicit recovery identity**. Request and attempt ambiguity use distinct
+  strategies and explicit request/attempt/reservation IDs. Recovery reads
+  named columns directly and keeps unknown statuses or mismatched tuples
+  unresolved.
+
+`FinalizationRetryQueue` is retained only as a bounded one-shot compatibility
+adapter. It does not maintain an independent retry budget or drop an
+already-terminal operation as failed.
 
 The queue does NOT substitute for `_crash_recovery`: durable rows
 that never converge are still recovered at every startup.

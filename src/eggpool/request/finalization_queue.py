@@ -1,4 +1,4 @@
-"""Bounded in-memory retry queue for cancelled / midstream finalizations.
+"""Compatibility adapter for legacy finalization retry submissions.
 
 The shielded immediate finalizer inside
 :meth:`eggpool.request.coordinator.RequestCoordinator._build_stream_generator`
@@ -9,7 +9,13 @@ remembers the metadata needed to retry that finalization quickly and
 idempotently so the runtime state (active counts, reservations,
 backoff) reconciles faster than a 60-second stale sweep.
 
-The queue is:
+Historically this module owned a second periodic retry policy.  Terminal
+ownership now belongs to :class:`RequestFinalizationSupervisor`; this adapter
+is retained only for older integrations that still submit an entry.  It never
+interprets an idempotent no-op as failure and never applies an independent
+retry count or drop policy.
+
+The adapter remains:
 
 * **bounded**: a maximum number of in-flight entries protects memory
   under sustained overload.  New entries past the cap are dropped and a
@@ -20,13 +26,8 @@ The queue is:
   that already transitioned is also a no-op because
   :meth:`RequestFinalizer.finalize` returns ``False`` for already
   finalized rows.
-* **periodic-drain**: a supervisor-owned periodic task drains the
-  queue.  When the queue is empty the drain cadence is the longer
-  ``idle_interval_s``; when the queue has entries the cadence shortens
-  to ``active_interval_s`` so transient bursts clear quickly.
-* **age-bounded**: entries older than ``max_age_s`` are dropped and
-  counted so an entry that never converges does not block the queue
-  indefinitely.
+* **bounded**: old callers still receive explicit saturation diagnostics;
+  accepted entries are handed to the finalizer once by the caller's drain.
 
 The queue does NOT apply provider health penalties for
 ``CLIENT_CANCELLED`` outcomes — the retry simply re-runs the same
@@ -209,7 +210,7 @@ class FinalizationRetryQueue:
         now = time.monotonic()
         succeeded = 0
         processed = 0
-        # Drop entries that exceeded the max age; re-enqueue the rest.
+        # Drop entries that exceeded the compatibility adapter's age bound.
         survivors: list[FinalizationRetryEntry] = []
         for entry in snapshot:
             if now - entry.enqueued_at > self._max_age_s:
@@ -220,27 +221,13 @@ class FinalizationRetryQueue:
                 ok = await self._finalize_entry(entry)
                 if ok:
                     succeeded += 1
-                else:
-                    entry.retry_count += 1
-                    if entry.retry_count > 4:
-                        self._dropped_age += 1
-                        logger.warning(
-                            "Finalization retry exceeded attempts; "
-                            "giving up on request %s",
-                            entry.request_id,
-                        )
-                        continue
-                    survivors.append(entry)
             except Exception:
+                self._dropped_age += 1
                 logger.exception(
-                    "Finalization retry failed for request %s",
+                    "Legacy finalization adapter failed for request %s; "
+                    "the process-owned supervisor must own any retry",
                     entry.request_id,
                 )
-                entry.retry_count += 1
-                if entry.retry_count > 4:
-                    self._dropped_age += 1
-                    continue
-                survivors.append(entry)
 
         async with self._lock:
             self._entries.extendleft(reversed(survivors))
@@ -256,9 +243,8 @@ class FinalizationRetryQueue:
     async def _finalize_entry(self, entry: FinalizationRetryEntry) -> bool:
         """Re-run the finalizer for one entry.
 
-        Returns ``True`` when the request transitioned, ``False`` when
-        it was already finalized (idempotent no-op) or the queue gave
-        up after too many retries.
+        Returns whether the finalizer transitioned the row.  An already
+        terminal row is converged and is intentionally not requeued.
         """
         # Imported lazily to avoid an import cycle with finalizer.py.
         from eggpool.request.finalizer import (

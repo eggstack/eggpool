@@ -28,6 +28,7 @@ ATTEMPT_MAX_ERROR_DETAIL_CHARS = MAX_REDACTED_ERROR_DETAIL_CHARS
 class AttemptFinalizationData:
     """Data for finalizing a single failed attempt."""
 
+    request_id: str | None = None
     status_code: int | None = None
     error_class: str | None = None
     error_detail: str | None = None
@@ -47,6 +48,10 @@ class AttemptFinalizeResult:
     attempt_transitioned: bool
     reservation_released: bool
     reservation_converged: bool = False
+    durable_terminal: bool = False
+    durable_transitioned: bool = False
+    runtime_cleanup_complete: bool = True
+    retryable: bool = False
 
 
 class AttemptFinalizer:
@@ -104,13 +109,18 @@ class AttemptFinalizer:
             operation_id=str(attempt_id),
             operation_kind="attempt_finalization",
             connection_epoch=self._db.connection_epoch,
-            idempotency_keys=(("reservation_id", reservation_id),),
+            idempotency_keys=(
+                ("request_id", str(data.request_id or "")),
+                ("attempt_id", str(attempt_id)),
+                ("reservation_id", reservation_id),
+            ),
             intended_status="completed",
             precondition_facts=(),
             created_at_monotonic=time.monotonic(),
-            reconciliation_strategy="finalization",
+            reconciliation_strategy="attempt_finalization",
         )
         reservation_converged = False
+        attempt_terminal = False
         async with self._db.transaction(ambiguous_operation=ambiguous_operation):
             # 1. Mark attempt completed only if not already terminal
             transitioned = bool(
@@ -160,9 +170,19 @@ class AttemptFinalizer:
                 reservation_converged = (
                     status in self._reservation_repo.TERMINAL_STATUSES
                 )
+            attempt_row = await self._db.fetch_one(
+                "SELECT completed_at FROM request_attempts WHERE id = ?",
+                (attempt_id,),
+            )
+            attempt_terminal = (
+                attempt_row is not None and attempt_row["completed_at"] is not None
+            )
 
         return AttemptFinalizeResult(
             attempt_transitioned=transitioned,
             reservation_released=reservation_released,
             reservation_converged=reservation_converged,
+            durable_terminal=attempt_terminal,
+            durable_transitioned=transitioned,
+            retryable=not reservation_converged,
         )

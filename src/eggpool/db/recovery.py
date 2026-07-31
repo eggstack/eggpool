@@ -41,6 +41,11 @@ from eggpool.db.connection import (
     AmbiguousDatabaseOperation,
     DatabaseLifecycleState,
 )
+from eggpool.request.terminal_status import (
+    REQUEST_PENDING_STATUSES,
+    REQUEST_TERMINAL_STATUSES,
+    RESERVATION_TERMINAL_STATUSES,
+)
 
 if TYPE_CHECKING:
     from eggpool.db.connection import Database
@@ -324,7 +329,15 @@ class DatabaseRecoveryController:
         respects Plan 026 invariants.
         """
         self._reconciler_registry["dispatch"] = _reconcile_dispatch
-        self._reconciler_registry["finalization"] = _reconcile_finalization
+        self._reconciler_registry["request_finalization"] = (
+            _reconcile_request_finalization
+        )
+        self._reconciler_registry["attempt_finalization"] = (
+            _reconcile_attempt_finalization
+        )
+        # Only supports descriptors buffered by pre-061 code in the current
+        # process.  Production writers use the explicit strategies above.
+        self._reconciler_registry["finalization"] = _reconcile_legacy_finalization
 
     def _backoff_for_attempt(self, attempt: int) -> float:
         """Return the backoff (seconds) for the given attempt number."""
@@ -622,30 +635,116 @@ async def _reconcile_dispatch(db: Database, op: AmbiguousDatabaseOperation) -> s
         return "unresolved_conflict"
 
 
-async def _reconcile_finalization(db: Database, op: AmbiguousDatabaseOperation) -> str:
-    """Reconcile a finalization against the durable state.
+def _operation_value(op: AmbiguousDatabaseOperation, name: str) -> str | None:
+    """Read one explicit identity from an ambiguous-operation descriptor."""
 
-    Finalization reconciliation is idempotent: the durable rows
-    are inspected for terminal state.  If the request is terminal
-    and the attempt is complete, the reconciler reports
-    ``"committed"``.  If the request is still pending, the
-    reconciler returns ``"absent"`` so the caller can retry the
-    idempotent finalization.  Any unexpected state is reported as
-    ``"conflicting"``.
-    """
-    db_request_id = op.operation_id
+    for key, value in op.idempotency_keys:
+        if key == name:
+            return str(value)
+    return None
+
+
+async def _reconcile_request_finalization(
+    db: Database, op: AmbiguousDatabaseOperation
+) -> str:
+    """Reconcile a request finalization using its complete identity tuple."""
+
+    request_id = _operation_value(op, "request_id") or op.operation_id
+    attempt_id = _operation_value(op, "attempt_id")
+    reservation_id = _operation_value(op, "reservation_id")
     try:
-        req = await db.fetch_one(
-            "SELECT status FROM requests WHERE id = ?",
-            (db_request_id,),
+        request = await db.fetch_one(
+            "SELECT id, status FROM requests WHERE id = ?",
+            (request_id,),
         )
+        if request is None:
+            return "absent"
+        status = request["status"]
+        if status not in REQUEST_TERMINAL_STATUSES:
+            if status in REQUEST_PENDING_STATUSES:
+                return "absent"
+            return "unresolved_conflict"
+
+        if attempt_id is not None:
+            attempt = await db.fetch_one(
+                "SELECT id, request_id, completed_at "
+                "FROM request_attempts WHERE id = ?",
+                (attempt_id,),
+            )
+            if attempt is None or str(attempt["request_id"]) != str(request["id"]):
+                return "unresolved_conflict"
+            if attempt["completed_at"] is None:
+                return "unresolved_conflict"
+        if reservation_id is not None:
+            reservation = await db.fetch_one(
+                "SELECT request_id, status FROM reservations WHERE id = ?",
+                (reservation_id,),
+            )
+            if (
+                reservation is None
+                or str(reservation["request_id"]) != str(request["id"])
+                or reservation["status"] not in RESERVATION_TERMINAL_STATUSES
+            ):
+                return "unresolved_conflict"
     except Exception:
-        return "conflicting"
-    if req is None:
-        return "absent"
-    status = str(req["status"])
-    if status in ("completed", "failed", "cancelled", "client_disconnected"):
-        return "committed"
-    if status in ("pending", "selected", "streaming"):
-        return "absent"
-    return "unresolved_conflict"
+        return "unresolved_conflict"
+    return "committed"
+
+
+async def _reconcile_attempt_finalization(
+    db: Database, op: AmbiguousDatabaseOperation
+) -> str:
+    """Reconcile an attempt and its reservation by explicit durable IDs."""
+
+    attempt_id = _operation_value(op, "attempt_id") or op.operation_id
+    request_id = _operation_value(op, "request_id")
+    reservation_id = _operation_value(op, "reservation_id")
+    if request_id is None or reservation_id is None:
+        return "unresolved_conflict"
+    try:
+        attempt = await db.fetch_one(
+            "SELECT id, request_id, completed_at FROM request_attempts WHERE id = ?",
+            (attempt_id,),
+        )
+        if attempt is None:
+            return "absent"
+        if str(attempt["request_id"]) != request_id:
+            return "unresolved_conflict"
+        request = await db.fetch_one(
+            "SELECT id, status FROM requests WHERE id = ?",
+            (request_id,),
+        )
+        reservation = await db.fetch_one(
+            "SELECT request_id, status FROM reservations WHERE id = ?",
+            (reservation_id,),
+        )
+        if request is None or reservation is None:
+            return "unresolved_conflict"
+        if str(reservation["request_id"]) != request_id:
+            return "unresolved_conflict"
+        if attempt["completed_at"] is None:
+            return "unresolved_conflict"
+        if reservation["status"] not in RESERVATION_TERMINAL_STATUSES:
+            return "unresolved_conflict"
+        if (
+            request["status"]
+            not in REQUEST_TERMINAL_STATUSES | REQUEST_PENDING_STATUSES
+        ):
+            return "unresolved_conflict"
+    except Exception:
+        return "unresolved_conflict"
+    return "committed"
+
+
+async def _reconcile_legacy_finalization(
+    db: Database, op: AmbiguousDatabaseOperation
+) -> str:
+    """Bounded compatibility for already-buffered pre-061 descriptors."""
+
+    if op.operation_kind == "attempt_finalization":
+        return await _reconcile_attempt_finalization(db, op)
+    return await _reconcile_request_finalization(db, op)
+
+
+# Kept as a private compatibility name for existing diagnostics/tests.
+_reconcile_finalization = _reconcile_legacy_finalization

@@ -26,10 +26,12 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import contextlib
+import heapq
 import inspect
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
@@ -268,6 +270,10 @@ class TerminalConflictError(FinalizationInvariantError):
     """Raised when one attempt is submitted with incompatible outcomes."""
 
 
+class FinalizationCapacityError(RuntimeError):
+    """Raised before terminal ownership is transferred at supervisor capacity."""
+
+
 @dataclass(frozen=True, slots=True)
 class FinalizationResult:
     """Explicit outcome of the canonical terminal command."""
@@ -279,6 +285,12 @@ class FinalizationResult:
     active_count_decremented: bool = False
     health_released_or_recorded: bool = False
     effects_applied: bool = False
+    durable_terminal: bool = False
+    durable_transitioned: bool = False
+    reservation_converged: bool = False
+    runtime_cleanup_complete: bool = False
+    retryable: bool = False
+    detail: str = ""
     retry_queued: bool = False
     terminal_conflict: bool = False
 
@@ -325,6 +337,7 @@ class RequestFinalizationJob:
     _updated_at: float = field(default_factory=time.monotonic)
     _run_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _run_task: asyncio.Task[None] | None = None
+    _capacity_rejected: bool = False
     on_completion: Any = None  # callback(RequestFinalizationJob)
     _release_outcomes: list[RuntimeReleaseOutcome] = field(  # pyright: ignore[reportUnknownVariableType]
         default_factory=list
@@ -347,6 +360,17 @@ class RequestFinalizationJob:
     @property
     def progress(self) -> FinalizationProgress:
         return self._progress
+
+    @property
+    def health(self) -> str:
+        """Return bounded diagnostic health for the retained job."""
+
+        return self._health
+
+    def mark_retry_exhausted(self) -> None:
+        """Stop automatic retries while retaining the diagnostic record."""
+
+        self._health = "failed"
 
     @property
     def request_id(self) -> str:
@@ -422,6 +446,10 @@ class RequestFinalizationJob:
         ``asyncio.shield``.  Cancellation of the caller does not
         cancel the retained task.
         """
+        if self._capacity_rejected:
+            raise FinalizationCapacityError(
+                f"finalization supervisor capacity exhausted for {self.request_id}"
+            )
         if self.is_complete:
             return
         async with self._run_lock:
@@ -521,11 +549,16 @@ class RequestFinalizationJob:
             active_count_decremented=transitioned,
             health_released_or_recorded=transitioned,
             effects_applied=transitioned,
+            durable_terminal=True,
+            durable_transitioned=transitioned,
+            reservation_converged=transitioned,
+            retryable=False,
         )
 
     async def _execute_runtime_release(self) -> None:
         """Release runtime ownership exactly once."""
         if self.runtime_lease is None:
+            self._result = replace(self._result, runtime_cleanup_complete=True)
             return
         outcomes = await self.runtime_lease.release_once(
             reason=self.outcome,
@@ -542,6 +575,18 @@ class RequestFinalizationJob:
                     outcome.error,
                     self.identity.proxy_request_id,
                 )
+        if any(not outcome.released for outcome in outcomes):
+            self._result = replace(
+                self._result,
+                runtime_cleanup_complete=False,
+                retryable=True,
+                detail="runtime cleanup incomplete",
+            )
+            raise RuntimeError("runtime cleanup incomplete")
+        self._result = replace(
+            self._result,
+            runtime_cleanup_complete=self.runtime_lease.released,
+        )
 
     async def _execute_analytics(self) -> None:
         """Emit non-authoritative analytics (best-effort)."""
@@ -684,6 +729,13 @@ class RequestFinalizationSupervisor:
         self._shutdown_adopted: dict[str, RequestFinalizationJob] = {}
         self._counters = FinalizationCounters()
         self._terminal_conflicts: int = 0
+        self._retry_heap: list[tuple[float, int, str]] = []
+        self._retry_sequence = 0
+        self._retry_wakeup: asyncio.Event | None = None
+        self._retry_scheduler_task: asyncio.Task[None] | None = None
+        self._failed_jobs: collections.deque[FinalizationRecord] = collections.deque(
+            maxlen=FINALIZATION_HISTORY_MAX
+        )
 
     @property
     def active_count(self) -> int:
@@ -745,14 +797,13 @@ class RequestFinalizationSupervisor:
                 self._max_active_jobs,
                 request_id,
             )
-            # Return a detached job that will run inline but not be
-            # tracked by the supervisor.
             return RequestFinalizationJob(
                 identity=identity,
                 outcome=outcome,
                 finalization_data=finalization_data,
                 runtime_lease=runtime_lease,
                 failure_effects=failure_effects,
+                _capacity_rejected=True,
             )
 
         job = RequestFinalizationJob(
@@ -765,11 +816,76 @@ class RequestFinalizationSupervisor:
         )
         self._active_jobs[job_key] = job
         self._counters.registered += 1
+        self._ensure_retry_scheduler()
         return job
 
+    def _ensure_retry_scheduler(self) -> None:
+        """Start the one process-owned retry timer when a loop is running."""
+
+        if self._retry_scheduler_task is not None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._retry_wakeup = asyncio.Event()
+        self._retry_scheduler_task = loop.create_task(self._retry_scheduler())
+
+    def _schedule_retry(self, job: RequestFinalizationJob) -> None:
+        age = time.monotonic() - job.created_at
+        if age >= self._max_retry_age_s:
+            job.mark_retry_exhausted()
+            self._failed_jobs.append(job.to_record())
+            return
+        self._retry_sequence += 1
+        delay = min(
+            self._retry_backoff_cap_s,
+            self._retry_backoff_base_s * (2 ** max(job.failure_count - 1, 0)),
+        )
+        key = f"{job.identity.proxy_request_id}:{job.identity.attempt_id}"
+        heapq.heappush(
+            self._retry_heap,
+            (time.monotonic() + delay, self._retry_sequence, key),
+        )
+        if self._retry_wakeup is not None:
+            self._retry_wakeup.set()
+
+    async def _retry_scheduler(self) -> None:
+        """Run due retries from one bounded timer task."""
+
+        while True:
+            if not self._retry_heap:
+                if self._retry_wakeup is None:
+                    return
+                await self._retry_wakeup.wait()
+                self._retry_wakeup.clear()
+                continue
+            due, _, key = self._retry_heap[0]
+            wait_s = due - time.monotonic()
+            if wait_s > 0:
+                if self._retry_wakeup is None:
+                    return
+                try:
+                    await asyncio.wait_for(self._retry_wakeup.wait(), wait_s)
+                    self._retry_wakeup.clear()
+                except TimeoutError:
+                    pass
+                continue
+            heapq.heappop(self._retry_heap)
+            job = self._active_jobs.get(key)
+            if job is None or job.is_complete:
+                continue
+            try:
+                await job.run()
+            except Exception:
+                continue
+
     def _on_job_completion(self, job: RequestFinalizationJob) -> None:
-        """Process-owned completion callback."""
-        self._reconcile_job(job, source="callback")
+        """Process-owned completion callback and retry handoff."""
+        if job.is_complete:
+            self._reconcile_job(job, source="callback")
+        elif job.health == "retry_pending":
+            self._schedule_retry(job)
 
     def get_job(self, request_id: str) -> RequestFinalizationJob | None:
         for job in self._active_jobs.values():
@@ -882,6 +998,13 @@ class RequestFinalizationSupervisor:
         if remaining > 0:
             self.adopt_for_shutdown()
         self._reconcile_completed_jobs()
+        if (
+            self._retry_scheduler_task is not None
+            and not self._retry_scheduler_task.done()
+        ):
+            self._retry_scheduler_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._retry_scheduler_task
         return remaining
 
     async def reconcile_startup_state(self) -> int:
@@ -948,6 +1071,8 @@ class RequestFinalizationSupervisor:
             "registry_key": "proxy_request_id:attempt_id",
             "history_count": len(self._history),
             "shutdown_adopted_count": len(self._shutdown_adopted),
+            "retry_pending_count": len(self._retry_heap),
+            "failed_count": len(self._failed_jobs),
             "oldest_active_age_s": (
                 round(oldest_age, 3) if oldest_age is not None else None
             ),
