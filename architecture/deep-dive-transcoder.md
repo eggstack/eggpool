@@ -146,6 +146,12 @@ Additional loss-warning kinds (informational):
 
 ## Thinking/Reasoning Transcoding
 
+Provider-bound thinking controls are normalized after selection by
+`adapt_thinking_controls()`. Top-level `thinking_budget` follows the same
+`reject` / `warn_drop` / `map_if_known` policy as nested controls: unmappable
+values are rejected rather than silently dropped, and the `none` contract has
+no implicit mapping target. Historical reasoning content remains untouched.
+
 Phase 7+ adds thinking/reasoning support:
 - `reasoning_effort` (OpenAI) → `thinking.budget_tokens` (Anthropic)
 - `reasoning_content` history → thinking blocks

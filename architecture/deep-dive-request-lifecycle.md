@@ -124,6 +124,19 @@ Persists usage, releases reservations, updates health state. Reads from `Finaliz
 
 Per-attempt finalization with idempotent reservation release. Each attempt reservation is released exactly once.
 
+### Coordinator-retained cleanup
+
+Retryable pre-body attempt cleanup and post-commit claim compensation are
+separate coordinator-owned commands. Each records durable transition,
+reservation, active-count, quota, health/probe, and completion progress before
+the next await, so a later duplicate caller resumes only unfinished releases.
+Each registry is capped at 128 entries by default; capacity exhaustion fails
+closed rather than creating detached work. Generation shutdown performs one
+bounded drain and reports unresolved identities for the existing startup
+recovery safety net. If a request waiter is cancelled during either command,
+the coordinator submits the canonical `CLIENT_CANCELLED` request terminal only
+after the retained command converges.
+
 ### `request/body.py` — Request Body Reader
 
 Reads and validates incoming request bodies.

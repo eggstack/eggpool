@@ -1,7 +1,7 @@
 # Plan 055 — Terminal Stream Lifecycle Corrective Pass
 
 Date: 2026-07-31
-Status: complete (implementation and local verification)
+Status: stream-specific implementation complete at `13cdd493`; residual retained-cleanup convergence is tracked and closed by Plan 056
 Parent roadmap: `plans/045-upstream-streaming-hardening-hotpath-roadmap.md`
 Supersedes closure claims in: Plans 047, 048, 049, and 053 where they conflict with this plan
 Planning baseline: `8cde724d30cd1b418793bfe62fdbf4a49615e589`
@@ -19,6 +19,11 @@ The implementation must:
 5. simplify timeout behavior where the current implementation exceeds demonstrated requirements;
 6. correct the remaining nested thinking-control policy inconsistency;
 7. retain only a small, behavior-focused test set and make no CI expansion.
+
+The stream-specific corrections landed in `13cdd493`. The retryable-attempt
+cleanup, post-commit compensation, waiter-cancellation terminal bridge, and
+retained-registry capacity work described below remained as residual defects
+and are intentionally closed by Plan 056.
 
 This is a corrective pass, not another architecture phase. Reuse the existing `RequestFinalizationSupervisor`, `RequestFinalizationJob`, `_finalize_terminal()`, `AttemptFinalizer`, `SSEDecoder`, `IncrementalSSEObserver`, and provider configuration models. Do not introduce a second supervisor, a generalized workflow engine, a new evidence schema, a soak runner, or a new CI job.
 
@@ -435,9 +440,9 @@ Plan 055 is complete only when all statements below are true:
 1. No successful, cancelled, prematurely closed, or failed stream leaves an active supervisor job after finalization convergence.
 2. There is no `pending_stream` placeholder job lifecycle.
 3. Every selected request-terminal streaming path calls the canonical retained `_finalize_terminal()` path exactly once.
-4. Retryable failed-attempt cleanup is retained until durable and runtime ownership converge before another account is selected.
-5. Post-commit publication compensation tracks and releases active-count and quota components independently.
-6. Caller cancellation cannot strand a durable active reservation, in-memory quota reservation, active-request count, or health probe in the covered paths.
+4. Residual retryable failed-attempt cleanup convergence is tracked by Plan 056.
+5. Residual post-commit publication compensation convergence is tracked by Plan 056.
+6. Residual waiter-cancellation ownership convergence is tracked by Plan 056.
 7. Stream EOF semantics do not advertise an unsafe retry after response handoff.
 8. Strict missing-terminal EOF remains a visible error; canonical and explicitly compatible completion remain successful.
 9. No total-lifetime stream timer runs by default, and no global timeout increase is introduced.

@@ -195,6 +195,12 @@ def _redact_auth_shape(auth_headers: dict[str, str]) -> str:
 # Default maximum retry attempts for pre-body failures
 DEFAULT_MAX_RETRY_ATTEMPTS = 3
 
+# Coordinator-owned retained work is deliberately small and local.  Failed
+# entries remain available for one explicit rejoin or shutdown drain; there is
+# no background retry loop for this state.
+DEFAULT_RETAINED_CLEANUP_CAPACITY = 128
+DEFAULT_RETAINED_CLEANUP_DRAIN_TIMEOUT_S = 10.0
+
 # Ordered list of upstream request-ID header names checked during
 # finalization.  The first non-empty match wins.
 _UPSTREAM_REQUEST_ID_HEADERS: list[str] = [
@@ -598,6 +604,46 @@ class RuntimePublicationReceipt:
     quota_reservation_added: bool = False
 
 
+@dataclass(slots=True)
+class AttemptCleanupProgress:
+    """Resumable component progress for one retryable failed attempt."""
+
+    durable_transition_checked: bool = False
+    durable_attempt_transitioned: bool = False
+    durable_reservation_released: bool = False
+    runtime_cleanup_required: bool = False
+    quota_released: bool = False
+    active_count_released: bool = False
+    health_effect_applied: bool = False
+    probe_released: bool = False
+    completed: bool = False
+    # Retain the operation inputs so shutdown can rejoin a failed command.
+    context: Any = field(default=None, repr=False)
+    selected: Any = field(default=None, repr=False)
+    error: Any = field(default=None, repr=False)
+
+
+@dataclass(slots=True)
+class ClaimCompensationProgress:
+    """Resumable component progress for one post-commit claim."""
+
+    active_count_released: bool = False
+    quota_reservation_released: bool = False
+    durable_attempt_finalized: bool = False
+    durable_reservation_released: bool = False
+    probe_released: bool = False
+    completed: bool = False
+    # Retain the operation inputs so cancellation and shutdown can rejoin it.
+    context: Any = field(default=None, repr=False)
+    claim_identity: Any = field(default=None, repr=False)
+    db_request_id: str | None = field(default=None, repr=False)
+    attempt_id: int | None = field(default=None, repr=False)
+    reservation_id: str | None = field(default=None, repr=False)
+    estimated_tokens: int = field(default=0, repr=False)
+    error: BaseException | None = field(default=None, repr=False)
+    receipt: RuntimePublicationReceipt | None = field(default=None, repr=False)
+
+
 class RequestCoordinator:
     """Orchestrates the full proxy request lifecycle.
 
@@ -660,6 +706,10 @@ class RequestCoordinator:
         effects_applier: EffectsApplier | None = None,
         quarantine: ModelQuarantine | None = None,
         account_identities: dict[str, AccountRuntimeIdentity] | None = None,
+        retained_cleanup_capacity: int = DEFAULT_RETAINED_CLEANUP_CAPACITY,
+        retained_cleanup_drain_timeout_s: float = (
+            DEFAULT_RETAINED_CLEANUP_DRAIN_TIMEOUT_S
+        ),
     ) -> None:
         self._registry = registry
         self._catalog = catalog
@@ -684,6 +734,17 @@ class RequestCoordinator:
         self._selection_claim_lock = asyncio.Lock()
         self._attempt_cleanup_tasks: dict[tuple[str, int], asyncio.Task[None]] = {}
         self._claim_compensation_tasks: dict[tuple[str, int], asyncio.Task[None]] = {}
+        self._attempt_cleanup_progress: dict[
+            tuple[str, int], AttemptCleanupProgress
+        ] = {}
+        self._claim_compensation_progress: dict[
+            tuple[str, int], ClaimCompensationProgress
+        ] = {}
+        self._retained_cleanup_capacity = max(1, retained_cleanup_capacity)
+        self._retained_cleanup_drain_timeout_s = max(
+            0.1, retained_cleanup_drain_timeout_s
+        )
+        self._retained_cleanup_capacity_rejections = 0
         self._selection_claim_diagnostics = (
             selection_claim_diagnostics
             if selection_claim_diagnostics is not None
@@ -846,69 +907,290 @@ class RequestCoordinator:
         cleanup ownership.
         """
         key = (selected.proxy_request_id, selected.attempt_id)
+        progress = self._attempt_cleanup_progress.get(key)
+        if progress is not None and progress.completed:
+            self._attempt_cleanup_progress.pop(key, None)
+            return
+        if progress is None:
+            self._check_retained_cleanup_capacity(
+                registry_name="attempt cleanup",
+                registry=self._attempt_cleanup_progress,
+            )
+            progress = AttemptCleanupProgress(
+                context=context,
+                selected=selected,
+                error=error,
+            )
+            self._attempt_cleanup_progress[key] = progress
         task = self._attempt_cleanup_tasks.get(key)
         if task is None:
-            task = asyncio.create_task(
-                self._run_failed_attempt_cleanup(
-                    context=context,
-                    selected=selected,
-                    error=error,
-                )
-            )
-            self._attempt_cleanup_tasks[key] = task
-
-            def _remove(done: asyncio.Task[None]) -> None:
-                if self._attempt_cleanup_tasks.get(key) is done:
-                    self._attempt_cleanup_tasks.pop(key, None)
-                if not done.cancelled():
-                    done.exception()
-
-            task.add_done_callback(_remove)
+            task = self._start_attempt_cleanup_task(key, progress)
         await asyncio.shield(task)
+
+    def _check_retained_cleanup_capacity(
+        self,
+        *,
+        registry_name: str,
+        registry: dict[tuple[str, int], Any],
+    ) -> None:
+        """Fail closed before creating untracked retained cleanup work."""
+        if len(registry) < self._retained_cleanup_capacity:
+            return
+        self._retained_cleanup_capacity_rejections += 1
+        logger.error(
+            "Retained %s registry at capacity (%d); refusing detached work",
+            registry_name,
+            self._retained_cleanup_capacity,
+        )
+        raise RuntimeError(f"retained {registry_name} capacity exhausted")
+
+    def _start_attempt_cleanup_task(
+        self,
+        key: tuple[str, int],
+        progress: AttemptCleanupProgress,
+    ) -> asyncio.Task[None]:
+        task = asyncio.create_task(
+            self._run_failed_attempt_cleanup(progress),
+            name=f"attempt-cleanup-{key[0]}-{key[1]}",
+        )
+        self._attempt_cleanup_tasks[key] = task
+
+        def _remove(done: asyncio.Task[None]) -> None:
+            if self._attempt_cleanup_tasks.get(key) is done:
+                self._attempt_cleanup_tasks.pop(key, None)
+            if done.cancelled():
+                return
+            try:
+                error = done.exception()
+            except asyncio.CancelledError:
+                return
+            if error is None and progress.completed:
+                self._attempt_cleanup_progress.pop(key, None)
+            elif error is not None:
+                logger.warning(
+                    "Retained attempt cleanup remains resumable: request_id=%s "
+                    "attempt_id=%s error=%s",
+                    key[0],
+                    key[1],
+                    type(error).__name__,
+                )
+
+        task.add_done_callback(_remove)
+        return task
 
     async def _run_failed_attempt_cleanup(
         self,
-        *,
-        context: ProxyRequestContext,
-        selected: SelectedAttempt,
-        error: _RetryableUpstreamError,
+        progress: AttemptCleanupProgress,
     ) -> None:
-        result = await self._attempt_finalizer.finalize_failed_attempt(
-            attempt_id=selected.attempt_id,
-            reservation_id=selected.reservation_id,
-            data=AttemptFinalizationData(
-                status_code=error.status_code,
-                error_class=error.error_class,
-                release_reason="attempt_retryable",
-                retry_category=(
-                    error.retry_category.value
-                    if error.retry_category is not None
-                    else None
+        context = cast("ProxyRequestContext", progress.context)
+        selected = cast("SelectedAttempt", progress.selected)
+        error = cast("_RetryableUpstreamError", progress.error)
+
+        if not progress.durable_transition_checked:
+            result = await self._attempt_finalizer.finalize_failed_attempt(
+                attempt_id=selected.attempt_id,
+                reservation_id=selected.reservation_id,
+                data=AttemptFinalizationData(
+                    status_code=error.status_code,
+                    error_class=error.error_class,
+                    release_reason="attempt_retryable",
+                    retry_category=(
+                        error.retry_category.value
+                        if error.retry_category is not None
+                        else None
+                    ),
+                    bytes_received=len(context.original_body),
+                    latency_ms=self._elapsed_ms(context),
+                    is_retry_outcome=True,
                 ),
-                bytes_received=len(context.original_body),
-                latency_ms=self._elapsed_ms(context),
-                is_retry_outcome=True,
-            ),
-        )
-        if not result.attempt_transitioned:
-            return
-        if self._quota_estimator is not None and result.reservation_released:
+            )
+            # Record durable facts before any runtime release await.  A later
+            # rejoin must never use ``attempt_transitioned`` as a reason to
+            # skip unfinished runtime cleanup.
+            progress.durable_transition_checked = True
+            progress.durable_attempt_transitioned = result.attempt_transitioned
+            progress.durable_reservation_released = result.reservation_released
+            progress.runtime_cleanup_required = result.reservation_released
+
+        if not progress.runtime_cleanup_required:
+            # Another terminal owner already completed the durable attempt or
+            # reservation. Its finalization path owns the runtime release too.
+            # Mark these components converged without replaying them here.
+            progress.quota_released = True
+            progress.active_count_released = True
+            progress.health_effect_applied = True
+            progress.probe_released = True
+
+        if (
+            progress.runtime_cleanup_required
+            and not progress.quota_released
+            and (self._quota_estimator is not None)
+        ):
             await self._quota_estimator.remove_reservation(
                 selected.account_name,
                 selected.estimated_microdollars,
                 requests=1,
                 tokens=selected.estimated_tokens,
             )
-        if result.reservation_released:
+            progress.quota_released = True
+        elif not progress.runtime_cleanup_required or self._quota_estimator is None:
+            progress.quota_released = True
+
+        if progress.runtime_cleanup_required and not progress.active_count_released:
             await self._router.decrement_active_request_count(selected.account_name)
-        await self._apply_health_transition(
-            selected.account_name,
-            error,
-            context.model_id,
-            provider_id=selected.provider_id,
-            upstream_protocol=context.upstream_protocol,
-            client_protocol=context.protocol,
+            progress.active_count_released = True
+
+        if progress.runtime_cleanup_required and not progress.health_effect_applied:
+            await self._apply_health_transition(
+                selected.account_name,
+                error,
+                context.model_id,
+                provider_id=selected.provider_id,
+                upstream_protocol=context.upstream_protocol,
+                client_protocol=context.protocol,
+            )
+            progress.health_effect_applied = True
+            # Every health transition path either records a success/failure,
+            # which clears a half-open probe, or explicitly releases it.
+            progress.probe_released = True
+        elif not progress.probe_released:
+            progress.probe_released = True
+
+        progress.completed = all(
+            (
+                progress.durable_transition_checked,
+                progress.durable_reservation_released
+                or not progress.durable_attempt_transitioned,
+                progress.quota_released,
+                progress.active_count_released,
+                progress.health_effect_applied,
+                progress.probe_released,
+            )
         )
+
+    async def _join_attempt_cleanup(self, key: tuple[str, int]) -> bool:
+        """Join retained attempt cleanup and report full convergence."""
+        task = self._attempt_cleanup_tasks.get(key)
+        if task is not None:
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "Retained attempt cleanup failed while joining: "
+                    "request_id=%s attempt_id=%s",
+                    key[0],
+                    key[1],
+                )
+                return False
+        progress = self._attempt_cleanup_progress.get(key)
+        return progress is None or progress.completed
+
+    async def _finalize_cancelled_after_cleanup(
+        self,
+        *,
+        context: ProxyRequestContext,
+        selected: SelectedAttempt,
+        health_already_applied: bool,
+    ) -> None:
+        """Submit the canonical request terminal after ownership converges."""
+        if context.client_metadata.get("_cancelled_request_finalized"):
+            return
+        context.client_metadata["_cancelled_request_finalized"] = True
+        await self._finalize_terminal(
+            context,
+            selected,
+            FinalizationData(
+                outcome=FinalizationOutcome.CLIENT_CANCELLED,
+                error_class="CancelledError",
+                upstream_latency_ms=self._elapsed_ms(context),
+                bytes_received=len(context.original_body),
+                health_already_applied=health_already_applied,
+                upstream_protocol=context.upstream_protocol,
+                thinking_trace_json=_serialize_thinking_trace(context.thinking_trace),
+            ),
+        )
+
+    async def _await_cleanup_then_finalize_cancelled(
+        self,
+        *,
+        context: ProxyRequestContext,
+        selected: SelectedAttempt,
+    ) -> bool:
+        """Rejoin retained cleanup before terminalizing a cancelled request."""
+        converged = await self._join_attempt_cleanup(
+            (selected.proxy_request_id, selected.attempt_id)
+        )
+        if not converged:
+            logger.error(
+                "Cancelled request cleanup has not converged; request remains "
+                "available for bounded rejoin: request_id=%s attempt_id=%s",
+                selected.proxy_request_id,
+                selected.attempt_id,
+            )
+            return False
+        await self._finalize_cancelled_after_cleanup(
+            context=context,
+            selected=selected,
+            health_already_applied=True,
+        )
+        return True
+
+    async def drain_retained_cleanup(
+        self,
+        timeout_s: float | None = None,
+    ) -> int:
+        """Resume and bounded-drain coordinator-owned retained cleanup.
+
+        Returns unresolved identity count.  Pending tasks are deliberately
+        left alive after the deadline so their retained ownership is not
+        cancelled during shutdown; startup reconciliation remains the safety
+        net for durable leftovers.
+        """
+        timeout = (
+            self._retained_cleanup_drain_timeout_s
+            if timeout_s is None
+            else max(0.1, timeout_s)
+        )
+        for key, progress in list(self._attempt_cleanup_progress.items()):
+            if key not in self._attempt_cleanup_tasks and not progress.completed:
+                self._start_attempt_cleanup_task(key, progress)
+        for key, progress in list(self._claim_compensation_progress.items()):
+            if key not in self._claim_compensation_tasks and not progress.completed:
+                self._start_claim_compensation_task(key, progress)
+
+        tasks = [
+            *self._attempt_cleanup_tasks.values(),
+            *self._claim_compensation_tasks.values(),
+        ]
+        pending: set[asyncio.Task[None]] = set()
+        if tasks:
+            _, pending = await asyncio.wait(tasks, timeout=timeout)
+        await asyncio.sleep(0)
+        unresolved = {
+            *self._attempt_cleanup_progress.keys(),
+            *self._claim_compensation_progress.keys(),
+        }
+        if unresolved:
+            logger.warning(
+                "Retained cleanup drain left %d unresolved identity(ies): %s",
+                len(unresolved),
+                sorted(unresolved),
+            )
+        return max(len(unresolved), len(pending))
+
+    def retained_cleanup_snapshot(self) -> dict[str, int]:
+        """Return compact process-local retained-cleanup diagnostics."""
+        return {
+            "active_attempt_cleanup_tasks": len(self._attempt_cleanup_tasks),
+            "resumable_attempt_cleanup_entries": len(self._attempt_cleanup_progress),
+            "active_claim_compensation_tasks": len(self._claim_compensation_tasks),
+            "resumable_claim_compensation_entries": len(
+                self._claim_compensation_progress
+            ),
+            "capacity_rejections": self._retained_cleanup_capacity_rejections,
+        }
 
     def _log_transcode_warnings(
         self,
@@ -1213,6 +1495,16 @@ class RequestCoordinator:
             try:
                 selected = await self._select_and_persist_attempt(context, attempt_num)
             except asyncio.CancelledError:
+                try:
+                    await self._handle_selection_cancellation(context)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception(
+                        "Failed to terminalize cancellation after selection "
+                        "cleanup: request_id=%s",
+                        context.request_id,
+                    )
                 raise
             except ModelUnavailableError as err:
                 # Only overwrite last_error if we don't have an upstream error
@@ -1286,11 +1578,28 @@ class RequestCoordinator:
                     context.request_id,
                     err,
                 )
-                await self._cleanup_failed_attempt(
-                    context=context,
-                    selected=selected,
-                    error=err,
-                )
+                try:
+                    await self._cleanup_failed_attempt(
+                        context=context,
+                        selected=selected,
+                        error=err,
+                    )
+                except asyncio.CancelledError:
+                    try:
+                        await self._await_cleanup_then_finalize_cancelled(
+                            context=context,
+                            selected=selected,
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        logger.exception(
+                            "Failed to terminalize cancellation after attempt "
+                            "cleanup: request_id=%s attempt_id=%s",
+                            selected.proxy_request_id,
+                            selected.attempt_id,
+                        )
+                    raise
                 health_applied = True
                 # If no other accounts are eligible, don't retry — pass
                 # the error directly to the client.
@@ -1644,22 +1953,113 @@ class RequestCoordinator:
         re-raised by the caller after this method returns.
         """
 
-        async def compensate() -> None:
-            if receipt.active_count_added:
-                await self._router.decrement_active_request_count(
-                    claim_identity.account_name
+        task_key = (context.request_id, attempt_id or -1)
+        progress = self._claim_compensation_progress.get(task_key)
+        if progress is not None and progress.completed:
+            self._claim_compensation_progress.pop(task_key, None)
+            context.client_metadata["post_commit_interrupted"] = True
+            self._selection_claim_diagnostics.record_compensation(success=True)
+            return
+        if progress is None:
+            self._check_retained_cleanup_capacity(
+                registry_name="claim compensation",
+                registry=self._claim_compensation_progress,
+            )
+            progress = ClaimCompensationProgress(
+                context=context,
+                claim_identity=claim_identity,
+                db_request_id=db_request_id,
+                attempt_id=attempt_id,
+                reservation_id=reservation_id,
+                estimated_tokens=estimated_tokens,
+                error=error,
+                receipt=receipt,
+            )
+            self._claim_compensation_progress[task_key] = progress
+        task = self._claim_compensation_tasks.get(task_key)
+        if task is None:
+            task = self._start_claim_compensation_task(task_key, progress)
+        await asyncio.shield(task)
+
+        context.client_metadata["post_commit_interrupted"] = True
+        self._selection_claim_diagnostics.record_compensation(success=True)
+        del error  # only logged for the trace; no type narrowing needed
+
+    def _start_claim_compensation_task(
+        self,
+        key: tuple[str, int],
+        progress: ClaimCompensationProgress,
+    ) -> asyncio.Task[None]:
+        task = asyncio.create_task(
+            self._run_claim_compensation(progress),
+            name=f"claim-compensation-{key[0]}-{key[1]}",
+        )
+        self._claim_compensation_tasks[key] = task
+
+        def _remove(done: asyncio.Task[None]) -> None:
+            if self._claim_compensation_tasks.get(key) is done:
+                self._claim_compensation_tasks.pop(key, None)
+            if done.cancelled():
+                return
+            try:
+                task_error = done.exception()
+            except asyncio.CancelledError:
+                return
+            if task_error is None and progress.completed:
+                self._claim_compensation_progress.pop(key, None)
+            elif task_error is not None:
+                logger.warning(
+                    "Retained claim compensation remains resumable: "
+                    "request_id=%s attempt_id=%s error=%s",
+                    key[0],
+                    key[1],
+                    type(task_error).__name__,
                 )
-            if receipt.quota_reservation_added and self._quota_estimator is not None:
-                await self._quota_estimator.remove_reservation(
-                    claim_identity.account_name,
-                    claim_identity.estimated_microdollars,
-                    requests=1,
-                    tokens=estimated_tokens,
-                )
-            if attempt_id is not None and reservation_id is not None:
-                await self._attempt_finalizer.finalize_failed_attempt(
-                    attempt_id=attempt_id,
-                    reservation_id=reservation_id,
+
+        task.add_done_callback(_remove)
+        return task
+
+    async def _run_claim_compensation(
+        self,
+        progress: ClaimCompensationProgress,
+    ) -> None:
+        """Release a committed claim one acquired component at a time."""
+        context = cast("ProxyRequestContext", progress.context)
+        claim_identity = cast(
+            "RequestCoordinator._ClaimIdentity", progress.claim_identity
+        )
+        receipt = progress.receipt
+        if receipt is None:
+            raise RuntimeError("claim compensation receipt is missing")
+
+        if receipt.active_count_added and not progress.active_count_released:
+            await self._router.decrement_active_request_count(
+                claim_identity.account_name
+            )
+            progress.active_count_released = True
+        elif not receipt.active_count_added:
+            progress.active_count_released = True
+
+        if (
+            receipt.quota_reservation_added
+            and not progress.quota_reservation_released
+            and self._quota_estimator is not None
+        ):
+            await self._quota_estimator.remove_reservation(
+                claim_identity.account_name,
+                claim_identity.estimated_microdollars,
+                requests=1,
+                tokens=progress.estimated_tokens,
+            )
+            progress.quota_reservation_released = True
+        elif not receipt.quota_reservation_added or self._quota_estimator is None:
+            progress.quota_reservation_released = True
+
+        if not progress.durable_attempt_finalized:
+            if progress.attempt_id is not None and progress.reservation_id is not None:
+                result = await self._attempt_finalizer.finalize_failed_attempt(
+                    attempt_id=progress.attempt_id,
+                    reservation_id=progress.reservation_id,
                     data=AttemptFinalizationData(
                         status_code=None,
                         error_class="PostCommitInterrupted",
@@ -1670,27 +2070,89 @@ class RequestCoordinator:
                         is_retry_outcome=False,
                     ),
                 )
+                progress.durable_reservation_released = (
+                    result.reservation_released or result.attempt_transitioned
+                )
+            else:
+                progress.durable_reservation_released = True
+            progress.durable_attempt_finalized = True
+
+        if not progress.probe_released:
             if self._health_manager is not None:
                 self._health_manager.release_request(claim_identity.account_name)
+            progress.probe_released = True
 
-        task_key = (context.request_id, attempt_id or -1)
-        task = self._claim_compensation_tasks.get(task_key)
-        if task is None:
-            task = asyncio.create_task(compensate())
-            self._claim_compensation_tasks[task_key] = task
+        progress.completed = all(
+            (
+                progress.active_count_released,
+                progress.quota_reservation_released,
+                progress.durable_attempt_finalized,
+                progress.durable_reservation_released,
+                progress.probe_released,
+            )
+        )
+        if progress.completed:
+            context.client_metadata["post_commit_interrupted"] = True
 
-            def _remove(done: asyncio.Task[None]) -> None:
-                if self._claim_compensation_tasks.get(task_key) is done:
-                    self._claim_compensation_tasks.pop(task_key, None)
-                if not done.cancelled():
-                    done.exception()
+    async def _join_claim_compensation(self, key: tuple[str, int]) -> bool:
+        """Join retained claim compensation and report full convergence."""
+        task = self._claim_compensation_tasks.get(key)
+        if task is not None:
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "Retained claim compensation failed while joining: "
+                    "request_id=%s attempt_id=%s",
+                    key[0],
+                    key[1],
+                )
+                return False
+        progress = self._claim_compensation_progress.get(key)
+        return progress is None or progress.completed
 
-            task.add_done_callback(_remove)
-        await asyncio.shield(task)
+    async def _handle_selection_cancellation(
+        self,
+        context: ProxyRequestContext,
+    ) -> bool:
+        """Converge a committed selection before terminalizing cancellation."""
+        selected_obj = context.client_metadata.get("_post_commit_selected")
+        if not isinstance(selected_obj, SelectedAttempt):
+            return False
+        key = (selected_obj.proxy_request_id, selected_obj.attempt_id)
+        compensation_started = (
+            key in self._claim_compensation_progress
+            or key in self._claim_compensation_tasks
+        )
+        if compensation_started:
+            if not await self._join_claim_compensation(key):
+                logger.error(
+                    "Cancelled selection compensation has not converged: "
+                    "request_id=%s attempt_id=%s",
+                    key[0],
+                    key[1],
+                )
+                return False
+            health_already_applied = bool(
+                context.client_metadata.get("post_commit_interrupted")
+            )
+        elif context.client_metadata.get("post_commit_interrupted"):
+            health_already_applied = True
+        elif context.client_metadata.get("post_commit_published"):
+            # Publication completed and no compensation was needed.  The
+            # request finalizer still owns the active/quota/probe release.
+            health_already_applied = False
+        else:
+            return False
 
-        context.client_metadata["post_commit_interrupted"] = True
-        self._selection_claim_diagnostics.record_compensation(success=True)
-        del error  # only logged for the trace; no type narrowing needed
+        await self._finalize_cancelled_after_cleanup(
+            context=context,
+            selected=selected_obj,
+            health_already_applied=health_already_applied,
+        )
+        return True
 
     async def _select_and_persist_attempt(
         self,
@@ -2189,6 +2651,35 @@ class RequestCoordinator:
                         )
                     raise
 
+        assert db_request_id is not None
+        assert reservation_id is not None
+        assert attempt_id is not None
+        post_commit_selected = SelectedAttempt(
+            proxy_request_id=context.request_id,
+            db_request_id=db_request_id,
+            attempt_id=attempt_id,
+            reservation_id=reservation_id,
+            account_id=claim_identity.account_id,
+            account_name=claim_identity.account_name,
+            api_key=claim_identity.api_key,
+            model_id=context.model_id,
+            estimated_tokens=estimated_tokens,
+            estimated_microdollars=claim_identity.estimated_microdollars,
+            attempt_number=attempt_number,
+            provider_id=claim_identity.resolved_provider_id,
+            requires_transcode=context.transcode_required,
+            protocol=context.protocol,
+            streamed=context.streaming,
+        )
+        context.client_metadata.update(
+            {
+                "db_request_id": db_request_id,
+                "attempt_id": attempt_id,
+                "reservation_id": reservation_id,
+                "_post_commit_selected": post_commit_selected,
+            }
+        )
+
         # --- Phase C: runtime publication under _selection_claim_lock #2 ---
         publish_lock_wait_ns = time.perf_counter_ns()
         publication_receipt = RuntimePublicationReceipt()
@@ -2217,6 +2708,7 @@ class RequestCoordinator:
                             ),
                             receipt=publication_receipt,
                         )
+                context.client_metadata["post_commit_published"] = True
                 context.attempted_accounts.add(claim_identity.account_name)
                 context.client_metadata["account_name"] = claim_identity.account_name
         except BaseException:
@@ -2368,23 +2860,7 @@ class RequestCoordinator:
                 else:
                     self._routing_trace_guard.record_skip(reason=result)
 
-        return SelectedAttempt(
-            proxy_request_id=context.request_id,
-            db_request_id=db_request_id,
-            attempt_id=attempt_id,
-            reservation_id=reservation_id,
-            account_id=account_id,
-            account_name=account_name,
-            api_key=api_key,
-            model_id=context.model_id,
-            estimated_tokens=estimated_tokens,
-            estimated_microdollars=estimated_microdollars,
-            attempt_number=attempt_number,
-            provider_id=resolved_provider_id,
-            requires_transcode=context.transcode_required,
-            protocol=context.protocol,
-            streamed=context.streaming,
-        )
+        return post_commit_selected
 
     def _should_write_routing_trace(self, request_id: str) -> bool:
         """Decide trace sampling before constructing any trace details."""

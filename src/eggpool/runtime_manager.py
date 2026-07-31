@@ -1729,7 +1729,7 @@ class RuntimeManager:
         # Close generation-owned resources in the documented order.
         slot.state = SlotState.CLOSING
         slot.close_start_time = time.monotonic()
-        await self._close_slot_resources(slot)
+        await self._close_slot_resources(slot, drain_timeout_s=drain_timeout_s)
         slot.close_complete_time = time.monotonic()
         slot.retirement_complete.set()
         async with self._lock:
@@ -1742,7 +1742,12 @@ class RuntimeManager:
             slot.forced_close,
         )
 
-    async def _close_slot_resources(self, slot: _GenerationSlot) -> None:
+    async def _close_slot_resources(
+        self,
+        slot: _GenerationSlot,
+        *,
+        drain_timeout_s: float = 5.0,
+    ) -> None:
         """Close generation-owned resources in the documented order.
 
         The order matches workstream B8 of the milestone plan:
@@ -1774,6 +1779,25 @@ class RuntimeManager:
                 slot.last_close_error = f"supervisor.stop_all: {exc!r}"
                 logger.exception(
                     "Runtime generation %d supervisor.stop_all failed",
+                    generation.generation_id,
+                )
+        coordinator = generation.coordinator
+        drain = getattr(coordinator, "drain_retained_cleanup", None)
+        if drain is not None:
+            record_close_attempt("retained_cleanup")
+            try:
+                unresolved = await drain(timeout_s=min(drain_timeout_s, 10.0))
+                if unresolved:
+                    logger.warning(
+                        "Runtime generation %d retained cleanup drain left "
+                        "%d unresolved identity(ies)",
+                        generation.generation_id,
+                        unresolved,
+                    )
+            except Exception as exc:  # noqa: BLE001 -- close path continues
+                slot.last_close_error = f"retained_cleanup: {exc!r}"
+                logger.exception(
+                    "Runtime generation %d retained cleanup drain failed",
                     generation.generation_id,
                 )
         # 2. Close the provider client pool.  This must happen before

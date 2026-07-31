@@ -230,7 +230,7 @@ class TestTranscodedEffortContract:
             provider_id="test-provider",
             capability=cap,
             intent=intent,
-            policy=ProviderControlPolicy(),
+            policy=ProviderControlPolicy(unsupported_control="warn_drop"),
         )
         assert result.changed is True
         thinking = result.payload.get("thinking")
@@ -267,21 +267,20 @@ class TestTranscodedBudgetContract:
         assert isinstance(thinking, dict)
         assert thinking.get("budget_tokens") == 4096
 
-    def test_top_level_thinking_budget_removed_for_effort_contract(self) -> None:
-        """Effort contract → top-level thinking_budget removed."""
+    def test_top_level_thinking_budget_rejected_for_effort_contract(self) -> None:
+        """Effort contract → unsupported top-level budget is rejected."""
         cap = _capability(mode="effort", accepted_efforts=["low", "medium", "high"])
         intent = _intent(budget=4096, fields=("thinking_budget",), protocol="openai")
-        result = adapt_thinking_controls(
-            payload={"model": "test", "thinking_budget": 4096},
-            client_protocol="openai",
-            model_id="test-model",
-            provider_id="test-provider",
-            capability=cap,
-            intent=intent,
-            policy=ProviderControlPolicy(),
-        )
-        assert result.changed is True
-        assert "thinking_budget" not in result.payload
+        with pytest.raises(CapabilityError):
+            adapt_thinking_controls(
+                payload={"model": "test", "thinking_budget": 4096},
+                client_protocol="openai",
+                model_id="test-model",
+                provider_id="test-provider",
+                capability=cap,
+                intent=intent,
+                policy=ProviderControlPolicy(),
+            )
 
 
 # ---------------------------------------------------------------------------

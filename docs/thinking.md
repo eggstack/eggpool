@@ -301,6 +301,24 @@ Source: `src/eggpool/catalog/capabilities.py:322-372`
 
 Source: `src/eggpool/catalog/capabilities.py:783-819`, `src/eggpool/errors.py:98-112`
 
+### Provider-bound control policy
+
+After account selection, `[transcoder.provider_control_policy]` applies the
+same policy to top-level and nested selectable controls:
+
+| `unsupported_control` | Behavior |
+|---|---|
+| `reject` (default) | Raises `CapabilityError` before upstream dispatch. |
+| `warn_drop` | Removes the unsupported control and records a warning. |
+| `map_if_known` | Applies only an explicit contract mapping; otherwise raises `CapabilityError`. |
+
+This includes top-level `thinking_budget`. An effort-only contract therefore
+rejects an unmappable budget under the default policy, while `map_if_known`
+may convert an exact budget in the contract's effort-to-budget table into its
+corresponding effort. The `none` contract rejects selectable controls under
+`reject` and `map_if_known`; only `warn_drop` removes them. Historical
+reasoning content is not a selectable control and remains unchanged.
+
 ## 7. Budget Mapping
 
 The budget resolver translates client-side effort levels or explicit budgets into a concrete token count.

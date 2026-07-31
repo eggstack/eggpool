@@ -130,6 +130,20 @@ class TestRejectDecisions:
                 policy=ProviderControlPolicy(unsupported_control="reject"),
             )
 
+    def test_map_if_known_none_contract_rejects(self) -> None:
+        cap = _capability(mode="none")
+        intent = _intent(budget=4096, fields=("thinking_budget",))
+        with pytest.raises(CapabilityError):
+            adapt_thinking_controls(
+                payload={"model": "test", "thinking_budget": 4096},
+                client_protocol="openai",
+                model_id="test-model",
+                provider_id="test-provider",
+                capability=cap,
+                intent=intent,
+                policy=ProviderControlPolicy(unsupported_control="map_if_known"),
+            )
+
     def test_reject_fixed_contract_strict(self) -> None:
         cap = _capability(mode="fixed")
         intent = _intent(effort="high", fields=("reasoning_effort",))
@@ -357,23 +371,22 @@ class TestThinkingBlockAdaptation:
 class TestThinkingBudgetFieldAdaptation:
     """Tests for top-level thinking_budget field adaptation."""
 
-    def test_remove_thinking_budget_for_effort_only(self) -> None:
+    def test_reject_thinking_budget_for_effort_only_by_default(self) -> None:
         cap = _capability(
             mode="effort",
             accepted_efforts=["low", "medium", "high"],
         )
         intent = _intent(budget=4096, fields=("thinking_budget",))
-        result = adapt_thinking_controls(
-            payload={"model": "test", "thinking_budget": 4096},
-            client_protocol="openai",
-            model_id="test-model",
-            provider_id="test-provider",
-            capability=cap,
-            intent=intent,
-            policy=ProviderControlPolicy(),
-        )
-        assert result.changed is True
-        assert "thinking_budget" not in result.payload
+        with pytest.raises(CapabilityError):
+            adapt_thinking_controls(
+                payload={"model": "test", "thinking_budget": 4096},
+                client_protocol="openai",
+                model_id="test-model",
+                provider_id="test-provider",
+                capability=cap,
+                intent=intent,
+                policy=ProviderControlPolicy(),
+            )
 
     def test_keep_thinking_budget_for_budget_contract(self) -> None:
         cap = _capability(
@@ -393,3 +406,38 @@ class TestThinkingBudgetFieldAdaptation:
         )
         assert result.decision == "passthrough"
         assert result.payload.get("thinking_budget") == 4096
+
+    def test_warn_drop_thinking_budget_for_effort_only(self) -> None:
+        cap = _capability(mode="effort", accepted_efforts=["low", "high"])
+        intent = _intent(budget=4096, fields=("thinking_budget",))
+        result = adapt_thinking_controls(
+            payload={"model": "test", "thinking_budget": 4096},
+            client_protocol="openai",
+            model_id="test-model",
+            provider_id="test-provider",
+            capability=cap,
+            intent=intent,
+            policy=ProviderControlPolicy(unsupported_control="warn_drop"),
+        )
+        assert result.decision == "dropped"
+        assert "thinking_budget" not in result.payload
+
+    def test_map_known_budget_to_effort(self) -> None:
+        cap = _capability(
+            mode="effort",
+            accepted_efforts=["low", "high"],
+            effort_to_budget={"low": 1024, "high": 4096},
+        )
+        intent = _intent(budget=4096, fields=("thinking_budget",))
+        result = adapt_thinking_controls(
+            payload={"model": "test", "thinking_budget": 4096},
+            client_protocol="openai",
+            model_id="test-model",
+            provider_id="test-provider",
+            capability=cap,
+            intent=intent,
+            policy=ProviderControlPolicy(unsupported_control="map_if_known"),
+        )
+        assert result.decision == "mapped"
+        assert result.payload["reasoning_effort"] == "high"
+        assert "thinking_budget" not in result.payload

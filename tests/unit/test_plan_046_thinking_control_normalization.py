@@ -675,20 +675,19 @@ class TestControlSpellingMatrix:
         assert result.changed is False
         assert "reasoning_effort" in result.emitted_controls
 
-    def test_thinking_budget_dropped_for_effort_contract(self) -> None:
+    def test_thinking_budget_rejected_for_effort_contract(self) -> None:
         cap = _capability(mode="effort", accepted_efforts=["low", "medium", "high"])
         intent = _intent(budget=4096, fields=("thinking_budget",))
-        result = adapt_thinking_controls(
-            payload={"model": "test", "thinking_budget": 4096},
-            client_protocol="openai",
-            model_id="test-model",
-            provider_id="test-provider",
-            capability=cap,
-            intent=intent,
-            policy=ProviderControlPolicy(),
-        )
-        assert result.changed is True
-        assert "thinking_budget" not in result.payload
+        with pytest.raises(CapabilityError):
+            adapt_thinking_controls(
+                payload={"model": "test", "thinking_budget": 4096},
+                client_protocol="openai",
+                model_id="test-model",
+                provider_id="test-provider",
+                capability=cap,
+                intent=intent,
+                policy=ProviderControlPolicy(),
+            )
 
     def test_thinking_budget_kept_for_budget_contract(self) -> None:
         cap = _capability(mode="budget", budget_min=1024, budget_max=128000)
