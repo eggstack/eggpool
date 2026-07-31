@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import uuid
 from typing import TYPE_CHECKING
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 import pytest_asyncio
@@ -232,6 +232,38 @@ async def test_stale_finalizer_releases_reservations(db: Database) -> None:
 
 
 @pytest.mark.asyncio
+async def test_stale_finalizer_releases_zero_cost_token_reservation(
+    db: Database,
+) -> None:
+    """Request/token ownership is released even when monetary cost is zero."""
+    await _seed_account_and_model(db)
+    req_id, _ = await _create_pending(db, reserved_microdollars=0)
+    async with db.transaction():
+        await db.execute_write(
+            "UPDATE requests SET started_at = datetime('now', '-2 hours') WHERE id = ?",
+            (req_id,),
+        )
+
+    router = MagicMock()
+    router.decrement_active_request_count = AsyncMock()
+    quota_estimator = MagicMock()
+    quota_estimator.remove_reservation = AsyncMock()
+
+    assert (
+        await finalize_stale_requests_once(
+            db,
+            router,  # type: ignore[arg-type]
+            quota_estimator,  # type: ignore[arg-type]
+            max_pending_seconds=300.0,
+        )
+        == 1
+    )
+    quota_estimator.remove_reservation.assert_awaited_once_with(
+        "acct-1", 0, requests=1, tokens=1000
+    )
+
+
+@pytest.mark.asyncio
 async def test_stale_finalizer_reconciles_runtime_state(db: Database) -> None:
     """In-memory active counts and reservation tracking are updated post-commit."""
     await _seed_account_and_model(db)
@@ -324,7 +356,7 @@ async def test_stale_finalizer_handles_no_work(db: Database) -> None:
 
 
 @pytest.mark.asyncio
-async def test_stale_finalizer_dedups_reconciliation_per_account(
+async def test_stale_finalizer_preserves_request_multiplicity_per_account(
     db: Database,
 ) -> None:
     """Multiple leaked requests on one account decrement the count exactly once."""
@@ -353,10 +385,13 @@ async def test_stale_finalizer_dedups_reconciliation_per_account(
     )
     assert transitioned == 3
 
-    # All three rows share one account.  The active count is per-account,
-    # not per-request, so the runtime state should be reconciled exactly
-    # once for the account.
-    router.decrement_active_request_count.assert_awaited_once_with("acct-1")
+    # All three rows share one account, but each accepted request owns one
+    # active-count unit.  The production Router receives one aggregate delta.
+    assert router.decrement_active_request_count.await_args_list == [
+        call("acct-1"),
+        call("acct-1"),
+        call("acct-1"),
+    ]
     # Reservation removal IS per-row because each leaked row reserved a
     # distinct amount; 100_000 * 3 = 300_000.
     assert quota_estimator.remove_reservation.await_count == 3

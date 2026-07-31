@@ -1031,8 +1031,9 @@ class TestBoundedFinalizeStaleRequests:
         )
         assert transitioned == 2
 
-        # Router decremented once (deduplicated per account)
-        router.decrement_active_request_count.assert_awaited_once_with("test-acct")
+        # The compatibility dummy receives one decrement per exact unit;
+        # production Router applies the same total as one aggregate update.
+        assert router.decrement_active_request_count.await_count == 2
         # Quota estimator removed reservations for the 2 finalized rows
         assert quota_estimator.remove_reservation.await_count == 2
 

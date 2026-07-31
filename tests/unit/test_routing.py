@@ -953,6 +953,38 @@ async def test_active_request_count_updates_are_serialized() -> None:
 
 
 @pytest.mark.asyncio()
+async def test_active_request_count_bulk_release_clamps_and_logs_underflow(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Bulk stale cleanup releases exact units and exposes underflow."""
+    config = AppConfig.from_dict(
+        {"accounts": [{"name": "acct1", "api_key": "test-key"}]}
+    )
+    registry = AccountRegistry(config)
+    cache = ModelCatalogCache()
+
+    class MockCatalog:
+        @property
+        def cache(self) -> ModelCatalogCache:
+            return cache
+
+    router = Router(registry, MockCatalog())  # type: ignore[arg-type]
+    state = registry.get_state("acct1")
+    assert state is not None
+    await router.increment_active_request_count("acct1")
+    await router.increment_active_request_count("acct1")
+
+    await router.decrement_active_request_count_by("acct1", 2)
+    assert state.active_request_count == 0
+
+    with caplog.at_level("WARNING"):
+        await router.decrement_active_request_count_by("acct1", 1)
+
+    assert state.active_request_count == 0
+    assert "Active request count underflow" in caplog.text
+
+
+@pytest.mark.asyncio()
 async def test_failover_selection_honors_zero_limit() -> None:
     """A zero-sized failover request must not return a candidate."""
     config = AppConfig.from_dict(

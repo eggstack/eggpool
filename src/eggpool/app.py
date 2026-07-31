@@ -319,43 +319,52 @@ async def finalize_stale_requests_once(
             " LIMIT ?",
             (threshold, batch_size),
         )
-        transitioned = [dict(row) for row in rows]
-        if not transitioned:
+        candidates = [dict(row) for row in rows]
+        if not candidates:
             return 0
 
-        request_ids = [r["id"] for r in transitioned]
-        reservation_ids = [
-            r["reservation_id"] for r in transitioned if r["reservation_id"] is not None
-        ]
+        request_ids = [r["id"] for r in candidates]
+        released_reservation_ids: set[object] = set()
+        released_reservations: list[Any] = []
 
         # Mark requests interrupted.  Re-checking ``status = 'pending'``
         # inside the UPDATE guards against a concurrent legitimate
         # finalizer that finalized one of the rows between the SELECT
         # and the UPDATE.
         req_placeholders = ",".join("?" * len(request_ids))
-        await db.execute_write(
+        transitioned_rows = await db.execute_returning(
             f"UPDATE requests "
             f"SET status = 'interrupted', "
             f"    completed_at = CURRENT_TIMESTAMP, "
             f"    error_class = 'StaleRequestFinalizer' "
             f"WHERE id IN ({req_placeholders}) "
-            f"  AND status = 'pending'",
+            f"  AND status = 'pending' "
+            f"RETURNING id",
             tuple(request_ids),
         )
+        transitioned_ids = {row["id"] for row in transitioned_rows}
+        transitioned = [row for row in candidates if row["id"] in transitioned_ids]
+        if not transitioned:
+            return 0
 
         # Release associated reservations.  Same ``status`` guard so
         # a legitimate finalizer is not raced.
+        reservation_ids = [
+            r["reservation_id"] for r in transitioned if r["reservation_id"] is not None
+        ]
         if reservation_ids:
             res_placeholders = ",".join("?" * len(reservation_ids))
-            await db.execute_write(
+            released_reservations = await db.execute_returning(
                 f"UPDATE reservations "
                 f"SET status = 'released', "
                 f"    released_at = CURRENT_TIMESTAMP, "
                 f"    release_reason = 'stale_request' "
                 f"WHERE id IN ({res_placeholders}) "
-                f"  AND status = 'active'",
+                f"  AND status = 'active' "
+                f"RETURNING id",
                 tuple(reservation_ids),
             )
+            released_reservation_ids = {row["id"] for row in released_reservations}
 
         # Phase 3: emit an operational event summarising the sweep.
         # Recorded inside the same transaction so a crash between the
@@ -365,60 +374,65 @@ async def finalize_stale_requests_once(
             event_type="stale_request_finalizer",
             details={
                 "leaked_requests": len(transitioned),
-                "released_reservations": len(reservation_ids),
+                "released_reservations": len(released_reservations),
             },
         )
 
-    # Post-commit: reconcile runtime state.  Iterate ``transitioned``
-    # rather than re-querying so the same
-    # ``(account_name, reserved_microdollars)`` rows we just finalized
-    # drive the cleanup.  ``decrement_active_request_count`` is
-    # deduplicated per account because the count is per-account, but
-    # ``remove_reservation`` MUST be called once per leaked row to
-    # keep the in-memory reservation total consistent with the
-    # released reservations in SQLite.
-    seen_accounts: set[str] = set()
+    # Post-commit: reconcile runtime state from the exact rows transitioned
+    # above.  Active ownership is per accepted request, so aggregation keeps
+    # multiplicity while still applying one router update per account.
     per_account_reconciled: dict[str, dict[str, int]] = {}
     for row in transitioned:
         account_name = row.get("account_name")
         if not account_name:
+            logger.warning(
+                "Stale request %s has no account identity; leaving runtime "
+                "convergence unresolved",
+                row.get("id"),
+            )
             continue
-        if account_name not in seen_accounts:
-            seen_accounts.add(account_name)
-            # Decrement active request count (idempotent if already 0)
-            await router.decrement_active_request_count(account_name)
-            per_account_reconciled[account_name] = {
-                "requests": 0,
-                "tokens": 0,
-                "microdollars": 0,
-            }
+        bucket = per_account_reconciled.setdefault(
+            account_name,
+            {"requests": 0, "tokens": 0, "microdollars": 0},
+        )
+        bucket["requests"] += 1
 
-        # Remove in-memory reservation tracking.  The exact reserved
-        # amount must be removed so a future cost accounting run does
-        # not double-count the leaked estimate. The in-flight request
-        # and projected token components are also decremented so the
-        # new load-aware scoring signal stays consistent.
+        # Reservation ownership is represented by the active reservation
+        # identity, not by its monetary value.  A zero-cost reservation can
+        # still own request and token pressure.
         reserved = row.get("reserved_microdollars") or 0
         leaked_tokens = row.get("estimated_tokens") or 0
-        if reserved and quota_estimator is not None:
+        if (
+            row.get("reservation_id") in released_reservation_ids
+            and quota_estimator is not None
+        ):
             await quota_estimator.remove_reservation(
                 account_name,
                 int(reserved),
                 requests=1,
                 tokens=int(leaked_tokens),
             )
-        bucket = per_account_reconciled.setdefault(
-            account_name,
-            {"requests": 0, "tokens": 0, "microdollars": 0},
-        )
-        bucket["requests"] += 1
         bucket["tokens"] += int(leaked_tokens)
         bucket["microdollars"] += int(reserved)
+
+    for account_name, bucket in sorted(per_account_reconciled.items()):
+        decrement_many = getattr(
+            type(router), "decrement_active_request_count_by", None
+        )
+        if decrement_many is not None:
+            await router.decrement_active_request_count_by(
+                account_name, bucket["requests"]
+            )
+        else:
+            # Compatibility for lightweight test/dummy routers predating the
+            # exact-count API.  Production Router always takes the bulk path.
+            for _ in range(bucket["requests"]):
+                await router.decrement_active_request_count(account_name)
 
     logger.info(
         "Stale request finalizer: cleaned up %d leaked requests across %d accounts",
         len(transitioned),
-        len(seen_accounts),
+        len(per_account_reconciled),
     )
     if per_account_reconciled:
         for acct, bucket in sorted(per_account_reconciled.items()):

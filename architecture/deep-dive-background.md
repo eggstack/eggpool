@@ -71,7 +71,8 @@ Retired when their generation is retired:
 
 Recorded in `operational_events` table:
 - **`_crash_recovery`** — Recover from unclean shutdown
-- **`_finalize_stale_requests_once`** — Finalize requests stuck in pending
+- **`_finalize_stale_requests_once`** — Finalize requests stuck in pending and
+  reconcile exact per-request runtime ownership in a bounded pass
 - **`reconcile_expired_reservations`** — Release expired quota reservations
 
 ## Update Checker

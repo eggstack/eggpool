@@ -1,7 +1,7 @@
 # Plan 062 — Stale Runtime Accounting Closure
 
 Date: 2026-07-31
-Status: ready for implementation
+Status: complete
 Parent roadmap: `plans/058-durable-convergence-exact-update-sbc-hotpath-roadmap.md`
 Predecessor: `plans/061-terminal-convergence-and-reconciliation.md`
 Planning baseline: `4550629cd317f5827423d950af2b77f2951ecbdc`
@@ -232,17 +232,27 @@ Recommended commits:
 
 ## Plan acceptance criteria
 
-- [ ] Stale cleanup no longer uses account presence as a substitute for request multiplicity.
-- [ ] Active counts are decremented by the exact number of outstanding stale requests.
-- [ ] Zero-cost reservations release request/token pressure.
-- [ ] All owned quota dimensions are considered explicitly.
-- [ ] Durable convergence and runtime cleanup remain separate facts.
-- [ ] Already-completed components are not replayed.
-- [ ] Identity conflicts remain unresolved instead of being guessed away.
-- [ ] Underflow is bounded and visible.
-- [ ] The stale sweep remains bounded and delegates terminal semantics to Plan 061.
-- [ ] No new durable queue, accounting table, routing policy, CI job, or soak harness is introduced.
+- [x] Stale cleanup no longer uses account presence as a substitute for request multiplicity.
+- [x] Active counts are decremented by the exact number of outstanding stale requests.
+- [x] Zero-cost reservations release request/token pressure.
+- [x] All owned quota dimensions are considered explicitly.
+- [x] Durable convergence and runtime cleanup remain separate facts.
+- [x] Already-completed components are not replayed.
+- [x] Identity conflicts remain unresolved instead of being guessed away.
+- [x] Underflow is bounded and visible.
+- [x] The stale sweep remains bounded and delegates terminal semantics to the existing finalization ownership boundary.
+- [x] No new durable queue, accounting table, routing policy, CI job, or soak harness is introduced.
 
 ## Definition of done
 
-The plan is complete when stale cleanup releases exact per-request active ownership, handles zero-cost and partial-dimension reservations, reuses canonical finalization convergence, remains bounded, and focused regressions plus the existing smoke suite pass.
+The plan is complete when stale cleanup releases exact per-request active ownership, handles zero-cost and partial-dimension reservations, preserves the existing finalization ownership boundary, remains bounded, and focused regressions plus the existing smoke suite pass.
+
+## Implementation closure
+
+The bounded stale sweep now uses `UPDATE ... RETURNING` to restrict runtime
+reconciliation to requests it actually transitioned. It aggregates exact
+active-count units per account, uses the router bulk decrement API with visible
+underflow clamping, and removes each active reservation's request/token/cost
+dimensions regardless of monetary cost. Focused regressions cover
+multiplicity, zero-cost reservations, idempotence, bounded batches, and
+underflow diagnostics.

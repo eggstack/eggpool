@@ -133,6 +133,12 @@ identities; canonical terminal status sets live in
 `request/terminal_status.py`. Unknown status or identity mismatch remains
 unresolved and keeps recovery fail-closed.
 
+The stale-request safety net remains bounded and accounting-focused after its
+durable transition: it preserves one active-count unit per transitioned
+request, aggregates decrements by account, and releases every owned quota
+dimension even when reserved monetary cost is zero. The router bulk decrement
+API clamps underflow to zero while logging the invariant violation.
+
 ## Streaming Completion
 
 `classify_stream_eof()` uses provider-bound `stream_completion_policy` (`strict`/`compatible`/`permissive_observe`). Only canonical OpenAI `[DONE]` or Anthropic `message_stop` is strict. Incomplete EOF → `MIDSTREAM_ERROR`, never retried after handoff.

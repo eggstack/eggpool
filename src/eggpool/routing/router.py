@@ -1452,13 +1452,40 @@ class Router:
     async def decrement_active_request_count(self, account_name: str) -> None:
         """Decrement the active request count for an account.
 
-        Never allows the count to become negative.
+        Never allows the count to become negative.  This is the one-unit
+        compatibility wrapper; bounded recovery paths should use
+        :meth:`decrement_active_request_count_by` so request multiplicity is
+        preserved.
         """
+        await self.decrement_active_request_count_by(account_name, 1)
+
+    async def decrement_active_request_count_by(
+        self, account_name: str, count: int
+    ) -> None:
+        """Release an exact number of active request units for an account.
+
+        A decrement larger than the observed runtime count indicates that a
+        release owner was replayed or runtime state was already incomplete.
+        Surface that invariant violation, but clamp to zero so routing remains
+        available and the count never becomes negative.
+        """
+        if count <= 0:
+            raise ValueError("active request decrement must be positive")
         state = self._registry.get_state(account_name)
         if state is not None:
             async with self._active_count_lock:
-                if state.active_request_count > 0:
-                    state.active_request_count -= 1
+                current = state.active_request_count
+                if count > current:
+                    logger.warning(
+                        "Active request count underflow for account=%s: "
+                        "requested=%d current=%d; clamping to zero",
+                        account_name,
+                        count,
+                        current,
+                    )
+                    state.active_request_count = 0
+                else:
+                    state.active_request_count = current - count
 
     def has_eligible_pairing(
         self,
