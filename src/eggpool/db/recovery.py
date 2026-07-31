@@ -87,7 +87,7 @@ class ReconciliationOutcome:
 
     operation_id: str
     strategy: str
-    outcome: str  # "committed", "absent", "conflicting", "partial"
+    outcome: str  # committed/absent or an unresolved_* category
     duration_ms: float
     error_class: str | None = None
 
@@ -325,7 +325,6 @@ class DatabaseRecoveryController:
         """
         self._reconciler_registry["dispatch"] = _reconcile_dispatch
         self._reconciler_registry["finalization"] = _reconcile_finalization
-        self._reconciler_registry["boundary"] = _reconcile_boundary
 
     def _backoff_for_attempt(self, attempt: int) -> float:
         """Return the backoff (seconds) for the given attempt number."""
@@ -402,7 +401,7 @@ class DatabaseRecoveryController:
                     await self.db.disconnect()
 
             # 3. Open a replacement connection.
-            await self.db.connect()
+            await self.db.connect(admit=False)
             replacement_epoch = self.db.connection_epoch
 
             # 4. For in-memory databases, re-run migrations since the
@@ -411,7 +410,7 @@ class DatabaseRecoveryController:
             if is_memory_db:
                 from eggpool.db.migrations import MigrationRunner  # noqa: PLC0415
 
-                await MigrationRunner(self.db).run()
+                await MigrationRunner(self.db).run(internal_recovery=True)
             else:
                 await self._verify_schema_compatibility()
 
@@ -421,8 +420,12 @@ class DatabaseRecoveryController:
                 raise RuntimeError("Writable probe failed on replacement connection")
 
             # 6. Reconcile ambiguous operations.
-            ambiguous_ops = self.db.drain_ambiguous_operations()
+            ambiguous_ops = self.db.pending_ambiguous_operations()
             resolved, failed = await self._reconcile_ambiguous_operations(ambiguous_ops)
+            if failed:
+                raise RuntimeError(
+                    f"{failed} ambiguous database operation(s) unresolved"
+                )
 
             completed_at = time.monotonic()
             return RecoveryAttemptResult(
@@ -436,7 +439,18 @@ class DatabaseRecoveryController:
                 ambiguous_resolved=resolved,
                 ambiguous_failed=failed,
             )
+        except asyncio.CancelledError:
+            await self.db._close_failed_connection()  # type: ignore[reportPrivateUsage]
+            self.db._writes_admitted = False  # type: ignore[reportPrivateUsage]
+            self.db._reads_admitted = False  # type: ignore[reportPrivateUsage]
+            self.db._writes_admitted_event.clear()  # type: ignore[reportPrivateUsage]
+            raise
         except Exception as exc:
+            await self.db._close_failed_connection()  # type: ignore[reportPrivateUsage]
+            self.db._writes_admitted = False  # type: ignore[reportPrivateUsage]
+            self.db._reads_admitted = False  # type: ignore[reportPrivateUsage]
+            self.db._writes_admitted_event.clear()  # type: ignore[reportPrivateUsage]
+            self.db._transition_state(DatabaseLifecycleState.FAILED_CLOSED)  # type: ignore[reportPrivateUsage]
             completed_at = time.monotonic()
             return RecoveryAttemptResult(
                 state=DatabaseLifecycleState.FAILED_CLOSED,
@@ -460,9 +474,10 @@ class DatabaseRecoveryController:
         or replaced out-of-band.
         """
         try:
-            rows = await self.db.fetch_all(
-                "SELECT MAX(version) AS max_version FROM _migrations"
-            )
+            async with self.db.transaction(_internal_recovery=True):
+                rows = await self.db.fetch_all(
+                    "SELECT MAX(version) AS max_version FROM _migrations"
+                )
         except Exception as exc:
             raise RuntimeError(
                 f"Cannot verify schema on replacement connection: {exc}"
@@ -497,10 +512,10 @@ class DatabaseRecoveryController:
     ) -> tuple[int, int]:
         """Reconcile ambiguous operations against the replacement connection.
 
-        Returns ``(resolved_count, failed_count)``.  Resolved means
-        the reconciler produced a definitive outcome (committed,
-        absent, conflicting).  Failed means the reconciler raised
-        or the operation timed out.
+        Operations are acknowledged individually only after a
+        definitive ``committed`` or explicitly valid ``absent`` result.
+        Every other result remains in the ambiguity buffer and blocks
+        readiness.
         """
         if not ops:
             return 0, 0
@@ -511,8 +526,9 @@ class DatabaseRecoveryController:
             try:
                 async with asyncio.timeout(self.config.reconciliation_timeout_s):
                     outcome = await self._dispatch_reconciler(op)
-                if outcome.outcome in ("committed", "absent", "conflicting"):
+                if outcome.outcome in ("committed", "absent"):
                     resolved += 1
+                    self.db.acknowledge_ambiguous_operation(op)
                 else:
                     failed += 1
             except Exception:
@@ -529,12 +545,13 @@ class DatabaseRecoveryController:
             return ReconciliationOutcome(
                 operation_id=op.operation_id,
                 strategy=op.reconciliation_strategy,
-                outcome="conflicting",
+                outcome="unresolved_unknown_strategy",
                 duration_ms=(time.monotonic() - started) * 1000,
                 error_class="UnknownStrategy",
             )
         try:
-            result = await reconciler(self.db, op)
+            async with self.db.transaction(_internal_recovery=True):
+                result = await reconciler(self.db, op)
             return ReconciliationOutcome(
                 operation_id=op.operation_id,
                 strategy=op.reconciliation_strategy,
@@ -545,7 +562,7 @@ class DatabaseRecoveryController:
             return ReconciliationOutcome(
                 operation_id=op.operation_id,
                 strategy=op.reconciliation_strategy,
-                outcome="conflicting",
+                outcome="unresolved_error",
                 duration_ms=(time.monotonic() - started) * 1000,
                 error_class=type(exc).__qualname__,
             )
@@ -602,7 +619,7 @@ async def _reconcile_dispatch(db: Database, op: AmbiguousDatabaseOperation) -> s
         # Check if the operation should be retried or rolled back.
         return "absent"
     except Exception:
-        return "conflicting"
+        return "unresolved_conflict"
 
 
 async def _reconcile_finalization(db: Database, op: AmbiguousDatabaseOperation) -> str:
@@ -626,20 +643,9 @@ async def _reconcile_finalization(db: Database, op: AmbiguousDatabaseOperation) 
         return "conflicting"
     if req is None:
         return "absent"
-    status = str(req["status"]) if "status" in req else ""
+    status = str(req["status"])
     if status in ("completed", "failed", "cancelled", "client_disconnected"):
         return "committed"
     if status in ("pending", "selected", "streaming"):
         return "absent"
-    return "conflicting"
-
-
-async def _reconcile_boundary(db: Database, op: AmbiguousDatabaseOperation) -> str:
-    """Bounded retry for generic maintenance-style operations.
-
-    Generic maintenance is idempotent and the recovery succeeds
-    simply by re-running the operation.  The reconciler reports
-    ``"committed"`` after a bounded retry to indicate the
-    recovery is allowed to re-run the operation.
-    """
-    return "committed"
+    return "unresolved_conflict"

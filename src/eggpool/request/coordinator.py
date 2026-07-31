@@ -2697,22 +2697,22 @@ class RequestCoordinator:
                         AmbiguousDatabaseOperation,
                     )
 
-                    self._db.set_pending_ambiguous_operation(
-                        AmbiguousDatabaseOperation(
-                            operation_id=context.request_id,
-                            operation_kind="dispatch_selection",
-                            connection_epoch=self._db.connection_epoch,
-                            idempotency_keys=(("attempt_number", str(attempt_number)),),
-                            intended_status="selected",
-                            precondition_facts=(
-                                ("account_id", str(claim_identity.account_id)),
-                                ("provider_id", claim_identity.resolved_provider_id),
-                            ),
-                            created_at_monotonic=time.monotonic(),
-                            reconciliation_strategy="dispatch",
-                        )
+                    ambiguous_operation = AmbiguousDatabaseOperation(
+                        operation_id=context.request_id,
+                        operation_kind="dispatch_selection",
+                        connection_epoch=self._db.connection_epoch,
+                        idempotency_keys=(("attempt_number", str(attempt_number)),),
+                        intended_status="selected",
+                        precondition_facts=(
+                            ("account_id", str(claim_identity.account_id)),
+                            ("provider_id", claim_identity.resolved_provider_id),
+                        ),
+                        created_at_monotonic=time.monotonic(),
+                        reconciliation_strategy="dispatch",
                     )
-                    async with self._db.transaction():
+                    async with self._db.transaction(
+                        ambiguous_operation=ambiguous_operation
+                    ):
                         with _maybe_span(
                             self._dispatch_span_recorder,
                             SPAN_DISPATCH_PERSISTENCE_COMMIT,

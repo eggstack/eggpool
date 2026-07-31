@@ -27,7 +27,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Bounded observability: request-coherent span sampling (5% default), bounded rolling-window metrics, and constant-bounded snapshot cost regardless of uptime
 - Error isolation: provider-specific validation errors (e.g. unsupported MiniMax-M3 thinking through OpenCode Go) are contained to a single request — no account/model/circuit/quarantine penalties, no restart or database deletion required
 - Process-owned finalization: every selected request-terminal outcome (completion, cancellation, capability rejection, upstream client error, or stream failure) is reconciled by one bounded, attempt-keyed retained job; retryable failed attempts use component-progress cleanup that proves terminal reservation state and runtime release convergence before the next selection
-- Database recovery: automatic connection recovery with single-flight reconciliation, fail-closed on exhaustion
+- Database recovery: staged, fail-closed connection recovery with transaction-owned ambiguity metadata, retained unresolved work, and single-flight reconciliation
 - Bounded model quarantine: TTL-based suspected/quarantined state with corroboration thresholds and automatic recovery
 - Designed for lightweight deployments (Raspberry Pi, SBCs)
 

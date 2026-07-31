@@ -100,20 +100,18 @@ class AttemptFinalizer:
             AmbiguousDatabaseOperation,
         )
 
-        self._db.set_pending_ambiguous_operation(
-            AmbiguousDatabaseOperation(
-                operation_id=str(attempt_id),
-                operation_kind="attempt_finalization",
-                connection_epoch=self._db.connection_epoch,
-                idempotency_keys=(("reservation_id", reservation_id),),
-                intended_status="completed",
-                precondition_facts=(),
-                created_at_monotonic=time.monotonic(),
-                reconciliation_strategy="finalization",
-            )
+        ambiguous_operation = AmbiguousDatabaseOperation(
+            operation_id=str(attempt_id),
+            operation_kind="attempt_finalization",
+            connection_epoch=self._db.connection_epoch,
+            idempotency_keys=(("reservation_id", reservation_id),),
+            intended_status="completed",
+            precondition_facts=(),
+            created_at_monotonic=time.monotonic(),
+            reconciliation_strategy="finalization",
         )
         reservation_converged = False
-        async with self._db.transaction():
+        async with self._db.transaction(ambiguous_operation=ambiguous_operation):
             # 1. Mark attempt completed only if not already terminal
             transitioned = bool(
                 await self._db.execute_write(

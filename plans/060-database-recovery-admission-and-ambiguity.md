@@ -1,7 +1,7 @@
 # Plan 060 — Database Recovery Admission and Ambiguity
 
 Date: 2026-07-31
-Status: ready for implementation
+Status: completed
 Parent roadmap: `plans/058-durable-convergence-exact-update-sbc-hotpath-roadmap.md`
 Predecessor: `plans/059-dispatch-persistence-contract-and-writer-boundary.md`
 Planning baseline: `34ea5da2ad1b7674cce338db867cbff498085264`
@@ -269,17 +269,17 @@ Recommended commits:
 
 ## Plan acceptance criteria
 
-- [ ] Ambiguous-operation descriptors are transaction-scoped after lock acquisition.
-- [ ] Descriptors are cleared for every non-ambiguous exit.
-- [ ] Recovery opens a candidate connection without admitting public reads/writes.
-- [ ] Admission occurs only after schema verification, writable probe, and reconciliation succeed.
-- [ ] Failed recovery closes/discards the candidate and clears the event.
-- [ ] Database and controller state cannot disagree about readiness.
-- [ ] Conflicts, unknown strategies, errors, and timeouts remain unresolved.
-- [ ] Unresolved correctness-critical operations prevent ready.
-- [ ] Buffer overflow fails closed rather than silently evicting.
-- [ ] No strategy reports committed without durable verification or idempotent convergence.
-- [ ] No durable workflow table, second database, multi-node recovery system, CI matrix, or soak harness is introduced.
+- [x] Ambiguous-operation descriptors are transaction-scoped after lock acquisition.
+- [x] Descriptors are cleared for every non-ambiguous exit.
+- [x] Recovery opens a candidate connection without admitting public reads/writes.
+- [x] Admission occurs only after schema verification, writable probe, and reconciliation succeed.
+- [x] Failed recovery closes/discards the candidate and clears the event.
+- [x] Database and controller state cannot disagree about readiness.
+- [x] Conflicts, unknown strategies, errors, and timeouts remain unresolved.
+- [x] Unresolved correctness-critical operations prevent ready.
+- [x] Buffer overflow fails closed rather than silently evicting.
+- [x] No strategy reports committed without durable verification or idempotent convergence.
+- [x] No durable workflow table, second database, multi-node recovery system, CI matrix, or soak harness is introduced.
 
 ## Definition of done
 

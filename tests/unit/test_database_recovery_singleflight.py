@@ -15,7 +15,11 @@ import pytest_asyncio
 if TYPE_CHECKING:
     from pathlib import Path
 
-from eggpool.db.connection import Database, DatabaseLifecycleState
+from eggpool.db.connection import (
+    AmbiguousDatabaseOperation,
+    Database,
+    DatabaseLifecycleState,
+)
 from eggpool.db.migrations import MigrationRunner
 from eggpool.db.recovery import DatabaseRecoveryController
 from eggpool.models.config import DatabaseRecoveryConfig
@@ -157,6 +161,85 @@ async def test_failed_recovery_enters_failed_closed(
     finally:
         db.connect = original_connect  # type: ignore[assignment]
         await asyncio.wait_for(controller.shutdown(), timeout=5.0)
+
+
+async def test_schema_failure_discards_unadmitted_candidate(
+    test_db: Database,
+) -> None:
+    """Schema failure never leaves a replacement connection admitted."""
+    config = DatabaseRecoveryConfig(
+        max_attempts=1,
+        initial_backoff_ms=10,
+        max_backoff_ms=10,
+        reconciliation_timeout_s=2.0,
+    )
+    controller = DatabaseRecoveryController(db=test_db, config=config)
+    original_verify = controller._verify_schema_compatibility
+
+    async def fail_schema() -> None:
+        raise RuntimeError("schema mismatch")
+
+    controller._verify_schema_compatibility = fail_schema  # type: ignore[method-assign]
+    try:
+        await controller.handle_invalidation(
+            reason="schema test", reason_class="operational_error"
+        )
+        assert await controller.wait_for_ready(timeout_s=5.0) is False
+        assert test_db.lifecycle_state is DatabaseLifecycleState.FAILED_CLOSED
+        assert test_db._conn is None  # type: ignore[reportPrivateUsage]
+        assert test_db.writes_admitted is False
+        assert test_db.reads_admitted is False
+        assert not test_db._writes_admitted_event.is_set()  # type: ignore[reportPrivateUsage]
+    finally:
+        controller._verify_schema_compatibility = original_verify  # type: ignore[method-assign]
+        await asyncio.wait_for(controller.shutdown(), timeout=5.0)
+
+
+async def test_unresolved_operation_prevents_ready(
+    test_db: Database,
+) -> None:
+    """Unknown reconciliation work remains queued and blocks readiness."""
+    op = AmbiguousDatabaseOperation(
+        operation_kind="maintenance",
+        connection_epoch=test_db.connection_epoch,
+        operation_id="unknown-op",
+        idempotency_keys=(),
+        intended_status="completed",
+        precondition_facts=(),
+        created_at_monotonic=0.0,
+        reconciliation_strategy="unknown",
+    )
+    test_db.record_ambiguous_operation(op)
+    controller = DatabaseRecoveryController(
+        db=test_db,
+        config=DatabaseRecoveryConfig(max_attempts=1, reconciliation_timeout_s=2.0),
+    )
+    try:
+        await controller.handle_invalidation(
+            reason="unresolved operation", reason_class="operational_error"
+        )
+        assert await controller.wait_for_ready(timeout_s=5.0) is False
+        assert controller.state is DatabaseLifecycleState.FAILED_CLOSED
+        assert test_db.pending_ambiguous_operations() == (op,)
+    finally:
+        await asyncio.wait_for(controller.shutdown(), timeout=5.0)
+
+
+async def test_public_transaction_closed_during_private_probe(
+    test_db: Database,
+) -> None:
+    """A candidate can be probed privately without public admission."""
+    await test_db.disconnect()
+    await test_db.connect(admit=False)
+    try:
+        with pytest.raises(Exception, match="not admitted"):
+            async with test_db.transaction():
+                pass
+        assert await test_db.probe_writable() is True
+        assert test_db.writes_admitted is False
+        assert test_db.reads_admitted is False
+    finally:
+        await test_db.disconnect()
 
 
 async def test_invalidated_reason_classes_counted(test_db: Database) -> None:

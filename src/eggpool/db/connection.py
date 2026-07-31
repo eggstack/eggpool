@@ -95,8 +95,8 @@ class AmbiguousDatabaseOperation:
       (e.g. ``"selected_account_id": "42"``).
     - ``created_at_monotonic``: monotonic timestamp of capture.
     - ``reconciliation_strategy``: identifier for the reconciler
-      function to invoke (``"dispatch"``, ``"finalization"``,
-      ``"boundary"``).  Boundary invokes a generic limited retry.
+      function to invoke (currently ``"dispatch"`` or
+      ``"finalization"``).
     - ``metadata``: tuple of (key, value) strings for application-
       specific facts.  Never contains SQL parameters, secrets, or
       prompt data.
@@ -297,8 +297,9 @@ class Database:
         # drained by the recovery controller after a successful
         # replacement connection is opened.
         self._ambiguous_operations: collections.deque[AmbiguousDatabaseOperation] = (
-            collections.deque(maxlen=128)
+            collections.deque()
         )
+        self._ambiguous_operation_capacity = 128
         # Optional recovery controller -- wired in by ``ProcessRuntime``
         # after both the database and the controller are constructed.
         # ``None`` means the process is running without automated
@@ -331,12 +332,13 @@ class Database:
         # connection invalidation.  Surfaced via ``diagnostics()`` so
         # operators can correlate anomalies.
         self._rollback_failure_count: int = 0
-        # Plan 027 Workstream E/F/G: callers set this before entering
-        # a correctness-critical transaction so that an indeterminate
-        # commit outcome records the operation for post-recovery
-        # reconciliation.  The transaction() context manager reads
-        # and clears it on indeterminate failure.
-        self._pending_ambiguous_op: AmbiguousDatabaseOperation | None = None
+        # Recovery-only transactions may inspect and probe a candidate
+        # connection before public admission.  This ContextVar is set
+        # only by the private transaction API and cannot be inherited
+        # by unrelated tasks waiting for admission.
+        self._recovery_transaction: ContextVar[bool] = ContextVar(
+            "database_recovery_transaction", default=False
+        )
         # Counter incremented on every successful rollback.  Bounded
         # by the lifetime of the connection.
         self._rollback_success_count: int = 0
@@ -415,47 +417,30 @@ class Database:
     def pending_ambiguous_operations(self) -> tuple[AmbiguousDatabaseOperation, ...]:
         """Return a snapshot of ambiguous operations awaiting reconciliation.
 
-        The deque is bounded; oldest entries are evicted when full.
+        The buffer is bounded; overflow is failed closed rather than
+        silently discarding an older correctness-critical operation.
         """
         return tuple(self._ambiguous_operations)
-
-    def drain_ambiguous_operations(self) -> tuple[AmbiguousDatabaseOperation, ...]:
-        """Remove and return all pending ambiguous operations.
-
-        Called by the recovery controller after a successful
-        replacement connection is opened.  Subsequent reconciliations
-        then run against the replacement connection.
-        """
-        ops = tuple(self._ambiguous_operations)
-        self._ambiguous_operations.clear()
-        return ops
 
     def record_ambiguous_operation(self, op: AmbiguousDatabaseOperation) -> None:
         """Record an ambiguous operation for later reconciliation.
 
         Called by ``transaction()`` when the commit raises before the
-        outcome is observable.  No-op if the deque is full (the
-        oldest entry is silently evicted because the recovery is
-        bounded in cardinality).
+        outcome is observable.  Overflow fails closed and preserves
+        every already-recorded operation.
         """
+        if len(self._ambiguous_operations) >= self._ambiguous_operation_capacity:
+            self._writes_admitted = False
+            self._reads_admitted = False
+            self._writes_admitted_event.clear()
+            self._transition_state(DatabaseLifecycleState.FAILED_CLOSED)
+            raise DatabaseError("Ambiguous database operation buffer capacity exceeded")
         self._ambiguous_operations.append(op)
 
-    def set_pending_ambiguous_operation(self, op: AmbiguousDatabaseOperation) -> None:
-        """Attach an ambiguous-operation descriptor to the next transaction.
-
-        The ``transaction()`` context manager records this descriptor
-        when the commit outcome is indeterminate.  Callers must set
-        this *before* entering ``async with self.transaction():``.
-        """
-        self._pending_ambiguous_op = op
-
-    def clear_pending_ambiguous_operation(self) -> None:
-        """Clear the pending ambiguous-operation descriptor.
-
-        Called by ``transaction()`` after recording or when the commit
-        succeeds.  Also callable by the caller on the happy path.
-        """
-        self._pending_ambiguous_op = None
+    def acknowledge_ambiguous_operation(self, op: AmbiguousDatabaseOperation) -> None:
+        """Remove one operation after its durable convergence is proven."""
+        with suppress(ValueError):
+            self._ambiguous_operations.remove(op)
 
     def _transition_state(self, new_state: DatabaseLifecycleState) -> None:
         """Transition the lifecycle state, validating the move.
@@ -494,7 +479,7 @@ class Database:
             return "operational_error"
         return "other"
 
-    async def connect(self) -> None:
+    async def connect(self, *, admit: bool = True) -> None:
         """Open the connection and set pragmas.
 
         Lifecycle state transitions are routed through
@@ -523,8 +508,12 @@ class Database:
                 )
                 self._connection_epoch += 1
                 self._writes_admitted = False
-                self._reads_admitted = True
-                self._transition_state(DatabaseLifecycleState.READY)
+                self._reads_admitted = admit
+                if admit:
+                    self._transition_state(DatabaseLifecycleState.READY)
+                else:
+                    self._writes_admitted_event.clear()
+                    self._transition_state(DatabaseLifecycleState.RECOVERING)
                 return
             self._conn = await aiosqlite.connect(self._path)
             self._conn.row_factory = aiosqlite.Row
@@ -535,10 +524,14 @@ class Database:
             await self._conn.execute(f"PRAGMA synchronous = {self._synchronous}")
             await self._conn.commit()
             self._connection_epoch += 1
-            self._writes_admitted = True
-            self._reads_admitted = True
-            self._writes_admitted_event.set()
-            self._transition_state(DatabaseLifecycleState.READY)
+            self._writes_admitted = admit
+            self._reads_admitted = admit
+            if admit:
+                self._writes_admitted_event.set()
+                self._transition_state(DatabaseLifecycleState.READY)
+            else:
+                self._writes_admitted_event.clear()
+                self._transition_state(DatabaseLifecycleState.RECOVERING)
         except asyncio.CancelledError:
             await self._close_failed_connection()
             self._transition_state(DatabaseLifecycleState.DISCONNECTED)
@@ -860,6 +853,11 @@ class Database:
                 self._invalidated_reason
                 or "Connection invalidated by indeterminate commit outcome"
             )
+        recovery_context = getattr(self, "_recovery_transaction", None)
+        if not self._reads_admitted and not (
+            recovery_context is not None and recovery_context.get()
+        ):
+            raise DatabaseError("Database reads are not admitted")
         # ContextVar inheritance is the transaction's intentional
         # piggyback signal.  A child task created inside the transaction
         # inherits ``_in_transaction_context`` but not the identity of the
@@ -887,7 +885,7 @@ class Database:
         insert succeeded, False otherwise.
         """
         try:
-            async with self.transaction():
+            async with self.transaction(_internal_recovery=True):
                 await self._execute_cursor(
                     "INSERT INTO health_probe (probe_at) VALUES (CURRENT_TIMESTAMP)"
                 )
@@ -1156,7 +1154,12 @@ class Database:
                 raise DatabaseError(f"Fetch one failed: {exc}") from exc
 
     @asynccontextmanager
-    async def transaction(self) -> AsyncGenerator[None]:
+    async def transaction(
+        self,
+        *,
+        ambiguous_operation: AmbiguousDatabaseOperation | None = None,
+        _internal_recovery: bool = False,
+    ) -> AsyncGenerator[None]:
         """Execute a serialized write transaction.
 
         Uses ``BEGIN IMMEDIATE`` to serialize writers predictably.
@@ -1192,6 +1195,20 @@ class Database:
             )
         if self._conn is None:
             raise DatabaseError("Database not connected")
+        if self._read_only:
+            raise DatabaseError("Database is read-only")
+        recovery_context = getattr(self, "_recovery_transaction", None)
+        if recovery_context is None:
+            recovery_context = ContextVar(
+                "database_recovery_transaction_compat", default=False
+            )
+            self._recovery_transaction = recovery_context
+        if (
+            not self._writes_admitted
+            and not _internal_recovery
+            and not recovery_context.get()
+        ):
+            raise DatabaseError("Database writes are not admitted")
 
         # Fast path: piggyback on an existing transaction only when
         # the current task inherited the transaction context (via
@@ -1240,6 +1257,7 @@ class Database:
             self._total_transactions += 1
             owner = asyncio.current_task()
             owner_token = self._transaction_owner.set(owner)
+            recovery_token = self._recovery_transaction.set(_internal_recovery)
             state = _TransactionState()
             state_context = getattr(self, "_transaction_state", None)
             if state_context is None:
@@ -1313,9 +1331,14 @@ class Database:
                     # Plan 027: record the pending ambiguous operation
                     # before raising so the recovery controller can
                     # reconcile it after a replacement connection is opened.
-                    if self._pending_ambiguous_op is not None:
-                        self.record_ambiguous_operation(self._pending_ambiguous_op)
-                        self._pending_ambiguous_op = None
+                    if ambiguous_operation is not None:
+                        try:
+                            self.record_ambiguous_operation(ambiguous_operation)
+                        except DatabaseError:
+                            await self._invalidate_connection(
+                                "ambiguous operation buffer overflow"
+                            )
+                            raise
                     raise DatabaseCommitError(
                         "Connection was replaced while transaction was open",
                         rollback_attempted=False,
@@ -1356,12 +1379,6 @@ class Database:
                     await self._commit_connection()
                 except Exception as exc:
                     commit_exc = exc
-
-                # Plan 027: clear the pending ambiguous operation on
-                # the happy path (commit succeeded) so it is not
-                # spuriously recorded on a later failure.
-                if commit_exc is None:
-                    self._pending_ambiguous_op = None
 
                 if commit_exc is not None:
                     rollback_attempted = False
@@ -1413,12 +1430,14 @@ class Database:
                     # ambiguous operation so the recovery controller
                     # can reconcile it after a replacement connection
                     # is opened.
-                    if (
-                        outcome == "indeterminate"
-                        and self._pending_ambiguous_op is not None
-                    ):
-                        self.record_ambiguous_operation(self._pending_ambiguous_op)
-                        self._pending_ambiguous_op = None
+                    if outcome == "indeterminate" and ambiguous_operation is not None:
+                        try:
+                            self.record_ambiguous_operation(ambiguous_operation)
+                        except DatabaseError:
+                            await self._invalidate_connection(
+                                "ambiguous operation buffer overflow"
+                            )
+                            raise
                     self._last_rollback_attempted = rollback_attempted
                     self._last_rollback_succeeded = rollback_succeeded
                     self._last_in_transaction_before_rollback = (
@@ -1467,4 +1486,5 @@ class Database:
                 state.active = False
                 state_context.reset(state_token)
                 self._in_transaction_context.reset(ctx_token)
+                self._recovery_transaction.reset(recovery_token)
                 self._transaction_owner.reset(owner_token)

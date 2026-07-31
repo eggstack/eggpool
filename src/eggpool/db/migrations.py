@@ -82,7 +82,7 @@ class MigrationRunner:
     def __init__(self, db: Database) -> None:
         self._db = db
 
-    async def run(self) -> None:
+    async def run(self, *, internal_recovery: bool = False) -> None:
         """Apply all pending migrations in order.
 
         Each migration file is applied in a single ``db.transaction()``
@@ -90,8 +90,8 @@ class MigrationRunner:
         statement failure the entire migration is rolled back and the
         database is left untouched.
         """
-        await self._ensure_migrations_table()
-        applied = await self._applied_versions()
+        await self._ensure_migrations_table(internal_recovery=internal_recovery)
+        applied = await self._applied_versions(internal_recovery=internal_recovery)
         pending = self._pending_migrations(applied)
 
         if not pending:
@@ -103,7 +103,7 @@ class MigrationRunner:
             statements = _split_statements(sql)
             logger.info("Applying migration %04d: %s", version, path.name)
             try:
-                async with self._db.transaction():
+                async with self._db.transaction(_internal_recovery=internal_recovery):
                     for stmt in statements:
                         await self._db._execute_cursor(stmt)  # pyright: ignore[reportPrivateUsage] -- DDL requires raw cursor, safe inside transaction
                     await self._db._execute_cursor(  # pyright: ignore[reportPrivateUsage] -- DDL requires raw cursor, safe inside transaction
@@ -115,9 +115,11 @@ class MigrationRunner:
 
         logger.info("Applied %d migration(s)", len(pending))
 
-    async def _ensure_migrations_table(self) -> None:
+    async def _ensure_migrations_table(
+        self, *, internal_recovery: bool = False
+    ) -> None:
         """Create the _migrations tracking table if it doesn't exist."""
-        async with self._db.transaction():
+        async with self._db.transaction(_internal_recovery=internal_recovery):
             await self._db._execute_cursor(  # pyright: ignore[reportPrivateUsage] -- DDL requires raw cursor, safe inside transaction
                 """
                 CREATE TABLE IF NOT EXISTS _migrations (
@@ -128,9 +130,10 @@ class MigrationRunner:
                 """
             )
 
-    async def _applied_versions(self) -> set[int]:
+    async def _applied_versions(self, *, internal_recovery: bool = False) -> set[int]:
         """Return set of already-applied migration versions."""
-        rows = await self._db.fetch_all("SELECT version FROM _migrations")
+        async with self._db.transaction(_internal_recovery=internal_recovery):
+            rows = await self._db.fetch_all("SELECT version FROM _migrations")
         return {row["version"] for row in rows}
 
     def _pending_migrations(self, applied: set[int]) -> dict[int, Path]:

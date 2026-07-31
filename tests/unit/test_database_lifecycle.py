@@ -134,8 +134,8 @@ async def test_record_ambiguous_operation_appends_to_deque(test_db: Database) ->
     assert pending[2].operation_id == "req-2"
 
 
-async def test_drain_ambiguous_operations_clears_deque(test_db: Database) -> None:
-    """Drain returns and clears the deque."""
+async def test_acknowledge_ambiguous_operation_removes_one(test_db: Database) -> None:
+    """Acknowledgement removes only the converged operation."""
     op = AmbiguousDatabaseOperation(
         operation_kind="dispatch_selection",
         connection_epoch=1,
@@ -147,8 +147,8 @@ async def test_drain_ambiguous_operations_clears_deque(test_db: Database) -> Non
         reconciliation_strategy="dispatch",
     )
     test_db.record_ambiguous_operation(op)
-    drained = test_db.drain_ambiguous_operations()
-    assert len(drained) == 1
+    assert test_db.pending_ambiguous_operations() == (op,)
+    test_db.acknowledge_ambiguous_operation(op)
     assert test_db.pending_ambiguous_operations() == ()
 
 

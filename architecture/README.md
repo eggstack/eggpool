@@ -4318,7 +4318,7 @@ adopting unresolved work for recovery.
 
 ## Database Connection Recovery (Plan 027)
 
-Allows EggPool to recover safely from an invalidated or indeterminate SQLite connection without requiring a process restart. The process detaches a suspect connection, opens a replacement, reconciles ambiguous operations, and restores readiness.
+Allows EggPool to recover safely from an invalidated or indeterminate SQLite connection without requiring a process restart. The process detaches a suspect connection, opens an unadmitted replacement, verifies it, reconciles ambiguous operations, and restores readiness only after every correctness check succeeds.
 
 ### Design principle
 
@@ -4330,6 +4330,8 @@ Fail closed on uncertain transaction outcome, but recover the process automatica
 - `connection_epoch` property — incremented on every successful `connect()` so long-lived components detect replacement.
 - `DatabaseRecoveryController` (`src/eggpool/db/recovery.py`) — single-flight recovery with bounded retry/escalation, reason-class tracking, and `RecoverySnapshot` diagnostics.
 - `AmbiguousDatabaseOperation` — frozen dataclass capturing indeterminate commit metadata for dispatch/finalization reconciliation.
+- `Database.transaction(ambiguous_operation=...)` — transaction-owned ambiguity metadata installed after lock acquisition; waiting tasks cannot overwrite it.
+- Ambiguity retention is bounded but lossless: convergence acknowledges one operation at a time, while unresolved results remain queued and overflow fails closed.
 - `DatabaseRollbackError` — typed error when ROLLBACK itself fails after a body exception, distinct from `DatabaseCommitError`.
 - `_safe_rollback()` helper with bounded diagnostics.
 - `[database.recovery]` config section with `max_attempts`, `initial_backoff_ms`, `max_backoff_ms`, `reconciliation_timeout_s`, `fail_process_on_exhaustion`.
@@ -4340,12 +4342,12 @@ Fail closed on uncertain transaction outcome, but recover the process automatica
 
 1. `Database._invalidate_connection()` transitions through `INVALIDATING → INVALIDATED` and notifies the recovery controller.
 2. The controller starts a single-flight recovery task; concurrent callers join the same attempt.
-3. The suspect connection is closed and a replacement opened.
-4. For in-memory DBs, migrations are re-run; for file-backed DBs, schema compatibility is verified.
-5. A writable probe confirms the replacement connection is usable.
-6. Ambiguous operations are reconciled via built-in reconcilers (`dispatch`, `finalization`, `boundary`).
+3. The suspect connection is closed and an unadmitted replacement opened.
+4. For in-memory DBs, migrations are re-run privately; for file-backed DBs, schema compatibility is verified privately.
+5. A private writable probe confirms the replacement connection is usable while public transactions remain rejected.
+6. Ambiguous operations are reconciled via built-in reconcilers (`dispatch`, `finalization`); unresolved operations remain queued.
 7. On success, `writes_admitted` and `reads_admitted` are restored; readiness recovers.
-8. On exhaustion, the database enters `failed_closed` state with precise diagnostics.
+8. On any failed attempt, the candidate is closed and discarded. On exhaustion, the database enters `failed_closed` state with precise diagnostics.
 
 ### Tests
 

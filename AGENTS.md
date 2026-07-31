@@ -133,7 +133,7 @@ stream-specific regressions.
 - **Provider payload lifecycle**: `ProviderBoundRequest` is the sole provider-payload authority after client parsing. Copy-on-write generation-aware mutations, one final serialization cache, frozen before dispatch. `ProxyRequestContext.upstream_body` is a compatibility mirror only.
 - **Dispatch persistence contract**: `persist_dispatch_bundles()` is binary: a validated result list or an exception; rollback never returns placeholder identities. `PersistedDispatchResult` requires non-empty request/reservation IDs and a positive attempt ID. `DispatchPersistenceWriter` fans batch failures to every waiter, keeps failed work out of persisted counters, and accepts submissions only from its owner event loop.
 - **Background tasks**: `src/eggpool/background/` — `TaskSupervisor`, fixed-delay scheduler. Process-owned tasks survive generation swaps; generation-leased tasks retire with their generation.
-- **Database recovery**: `DatabaseRecoveryController` — single-flight recovery, bounded retry, transaction reconciliation.
+- **Database recovery**: `DatabaseRecoveryController` — single-flight, bounded recovery keeps public reads/writes closed until candidate schema verification, private writable probing, and ambiguity reconciliation succeed; unresolved work is retained and buffer overflow fails closed.
 - **Failure effects and quarantine**: `classify_failure_effects()` centralizes consequences. `ModelQuarantine` — bounded state machine with corroboration before terminal withdrawal.
 
 ## Gotchas
@@ -156,6 +156,7 @@ stream-specific regressions.
 - **`/readyz` never performs a write**: reads a cached probe snapshot.
 - **Readiness probe is process-owned**: survives generation swaps.
 - **Process transitions execute inside `db.transaction()`**: atomic rollback on any failure.
+- **Ambiguous-operation ownership**: pass `ambiguous_operation=` directly to `db.transaction()`; never use a shared pending descriptor. The descriptor is installed only after lock acquisition and is acknowledged only after durable convergence.
 - **Terminal lifecycle**: streaming 4xx paths defer terminal work to `_handle_exhausted()`; they must not finalize and then raise into a second finalizer. Capability rejection is a client error with no provider penalty and uses the same retained terminal job as normal completion and cancellation.
 - **SSE diagnostics**: `stream_diagnostics` exposes canonical/compatibility completion, premature EOF, HTTPX transport, and provider-bound first-byte/idle timeout outcomes. Historical lifetime fields remain bounded compatibility metadata but no lifetime timer runs. Each last-event record carries configured limits and bounded timing evidence; stream content and credentials are never persisted.
 

@@ -2,16 +2,11 @@
 
 Verifies the finalization reconciler (``_reconcile_finalization``) in
 ``src/eggpool/db/recovery.py`` and the production wiring of
-``set_pending_ambiguous_operation`` in the finalizer.
+transaction-owned ambiguity metadata in the finalizer.
 
-NOTE: ``_reconcile_finalization`` checks ``"status" in req`` to detect
-whether the fetched row contains a ``status`` column.  ``aiosqlite.Row``
-objects do not support the ``in`` operator for key membership, so the
-check always evaluates to ``False``.  This means every existing row
-produces an empty status string and falls through to the
-``"conflicting"`` branch.  The tests below document this actual
-behaviour.  A follow-up should fix the reconciler to use
-``req.keys()`` or direct attribute access.
+The reconciler uses the durable request status to distinguish a
+converged terminal operation from an operation that remains retryable
+or ambiguous.
 """
 
 from __future__ import annotations
@@ -28,6 +23,7 @@ from eggpool.db.connection import (
 )
 from eggpool.db.migrations import MigrationRunner
 from eggpool.db.recovery import DatabaseRecoveryController, ReconciliationOutcome
+from eggpool.errors import DatabaseError
 from eggpool.models.config import DatabaseRecoveryConfig
 
 pytestmark = pytest.mark.asyncio
@@ -106,82 +102,76 @@ async def test_reconcile_finalization_absent_no_request(
     assert outcome == "absent"
 
 
-async def test_reconcile_finalization_existing_row_yields_conflicting(
+async def test_reconcile_finalization_existing_row_yields_committed(
     test_db: Database,
 ) -> None:
-    """An existing request row yields 'conflicting' (aiosqlite.Row bug).
-
-    ``_reconcile_finalization`` checks ``"status" in req`` to detect
-    column presence, but ``aiosqlite.Row`` does not support ``in`` for
-    key membership.  The status string is therefore always empty and
-    the function falls through to ``"conflicting"``.
-    """
+    """A terminal request row is durably converged."""
     from eggpool.db.recovery import _reconcile_finalization
 
     request_id = await _create_request(test_db, status="completed")
     op = _make_finalization_op(request_id)
     outcome = await _reconcile_finalization(test_db, op)
-    assert outcome == "conflicting"
+    assert outcome == "committed"
 
 
-async def test_reconcile_finalization_pending_row_yields_conflicting(
+async def test_reconcile_finalization_pending_row_yields_absent(
     test_db: Database,
 ) -> None:
-    """A pending request row also yields 'conflicting' (same bug)."""
+    """A pending request remains absent from the terminal transition."""
     from eggpool.db.recovery import _reconcile_finalization
 
     request_id = await _create_request(test_db, status="pending")
     op = _make_finalization_op(request_id)
     outcome = await _reconcile_finalization(test_db, op)
-    assert outcome == "conflicting"
+    assert outcome == "absent"
 
 
-async def test_reconcile_finalization_failed_row_yields_conflicting(
+async def test_reconcile_finalization_failed_row_yields_committed(
     test_db: Database,
 ) -> None:
-    """A 'failed' request row yields 'conflicting' (same bug)."""
+    """A failed request is durably terminal."""
     from eggpool.db.recovery import _reconcile_finalization
 
     request_id = await _create_request(test_db, status="failed")
     op = _make_finalization_op(request_id)
     outcome = await _reconcile_finalization(test_db, op)
-    assert outcome == "conflicting"
+    assert outcome == "committed"
 
 
-async def test_reconcile_finalization_cancelled_row_yields_conflicting(
+async def test_reconcile_finalization_cancelled_row_yields_committed(
     test_db: Database,
 ) -> None:
-    """A 'cancelled' request row yields 'conflicting' (same bug)."""
+    """A cancelled request is durably terminal."""
     from eggpool.db.recovery import _reconcile_finalization
 
     request_id = await _create_request(test_db, status="cancelled")
     op = _make_finalization_op(request_id)
     outcome = await _reconcile_finalization(test_db, op)
-    assert outcome == "conflicting"
+    assert outcome == "committed"
 
 
-async def test_reconcile_finalization_client_disconnected_yields_conflicting(
+async def test_reconcile_finalization_client_disconnected_yields_committed(
     test_db: Database,
 ) -> None:
-    """A 'client_disconnected' row yields 'conflicting' (same bug)."""
+    """A client-disconnected request is durably terminal."""
     from eggpool.db.recovery import _reconcile_finalization
 
     request_id = await _create_request(test_db, status="client_disconnected")
     op = _make_finalization_op(request_id)
     outcome = await _reconcile_finalization(test_db, op)
-    assert outcome == "conflicting"
+    assert outcome == "committed"
 
 
-async def test_reconcile_finalization_weird_status_yields_conflicting(
+async def test_reconcile_finalization_weird_status_remains_unresolved(
     test_db: Database,
 ) -> None:
-    """An unrecognized status also yields 'conflicting'."""
+    """An unrecognized status remains unresolved."""
     from eggpool.db.recovery import _reconcile_finalization
 
     request_id = await _create_request(test_db, status="weird_status")
     op = _make_finalization_op(request_id)
     outcome = await _reconcile_finalization(test_db, op)
-    assert outcome == "conflicting"
+    assert outcome == "unresolved_conflict"
 
 
 async def test_reconcile_finalization_empty_deque_yields_nothing(
@@ -204,54 +194,28 @@ async def test_reconcile_finalization_empty_deque_yields_nothing(
 
 
 # ------------------------------------------------------------------
-# set_pending_ambiguous_operation wiring tests
+# transaction-owned ambiguous-operation wiring tests
 # ------------------------------------------------------------------
 
 
-async def test_set_pending_ambiguous_op_for_finalization(
+async def test_transaction_owned_ambiguous_op_for_finalization(
     test_db: Database,
 ) -> None:
-    """set_pending_ambiguous_operation attaches the op for later recording.
-
-    The pending operation is stored on the database instance so the
-    ``transaction()`` context manager can record it when an
-    indeterminate commit failure occurs.
-    """
+    """A descriptor is supplied directly to its owning transaction."""
     request_id = await _create_request(test_db, status="pending")
     op = _make_finalization_op(request_id)
-    test_db.set_pending_ambiguous_operation(op)
-
-    assert test_db._pending_ambiguous_op is op
-
-    # Record it into the deque (simulating the transaction() path).
     test_db.record_ambiguous_operation(op)
     pending = test_db.pending_ambiguous_operations()
     assert len(pending) == 1
     assert pending[0].operation_kind == "request_finalization"
     assert pending[0].operation_id == str(request_id)
 
-    # Clean up the seam.
-    test_db.clear_pending_ambiguous_operation()
-    assert test_db._pending_ambiguous_op is None
-
-
-async def test_clear_pending_ambiguous_operation(
-    test_db: Database,
-) -> None:
-    """clear_pending_ambiguous_operation resets the descriptor."""
-    request_id = await _create_request(test_db, status="pending")
-    op = _make_finalization_op(request_id)
-    test_db.set_pending_ambiguous_operation(op)
-    assert test_db._pending_ambiguous_op is op
-    test_db.clear_pending_ambiguous_operation()
-    assert test_db._pending_ambiguous_op is None
-
 
 async def test_pending_ambiguous_ops_deque_is_bounded(
     test_db: Database,
 ) -> None:
-    """The ambiguous-operations deque evicts oldest entries when full."""
-    for i in range(130):
+    """The ambiguous-operations deque fails closed at capacity."""
+    for i in range(128):
         op = AmbiguousDatabaseOperation(
             operation_kind="request_finalization",
             connection_epoch=1,
@@ -263,10 +227,22 @@ async def test_pending_ambiguous_ops_deque_is_bounded(
             reconciliation_strategy="finalization",
         )
         test_db.record_ambiguous_operation(op)
+    with pytest.raises(DatabaseError, match="capacity"):
+        test_db.record_ambiguous_operation(
+            AmbiguousDatabaseOperation(
+                operation_kind="request_finalization",
+                connection_epoch=1,
+                operation_id="overflow",
+                idempotency_keys=(),
+                intended_status="completed",
+                precondition_facts=(),
+                created_at_monotonic=time.monotonic(),
+                reconciliation_strategy="finalization",
+            )
+        )
     pending = test_db.pending_ambiguous_operations()
-    # Deque maxlen is 128; oldest entries are evicted.
     assert len(pending) == 128
-    assert pending[0].operation_id == "2"
+    assert pending[0].operation_id == "0"
 
 
 # ------------------------------------------------------------------
@@ -347,41 +323,10 @@ async def test_recovery_reconciles_absent_finalization_ops(
         await asyncio.wait_for(controller.shutdown(), timeout=5.0)
 
 
-async def test_recovery_reconciles_conflicting_finalization_ops(
+async def test_reconciliation_acknowledges_converged_ops(
     test_db: Database,
 ) -> None:
-    """Recovery resolves conflicting finalization ops (unknown status)."""
-    config = DatabaseRecoveryConfig(
-        max_attempts=3,
-        initial_backoff_ms=10,
-        max_backoff_ms=50,
-        reconciliation_timeout_s=5.0,
-    )
-    controller = DatabaseRecoveryController(db=test_db, config=config)
-    try:
-        request_id = await _create_request(test_db, status="weird_status")
-        op = _make_finalization_op(request_id)
-        test_db.record_ambiguous_operation(op)
-
-        await controller.handle_invalidation(
-            reason="test recovery", reason_class="commit_failure"
-        )
-        ready = await asyncio.wait_for(
-            controller.wait_for_ready(timeout_s=10.0), timeout=10.0
-        )
-        assert ready is True
-
-        snap = controller.snapshot()
-        assert snap.last_attempt is not None
-        assert snap.last_attempt.ambiguous_resolved >= 1
-    finally:
-        await asyncio.wait_for(controller.shutdown(), timeout=5.0)
-
-
-async def test_drain_clears_ambiguous_ops_for_reconciliation(
-    test_db: Database,
-) -> None:
-    """drain_ambiguous_operations empties the deque for reconciliation."""
+    """Only converged operations are removed during reconciliation."""
     for i in range(3):
         request_id = await _create_request(
             test_db, status="completed", proxy_request_id=f"req-{i}"
@@ -390,9 +335,8 @@ async def test_drain_clears_ambiguous_ops_for_reconciliation(
         test_db.record_ambiguous_operation(op)
 
     assert len(test_db.pending_ambiguous_operations()) == 3
-    drained = test_db.drain_ambiguous_operations()
-    assert len(drained) == 3
-    assert len(test_db.pending_ambiguous_operations()) == 0
+    snapshot = test_db.pending_ambiguous_operations()
+    assert len(snapshot) == 3
 
     config = DatabaseRecoveryConfig(
         max_attempts=1,
@@ -402,9 +346,10 @@ async def test_drain_clears_ambiguous_ops_for_reconciliation(
     )
     controller = DatabaseRecoveryController(db=test_db, config=config)
     try:
-        resolved, failed = await controller._reconcile_ambiguous_operations(drained)
+        resolved, failed = await controller._reconcile_ambiguous_operations(snapshot)
         assert resolved == 3
         assert failed == 0
+        assert test_db.pending_ambiguous_operations() == ()
     finally:
         await asyncio.wait_for(controller.shutdown(), timeout=5.0)
 
@@ -438,7 +383,7 @@ async def test_unknown_strategy_yields_conflicting(
     controller = DatabaseRecoveryController(db=test_db, config=config)
     try:
         result = await controller._dispatch_reconciler(op)
-        assert result.outcome == "conflicting"
+        assert result.outcome == "unresolved_unknown_strategy"
         assert result.error_class == "UnknownStrategy"
     finally:
         await asyncio.wait_for(controller.shutdown(), timeout=5.0)

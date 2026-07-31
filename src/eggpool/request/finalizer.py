@@ -553,17 +553,15 @@ class RequestFinalizer:
             AmbiguousDatabaseOperation,
         )
 
-        self._db.set_pending_ambiguous_operation(
-            AmbiguousDatabaseOperation(
-                operation_id=selected.db_request_id,
-                operation_kind="request_finalization",
-                connection_epoch=self._db.connection_epoch,
-                idempotency_keys=(("attempt_number", str(selected.attempt_number)),),
-                intended_status=self._outcome_to_status(data.outcome),
-                precondition_facts=(),
-                created_at_monotonic=time.monotonic(),
-                reconciliation_strategy="finalization",
-            )
+        ambiguous_operation = AmbiguousDatabaseOperation(
+            operation_id=selected.db_request_id,
+            operation_kind="request_finalization",
+            connection_epoch=self._db.connection_epoch,
+            idempotency_keys=(("attempt_number", str(selected.attempt_number)),),
+            intended_status=self._outcome_to_status(data.outcome),
+            precondition_facts=(),
+            created_at_monotonic=time.monotonic(),
+            reconciliation_strategy="finalization",
         )
 
         # Plan 028 Workstream G: precompute ALL diagnostic serialization
@@ -575,7 +573,7 @@ class RequestFinalizer:
         status = self._outcome_to_status(data.outcome)
         retry_count = max(0, selected.attempt_number - 1)
 
-        async with self._db.transaction():
+        async with self._db.transaction(ambiguous_operation=ambiguous_operation):
             # 3. Finalize request only if pending (idempotent)
             transitioned = await self._request_repo.finalize_if_pending(
                 request_id=db_request_id,

@@ -1,8 +1,8 @@
 """Dispatch reconciliation tests.
 
 Verifies the dispatch reconciler (``_reconcile_dispatch``), the
-pending-ambiguous-operation lifecycle, and the production wiring
-of ``set_pending_ambiguous_operation`` in the transaction commit path.
+transaction-owned ambiguous-operation lifecycle, and the production
+wiring in the transaction commit path.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from eggpool.db.connection import (
 )
 from eggpool.db.migrations import MigrationRunner
 from eggpool.db.recovery import DatabaseRecoveryController
-from eggpool.errors import DatabaseCommitError
+from eggpool.errors import DatabaseCommitError, DatabaseError
 from eggpool.models.config import DatabaseRecoveryConfig
 
 if TYPE_CHECKING:
@@ -59,18 +59,16 @@ async def test_db() -> Database:
     return db
 
 
-async def test_set_pending_ambiguous_operation_records_on_indeterminate(
+async def test_transaction_descriptor_records_on_indeterminate(
     test_db: Database,
 ) -> None:
     """Pending ambiguous op is recorded in the deque on indeterminate commit."""
     op = _make_ambiguous_op(proxy_request_id="req-indet")
-    test_db.set_pending_ambiguous_operation(op)
-
     test_db.set_test_inject_commit_call(RuntimeError("simulated commit failure"))
     test_db.set_test_inject_in_transaction_before_rollback(False)
 
     with pytest.raises(DatabaseCommitError) as exc_info:
-        async with test_db.transaction():
+        async with test_db.transaction(ambiguous_operation=op):
             await test_db.execute_returning("SELECT 1")
 
     assert exc_info.value.outcome == "indeterminate"
@@ -79,46 +77,79 @@ async def test_set_pending_ambiguous_operation_records_on_indeterminate(
     assert len(pending) == 1
     assert pending[0].operation_id == "req-indet"
 
-    # The pending slot itself is cleared after recording.
-    assert test_db._pending_ambiguous_op is None  # type: ignore[reportPrivateUsage]
-
     test_db.set_test_inject_commit_call(None)
     test_db.set_test_inject_in_transaction_before_rollback(None)
 
 
-async def test_clear_pending_on_successful_commit(test_db: Database) -> None:
-    """Pending ambiguous op is cleared on the happy path (commit succeeds)."""
+async def test_descriptor_is_not_recorded_on_successful_commit(
+    test_db: Database,
+) -> None:
+    """A descriptor is not recorded on the happy path."""
     op = _make_ambiguous_op(proxy_request_id="req-happy")
-    test_db.set_pending_ambiguous_operation(op)
-
-    async with test_db.transaction():
+    async with test_db.transaction(ambiguous_operation=op):
         await test_db.execute_returning("SELECT 1")
 
-    # Happy path: pending slot is cleared, deque is empty.
-    assert test_db._pending_ambiguous_op is None  # type: ignore[reportPrivateUsage]
+    # Happy path: no ambiguity is recorded.
     assert test_db.pending_ambiguous_operations() == ()
 
 
-async def test_clear_pending_on_indeterminate_recorded(test_db: Database) -> None:
-    """On indeterminate failure the op moves from pending slot to deque."""
+async def test_descriptor_is_recorded_once_on_indeterminate(
+    test_db: Database,
+) -> None:
+    """On indeterminate failure the operation is recorded once."""
     op = _make_ambiguous_op(proxy_request_id="req-move")
-    test_db.set_pending_ambiguous_operation(op)
-
     test_db.set_test_inject_commit_call(RuntimeError("simulated failure"))
     test_db.set_test_inject_in_transaction_before_rollback(False)
 
     with pytest.raises(DatabaseCommitError):
-        async with test_db.transaction():
+        async with test_db.transaction(ambiguous_operation=op):
             await test_db.execute_returning("SELECT 1")
 
     # Pending slot is cleared, operation is in the deque.
-    assert test_db._pending_ambiguous_op is None  # type: ignore[reportPrivateUsage]
+    assert len(test_db.pending_ambiguous_operations()) == 1
     pending = test_db.pending_ambiguous_operations()
     assert len(pending) == 1
     assert pending[0].operation_id == "req-move"
 
     test_db.set_test_inject_commit_call(None)
     test_db.set_test_inject_in_transaction_before_rollback(None)
+
+
+async def test_concurrent_transactions_keep_descriptor_with_owner(
+    test_db: Database,
+) -> None:
+    """A waiter cannot overwrite the descriptor of the lock owner."""
+    owner_entered = asyncio.Event()
+    waiter_started = asyncio.Event()
+    release_owner = asyncio.Event()
+    owner_op = _make_ambiguous_op(proxy_request_id="owner")
+    waiter_op = _make_ambiguous_op(proxy_request_id="waiter")
+
+    async def owner() -> None:
+        test_db.set_test_inject_commit_call(RuntimeError("ambiguous owner"))
+        test_db.set_test_inject_in_transaction_before_rollback(False)
+        with pytest.raises(DatabaseCommitError):
+            async with test_db.transaction(ambiguous_operation=owner_op):
+                owner_entered.set()
+                await release_owner.wait()
+
+    async def waiter() -> None:
+        await owner_entered.wait()
+        waiter_started.set()
+        with pytest.raises(DatabaseError):  # connection is invalidated by owner
+            async with test_db.transaction(ambiguous_operation=waiter_op):
+                pass
+
+    owner_task = asyncio.create_task(owner())
+    waiter_task = asyncio.create_task(waiter())
+    await owner_entered.wait()
+    await waiter_started.wait()
+    release_owner.set()
+    await asyncio.gather(owner_task, waiter_task)
+
+    assert [op.operation_id for op in test_db.pending_ambiguous_operations()] == [
+        "owner"
+    ]
 
 
 async def test_reconcile_dispatch_committed_complete(test_db: Database) -> None:
@@ -264,6 +295,7 @@ async def test_pending_ambiguous_ops_diagnostics(test_db: Database) -> None:
     diags = test_db.diagnostics()
     assert diags["pending_ambiguous_operations"] == 2
 
-    test_db.drain_ambiguous_operations()
+    for op in test_db.pending_ambiguous_operations():
+        test_db.acknowledge_ambiguous_operation(op)
     diags = test_db.diagnostics()
     assert diags["pending_ambiguous_operations"] == 0

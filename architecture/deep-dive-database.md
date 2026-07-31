@@ -34,7 +34,7 @@ SQLite via aiosqlite with WAL mode provides the durable storage layer. Single-co
 aiosqlite wrapper with:
 - WAL mode enabled
 - Single-connection serialization via lock + ContextVar
-- Transaction management: `async with db.transaction():`
+- Transaction management: `async with db.transaction(ambiguous_operation=...):`; ambiguity metadata belongs to the lock-owning transaction
 - Readiness probes: `probe_writable()` with owned transactions
 - `Database.vacuum()` — only sanctioned path for VACUUM
 - Plan 027: `DatabaseLifecycleState` enum with explicit states
@@ -46,6 +46,12 @@ aiosqlite wrapper with:
 - Plan 027: `_safe_rollback()` helper with bounded diagnostics
 - Plan 027: `AmbiguousDatabaseOperation` frozen dataclass for
   indeterminate commit outcomes
+- Plan 060: connection opening and public admission are separate; recovery
+  candidates remain closed to public reads/writes until schema verification,
+  a private writable probe, and reconciliation complete
+- Plan 060: ambiguity buffers acknowledge operations individually only after
+  convergence; unresolved results remain queued and capacity overflow fails
+  closed rather than evicting older work
 
 ### `db/recovery.py` — DatabaseRecoveryController
 
@@ -55,10 +61,11 @@ Plan 027: Process-owned single-flight recovery controller.
 - Stops admission of new correctness-critical writes
 - Marks readiness false for the duration of recovery
 - Detaches and closes the suspect connection with bounded timeout
-- Opens a fresh connection and re-runs migrations (in-memory DBs)
+- Opens an unadmitted fresh connection and re-runs migrations (in-memory DBs)
   or verifies schema compatibility (file-backed DBs)
-- Runs a writable probe to confirm the replacement connection is usable
-- Reconciles ambiguous operations via built-in reconcilers
+- Runs a private writable probe to confirm the replacement connection is usable
+- Reconciles ambiguous operations via built-in reconcilers; only durable
+  convergence is acknowledged and unresolved operations remain queued
 - Retries with bounded exponential backoff (`[database.recovery]` config)
 - Single-flight: concurrent callers join the same recovery attempt
 - `RecoverySnapshot` for diagnostics (state, attempts, waiters, reasons)

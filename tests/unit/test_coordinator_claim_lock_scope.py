@@ -267,12 +267,12 @@ async def test_db_io_runs_outside_selection_claim_lock() -> None:
         original_tx = coord._db.transaction
 
         @asynccontextmanager
-        async def instrumented_transaction() -> AsyncIterator[None]:
+        async def instrumented_transaction(**kwargs: object) -> AsyncIterator[None]:
             if claim_lock_held.is_set():
                 overlap["overlap"] = True
             db_open.set()
             try:
-                async with original_tx():
+                async with original_tx(**kwargs):
                     yield None
             finally:
                 db_open.clear()
