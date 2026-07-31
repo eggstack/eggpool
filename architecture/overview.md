@@ -49,7 +49,7 @@ EggPool is a lightweight, LAN-hosted proxy that aggregates multiple LLM provider
 4. **Provider Contract** — `compose_provider_url()` + `build_upstream_headers()` from provider config
 5. **Transcoding** — Body translated if client protocol ≠ upstream protocol
 6. **Proxy** — Request sent via `ProviderClientPool` httpx client
-7. **Streaming** — SSE frames parsed by `IncrementalSSEObserver`; transcoded if needed
+7. **Streaming** — one bounded `SSEDecoder` frames each upstream stream; shared frames are observed and transcoded if needed
 8. **Finalization** — Usage recorded, reservations released, health updated
 
 ## Component Index

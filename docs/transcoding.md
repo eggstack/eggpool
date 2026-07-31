@@ -13,7 +13,18 @@ The transcoder sits in the request path and:
 1. **Rewrites the request body** before dispatch (OpenAI fields → Anthropic fields or vice versa).
 2. **Decodes the response body** back to the client's expected format.
 3. **Re-renders non-retryable errors** in the client protocol so error handling stays uniform.
-4. **Translates streaming SSE events** chunk-by-chunk in real time.
+4. **Translates streaming SSE events** from one shared bounded frame stream in real time.
+
+### Streaming hot path
+
+`RequestCoordinator` creates one `SSEDecoder` for each upstream stream. It owns
+UTF-8 decoding, line-ending normalization, multiline `data:` assembly, and
+bounds incomplete input to 64 KiB. Each `DecodedSSEFrame` is then delivered to
+the completion/usage observer and, when needed, the selected transcoder.
+`DecodedSSEFrame.json_object()` lazily caches a parsed object so two consumers
+never parse the same frame twice. Concrete transcoders do not parse raw bytes;
+their `translate_frame()` and `finish()` methods are synchronous. Native
+protocol responses remain byte-for-byte pass-through apart from observation.
 
 Usage and cost fields are preserved exactly as the upstream reported them — no translation, no rounding, no loss.
 
@@ -542,7 +553,7 @@ The complete catalogue lives in `eggpool.transcoder.LOSS_WARNING_KINDS`.
 
 - **Body translation**: ~50µs per request. This is a pure Python dict transformation — no I/O, no network calls.
 - **Streaming translation**: One state machine per request. The state machine processes SSE frames incrementally — no buffering of the full stream.
-- **Memory**: The streaming transcoder holds a small frame buffer (max 64KB per incomplete SSE line) and a UTF-8 incremental decoder.
+- **Memory**: The shared decoder bounds each incomplete line/event to 64KB; the transcoder retains only protocol state and bounded tool/reasoning buffers.
 - **No additional network hops**: Transcoding happens inside the existing request path. There is no sidecar or proxy.
 
 The overhead is negligible compared to upstream latency (typically 200ms–30s). You will not measure a difference in p99 latency from transcoding alone.
@@ -552,15 +563,16 @@ The overhead is negligible compared to upstream latency (typically 200ms–30s).
 The streaming transcoder path is optimised to minimise per-chunk event-loop
 pressure when many transcoded streams are in flight concurrently:
 
-- **Single SSE observer**: Only the coordinator's `IncrementalSSEObserver`
-  observes upstream chunks. The transcoder no longer runs its own
-  observer for usage extraction — one parse/observe pass per upstream
-  chunk covers both translation and finalization. The transcoder's
+- **Shared frame fan-out**: The coordinator's bounded `SSEDecoder` owns the
+  only UTF-8/SSE framing pass. It sends each `DecodedSSEFrame` to
+  `IncrementalSSEObserver` and the transcoder; the transcoder no longer parses
+  raw bytes. Shared frames lazily cache JSON objects, so usage extraction and
+  translation do not repeat a parse. The transcoder's
   `usage` property returns a default `StreamUsageResult()`; callers
   should always read usage from the coordinator's observer.
-- **Synchronous `feed()` / `flush()`**: The streaming transcoder
-  interface is synchronous. The per-chunk work (incremental UTF-8
-  decoding, JSON parsing, nested dict construction, `json.dumps`)
+- **Synchronous frame translation**: The streaming transcoder's
+  interface is synchronous. The per-frame work (cached JSON parsing, nested
+  dict construction, `json.dumps`)
   performs no async I/O, so awaiting a coroutine per chunk is
   unnecessary scheduler overhead. Any future implementation that
   requires async I/O must not be placed in this per-chunk path without

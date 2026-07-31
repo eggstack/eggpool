@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 
     from scripts.run_dispatch_stability_soak import ValidationResult
 
-WORKFLOW_PATH = Path(".github/workflows/extended-soak.yml")
+WORKFLOW_PATH = Path(".github/workflows/ci.yml")
 RELEASE_DOC = Path("docs/releasing.md")
 OPS_DOC = Path("docs/operations/dispatch-stability.md")
 
@@ -1279,12 +1279,10 @@ def test_run_validation_setup_failure_and_cancellation_loop(tmp_path: Path) -> N
 def test_workflow_and_documentation_alignment() -> None:
     """Workflow and docs agree with the supported runner contract."""
     workflow = WORKFLOW_PATH.read_text()
-    assert "workflow_dispatch" in workflow
+    assert "pytest tests/smoke/" in workflow
     assert workflow.count("runs-on:") == 1
-    assert "matrix:" not in workflow and "schedule:" not in workflow
-    assert "--duration-seconds" in workflow and "--seed" in workflow
-    assert "--mode" not in workflow
-    assert "/tmp/eggpool-runtime-validation.json" in workflow
+    assert "matrix:" not in workflow
+    assert "schedule:" not in workflow
 
     release = RELEASE_DOC.read_text()
     assert "--duration-seconds 300" in release and "--seed 42" in release

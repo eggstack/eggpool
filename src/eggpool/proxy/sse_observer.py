@@ -1,16 +1,20 @@
-"""Incremental SSE observer for streaming proxy responses.
-
-Handles arbitrary chunk boundaries, CRLF/LF delimiters, unknown events,
-bounded incomplete-frame memory, and usage extraction.
-"""
+"""Frame-level stream completion and usage observation."""
 
 from __future__ import annotations
 
-import codecs
 import logging
 from dataclasses import dataclass, field
 
-from eggpool.jsonx import loads as jsonx_loads
+from eggpool.jsonx import loads as jsonx_loads  # compatibility patch surface
+from eggpool.proxy.sse import (
+    MAX_SSE_FRAME_BYTES,
+    DecodedSSEFrame,
+    SSEDecoder,
+    SSEDecodeResult,
+)
+from eggpool.proxy.sse import (
+    SSEFrame as FramedSSEFrame,
+)
 from eggpool.proxy.usage import (
     AnthropicStreamUsageExtractor,
     OpenAIStreamUsageExtractor,
@@ -19,19 +23,12 @@ from eggpool.proxy.usage import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Maximum UTF-8 bytes to retain for an incomplete SSE line or event.
-MAX_INCOMPLETE_FRAME_BYTES = 64 * 1024  # 64KB
-
-
-def _utf8_len(value: str) -> int:
-    """Return the UTF-8 byte length without allocating for ASCII strings."""
-    return len(value) if value.isascii() else len(value.encode("utf-8"))
+MAX_INCOMPLETE_FRAME_BYTES = MAX_SSE_FRAME_BYTES
 
 
 @dataclass(slots=True)
 class SSEFrame:
-    """A parsed SSE frame."""
+    """Legacy frame helper retained for callers importing the observer."""
 
     event: str = ""
     data_lines: list[str] = field(default_factory=list[str])
@@ -45,233 +42,145 @@ class SSEFrame:
         return self.data.strip() == "[DONE]"
 
 
-@dataclass(frozen=True, slots=True)
 class StreamCompletionSnapshot:
-    """Bounded protocol evidence collected while observing an SSE stream."""
+    __slots__ = (
+        "saw_payload",
+        "saw_terminal_event",
+        "terminal_kind",
+        "saw_usage_completion",
+        "incomplete_frame_at_eof",
+        "parser_error_count",
+        "bytes_observed",
+    )
 
-    saw_payload: bool
-    saw_terminal_event: bool
-    terminal_kind: str | None
-    saw_usage_completion: bool
-    incomplete_frame_at_eof: bool
-    parser_error_count: int
-    bytes_observed: int
+    def __init__(
+        self,
+        *,
+        saw_payload: bool,
+        saw_terminal_event: bool,
+        terminal_kind: str | None,
+        saw_usage_completion: bool,
+        incomplete_frame_at_eof: bool,
+        parser_error_count: int,
+        bytes_observed: int,
+    ) -> None:
+        self.saw_payload = saw_payload
+        self.saw_terminal_event = saw_terminal_event
+        self.terminal_kind = terminal_kind
+        self.saw_usage_completion = saw_usage_completion
+        self.incomplete_frame_at_eof = incomplete_frame_at_eof
+        self.parser_error_count = parser_error_count
+        self.bytes_observed = bytes_observed
 
 
 class IncrementalSSEObserver:
-    """Observes an SSE byte stream incrementally.
-
-    Handles:
-    - Arbitrary chunk boundaries (partial lines, split across chunks)
-    - CRLF and LF line endings
-    - Unknown event types (ignored gracefully)
-    - Bounded incomplete-frame memory
-    - Usage extraction from recognized events
-    - Tracking of bytes_emitted and first_byte_ms
-    - Proper SSE event assembly: accumulates data lines across blank lines
-
-    Instances are intended to be driven from a single coroutine
-    (the streaming response generator). The asyncio event loop
-    serializes access within that coroutine, so explicit
-    synchronization is not required.
-    """
+    """Observe already-framed SSE events without owning byte framing."""
 
     def __init__(self, protocol: str, *, provider_id: str | None = None) -> None:
         self._protocol = protocol
-        self._provider_id = provider_id
-        self._buffer = ""
-        self._bytes_emitted = 0
         self._usage_result = StreamUsageResult()
+        self._extractor = (
+            AnthropicStreamUsageExtractor(provider_id=provider_id)
+            if protocol == "anthropic"
+            else OpenAIStreamUsageExtractor(provider_id=provider_id)
+        )
+        self._compat_decoder = SSEDecoder()
+        self._bytes_observed = 0
         self._frame_count = 0
         self._error_count = 0
         self._structural_error_count = 0
-        # Telemetry must never terminate an otherwise valid byte stream.
-        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-        self._pending_cr = False
-        self._discarding_incomplete_line = False
-
-        # Current event state (for assembling multi-line data)
-        self._current_data_lines: list[str] = []
-        self._current_event = ""
-        self._current_event_bytes = 0
-        self._discarding_event = False
         self._saw_payload = False
         self._saw_terminal_event = False
         self._terminal_kind: str | None = None
         self._post_terminal_data = False
         self._incomplete_frame_at_eof = False
 
-        if protocol == "anthropic":
-            self._extractor = AnthropicStreamUsageExtractor(provider_id=provider_id)
-        else:
-            self._extractor = OpenAIStreamUsageExtractor(provider_id=provider_id)
+    def observe_bytes(self, chunk: bytes) -> None:
+        """Record transport bytes; framing is performed by the coordinator."""
+        self._bytes_observed += len(chunk)
 
     def observe(self, chunk: bytes) -> None:
-        """Process a chunk of bytes from the upstream stream.
+        """Compatibility adapter for callers that still provide raw bytes."""
+        self.observe_bytes(chunk)
+        for decoded in self._compat_decoder.feed(chunk):
+            self.observe_frame(decoded)
+        self._structural_error_count = self._compat_decoder.structural_error_count
+        self._error_count = max(self._error_count, self._structural_error_count)
 
-        Appends to the internal buffer, splits on line boundaries,
-        and processes complete SSE frames.
-        """
-        self._bytes_emitted += len(chunk)
-
-        # Decode and normalize line endings using incremental decoder
-        text = self._decoder.decode(chunk)
-        # Preserve a trailing CR until the next chunk so a CRLF split at the
-        # transport boundary is normalized to one newline, not two.
-        if self._pending_cr:
-            if text.startswith("\n"):
-                text = text[1:]
-            text = "\n" + text
-            self._pending_cr = False
-        if text.endswith("\r"):
-            text = text[:-1]
-            self._pending_cr = True
-        text = text.replace("\r\n", "\n").replace("\r", "\n")
-        lines = (self._buffer + text).split("\n")
-        incomplete_line = lines.pop()
-
-        # Process complete lines in one linear pass. Repeatedly splitting the
-        # remaining buffer copied the tail once per SSE line.
-        for line in lines:
-            if self._discarding_incomplete_line:
-                # The beginning of this line was discarded after exceeding the
-                # memory limit. Ignore its remainder rather than interpreting a
-                # truncated suffix as a new SSE field.
-                self._discarding_incomplete_line = False
-                continue
-            if not line:
-                # Blank line: terminate the current SSE event
-                self._flush_event()
-                continue
-
-            self._process_line(line)
-
-        # While discarding an oversized line, retain nothing until its newline
-        # arrives. Otherwise retain the one incomplete line for the next chunk.
-        self._buffer = "" if self._discarding_incomplete_line else incomplete_line
-
-        # Bound by encoded bytes, not Python characters. A non-ASCII character
-        # can occupy up to four UTF-8 bytes.
-        if _utf8_len(self._buffer) > MAX_INCOMPLETE_FRAME_BYTES:
-            logger.warning(
-                "SSE line exceeded %d bytes, discarding it",
-                MAX_INCOMPLETE_FRAME_BYTES,
-            )
-            self._error_count += 1
-            self._structural_error_count += 1
-            self._buffer = ""
-            self._discarding_incomplete_line = True
-            self._reset_event(discarding=True)
-
-    def _process_line(self, line: str) -> None:
-        """Process a single SSE line."""
-        self._frame_count += 1
-
-        if self._discarding_event:
+    def observe_frame(self, decoded: DecodedSSEFrame | FramedSSEFrame) -> None:
+        """Consume one shared decoded frame."""
+        frame = (
+            decoded
+            if isinstance(decoded, DecodedSSEFrame)
+            else DecodedSSEFrame(decoded)
+        )
+        payload = frame.frame.data
+        self._frame_count += len(frame.frame.fields or ())
+        if frame.frame.is_comment_only:
             return
-
-        # Ignore comments beginning with ':'
-        if line.startswith(":"):
+        if not any(name == "data" for name, _ in (frame.frame.fields or ())):
             return
-
-        # Parse field and optional value
-        if ":" in line:
-            field_name, _, value = line.partition(":")
-            # Accept both "data:value" and "data: value"
-            value = value.lstrip(" ")
-            if field_name == "data":
-                self._saw_payload = True
-                if self._saw_terminal_event:
-                    self._post_terminal_data = True
-                separator_bytes = 1 if self._current_data_lines else 0
-                event_bytes = (
-                    self._current_event_bytes + separator_bytes + _utf8_len(value)
-                )
-                if event_bytes > MAX_INCOMPLETE_FRAME_BYTES:
-                    logger.warning(
-                        "SSE event exceeded %d bytes, discarding telemetry",
-                        MAX_INCOMPLETE_FRAME_BYTES,
-                    )
-                    self._error_count += 1
-                    self._structural_error_count += 1
-                    self._reset_event(discarding=True)
-                    return
-                self._current_data_lines.append(value)
-                self._current_event_bytes = event_bytes
-            elif field_name == "event":
-                self._current_event = value
-        else:
-            # Line with no colon - treat as field with empty value
-            pass
-
-    def _flush_event(self) -> None:
-        """Flush the current accumulated event for processing."""
-        if self._discarding_event:
-            self._reset_event()
-            return
-        if not self._current_data_lines:
-            return
-
-        data = "\n".join(self._current_data_lines)
-        event = self._current_event
-        self._reset_event()
-
-        if data.strip() == "[DONE]":
+        if payload:
+            self._saw_payload = True
+        if self._saw_terminal_event and payload:
+            self._post_terminal_data = True
+        if payload.strip() == "[DONE]":
             if self._saw_terminal_event:
                 self._post_terminal_data = True
             else:
                 self._saw_terminal_event = True
                 self._terminal_kind = "openai_done"
             return
-
-        if event == "message_stop":
+        if frame.frame.event == "message_stop":
             if self._saw_terminal_event:
                 self._post_terminal_data = True
             else:
                 self._saw_terminal_event = True
                 self._terminal_kind = "anthropic_message_stop"
 
-        # OpenAI emits usage only in the final usage chunk. Ordinary content
-        # chunks always carry choices, so avoid decoding their JSON solely for
-        # telemetry. Malformed and unusual frames still take the validating path.
-        if self._protocol == "openai" and '"usage"' not in data and '"choices"' in data:
+        if (
+            self._protocol == "openai"
+            and '"usage"' not in payload
+            and '"choices"' in payload
+        ):
             return
-
+        parsed = frame.json_object(jsonx_loads)
+        if parsed is None:
+            self._error_count += 1
+            return
         try:
-            parsed_raw = jsonx_loads(data)
-            parsed = safe_dict(parsed_raw)
-            if parsed is None:
-                self._error_count += 1
-                logger.debug(
-                    "SSE data frame is not a JSON object (type=%s), ignoring",
-                    type(parsed_raw).__name__,
-                )
-                return
-            usage = self._extractor.extract(parsed)
-            if usage:
-                self._merge_usage(usage)
+            usage = self._extractor.extract(safe_dict(parsed) or {})
         except (ValueError, TypeError, AttributeError):
             self._error_count += 1
-            logger.debug("Malformed SSE data frame, ignoring")
+            logger.debug("Malformed SSE usage frame, ignoring")
+            return
+        if usage:
+            self._merge_usage(usage)
 
-    def _reset_event(self, *, discarding: bool = False) -> None:
-        """Release accumulated event data and set its discard state."""
-        self._current_data_lines.clear()
-        self._current_event_bytes = 0
-        self._discarding_event = discarding
-        self._current_event = ""
+    def finish(self, eof: SSEDecodeResult | None = None) -> None:
+        """Finish observation after the shared decoder has reached EOF."""
+        if eof is None:
+            eof = self._compat_decoder.finish()
+            for decoded in eof.frames:
+                self.observe_frame(decoded)
+        else:
+            for decoded in eof.frames:
+                self.observe_frame(decoded)
+        self._incomplete_frame_at_eof = eof.incomplete_frame
+        self._structural_error_count += (
+            eof.invalid_utf8_replacements + eof.discarded_frame_count
+        )
+
+    def flush(self) -> None:
+        """Compatibility alias for :meth:`finish`."""
+        self.finish()
+
+    @property
+    def _buffer(self) -> str:
+        """Compatibility view retained for bounded-buffer tests."""
+        return self._compat_decoder.line_buffer
 
     def _merge_usage(self, incoming: StreamUsageResult) -> None:
-        """Merge incoming usage into the accumulated result.
-
-        Token counters are additive. Provider-reported cost is replaced
-        with the latest non-null value when the incoming event is
-        marked ``is_complete``; otherwise the existing authoritative
-        value is preserved. This matches the convention that final
-        stream events supersede intermediate deltas — most providers
-        publish a single authoritative cost figure in the final usage
-        event rather than emitting incremental deltas across chunks.
-        """
         self._usage_result.input_tokens += incoming.input_tokens
         self._usage_result.output_tokens += incoming.output_tokens
         self._usage_result.cache_read_tokens += incoming.cache_read_tokens
@@ -286,8 +195,6 @@ class IncrementalSSEObserver:
                 )
                 self._usage_result.reported_cost_source = incoming.reported_cost_source
         elif incoming.reported_cost_microdollars is not None:
-            # Intermediate chunk surfaced a cost. Take it but keep
-            # tracking; a later ``is_complete`` chunk may supersede it.
             self._usage_result.reported_cost_microdollars = (
                 incoming.reported_cost_microdollars
             )
@@ -299,7 +206,7 @@ class IncrementalSSEObserver:
 
     @property
     def bytes_emitted(self) -> int:
-        return self._bytes_emitted
+        return self._bytes_observed
 
     @property
     def frame_count(self) -> int:
@@ -311,7 +218,6 @@ class IncrementalSSEObserver:
 
     @property
     def completion_snapshot(self) -> StreamCompletionSnapshot:
-        """Return protocol completion evidence without exposing stream data."""
         return StreamCompletionSnapshot(
             saw_payload=self._saw_payload,
             saw_terminal_event=self._saw_terminal_event,
@@ -320,51 +226,5 @@ class IncrementalSSEObserver:
             incomplete_frame_at_eof=self._incomplete_frame_at_eof,
             parser_error_count=self._structural_error_count
             + (1 if self._post_terminal_data else 0),
-            bytes_observed=self._bytes_emitted,
+            bytes_observed=self._bytes_observed,
         )
-
-    def flush(self) -> None:
-        """Process any remaining buffered data.
-
-        Flushes any pending event. Also flushes the incremental decoder
-        for any incomplete multi-byte sequences.
-        """
-        # Flush the decoder for incomplete multi-byte sequences
-        try:
-            remainder = self._decoder.decode(b"", True)
-        except UnicodeDecodeError:
-            self._error_count += 1
-            self._structural_error_count += 1
-            logger.debug("Incremental decoder in error state at flush")
-            remainder = ""
-        if remainder:
-            self._buffer += remainder.replace("\r\n", "\n").replace("\r", "\n")
-        if self._pending_cr:
-            self._buffer += "\n"
-            self._pending_cr = False
-
-        # A non-empty tail without a blank-line delimiter is evidence of an
-        # incomplete frame, even when its JSON happens to be parseable.
-        self._incomplete_frame_at_eof = bool(self._buffer or self._current_data_lines)
-        # At EOF, the final partial line is complete for usage extraction.
-        # If an oversized partial line was being discarded, none of its
-        # truncated contents are parseable.
-        lines = [] if self._discarding_incomplete_line else self._buffer.split("\n")
-        self._discarding_incomplete_line = False
-        if not lines:
-            self._flush_event()
-            self._buffer = ""
-            return
-        for line in lines:
-            if not line:
-                self._flush_event()
-                continue
-            self._process_line(line)
-
-        # Flush any remaining partial event (no trailing blank line)
-        self._flush_event()
-        if self._saw_terminal_event:
-            # A complete terminal frame is valid even when the transport
-            # closes immediately after its final data line.
-            self._incomplete_frame_at_eof = False
-        self._buffer = ""

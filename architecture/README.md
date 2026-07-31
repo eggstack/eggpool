@@ -21,7 +21,7 @@ src/eggpool/
 ├── models/            # Pydantic config, domain, API, and database models
 ├── observability/     # Routing trace writer
 ├── providers/         # ProviderClientPool, pproxy transport, connect CLI
-├── proxy/             # Transparent proxy, SSE observer, usage extraction
+├── proxy/             # Transparent proxy, shared SSE framing, observer, usage
 ├── transcoder/        # Protocol transcoding (OpenAI ↔ Anthropic, body + streaming)
 ├── quota/             # Quota estimation, reservations, scoring
 ├── request/           # RequestCoordinator, finalizers, body reader, limit enforcement
@@ -69,7 +69,7 @@ All data-plane requests flow through `RequestCoordinator`:
 4. **Provider Contract** renders absolute URL (`compose_provider_url()`) and auth headers (`build_upstream_headers()`) from `providers/contract.py`
 5. **Protocol Transcoding** (if enabled) translates the request body when the client protocol differs from the upstream protocol
 6. **Proxy** sends the request via the provider's `httpx.AsyncClient` from `ProviderClientPool`
-6. **Streaming** is handled by `proxy/sse_observer.py` with chunk-level usage extraction
+6. **Streaming** is handled by one `proxy/sse.py` decoder; the coordinator fans shared frames to `proxy/sse_observer.py` and the selected frame-level transcoder
 7. **Finalization** records usage, releases reservations, updates health state
 
 All outbound dispatch paths (non-streaming chat, streaming chat, catalog refresh) share the same `compose_provider_url()` rules so a provider cannot list models at one host and dispatch requests to another. The coordinator's `_get_upstream_url()` returns an absolute URL for provider-configured paths, falling back to bare paths only when no provider config is loaded.
@@ -77,7 +77,7 @@ All outbound dispatch paths (non-streaming chat, streaming chat, catalog refresh
 Key invariants:
 - Requests must be persisted before upstream dispatch
 - Pre-body failures can retry; no retry after first downstream byte emitted
-- **Protocol-aware streaming EOF**: `IncrementalSSEObserver` retains bounded completion evidence (`[DONE]` for OpenAI, `message_stop` for Anthropic), and `classify_stream_eof()` maps clean exhaustion to canonical completion, provider-policy compatibility, empty, premature, or malformed EOF. The coordinator drains parser state and classifies before transcoder flush. A premature/malformed stream is finalized through the canonical `MIDSTREAM_ERROR` owner; it cannot clear success backoff or emit a synthetic downstream terminal marker. Provider policy is explicit on `ProviderConfig.stream_completion_policy` and defaults to `strict`.
+- **Protocol-aware streaming EOF**: `SSEDecoder` (`proxy/sse.py`) owns bounded UTF-8/SSE framing and emits shared `DecodedSSEFrame` objects. `IncrementalSSEObserver` retains bounded completion evidence (`[DONE]` for OpenAI, `message_stop` for Anthropic), and `classify_stream_eof()` maps clean exhaustion to canonical completion, provider-policy compatibility, empty, premature, or malformed EOF. The coordinator drains the shared decoder and classifies before `StreamingTranscoder.finish()`. A premature/malformed stream is finalized through the canonical `MIDSTREAM_ERROR` owner; it cannot clear success backoff or emit a synthetic downstream terminal marker. Provider policy is explicit on `ProviderConfig.stream_completion_policy` and defaults to `strict`.
 - Every retryable failed attempt must reach terminal state before the next attempt
 - Each attempt reservation is released exactly once via `AttemptFinalizer`
 - **Process-owned request finalization (Plans 026/047)**: every selected terminal outcome is owned by one retained, attempt-keyed `RequestFinalizationJob` registered before cancellation-sensitive stream work; the retained task completes durable and in-memory cleanup independently of request waiters. Duplicate submissions join, conflicting terminal payloads are diagnosed, and the bounded `RequestFinalizationSupervisor` provides diagnostics, startup reconciliation, and shutdown drain. The stale-request finalizer is a recovery safety net rather than a normal terminal path.
@@ -236,7 +236,7 @@ scope (phases 4–6).
 
 **Phase 9 — Streaming hot-path optimisation (transcoded-stream-dispatch-fixes)**:
 the streaming transcoder path is tuned for sustained concurrent coding-agent
-streaming loads. The coordinator's `IncrementalSSEObserver` is the single
+streaming loads. The coordinator's bounded `SSEDecoder` is the single
 observer — the streaming transcoder no longer runs its own observer for
 usage extraction, so a single parse/observe pass per upstream chunk covers
 both translation and finalization. The transcoder's `usage` property

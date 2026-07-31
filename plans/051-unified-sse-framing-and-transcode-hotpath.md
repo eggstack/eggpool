@@ -1,7 +1,7 @@
 # Plan 051 — Unified SSE Framing and Transcoded-Stream Hot Path
 
 Date: 2026-07-30
-Status: closed at 3b8976d5
+Status: implemented; closure commit recorded below
 Parent roadmap: `plans/045-upstream-streaming-hardening-hotpath-roadmap.md`
 Depends on: Plan 048 completion model and Plan 050 provider-bound ownership
 Planning baseline: `216e615d75269cc1471a920ae81ece9ef2d21802`
@@ -311,3 +311,18 @@ Record:
 ## Definition of done
 
 Plan 051 is complete when one bounded SSE framing layer feeds completion, usage, and transcoding; concrete transcoders no longer parse raw stream bytes; terminal and capability behavior remain correct; output emission is measurement-selected; and concurrent transcoded streams consume materially fewer CPU/allocation resources without native-path regression.
+
+## Implementation handoff
+
+- Shared API: `eggpool.proxy.sse.SSEDecoder`, `DecodedSSEFrame`, and
+  `SSEDecodeResult`; production fan-out is in
+  `RequestCoordinator._build_stream_generator()`.
+- Concrete transcoders consume `translate_frame()` and `finish()`; raw
+  `feed()`/`flush()` remain bounded compatibility adapters only.
+- Removed duplicate concrete UTF-8/SSE parsers and moved usage/completion
+  observation to shared frames with lazy JSON-object caching.
+- Verification: full repository suite `7369 passed, 23 skipped`; CI-equivalent
+  format, Ruff, Pyright, and smoke checks pass; streaming performance suite
+  `4 passed`.
+- Output selection: retained bounded per-upstream-chunk `b"".join()` emission;
+  no unbounded coalescing buffer was introduced.

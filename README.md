@@ -145,7 +145,7 @@ Feature flags (`[transcoder.features]`) — all **off** by default:
 - `structured_outputs` — `response_format` / `json_schema` coercion
 - `anthropic_primitives` — `top_k`, `cache_control`, `context_management`, `container`, `mcp_servers`
 
-The streaming hot path is optimised for sustained concurrent coding-agent loads. See [docs/transcoding.md](docs/transcoding.md) for the full translation table, known limitations, and streaming performance notes.
+The streaming hot path is optimised for sustained concurrent coding-agent loads. A single bounded SSE decoder feeds completion tracking, usage extraction, and frame-level translation; shared frames lazily cache JSON parsing, while native pass-through avoids translation work. See [docs/transcoding.md](docs/transcoding.md) for the full translation table, known limitations, and streaming performance notes.
 
 Streaming completion is determined by the upstream protocol, not by the absence
 of a transport exception. OpenAI streams require `data: [DONE]` and Anthropic

@@ -1,11 +1,9 @@
-"""Phase 3 streaming SSE translation between OpenAI and Anthropic protocols.
+"""Phase 3 streaming translation between OpenAI and Anthropic protocols.
 
-Provides ``StreamingTranscoder`` implementations that translate upstream SSE
-byte streams into client-format bytes on a chunk-by-chunk basis.  Each
-transcoder maintains its own incremental SSE frame parser for translation;
-usage extraction is delegated to the coordinator's
-``IncrementalSSEObserver`` to avoid running two parse/observe passes per
-upstream chunk.
+The coordinator owns byte framing in ``eggpool.proxy.sse.SSEDecoder`` and
+passes shared decoded frames here. Raw-byte ``feed``/``flush`` methods are
+compatibility adapters for older callers; production uses ``translate_frame``
+and ``finish``.
 
 Phase 6.1 adds tool-call delta support: ``AnthropicToOpenAIStreaming`` emits
 ``delta.tool_calls`` entries for every ``content_block_start`` /
@@ -22,7 +20,6 @@ compact JSON separators to reduce output bytes and serialization work.
 
 from __future__ import annotations
 
-import codecs
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -34,6 +31,7 @@ if TYPE_CHECKING:
     from eggpool.transcoder.policy import TranscoderFeatures
 
 from eggpool.jsonx import dumps_bytes, loads
+from eggpool.proxy.sse import DecodedSSEFrame, SSEDecoder, SSEDecodeResult
 from eggpool.transcoder.policy import build_reasoning_fields
 from eggpool.transcoder.usage import (
     merge_anthropic_usage,
@@ -63,8 +61,6 @@ _STOP_TO_FINISH: dict[str, str] = {
     "model_context_window_exceeded": "length",
 }
 
-_MAX_INCOMPLETE_FRAME_BYTES = 64 * 1024
-
 _PAUSE_TURN_FUNCTION_NAME = "__eggpool_pause_turn__"
 
 
@@ -91,11 +87,6 @@ class _AnthropicToolUse:
     arguments: str = ""
 
 
-def _utf8_len(value: str) -> int:
-    """Return the UTF-8 byte length without allocating for ASCII strings."""
-    return len(value) if value.isascii() else len(value.encode("utf-8"))
-
-
 class StreamingTranscoder(Protocol):
     """Translate an upstream SSE stream into client-format bytes.
 
@@ -116,6 +107,8 @@ class StreamingTranscoder(Protocol):
     client_protocol: str
     upstream_protocol: str
 
+    def translate_frame(self, frame: DecodedSSEFrame) -> list[bytes]: ...
+    def finish(self, completion: SSEDecodeResult | None = None) -> list[bytes]: ...
     def feed(self, chunk: bytes) -> list[bytes]: ...
     def flush(self) -> list[bytes]: ...
 
@@ -127,14 +120,7 @@ class StreamingTranscoder(Protocol):
 
 
 class _BaseStreamingTranscoder:
-    """Shared incremental SSE frame parser for translation.
-
-    The transcoder no longer owns an ``IncrementalSSEObserver``; usage
-    extraction lives in the coordinator's observer so a single parse
-    pass per upstream chunk covers both translation and usage.  The
-    ``usage`` property returns a default :class:`StreamUsageResult` to
-    preserve the protocol contract.
-    """
+    """Frame translator; raw-byte methods are compatibility adapters only."""
 
     client_protocol: str
     upstream_protocol: str
@@ -149,15 +135,7 @@ class _BaseStreamingTranscoder:
         self.client_protocol = client_protocol
         self.upstream_protocol = upstream_protocol
         self._transcode_context = transcode_context
-        self._decoder = codecs.getincrementaldecoder("utf-8")(
-            errors="replace",
-        )
-        self._buffer = ""
-        self._pending_cr = False
-        self._current_data_lines: list[str] = []
-        self._current_event = ""
-        self._current_event_bytes = 0
-        self._discarding = False
+        self._compat_decoder = SSEDecoder()
         self._saw_terminal_event = False
 
     @property
@@ -165,140 +143,30 @@ class _BaseStreamingTranscoder:
         """Whether a canonical upstream terminal event was consumed."""
         return self._saw_terminal_event
 
-    # ------------------------------------------------------------------
-    # Incremental SSE frame parser
-    # ------------------------------------------------------------------
+    def feed(self, chunk: bytes) -> list[bytes]:
+        """Deprecated raw-byte adapter; production uses ``translate_frame``."""
+        out: list[bytes] = []
+        for frame in self._compat_decoder.feed(chunk):
+            out.extend(self.translate_frame(frame))
+        return out
 
-    def _parse_chunk(
-        self,
-        chunk: bytes,
-    ) -> list[tuple[str, str]]:
-        """Decode *chunk* and return ``(event_type, data)`` tuples.
+    def finish(self, completion: SSEDecodeResult | None = None) -> list[bytes]:
+        del completion
+        return []
 
-        Handles arbitrary chunk boundaries, CRLF/LF delimiters, and
-        buffers incomplete frames across calls.
-        """
-        text = self._decoder.decode(chunk)
-        if self._pending_cr:
-            if text.startswith("\n"):
-                text = text[1:]
-            text = "\n" + text
-            self._pending_cr = False
-        if text.endswith("\r"):
-            text = text[:-1]
-            self._pending_cr = True
-        text = text.replace("\r\n", "\n").replace("\r", "\n")
+    def flush(self) -> list[bytes]:
+        """Deprecated raw-byte adapter for the frame-level ``finish`` API."""
+        return self.finish(self._compat_decoder.finish())
 
-        lines = (self._buffer + text).split("\n")
-        incomplete_line = lines.pop()
+    def translate_frame(self, frame: DecodedSSEFrame) -> list[bytes]:
+        if frame.frame.is_comment_only or not any(
+            name == "data" for name, _ in (frame.frame.fields or ())
+        ):
+            return []
+        return self._translate(frame)
 
-        frames: list[tuple[str, str]] = []
-        for line in lines:
-            if self._discarding:
-                self._discarding = False
-                continue
-            if not line:
-                frame = self._emit_frame()
-                if frame is not None:
-                    frames.append(frame)
-                continue
-            self._process_line(line)
-
-        self._buffer = "" if self._discarding else incomplete_line
-        if _utf8_len(self._buffer) > _MAX_INCOMPLETE_FRAME_BYTES:
-            self._warn(
-                "SSE line exceeded %d bytes, discarding",
-                _MAX_INCOMPLETE_FRAME_BYTES,
-            )
-            self._buffer = ""
-            self._discarding = True
-            self._reset_frame(discarding=True)
-        return frames
-
-    def _process_line(self, line: str) -> None:
-        """Parse a single SSE line into the current frame buffer."""
-        if self._discarding:
-            return
-        if line.startswith(":"):
-            return
-        if ":" not in line:
-            return
-        field, _, value = line.partition(":")
-        value = value.lstrip(" ")
-        if field == "event":
-            self._current_event = value
-        elif field == "data":
-            sep = 1 if self._current_data_lines else 0
-            ev_bytes = self._current_event_bytes + sep + _utf8_len(value)
-            if ev_bytes > _MAX_INCOMPLETE_FRAME_BYTES:
-                self._warn(
-                    "SSE event exceeded %d bytes, discarding",
-                    _MAX_INCOMPLETE_FRAME_BYTES,
-                )
-                self._discarding = True
-                self._reset_frame(discarding=True)
-                return
-            self._current_data_lines.append(value)
-            self._current_event_bytes = ev_bytes
-
-    def _emit_frame(self) -> tuple[str, str] | None:
-        """Return the accumulated frame and reset state."""
-        if self._discarding:
-            self._reset_frame()
-            return None
-        if not self._current_data_lines:
-            self._reset_frame()
-            return None
-        event = self._current_event
-        data = "\n".join(self._current_data_lines)
-        self._reset_frame()
-        return (event, data)
-
-    def _reset_frame(
-        self,
-        *,
-        discarding: bool = False,
-    ) -> None:
-        self._current_data_lines.clear()
-        self._current_event_bytes = 0
-        self._current_event = ""
-        self._discarding = discarding
-
-    def _drain_buffer(self) -> list[tuple[str, str]]:
-        """Flush the incremental decoder and emit any remaining frame."""
-        try:
-            remainder = self._decoder.decode(b"", True)
-        except UnicodeDecodeError:
-            remainder = ""
-        if remainder:
-            self._buffer += remainder.replace(
-                "\r\n",
-                "\n",
-            ).replace("\r", "\n")
-        if self._pending_cr:
-            self._buffer += "\n"
-            self._pending_cr = False
-
-        frames: list[tuple[str, str]] = []
-        if self._buffer and not self._discarding:
-            lines = self._buffer.split("\n")
-            for line in lines:
-                if not line:
-                    frame = self._emit_frame()
-                    if frame is not None:
-                        frames.append(frame)
-                    continue
-                self._process_line(line)
-            frame = self._emit_frame()
-            if frame is not None:
-                frames.append(frame)
-        elif self._current_data_lines and not self._discarding:
-            frame = self._emit_frame()
-            if frame is not None:
-                frames.append(frame)
-        self._buffer = ""
-        self._discarding = False
-        return frames
+    def _translate(self, frame: DecodedSSEFrame) -> list[bytes]:
+        raise NotImplementedError
 
     def _warn(self, message: str, *args: object, **context: Any) -> None:
         """Log a warning and accumulate it in the transcode context."""
@@ -317,15 +185,11 @@ class _BaseStreamingTranscoder:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _safe_json(self, data: str) -> dict[str, Any] | None:
-        try:
-            obj = loads(data)
-        except ValueError:
+    def _safe_json(self, frame: DecodedSSEFrame) -> dict[str, Any] | None:
+        obj = frame.json_object()
+        if obj is None:
             self._warn("Malformed SSE data, skipping")
-            return None
-        if not isinstance(obj, dict):
-            return None
-        return cast("dict[str, Any]", obj)
+        return obj
 
     @staticmethod
     def _anthropic_frame(
@@ -379,20 +243,14 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
         self._anthropic_tool_blocks: dict[int, _AnthropicToolUse] = {}
         self._tool_blocks_emitted = False
 
-    def feed(self, chunk: bytes) -> list[bytes]:
-        frames = self._parse_chunk(chunk)
+    def finish(self, completion: SSEDecodeResult | None = None) -> list[bytes]:
+        frames = completion.frames if completion is not None else ()
         out: list[bytes] = []
-        for event_type, data in frames:
-            out.extend(self._translate(event_type, data))
-        return out
-
-    def flush(self) -> list[bytes]:
-        frames = self._drain_buffer()
-        out: list[bytes] = []
-        for event_type, data in frames:
-            out.extend(self._translate(event_type, data))
+        for frame in frames:
+            out.extend(self.translate_frame(frame))
         if (
-            not self._finished
+            self._saw_terminal_event
+            and not self._finished
             and self._anthropic_tool_blocks
             and not self._tool_blocks_emitted
         ):
@@ -403,23 +261,21 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
             out.extend(self._stop_message())
         return out
 
-    def _translate(
-        self,
-        event_type: str,
-        data: str,
-    ) -> list[bytes]:
+    def _translate(self, frame: DecodedSSEFrame) -> list[bytes]:
+        event_type = frame.frame.event or ""
+        data = frame.frame.data
         if event_type == "error":
-            return self._handle_error(data)
+            return self._handle_error(frame)
         if data.strip() == "[DONE]":
             self._saw_terminal_event = True
             return self._stop_message()
-        parsed = self._safe_json(data)
+        parsed = self._safe_json(frame)
         if parsed is None:
             return []
         return self._dispatch(parsed)
 
-    def _handle_error(self, data: str) -> list[bytes]:
-        parsed = self._safe_json(data)
+    def _handle_error(self, frame: DecodedSSEFrame) -> list[bytes]:
+        parsed = self._safe_json(frame)
         if parsed is None:
             return []
         self._stopped = True
@@ -765,44 +621,34 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
     def thinking_delta_count(self) -> int:
         return self._thinking_delta_count
 
-    def feed(self, chunk: bytes) -> list[bytes]:
-        frames = self._parse_chunk(chunk)
+    def finish(self, completion: SSEDecodeResult | None = None) -> list[bytes]:
+        frames = completion.frames if completion is not None else ()
         out: list[bytes] = []
-        for event_type, data in frames:
-            out.extend(self._translate(event_type, data))
-        return out
-
-    def flush(self) -> list[bytes]:
-        frames = self._drain_buffer()
-        out: list[bytes] = []
-        for event_type, data in frames:
-            out.extend(self._translate(event_type, data))
+        for frame in frames:
+            out.extend(self.translate_frame(frame))
         if self._saw_terminal_event:
             done = self._emit_done()
             if done is not None:
                 out.append(done)
         return out
 
-    def _translate(
-        self,
-        event_type: str,
-        data: str,
-    ) -> list[bytes]:
+    def _translate(self, frame: DecodedSSEFrame) -> list[bytes]:
+        event_type = frame.frame.event or ""
         if event_type == "error":
-            return self._handle_error(data)
+            return self._handle_error(frame)
         if event_type == "message_stop":
             self._saw_terminal_event = True
-            parsed = self._safe_json(data)
+            parsed = self._safe_json(frame)
             if parsed is None:
                 return []
             return self._dispatch(event_type, parsed)
-        parsed = self._safe_json(data)
+        parsed = self._safe_json(frame)
         if parsed is None:
             return []
         return self._dispatch(event_type, parsed)
 
-    def _handle_error(self, data: str) -> list[bytes]:
-        parsed = self._safe_json(data)
+    def _handle_error(self, frame: DecodedSSEFrame) -> list[bytes]:
+        parsed = self._safe_json(frame)
         if parsed is None:
             return []
         err = parsed.get("error", {})

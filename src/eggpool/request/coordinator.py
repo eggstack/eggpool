@@ -73,6 +73,7 @@ from eggpool.proxy.normalized_usage import (
     normalize_from_stream_result,
     normalize_usage,
 )
+from eggpool.proxy.sse import SSEDecoder
 from eggpool.proxy.sse_observer import IncrementalSSEObserver
 from eggpool.proxy.usage import (
     StreamUsageResult,
@@ -3010,6 +3011,7 @@ class RequestCoordinator:
         observer = IncrementalSSEObserver(
             context.upstream_protocol, provider_id=selected.provider_id
         )
+        shared_decoder = SSEDecoder()
         bytes_emitted = 0
         downstream_bytes_emitted = 0
         first_byte_ms = 0.0
@@ -3126,11 +3128,18 @@ class RequestCoordinator:
                     if first_byte_ms == 0.0:
                         first_byte_ms = (time.monotonic() - reference) * 1000
 
-                    observer.observe(chunk)
+                    observer.observe_bytes(chunk)
                     bytes_emitted = observer.bytes_emitted
+                    frames = shared_decoder.feed(chunk)
+                    for frame in frames:
+                        observer.observe_frame(frame)
 
                     if streaming_transcoder is not None:
-                        out_chunks = streaming_transcoder.feed(chunk)
+                        out_chunks: list[bytes] = []
+                        for frame in frames:
+                            out_chunks.extend(
+                                streaming_transcoder.translate_frame(frame)
+                            )
                         if out_chunks:
                             output = b"".join(out_chunks)
                             downstream_bytes_emitted += len(output)
@@ -3141,7 +3150,8 @@ class RequestCoordinator:
 
                 # Transport EOF is not protocol completion. Drain the parser,
                 # classify first, and only then permit a transcoder flush.
-                observer.flush()
+                eof_result = shared_decoder.finish()
+                observer.finish(eof_result)
                 provider_config = (
                     self._config.providers.get(selected.provider_id)
                     if self._config is not None
@@ -3247,7 +3257,7 @@ class RequestCoordinator:
                         eof_decision.classification, request_id=context.request_id
                     )
                 if streaming_transcoder is not None:
-                    out_chunks = streaming_transcoder.flush()
+                    out_chunks = streaming_transcoder.finish(eof_result)
                     if out_chunks:
                         output = b"".join(out_chunks)
                         downstream_bytes_emitted += len(output)
@@ -3377,7 +3387,7 @@ class RequestCoordinator:
                 # supervisor's registry regardless of cancellation timing.
                 # ``fin_job.run()`` uses ``asyncio.shield`` internally; the
                 # retained task continues after the caller is cancelled.
-                observer.flush()
+                observer.finish(shared_decoder.finish())
                 usage_result = observer.usage
                 if not context.client_metadata.get("_cancelled_finalized"):
                     cancel_latency_total = int((time.monotonic() - reference) * 1000)
@@ -3498,7 +3508,7 @@ class RequestCoordinator:
                 raise
             except Exception as exc:
                 # Midstream error - finalize, no retry
-                observer.flush()
+                observer.finish(shared_decoder.finish())
                 usage_result = observer.usage
                 error_detail_value = _prepare_error_detail(exc, persist_error_detail)
                 mid_latency_total = int((time.monotonic() - reference) * 1000)

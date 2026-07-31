@@ -119,7 +119,7 @@ Hot-path JSON serialization/parsing behind a small helper:
 - **Fallback**: stdlib `json` (identical compact-separator wire behaviour)
 - Override at runtime: `EGGPOOL_JSON_BACKEND=orjson|stdlib|auto`
 - Active backend logged at startup (`json_backend=orjson|stdlib`)
-- Used by: wire bodies, SSE frame helpers, streaming transcoder parse, request-path body parses
+- Used by: wire bodies, SSE frame helpers, shared streaming SSE framing, request-path body parses
 - Tests parametrised across both backends
 
 **Important**: Off the request path, stdlib `json` is allowed for deterministic hashing and persisted diagnostic metadata.

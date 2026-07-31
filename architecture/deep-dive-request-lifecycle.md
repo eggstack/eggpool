@@ -203,9 +203,11 @@ API error rendering (400/404/429/503). Maps exception hierarchy to HTTP status c
 
 `build_upstream_headers()` — header sanitization + auth injection in single pass.
 
-### `proxy/sse_observer.py` — IncrementalSSEObserver
+### `proxy/sse.py` / `proxy/sse_observer.py` — shared framing and observation
 
-Chunk-level SSE parsing and usage extraction. The single observer for both same-protocol and transcoded streams (Phase 9 optimization).
+`SSEDecoder` owns bounded UTF-8/SSE framing. The coordinator fans each shared
+frame to `IncrementalSSEObserver` for usage/completion evidence and to a
+frame-level transcoder when protocols differ.
 
 ### `proxy/usage.py` — StreamUsageResult
 

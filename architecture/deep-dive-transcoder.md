@@ -46,7 +46,9 @@ Streaming transcoder implementations for both directions:
 - `OpenAIToAnthropicStreaming`
 - `AnthropicToOpenAIStreaming`
 
-Phase 9 optimization: synchronous `feed()`/`flush()` (no per-chunk `await`), compact JSON separators `(",", ":")`, coalesced output chunks.
+Phase 9 optimization: one shared bounded decoder, synchronous
+`translate_frame()`/`finish()` (no per-chunk `await`), compact JSON separators
+`(",", ":")`, and coalesced output chunks.
 
 ### `transcoder/policy.py`
 
@@ -122,7 +124,7 @@ JSON frame helpers with compact separators for SSE frame construction.
 | 6.1 | Tool-use | Bidirectional tool calling translation |
 | 7 | Budget resolution | Effort-to-budget translation |
 | 8 | Response-field compat | Configurable OpenAI reasoning field names |
-| 9 | Streaming hot-path | Single observer, synchronous feed/flush |
+| 9 | Streaming hot-path | Shared decoder, frame fan-out, synchronous translation |
 | 10 | JSON backend | `eggpool.jsonx` abstraction (orjson/stdlib) |
 
 ## Loss Warning Kinds
