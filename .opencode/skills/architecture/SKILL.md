@@ -63,8 +63,13 @@ Transparent request/response format conversion between OpenAI and Anthropic prot
 ## Quota and Routing
 
 - Tier-based routing via `routing_priority`, `QuotaFairScorer`, upstream-authoritative suppression, same-tier fairness rotor
+- Ordered `QuotaWindow` observations use cached totals and left-edge expiry; out-of-order observations use one bounded rebuild path.
+- Persisted 5h/7d/30d snapshots refresh from timestamped retained request data, preserving exact horizon boundaries for long-lived generations.
 - **Load-based, never cost-based**: request count + token count + active count + health
 - `QuotaFairScorer` does NOT consume cache/compression fields
+
+Routing trace batches use one `executemany` call inside the transaction owner’s
+transaction. Unexpected database errors propagate to the writer/recovery path.
 
 ## Error Hierarchy
 

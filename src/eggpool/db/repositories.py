@@ -1008,12 +1008,7 @@ class RoutingDecisionRepository:
         )
 
     async def create_many(self, rows: Sequence[tuple[Any, ...]]) -> int:
-        """Persist a batch of routing decision rows in one transaction.
-
-        Returns the number of rows successfully inserted.  Rows that
-        violate foreign-key constraints (e.g. stale parent request
-        deleted by retention) are silently skipped.
-        """
+        """Persist a batch of routing decision rows in one transaction."""
         if not rows:
             return 0
         sql = (
@@ -1028,15 +1023,9 @@ class RoutingDecisionRepository:
             "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
             ")"
         )
-        inserted = 0
         async with self._db.transaction():
-            for row in rows:
-                try:
-                    await self._db.execute_insert(sql, row)
-                    inserted += 1
-                except Exception:  # noqa: BLE001
-                    pass
-        return inserted
+            await self._db.execute_many(sql, rows)
+        return len(rows)
 
     async def get_for_request(self, request_id: int) -> list[dict[str, Any]]:
         """Get all routing decisions for one request, ordered by attempt."""

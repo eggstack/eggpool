@@ -24,6 +24,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Dispatch timing: distinct `local_pre_upstream` (full EggPool-side) and `dispatch_overhead` (coordinator-internal) metrics with cadence drift diagnostics for background tasks
 - Selection hot path: generation-hydrated account identities keep SQLite outside the claim lock, while routing plans carry quarantine exclusions directly into sampled diagnostic traces
 - Durable dispatch write pipeline: process-owned microbatching writer for dispatch intents with bounded queue, adaptive batching, binary success/exception persistence semantics, durable-identity validation, and diagnostics
+- Amortized quota-window maintenance: ordered observations expire incrementally, while rare out-of-order timestamps remain correct through a bounded slow path
 - Bounded observability: request-coherent span sampling (5% default), bounded rolling-window metrics, and constant-bounded snapshot cost regardless of uptime
 - Error isolation: provider-specific validation errors (e.g. unsupported MiniMax-M3 thinking through OpenCode Go) are contained to a single request — no account/model/circuit/quarantine penalties, no restart or database deletion required
 - Process-owned finalization: every selected request-terminal outcome (completion, cancellation, capability rejection, upstream client error, or stream failure) is reconciled by one bounded, attempt-keyed retained job; the supervisor owns capped timer-driven retries and exposes durable-terminal, reservation, and runtime-cleanup convergence separately

@@ -40,12 +40,10 @@ class QuotaWindow:
     tuples. The deque is bounded by the ``window_seconds`` horizon: entries
     older than ``current_time - window_seconds`` are pruned on every write.
 
-    Invariant: every persisted snapshot path goes through
-    :meth:`add_observation`, which calls :meth:`_prune_old_observations`.
-    The deque is therefore bounded by the number of observations within
-    the window_seconds horizon. Any future write path that bypasses
-    :meth:`add_observation` MUST call :meth:`_prune_old_observations`
-    explicitly to preserve this invariant.
+    Ordered timestamps are the normal path: expiry removes entries from the
+    left edge and updates the cached totals incrementally. An out-of-order
+    observation uses a bounded rebuild so clock corrections and test
+    backfills remain correct without making every normal update expensive.
     """
 
     window_seconds: float
@@ -54,34 +52,56 @@ class QuotaWindow:
     observations: deque[tuple[float, int, int]] = field(
         default_factory=deque[tuple[float, int, int]]
     )
+    _last_observation_timestamp: float | None = field(default=None, repr=False)
 
     def add_observation(self, timestamp: float, tokens: int, cost: int) -> None:
         """Add an observation to the window."""
-        self.observations.append((timestamp, tokens, cost))
-        self.used_tokens += tokens
-        self.used_cost_microdollars += cost
-        self._prune_old_observations(timestamp)
+        observation = (timestamp, tokens, cost)
+        if (
+            self._last_observation_timestamp is None
+            or timestamp >= self._last_observation_timestamp
+        ):
+            self.observations.append(observation)
+            self.used_tokens += tokens
+            self.used_cost_microdollars += cost
+            self._last_observation_timestamp = timestamp
+            self._prune_old_observations(timestamp)
+            return
+
+        # Rare slow path for clock skew/backfills. Re-sort the bounded
+        # retained window once, then restore the same cached-total invariant
+        # used by the ordered path.
+        logger.debug(
+            "Out-of-order quota observation: timestamp=%s last=%s",
+            timestamp,
+            self._last_observation_timestamp,
+        )
+        observations = [*self.observations, observation]
+        observations.sort(key=lambda item: item[0])
+        self.observations = deque(observations)
+        self._last_observation_timestamp = max(
+            self._last_observation_timestamp,
+            timestamp,
+        )
+        self._rebuild_totals_and_prune(timestamp)
 
     def _prune_old_observations(self, current_time: float) -> None:
-        """Remove observations older than the window.
-
-        Performs a full scan rather than relying on the leftmost entry being
-        the oldest, so an out-of-order insertion (backfill, clock skew
-        correction, test fixture) cannot leave stale observations behind.
-        """
+        """Remove observations older than the window from the left edge."""
         cutoff = current_time - self.window_seconds
-        surviving: deque[tuple[float, int, int]] = deque()
-        kept_tokens = 0
-        kept_cost = 0
-        for ts, tokens, cost in self.observations:
-            if ts < cutoff:
-                continue
-            surviving.append((ts, tokens, cost))
-            kept_tokens += tokens
-            kept_cost += cost
-        self.observations = surviving
-        self.used_tokens = kept_tokens
-        self.used_cost_microdollars = kept_cost
+        while self.observations and self.observations[0][0] < cutoff:
+            _timestamp, tokens, cost = self.observations.popleft()
+            self.used_tokens = max(0, self.used_tokens - tokens)
+            self.used_cost_microdollars = max(0, self.used_cost_microdollars - cost)
+
+    def _rebuild_totals_and_prune(self, current_time: float) -> None:
+        """Rebuild totals for the bounded out-of-order slow path."""
+        cutoff = current_time - self.window_seconds
+        retained = [
+            observation for observation in self.observations if observation[0] >= cutoff
+        ]
+        self.observations = deque(retained)
+        self.used_tokens = max(0, sum(item[1] for item in retained))
+        self.used_cost_microdollars = max(0, sum(item[2] for item in retained))
 
     def get_usage(self, current_time: float | None = None) -> tuple[int, int]:
         """Get current usage within the window."""
@@ -798,13 +818,16 @@ class QuotaEstimator:
         per-window request count and token count snapshots, which are
         the signals the routing scorer actually consumes.
         """
+        # This section has no await points, so it is atomic on the canonical
+        # event loop. Keep it outside the lock; the lock is only needed for
+        # the shared persisted snapshot and reservation mirrors below.
+        self.record_usage(
+            account_name,
+            tokens=tokens,
+            cost_microdollars=cost_microdollars,
+            model_id=model_id,
+        )
         async with self._snapshot_lock:
-            self.record_usage(
-                account_name,
-                tokens=tokens,
-                cost_microdollars=cost_microdollars,
-                model_id=model_id,
-            )
             # Lifecycle: ``persisted_snapshot`` is set exclusively by
             # :meth:`load_persisted_windows` during startup and is
             # never replaced afterwards. Reading it under

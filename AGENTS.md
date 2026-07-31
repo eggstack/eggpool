@@ -122,6 +122,7 @@ stream-specific regressions.
 - **JSON backend (`eggpool.jsonx`)**: wire bodies, SSE frame helpers, and hot-path request body parsing. Preferred: `orjson` (install `eggpool[fast]`); falls back to stdlib. Override with `EGGPOOL_JSON_BACKEND=orjson|stdlib|auto`. Off the request path, stdlib `json` allowed for deterministic hashing.
 - **Database invariants**: SQLite WAL, single-connection serialization, `async with db.transaction():` for all DML.
 - **Quota and routing**: tier-based routing via `routing_priority`, `QuotaFairScorer`, upstream-authoritative suppression, same-tier fairness rotor. Load-based (request count + token count + active count + health), never cost-based.
+- **Quota window hot path**: ordered `QuotaWindow` observations expire from the left with cached totals; rare out-of-order timestamps use a bounded rebuild. Persisted 5h/7d/30d snapshots refresh from timestamped retained requests so aging remains exact across long-lived generations.
 - **Error hierarchy**: `AggregatorError` → `UpstreamError` → specific subclasses. `CapabilityError` (400) for thinking mismatches. `TranscodeLossError` (400) for loss-policy reject. `ProtocolMismatchError` for endpoint/model-protocol mismatches.
 - **Process model**: supervisor + Granian worker (`workers=1`), daemon mode (`--verbose` for foreground). `runtime_threads=1` canonical (values > 1 emit startup warning), `database_worker_threads=2`. Readiness probe is process-owned.
 - **Runtime generations**: `RuntimeManager` owns active/retiring generation slots. Lease acquisition is fail-closed: `RuntimeManagerLeaseExhaustedError` → HTTP 503. Staged reload swap: `stage()` → `commit()`/`rollback()` → `finalize_retirement()`. `RuntimeGenerationCandidate` owns reload-created resources; `candidate.abort()` closes in reverse order.
@@ -149,6 +150,7 @@ stream-specific regressions.
 - **`static_models` is source of truth for provider-specific protocol**: providers serving non-default protocol must ship `[[providers.<id>.static_models]]` rows.
 - **Upstream-authoritative suppression**: local quota estimates are advisory. Only upstream-observed failures suppress routing.
 - **Routing is load-based, not cost-based**: `QuotaFairScorer` uses request count and token count, never `cost_microdollars`.
+- **Routing trace persistence**: `RoutingDecisionRepository.create_many()` uses one `executemany` operation inside the caller-owned transaction and propagates database failures; trace-off and unsampled paths do not call it.
 - **`app.state` generation-owned attributes are mirrors, not authority**: New code should use `get_active_generation(request)` or acquire a lease.
 - **When constructing `RequestCoordinator` in tests**: pass an explicit `transcoder_policy` or assert the desired default.
 - **`CapabilityError` (400) is distinct from `ModelNotFoundError` (404) and `ModelUnavailableError` (503)**.

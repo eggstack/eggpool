@@ -46,6 +46,30 @@ class TestQuotaWindow:
         assert tokens == 200
         assert cost == 1000
 
+    def test_ordered_pruning_does_not_rebuild_retained_observations(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The normal timestamp-ordered path only pops expired entries."""
+        window = QuotaWindow(window_seconds=60.0)
+        window.add_observation(100.0, 10, 20)
+        window.add_observation(110.0, 30, 40)
+
+        def fail_rebuild(_window: QuotaWindow, _current_time: float) -> None:
+            raise AssertionError("ordered observations must not rebuild")
+
+        monkeypatch.setattr(QuotaWindow, "_rebuild_totals_and_prune", fail_rebuild)
+        assert window.get_usage(161.0) == (30, 40)
+
+    def test_out_of_order_observation_uses_correct_bounded_slow_path(self) -> None:
+        """Clock skew/backfill remains correct without weakening expiry."""
+        window = QuotaWindow(window_seconds=60.0)
+        window.add_observation(100.0, 10, 20)
+        window.add_observation(150.0, 30, 40)
+        window.add_observation(120.0, 50, 60)
+
+        assert window.get_usage(150.0) == (90, 120)
+        assert window.get_usage(211.0) == (0, 0)
+
 
 class TestAccountQuota:
     """Tests for AccountQuota."""

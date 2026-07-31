@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -237,6 +238,30 @@ async def test_drain_writes_to_db() -> None:
             assert count == 2
         finally:
             await writer.stop()
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio()
+async def test_create_many_uses_one_batch_operation() -> None:
+    """Routing trace persistence submits a batch through one DB operation."""
+    db = Database(path=":memory:")
+    await db.connect()
+    try:
+        await MigrationRunner(db).run()
+        await _seed_request(db, 1)
+        await _seed_request(db, 2)
+        repo = RoutingDecisionRepository(db)
+        original_execute_many = db.execute_many
+        db.execute_many = AsyncMock(wraps=original_execute_many)  # type: ignore[method-assign]
+        rows = [
+            _make_event(db_request_id=1).to_row_tuple(),
+            _make_event(db_request_id=2).to_row_tuple(),
+        ]
+
+        assert await repo.create_many(rows) == 2
+        assert db.execute_many.await_count == 1  # type: ignore[attr-defined]
+        assert await _count_routing_traces(db) == 2
     finally:
         await db.disconnect()
 

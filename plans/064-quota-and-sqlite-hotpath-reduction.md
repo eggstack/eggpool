@@ -1,7 +1,7 @@
 # Plan 064 — Quota and SQLite Hot-Path Reduction
 
 Date: 2026-07-31
-Status: ready for implementation
+Status: completed
 Parent roadmap: `plans/058-durable-convergence-exact-update-sbc-hotpath-roadmap.md`
 Planning baseline: `c2fe512ad46f2d1a672a7ab1f9928e1def494cb4`
 
@@ -287,16 +287,43 @@ Recommended commits:
 
 ## Plan acceptance criteria
 
-- [ ] Ordered quota-window maintenance is amortized O(1) and allocates no replacement deque per update.
-- [ ] Quota snapshots are internally consistent and lock hold time excludes unrelated work/I/O.
-- [ ] Long-lived generations expire usage from 5-hour/7-day/30-day snapshots correctly, or investigation proves existing behavior already does so.
-- [ ] Routing traces are persisted through one true batch operation.
-- [ ] Unexpected trace database failures are not silently suppressed.
-- [ ] Finalization write structure is changed only if compact measurement shows material benefit.
-- [ ] Canonical terminal/accounting fields remain atomic.
-- [ ] Dispatch microbatching is retained or removed based on one realistic local comparison.
-- [ ] No adaptive batching system, benchmark framework, schema migration, new database, CI timing gate, or soak requirement is introduced.
+- [x] Ordered quota-window maintenance is amortized O(1) and allocates no replacement deque per update.
+- [x] Quota snapshots are internally consistent and lock hold time excludes unrelated work/I/O.
+- [x] Long-lived generations expire usage from 5-hour/7-day/30-day snapshots correctly, or investigation proves existing behavior already does so.
+- [x] Routing traces are persisted through one true batch operation.
+- [x] Unexpected trace database failures are not silently suppressed.
+- [x] Finalization write structure is changed only if compact measurement shows material benefit.
+- [x] Canonical terminal/accounting fields remain atomic.
+- [x] Dispatch microbatching is retained or removed based on one realistic local comparison.
+- [x] No adaptive batching system, benchmark framework, schema migration, new database, CI timing gate, or soak requirement is introduced.
 
 ## Definition of done
 
 The plan is complete when quota-window work remains bounded as process age grows, rolling snapshots age correctly, trace inserts are genuinely batched and truthful on failure, finalization and dispatch structures have measurement-backed decisions, focused correctness tests and the existing smoke suite pass, and no permanent performance-testing apparatus has been added.
+
+## Implementation closure
+
+- Ordered quota-window adds and reads now use cached totals plus left-edge
+  expiry. The only full rebuild is the bounded out-of-order timestamp path.
+- `record_usage_and_snapshot()` performs synchronous quota/EWMA mutation
+  outside `_snapshot_lock`; the lock now covers only shared snapshot mirrors.
+  No database I/O occurs under that lock.
+- Persisted snapshots already age through the generation-leased refresh task,
+  whose repository query uses explicit 5h/7d/30d timestamp boundaries over the
+  retained request horizon. This preserves exact boundaries without adding an
+  approximate bucket schema or per-request database rollup query.
+- Routing trace persistence now uses one `execute_many()` call and lets
+  unexpected SQLite errors reach the writer. Trace-off and unsampled paths are
+  unchanged.
+- A local comprehensive performance diagnostic was attempted. Its first
+  baseline case passed; a pre-existing contention assertion failed because an
+  empty sample reports `None` for `lock_wait_p95_ms`, so no timing result was
+  used to justify a finalization rewrite. The wide finalization statement was
+  therefore retained atomically.
+- Dispatch microbatching was retained: it remains the process-owned writer
+  required by the binary dispatch persistence contract, with bounded queue,
+  batch size, and wait time. No adaptive or sharded batching was added.
+
+Focused verification covers ordered expiry, out-of-order observations, and
+one-batch trace persistence. No schema migration, benchmark artifact, CI timing
+gate, or soak requirement was introduced.

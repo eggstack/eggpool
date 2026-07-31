@@ -1720,14 +1720,14 @@ Ordered SQL migrations in `db/schema/` (0001 through 0051). Checksums tracked in
 | `RequestRepository` | Request lifecycle (pending → selected → completed) |
 | `ReservationRepository` | Quota reservations with release/reconciliation |
 | `AttemptRepository` | Per-request attempt tracking |
-| `UsageWindowRepository` | Aggregated cost queries (5h/7d/30d) |
+| `UsageWindowRepository` | Exact timestamped 5h/7d/30d usage snapshots |
 | `PriceSnapshotRepository` | Model price snapshots |
 | `ProviderRepository` | Provider CRUD and config sync |
 | `PingRepository` | Provider health ping results |
 | `AccountBackoffRepository` | Upstream-derived backoff persistence |
 | `AccountEventRepository` | Account event logging |
 | `OperationalEventRepository` | Safety-net task event logging |
-| `RoutingDecisionRepository` | Routing decision persistence |
+| `RoutingDecisionRepository` | Batched routing-decision persistence |
 
 ## Quota and Routing
 
