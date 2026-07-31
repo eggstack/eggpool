@@ -21,7 +21,8 @@ Design rules
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from copy import deepcopy
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
@@ -40,6 +41,20 @@ def _freeze(value: Any) -> Any:  # noqa: ANN401
         return tuple(_freeze(item) for item in cast("list[Any]", value))
     if isinstance(value, tuple):
         return tuple(_freeze(item) for item in cast("tuple[Any, ...]", value))
+    return value
+
+
+def _thaw(value: Any) -> Any:  # noqa: ANN401
+    """Return JSON-native containers for serialization backends."""
+    if isinstance(value, Mapping):
+        result: dict[str, Any] = {}
+        for key, item in cast("Mapping[str, Any]", value).items():
+            result[key] = _thaw(item)
+        return result
+    if isinstance(value, list):
+        return [_thaw(item) for item in cast("list[Any]", value)]
+    if isinstance(value, tuple):
+        return [_thaw(item) for item in cast("tuple[Any, ...]", value)]
     return value
 
 
@@ -71,6 +86,27 @@ class PreparedTranscodeValidityKey:
     features_fingerprint: str
     policy_generation: int = 0
     capability_generation: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class PayloadMutation:
+    """Bounded diagnostic record for one provider-payload generation."""
+
+    generation: int
+    reason: str
+
+
+@dataclass(slots=True)
+class ProviderPayloadDiagnostics:
+    """Low-cardinality lifecycle counters for tests and request diagnostics."""
+
+    provider_decodes: int = 0
+    provider_encodes: int = 0
+    generation_changes: int = 0
+    transforms_run: int = 0
+    transforms_skipped: int = 0
+    transforms_mutated: int = 0
+    transforms_rejected: int = 0
 
 
 @dataclass(slots=True)
@@ -120,6 +156,15 @@ class ProviderBoundRequest:
     parsed_payload: ParsedRequestPayload | None = field(
         default=None, repr=False, compare=False, hash=False
     )
+    mutation_log_limit: int = 16
+    mutation_log: list[PayloadMutation] = field(
+        default_factory=lambda: list[PayloadMutation](), repr=False
+    )
+    diagnostics: ProviderPayloadDiagnostics = field(
+        default_factory=ProviderPayloadDiagnostics, repr=False
+    )
+    _serialized_generation: int | None = field(default=None, repr=False)
+    _frozen: bool = field(default=False, repr=False)
 
     @property
     def provider_payload(self) -> Mapping[str, Any]:
@@ -145,8 +190,47 @@ class ProviderBoundRequest:
         return self._provider_bytes
 
     def set_provider_bytes(self, body: bytes) -> None:
-        """Store the serialized provider-bound body (write-once)."""
+        """Store bytes for the current generation.
+
+        This compatibility setter is intentionally not the preferred API;
+        callers should use :meth:`serialize_provider_payload` so the
+        generation and encode counter cannot drift apart.
+        """
+        if self._frozen and self._serialized_generation != self.payload_generation:
+            raise RuntimeError("provider payload is frozen")
         object.__setattr__(self, "_provider_bytes", body)
+        object.__setattr__(self, "_serialized_generation", self.payload_generation)
+
+    def replace_provider_payload(
+        self, payload: Mapping[str, Any], *, reason: str
+    ) -> bool:
+        """Replace the provider payload when its structural content changed."""
+        if dict(self.provider_payload) == dict(payload):
+            return False
+        if self._frozen:
+            raise RuntimeError("provider payload is frozen")
+        frozen = cast("Mapping[str, Any]", _freeze(payload))
+        object.__setattr__(self, "_provider_payload", frozen)
+        object.__setattr__(self, "mutated", True)
+        object.__setattr__(self, "payload_generation", self.payload_generation + 1)
+        object.__setattr__(self, "_provider_bytes", None)
+        object.__setattr__(self, "_serialized_generation", None)
+        self.diagnostics.generation_changes += 1
+        self.mutation_log.append(PayloadMutation(self.payload_generation, reason))
+        del self.mutation_log[: -self.mutation_log_limit]
+        return True
+
+    def mutate_provider_payload(
+        self, mutator: Callable[[dict[str, Any]], None], *, reason: str
+    ) -> bool:
+        """Copy the current payload, apply ``mutator``, and replace it safely."""
+        candidate = self.provider_payload_copy()
+        mutator(candidate)
+        return self.replace_provider_payload(candidate, reason=reason)
+
+    def provider_payload_copy(self) -> dict[str, Any]:
+        """Return a mutable, detached copy of the provider payload."""
+        return cast("dict[str, Any]", deepcopy(_thaw(self.provider_payload)))
 
     def set_provider_payload(
         self, payload: Mapping[str, Any], *, increment_generation: bool = True
@@ -158,14 +242,41 @@ class ProviderBoundRequest:
         downstream caches (segmentation, prepared-transcode) can detect
         staleness.
         """
+        if not increment_generation and self._frozen:
+            raise RuntimeError("provider payload is frozen")
         frozen = cast("Mapping[str, Any]", _freeze(payload))
         object.__setattr__(self, "_provider_payload", frozen)
         object.__setattr__(self, "mutated", True)
         if increment_generation:
             object.__setattr__(self, "payload_generation", self.payload_generation + 1)
-        # Invalidate stale serialized bytes — they no longer match the
-        # decoded payload.
+            self.diagnostics.generation_changes += 1
+            self.mutation_log.append(
+                PayloadMutation(self.payload_generation, "set_provider_payload")
+            )
+            del self.mutation_log[: -self.mutation_log_limit]
         object.__setattr__(self, "_provider_bytes", None)
+        object.__setattr__(self, "_serialized_generation", None)
+
+    def serialize_provider_payload(self) -> bytes:
+        """Serialize and cache the current generation, then freeze dispatch."""
+        if (
+            self._provider_bytes is not None
+            and self._serialized_generation == self.payload_generation
+        ):
+            return self._provider_bytes
+        from eggpool.jsonx import dumps_bytes
+
+        body = dumps_bytes(_thaw(self.provider_payload))
+        object.__setattr__(self, "_provider_bytes", body)
+        object.__setattr__(self, "_serialized_generation", self.payload_generation)
+        self.diagnostics.provider_encodes += 1
+        object.__setattr__(self, "_frozen", True)
+        return body
+
+    @property
+    def frozen(self) -> bool:
+        """Whether dispatch serialization has frozen this request."""
+        return self._frozen
 
     def segmentation_is_valid(
         self,

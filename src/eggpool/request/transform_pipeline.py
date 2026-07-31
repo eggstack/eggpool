@@ -17,9 +17,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
-
-from eggpool.jsonx import dumps_bytes as jsonx_dumps_bytes
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -109,7 +107,7 @@ class TransformContext:
     config: Any | None = None
     segmentation_policy_version: int = 0
     selected: Any | None = None  # SelectedAttempt — adapter only
-    proxy_context: Any | None = None  # ProxyRequestContext — adapter only
+    proxy_context: Any | None = None  # ProxyRequestContext — compatibility only
 
 
 # ---------------------------------------------------------------------------
@@ -172,11 +170,36 @@ def run_transform_pipeline(
     decisions: list[TransformResult] = []
     transformed = False
 
-    for _meta, fn in transforms:
+    # Retries reuse the exact provider generation that was already frozen for
+    # the first dispatch. Re-running transforms could attempt a structural
+    # mutation after freeze; it is both unnecessary and unsafe.
+    if request.frozen:
+        return PipelineResult(
+            final_payload=request.provider_payload,
+            final_bytes=request.provider_bytes,
+            transformed=False,
+            generation=request.payload_generation,
+        )
+
+    for meta, fn in transforms:
+        request.diagnostics.transforms_run += 1
+        generation_before = request.payload_generation
         result = fn(request, context)
         decisions.append(result)
 
+        generation_changed = request.payload_generation != generation_before
+        if result.decision == TransformDecision.MUTATED and not generation_changed:
+            raise RuntimeError(
+                f"transform {meta.name!r} reported mutation without changing payload"
+            )
+        if result.decision != TransformDecision.MUTATED and generation_changed:
+            raise RuntimeError(
+                f"transform {meta.name!r} changed payload but reported "
+                f"{result.decision!r}"
+            )
+
         if result.decision == TransformDecision.REJECTED:
+            request.diagnostics.transforms_rejected += 1
             return PipelineResult(
                 final_payload=request.provider_payload,
                 transformed=transformed,
@@ -188,6 +211,9 @@ def run_transform_pipeline(
 
         if result.decision == TransformDecision.MUTATED:
             transformed = True
+            request.diagnostics.transforms_mutated += 1
+        elif result.decision == TransformDecision.SKIPPED:
+            request.diagnostics.transforms_skipped += 1
 
         warnings.extend(result.warnings)
 
@@ -207,7 +233,7 @@ def serialize_provider_payload(request: ProviderBoundRequest) -> bytes:
     generation has not changed, returns the cached bytes.  Otherwise
     serializes and caches.
     """
-    return jsonx_dumps_bytes(request.provider_payload)
+    return request.serialize_provider_payload()
 
 
 # ---------------------------------------------------------------------------
@@ -236,14 +262,15 @@ def _make_thinking_control_adapter(
             or not getattr(selected, "provider_id", None)
         ):
             return TransformResult()
-        # Delegate to the coordinator's existing method which mutates
-        # ``context.upstream_body`` and ``context.thinking_trace``.
-        coordinator._apply_selected_provider_transcode_adjustments(
+        changed = coordinator._apply_selected_provider_transcode_adjustments(
             context=context,
             selected=selected,
+            request=request,
         )
         return TransformResult(
-            decision=TransformDecision.MUTATED,
+            decision=(
+                TransformDecision.MUTATED if changed else TransformDecision.PASSTHROUGH
+            ),
             category="thinking_control",
         )
 
@@ -271,12 +298,15 @@ def _make_cache_synthesis_adapter(
         context = ctx.proxy_context
         if selected is None or context is None:
             return TransformResult()
-        coordinator._apply_synthetic_cache_controls(
+        changed = coordinator._apply_synthetic_cache_controls(
             context=context,
             selected=selected,
+            request=request,
         )
         return TransformResult(
-            decision=TransformDecision.MUTATED,
+            decision=(
+                TransformDecision.MUTATED if changed else TransformDecision.PASSTHROUGH
+            ),
             category="cache_synthesis",
         )
 
@@ -306,7 +336,51 @@ def build_provider_transforms(
     return [
         _make_thinking_control_adapter(coordinator),
         _make_cache_synthesis_adapter(coordinator),
+        _make_stream_options_adapter(),
     ]
+
+
+def _make_stream_options_adapter() -> tuple[TransformMeta, TransformFnAny]:
+    """Inject OpenAI stream usage options into the shared payload."""
+
+    def _apply(request: ProviderBoundRequest, ctx: TransformContext) -> TransformResult:
+        if ctx.upstream_protocol != "openai" or not getattr(
+            ctx.proxy_context, "streaming", False
+        ):
+            return TransformResult(decision=TransformDecision.SKIPPED)
+
+        include_usage: bool | None = None
+
+        def mutate(payload: dict[str, Any]) -> None:
+            nonlocal include_usage
+            value = payload.get("stream_options")
+            if isinstance(value, dict):
+                if "include_usage" in value:
+                    include_usage = bool(cast("Any", value["include_usage"]))
+                else:
+                    value["include_usage"] = True
+                    include_usage = True
+            elif value is None:
+                payload["stream_options"] = {"include_usage": True}
+                include_usage = True
+
+        changed = request.mutate_provider_payload(mutate, reason="stream_options")
+        if ctx.proxy_context is not None:
+            ctx.proxy_context.client_metadata["upstream_include_usage"] = include_usage
+        return TransformResult(
+            decision=(
+                TransformDecision.MUTATED if changed else TransformDecision.PASSTHROUGH
+            ),
+            category="stream_options",
+        )
+
+    return (
+        TransformMeta(
+            name="stream_options_include_usage",
+            diagnostic_category="stream_options",
+        ),
+        _apply,
+    )
 
 
 def run_provider_transforms(
@@ -337,13 +411,8 @@ def run_provider_transforms(
         selected=selected,
         proxy_context=context,
     )
-    # Pass a no-op ProviderBoundRequest — the adapters mutate context
-    # directly.  The pipeline orchestrator only reads payload from the
-    # request for aggregate bookkeeping (generation, transformed flag).
-    noop_request = ProviderBoundRequest(
-        client_bytes=b"",
-        client_payload={},
-        client_protocol="openai",
-        model_id="",
-    )
-    return run_transform_pipeline(noop_request, ctx, transforms)
+    request = getattr(context, "provider_bound", None)
+    if not isinstance(request, ProviderBoundRequest):
+        raise RuntimeError("provider-bound request is required for provider transforms")
+    ctx.proxy_context = context
+    return run_transform_pipeline(request, ctx, transforms)

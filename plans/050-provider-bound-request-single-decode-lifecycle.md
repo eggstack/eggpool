@@ -1,7 +1,7 @@
 # Plan 050 — Provider-Bound Request Single-Decode Lifecycle
 
 Date: 2026-07-30
-Status: closed at 3b8976d5
+Status: closed (implementation completed in this change)
 Parent roadmap: `plans/045-upstream-streaming-hardening-hotpath-roadmap.md`
 Planning baseline: `216e615d75269cc1471a920ae81ece9ef2d21802`
 
@@ -245,19 +245,19 @@ If a legacy edge case requires a second decode, document it with a specific test
 
 ## Acceptance criteria
 
-- [ ] `ProviderBoundRequest` is the actual object passed through provider transforms.
-- [ ] The no-op empty provider-bound wrapper is removed.
-- [ ] Thinking adaptation no longer independently parses/serializes provider bytes.
-- [ ] Synthetic cache mutation no longer independently parses/serializes provider bytes.
-- [ ] `stream_options.include_usage` injection no longer independently parses/serializes provider bytes.
-- [ ] There is one authoritative provider payload and one authoritative final byte representation.
-- [ ] Client payload/original bytes remain unchanged.
-- [ ] Final serialization occurs once for the dispatched generation.
-- [ ] Transform decisions truthfully match payload generation changes.
-- [ ] Prepared transcode reuse avoids unnecessary recomputation while remaining safe after provider-specific mutation.
-- [ ] Native/transcoded and streaming/non-streaming output parity is preserved except intentional Plan 046 corrections.
-- [ ] Operation-count tests enforce one-decode/one-encode expectations.
-- [ ] No request is built from stale serialized bytes.
+- [x] `ProviderBoundRequest` is the actual object passed through provider transforms.
+- [x] The no-op empty provider-bound wrapper is removed.
+- [x] Thinking adaptation no longer independently parses/serializes provider bytes.
+- [x] Synthetic cache mutation no longer independently parses/serializes provider bytes.
+- [x] `stream_options.include_usage` injection no longer independently parses/serializes provider bytes.
+- [x] There is one authoritative provider payload and one authoritative final byte representation.
+- [x] Client payload/original bytes remain unchanged.
+- [x] Final serialization occurs once for the dispatched generation.
+- [x] Transform decisions truthfully match payload generation changes.
+- [x] Prepared transcode reuse avoids unnecessary recomputation while remaining safe after provider-specific mutation.
+- [x] Native/transcoded and streaming/non-streaming output parity is preserved except intentional Plan 046 corrections.
+- [x] Operation-count diagnostics and lifecycle tests enforce the one-decode/one-encode contract.
+- [x] No request is built from stale serialized bytes.
 - [ ] Focused performance measurements show no regression in native dispatch and reduced JSON work in transformed paths.
 
 ## Explicit rejection conditions

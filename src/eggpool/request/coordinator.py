@@ -91,6 +91,7 @@ from eggpool.request.finalizer import (
 )
 from eggpool.request.limits import estimate_reservation_tokens
 from eggpool.request.parsed_payload import ParsedRequestPayload  # noqa: TC001
+from eggpool.request.provider_bound_request import ProviderBoundRequest
 from eggpool.request.selection_claim import (  # noqa: F401  (Milestone B scaffolding)
     SelectionClaim,  # type: ignore[reportUnusedImport]
     SelectionClaimError,  # type: ignore[reportUnusedImport]
@@ -602,6 +603,16 @@ class RequestCoordinator:
     - Pre-body failures retry on another account (excluding failed accounts)
     """
 
+    @staticmethod
+    def _serialize_provider_request(context: ProxyRequestContext) -> bytes:
+        """Serialize the final provider generation and mirror it for compatibility."""
+        request = context.provider_bound
+        if request is None:
+            raise RuntimeError("provider-bound request is required for serialization")
+        body = request.serialize_provider_payload()
+        context.upstream_body = body
+        return body
+
     def __init__(
         self,
         registry: AccountRegistry,
@@ -854,6 +865,13 @@ class RequestCoordinator:
         # Reject mismatched protocol endpoints before creating any
         # request, reservation, or attempt row.
         self._validate_endpoint_or_transcode(context)
+        provider_bound = context.provider_bound
+        if provider_bound is None:
+            # Compatibility for direct coordinator tests and embedders that
+            # construct ProxyRequestContext themselves. The API handler
+            # always supplies the canonical object from its single parse.
+            provider_bound = self._legacy_provider_request(context)
+            context.provider_bound = provider_bound
 
         # Phase 2: select the body transcoder when client and upstream
         # protocols differ and transcoding is enabled.
@@ -896,7 +914,9 @@ class RequestCoordinator:
                     and (_thinking_off or not _client_has_thinking)
                 ):
                     # Reuse the cached preflight translation.
-                    context.upstream_body = _prepared.translated_body
+                    provider_bound.set_provider_payload(_prepared.translated_payload)
+                    provider_bound.set_provider_bytes(_prepared.translated_body)
+                    provider_bound.diagnostics.provider_decodes += 0
                     context.transcode_context.loss_warnings.extend(
                         dict(warning) for warning in _prepared.warnings
                     )
@@ -932,11 +952,8 @@ class RequestCoordinator:
                         context.request_id,
                         _recompute_reason,
                     )
-                    try:
-                        payload = jsonx_loads(context.body_for_upstream)
-                    except ValueError:
-                        payload = None
-                    if isinstance(payload, dict):
+                    payload = provider_bound.provider_payload_copy()
+                    if len(payload) >= 0:
                         _thinking_cap: ThinkingCapability | None = None
                         _budget_defaults: dict[str, int] | None = None
                         _budget_policy = "lenient"
@@ -978,7 +995,9 @@ class RequestCoordinator:
                             budget_resolution_policy=_budget_policy,
                             loss_policy=_loss_policy,
                         )
-                        context.upstream_body = encode_json_body(translated)
+                        provider_bound.replace_provider_payload(
+                            translated, reason="protocol_transcode"
+                        )
                         context.transcode_context.loss_warnings.extend(warnings)
 
                         # Determine thinking decision from transcoder warnings
@@ -2392,6 +2411,9 @@ class RequestCoordinator:
             )
             raise
 
+        # Freeze the exact provider generation that will be dispatched.
+        self._serialize_provider_request(context)
+
         response: httpx.Response | None = None
         try:
             client = self._get_client(selected.provider_id, selected.account_name)
@@ -2728,39 +2750,9 @@ class RequestCoordinator:
                 err=err,
             )
             raise
-
-        # Inject stream_options.include_usage for OpenAI
+        self._serialize_provider_request(context)
         body_to_send = context.body_for_upstream
-        upstream_include_usage: bool | None = None
-        if context.upstream_protocol == "openai":
-            payload_obj: object
-            try:
-                payload_obj = jsonx_loads(body_to_send)
-            except ValueError:
-                pass
-            else:
-                if isinstance(payload_obj, dict):
-                    payload = cast("dict[str, Any]", payload_obj)
-                    stream_opts_value: Any = payload.get("stream_options")
-                    if isinstance(stream_opts_value, dict):
-                        stream_opts_dict = cast("dict[str, Any]", stream_opts_value)
-                        if "include_usage" not in stream_opts_dict:
-                            stream_opts_dict["include_usage"] = True
-                            body_to_send = encode_json_body(payload)
-                            upstream_include_usage = True
-                        else:
-                            raw_include: Any = stream_opts_dict.get(
-                                "include_usage", True
-                            )
-                            upstream_include_usage = bool(raw_include)
-                    elif stream_opts_value is None:
-                        payload["stream_options"] = {"include_usage": True}
-                        body_to_send = encode_json_body(payload)
-                        upstream_include_usage = True
-                    else:
-                        # Non-dict stream_options (list, str, bool, etc.) —
-                        # leave the body unchanged and let upstream reject it.
-                        pass
+        upstream_include_usage = context.client_metadata.get("upstream_include_usage")
 
         client = self._get_client(selected.provider_id, selected.account_name)
         request = client.build_request(
@@ -3947,6 +3939,7 @@ class RequestCoordinator:
         context: ProxyRequestContext,
         selected: SelectedAttempt,
         thinking_capability: ThinkingCapability,
+        request: Any,
     ) -> None:
         """Re-resolve ``thinking.budget_tokens`` for the selected provider.
 
@@ -3977,16 +3970,7 @@ class RequestCoordinator:
 
         if not context.transcode_required:
             return
-        body = context.upstream_body
-        if body is None:
-            return
-        try:
-            payload_obj: object = jsonx_loads(body)
-        except ValueError:
-            return
-        if not isinstance(payload_obj, dict):
-            return
-        payload: dict[str, object] = payload_obj  # pyright: ignore[reportUnknownVariableType]
+        payload: dict[str, object] = request.provider_payload_copy()
         thinking_block_obj: object = payload.get("thinking")  # pyright: ignore[reportUnknownMemberType]
         if not isinstance(thinking_block_obj, dict):
             return
@@ -4018,7 +4002,7 @@ class RequestCoordinator:
             context.thinking_trace["capability_source"] = thinking_capability.source
             if not context.thinking_trace.get("upstream_fields"):
                 context.thinking_trace["upstream_fields"] = ["thinking"]
-        context.upstream_body = encode_json_body(payload_obj)  # pyright: ignore[reportUnknownArgumentType]
+        request.replace_provider_payload(payload, reason="thinking_budget")
         if context.transcode_context is not None:
             context.transcode_context.loss_warnings.extend(resolution.warnings)
             if resolution.clamped:
@@ -4036,7 +4020,8 @@ class RequestCoordinator:
         *,
         context: ProxyRequestContext,
         selected: SelectedAttempt,
-    ) -> None:
+        request: Any | None = None,
+    ) -> bool:
         """Apply provider-specific thinking control normalization before dispatch.
 
         Runs two stages after provider selection:
@@ -4053,7 +4038,11 @@ class RequestCoordinator:
         attempt state is cleaned up before the error is re-raised.
         """
         if not selected.provider_id:
-            return
+            return False
+        legacy_request = request is None
+        if request is None:
+            request = self._legacy_provider_request(context)
+        generation_before = request.payload_generation
         thinking_capability = self._resolve_selected_thinking_capability(
             model_id=context.model_id,
             provider_id=selected.provider_id,
@@ -4064,6 +4053,7 @@ class RequestCoordinator:
                 context=context,
                 selected=selected,
                 thinking_capability=thinking_capability,
+                request=request,
             )
         # Stage 2: provider control normalization (always runs when
         # thinking controls are present, regardless of transcode_required).
@@ -4071,6 +4061,31 @@ class RequestCoordinator:
             context=context,
             selected=selected,
             thinking_capability=thinking_capability,
+            request=request,
+        )
+        changed = request.payload_generation != generation_before
+        if legacy_request:
+            context.upstream_body = request.serialize_provider_payload()
+        return changed
+
+    @staticmethod
+    def _legacy_provider_request(context: ProxyRequestContext) -> ProviderBoundRequest:
+        """Build a compatibility request for direct legacy helper callers.
+
+        Production dispatch always supplies the request from the context. This
+        narrow adapter keeps older unit-level helper callers working while
+        preventing the pipeline itself from creating a competing request.
+        """
+        body = context.upstream_body or context.original_body
+        payload = jsonx_loads(body)
+        if not isinstance(payload, dict):
+            raise ValueError("provider request payload must be an object")
+        typed_payload = cast("dict[str, Any]", payload)
+        return ProviderBoundRequest(
+            client_bytes=context.original_body,
+            client_payload=typed_payload,
+            client_protocol=context.protocol,
+            model_id=context.model_id,
         )
 
     def _adapt_provider_thinking_controls(
@@ -4079,6 +4094,7 @@ class RequestCoordinator:
         context: ProxyRequestContext,
         selected: SelectedAttempt,
         thinking_capability: ThinkingCapability,
+        request: Any,
     ) -> None:
         """Validate and adapt thinking controls against the provider contract.
 
@@ -4152,15 +4168,7 @@ class RequestCoordinator:
             )
 
         # Decode the current upstream body for adaptation.
-        body = context.upstream_body
-        if body is None:
-            body = context.original_body
-        try:
-            payload_obj: object = jsonx_loads(body)
-        except (ValueError, TypeError):
-            return
-        if not isinstance(payload_obj, dict):
-            return
+        payload_obj = request.provider_payload_copy()
 
         # Override the capability's control_contract with the resolved one.
         adapted_capability = thinking_capability.model_copy(deep=True)
@@ -4190,16 +4198,18 @@ class RequestCoordinator:
 
         # If the adaptation changed the payload, re-serialize.
         if result.changed:
-            from eggpool.jsonx import dumps_bytes as jsonx_dumps_bytes
-
-            context.upstream_body = jsonx_dumps_bytes(result.payload)  # type: ignore[arg-type]
+            request.replace_provider_payload(
+                result.payload,
+                reason="thinking_control",  # type: ignore[arg-type]
+            )
 
     def _apply_synthetic_cache_controls(
         self,
         *,
         context: ProxyRequestContext,
         selected: SelectedAttempt,
-    ) -> None:
+        request: Any | None = None,
+    ) -> bool:
         """Apply Phase 9 synthetic cache_control annotations on the provider-bound body.
 
         Runs AFTER ``_apply_selected_provider_transcode_adjustments`` so it
@@ -4214,19 +4224,13 @@ class RequestCoordinator:
         the second pass overrides the pre-route result.
         """
         if self._cache_config is None:
-            return
+            return False
         if not getattr(self._cache_config, "synthetic_cache_controls", None):
-            return
-        body = context.upstream_body
-        if body is None:
-            return
-        try:
-            payload_obj: object = jsonx_loads(body)
-        except ValueError:
-            return
-        if not isinstance(payload_obj, dict):
-            return
-        payload: dict[str, Any] = payload_obj  # pyright: ignore[reportUnknownVariableType]
+            return False
+        legacy_request = request is None
+        if request is None:
+            request = self._legacy_provider_request(context)
+        payload: dict[str, Any] = request.provider_payload_copy()
 
         target_provider_kind = resolve_selected_provider_kind(
             self._catalog, selected, config=self._config
@@ -4317,9 +4321,16 @@ class RequestCoordinator:
                 result.transformed_payload = None
                 result.cache_boundary_entries = ()
             else:
-                context.upstream_body = encode_json_body(result.transformed_payload)
+                changed = request.replace_provider_payload(
+                    result.transformed_payload, reason="synthetic_cache"
+                )
+                context.synthetic_cache_result = result
+                if legacy_request:
+                    context.upstream_body = request.serialize_provider_payload()
+                return changed
 
         context.synthetic_cache_result = result
+        return False
 
     async def _finalize_selected_capability_rejection(
         self,

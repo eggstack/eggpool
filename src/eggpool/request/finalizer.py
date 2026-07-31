@@ -147,6 +147,7 @@ class FinalizationData:
     upstream_request_id: str | None = None
     error_class: str | None = None
     error_detail: str | None = None
+    release_reason: str | None = None
     health_already_applied: bool = False
     upstream_connect_ms: int | None = None
     upstream_read_ms: int | None = None
@@ -677,6 +678,9 @@ class RequestFinalizer:
                     error_detail=error_detail,
                     upstream_request_id=data.upstream_request_id,
                     bytes_emitted=data.bytes_emitted,
+                    retry_category=self._retry_category_for_outcome(data.outcome),
+                    release_reason=data.release_reason
+                    or self._release_reason_for_outcome(data.outcome),
                 )
 
                 # 5. Release reservation
@@ -881,6 +885,24 @@ class RequestFinalizer:
         if outcome == FinalizationOutcome.CLIENT_CANCELLED:
             return "cancelled"
         return "error"
+
+    @staticmethod
+    def _release_reason_for_outcome(outcome: FinalizationOutcome) -> str:
+        """Return the durable release reason for terminal request outcomes."""
+        if outcome == FinalizationOutcome.CLIENT_ERROR:
+            return "capability_rejected"
+        if outcome == FinalizationOutcome.CLIENT_CANCELLED:
+            return "client_cancelled"
+        if outcome == FinalizationOutcome.COMPLETED:
+            return "completed"
+        return "attempt_failed"
+
+    @staticmethod
+    def _retry_category_for_outcome(outcome: FinalizationOutcome) -> str:
+        """Return the persisted retry classification for terminal outcomes."""
+        if outcome == FinalizationOutcome.CLIENT_ERROR:
+            return "never"
+        return "none"
 
     def _precompute_finalization_diagnostics(
         self,

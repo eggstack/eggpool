@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from eggpool.request.provider_bound_request import ProviderBoundRequest
 from eggpool.request.transform_pipeline import (
     TransformContext,
@@ -169,6 +171,7 @@ class TestRunTransformPipeline:
 
     def test_warnings_accumulated(self) -> None:
         def warn1(req: ProviderBoundRequest, ctx: TransformContext) -> TransformResult:
+            req.set_provider_payload({"model": "gpt-4", "warning": True})
             return TransformResult(
                 decision=TransformDecision.MUTATED,
                 warnings=({"kind": "warning1"},),
@@ -187,6 +190,19 @@ class TestRunTransformPipeline:
             request, context, [(meta1, warn1), (meta2, warn2)]
         )
         assert len(result.warnings) == 2
+
+    def test_mutated_decision_requires_generation_change(self) -> None:
+        def dishonest(
+            req: ProviderBoundRequest, ctx: TransformContext
+        ) -> TransformResult:
+            return TransformResult(decision=TransformDecision.MUTATED)
+
+        with pytest.raises(RuntimeError, match="reported mutation"):
+            run_transform_pipeline(
+                _make_request(),
+                _make_context(),
+                [(TransformMeta(name="dishonest"), dishonest)],
+            )
 
 
 # ---------------------------------------------------------------------------

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from types import MappingProxyType
 
+import pytest
+
 from eggpool.request.provider_bound_request import (
     PreparedTranscodeValidityKey,
     ProviderBoundRequest,
@@ -227,3 +229,40 @@ class TestProviderBoundRequest:
         pbr.set_provider_payload({"messages": [{"role": "user", "content": "hi"}]})
         # The stored payload should be a MappingProxyType
         assert isinstance(pbr._provider_payload, MappingProxyType)
+
+    def test_structural_noop_does_not_advance_generation(self) -> None:
+        pbr = ProviderBoundRequest(
+            client_bytes=b"{}",
+            client_payload={"model": "gpt-4"},
+            client_protocol="openai",
+            model_id="gpt-4",
+        )
+        assert pbr.replace_provider_payload({"model": "gpt-4"}, reason="noop") is False
+        assert pbr.payload_generation == 0
+
+    def test_serialization_is_cached_and_freezes_dispatch(self) -> None:
+        pbr = ProviderBoundRequest(
+            client_bytes=b"{}",
+            client_payload={"model": "gpt-4"},
+            client_protocol="openai",
+            model_id="gpt-4",
+        )
+        first = pbr.serialize_provider_payload()
+        second = pbr.serialize_provider_payload()
+        assert first == second
+        assert pbr.diagnostics.provider_encodes == 1
+        assert pbr.frozen is True
+        with pytest.raises(RuntimeError):
+            pbr.replace_provider_payload({"model": "claude"}, reason="late")
+
+    def test_mutation_log_is_bounded(self) -> None:
+        pbr = ProviderBoundRequest(
+            client_bytes=b"{}",
+            client_payload={"model": "gpt-4"},
+            client_protocol="openai",
+            model_id="gpt-4",
+            mutation_log_limit=2,
+        )
+        for index in range(4):
+            pbr.set_provider_payload({"model": f"model-{index}"})
+        assert len(pbr.mutation_log) == 2

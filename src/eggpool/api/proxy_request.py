@@ -818,6 +818,17 @@ async def _handle_proxy_request_inner(
             client_protocol=endpoint.protocol,
             model_id=model_id,
         )
+        # The rewrite is provider-bound state, while ``client_payload``
+        # remains the immutable parsed client snapshot. Keep the normalized
+        # model in the decoded object so final serialization cannot fall back
+        # to the client-suffixed model.
+        provider_payload = dict(payload_for_rewrite)
+        if provider_payload.get("model") != model_id:
+            provider_payload["model"] = model_id
+        if provider_payload != payload:
+            provider_bound.set_provider_payload(
+                provider_payload, increment_generation=False
+            )
 
         context = ProxyRequestContext(
             request_id=request_id,
