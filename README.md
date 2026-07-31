@@ -76,7 +76,7 @@ See [Deployment](docs/deployment.md) for alternative install methods (pipx, manu
 | `eggpool deploy backup-cron` | Install daily backup cron job |
 | `eggpool deploy logrotate` | Print/install logrotate config |
 | `eggpool deploy all` | Print every deployment snippet in sequence |
-| `eggpool update` | Check for and install updates |
+| `eggpool update [VERSION]` | Check for latest, or install an exact PyPI release (`v` prefix accepted) |
 | `eggpool uninstall` | Uninstall EggPool from this machine |
 
 All commands accept `--config /path/to/config.toml`. Config resolution: `--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`.

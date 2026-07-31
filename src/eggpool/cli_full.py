@@ -91,7 +91,12 @@ from eggpool.toml_edit import (
     render_toml_string,
     update_section_value,
 )
-from eggpool.update_checker import async_check_for_update, is_newer_version
+from eggpool.update_checker import (
+    async_check_for_update,
+    check_exact_release,
+    is_newer_version,
+    normalize_requested_version,
+)
 
 
 class _ConfigPathGroup(click.Group):
@@ -3925,74 +3930,158 @@ def db_vacuum(ctx: click.Context) -> None:
     _run_with_database(config, _run_vacuum)
 
 
+def _build_update_command(
+    *,
+    method: str,
+    target_version: str,
+    exact: bool,
+    from_source: bool,
+) -> list[str]:
+    """Build the installer command for latest or exact-version updates."""
+    repo = "eggstack/eggpool"
+    if from_source:
+        git_target = f"git+https://github.com/{repo}.git@v{target_version}"
+        if method == "source":
+            return ["uv", "sync", "--no-dev"]
+        if method == "pipx":
+            command = ["pipx", "install"]
+            if exact:
+                command.append("--force")
+            return [*command, git_target]
+        if method == "uv-tool":
+            command = ["uv", "tool", "install"]
+            if exact:
+                command.append("--force")
+            return [*command, git_target]
+        return [sys.executable, "-m", "pip", "install", git_target]
+
+    if exact:
+        requirement = f"eggpool=={target_version}"
+        if method == "pipx":
+            return ["pipx", "install", "--force", requirement]
+        if method == "uv-tool":
+            return ["uv", "tool", "install", "--force", requirement]
+        if method == "source":
+            raise ValueError(
+                "exact-version updates are not supported for source checkouts"
+            )
+        return [sys.executable, "-m", "pip", "install", requirement]
+
+    if method == "source":
+        repo_root = Path(__file__).resolve().parent.parent.parent
+        return ["uv", "sync", "--no-dev", "--directory", str(repo_root)]
+    if method == "pipx":
+        return ["pipx", "upgrade", "eggpool"]
+    if method == "uv-tool":
+        return ["uv", "tool", "install", f"eggpool=={target_version}"]
+    return [sys.executable, "-m", "pip", "install", "--upgrade", "eggpool"]
+
+
 @cli.command()
+@click.argument("requested_version", required=False)
 @click.option("--check", "check_only", is_flag=True, help="Only check, do not install.")
 @click.option(
     "--from-source", is_flag=True, help="Force update from git source instead of PyPI."
 )
 @click.pass_context
-def update(ctx: click.Context, check_only: bool, from_source: bool) -> None:
-    """Check for updates and reinstall if a newer version is available.
+def update(
+    ctx: click.Context,
+    requested_version: str | None,
+    check_only: bool,
+    from_source: bool,
+) -> None:
+    """Update to the latest release or an exact published VERSION.
 
-    Config and database files are never overwritten. If the server is
-    running it is restarted automatically after a successful update.
+    With VERSION, an optional leading ``v`` is accepted and the exact
+    release is verified on PyPI before installation. Exact targeting of a
+    source checkout is refused; use ``git checkout vVERSION && uv sync
+    --no-dev`` or install with pipx/uv-tool instead. Config and database
+    files are never overwritten. If the server is running it is restarted
+    automatically after a successful update.
     """
     import importlib.metadata
-    import subprocess
 
     from eggpool.providers.connect import restart_server
 
     config_path: str = ctx.obj["config_path"]
-    current_version, latest_version, error = async_check_for_update()
+
+    if requested_version is None:
+        current_version, latest_version, error = async_check_for_update()
+        if error:
+            click.echo(f"Error checking for updates: {error}", err=True)
+            sys.exit(1)
+
+        if not latest_version:
+            click.echo("Could not determine latest version from PyPI.", err=True)
+            sys.exit(1)
+
+        if not is_newer_version(current_version, latest_version):
+            click.echo("Already up to date.")
+            return
+
+        target_version = latest_version
+        exact = False
+    else:
+        try:
+            current_version = importlib.metadata.version("eggpool")
+        except Exception as exc:
+            click.echo(f"Error resolving installed version: {exc}", err=True)
+            sys.exit(1)
+        try:
+            normalized_version = normalize_requested_version(requested_version)
+        except ValueError as exc:
+            click.echo(f"Error: {exc}", err=True)
+            sys.exit(1)
+
+        target_version, error = check_exact_release(normalized_version)
+        if error:
+            if "does not exist on PyPI" in error:
+                click.echo(f"Error: {error}", err=True)
+            else:
+                click.echo(f"Error checking EggPool version: {error}", err=True)
+            sys.exit(1)
+
+        exact = True
+
     click.echo(f"Current version: {current_version}")
+    if exact:
+        click.echo(f"Requested version: {target_version}")
+    else:
+        click.echo(f"Latest version:  {target_version}")
 
-    if error:
-        click.echo(f"Error checking for updates: {error}", err=True)
-        sys.exit(1)
-
-    if not latest_version:
-        click.echo("Could not determine latest version from PyPI.", err=True)
-        sys.exit(1)
-
-    click.echo(f"Latest version:  {latest_version}")
-
-    if not is_newer_version(current_version, latest_version):
-        click.echo("Already up to date.")
+    if exact and normalize_requested_version(
+        current_version
+    ) == normalize_requested_version(target_version):
+        click.echo("Requested version is already installed.")
         return
 
     if check_only:
-        click.echo("An update is available.")
+        click.echo(
+            "An update is available." if not exact else "Exact version is available."
+        )
         return
 
-    click.echo(f"Updating from {current_version} to {latest_version}...")
-
-    # Determine update command based on install method
     method = _detect_install_method()
-    repo = "eggstack/eggpool"
-    git_target = f"git+https://github.com/{repo}.git@v{latest_version}"
+    if exact and method == "source":
+        click.echo(
+            "Error: exact-version update cannot safely modify a source checkout.\n"
+            f"  Run `git checkout v{target_version} && uv sync --no-dev`, or use "
+            "a pipx/uv-tool install.",
+            err=True,
+        )
+        sys.exit(1)
 
-    if from_source:
-        # Force update from git source — use the method-appropriate installer
-        if method == "source":
-            cmd = ["uv", "sync", "--no-dev"]
-        elif method == "pipx":
-            cmd = ["pipx", "install", git_target]
-        elif method == "uv-tool":
-            cmd = ["uv", "tool", "install", git_target]
-        else:
-            cmd = [sys.executable, "-m", "pip", "install", git_target]
-    elif method == "source":
-        # Source checkout — find repo root and run uv sync
-        repo_root = Path(__file__).resolve().parent.parent.parent
-        cmd = ["uv", "sync", "--no-dev", "--directory", str(repo_root)]
-    elif method == "pipx":
-        cmd = ["pipx", "upgrade", "eggpool"]
-    elif method == "uv-tool":
-        cmd = ["uv", "tool", "install", f"eggpool=={latest_version}"]
-    else:
-        cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "eggpool"]
+    click.echo(f"Updating from {current_version} to {target_version}...")
+    cmd = _build_update_command(
+        method=method,
+        target_version=target_version,
+        exact=exact,
+        from_source=from_source,
+    )
 
     click.echo(f"Running: {' '.join(cmd)}")
+    import subprocess
+
     result = subprocess.run(cmd, capture_output=True, text=True)  # noqa: S603
 
     if result.returncode != 0:
@@ -4007,6 +4096,17 @@ def update(ctx: click.Context, check_only: bool, from_source: bool) -> None:
         new_version = "unknown"
 
     click.echo(f"Installed version: {new_version}")
+
+    if exact and (
+        new_version == "unknown"
+        or normalize_requested_version(new_version)
+        != normalize_requested_version(target_version)
+    ):
+        click.echo(
+            f"Error: expected EggPool {target_version}, but installed {new_version}.",
+            err=True,
+        )
+        sys.exit(1)
 
     if restart_server(config_path):
         click.echo("Server restarted.")

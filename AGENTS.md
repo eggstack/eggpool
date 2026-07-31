@@ -144,7 +144,7 @@ stream-specific regressions.
 - **`eggpool rehash` serializes reload transactions**: only one reload in progress at a time. Concurrent rejections with `reload_in_progress`.
 - **`ReloadObserver` is inert in production**: the observer protocol has no-op defaults.
 - **`eggpool connect`/`logout` don't silently restart**: if the server is healthy but control socket is missing, they return `(False, "control unavailable (server healthy)")`.
-- **`eggpool update` must make a live PyPI lookup**: use `is_newer_version()` for version comparison, never raw string equality.
+- **`eggpool update` must make a live PyPI lookup**: bare updates use `is_newer_version()` and retain the freshness-aware latest path; an explicit `VERSION` uses the exact PyPI release endpoint, permits deliberate downgrades, and verifies the installed version before restart.
 - **No pre-commit hooks configured**: CI runs ruff, pyright, and pytest via GitHub Actions.
 - **`static_models` is source of truth for provider-specific protocol**: providers serving non-default protocol must ship `[[providers.<id>.static_models]]` rows.
 - **Upstream-authoritative suppression**: local quota estimates are advisory. Only upstream-observed failures suppress routing.

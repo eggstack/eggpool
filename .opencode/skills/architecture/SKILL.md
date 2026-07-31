@@ -170,6 +170,8 @@ Provider-bound `ThinkingControlContract` validates/normalizes thinking controls.
 
 ## Gotchas
 
+- **Update targeting**: `eggpool update` without an argument follows the live latest-release path. An explicit version must be normalized, verified through PyPI's exact release endpoint, installed with a pinned requirement/tag, and verified before restart; source checkouts refuse exact targeting.
+
 - **`fastcli` and `runtime_paths` are stdlib-only**: no transitive imports. Raspberry Pi watchdog contract.
 - **`/readyz` never performs a write**: reads a cached probe snapshot.
 - **Single event-loop thread is canonical**: all `asyncio.Lock` objects are loop-bound.

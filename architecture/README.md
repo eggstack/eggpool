@@ -1666,6 +1666,15 @@ inputs.
 
 - **`UpdateChecker`** — the background/periodic probe registered via `TaskSupervisor.register_periodic("update_checker", ...)`. It caches the latest `UpdateInfo` so the dashboard footer indicator and `/api/stats/update` reflect a recent state without hitting PyPI on every request. The background probe reuses the shared outbound `httpx.AsyncClient` and is intentionally conservative (no freshness bypass) to keep PyPI traffic minimal.
 - **`async_check_for_update()`** — the CLI one-shot helper used by `eggpool update`. It performs its own live PyPI lookup and must NEVER read `UpdateChecker.snapshot()` — a stale dashboard cache could mask a real newer release and cause the operator to skip the update.
+- **`check_exact_release()`** and **`normalize_requested_version()`** — the explicit-version path used by `eggpool update VERSION`. It validates one supported version, checks the exact PyPI release endpoint, and returns the canonical release without consulting the dashboard cache.
+
+The CLI accepts `eggpool update` for the existing latest-release behavior and
+`eggpool update VERSION` (including `vVERSION`) for an exact published release.
+Exact package installs pin `eggpool==VERSION` and may downgrade; exact
+`--from-source` installs pin the Git tag. A source checkout refuses exact
+targeting because changing local checkout state safely requires operator
+decisions. After an exact install, the distribution version must match the
+canonical PyPI target before the server can restart.
 
 ### Freshness-aware CLI lookup
 

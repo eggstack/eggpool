@@ -310,6 +310,70 @@ class TestUpdateFailures:
         assert "Could not determine latest version" in output
 
 
+class TestExactUpdate:
+    def test_older_exact_version_is_pinned_for_install(self) -> None:
+        runner = CliRunner()
+        with (
+            patch(
+                "importlib.metadata.version",
+                side_effect=["0.2.0", "0.1.0"],
+            ),
+            patch(
+                "eggpool.cli_full.check_exact_release",
+                return_value=("0.1.0", ""),
+            ),
+            patch("eggpool.cli_full._detect_install_method", return_value="pip"),
+            patch("subprocess.run") as mock_run,
+            patch("eggpool.providers.connect.restart_server", return_value=False),
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stderr="")
+            result = runner.invoke(cli, ["update", "v0.1.0"])
+
+        assert result.exit_code == 0
+        assert "Requested version: 0.1.0" in result.output
+        assert mock_run.call_args.args[0][-1] == "eggpool==0.1.0"
+
+    def test_missing_exact_version_does_not_install_or_restart(self) -> None:
+        runner = CliRunner()
+        with (
+            patch("importlib.metadata.version", return_value="0.2.0"),
+            patch(
+                "eggpool.cli_full.check_exact_release",
+                return_value=("", "EggPool version 0.9.9 does not exist on PyPI."),
+            ),
+            patch("subprocess.run") as mock_run,
+            patch("eggpool.providers.connect.restart_server") as mock_restart,
+        ):
+            result = runner.invoke(cli, ["update", "0.9.9"])
+
+        assert result.exit_code == 1
+        assert "does not exist on PyPI" in result.output
+        mock_run.assert_not_called()
+        mock_restart.assert_not_called()
+
+    def test_post_install_version_mismatch_does_not_restart(self) -> None:
+        runner = CliRunner()
+        with (
+            patch(
+                "importlib.metadata.version",
+                side_effect=["0.1.0", "0.1.1"],
+            ),
+            patch(
+                "eggpool.cli_full.check_exact_release",
+                return_value=("0.2.0", ""),
+            ),
+            patch("eggpool.cli_full._detect_install_method", return_value="pip"),
+            patch("subprocess.run") as mock_run,
+            patch("eggpool.providers.connect.restart_server") as mock_restart,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stderr="")
+            result = runner.invoke(cli, ["update", "0.2.0"])
+
+        assert result.exit_code == 1
+        assert "expected EggPool 0.2.0, but installed 0.1.1" in result.output
+        mock_restart.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # install script
 # ---------------------------------------------------------------------------

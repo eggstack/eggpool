@@ -26,6 +26,22 @@ overwriting an existing file and prints the resolved config path.
 
 After install, `eggpool onboard` walks the operator through provider
 connections, configuration validation, and an optional server start.
+
+### Updating EggPool
+
+```bash
+eggpool update          # install the newest published release when newer
+eggpool update 0.6.4    # install one exact PyPI release
+eggpool update v0.6.4   # equivalent spelling
+eggpool update 0.6.4 --check
+```
+
+Exact package updates are pinned and can intentionally downgrade. The
+command verifies the release on PyPI and verifies the installed version
+before restarting a running server. Exact targeting is refused for a local
+source checkout; change that checkout deliberately with `git checkout
+v0.6.4 && uv sync --no-dev`, or use a pipx/uv-tool installation.
+
 The systemd step then takes over: `eggpool deploy systemd --install`
 generates a unit tailored to your system (correct binary path,
 absolute config path, `User=`/`Group=` set to the invoking user) and

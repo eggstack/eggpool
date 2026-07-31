@@ -36,7 +36,7 @@ PYPI_URL = "https://pypi.org/pypi/eggpool/json"
 _CHECK_TIMEOUT_S = 15.0
 _DEFAULT_CHECK_INTERVAL_S = 24 * 60 * 60
 _VERSION_RE = re.compile(
-    r"^\s*v?"
+    r"v?"
     r"(?P<release>\d+(?:\.\d+)*)"
     r"(?:[-_.]?(?P<pre_l>a|b|rc)[-_.]?(?P<pre_n>\d*))?"
     r"(?:[-_.]?post[-_.]?(?P<post_n>\d*))?"
@@ -61,6 +61,55 @@ def is_newer_version(current: str, latest: str) -> bool:
 
 class UpdateCheckError(RuntimeError):
     """Raised when the PyPI lookup fails or returns an unparseable body."""
+
+
+def normalize_requested_version(raw: str) -> str:
+    """Normalize and validate one exact EggPool release version."""
+    value = raw.strip()
+    if value[:1].lower() == "v":
+        value = value[1:]
+    if not value or _VERSION_RE.fullmatch(value) is None:
+        raise ValueError(
+            f"invalid EggPool version {raw!r}. Expected a version such as "
+            "0.6.5 or v0.6.5."
+        )
+    return value
+
+
+def check_exact_release(
+    requested_version: str,
+    *,
+    package_name: str = "eggpool",
+    timeout_s: float = _CHECK_TIMEOUT_S,
+    http_get: Callable[..., httpx.Response] | None = None,
+) -> tuple[str, str]:
+    """Return ``(canonical_version, error_message)`` for one PyPI release."""
+    url = f"https://pypi.org/pypi/{package_name}/{requested_version}/json"
+    get = http_get or httpx.get
+    try:
+        response = get(
+            url,
+            timeout=timeout_s,
+            follow_redirects=True,
+            headers={
+                "Cache-Control": "no-cache, max-age=0",
+                "Pragma": "no-cache",
+                "Accept": "application/json",
+                "User-Agent": "eggpool/update-check",
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 — report bounded lookup failures
+        return "", f"pypi: {exc}"
+    if response.status_code == 404:
+        return "", f"EggPool version {requested_version} does not exist on PyPI."
+    try:
+        canonical = _latest_version_from_response(response)
+        normalized_canonical = normalize_requested_version(canonical)
+    except (UpdateCheckError, ValueError) as exc:
+        return "", f"pypi: {exc}"
+    if _pep440_key(normalized_canonical) != _pep440_key(requested_version):
+        return "", "pypi: response version does not match requested version"
+    return canonical, ""
 
 
 @dataclass(frozen=True)
@@ -330,7 +379,7 @@ def _pep440_key(version: str) -> tuple[int, ...]:
 
     ``.dev`` < ``a`` < ``b`` < ``rc`` < final < ``.post``.
     """
-    match = _VERSION_RE.match(version)
+    match = _VERSION_RE.fullmatch(version)
     if match is None:
         return (0, 0, 0, 0, 4, 0)
 
@@ -487,6 +536,8 @@ __all__ = [
     "UpdateChecker",
     "UpdateInfo",
     "async_check_for_update",
+    "check_exact_release",
     "is_newer_version",
+    "normalize_requested_version",
     "schedule_check",
 ]

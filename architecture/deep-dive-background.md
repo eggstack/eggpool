@@ -80,6 +80,7 @@ Recorded in `operational_events` table:
 `src/eggpool/update_checker.py` — two paths:
 - **Background probe**: `UpdateChecker` via `TaskSupervisor.register_periodic()`. Conservative (no freshness bypass). Caches latest `UpdateInfo`.
 - **CLI one-shot**: `async_check_for_update()`. Live PyPI lookup with freshness-aware double-fetch. Never reads `UpdateChecker.snapshot()`.
+- **Exact CLI target**: `normalize_requested_version()` and `check_exact_release()` validate one requested release and query its PyPI metadata directly; this path is separate from the cached background snapshot.
 
 ## Key Invariants
 

@@ -148,7 +148,8 @@ Small helper for editing scalar TOML section values while preserving formatting.
 
 Two paths:
 - **`UpdateChecker`**: background/periodic probe, caches latest `UpdateInfo`
-- **`async_check_for_update()`**: CLI one-shot, performs live PyPI lookup (never reads `UpdateChecker.snapshot()`)
+- **`async_check_for_update()`**: bare CLI one-shot, performs the freshness-aware live latest lookup (never reads `UpdateChecker.snapshot()`)
+- **`normalize_requested_version()` / `check_exact_release()`**: validate and verify an optional exact `VERSION` through PyPI's release endpoint; exact installs are pinned and verified before restart
 
 CLI helper uses freshness-aware lookup with cache-bust tokens and double-fetch for stale CDN protection. Version comparison via `is_newer_version()` (PEP 440 compliant).
 
@@ -157,5 +158,5 @@ CLI helper uses freshness-aware lookup with cache-bust tokens and double-fetch f
 - `fastcli` and `runtime_paths` are stdlib-only — no transitive imports
 - `ConfigValidationError` subclasses never raise `SystemExit`
 - `reload_in_progress` exits with code 4 (`EXIT_RELOAD_BUSY`)
-- `eggpool update` must make a live PyPI lookup, never consult `UpdateChecker.snapshot()`
+- `eggpool update` must make a live PyPI lookup, never consult `UpdateChecker.snapshot()`; explicit versions must not silently fall back to latest
 - JSON backend tests are parametrised across both orjson and stdlib

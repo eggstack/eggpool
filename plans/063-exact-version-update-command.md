@@ -1,7 +1,7 @@
 # Plan 063 — Exact-Version Update Command
 
 Date: 2026-07-31
-Status: ready for implementation
+Status: complete
 Parent roadmap: `plans/058-durable-convergence-exact-update-sbc-hotpath-roadmap.md`
 Planning baseline: `3e4f41ff6efed4a1a69a9bb0a6147891d0b2b2b3`
 

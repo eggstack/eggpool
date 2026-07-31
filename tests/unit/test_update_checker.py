@@ -15,7 +15,9 @@ from eggpool.update_checker import (
     UpdateInfo,
     _pep440_key,
     async_check_for_update,
+    check_exact_release,
     is_newer_version,
+    normalize_requested_version,
 )
 
 
@@ -286,6 +288,33 @@ class TestPep440Key:
     def test_normalizes_trailing_release_zeroes(self) -> None:
         assert _pep440_key("1.0") == _pep440_key("1.0.0")
         assert _pep440_key("1.0.1") > _pep440_key("1.0")
+
+
+class TestExactRelease:
+    @pytest.mark.parametrize("raw", ["0.6.4", "v0.6.4", "V0.6.4", " 0.6.4 "])
+    def test_normalizes_supported_exact_versions(self, raw: str) -> None:
+        assert normalize_requested_version(raw) == "0.6.4"
+
+    @pytest.mark.parametrize("raw", ["", "v", "0.6.*", ">=0.6", "0.6.4junk"])
+    def test_rejects_non_exact_versions(self, raw: str) -> None:
+        with pytest.raises(ValueError):
+            normalize_requested_version(raw)
+
+    def test_returns_canonical_release_version(self) -> None:
+        response = _fake_response("0.6.4")
+        canonical, error = check_exact_release(
+            "0.6.4", http_get=lambda _url, **_kwargs: response
+        )
+        assert canonical == "0.6.4"
+        assert error == ""
+
+    def test_reports_missing_release(self) -> None:
+        response = _fake_response("0.6.99", status_code=404)
+        canonical, error = check_exact_release(
+            "0.6.99", http_get=lambda _url, **_kwargs: response
+        )
+        assert canonical == ""
+        assert "does not exist on PyPI" in error
 
 
 # ---------------------------------------------------------------------------
