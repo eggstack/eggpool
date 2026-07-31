@@ -37,6 +37,7 @@ from eggpool.errors import (
     DatabaseError,
     ModelNotFoundError,
     ModelUnavailableError,
+    PrematureStreamEOFError,
     QuotaExhaustedError,
     RateLimitError,
     TemporaryUpstreamError,
@@ -101,9 +102,20 @@ from eggpool.request.selection_claim_diagnostics import (  # noqa: F401  (Milest
     get_selection_claim_diagnostics,
     set_selection_claim_diagnostics,  # type: ignore[reportUnusedImport]
 )
+from eggpool.request.stream_completion import (
+    CompletionPolicy,
+    StreamEOFDecision,
+    classify_stream_eof,
+)
 from eggpool.request.stream_diagnostics import (
     STREAM_OUTCOME_CLIENT_CANCELLED,
     STREAM_OUTCOME_COMPLETED,
+    STREAM_OUTCOME_COMPLETED_CANONICAL,
+    STREAM_OUTCOME_COMPLETED_COMPATIBILITY,
+    STREAM_OUTCOME_EMPTY_EOF,
+    STREAM_OUTCOME_MALFORMED_EOF,
+    STREAM_OUTCOME_PREMATURE_EOF_BEFORE_BODY,
+    STREAM_OUTCOME_PREMATURE_EOF_MIDSTREAM,
     STREAM_OUTCOME_UPSTREAM_MIDSTREAM_ERROR,
     StreamDiagnostics,
     classify_httpx_error_class,
@@ -2928,6 +2940,7 @@ class RequestCoordinator:
             context.upstream_protocol, provider_id=selected.provider_id
         )
         bytes_emitted = 0
+        downstream_bytes_emitted = 0
         first_byte_ms = 0.0
         started = time.monotonic()
         # Use the caller-provided request start time so first_byte_ms
@@ -2977,7 +2990,7 @@ class RequestCoordinator:
             )
 
         async def _stream() -> AsyncIterator[bytes]:
-            nonlocal bytes_emitted, first_byte_ms
+            nonlocal bytes_emitted, downstream_bytes_emitted, first_byte_ms
             try:
                 streaming_transcoder = select_streaming_transcoder(
                     client_protocol=context.protocol,
@@ -3010,17 +3023,144 @@ class RequestCoordinator:
                     if streaming_transcoder is not None:
                         out_chunks = streaming_transcoder.feed(chunk)
                         if out_chunks:
-                            yield b"".join(out_chunks)
+                            output = b"".join(out_chunks)
+                            downstream_bytes_emitted += len(output)
+                            yield output
                     else:
+                        downstream_bytes_emitted += len(chunk)
                         yield chunk
 
-                # Stream completed - flush observer and transcoder
+                # Transport EOF is not protocol completion. Drain the parser,
+                # classify first, and only then permit a transcoder flush.
                 observer.flush()
+                provider_config = (
+                    self._config.providers.get(selected.provider_id)
+                    if self._config is not None
+                    else None
+                )
+                completion_policy = cast(
+                    "CompletionPolicy",
+                    getattr(provider_config, "stream_completion_policy", "strict"),
+                )
+                if (
+                    "text/event-stream"
+                    not in upstream_response.headers.get("content-type", "").lower()
+                ):
+                    # A few OpenAI-compatible providers return a complete JSON
+                    # body despite a streaming request. Preserve that legacy
+                    # pass-through behavior; SSE completion rules apply to
+                    # event-stream responses only.
+                    eof_decision = StreamEOFDecision(
+                        classification="complete",
+                        retryable=False,
+                        downstream_started=downstream_bytes_emitted > 0,
+                    )
+                else:
+                    eof_decision = classify_stream_eof(
+                        protocol=context.upstream_protocol,
+                        policy=completion_policy,
+                        snapshot=observer.completion_snapshot,
+                        downstream_bytes_emitted=downstream_bytes_emitted,
+                    )
+                if eof_decision.classification not in {
+                    "complete",
+                    "compatibility_eof",
+                }:
+                    eof_outcome = {
+                        "empty_eof": STREAM_OUTCOME_EMPTY_EOF,
+                        "malformed_eof": STREAM_OUTCOME_MALFORMED_EOF,
+                        "premature_eof": (
+                            STREAM_OUTCOME_PREMATURE_EOF_MIDSTREAM
+                            if eof_decision.downstream_started
+                            else STREAM_OUTCOME_PREMATURE_EOF_BEFORE_BODY
+                        ),
+                    }[eof_decision.classification]
+                    self._stream_diagnostics.record_outcome(
+                        eof_outcome,
+                        proxy_request_id=context.request_id,
+                        db_request_id=selected.db_request_id,
+                        provider_id=selected.provider_id,
+                        account_name=selected.account_name,
+                        model_id=selected.model_id,
+                        protocol=context.upstream_protocol,
+                        bytes_emitted=downstream_bytes_emitted,
+                        attempt=selected.attempt_number,
+                    )
+                    usage_result = observer.usage
+                    incomplete_latency = int((time.monotonic() - reference) * 1000)
+                    await finalizer.finalize(
+                        selected,
+                        FinalizationData(
+                            outcome=FinalizationOutcome.MIDSTREAM_ERROR,
+                            first_byte_ms=(
+                                int(first_byte_ms) if first_byte_ms > 0 else None
+                            ),
+                            upstream_latency_ms=incomplete_latency,
+                            bytes_emitted=downstream_bytes_emitted,
+                            input_tokens=usage_result.input_tokens,
+                            output_tokens=usage_result.output_tokens,
+                            cache_read_tokens=usage_result.cache_read_tokens,
+                            cache_write_tokens=usage_result.cache_creation_tokens,
+                            reasoning_tokens=usage_result.reasoning_tokens,
+                            thinking_characters=usage_result.thinking_characters,
+                            error_class="PrematureStreamEOFError",
+                            error_detail=eof_decision.classification,
+                            bytes_received=len(context.original_body),
+                            upstream_protocol=context.upstream_protocol,
+                            normalized_usage=_build_normalized_usage(
+                                usage=usage_result,
+                                raw_payload=None,
+                                protocol=context.upstream_protocol,
+                                provider_id=selected.provider_id,
+                                model_id=selected.model_id,
+                                is_streaming=True,
+                            ),
+                            transcoded=context.transcode_context is not None,
+                        ),
+                    )
+                    self._stream_diagnostics.record_outcome(
+                        STREAM_OUTCOME_UPSTREAM_MIDSTREAM_ERROR,
+                        proxy_request_id=context.request_id,
+                        db_request_id=selected.db_request_id,
+                        provider_id=selected.provider_id,
+                        account_name=selected.account_name,
+                        model_id=selected.model_id,
+                        protocol=context.upstream_protocol,
+                        elapsed_ms=incomplete_latency,
+                        bytes_emitted=downstream_bytes_emitted,
+                        first_byte_ms=(
+                            int(first_byte_ms) if first_byte_ms > 0 else None
+                        ),
+                        attempt=selected.attempt_number,
+                        exception_class="PrematureStreamEOFError",
+                    )
+                    raise PrematureStreamEOFError(
+                        eof_decision.classification, request_id=context.request_id
+                    )
                 if streaming_transcoder is not None:
                     out_chunks = streaming_transcoder.flush()
                     if out_chunks:
-                        yield b"".join(out_chunks)
+                        output = b"".join(out_chunks)
+                        downstream_bytes_emitted += len(output)
+                        yield output
                 usage_result = observer.usage
+
+                completion_outcome = (
+                    STREAM_OUTCOME_COMPLETED_COMPATIBILITY
+                    if eof_decision.classification == "compatibility_eof"
+                    else STREAM_OUTCOME_COMPLETED_CANONICAL
+                )
+                self._stream_diagnostics.record_outcome(
+                    completion_outcome,
+                    proxy_request_id=context.request_id,
+                    db_request_id=selected.db_request_id,
+                    provider_id=selected.provider_id,
+                    account_name=selected.account_name,
+                    model_id=selected.model_id,
+                    protocol=context.upstream_protocol,
+                    bytes_emitted=downstream_bytes_emitted,
+                    attempt=selected.attempt_number,
+                )
 
                 upstream_latency_total = int((time.monotonic() - reference) * 1000)
                 upstream_connect_ms_value = context.upstream_connect_ms
@@ -3238,6 +3378,8 @@ class RequestCoordinator:
                         upstream_read_ms=cancel_read_ms_value,
                         attempt=selected.attempt_number,
                     )
+                raise
+            except PrematureStreamEOFError:
                 raise
             except Exception as exc:
                 # Midstream error - finalize, no retry

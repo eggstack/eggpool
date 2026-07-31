@@ -120,6 +120,9 @@ class StreamingTranscoder(Protocol):
     def flush(self) -> list[bytes]: ...
 
     @property
+    def saw_terminal_event(self) -> bool: ...
+
+    @property
     def usage(self) -> StreamUsageResult: ...
 
 
@@ -155,6 +158,12 @@ class _BaseStreamingTranscoder:
         self._current_event = ""
         self._current_event_bytes = 0
         self._discarding = False
+        self._saw_terminal_event = False
+
+    @property
+    def saw_terminal_event(self) -> bool:
+        """Whether a canonical upstream terminal event was consumed."""
+        return self._saw_terminal_event
 
     # ------------------------------------------------------------------
     # Incremental SSE frame parser
@@ -283,6 +292,10 @@ class _BaseStreamingTranscoder:
             frame = self._emit_frame()
             if frame is not None:
                 frames.append(frame)
+        elif self._current_data_lines and not self._discarding:
+            frame = self._emit_frame()
+            if frame is not None:
+                frames.append(frame)
         self._buffer = ""
         self._discarding = False
         return frames
@@ -386,7 +399,8 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
             self._finished = True
             self._pending_stop_reason = "tool_use"
             out.extend(self._flush_pending_tool_blocks())
-        out.extend(self._stop_message())
+        if self._saw_terminal_event:
+            out.extend(self._stop_message())
         return out
 
     def _translate(
@@ -397,6 +411,7 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
         if event_type == "error":
             return self._handle_error(data)
         if data.strip() == "[DONE]":
+            self._saw_terminal_event = True
             return self._stop_message()
         parsed = self._safe_json(data)
         if parsed is None:
@@ -762,9 +777,10 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
         out: list[bytes] = []
         for event_type, data in frames:
             out.extend(self._translate(event_type, data))
-        done = self._emit_done()
-        if done is not None:
-            out.append(done)
+        if self._saw_terminal_event:
+            done = self._emit_done()
+            if done is not None:
+                out.append(done)
         return out
 
     def _translate(
@@ -774,6 +790,12 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
     ) -> list[bytes]:
         if event_type == "error":
             return self._handle_error(data)
+        if event_type == "message_stop":
+            self._saw_terminal_event = True
+            parsed = self._safe_json(data)
+            if parsed is None:
+                return []
+            return self._dispatch(event_type, parsed)
         parsed = self._safe_json(data)
         if parsed is None:
             return []
@@ -822,6 +844,9 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
             return self._on_content_block_stop(parsed)
         if t == "message_delta":
             return self._on_message_delta(parsed)
+        if t == "message_stop":
+            done = self._emit_done()
+            return [done] if done is not None else []
         return []
 
     def _on_content_block_start(

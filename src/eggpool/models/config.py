@@ -791,6 +791,9 @@ class ProviderConfig(BaseModel):
     read_timeout_s: float = Field(default=300, gt=0)
     write_timeout_s: float = Field(default=30, gt=0)
     pool_timeout_s: float = Field(default=30, gt=0)
+    stream_completion_policy: Literal["strict", "compatible", "permissive_observe"] = (
+        "strict"
+    )
     max_connections: int = Field(default=100, gt=0)
     max_keepalive: int = Field(default=20, gt=0)
     keepalive_timeout_s: float = Field(default=30, ge=0)

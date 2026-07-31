@@ -41,20 +41,27 @@ async def test_premature_eof_not_completed(real_runtime_app: FastAPI) -> None:
     async with httpx.AsyncClient(
         transport=transport, base_url="http://testserver"
     ) as client:
-        resp = await client.post(
-            "/v1/chat/completions",
-            headers={"Authorization": "Bearer rt-test-key"},
-            json={
-                "model": "gpt-4",
-                "messages": [{"role": "user", "content": "Hi"}],
-                "stream": True,
-            },
-        )
+        try:
+            resp = await client.post(
+                "/v1/chat/completions",
+                headers={"Authorization": "Bearer rt-test-key"},
+                json={
+                    "model": "gpt-4",
+                    "messages": [{"role": "user", "content": "Hi"}],
+                    "stream": True,
+                },
+            )
+        except RuntimeError as exc:
+            # ASGITransport reports an exception after response headers have
+            # started; production servers likewise terminate the iterator.
+            assert "PrematureStreamEOFError" in repr(exc.__cause__)
+            body = ""
+        else:
+            body = resp.text
 
     # The response may be 200 (headers already sent) or an error depending
     # on how the coordinator handles midstream failure.  Either way, the
     # downstream body must NOT contain a successful terminal marker.
-    body = resp.text
     # A normal successful OpenAI stream ends with "data: [DONE]"
     # After premature EOF the body should not have that marker.
     # The body may contain an error JSON or be empty, but [DONE] is forbidden.

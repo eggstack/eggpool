@@ -605,7 +605,10 @@ async def test_scenario_matrix_no_leak(
     assert state["active_requests_total"] == 0, (scenario, state)
     assert state["finalization_retry_queue_size"] == 0, (scenario, state)
     assert state["quota_reserved_cost_delta"] == 0, (scenario, state)
-    assert summary["completed_count"] >= 1, (scenario, summary)
+    if scenario in {SCENARIO_ABRUPT_CLOSE, SCENARIO_CONNECTION_RESET}:
+        assert summary["failure_count"] >= 1, (scenario, summary)
+    else:
+        assert summary["completed_count"] >= 1, (scenario, summary)
 
 
 @pytest.mark.asyncio()

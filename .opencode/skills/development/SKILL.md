@@ -118,6 +118,11 @@ uv run pytest tests/smoke/ -q --tb=short --maxfail=1
 
 The smoke suite covers: package import, config parsing, invalid config rejection, check-config validation, DB migration, one non-stream request, one streaming request, one upstream failure followed by recovery, one premature EOF, one Anthropic request, and CLI help.
 
+Streaming completion regressions should include both the pure EOF decision table
+and the real response path. Verify that canonical `[DONE]`/`message_stop` streams
+complete, markerless payload streams record incomplete EOF, and transcoded streams
+do not receive a synthetic terminal marker after premature EOF.
+
 ## Code Style
 
 - Python 3.11+ with `from __future__ import annotations` in all files

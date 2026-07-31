@@ -19,6 +19,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Provider-neutral request shaping: cache reporting, safe suffix compression, policy-scoped overrides, optional synthetic cache controls, and advisory threshold tuning
 - Thinking/reasoning capability-aware routing with configurable budget mapping
 - High-concurrency stream stability: bounded retry queue, lock-contention diagnostics, and an OpenCode-specific operator playbook for sustained coding-agent streaming loads
+- Protocol-aware stream completion: clean EOF is classified from upstream `[DONE]`/`message_stop` evidence; truncated streams are never recorded as successful
 - Dispatch timing: distinct `local_pre_upstream` (full EggPool-side) and `dispatch_overhead` (coordinator-internal) metrics with cadence drift diagnostics for background tasks
 - Durable dispatch write pipeline: process-owned microbatching writer for concurrent dispatch intents with bounded queue, adaptive batching, and diagnostics
 - Bounded observability: request-coherent span sampling (5% default), bounded rolling-window metrics, and constant-bounded snapshot cost regardless of uptime
@@ -144,6 +145,13 @@ Feature flags (`[transcoder.features]`) — all **off** by default:
 - `anthropic_primitives` — `top_k`, `cache_control`, `context_management`, `container`, `mcp_servers`
 
 The streaming hot path is optimised for sustained concurrent coding-agent loads. See [docs/transcoding.md](docs/transcoding.md) for the full translation table, known limitations, and streaming performance notes.
+
+Streaming completion is determined by the upstream protocol, not by the absence
+of a transport exception. OpenAI streams require `data: [DONE]` and Anthropic
+streams require `event: message_stop`. Provider-specific markerless behavior,
+when needed, is configured with `[providers.<id>].stream_completion_policy`;
+the default is `strict`. Premature EOF is retried only before downstream bytes
+are emitted and is a non-retryable midstream failure afterward.
 
 ## Request shaping
 

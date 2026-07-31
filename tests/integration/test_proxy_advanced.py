@@ -373,15 +373,21 @@ async def test_midstream_upstream_failure(
             )
         )
 
-        response = await client.post(
-            "/v1/chat/completions",
-            json={
-                "model": "gpt-4",
-                "messages": [{"role": "user", "content": "Hi"}],
-                "stream": True,
-            },
-            headers=auth_headers,
-        )
+        try:
+            response = await client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "gpt-4",
+                    "messages": [{"role": "user", "content": "Hi"}],
+                    "stream": True,
+                },
+                headers=auth_headers,
+            )
+        except RuntimeError as exc:
+            # ASGITransport wraps an iterator exception after headers have
+            # started; the typed cause is the expected midstream outcome.
+            assert "PrematureStreamEOFError" in repr(exc.__cause__)
+            return
 
     assert response.status_code == 200
     assert "Hello" in response.text

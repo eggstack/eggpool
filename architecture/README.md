@@ -77,6 +77,7 @@ All outbound dispatch paths (non-streaming chat, streaming chat, catalog refresh
 Key invariants:
 - Requests must be persisted before upstream dispatch
 - Pre-body failures can retry; no retry after first downstream byte emitted
+- **Protocol-aware streaming EOF**: `IncrementalSSEObserver` retains bounded completion evidence (`[DONE]` for OpenAI, `message_stop` for Anthropic), and `classify_stream_eof()` maps clean exhaustion to canonical completion, provider-policy compatibility, empty, premature, or malformed EOF. The coordinator drains parser state and classifies before transcoder flush. A premature/malformed stream is finalized through the canonical `MIDSTREAM_ERROR` owner; it cannot clear success backoff or emit a synthetic downstream terminal marker. Provider policy is explicit on `ProviderConfig.stream_completion_policy` and defaults to `strict`.
 - Every retryable failed attempt must reach terminal state before the next attempt
 - Each attempt reservation is released exactly once via `AttemptFinalizer`
 - **Process-owned request finalization (Plans 026/047)**: every selected terminal outcome is owned by one retained, attempt-keyed `RequestFinalizationJob` registered before cancellation-sensitive stream work; the retained task completes durable and in-memory cleanup independently of request waiters. Duplicate submissions join, conflicting terminal payloads are diagnosed, and the bounded `RequestFinalizationSupervisor` provides diagnostics, startup reconciliation, and shutdown drain. The stale-request finalizer is a recovery safety net rather than a normal terminal path.
@@ -3035,6 +3036,8 @@ path under a fixed label set:
 - `upstream_protocol_error`
 - `upstream_connect_error`
 - `upstream_transport_error`
+- `stream_completed_canonical`, `stream_completed_compatibility`
+- `empty_eof`, `premature_eof_before_body`, `premature_eof_midstream`, `malformed_eof`
 
 Bounded ring histograms (`completed_ms`, `client_cancel_ms`,
 `finalizer_timeout_ms`) keep p50 / p95 / p99 of recent samples without

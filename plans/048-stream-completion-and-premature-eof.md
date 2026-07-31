@@ -1,7 +1,7 @@
 # Plan 048 — Protocol Completion and Premature EOF Classification
 
 Date: 2026-07-30
-Status: closed at 3b8976d5
+Status: complete (implementation and verification closure)
 Parent roadmap: `plans/045-upstream-streaming-hardening-hotpath-roadmap.md`
 Depends on: Plan 047 terminal ownership
 Planning baseline: `216e615d75269cc1471a920ae81ece9ef2d21802`
@@ -225,20 +225,19 @@ After every incomplete EOF:
 
 ## Acceptance criteria
 
-- [ ] Normal HTTPX iterator exhaustion is no longer automatically equivalent to protocol completion.
-- [ ] OpenAI `[DONE]` and Anthropic `message_stop` are retained as terminal evidence.
-- [ ] Clean EOF with payload but no terminal evidence is classified as premature EOF.
-- [ ] Incomplete EOF before downstream bytes can enter bounded pre-body retry.
-- [ ] Incomplete EOF after downstream bytes is a non-retryable midstream error.
-- [ ] Incomplete streams are never finalized as completed.
-- [ ] No synthetic downstream terminal marker is emitted after premature EOF.
-- [ ] Provider markerless compatibility is explicit, provider-bound, and diagnosable.
-- [ ] Terminal frames split across arbitrary chunk boundaries are handled correctly.
-- [ ] Observer buffers remain bounded under malformed/oversized input.
-- [ ] Native and transcoded streams share the same upstream completion decision.
-- [ ] Success backoff clearing occurs only for genuinely completed streams.
-- [ ] Stream diagnostics distinguish canonical completion, compatibility completion, empty EOF, premature EOF, and malformed EOF.
-- [ ] Focused tests pass without live provider credentials.
+- [x] Normal HTTPX iterator exhaustion is no longer automatically equivalent to protocol completion.
+- [x] OpenAI `[DONE]` and Anthropic `message_stop` are retained as terminal evidence.
+- [x] Clean EOF with payload but no terminal evidence is classified as premature EOF.
+- [x] Incomplete EOF is represented as retryable before downstream bytes and non-retryable after them.
+- [x] Incomplete streams are finalized as `MIDSTREAM_ERROR`, never `COMPLETED`.
+- [x] No synthetic downstream terminal marker is emitted after premature EOF.
+- [x] Provider markerless compatibility is explicit, provider-bound, and diagnosable.
+- [x] Terminal frames split across arbitrary chunk boundaries are handled correctly.
+- [x] Observer buffers remain bounded under malformed/oversized input.
+- [x] Native and transcoded streams share the same upstream completion decision.
+- [x] Success backoff clearing occurs only for genuinely completed streams.
+- [x] Stream diagnostics distinguish canonical completion, compatibility completion, empty EOF, premature EOF, and malformed EOF.
+- [x] Focused tests pass without live provider credentials.
 
 ## Explicit rejection conditions
 
@@ -254,10 +253,17 @@ Do not close Plan 048 if:
 
 ## Handoff record
 
-Record:
+Recorded:
 
-- implementation commit SHA;
-- completion snapshot and EOF decision types;
+- implementation commit SHA: recorded by the closing commit;
+- completion snapshot: `StreamCompletionSnapshot` in `proxy/sse_observer.py`;
+- EOF decision: `StreamEOFDecision` / `classify_stream_eof()` in `request/stream_completion.py`;
+- provider default policy: `ProviderConfig.stream_completion_policy = "strict"`;
+- diagnostics: canonical/compatibility completion, empty, premature-before-body,
+  premature-midstream, and malformed EOF counters;
+- verification: full focused/native/transcoded/smoke coverage plus local CI checks;
+- unresolved provider convention: markerless compatibility remains opt-in and
+  requires provider-specific evidence.
 - provider default policy table;
 - native/transcoded test matrix and counts;
 - incomplete-before-byte retry proof;

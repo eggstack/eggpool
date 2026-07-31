@@ -142,6 +142,7 @@ zero attempts, and zero successes all fail closed.
 - **Model info sources**: `src/eggpool/model_info/` enriches model metadata from multiple sources with tiered identity matching (6 tiers).
 - **Performance hot path**: `Router.build_routing_plan()` is the authoritative selection path. `DispatchSpanRecorder` provides dispatch span telemetry.
 - **Request finalization**: Every selected request outcome is submitted to one `RequestFinalizationJob` keyed by `(proxy_request_id, attempt_id)`. The retained job owns durable request/attempt/reservation transitions and in-memory cleanup independently of the client task; duplicate identical submissions join, conflicting outcomes are diagnosed, and the bounded `RequestFinalizationSupervisor` drains or adopts unresolved jobs on shutdown.
+- **Streaming completion**: `IncrementalSSEObserver.completion_snapshot` retains bounded upstream protocol evidence. Clean iterator EOF is classified by `classify_stream_eof()` using provider-bound `stream_completion_policy` (`strict`, `compatible`, or `permissive_observe`); only canonical OpenAI `[DONE]` or Anthropic `message_stop` is strict completion. Incomplete EOF is finalized as `MIDSTREAM_ERROR`, never clears backoff, and is retryable only before downstream bytes.
 - **Database recovery**: `DatabaseRecoveryController` handles connection invalidation with single-flight recovery, bounded retry, and transaction reconciliation.
 - **Failure effects and quarantine**: `classify_failure_effects()` centralizes failure consequences. `ModelQuarantine` implements bounded quarantine state machine with corroboration before terminal withdrawal.
 - **Thinking control normalization**: Provider-bound `ThinkingControlContract` validates and normalizes thinking/reasoning controls after provider/account selection. `ControlFieldAdaptation` provides typed per-field dispositions (`unchanged`/`mapped`/`dropped`/`rejected`/`not_present`) so `emitted_controls` and warnings are truthful. Built-in contract resolution evaluates specificity before priority; OpenCode Go has both ID-based and URL-compatibility rules.
@@ -168,6 +169,7 @@ zero attempts, and zero successes all fail closed.
 - **Readiness probe is process-owned**: survives generation swaps.
 - **Process transitions execute inside `db.transaction()`**: atomic rollback on any failure.
 - **Terminal lifecycle**: streaming 4xx paths defer terminal work to `_handle_exhausted()`; they must not finalize and then raise into a second finalizer. Capability rejection is a client error with no provider penalty and uses the same retained terminal job as normal completion and cancellation.
+- **SSE diagnostics**: `stream_diagnostics` exposes canonical/compatibility completion and empty/premature/malformed EOF counters; stream content is never persisted.
 
 ## Error Handling
 
@@ -178,6 +180,7 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 - `UpstreamError` (has `status_code`) → `TemporaryUpstreamError`, `TransientUpstreamError`, `AuthenticationError`, `QuotaExhaustedError`, `RateLimitError` (has `retry_after`), `ModelUnavailableError`
 - `ModelNotFoundError` (has `model_id`), `NoEligibleAccountError`, `CatalogUnavailableError`, `AuthenticationUnavailableError`, `UpstreamExhaustedError`, `AccountSuspendedError`, `RequestTooLargeError`, `ModelInfoSourceFetchError`, `ContextLimitExceededError`, `CapabilityError`
 - `RuntimeManagerLeaseExhaustedError` (RuntimeError) — mapped to HTTP 503 in `proxy_request.py`
+- `PrematureStreamEOFError` (`ProxyError`) — upstream stream closed before protocol completion; carries the EOF classification and request ID
 - `ConfigValidationError(ConfigError)` and its subclasses are raised by `eggpool.config_validation.validate_config_file()`. They chain from the underlying failure and never raise `SystemExit`.
 
 ## Fast-Path CLI

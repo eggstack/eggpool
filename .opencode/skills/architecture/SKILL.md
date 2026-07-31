@@ -19,6 +19,7 @@ See `architecture/README.md` for the full design overview.
 - All data-plane requests flow through `RequestCoordinator`
 - Requests must be persisted before upstream dispatch
 - Pre-body failures can retry; no retry after first downstream byte emitted
+- Streaming success requires upstream protocol terminal evidence: OpenAI `[DONE]` or Anthropic `message_stop`. Use `StreamCompletionSnapshot` and `classify_stream_eof()`; provider-bound markerless compatibility is opt-in, and transcoder `flush()` must not synthesize success after premature EOF.
 - Every retryable failed attempt must reach terminal state before the next attempt
 - Each attempt reservation is released exactly once via `AttemptFinalizer`
 - Every selected request outcome uses one retained, attempt-keyed `RequestFinalizationJob`; callers may be cancelled while the process-owned task continues durable and in-memory convergence. Duplicate submissions join the existing job, conflicting terminal payloads are diagnosed, and the bounded `RequestFinalizationSupervisor` drains or adopts unresolved jobs at shutdown. The stale-request finalizer remains a recovery safety net, not a normal terminal path.

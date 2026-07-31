@@ -166,6 +166,17 @@ class ProxyError(AggregatorError):
     """Raised for general proxy/transport errors."""
 
 
+class PrematureStreamEOFError(ProxyError):
+    """Raised when a streaming upstream closes before protocol completion."""
+
+    def __init__(self, classification: str, *, request_id: str | None = None) -> None:
+        self.classification = classification
+        self.request_id = request_id
+        super().__init__(
+            f"Upstream stream ended without a valid terminal event ({classification})"
+        )
+
+
 class ModelNotFoundError(AggregatorError):
     """Raised when the requested model does not exist (404)."""
 

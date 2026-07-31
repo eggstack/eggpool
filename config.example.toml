@@ -21,6 +21,10 @@ max_connections = 100
 max_keepalive = 20
 keepalive_timeout_s = 30
 
+# Provider blocks may set stream_completion_policy = "strict" (default),
+# "compatible", or "permissive_observe". The setting is provider-bound;
+# strict requires [DONE] for OpenAI or message_stop for Anthropic.
+
 [database]
 path = "usage.sqlite3"
 busy_timeout_ms = 5000

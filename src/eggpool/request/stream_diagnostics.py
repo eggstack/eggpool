@@ -41,6 +41,12 @@ STREAM_OUTCOME_UPSTREAM_WRITE_TIMEOUT = "upstream_write_timeout"
 STREAM_OUTCOME_UPSTREAM_PROTOCOL_ERROR = "upstream_protocol_error"
 STREAM_OUTCOME_UPSTREAM_CONNECT_ERROR = "upstream_connect_error"
 STREAM_OUTCOME_UPSTREAM_TRANSPORT_ERROR = "upstream_transport_error"
+STREAM_OUTCOME_COMPLETED_CANONICAL = "stream_completed_canonical"
+STREAM_OUTCOME_COMPLETED_COMPATIBILITY = "stream_completed_compatibility"
+STREAM_OUTCOME_EMPTY_EOF = "empty_eof"
+STREAM_OUTCOME_PREMATURE_EOF_BEFORE_BODY = "premature_eof_before_body"
+STREAM_OUTCOME_PREMATURE_EOF_MIDSTREAM = "premature_eof_midstream"
+STREAM_OUTCOME_MALFORMED_EOF = "malformed_eof"
 
 
 def classify_httpx_error_class(error_class: str) -> str:
@@ -151,6 +157,12 @@ class StreamDiagnostics:
             STREAM_OUTCOME_UPSTREAM_PROTOCOL_ERROR: 0,
             STREAM_OUTCOME_UPSTREAM_CONNECT_ERROR: 0,
             STREAM_OUTCOME_UPSTREAM_TRANSPORT_ERROR: 0,
+            STREAM_OUTCOME_COMPLETED_CANONICAL: 0,
+            STREAM_OUTCOME_COMPLETED_COMPATIBILITY: 0,
+            STREAM_OUTCOME_EMPTY_EOF: 0,
+            STREAM_OUTCOME_PREMATURE_EOF_BEFORE_BODY: 0,
+            STREAM_OUTCOME_PREMATURE_EOF_MIDSTREAM: 0,
+            STREAM_OUTCOME_MALFORMED_EOF: 0,
         }
         self._httpx_exception_counts: dict[str, int] = {}
         self._upstream_error_class_counts: dict[str, int] = {}

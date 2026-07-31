@@ -87,6 +87,9 @@ api_key_env = "GROQ_API_KEY"
 
 [providers.groq.auth]
 mode = "bearer"
+
+# Require the upstream protocol terminal marker (the default).
+# stream_completion_policy = "strict"
 ```
 
 Set the API key in your environment or `.env` file:
@@ -94,6 +97,15 @@ Set the API key in your environment or `.env` file:
 ```bash
 export GROQ_API_KEY="gsk_..."
 ```
+
+`stream_completion_policy` is provider-bound and controls clean upstream EOF:
+`strict` requires OpenAI `[DONE]` or Anthropic `message_stop`; `compatible`
+allows markerless completion only when a complete usage signal is present; and
+`permissive_observe` preserves that compatibility behavior while exposing the
+missing-marker diagnostic. Use compatibility modes only for a named provider
+whose terminal convention has been verified. A stream with payload but no
+valid terminal evidence is otherwise recorded as an incomplete/midstream
+failure and never emits a synthetic client terminal marker.
 
 ### Anthropic-Specific Configuration
 
