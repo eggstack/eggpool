@@ -421,6 +421,9 @@ async def _post_burst_assertions(
         "httpx_exception_counts": httpx_delta,
         "upstream_error_class_counts": upstream_delta,
         "diagnostics_outcomes": outcomes_delta,
+        "finalization_active_count": coordinator._finalization_supervisor.active_count  # pyright: ignore[reportPrivateUsage]
+        if coordinator._finalization_supervisor is not None  # pyright: ignore[reportPrivateUsage]
+        else 0,
     }
 
 
@@ -480,6 +483,7 @@ async def test_fifty_concurrent_streams_no_leak(
         f"finalization retry queue not drained: "
         f"{state['finalization_retry_queue_size']}"
     )
+    assert state["finalization_active_count"] == 0, state
     assert state["quota_reserved_cost_delta"] == 0, (
         f"quota estimator reserved cost not zero: {state['quota_reserved_cost_delta']}"
     )

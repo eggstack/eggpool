@@ -102,7 +102,6 @@ def test_provider_stream_timeout_values_are_provider_bound() -> None:
     [
         {"idle_timeout_s": 0},
         {"first_byte_timeout_s": -1},
-        {"idle_timeout_s": 20, "max_lifetime_s": 10},
         {"max_lifetime_s": 86_401},
     ],
 )

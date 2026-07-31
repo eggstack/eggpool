@@ -1,7 +1,7 @@
 # Plan 048 — Protocol Completion and Premature EOF Classification
 
 Date: 2026-07-30
-Status: complete (implementation and verification closure)
+Status: corrected by Plan 055: generator-stage EOF is terminal after response handoff
 Parent roadmap: `plans/045-upstream-streaming-hardening-hotpath-roadmap.md`
 Depends on: Plan 047 terminal ownership
 Planning baseline: `216e615d75269cc1471a920ae81ece9ef2d21802`
@@ -10,7 +10,7 @@ Planning baseline: `216e615d75269cc1471a920ae81ece9ef2d21802`
 
 Make streaming completion protocol-aware. Eggpool must distinguish a valid terminal stream from a socket that merely ended without raising an exception.
 
-A clean EOF before the protocol terminal condition must not be finalized as `COMPLETED`. Before downstream response bytes begin it may be eligible for the existing bounded retry policy; after bytes begin it must become a visible, non-retryable midstream failure.
+A clean EOF before the protocol terminal condition must not be finalized as `COMPLETED`. Once the streaming response iterator has been handed off, all EOF classifications are terminal for that selected attempt because a retry cannot safely replace an already-returned response.
 
 ## Confirmed defect to close
 
@@ -228,7 +228,7 @@ After every incomplete EOF:
 - [x] Normal HTTPX iterator exhaustion is no longer automatically equivalent to protocol completion.
 - [x] OpenAI `[DONE]` and Anthropic `message_stop` are retained as terminal evidence.
 - [x] Clean EOF with payload but no terminal evidence is classified as premature EOF.
-- [x] Incomplete EOF is represented as retryable before downstream bytes and non-retryable after them.
+- [x] Incomplete EOF is a visible terminal failure in the handed-off stream iterator; no unsafe retryability claim remains.
 - [x] Incomplete streams are finalized as `MIDSTREAM_ERROR`, never `COMPLETED`.
 - [x] No synthetic downstream terminal marker is emitted after premature EOF.
 - [x] Provider markerless compatibility is explicit, provider-bound, and diagnosable.

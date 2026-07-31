@@ -367,7 +367,7 @@ class RequestFinalizationJob:
         finalization_data: Any = None,  # noqa: ANN401
     ) -> None:
         """Bind the first terminal command, rejecting conflicting reuse."""
-        if self.outcome not in ("pending_stream", outcome):
+        if self.outcome != outcome:
             raise TerminalConflictError(
                 "conflicting terminal outcome for attempt",
                 step="bind_terminal",

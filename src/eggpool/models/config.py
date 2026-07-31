@@ -779,20 +779,14 @@ class ProviderStreamTimeoutConfig(BaseModel):
     # raises its read guardrail to the largest configured stream interval.
     first_byte_timeout_s: float | None = Field(default=None, gt=0, le=86_400)
     idle_timeout_s: float | None = Field(default=None, gt=0, le=86_400)
+    # Parsed for one-release backward compatibility; the coordinator no
+    # longer enforces an absolute lifetime.
     max_lifetime_s: float | None = Field(default=None, ge=0, le=86_400)
 
     @model_validator(mode="after")
     def validate_lifetime(self) -> ProviderStreamTimeoutConfig:
         if self.max_lifetime_s == 0:
             self.max_lifetime_s = None
-        if (
-            self.max_lifetime_s is not None
-            and self.idle_timeout_s is not None
-            and self.max_lifetime_s < self.idle_timeout_s
-        ):
-            raise ConfigError(
-                "max_lifetime_s must be at least idle_timeout_s when both are set"
-            )
         return self
 
     def transport_read_timeout(self, configured_read_timeout_s: float) -> float:

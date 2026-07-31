@@ -119,7 +119,6 @@ from eggpool.request.stream_diagnostics import (
     STREAM_OUTCOME_EMPTY_EOF,
     STREAM_OUTCOME_FIRST_BYTE_TIMEOUT,
     STREAM_OUTCOME_IDLE_TIMEOUT,
-    STREAM_OUTCOME_LIFETIME_TIMEOUT,
     STREAM_OUTCOME_MALFORMED_EOF,
     STREAM_OUTCOME_PREMATURE_EOF_BEFORE_BODY,
     STREAM_OUTCOME_PREMATURE_EOF_MIDSTREAM,
@@ -591,6 +590,14 @@ class PreparedProxyResponse:
     attempt_count: int = 1
 
 
+@dataclass(slots=True)
+class RuntimePublicationReceipt:
+    """Runtime components acquired while publishing a durable claim."""
+
+    active_count_added: bool = False
+    quota_reservation_added: bool = False
+
+
 class RequestCoordinator:
     """Orchestrates the full proxy request lifecycle.
 
@@ -675,6 +682,8 @@ class RequestCoordinator:
         self._classifier = RetryClassifier()
         self._select_lock = asyncio.Lock()
         self._selection_claim_lock = asyncio.Lock()
+        self._attempt_cleanup_tasks: dict[tuple[str, int], asyncio.Task[None]] = {}
+        self._claim_compensation_tasks: dict[tuple[str, int], asyncio.Task[None]] = {}
         self._selection_claim_diagnostics = (
             selection_claim_diagnostics
             if selection_claim_diagnostics is not None
@@ -822,6 +831,84 @@ class RequestCoordinator:
             stream_diagnostics=self._stream_diagnostics,
         )
         await job.run()
+
+    async def _cleanup_failed_attempt(
+        self,
+        *,
+        context: ProxyRequestContext,
+        selected: SelectedAttempt,
+        error: _RetryableUpstreamError,
+    ) -> None:
+        """Converge a retryable attempt before selecting another account.
+
+        The retained task is keyed by the durable request/attempt pair so a
+        cancelled request waiter and a retry-loop rejoiner cannot split the
+        cleanup ownership.
+        """
+        key = (selected.proxy_request_id, selected.attempt_id)
+        task = self._attempt_cleanup_tasks.get(key)
+        if task is None:
+            task = asyncio.create_task(
+                self._run_failed_attempt_cleanup(
+                    context=context,
+                    selected=selected,
+                    error=error,
+                )
+            )
+            self._attempt_cleanup_tasks[key] = task
+
+            def _remove(done: asyncio.Task[None]) -> None:
+                if self._attempt_cleanup_tasks.get(key) is done:
+                    self._attempt_cleanup_tasks.pop(key, None)
+                if not done.cancelled():
+                    done.exception()
+
+            task.add_done_callback(_remove)
+        await asyncio.shield(task)
+
+    async def _run_failed_attempt_cleanup(
+        self,
+        *,
+        context: ProxyRequestContext,
+        selected: SelectedAttempt,
+        error: _RetryableUpstreamError,
+    ) -> None:
+        result = await self._attempt_finalizer.finalize_failed_attempt(
+            attempt_id=selected.attempt_id,
+            reservation_id=selected.reservation_id,
+            data=AttemptFinalizationData(
+                status_code=error.status_code,
+                error_class=error.error_class,
+                release_reason="attempt_retryable",
+                retry_category=(
+                    error.retry_category.value
+                    if error.retry_category is not None
+                    else None
+                ),
+                bytes_received=len(context.original_body),
+                latency_ms=self._elapsed_ms(context),
+                is_retry_outcome=True,
+            ),
+        )
+        if not result.attempt_transitioned:
+            return
+        if self._quota_estimator is not None and result.reservation_released:
+            await self._quota_estimator.remove_reservation(
+                selected.account_name,
+                selected.estimated_microdollars,
+                requests=1,
+                tokens=selected.estimated_tokens,
+            )
+        if result.reservation_released:
+            await self._router.decrement_active_request_count(selected.account_name)
+        await self._apply_health_transition(
+            selected.account_name,
+            error,
+            context.model_id,
+            provider_id=selected.provider_id,
+            upstream_protocol=context.upstream_protocol,
+            client_protocol=context.protocol,
+        )
 
     def _log_transcode_warnings(
         self,
@@ -1199,51 +1286,12 @@ class RequestCoordinator:
                     context.request_id,
                     err,
                 )
-                # Finalize the failed attempt before retrying
-                result = await self._attempt_finalizer.finalize_failed_attempt(
-                    attempt_id=selected.attempt_id,
-                    reservation_id=selected.reservation_id,
-                    data=AttemptFinalizationData(
-                        status_code=err.status_code,
-                        error_class=err.error_class,
-                        release_reason="attempt_retryable",
-                        retry_category=(
-                            err.retry_category.value
-                            if err.retry_category is not None
-                            else None
-                        ),
-                        bytes_received=len(context.original_body),
-                        latency_ms=self._elapsed_ms(context),
-                        is_retry_outcome=True,
-                    ),
+                await self._cleanup_failed_attempt(
+                    context=context,
+                    selected=selected,
+                    error=err,
                 )
-                # Clean up in-memory state when the attempt transitioned
-                if result.attempt_transitioned:
-                    if (
-                        self._quota_estimator is not None
-                        and result.reservation_released
-                    ):
-                        await self._quota_estimator.remove_reservation(
-                            selected.account_name,
-                            selected.estimated_microdollars,
-                            requests=1,
-                            tokens=selected.estimated_tokens,
-                        )
-                    if result.reservation_released:
-                        await self._router.decrement_active_request_count(
-                            selected.account_name
-                        )
-                # Apply health transitions only when the attempt transitioned
-                if result.attempt_transitioned:
-                    await self._apply_health_transition(
-                        selected.account_name,
-                        err,
-                        context.model_id,
-                        provider_id=selected.provider_id,
-                        upstream_protocol=context.upstream_protocol,
-                        client_protocol=context.protocol,
-                    )
-                    health_applied = True
+                health_applied = True
                 # If no other accounts are eligible, don't retry — pass
                 # the error directly to the client.
                 remaining = self._router.get_eligible_account_names(
@@ -1550,6 +1598,7 @@ class RequestCoordinator:
         account_name: str,
         estimated_tokens: int,
         estimated_microdollars: int,
+        receipt: RuntimePublicationReceipt,
     ) -> None:
         """Increment the runtime-side active count and quota reservation.
 
@@ -1561,6 +1610,7 @@ class RequestCoordinator:
         """
 
         await self._router.increment_active_request_count(account_name)
+        receipt.active_count_added = True
         if self._quota_estimator is not None:
             await self._quota_estimator.add_reservation(
                 account_name,
@@ -1568,6 +1618,7 @@ class RequestCoordinator:
                 requests=1,
                 tokens=estimated_tokens,
             )
+            receipt.quota_reservation_added = True
         self._selection_claim_diagnostics.record_claim_published()
 
     async def _compensate_or_rollback_claim(
@@ -1578,8 +1629,9 @@ class RequestCoordinator:
         db_request_id: str | None,
         attempt_id: int | None,
         reservation_id: str | None,
+        estimated_tokens: int,
         error: BaseException,
-        active_count_was_increased: bool,
+        receipt: RuntimePublicationReceipt,
     ) -> None:
         """Undo partial runtime state on post-commit publication failure.
 
@@ -1592,37 +1644,49 @@ class RequestCoordinator:
         re-raised by the caller after this method returns.
         """
 
-        if active_count_was_increased:
-            await self._router.decrement_active_request_count(
-                claim_identity.account_name
-            )
-
-        if attempt_id is not None and reservation_id is not None:
-            try:
-                await asyncio.shield(
-                    self._attempt_finalizer.finalize_failed_attempt(
-                        attempt_id=attempt_id,
-                        reservation_id=reservation_id,
-                        data=AttemptFinalizationData(
-                            status_code=None,
-                            error_class="PostCommitInterrupted",
-                            release_reason="post_commit_interrupted",
-                            retry_category=RetryCategory.NEVER.value,
-                            bytes_received=len(context.original_body),
-                            latency_ms=self._elapsed_ms(context),
-                            is_retry_outcome=False,
-                        ),
-                    )
+        async def compensate() -> None:
+            if receipt.active_count_added:
+                await self._router.decrement_active_request_count(
+                    claim_identity.account_name
                 )
-            except Exception:  # noqa: BLE001
-                logger.debug(
-                    "post_commit_interrupted_finalize_failed",
-                    extra={"proxy_request_id": context.request_id},
-                    exc_info=True,
+            if receipt.quota_reservation_added and self._quota_estimator is not None:
+                await self._quota_estimator.remove_reservation(
+                    claim_identity.account_name,
+                    claim_identity.estimated_microdollars,
+                    requests=1,
+                    tokens=estimated_tokens,
                 )
+            if attempt_id is not None and reservation_id is not None:
+                await self._attempt_finalizer.finalize_failed_attempt(
+                    attempt_id=attempt_id,
+                    reservation_id=reservation_id,
+                    data=AttemptFinalizationData(
+                        status_code=None,
+                        error_class="PostCommitInterrupted",
+                        release_reason="post_commit_interrupted",
+                        retry_category=RetryCategory.NEVER.value,
+                        bytes_received=len(context.original_body),
+                        latency_ms=self._elapsed_ms(context),
+                        is_retry_outcome=False,
+                    ),
+                )
+            if self._health_manager is not None:
+                self._health_manager.release_request(claim_identity.account_name)
 
-        if self._health_manager is not None:
-            self._health_manager.release_request(claim_identity.account_name)
+        task_key = (context.request_id, attempt_id or -1)
+        task = self._claim_compensation_tasks.get(task_key)
+        if task is None:
+            task = asyncio.create_task(compensate())
+            self._claim_compensation_tasks[task_key] = task
+
+            def _remove(done: asyncio.Task[None]) -> None:
+                if self._claim_compensation_tasks.get(task_key) is done:
+                    self._claim_compensation_tasks.pop(task_key, None)
+                if not done.cancelled():
+                    done.exception()
+
+            task.add_done_callback(_remove)
+        await asyncio.shield(task)
 
         context.client_metadata["post_commit_interrupted"] = True
         self._selection_claim_diagnostics.record_compensation(success=True)
@@ -2127,7 +2191,7 @@ class RequestCoordinator:
 
         # --- Phase C: runtime publication under _selection_claim_lock #2 ---
         publish_lock_wait_ns = time.perf_counter_ns()
-        active_count_increased = False
+        publication_receipt = RuntimePublicationReceipt()
         try:
             with _maybe_span(self._dispatch_span_recorder, SPAN_SELECTION_CLAIM_HELD):
                 async with self._selection_claim_lock:
@@ -2151,8 +2215,8 @@ class RequestCoordinator:
                             estimated_microdollars=(
                                 claim_identity.estimated_microdollars
                             ),
+                            receipt=publication_receipt,
                         )
-                        active_count_increased = True
                 context.attempted_accounts.add(claim_identity.account_name)
                 context.client_metadata["account_name"] = claim_identity.account_name
         except BaseException:
@@ -2169,9 +2233,10 @@ class RequestCoordinator:
                     db_request_id=db_request_id,
                     attempt_id=attempt_id,
                     reservation_id=reservation_id,
+                    estimated_tokens=estimated_tokens,
                     error=sys.exc_info()[1]
                     or RuntimeError("post_commit_publish_failed"),
-                    active_count_was_increased=active_count_increased,
+                    receipt=publication_receipt,
                 )
             raise
 
@@ -2899,7 +2964,6 @@ class RequestCoordinator:
                 stream_timeouts, "first_byte_timeout_s", None
             )
             idle_timeout_s = getattr(stream_timeouts, "idle_timeout_s", None)
-            max_lifetime_s = getattr(stream_timeouts, "max_lifetime_s", None)
             upstream_iterator = response.aiter_bytes()
             prefetched_chunk: bytes | None = None
             if first_byte_timeout_s is not None:
@@ -2932,7 +2996,7 @@ class RequestCoordinator:
                         exception_class=type(timeout).__name__,
                         configured_first_byte_timeout_s=first_byte_timeout_s,
                         configured_idle_timeout_s=idle_timeout_s,
-                        configured_max_lifetime_s=max_lifetime_s,
+                        configured_max_lifetime_s=None,
                     )
                     raise timeout from exc
 
@@ -2953,7 +3017,7 @@ class RequestCoordinator:
                 prefetched_chunk=prefetched_chunk,
                 stream_first_byte_timeout_s=first_byte_timeout_s,
                 stream_idle_timeout_s=idle_timeout_s,
-                stream_max_lifetime_s=max_lifetime_s,
+                stream_max_lifetime_s=None,
             )
             generator_created = True
         except ProviderStreamTimeoutError as err:
@@ -3036,43 +3100,12 @@ class RequestCoordinator:
             if request_started_monotonic is not None
             else started
         )
-        finalizer = self._finalizer
         persist_error_detail = self._persist_error_detail
         account_backoff_repo = self._account_backoff_repo
         clear_backoff = self._clear_backoff
         include_usage = (
             True if upstream_include_usage is None else upstream_include_usage
         )
-
-        # Plan 026: register a process-owned finalization job before the
-        # inner generator.  The job is registered synchronously so it
-        # exists before any cancellation-sensitive await.  The retained
-        # task owns finalization even when every request waiter is
-        # cancelled.
-        fin_supervisor = self._finalization_supervisor
-        fin_job: Any = None
-        if fin_supervisor is not None:
-            from eggpool.request.finalization_job import (
-                FinalizationIdentity,
-            )
-
-            fin_identity = FinalizationIdentity(
-                proxy_request_id=context.request_id,
-                db_request_id=selected.db_request_id,
-                attempt_id=selected.attempt_id,
-                reservation_id=selected.reservation_id,
-                account_id=selected.account_id,
-                account_name=selected.account_name,
-                provider_id=selected.provider_id,
-                model_id=selected.model_id,
-                client_protocol=context.protocol,
-                upstream_protocol=context.upstream_protocol,
-                attempt_number=selected.attempt_number,
-            )
-            fin_job = fin_supervisor.register_or_get(
-                fin_identity,
-                "pending_stream",
-            )
 
         async def _stream() -> AsyncIterator[bytes]:
             nonlocal bytes_emitted, downstream_bytes_emitted, first_byte_ms
@@ -3109,13 +3142,6 @@ class RequestCoordinator:
                     else:
                         timeout_s = stream_idle_timeout_s
                         timeout_outcome = STREAM_OUTCOME_IDLE_TIMEOUT
-                        if stream_max_lifetime_s is not None:
-                            remaining_lifetime = stream_max_lifetime_s - (
-                                time.monotonic() - stream_started_at
-                            )
-                            if timeout_s is None or remaining_lifetime < timeout_s:
-                                timeout_s = max(remaining_lifetime, 0.0)
-                                timeout_outcome = STREAM_OUTCOME_LIFETIME_TIMEOUT
                         try:
                             if timeout_s is None:
                                 chunk = await anext(iterator)
@@ -3183,7 +3209,6 @@ class RequestCoordinator:
                     # event-stream responses only.
                     eof_decision = StreamEOFDecision(
                         classification="complete",
-                        retryable=False,
                         downstream_started=downstream_bytes_emitted > 0,
                     )
                 else:
@@ -3219,7 +3244,8 @@ class RequestCoordinator:
                     )
                     usage_result = observer.usage
                     incomplete_latency = int((time.monotonic() - reference) * 1000)
-                    await finalizer.finalize(
+                    await self._finalize_terminal(
+                        context,
                         selected,
                         FinalizationData(
                             outcome=FinalizationOutcome.MIDSTREAM_ERROR,
@@ -3317,7 +3343,8 @@ class RequestCoordinator:
                 )
 
                 # Finalize via RequestFinalizer
-                await finalizer.finalize(
+                await self._finalize_terminal(
+                    context,
                     selected,
                     FinalizationData(
                         outcome=FinalizationOutcome.COMPLETED,
@@ -3453,50 +3480,7 @@ class RequestCoordinator:
                         resolved_compression_policy=context.resolved_compression_policy,
                         synthetic_cache_result=context.synthetic_cache_result,
                     )
-                    if fin_job is not None:
-                        # Process-owned path: populate the job and call
-                        # run().  The retained task owns finalization even
-                        # after the caller is cancelled.  This is the sole
-                        # finalization path for cancelled streams — the
-                        # legacy shielded-finalizer-with-timeout path has
-                        # been removed (Plan 026/030 closure).
-                        fin_job.finalization_data = fin_data
-                        fin_job.set_dependencies(
-                            finalizer=finalizer,
-                            selected=selected,
-                            effects_applier=getattr(self, "_effects_applier", None),
-                            router=getattr(self, "_router", None),
-                            quota_estimator=getattr(self, "_quota_estimator", None),
-                            health_manager=getattr(self, "_health_manager", None),
-                            stream_diagnostics=self._stream_diagnostics,
-                        )
-                        try:
-                            await fin_job.run()
-                        except TimeoutError:
-                            logger.error(
-                                "Finalization job timed out for "
-                                "cancelled stream %s; retained task "
-                                "continues",
-                                context.request_id,
-                            )
-                        except Exception:
-                            logger.exception(
-                                "Finalization job failed for "
-                                "cancelled stream %s; retained task "
-                                "continues",
-                                context.request_id,
-                            )
-                    else:
-                        # Finalization supervisor not wired (legacy test
-                        # doubles only).  Record the cancellation outcome;
-                        # the process-owned supervisor is the production
-                        # path and is always available in real deployments.
-                        logger.warning(
-                            "Finalization supervisor not available for "
-                            "cancelled stream %s; outcome recorded without "
-                            "retained task",
-                            context.request_id,
-                        )
+                    await self._finalize_terminal(context, selected, fin_data)
                     self._stream_diagnostics.record_outcome(
                         STREAM_OUTCOME_CLIENT_CANCELLED,
                         proxy_request_id=context.request_id,
@@ -3531,7 +3515,8 @@ class RequestCoordinator:
                     connect_ms=mid_connect_ms_value,
                     read_ms=mid_read_ms_value,
                 )
-                await finalizer.finalize(
+                await self._finalize_terminal(
+                    context,
                     selected,
                     FinalizationData(
                         outcome=FinalizationOutcome.MIDSTREAM_ERROR,

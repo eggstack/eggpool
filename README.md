@@ -26,7 +26,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Durable dispatch write pipeline: process-owned microbatching writer for concurrent dispatch intents with bounded queue, adaptive batching, and diagnostics
 - Bounded observability: request-coherent span sampling (5% default), bounded rolling-window metrics, and constant-bounded snapshot cost regardless of uptime
 - Error isolation: provider-specific validation errors (e.g. unsupported MiniMax-M3 thinking through OpenCode Go) are contained to a single request — no account/model/circuit/quarantine penalties, no restart or database deletion required
-- Process-owned finalization: every selected request outcome (completion, cancellation, capability rejection, upstream client error, or stream failure) is reconciled by one bounded, attempt-keyed retained job, not the client request task
+- Process-owned finalization: every selected request-terminal outcome (completion, cancellation, capability rejection, upstream client error, or stream failure) is reconciled by one bounded, attempt-keyed retained job; retryable failed attempts use retained attempt cleanup before the next selection
 - Database recovery: automatic connection recovery with single-flight reconciliation, fail-closed on exhaustion
 - Bounded model quarantine: TTL-based suspected/quarantined state with corroboration thresholds and automatic recovery
 - Designed for lightweight deployments (Raspberry Pi, SBCs)
@@ -152,8 +152,9 @@ Streaming completion is determined by the upstream protocol, not by the absence
 of a transport exception. OpenAI streams require `data: [DONE]` and Anthropic
 streams require `event: message_stop`. Provider-specific markerless behavior,
 when needed, is configured with `[providers.<id>].stream_completion_policy`;
-the default is `strict`. Premature EOF is retried only before downstream bytes
-are emitted and is a non-retryable midstream failure afterward.
+the default is `strict`. EOF classified inside the handed-off stream iterator
+is terminal for the selected attempt: premature EOF is never retried after
+response handoff, including when no downstream body byte has arrived yet.
 
 ## Request shaping
 

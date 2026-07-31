@@ -186,7 +186,11 @@ class TestDropDecisions:
         result = adapt_thinking_controls(
             payload={
                 "model": "test",
-                "thinking": {"type": "enabled", "budget_tokens": 4096},
+                "thinking": {
+                    "type": "enabled",
+                    "effort": "high",
+                    "budget_tokens": 4096,
+                },
             },
             client_protocol="anthropic",
             model_id="test-model",
@@ -306,19 +310,24 @@ class TestThinkingBlockAdaptation:
         result = adapt_thinking_controls(
             payload={
                 "model": "test",
-                "thinking": {"type": "enabled", "budget_tokens": 4096},
+                "thinking": {
+                    "type": "enabled",
+                    "effort": "high",
+                    "budget_tokens": 4096,
+                },
             },
             client_protocol="anthropic",
             model_id="test-model",
             provider_id="test-provider",
             capability=cap,
             intent=intent,
-            policy=ProviderControlPolicy(),
+            policy=ProviderControlPolicy(unsupported_control="warn_drop"),
         )
         assert result.changed is True
         thinking = result.payload.get("thinking")
         assert isinstance(thinking, dict)
         assert "budget_tokens" not in thinking
+        assert thinking.get("effort") == "high"
 
     def test_budget_contract_preserves_budget(self) -> None:
         cap = _capability(

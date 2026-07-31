@@ -19,7 +19,6 @@ class StreamEOFDecision:
     """The single decision produced when an upstream iterator reaches EOF."""
 
     classification: EOFClassification
-    retryable: bool
     downstream_started: bool
 
 
@@ -53,6 +52,5 @@ def classify_stream_eof(
         classification = "premature_eof"
     return StreamEOFDecision(
         classification=classification,
-        retryable=(not downstream_started and classification != "complete"),
         downstream_started=downstream_started,
     )

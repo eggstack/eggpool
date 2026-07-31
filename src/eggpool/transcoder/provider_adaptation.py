@@ -409,13 +409,21 @@ def _handle_effort_budget_contract(
                 pass
             elif result.disposition == "unchanged":
                 emitted.append("thinking")
-            elif result.disposition == "mapped":
+            elif result.disposition in ("mapped", "dropped"):
                 new_payload = result.payload
                 changed = True
                 if "thinking" in new_payload:
                     emitted.append("thinking")
                 if result.warning:
                     warnings.append(result.warning)
+            elif result.disposition == "rejected":
+                return _reject(
+                    new_payload,
+                    model_id,
+                    provider_id,
+                    "unsupported_nested_thinking_control",
+                    intent,
+                )
 
         elif field_name == "thinking_budget":
             result = _adapt_thinking_budget(
@@ -530,28 +538,77 @@ def _adapt_thinking_block(
     intent: ThinkingRequestIntent,
     policy: ProviderControlPolicy,
 ) -> ControlFieldAdaptation:
-    """Adapt an Anthropic-style thinking block against the contract."""
+    """Adapt an Anthropic-style thinking block against the contract.
+
+    The nested fields use the same reject/drop/map policy as top-level
+    controls.  ``type`` is structural for effort-capable contracts; it is
+    unsupported for fixed/none and budget-only contracts.
+    """
     thinking_obj: object = new_payload.get("thinking")
     if not isinstance(thinking_obj, dict):
         return ControlFieldAdaptation(disposition="not_present", payload=new_payload)
 
     thinking_dict: dict[str, object] = dict(thinking_obj)  # type: ignore[arg-type]
     removed_fields: list[str] = []
+    mapped_fields: list[str] = []
+    warnings: list[AdaptationWarning] = []
 
-    # If contract doesn't accept budget, remove it.
-    budget_not_accepted = contract.mode not in ("budget", "effort_or_budget")
-    if budget_not_accepted and "budget_tokens" in thinking_dict:
-        del thinking_dict["budget_tokens"]
-        removed_fields.append("thinking.budget_tokens")
+    def reject(field: str, detail: str) -> None:
+        raise CapabilityError(
+            model_id=model_id,
+            capability="thinking",
+            requested_fields=[field],
+            message=f"Provider {provider_id} does not accept {field} ({detail})",
+        )
 
-    # If contract doesn't accept effort/type, remove them.
-    if contract.mode not in ("effort", "effort_or_budget"):
-        for key in ("type", "effort"):
-            if key in thinking_dict:
-                del thinking_dict[key]
-                removed_fields.append(f"thinking.{key}")
+    def unsupported(field: str, detail: str) -> None:
+        if policy.unsupported_control in ("reject", "map_if_known"):
+            reject(field, detail)
+        thinking_dict.pop(field.removeprefix("thinking."), None)
+        removed_fields.append(field)
 
-    if not removed_fields:
+    if "type" in thinking_dict and contract.mode not in (
+        "effort",
+        "effort_or_budget",
+    ):
+        unsupported("thinking.type", "thinking type is not selectable")
+
+    if "effort" in thinking_dict:
+        value = thinking_dict["effort"]
+        if not isinstance(value, str):
+            unsupported("thinking.effort", "effort must be a string")
+        else:
+            normalized = value.lower()
+            alias = contract.effort_aliases.get(normalized)
+            accepted = {effort.lower(): effort for effort in contract.accepted_efforts}
+            if contract.mode not in ("effort", "effort_or_budget"):
+                unsupported("thinking.effort", "effort is not accepted")
+            elif alias is not None:
+                thinking_dict["effort"] = alias
+                mapped_fields.append("thinking.effort")
+            elif normalized in accepted:
+                thinking_dict["effort"] = accepted[normalized]
+                if value != accepted[normalized]:
+                    mapped_fields.append("thinking.effort")
+            else:
+                unsupported("thinking.effort", f"unknown effort {value!r}")
+
+    if "budget_tokens" in thinking_dict:
+        value = thinking_dict["budget_tokens"]
+        valid_budget = isinstance(value, int) and not isinstance(value, bool)
+        numeric_budget = (
+            value if isinstance(value, int) and not isinstance(value, bool) else None
+        )
+        if numeric_budget is not None and contract.explicit_budget_min is not None:
+            valid_budget = numeric_budget >= contract.explicit_budget_min
+        if numeric_budget is not None and contract.explicit_budget_max is not None:
+            valid_budget = numeric_budget <= contract.explicit_budget_max
+        if contract.mode not in ("budget", "effort_or_budget"):
+            unsupported("thinking.budget_tokens", "budget is not accepted")
+        elif not valid_budget:
+            unsupported("thinking.budget_tokens", "budget is outside provider bounds")
+
+    if not removed_fields and not mapped_fields:
         return ControlFieldAdaptation(disposition="unchanged", payload=new_payload)
 
     modified = dict(new_payload)
@@ -559,16 +616,20 @@ def _adapt_thinking_block(
         modified["thinking"] = thinking_dict
     else:
         del modified["thinking"]
+    if removed_fields:
+        warnings.append(
+            AdaptationWarning(
+                kind="thinking_control_dropped",
+                field_name="thinking",
+                detail=f"removed fields: {removed_fields}",
+            )
+        )
     return ControlFieldAdaptation(
-        disposition="mapped",
+        disposition="dropped" if removed_fields else "mapped",
         payload=modified,
         requested_field="thinking",
         emitted_field="thinking" if thinking_dict else None,
-        warning=AdaptationWarning(
-            kind="thinking_control_dropped",
-            field_name="thinking",
-            detail=f"removed fields: {removed_fields}",
-        ),
+        warning=warnings[0] if warnings else None,
     )
 
 

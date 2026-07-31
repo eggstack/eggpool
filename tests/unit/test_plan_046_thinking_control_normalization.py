@@ -255,7 +255,7 @@ class TestUnsupportedEffortNotMapped:
             provider_id="test-provider",
             capability=cap,
             intent=intent,
-            policy=ProviderControlPolicy(),
+            policy=ProviderControlPolicy(unsupported_control="warn_drop"),
         )
         assert result.decision == "passthrough"
         assert result.changed is False
@@ -789,7 +789,7 @@ class TestControlSpellingMatrix:
             provider_id="test-provider",
             capability=cap,
             intent=intent,
-            policy=ProviderControlPolicy(),
+            policy=ProviderControlPolicy(unsupported_control="warn_drop"),
         )
         assert result.changed is True
         thinking = result.payload.get("thinking")

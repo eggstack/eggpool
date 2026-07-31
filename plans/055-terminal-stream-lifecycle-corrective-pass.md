@@ -1,7 +1,7 @@
 # Plan 055 — Terminal Stream Lifecycle Corrective Pass
 
 Date: 2026-07-31
-Status: ready for implementation
+Status: complete (implementation and local verification)
 Parent roadmap: `plans/045-upstream-streaming-hardening-hotpath-roadmap.md`
 Supersedes closure claims in: Plans 047, 048, 049, and 053 where they conflict with this plan
 Planning baseline: `8cde724d30cd1b418793bfe62fdbf4a49615e589`

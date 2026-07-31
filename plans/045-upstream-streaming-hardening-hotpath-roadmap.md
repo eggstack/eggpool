@@ -1,7 +1,7 @@
 # Residual Upstream, Streaming, and Hot-Path Hardening Roadmap
 
 Date: 2026-07-30
-Status: closed at 3b8976d5
+Status: corrected by Plan 055; earlier closure claims are superseded where noted below
 Plan: 045
 
 Planning baseline:

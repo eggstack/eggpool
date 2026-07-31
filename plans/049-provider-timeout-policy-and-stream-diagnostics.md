@@ -1,14 +1,14 @@
 # Plan 049 — Provider Timeout Policy and Stream Diagnostics
 
 Date: 2026-07-30
-Status: closed at 3b8c8dbb
+Status: corrected by Plan 055 (lifetime cap no longer enforced)
 Parent roadmap: `plans/045-upstream-streaming-hardening-hotpath-roadmap.md`
 Depends on: Plan 048 protocol completion classification
 Planning baseline: `216e615d75269cc1471a920ae81ece9ef2d21802`
 
 ## Objective
 
-Make upstream timeout behavior explicit, provider-bound, and evidence-driven. Distinguish first-byte delay, inter-chunk idle timeout, connection/pool/write failure, total stream lifetime, and clean premature EOF so MiniMax direct can be tuned without weakening all providers or masking protocol truncation.
+Make upstream timeout behavior explicit, provider-bound, and evidence-driven. Distinguish first-byte delay, inter-chunk idle timeout, connection/pool/write failure, and clean premature EOF so MiniMax direct can be tuned without weakening all providers or masking protocol truncation.
 
 ## Problem statement
 
@@ -53,14 +53,14 @@ Define explicit provider settings for streaming behavior. A suitable model is:
 [providers.minimax.stream_timeouts]
 first_byte_timeout_s = 300
 idle_timeout_s = 300
-max_lifetime_s = 0
+# max_lifetime_s is deprecated, parsed for compatibility, and ignored.
 ```
 
 The exact nesting may differ, but semantics must be unambiguous:
 
 - `first_byte_timeout_s`: maximum time from successful request send/headers phase to first response payload byte, or clearly define whether response headers are included;
 - `idle_timeout_s`: maximum time between successive payload chunks after streaming begins;
-- `max_lifetime_s`: optional absolute stream lifetime; `0` or `null` disables it;
+- `max_lifetime_s`: deprecated compatibility field; parsed but ignored;
 - transport `connect_timeout_s`, `write_timeout_s`, and `pool_timeout_s` retain their current meanings.
 
 If HTTPX's client-level `read_timeout_s` remains, document whether it is the lower-level guardrail and how the explicit streaming idle timeout composes with it. Avoid two competing timers with contradictory values.
@@ -117,7 +117,7 @@ Do not collapse all timeout subclasses into `TimeoutException` in operator-facin
 ### 6. Retry/effect policy
 
 - Connect, pool, write, response-header, and first-byte timeout before downstream bytes may remain retryable according to existing bounded policy.
-- Stream idle/lifetime timeout after downstream bytes is non-retryable and becomes a midstream error.
+- Stream idle timeout after downstream bytes is non-retryable and becomes a midstream error.
 - Client cancellation has no provider health penalty.
 - Repeated transport/idle timeout may create bounded provider/account cooldown according to typed failure effects.
 - Premature EOF remains governed by Plan 048 and must not be mislabeled timeout.
@@ -291,14 +291,14 @@ The implementation adds `ProviderStreamTimeoutConfig` under
 `[providers.<id>.stream_timeouts]`. Defaults are unset, preserving the
 historical provider `read_timeout_s` behavior. Explicit first-byte and idle
 values are bounded to 86,400 seconds and raise the provider HTTPX read
-guardrail only for that provider; `max_lifetime_s = 0` disables the absolute
-cap. `max_lifetime_s` must not be shorter than `idle_timeout_s`.
+guardrail only for that provider; `max_lifetime_s` is retained for one release
+as a deprecated parsed field but is ignored.
 
 The coordinator now prefetches the first non-empty payload under the explicit
-first-byte timer, applies monotonic inter-chunk idle and absolute-lifetime
-timers, and closes the upstream response on every timeout path. First-byte
-timeouts become retryable pre-body attempt failures. Idle and lifetime timeout
-after downstream output are midstream failures and never retry. Response-header
+first-byte timer, applies a monotonic inter-chunk idle timer, and closes the
+upstream response on every timeout path. First-byte timeouts become retryable
+pre-body attempt failures. Idle timeout after downstream output is a midstream
+failure and never retries. Response-header
 timeouts, transport timeout subclasses, protocol completion, premature EOF,
 and client cancellation remain separate diagnostics outcomes.
 

@@ -1,7 +1,7 @@
 # Plan 053 — Lean Runtime Validation and Closure
 
 Date: 2026-07-30
-Status: closed at 3b8976d5
+Status: corrected by Plan 055; terminal-stream closure claims require the corrective pass
 Parent roadmap: `plans/045-upstream-streaming-hardening-hotpath-roadmap.md`
 Depends on: Plans 046 through 052
 Verification authority: `plans/054-test-suite-and-verification-reduction.md`

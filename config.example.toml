@@ -400,7 +400,7 @@ persist_redacted_error_detail = false
 # [providers.opencode-go.stream_timeouts]
 # first_byte_timeout_s = 300  # headers → first non-empty payload chunk
 # idle_timeout_s = 300        # maximum gap between payload chunks
-# max_lifetime_s = 0          # optional absolute cap; omitted/0 disables
+# max_lifetime_s = 0          # deprecated compatibility field; parsed but ignored
 #
 # [[providers.opencode-go.accounts]]
 # name = "personal"

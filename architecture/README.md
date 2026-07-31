@@ -80,7 +80,7 @@ Key invariants:
 - **Protocol-aware streaming EOF**: `SSEDecoder` (`proxy/sse.py`) owns bounded UTF-8/SSE framing and emits shared `DecodedSSEFrame` objects. `IncrementalSSEObserver` retains bounded completion evidence (`[DONE]` for OpenAI, `message_stop` for Anthropic), and `classify_stream_eof()` maps clean exhaustion to canonical completion, provider-policy compatibility, empty, premature, or malformed EOF. The coordinator drains the shared decoder and classifies before `StreamingTranscoder.finish()`. A premature/malformed stream is finalized through the canonical `MIDSTREAM_ERROR` owner; it cannot clear success backoff or emit a synthetic downstream terminal marker. Provider policy is explicit on `ProviderConfig.stream_completion_policy` and defaults to `strict`.
 - Every retryable failed attempt must reach terminal state before the next attempt
 - Each attempt reservation is released exactly once via `AttemptFinalizer`
-- **Process-owned request finalization (Plans 026/047)**: every selected terminal outcome is owned by one retained, attempt-keyed `RequestFinalizationJob` registered before cancellation-sensitive stream work; the retained task completes durable and in-memory cleanup independently of request waiters. Duplicate submissions join, conflicting terminal payloads are diagnosed, and the bounded `RequestFinalizationSupervisor` provides diagnostics, startup reconciliation, and shutdown drain. The stale-request finalizer is a recovery safety net rather than a normal terminal path.
+- **Process-owned request finalization (Plans 026/047/055)**: every selected request-terminal outcome is owned by one retained, attempt-keyed `RequestFinalizationJob`; streaming work registers no placeholder before its terminal data exists. The retained task completes durable and in-memory cleanup independently of request waiters. Retryable failed attempts use a separate bounded retained cleanup command and must converge before retry. Duplicate submissions join, conflicting terminal payloads are diagnosed, and the bounded `RequestFinalizationSupervisor` provides diagnostics, startup reconciliation, and shutdown drain. The stale-request finalizer is a recovery safety net rather than a normal terminal path.
 - The same URL composition rules apply to catalog fetch and chat dispatch
 - **Structured observability persistence (migrations 0026-0029)** every `request_attempts` row carries provider/model/protocol/retry_category/latency/bytes/streamed/is_retry_outcome; every routing decision is persisted to `routing_decisions` in the same transaction as the `request_attempts` INSERT; safety-net tasks (`_crash_recovery`, `_finalize_stale_requests_once`, `reconcile_expired_reservations`) record `operational_events` rows inside the same transaction as the durable state mutation; latency is decomposed into `upstream_connect_ms / upstream_read_ms / coordinator_overhead_ms` so the dashboard can distinguish network vs upstream vs eggpool-side bottlenecks
 - **Runtime metrics are best-effort and process-local** — the `/api/stats/runtime` endpoint and `eggpool runtime-status` CLI command gather process topology, memory, background task state, database health, OS load average (`os.getloadavg` + normalized per-core), and a bounded rolling-window dispatch-overhead distribution via `DispatchOverheadRecorder` (`src/eggpool/runtime_dispatch.py`); failed probes return `null` rather than raising, `probe_errors` is capped to 16 truncated entries, and the endpoint is always auth-gated even with a public dashboard
@@ -3061,7 +3061,8 @@ Provider stream timing is configured under
   first non-empty payload chunk;
 - `idle_timeout_s` bounds the gap between payload chunks after streaming
   begins; and
-- `max_lifetime_s` is an optional absolute stream cap (`0`/omitted disables it).
+- `max_lifetime_s` is retained as a deprecated compatibility field and is
+  parsed but ignored; no total-lifetime timer runs in the stream loop.
 
 When omitted, existing providers retain the HTTPX `read_timeout_s` behavior.
 When explicit stream values are present, the provider client uses the largest
@@ -3069,9 +3070,9 @@ configured first-byte/idle value as its lower-level HTTPX read guardrail, so a
 long active stream is not cut off by the historical 300-second default. The
 coordinator timers use monotonic time, exclude finalization/database work, and
 close the response on every timeout path. First-byte timeouts remain pre-body
-retryable; idle and lifetime timeouts after downstream output are midstream
-failures and are never retried. Clean premature EOF remains a separate
-protocol-completion outcome.
+retryable; idle timeouts after downstream output are midstream failures and
+are never retried. Clean premature EOF remains a separate protocol-completion
+outcome and is terminal once the stream response has been handed off.
 
 ### Database contention surface
 
@@ -4252,7 +4253,12 @@ Makes selected-attempt cleanup independent of the client request task. Once EggP
 
 ### Streaming cancellation integration
 
-The coordinator registers a finalization job before the inner stream generator. On `CancelledError`, the retained task owns finalization even when every request waiter is cancelled, replacing the fragile `asyncio.wait_for(asyncio.shield(...), timeout=10)` pattern. The `RuntimeGeneration` dataclass carries `finalization_supervisor` wired through `RuntimeGenerationFactory`.
+The coordinator submits stream completion, EOF, error, and cancellation through
+the canonical retained helper once terminal data is known; it does not create
+a mutable placeholder job before the inner stream generator. On
+`CancelledError`, the retained task owns finalization even when every request
+waiter is cancelled. The `RuntimeGeneration` dataclass carries
+`finalization_supervisor` wired through `RuntimeGenerationFactory`.
 
 ### Tests
 
@@ -4261,6 +4267,11 @@ The coordinator registers a finalization job before the inner stream generator. 
 - `tests/unit/test_plan_026_finalization_supervisor.py` — registry, drain, startup reconciliation, diagnostics
 
 ## Terminal Lifecycle and Cancellation Safety (Plan 047)
+
+Plan 055 corrected the remaining stream-specific ownership defects described
+below: the historical Plan 047 closure claim is superseded until that pass is
+complete, and the current invariant is documented in the request-lifecycle
+summary above.
 
 Plan 047 closes the gap between the retained cancellation job and the other
 request terminal paths. After selection, the coordinator submits completion,

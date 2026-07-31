@@ -38,7 +38,7 @@ def test_anthropic_message_stop_is_retained() -> None:
     assert observer.completion_snapshot.terminal_kind == "anthropic_message_stop"
 
 
-def test_payload_without_terminal_is_premature_and_not_retryable_after_bytes() -> None:
+def test_payload_without_terminal_is_premature_after_response_handoff() -> None:
     observer = IncrementalSSEObserver("openai")
     observer.observe(b'data: {"choices": []}\n\n')
     observer.flush()
@@ -50,7 +50,7 @@ def test_payload_without_terminal_is_premature_and_not_retryable_after_bytes() -
         downstream_bytes_emitted=1,
     )
     assert decision.classification == "premature_eof"
-    assert not decision.retryable
+    assert decision.downstream_started
 
 
 def test_markerless_usage_can_only_complete_under_provider_policy() -> None:
