@@ -1,7 +1,9 @@
 # Plan 056 — Retained Cleanup Convergence Closure
 
 Date: 2026-07-31
-Status: complete (implementation commit: `a5c7924`; local CI-equivalent checks pass)
+Status: complete (main implementation commit: `a5c7924`; final convergence and
+retry-identity closure completed by Plan 057 in `78b7618`; local CI-equivalent
+checks pass)
 Parent roadmap: `plans/045-upstream-streaming-hardening-hotpath-roadmap.md`
 Predecessor: `plans/055-terminal-stream-lifecycle-corrective-pass.md`
 Planning baseline: `13cdd493c90bd6019ca4730e0d49c354e5b3e30e`

@@ -1,7 +1,8 @@
 # Plan 057 — Retained Cleanup Final Closure
 
 Date: 2026-07-31
-Status: ready for implementation
+Status: complete (implementation commit: `78b7618`; local CI-equivalent checks
+pass)
 Parent roadmap: `plans/045-upstream-streaming-hardening-hotpath-roadmap.md`
 Predecessor: `plans/056-retained-cleanup-convergence-closure.md`
 Planning baseline: `be6fdc6eaa8d1073982970104607751a562ff2f0`
