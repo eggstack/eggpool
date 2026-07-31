@@ -104,8 +104,6 @@ See `architecture/README.md` for the full design overview.
 - **Operational profile logging (Milestone A6)**: `_log_operational_profile()` (`src/eggpool/app.py`) emits a single structured startup log with workers, runtime_threads, database_worker_threads, stats_db_separate, WAL/synchronous/busy_timeout, routing_trace_mode/sample_rate, metrics_write_mode/flush_interval_s, transcoder/compression/cache enabled flags, and background task counts split by ownership.
 - **Thinking/reasoning observability**: in-memory counters (`ThinkingMetricsCounter`) track thinking decision outcomes. Per-request trace stored as `thinking_trace_json`. Exposed via `/api/stats/thinking` and dashboard overview. See `architecture/README.md` § Thinking/Reasoning Observability.
 
-- **Runtime validation lifecycle**: `run_validation()` (`scripts/run_dispatch_stability_soak.py`) owns one outer `try/except/finally` lifecycle boundary. Every fallible operation after work-directory creation (upstream start, config write, subprocess start, health check, workload, gates) is inside the boundary. `CancelledError` propagates after cleanup. Unexpected `Exception` is converted to a bounded `ValidationResult` with `return_code=12` and a `"runtime validation internal error: <Class>: <msg>"` failure reason (no tracebacks in JSON). Cleanup aggregates errors from child termination, upstream `shutdown()`/`server_close()`, and directory removal — all steps attempted even when earlier steps fail. Cleanup failure forces `passed=False` and a nonzero return code. The JSON payload is built in-memory during validation, reconciled with cleanup status in `finally`, and written once atomically. Process-log redaction is line-preserving: `_redact_log_line()` processes each line independently, covering `Authorization: Bearer`, `api_key=`/`api-key=` forms, configured soak API keys (via `secrets=`), and generic `sk-`/`token-`/`password=`/`secret=` patterns. A secret on one line does not destroy unrelated diagnostic lines.
-
 ## Process Model
 
 - `eggpool serve` is a single supervisor process that invokes `Granian` with `workers=1`; Granian spawns one worker, so exactly two processes run under the canonical name
@@ -541,21 +539,13 @@ Long-running deployments — especially Raspberry Pi / SBC nodes — must keep s
 - `scripts/verify_upstream_auth.py` is operator-only: it bypasses EggPool to confirm the configured key works directly upstream
 - Pyright in CI covers `src/` AND `scripts/`; narrow type annotations with `cast` or `Any` rather than excluding a file
 
-### Runtime Validation Runner
+### Optional runtime checks
 
-The runtime-validation runner (`scripts/run_dispatch_stability_soak.py`) is the canonical SBC-target validation tool. The runner starts a real Eggpool subprocess against a local mock upstream, exercises a workload, polls runtime metrics, performs a bounded post-load quiescence check, writes one atomic JSON output file, and exits.
-
-- **Public CLI** (`--profile`, `--duration-seconds`, `--output`, `--seed`, `-v`); minimum duration is 30 seconds; production default is 300 seconds. No `--mode` or other test-only flags.
-- **Gate semantics**:
-  - **Workload gate** — per-window `request_count > 0` and `success_count > 0`; zero-error profiles reject any unexpected error; configured-error profiles tolerate `min(0.25, expected_error_rate + 0.10)`. `sbc-reference` at `duration_seconds >= 60` requires both `stream_success_count > 0` and `nonstream_success_count > 0`.
-  - **Latency ratio caps** — `dispatch_p95_ratio_limit` and `dispatch_p99_ratio_limit` are direct late/early ratio caps (`ratio <= ratio_limit`); the previous `1.0 + ratio_limit` additive increase is gone. Empty early/late samples and non-positive early baselines fail closed.
-  - **Drain gate** — final drain state comes from a bounded post-load quiescence poll (`wait_for_runtime_quiescence`), not from `metrics[-1]`. The drain gate fails closed when runtime data is missing or pending/reservation counts exceed the configured limits.
-  - **Workload gate participates in `all_passed`** alongside throughput, p95/p99, quiescence, RSS, and SQLite audit gates.
-- **Internal test seam** — `run_validation()` accepts narrow `DurationPlan`, `health_timeout_s`, `quiescence_timeout_s`, and `request_shapes` dependencies without expanding the public CLI.
-- **Process-level smoke** — `tests/integration/test_runtime_validation_process_smoke.py` starts and stops a real Eggpool subprocess through the production code path with a compact `DurationPlan`, asserts both stream and non-stream successes, one JSON output file, no manifest/JSONL/Markdown siblings, and bounded wall-clock duration. The smoke receives internal `ValidationResult` fields (`child_pid`, `work_dir`, `process_log_tail`, `process_stopped`, `work_dir_removed`, `cleanup_error`) and asserts the actual recorded PID is gone and the actual `eggpool-soak-*` work directory is removed. The process log tail is redacted and bounded; it is only shown in assertion messages on failure.
-- **Cleanup diagnostics** — `ValidationResult` exposes Python-internal `child_pid`, `work_dir`, `process_log_tail`, `process_stopped`, `work_dir_removed`, and `cleanup_error` fields. These are populated by a single cleanup path (`_populate_cleanup_diagnostics`) used by every exit branch. The fields are not written into the retained JSON; only the test seam reads them. `shutil.rmtree(..., ignore_errors=True)` is gone — cleanup failures are recorded as `cleanup_error` and surface in the smoke.
-- **Schema version** — bumped to `2` for the restructured output (separate `workload`, `throughput`, `dispatch_p95`, `dispatch_p99`, `quiescence`, `rss`, `database_audit` sections; explicit `quiescence_duration_seconds`).
-- **Manual workflow** — `.github/workflows/extended-soak.yml` remains `workflow_dispatch`-only, single Python 3.12 job, no matrix, no schedule, one JSON artifact.
+The normal CI gate is format, lint, strict typing, and `tests/smoke/` on
+Python 3.11. Target-device checks are optional and risk-based. Runtime
+metrics are operational telemetry, not a retained evidence schema or a fixed
+duration/percentile release gate. Use
+`scripts/repro_high_concurrency_streams.py` for stream-specific diagnosis.
 
 ## Live Configuration Rehash
 
@@ -613,12 +603,11 @@ str(exc).lower()` checks.
 
 ## CI
 
-Two GitHub Actions jobs on every PR:
+One GitHub Actions job on every PR:
 
 | Job | Python | What it does |
 |-----|--------|-------------|
-| `check` | 3.12 | ruff format + ruff check + pyright + canonical test suite |
-| `compat-311` | 3.11 | `pytest tests/smoke/` — package import, config, DB migration, one request through real Eggpool, CLI |
+| `check` | 3.11 | ruff format + ruff check + pyright + `pytest tests/smoke/` |
 
 ### Test Markers
 
@@ -627,12 +616,8 @@ Two GitHub Actions jobs on every PR:
 | `slow` | Tests exceeding normal CI budget |
 | `performance` | Manually invoked real-runtime performance checks |
 | `live` | Opt-in live provider/network verification tests |
-| `extended_soak` | Extended manual stability mode (not PR CI) |
 | `soak` | Manually invoked real-runtime duration/resource checks |
 | `network` | Tests requiring network access |
-| `request_path` | Routing, transcoding, finalization tests |
-| `dashboard` | Dashboard and cache-page rendering tests |
-| `reload` | Reload/rehash transaction and lifecycle tests |
 
 ### Fault Injection Matrix (28 tests)
 

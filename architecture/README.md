@@ -2977,10 +2977,11 @@ See `plans/2026-07-08-dashboard-graph-first-paint-latency-fix.md` for the full d
 
 `tests/perf/` contains baseline benchmarks and regression guards:
 
-- `test_perf_baseline.py` — 8 benchmarks: native OpenAI/Anthropic requests, transcode O2A/A2O, segmentation, routing eligibility, retry failover, thinking
+- `test_perf_baseline.py` — manually invoked benchmarks for representative request and routing paths
 - `test_perf_regression.py` — 3 regression guards: segmentation bounded overhead, routing eligibility determinism, transcode body equivalence
 
-Run with: `pytest -m performance -v` or `pytest tests/perf/ -m perf_baseline -v` for the baseline subset.
+Run with: `pytest tests/perf/test_perf_baseline.py -m performance -v` when a
+performance comparison is useful; it is not part of ordinary CI.
 
 ## In-Memory Bounds and Memory Footprint
 
@@ -3325,20 +3326,17 @@ The async primitive audit (`docs/async_primitive_audit.md`) documents every long
 - `tests/perf/test_hot_path_performance.py`: before/after measurements for parse, allocation, header, span, and lag monitor
 - `tests/perf/test_concurrent_workload_matrix.py`: end-to-end performance matrix — serial, 10/25/50 concurrent, streaming, large body, mixed workloads with dispatch overhead and span recorder metrics
 
-### Residual Constraints for Milestone G
+### Runtime stability and optional validation
 
-Milestone G (soak validation and rollout) inherits these constraints from F:
-
-1. **Single event-loop thread is canonical.** `server.threads=1` is the supported data-plane profile. All `asyncio.Lock` objects are loop-bound. Milestone G soak tests must not exercise multi-loop paths without the thread-safety bridge documented in `docs/async_primitive_audit.md`.
-2. **Process-owned writers survive generation swaps.** `DispatchPersistenceWriter` and `RoutingTraceWriter` are process-owned and use `threading.Lock` for thread-safe submission. Milestone G must verify no duplicate writers or orphaned drain tasks after rehash sequences.
-3. **Metrics coalescer is dual-locked.** `record_usage()` acquires `_thread_lock`; `flush()` acquires `_async_lock` then `_thread_lock`. Soak tests must verify the invariant `total_received == total_flushed + pending + dropped` survives multi-hour operation.
-4. **Event-loop lag monitor is bounded.** The 200-sample rolling window does not grow. Lag p95 > 100ms is an operator signal, not a correctness failure. Soak tests should assert lag stays within SBC-appropriate bounds.
-5. **ParsedRequestPayload caches one parse per request.** Downstream transformations (transcode/compress) must call `invalidate_transformed()` to reset derived state. Soak tests must not observe stale model/streaming values after body mutation.
-6. **estimate_padded_size is arithmetic-only.** No synthetic `b"\x00"*padding` allocation exists on the hot path. Context-limit checks must use the function, not raw allocation.
-7. **ImmutableRequestState is generation-scoped.** Frozensets are rebuilt on generation swap. Soak tests must verify that rehash produces fresh provider/account/header sets matching the new config.
-8. **Header forwarding is exact.** `build_upstream_headers()` filters hop-by-hop, credentials, connection-nominated, and framing headers in one pass. Soak tests must not observe credential leakage to upstream.
-9. **Resource plateaus are monitored.** DNS cache, client pool, and stream diagnostics are exposed via `/api/stats/runtime`. Soak tests should assert bounded growth over extended operation.
-10. **DispatchSpanRecorder is thread-safe.** Per-span bounded deques are protected by a single `threading.Lock`. Snapshot copies sample lists under the lock. Soak tests must not observe deque overflow beyond `window_size`.
+Production exposes bounded runtime telemetry for diagnosis: resource
+plateaus, stream outcomes, dispatch spans, and database health are available
+through `/api/stats/runtime`. These signals are best-effort operational data;
+they are not fixed CI percentile gates or retained release evidence. The
+ordinary correctness floor is the focused tests plus `tests/smoke/`, which
+covers request ownership, canonical streaming completion, premature EOF, and
+request-local failure recovery. Target-device runs and
+`scripts/repro_high_concurrency_streams.py` are optional tools for
+stream-specific diagnosis.
 
 ## Live Configuration Rehash — Validation, Diffing, and Fail-Closed CLI
 
@@ -4070,27 +4068,13 @@ every result category, counter, stage, and snapshot field.
   not rename them without a coordinated update to the dashboard,
   the runtime JSON contract, and the playbook.
 
-## Dispatch Stability Milestone G — Soak Validation, Rollout, and Operational Closure
+## Dispatch stability
 
-Proves that dispatch latency, database queues, background tasks, runtime
-generations, memory, file descriptors, threads, HTTP clients, and WAL/storage
-behavior remain stable over long-running operation. `ConsistencyAuditor`
-(`src/eggpool/db/consistency_audit.py`) performs read-only lifecycle invariant
-checks (pending-without-attempt, active-reservation-for-non-terminal,
-incomplete-attempt-for-terminal, duplicate-attempt-numbers,
-orphan-routing-traces) without mutating the database. Soak tests
-(`tests/soak/`) define eight canonical workload profiles (low-volume steady,
-moderate sustained, burst/recovery, retry/churn, cancellation-heavy,
-maintenance backlog, rehash churn, slow-storage) with early/late window
-comparison, stability ratio gates (dispatch p95 ≤ 1.20x, p99 ≤ 1.50x,
-throughput decline ≤ 10%), and resource plateau validation. Configuration
-profiles (`docs/config-profiles.md`) provide evidence-based settings for
-balanced-default, minimum-footprint SBC, full-diagnostics, and
-high-concurrency general host deployments. Operator runbook
-(`docs/operations/dispatch-stability.md`) documents the 10-step diagnostic
-sequence and safe mitigation priorities. Tests:
-`tests/soak/test_workload_profiles.py`, `tests/soak/test_stability_assertions.py`,
-`tests/soak/test_resource_plateau.py`, `tests/soak/test_db_consistency_audit.py`.
+Use `/api/stats/runtime` and `eggpool runtime-status` to distinguish local
+dispatch overhead from upstream latency and to inspect bounded stream and
+resource diagnostics. The optional runbook is
+`docs/operations/dispatch-stability.md`; it does not define a mandatory soak,
+benchmark, or evidence workflow.
 
 ## Error-Isolation Reproducer and Invariant Baseline (Plan 023)
 

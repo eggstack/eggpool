@@ -31,41 +31,6 @@ if TYPE_CHECKING:
 UPSTREAM_BASE = "https://soak-test-upstream.example.com"
 
 
-def pytest_configure(config: pytest.Config) -> None:
-    """Register custom pytest markers for soak tests."""
-    config.addinivalue_line(
-        "markers",
-        "soak: long-running soak validation tests",
-    )
-    config.addinivalue_line(
-        "markers",
-        "workload_profile: canonical workload profile tests",
-    )
-    config.addinivalue_line(
-        "markers",
-        "stability_assertion: early/late stability ratio checks",
-    )
-    config.addinivalue_line(
-        "markers",
-        "db_consistency: database lifecycle invariant checks",
-    )
-    config.addinivalue_line(
-        "markers",
-        "failure_injection: failure injection and recovery tests",
-    )
-    config.addinivalue_line(
-        "markers",
-        "resource_plateau: resource plateau validation",
-    )
-    config.addinivalue_line(
-        "markers",
-        (
-            "extended_soak: strict early-vs-late stability gates "
-            "(extended-soak mode only; excluded from normal CI)"
-        ),
-    )
-
-
 def _build_config() -> AppConfig:
     os.environ["SOAK_TEST_KEY"] = "soak-test-key-000"
     return AppConfig.from_dict(

@@ -42,7 +42,6 @@ Interactive install prompt for guided setup.
 | `scripts/verify_upstream_auth.py` | Direct upstream auth verifier |
 | `scripts/validate_routing.py` | Routing validation |
 | `scripts/repro_high_concurrency_streams.py` | High-concurrency stream reproducer |
-| `scripts/run_dispatch_stability_soak.py` | Dispatch stability runtime-validation runner (one canonical CLI, one JSON output) |
 | `scripts/test_model_info_identity.sh` | Model-info identity test runner |
 | `scripts/debug_model_info_openrouter.sh` | OpenRouter debug helper |
 

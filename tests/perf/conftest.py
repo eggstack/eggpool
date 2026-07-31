@@ -30,18 +30,6 @@ if TYPE_CHECKING:
 UPSTREAM_BASE = "https://perf-test-upstream.example.com"
 
 
-def pytest_configure(config: pytest.Config) -> None:
-    """Register custom pytest markers for performance tests."""
-    config.addinivalue_line(
-        "markers",
-        "perf_baseline: performance benchmark baseline snapshot",
-    )
-    config.addinivalue_line(
-        "markers",
-        "perf_regression: performance regression guard",
-    )
-
-
 def _build_config() -> AppConfig:
     os.environ["PERF_TEST_KEY"] = "perf-test-key-000"
     return AppConfig.from_dict(

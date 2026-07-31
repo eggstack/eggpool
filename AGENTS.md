@@ -59,9 +59,6 @@ uv run pytest -k "test_routing_plan_fallback" -v
 # Integration tests only
 uv run pytest -m integration -v
 
-# Request-path correctness (routing, transcoding, finalization)
-uv run pytest -m request_path -v
-
 # Network-dependent tests
 uv run pytest -m network -v
 
@@ -94,17 +91,13 @@ Manual release procedure — no automated release workflow. See `docs/releasing.
 
 ## Runtime Validation
 
-Manual risk-based validation on target SBC hardware. See `docs/releasing.md` § Risk-Based SBC Validation.
-
-The runner (`scripts/run_dispatch_stability_soak.py`) emits a single JSON
-output file. Gates include a per-window workload gate (useful attempts and
-successes, configured-vs-observed error rate, dual-shape coverage for
-`sbc-reference` at ≥60 s), direct late/early dispatch p95/p99 ratio caps
-(`ratio <= ratio_limit`, not `1.0 + ratio_limit`), a bounded post-load
-quiescence poll that the final drain gate consults (not `metrics[-1]`),
-the RSS availability gate, and the offline SQLite lifecycle audit.
-Unreachable samples, non-positive early baselines, missing runtime data,
-zero attempts, and zero successes all fail closed.
+Target-device validation is optional and risk-based. For request lifecycle,
+streaming, database, reload, or dependency changes, run the short manual
+smoke described in `docs/releasing.md` when representative hardware is
+available. It is a confidence check, not a CI gate or a retained evidence
+format. The high-concurrency reproducer in
+`scripts/repro_high_concurrency_streams.py` remains available for diagnosing
+stream-specific regressions.
 
 ## File Organization
 

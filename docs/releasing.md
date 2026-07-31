@@ -72,55 +72,17 @@ Then create a GitHub release from the tag.
 - Never force-reuse an already published version
 - Command failures must stop the process — do not mask with `|| true`
 
-## Risk-Based SBC Validation
+## Optional target-device validation
 
-Run the target-device runtime validation when:
+For request-path, streaming, database, reload, concurrency, or dependency
+changes, a short run on representative SBC hardware is useful when available.
+Exercise one ordinary request, one canonical stream, one premature-EOF stream,
+and confirm that active reservations return to zero after the run. Use the
+focused smoke suite first; do not treat a fixed-duration soak, timing
+percentage, JSON evidence file, or unavailable metric as a release gate.
 
-- Request-path, streaming, database, writer, reload, concurrency, or dependency changes: **run it**
-- Documentation-only or metadata-only release: **not required**
-- Uncertainty: run the short profile on representative hardware
+For a stream-specific reproducer, use:
 
 ```bash
-uv run python scripts/run_dispatch_stability_soak.py \
-  --profile sbc-reference \
-  --duration-seconds 300 \
-  --seed 42 \
-  --output /tmp/eggpool-runtime-validation.json
+uv run python scripts/repro_high_concurrency_streams.py --help
 ```
-
-`--output` names a single JSON file, not a directory. The output is written
-atomically and contains:
-
-- `passed` / `failure_reasons` for pass/fail gating
-- `process.eggpool_pid`, `process.rss_start_bytes`, `process.rss_end_bytes`,
-  `process.rss_peak_bytes` — RSS is measured from the Eggpool child process,
-  not the runner. On Linux, `/proc/<pid>/status` VmRSS is parsed; on macOS/BSD,
-  `ps -o rss=` is used. Both report bytes (KiB * 1024).
-- `early` / `late` window metrics (throughput, latency percentiles,
-  success counts, error counts, observed error rate)
-- `gates` with structured per-criterion sections:
-  - `workload` — useful-work gate (per-window attempts/successes/errors,
-    configured error rate, allowed error fraction, dual-shape coverage)
-  - `throughput` — late/early RPS ratio
-  - `dispatch_p95` / `dispatch_p99` — direct late/early ratio caps
-    (`ratio <= ratio_limit`). Recommended caps: `1.50` (p95) and `2.00`
-    (p99) for short validation; `1.30` and `1.80` for longer runs.
-  - `quiescence` — bounded post-load drain observation
-    (drained, attempts, elapsed_seconds, pending_requests,
-    active_reservations, failure_reason). Final drain state is read from
-    this observation, not from `metrics[-1]`.
-  - `rss` — RSS availability / required gate
-  - `database_audit` — offline SQLite lifecycle invariants
-- `polling` for bounded dashboard polling diagnostics
-
-Empty latency windows, non-positive early baselines, missing runtime data,
-zero attempts, and zero successes all fail closed. Zero-error profiles
-reject any unexpected request error. Configured-error profiles tolerate
-only `min(0.25, expected_error_rate + 0.10)`. `sbc-reference` at ≥60s
-requires both streaming and non-streaming successes.
-
-Unavailable metrics are reported as `null`, never as zero. A required metric
-that is unavailable causes the run to fail with a descriptive reason.
-
-GitHub workflow timing is diagnostic only — representative SBC output is
-authoritative for target performance claims.
