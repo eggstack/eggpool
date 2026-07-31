@@ -737,6 +737,56 @@ class RequestCoordinator:
             raise UpstreamError("No HTTP client available for upstream requests")
         return self._client
 
+    async def _finalize_terminal(
+        self,
+        context: ProxyRequestContext,
+        selected: SelectedAttempt,
+        data: FinalizationData,
+    ) -> None:
+        """Submit the single retained owner for a selected terminal outcome.
+
+        The supervisor registration is deliberately part of this helper so
+        normal completion, cancellation, client errors, and upstream errors
+        cannot accidentally take different cleanup paths.  The legacy
+        direct call remains only for lightweight test coordinators that do
+        not install a supervisor.
+        """
+        supervisor = self._finalization_supervisor
+        if supervisor is None:
+            await self._finalizer.finalize(selected, data)
+            return
+
+        from eggpool.request.finalization_job import FinalizationIdentity
+
+        identity = FinalizationIdentity(
+            proxy_request_id=context.request_id,
+            db_request_id=selected.db_request_id,
+            attempt_id=selected.attempt_id,
+            reservation_id=selected.reservation_id,
+            account_id=selected.account_id,
+            account_name=selected.account_name,
+            provider_id=selected.provider_id,
+            model_id=selected.model_id,
+            client_protocol=context.protocol,
+            upstream_protocol=context.upstream_protocol,
+            attempt_number=selected.attempt_number,
+        )
+        job = supervisor.register_or_get(
+            identity,
+            data.outcome.value,
+            finalization_data=data,
+        )
+        job.set_dependencies(
+            finalizer=self._finalizer,
+            selected=selected,
+            effects_applier=self._effects_applier,
+            router=None,
+            quota_estimator=None,
+            health_manager=None,
+            stream_diagnostics=self._stream_diagnostics,
+        )
+        await job.run()
+
     def _log_transcode_warnings(
         self,
         context: ProxyRequestContext,
@@ -2254,7 +2304,8 @@ class RequestCoordinator:
             # Client cancellation after selection - finalize the attempt
             elapsed_ms = self._elapsed_ms(context)
             context.client_metadata["_cancelled_finalized"] = True
-            await self._finalizer.finalize(
+            await self._finalize_terminal(
+                context,
                 selected,
                 FinalizationData(
                     outcome=FinalizationOutcome.CLIENT_CANCELLED,
@@ -2524,7 +2575,8 @@ class RequestCoordinator:
                 read_ms=upstream_read_ms,
             )
             # Finalize via RequestFinalizer
-            await self._finalizer.finalize(
+            await self._finalize_terminal(
+                context,
                 selected,
                 FinalizationData(
                     outcome=FinalizationOutcome.COMPLETED,
@@ -2791,10 +2843,9 @@ class RequestCoordinator:
                         ).category,
                     ) from error
 
-                # Non-retryable client error - finalize and raise for pass-through
-                await self._finalize_non_retryable(
-                    context, selected, response.status_code, resp_headers, resp_body
-                )
+                # Non-retryable client error - defer the single terminal
+                # transition to _handle_exhausted(), which owns the same
+                # retained job as every other request-level outcome.
                 raise _NonRetryableUpstreamError(
                     f"Upstream returned {response.status_code}",
                     status_code=response.status_code,
@@ -4009,34 +4060,6 @@ class RequestCoordinator:
         is a client-validation failure, not an account health signal.
         """
         elapsed_ms = self._elapsed_ms(context)
-        finalize_result = await asyncio.shield(
-            self._attempt_finalizer.finalize_failed_attempt(
-                attempt_id=selected.attempt_id,
-                reservation_id=selected.reservation_id,
-                data=AttemptFinalizationData(
-                    status_code=400,
-                    error_class=type(err).__name__,
-                    release_reason="capability_rejected",
-                    retry_category=RetryCategory.NEVER.value,
-                    bytes_received=len(context.original_body),
-                    latency_ms=elapsed_ms,
-                    is_retry_outcome=False,
-                ),
-            )
-        )
-        if finalize_result.reservation_released:
-            if self._quota_estimator is not None:
-                await self._quota_estimator.remove_reservation(
-                    selected.account_name,
-                    selected.estimated_microdollars,
-                    requests=1,
-                    tokens=selected.estimated_tokens,
-                )
-            await self._router.decrement_active_request_count(
-                selected.account_name,
-            )
-        if self._health_manager is not None:
-            self._health_manager.release_request(selected.account_name)
         rejection_reason = getattr(err, "reason", None) or "capability_rejected"
         if context.thinking_trace is not None:
             context.thinking_trace["decision"] = "rejected"
@@ -4054,7 +4077,8 @@ class RequestCoordinator:
                 exc_info=True,
             )
         try:
-            await self._finalizer.finalize(
+            await self._finalize_terminal(
+                context,
                 selected,
                 FinalizationData(
                     outcome=FinalizationOutcome.CLIENT_ERROR,
@@ -4435,7 +4459,8 @@ class RequestCoordinator:
     ) -> None:
         """Finalize a non-retryable client error (4xx)."""
         elapsed_ms = self._elapsed_ms(context)
-        await self._finalizer.finalize(
+        await self._finalize_terminal(
+            context,
             selected,
             FinalizationData(
                 outcome=FinalizationOutcome.CLIENT_ERROR,
@@ -4505,7 +4530,8 @@ class RequestCoordinator:
                     outcome = FinalizationOutcome.UPSTREAM_ERROR
                     health_already_applied = health_applied
 
-            await self._finalizer.finalize(
+            await self._finalize_terminal(
+                context,
                 last_selected,
                 FinalizationData(
                     outcome=outcome,
@@ -4574,7 +4600,8 @@ class RequestCoordinator:
                 attempt_number=0,
                 provider_id=context.provider_id or DEFAULT_PROVIDER_ID,
             )
-            await self._finalizer.finalize(
+            await self._finalize_terminal(
+                context,
                 synthetic,
                 FinalizationData(
                     outcome=FinalizationOutcome.UPSTREAM_ERROR,

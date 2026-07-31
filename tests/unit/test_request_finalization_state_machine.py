@@ -15,6 +15,7 @@ from eggpool.request.finalization_job import (
     FinalizationRecord,
     RequestFinalizationJob,
     RequestFinalizationSupervisor,
+    TerminalConflictError,
 )
 
 
@@ -192,6 +193,20 @@ class TestRequestFinalizationSupervisor:
         job2 = sup.register_or_get(_make_identity(), "client_cancelled")
         assert job1 is job2
         assert sup.active_count == 1
+
+    def test_registry_key_includes_attempt_id(self) -> None:
+        sup = self._make_supervisor()
+        first = sup.register_or_get(_make_identity(attempt_id=1), "completed")
+        second = sup.register_or_get(_make_identity(attempt_id=2), "completed")
+        assert first is not second
+        assert sup.active_count == 2
+
+    def test_conflicting_terminal_outcome_is_rejected(self) -> None:
+        sup = self._make_supervisor()
+        sup.register_or_get(_make_identity(), "completed")
+        with pytest.raises(TerminalConflictError):
+            sup.register_or_get(_make_identity(), "client_cancelled")
+        assert sup.snapshot()["terminal_conflicts"] == 1
 
     def test_register_respects_capacity(self) -> None:
         sup = self._make_supervisor(max_active_jobs=2)

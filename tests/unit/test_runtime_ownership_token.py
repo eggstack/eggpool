@@ -163,6 +163,26 @@ class TestAttemptRuntimeLease:
         assert outcomes[0].released is False
         assert "RuntimeError" in (outcomes[0].error or "")
 
+    def test_failed_component_is_retried_without_releasing_other_components_twice(
+        self,
+    ) -> None:
+        calls = 0
+
+        class FlakyRouter:
+            def release_active(self, account_name: str) -> None:
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    raise RuntimeError("busy")
+
+        lease = AttemptRuntimeLease(account_name="acct", active_count_acquired=True)
+        first = asyncio.run(lease.release_once(reason="test", router=FlakyRouter()))
+        second = asyncio.run(lease.release_once(reason="test", router=FlakyRouter()))
+        assert first[0].released is False
+        assert second[0].released is True
+        assert calls == 2
+        assert lease.released
+
     def test_release_all_components(self) -> None:
         """All three components released in one call."""
         lease = AttemptRuntimeLease(

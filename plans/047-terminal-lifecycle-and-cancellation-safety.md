@@ -289,3 +289,28 @@ Record:
 ## Definition of done
 
 Plan 047 is complete when every terminal request path delegates to one retained, attempt-keyed lifecycle owner; the full durable and in-memory cleanup sequence converges despite caller cancellation or database delay; duplicate calls cannot repeat effects; conflicting outcomes are visible; and subsequent proxy traffic remains healthy without restart or database repair.
+
+## Implementation record
+
+Implementation completed on 2026-07-31.
+
+- Request-level terminal call sites now converge through
+  `RequestCoordinator._finalize_terminal()` and the retained
+  `RequestFinalizationSupervisor` when the production runtime is wired.
+- Streaming non-retryable 4xx responses no longer finalize before raising into
+  `_handle_exhausted()`; the typed exhausted outcome performs the one terminal
+  submission.
+- Capability rejection no longer performs an attempt finalization followed by
+  a separate request finalization. It is one retained client-error command and
+  has no provider health penalty.
+- Supervisor keys are `(proxy_request_id, attempt_id)`. Duplicate active or
+  bounded-history submissions join the original result; conflicting outcomes
+  raise `TerminalConflictError` and increment `terminal_conflicts`.
+- `FinalizationResult` exposes explicit transition/cleanup facts, and
+  `AttemptRuntimeLease` retries only failed runtime-component releases.
+- Focused lifecycle coverage: 44 unit tests; request-path integration coverage:
+  58 tests; local CI-equivalent checks: Ruff format/check, Pyright, and 14
+  smoke tests.
+- The broader non-soak/non-perf/non-network run reached 927 passing tests and
+  exposed one unrelated timing-sensitive rehash concurrency assertion; its
+  isolated rerun passed.

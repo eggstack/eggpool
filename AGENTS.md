@@ -141,7 +141,7 @@ zero attempts, and zero successes all fail closed.
 - **Safe compression**: `src/eggpool/transcoder/compression/` implements observe/safe compression, policy resolution, advisory tuning, and deterministic markers.
 - **Model info sources**: `src/eggpool/model_info/` enriches model metadata from multiple sources with tiered identity matching (6 tiers).
 - **Performance hot path**: `Router.build_routing_plan()` is the authoritative selection path. `DispatchSpanRecorder` provides dispatch span telemetry.
-- **Request finalization**: Process-owned finalization jobs ensure terminal cleanup independent of client request tasks. `RequestFinalizationSupervisor` manages bounded, deduplicated active jobs with shutdown drain/adopt.
+- **Request finalization**: Every selected request outcome is submitted to one `RequestFinalizationJob` keyed by `(proxy_request_id, attempt_id)`. The retained job owns durable request/attempt/reservation transitions and in-memory cleanup independently of the client task; duplicate identical submissions join, conflicting outcomes are diagnosed, and the bounded `RequestFinalizationSupervisor` drains or adopts unresolved jobs on shutdown.
 - **Database recovery**: `DatabaseRecoveryController` handles connection invalidation with single-flight recovery, bounded retry, and transaction reconciliation.
 - **Failure effects and quarantine**: `classify_failure_effects()` centralizes failure consequences. `ModelQuarantine` implements bounded quarantine state machine with corroboration before terminal withdrawal.
 - **Thinking control normalization**: Provider-bound `ThinkingControlContract` validates and normalizes thinking/reasoning controls after provider/account selection. `ControlFieldAdaptation` provides typed per-field dispositions (`unchanged`/`mapped`/`dropped`/`rejected`/`not_present`) so `emitted_controls` and warnings are truthful. Built-in contract resolution evaluates specificity before priority; OpenCode Go has both ID-based and URL-compatibility rules.
@@ -167,6 +167,7 @@ zero attempts, and zero successes all fail closed.
 - **`/readyz` never performs a write**: reads a cached probe snapshot.
 - **Readiness probe is process-owned**: survives generation swaps.
 - **Process transitions execute inside `db.transaction()`**: atomic rollback on any failure.
+- **Terminal lifecycle**: streaming 4xx paths defer terminal work to `_handle_exhausted()`; they must not finalize and then raise into a second finalizer. Capability rejection is a client error with no provider penalty and uses the same retained terminal job as normal completion and cancellation.
 
 ## Error Handling
 

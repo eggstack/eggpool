@@ -79,7 +79,7 @@ Key invariants:
 - Pre-body failures can retry; no retry after first downstream byte emitted
 - Every retryable failed attempt must reach terminal state before the next attempt
 - Each attempt reservation is released exactly once via `AttemptFinalizer`
-- **Process-owned request finalization (Plan 026)**: streaming cancellation finalization is owned by a retained `RequestFinalizationJob` registered before the inner stream generator; on `CancelledError`, the retained task completes finalization independently of request waiters, replacing the fragile `asyncio.wait_for(asyncio.shield(...), timeout=10)` pattern. The `RequestFinalizationSupervisor` provides bounded registry, diagnostics, startup reconciliation, and shutdown drain.
+- **Process-owned request finalization (Plans 026/047)**: every selected terminal outcome is owned by one retained, attempt-keyed `RequestFinalizationJob` registered before cancellation-sensitive stream work; the retained task completes durable and in-memory cleanup independently of request waiters. Duplicate submissions join, conflicting terminal payloads are diagnosed, and the bounded `RequestFinalizationSupervisor` provides diagnostics, startup reconciliation, and shutdown drain. The stale-request finalizer is a recovery safety net rather than a normal terminal path.
 - The same URL composition rules apply to catalog fetch and chat dispatch
 - **Structured observability persistence (migrations 0026-0029)** every `request_attempts` row carries provider/model/protocol/retry_category/latency/bytes/streamed/is_retry_outcome; every routing decision is persisted to `routing_decisions` in the same transaction as the `request_attempts` INSERT; safety-net tasks (`_crash_recovery`, `_finalize_stale_requests_once`, `reconcile_expired_reservations`) record `operational_events` rows inside the same transaction as the durable state mutation; latency is decomposed into `upstream_connect_ms / upstream_read_ms / coordinator_overhead_ms` so the dashboard can distinguish network vs upstream vs eggpool-side bottlenecks
 - **Runtime metrics are best-effort and process-local** — the `/api/stats/runtime` endpoint and `eggpool runtime-status` CLI command gather process topology, memory, background task state, database health, OS load average (`os.getloadavg` + normalized per-core), and a bounded rolling-window dispatch-overhead distribution via `DispatchOverheadRecorder` (`src/eggpool/runtime_dispatch.py`); failed probes return `null` rather than raising, `probe_errors` is capped to 16 truncated entries, and the endpoint is always auth-gated even with a public dashboard
@@ -4221,6 +4221,7 @@ Closes six confirmed defects in the Plan 024 thinking-control adaptation layer, 
 ### Tests
 
 - `tests/unit/test_plan_046_thinking_control_normalization.py` — 42 tests covering all defects, control spellings, contract modes, policy dispositions, emitted-controls truthfulness, and non-dict safety
+- `tests/integration/test_plan_046_request_path_body_capture.py` — 8 request-path tests capturing upstream body bytes to prove warn-drop sanitization, native MiniMax control preservation, and streaming/non-streaming adaptation parity
 
 ## Typed Failure Effects and Bounded Model Quarantine (Plan 025)
 
@@ -4272,6 +4273,43 @@ The coordinator registers a finalization job before the inner stream generator. 
 - `tests/unit/test_plan_026_runtime_ownership_token.py` — identity, lease, release semantics
 - `tests/unit/test_plan_026_finalization_state_machine.py` — progress, concurrent callers, cancellation safety
 - `tests/unit/test_plan_026_finalization_supervisor.py` — registry, drain, startup reconciliation, diagnostics
+
+## Terminal Lifecycle and Cancellation Safety (Plan 047)
+
+Plan 047 closes the gap between the retained cancellation job and the other
+request terminal paths. After selection, the coordinator submits completion,
+client cancellation, capability rejection, upstream 4xx, exhausted upstream
+failure, and midstream failure through the same `RequestFinalizationJob`.
+Streaming 4xx handling only raises its typed non-retryable error; the
+exhausted-outcome path performs the single terminal submission.
+
+### Ownership and identity
+
+- `FinalizationIdentity` is keyed by `(proxy_request_id, attempt_id)`; two
+  attempts of one request are distinct jobs.
+- `RequestFinalizationSupervisor.register_or_get()` joins duplicate identical
+  submissions. A different outcome or terminal payload raises
+  `TerminalConflictError` and increments the bounded conflict diagnostic.
+- `FinalizationResult` reports durable transition, reservation release,
+  in-memory cleanup, health/effect handling, retry, and conflict facts instead
+  of making callers infer completion from request status alone.
+- `AttemptRuntimeLease` records each runtime component independently. A failed
+  component release remains retryable without repeating components that already
+  succeeded.
+
+Capability rejection is a request-local client error: it releases the selected
+  attempt and runtime ownership through the canonical job and never applies a
+provider health penalty. The job registry remains bounded, completed entries
+are removed into scalar history, and shutdown drains retained tasks before
+adopting unresolved work for recovery.
+
+### Tests
+
+- `tests/unit/test_request_finalization_state_machine.py` — retained execution,
+  cancellation, attempt-keyed deduplication, and terminal conflict detection
+- `tests/unit/test_runtime_ownership_token.py` — per-component release retry
+- request-path tests cover streaming/non-streaming 4xx parity and capability
+  rejection cleanup through the coordinator's canonical terminal helper
 
 ## Database Connection Recovery (Plan 027)
 

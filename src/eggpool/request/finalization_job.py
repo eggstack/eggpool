@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import inspect
 import logging
 import time
 from dataclasses import dataclass, field
@@ -130,6 +131,7 @@ class AttemptRuntimeLease:
     quota_reservation_acquired: bool = False
     health_probe_acquired: bool = False
     released: bool = False
+    _released_components: set[str] = field(default_factory=lambda: set[str]())
 
     async def release_once(
         self,
@@ -145,12 +147,21 @@ class AttemptRuntimeLease:
         """
         if self.released:
             return []
-        self.released = True
         outcomes: list[RuntimeReleaseOutcome] = []
 
-        if self.active_count_acquired and router is not None:
+        if (
+            self.active_count_acquired
+            and "active_count" not in self._released_components
+            and router is not None
+        ):
             try:
-                router.release_active(self.account_name)
+                release_active = getattr(router, "decrement_active_request_count", None)
+                if release_active is None:
+                    release_active = router.release_active
+                result = release_active(self.account_name)
+                if inspect.isawaitable(result):
+                    await result
+                self._released_components.add("active_count")
                 outcomes.append(
                     RuntimeReleaseOutcome(component="active_count", released=True)
                 )
@@ -163,11 +174,29 @@ class AttemptRuntimeLease:
                     )
                 )
 
-        if self.quota_reservation_acquired and quota_estimator is not None:
+        if (
+            self.quota_reservation_acquired
+            and "quota_reservation" not in self._released_components
+            and quota_estimator is not None
+        ):
             try:
-                quota_estimator.release_reservation(
-                    self.account_name, self.estimated_tokens
+                remove_reservation = getattr(
+                    quota_estimator, "remove_reservation", None
                 )
+                if remove_reservation is not None:
+                    result = remove_reservation(
+                        self.account_name,
+                        self.estimated_microdollars,
+                        requests=1,
+                        tokens=self.estimated_tokens,
+                    )
+                else:
+                    result = quota_estimator.release_reservation(
+                        self.account_name, self.estimated_tokens
+                    )
+                if inspect.isawaitable(result):
+                    await result
+                self._released_components.add("quota_reservation")
                 outcomes.append(
                     RuntimeReleaseOutcome(component="quota_reservation", released=True)
                 )
@@ -180,9 +209,16 @@ class AttemptRuntimeLease:
                     )
                 )
 
-        if self.health_probe_acquired and health_manager is not None:
+        if (
+            self.health_probe_acquired
+            and "health_probe" not in self._released_components
+            and health_manager is not None
+        ):
             try:
-                health_manager.release_request(self.account_name)
+                result = health_manager.release_request(self.account_name)
+                if inspect.isawaitable(result):
+                    await result
+                self._released_components.add("health_probe")
                 outcomes.append(
                     RuntimeReleaseOutcome(component="health_probe", released=True)
                 )
@@ -195,6 +231,16 @@ class AttemptRuntimeLease:
                     )
                 )
 
+        required = {
+            component
+            for component, acquired, dependency in (
+                ("active_count", self.active_count_acquired, router),
+                ("quota_reservation", self.quota_reservation_acquired, quota_estimator),
+                ("health_probe", self.health_probe_acquired, health_manager),
+            )
+            if acquired and dependency is not None
+        }
+        self.released = required.issubset(self._released_components)
         return outcomes
 
 
@@ -216,6 +262,25 @@ class FinalizationInvariantError(Exception):
         super().__init__(message)
         self.step = step
         self.request_id = request_id
+
+
+class TerminalConflictError(FinalizationInvariantError):
+    """Raised when one attempt is submitted with incompatible outcomes."""
+
+
+@dataclass(frozen=True, slots=True)
+class FinalizationResult:
+    """Explicit outcome of the canonical terminal command."""
+
+    attempt_transitioned: bool = False
+    request_transitioned: bool = False
+    reservation_released: bool = False
+    quota_reservation_removed: bool = False
+    active_count_decremented: bool = False
+    health_released_or_recorded: bool = False
+    effects_applied: bool = False
+    retry_queued: bool = False
+    terminal_conflict: bool = False
 
 
 @dataclass
@@ -264,6 +329,7 @@ class RequestFinalizationJob:
     _release_outcomes: list[RuntimeReleaseOutcome] = field(  # pyright: ignore[reportUnknownVariableType]
         default_factory=list
     )
+    _result: FinalizationResult = field(default_factory=FinalizationResult)
 
     # Dependencies — set after construction
     _finalizer: RequestFinalizer | None = None
@@ -289,6 +355,37 @@ class RequestFinalizationJob:
     @property
     def attempt_count(self) -> int:
         return self._attempt_count
+
+    @property
+    def result(self) -> FinalizationResult:
+        """Return the latest structured terminal result."""
+        return self._result
+
+    def bind_terminal(
+        self,
+        outcome: str,
+        finalization_data: Any = None,  # noqa: ANN401
+    ) -> None:
+        """Bind the first terminal command, rejecting conflicting reuse."""
+        if self.outcome not in ("pending_stream", outcome):
+            raise TerminalConflictError(
+                "conflicting terminal outcome for attempt",
+                step="bind_terminal",
+                request_id=self.request_id,
+            )
+        if (
+            self.finalization_data is not None
+            and finalization_data is not None
+            and repr(self.finalization_data) != repr(finalization_data)
+        ):
+            raise TerminalConflictError(
+                "conflicting terminal payload for attempt",
+                step="bind_terminal",
+                request_id=self.request_id,
+            )
+        self.outcome = outcome
+        if finalization_data is not None:
+            self.finalization_data = finalization_data
 
     @property
     def failure_count(self) -> int:
@@ -413,7 +510,18 @@ class RequestFinalizationJob:
         if self.finalization_data is None:
             return
 
-        await self._finalizer.finalize(self._selected, self.finalization_data)
+        transitioned = await self._finalizer.finalize(
+            self._selected, self.finalization_data
+        )
+        self._result = FinalizationResult(
+            attempt_transitioned=transitioned,
+            request_transitioned=transitioned,
+            reservation_released=transitioned,
+            quota_reservation_removed=transitioned,
+            active_count_decremented=transitioned,
+            health_released_or_recorded=transitioned,
+            effects_applied=transitioned,
+        )
 
     async def _execute_runtime_release(self) -> None:
         """Release runtime ownership exactly once."""
@@ -440,7 +548,7 @@ class RequestFinalizationJob:
         if self._stream_diagnostics is not None:
             try:
                 self._stream_diagnostics.record_outcome(
-                    "stream_completed",
+                    self.outcome,
                     proxy_request_id=self.identity.proxy_request_id,
                     db_request_id=self.identity.db_request_id,
                     provider_id=self.identity.provider_id,
@@ -575,6 +683,7 @@ class RequestFinalizationSupervisor:
         )
         self._shutdown_adopted: dict[str, RequestFinalizationJob] = {}
         self._counters = FinalizationCounters()
+        self._terminal_conflicts: int = 0
 
     @property
     def active_count(self) -> int:
@@ -592,14 +701,41 @@ class RequestFinalizationSupervisor:
     ) -> RequestFinalizationJob:
         """Register a new finalization job or return the existing one.
 
-        Deduplicates by proxy_request_id.  When the queue is at
+        Deduplicates by request and durable attempt identity.  When the queue is at
         capacity, returns ``None`` and increments the saturation
         counter.
         """
         request_id = identity.proxy_request_id
-        existing = self._active_jobs.get(request_id)
+        job_key = f"{request_id}:{identity.attempt_id}"
+        existing = self._active_jobs.get(job_key)
         if existing is not None:
+            try:
+                existing.bind_terminal(outcome, finalization_data)
+            except TerminalConflictError:
+                self._terminal_conflicts += 1
+                raise
             return existing
+
+        # Completed entries are removed from the active registry, but the
+        # bounded scalar history still makes a repeated submission join the
+        # original terminal result instead of starting a second lifecycle.
+        for record in reversed(self._history):
+            if (
+                record.proxy_request_id == request_id
+                and record.attempt_id == identity.attempt_id
+            ):
+                if record.outcome != outcome:
+                    self._terminal_conflicts += 1
+                    raise TerminalConflictError(
+                        "conflicting terminal outcome for completed attempt",
+                        step="register_or_get",
+                        request_id=request_id,
+                    )
+                return RequestFinalizationJob(
+                    identity=identity,
+                    outcome=record.outcome,
+                    _progress=FinalizationProgress.COMPLETED,
+                )
 
         if len(self._active_jobs) >= self._max_active_jobs:
             self._counters.saturation_rejections += 1
@@ -627,7 +763,7 @@ class RequestFinalizationSupervisor:
             failure_effects=failure_effects,
             on_completion=self._on_job_completion,
         )
-        self._active_jobs[request_id] = job
+        self._active_jobs[job_key] = job
         self._counters.registered += 1
         return job
 
@@ -636,7 +772,10 @@ class RequestFinalizationSupervisor:
         self._reconcile_job(job, source="callback")
 
     def get_job(self, request_id: str) -> RequestFinalizationJob | None:
-        return self._active_jobs.get(request_id)
+        for job in self._active_jobs.values():
+            if job.identity.proxy_request_id == request_id:
+                return job
+        return None
 
     def _reconcile_job(
         self,
@@ -647,9 +786,9 @@ class RequestFinalizationSupervisor:
         """Reconcile a completed job: move to history, release refs."""
         if not job.is_complete:
             return
-        request_id = job.identity.proxy_request_id
-        if request_id in self._active_jobs:
-            del self._active_jobs[request_id]
+        job_key = f"{job.identity.proxy_request_id}:{job.identity.attempt_id}"
+        if job_key in self._active_jobs:
+            del self._active_jobs[job_key]
         job.release_references()
         self._history.append(job.to_record())
         self._counters.completed += 1
@@ -805,6 +944,8 @@ class RequestFinalizationSupervisor:
 
         return {
             "active_count": len(self._active_jobs),
+            "terminal_conflicts": self._terminal_conflicts,
+            "registry_key": "proxy_request_id:attempt_id",
             "history_count": len(self._history),
             "shutdown_adopted_count": len(self._shutdown_adopted),
             "oldest_active_age_s": (
