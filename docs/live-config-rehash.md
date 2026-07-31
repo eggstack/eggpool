@@ -161,7 +161,7 @@ the top of the named phase.
 | ``tests/unit/test_reload_failure_injection.py`` | 12 | build/reconcile/publish failure injection via the three seams |
 | ``tests/unit/test_reload_security.py`` | 35 | secret redaction in events, CLI output, ``<old>``/``<new>`` tokens, raw credential patterns, ``sanitize_text_for_audit`` edge cases |
 | ``tests/unit/test_reload_inventory_audit.py`` | 5 | exhaustive audit of ``_FIELD_DISPOSITION`` coverage — caught and fixed ``dns_cache.ttl_seconds`` → ``network.dns_cache.positive_ttl_seconds`` and added 14 ``pricing.catalogs.*`` entries |
-| ``tests/integration/test_rehash_d3_soak.py`` | 1 | 25 alternating reloads asserting fresh per-resource identity |
+| ``tests/integration/test_rehash_d3_soak.py`` | 1 | Repeated alternating reloads asserting fresh per-resource identity |
 | ``tests/perf/test_rehash_d3_performance.py`` | 3 | reload latency (p50 ≈ 480 ms, p95 ≈ 750 ms), memory-delta (skipped when ``psutil`` absent), concurrent-traffic p95 < 750 ms |
 | ``tests/integration/test_rehash_d3_operator_workflow.py`` | 6 | operator happy-path, restart-required reject, JSON contract, no-op, dead-server exit 3, concurrent busy |
 

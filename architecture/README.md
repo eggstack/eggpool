@@ -3303,9 +3303,9 @@ The async primitive audit (`docs/async_primitive_audit.md`) documents every long
 - **ImmutableRequestState** (`src/eggpool/runtime_manager.py`): precomputes provider/account/header frozensets per generation, invalidated naturally through generation swap
 - **build_upstream_headers()** (`src/eggpool/proxy/client.py`): combines header sanitization + auth injection in a single pass
 
-### Resource Plateau Diagnostics
+### Bounded Runtime Diagnostics
 
-`/api/stats/runtime` now exposes resource plateau diagnostics:
+`/api/stats/runtime` exposes bounded resource diagnostics for operators:
 - DNS cache: max entries, current size, utilisation %, evictions total
 - Provider client pool: provider count, per-provider details
 - Stream diagnostics: histogram capacities and sample counts
@@ -3315,7 +3315,6 @@ The async primitive audit (`docs/async_primitive_audit.md`) documents every long
 - `tests/unit/test_granian_topology.py`: verifies single-process, single-loop model; task supervisor count; writer identity; generation identity; shutdown behaviour
 - `tests/unit/test_header_forwarding.py`: exhaustive header pass/drop tests
 - `tests/unit/test_resource_plateau.py`: DNS cache, client pool, and stream diagnostics boundedness
-- `tests/unit/test_resource_plateau_extended.py`: DNS singleflight lifecycle, HTTPX connection lifecycle, stream diagnostics error classification, FD/socket boundedness
 - `tests/unit/test_parsed_payload.py`: ParsedRequestPayload parse caching and derived state
 - `tests/unit/test_payload_utils.py`: estimate_padded_size arithmetic-only API
 - `tests/unit/test_immutable_request_state.py`: ImmutableRequestState frozen dataclass and generation swap
@@ -4096,46 +4095,21 @@ Nine MiniMax-M3 scenario presets via `minimax_thinking_rules()`: no thinking suc
 `copy_fixture()` returns deep copies so tests cannot mutate shared state.
 Parametrize-ready lists: `OPENAI_REASONING_EFFORT_VARIANTS`, `NESTED_REASONING_VARIANTS`, `ANTHROPIC_THINKING_VARIANTS`.
 
-### State-audit snapshot
-
-`tests/support/state_audit.py` provides `RequestStateAuditSnapshot` — captures `DurableFacts` (8 SQLite row counts) and `RuntimeFacts` (12 runtime fields) before and after a request.
-`before.diff(after)` produces a `StateAuditDiff` with five categories: `request_history_changes`, `runtime_ownership_changes`, `health_changes`, `durable_backoff_changes`, `database_connection_changes`.
-`diff.is_clean` detects leaked reservations, active counts, health state, or database connection changes.
-
-### Cancellation seams
-
-`tests/support/cancellation_seams.py` provides `CancellationSeamRegistry` with 11 named `CancellationPoint` entries along the request lifecycle: before request row, after request row before selection, after selection claim, after dispatch commit, before upstream send, after upstream headers, before finalization, during finalization transaction, after finalization before release, during response render, midstream after chunk.
-Seams fire `CancelledError` exactly once and become inert. Tests check `was_triggered()`.
-
 ### Database fault seams
 
 `Database` (`src/eggpool/db/connection.py`) exposes class-level test injection hooks: `TEST_INJECT_BEFORE_COMMIT_CALL`, `set_test_inject_commit_call()`, `set_test_inject_rollback_call()`, `set_test_inject_in_transaction_before_rollback()`.
 `tests/support/reload_faults.py` provides `ReloadFaultInjector` for reload-stage faults.
 Each test forces exactly one outcome (no multiple-possible-outcome assertions).
 
-### JSON operation counters
-
-`tests/support/json_counters.py` provides `JSONOperationCounters` — monkey-patches `eggpool.jsonx.loads` and `dumps_bytes` with category counters.
-Six categories: request_decode/encode, response_decode/encode, stream_event_decode/encode.
-Thread-safe, install/uninstall context, `CounterSnapshot` frozen dataclass with `total_decode`, `total_encode`, `total`.
-Near-zero overhead when not installed (guards on `_installed` flag).
-
 ### Performance and resource baselines
 
-`tests/perf/test_plan_023_request_path_baseline.py` — serial and concurrent latency baselines (p50/p95/p99), RSS, thread count, FD count, asyncio task count.
-`tests/soak/test_plan_023_error_isolation_baseline.py` — mixed success/error soak with resource plateau validation.
-Baseline artifact: `artifacts/plan-023-baseline.md`.
+Performance and long-running soak baselines are intentionally not part of the
+standard ownership model; use the focused request and smoke tests instead.
 
 ### Test files
 
-- `tests/unit/test_plan_023_state_audit.py` — state-audit snapshot and diff correctness
-- `tests/unit/test_plan_023_cancellation_seams.py` — cancellation seam lifecycle
-- `tests/unit/test_plan_023_database_fault_matrix.py` — database fault injection matrix
-- `tests/unit/test_plan_023_json_operation_counters.py` — JSON counter install/uninstall/contexts
-- `tests/integration/test_plan_023_minimax_thinking_reproducer.py` — MiniMax-M3 scenario reproducer
-- `tests/integration/test_plan_023_error_isolation_matrix.py` — error isolation state-audit matrix
-- `tests/perf/test_plan_023_request_path_baseline.py` — latency/resource baselines
-- `tests/soak/test_plan_023_error_isolation_baseline.py` — error-isolation soak baseline
+- `tests/smoke/test_failure_recovery_smoke.py` — request-local failure isolation
+- `tests/smoke/` — canonical request, stream, and failure-isolation smoke paths
 
 ## Provider-Bound Thinking-Control Normalization (Plan 024)
 

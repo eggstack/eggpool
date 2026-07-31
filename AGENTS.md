@@ -80,10 +80,10 @@ uv run ruff check --fix src/
 - pytest with `asyncio_mode = "strict"` and `xfail_strict = true` (from `pyproject.toml`)
 - `--strict-markers` enforced
 - respx for HTTPX upstream mocking
-- Tests in `tests/unit/`, `tests/integration/`, `tests/smoke/`, `tests/perf/`, `tests/soak/`, `tests/contract/`
+- Tests in `tests/unit/`, `tests/integration/`, `tests/smoke/`, `tests/perf/`, `tests/live/`, `tests/contract/`
 - Smoke suite (`tests/smoke/`): package import, config parsing, invalid config rejection, check-config validation, DB migration, one non-stream request, one streaming request, CLI help
 - Provider contract tests: `uv run pytest tests/unit/test_contract.py tests/unit/test_contract_urls.py -v`
-- Performance and soak tests are manually invoked, not run in CI
+- Performance, live, and diagnostic reproducer tests are manually invoked, not run in CI
 
 ## Release
 

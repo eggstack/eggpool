@@ -94,10 +94,6 @@ Buffered analytics rollups for performance.
 
 Schema migration execution. Ordered SQL files in `db/schema/`.
 
-### `db/consistency_audit.py`
-
-Database consistency audit queries.
-
 ### `db/schema/`
 
 50 SQL migration files (`0001_initial.sql` through `0050_*`), plus `checksums.json`.

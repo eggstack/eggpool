@@ -142,12 +142,12 @@ src/eggpool/
 └── update_checker.py  # PyPI update checker
 
 tests/
-├── unit/              # ~242 test files
-├── integration/       # ~80 test files
+├── unit/              # Focused module-level behavior
+├── integration/       # Cross-component request and lifecycle behavior
 ├── contract/          # Provider and transcoder contracts
-├── perf/              # Performance baselines
-├── soak/              # Long-running stability validation
+├── perf/              # Optional local performance checks
 ├── live/              # Opt-in live external-source tests
+├── smoke/             # Small canonical CI correctness floor
 ├── helpers/           # Shared test utilities
 └── fixtures/          # Test fixtures (cache_compression, streaming, etc.)
 
@@ -181,12 +181,12 @@ Runtime configuration lives in `config.toml` + `.env` (API keys). Key sections:
 
 ## Testing
 
-- **Unit**: ~242 files covering every module
-- **Integration**: ~80 files for end-to-end flows
-- **Contract**: Provider and transcoder contract tests
-- **Performance**: Baselines and regression guards
-- **Soak**: Long-running stability validation
-- **Markers**: `unit`, `integration`, `slow`, `performance`, `live`, `network`, `soak`
+The ordinary verification floor is `tests/smoke/`, covering import and CLI
+startup, configuration validation, database migration, representative OpenAI
+and Anthropic requests, canonical streaming completion, premature EOF, and
+request-local failure recovery. Use focused unit, integration, or contract
+tests for changed behavior. Performance and live checks are optional manual
+diagnostics; they are not part of ordinary CI.
 
 ## Further Reading
 

@@ -90,7 +90,7 @@ uv run pyright src/ scripts/
 
 - **pytest** with pytest-asyncio (strict mode), `xfail_strict = true`, `--strict-markers`
 - **respx** for HTTPX upstream mocking
-- Tests in `tests/unit/`, `tests/integration/`, `tests/smoke/`, `tests/perf/`, `tests/soak/`, `tests/contract/`
+- Tests in `tests/unit/`, `tests/integration/`, `tests/smoke/`, `tests/perf/`, `tests/live/`, `tests/contract/`
 
 ### Test Markers
 
@@ -100,7 +100,6 @@ Defined in `pyproject.toml`:
 - **`performance`** — manually invoked real-runtime performance checks
 - **`live`** — opt-in live provider/network verification tests
 - **`network`** — tests requiring network access or external services
-- **`soak`** — manually invoked real-runtime duration/resource checks
 - **`integration`** — integration tests requiring full component wiring
 - **`unit`** — unit tests
 
@@ -116,7 +115,7 @@ uv run pytest tests/unit/test_contract.py tests/unit/test_contract_urls.py -v
 uv run pytest tests/smoke/ -q --tb=short --maxfail=1
 ```
 
-The smoke suite covers: package import, config parsing, invalid config rejection, check-config validation, DB migration, one non-stream request, one streaming request, one upstream failure followed by recovery, one premature EOF, one Anthropic request, and CLI help.
+The smoke suite covers: package import, config parsing, invalid config rejection, check-config validation, DB migration, one non-stream request, one streaming request, one upstream failure followed by recovery, one premature EOF, one Anthropic request, and CLI help. Broader tests are selected by changed ownership boundary, not by a mandatory full-suite or soak ceremony.
 
 Streaming completion regressions should include both the pure EOF decision table
 and the real response path. Verify that canonical `[DONE]`/`message_stop` streams

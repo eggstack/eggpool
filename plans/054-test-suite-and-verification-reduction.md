@@ -1,7 +1,7 @@
 # Plan 054 — Test Suite and Verification Reduction
 
 Date: 2026-07-30
-Status: closed at 3b8976d5
+Status: completed; follow-up cleanup included in the implementation commit
 Parent roadmap: `plans/045-upstream-streaming-hardening-hotpath-roadmap.md`
 Applies to: Plans 045 through 053 and future corrective plans
 Planning baseline: `c3915389d8167c122f5654f60c0ca9363860b48e`

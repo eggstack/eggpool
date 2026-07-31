@@ -78,7 +78,7 @@ See `architecture/README.md` for the full design overview.
 
 - **Plan 020 — Accepted-Finalization Control-Flow Evidence Corrective Pass**: closes the structural seams the Plan 019 architecture left open, making accepted-finalization lifecycle bound, reconcilable, and faithfully observable. **Genuine single-flight via retained `asyncio.Task`** — `run()` spawns one task under `_run_lock` and callers `await asyncio.shield(task)`; cancel/timeout cannot cancel the retained task. **`run()` returns `AcceptedFinalizationOutcome`** (with `completed`, `next_step`, `error`, `failure_count`, `retry_attempt_count`, `retirement_retry_attempt_count`, `retirement_scheduled`, `adopted_for_shutdown`) rather than `AcceptedFinalizationStep`, decoupling the public contract from the internal progress cursor. **`FinalizationStatus` enum** (`COMPLETED` / `RETRY_PENDING` / `RETIREMENT_SCHEDULE_FAILED` / `SHUTDOWN_ADOPTED` / `INVARIANT_FAILED`) supersedes step-as-status; `is_complete` is only true for `COMPLETED`. **`AcceptedFinalizationInvariantError`** raised when an unknown step appears in the cursor (no silent swallow). **Active error fields cleared on success** — once a job recovers, the previous error is no longer reported. **`adopt_for_shutdown()`** lets the lifespan take ownership of unresolved jobs before shutdown; **`drain_finalization_jobs`** shields retained tasks so cancel does not cancel them. **Counter reconciliation** via `_reconcile_finalization_job()` with delta tracking per job (`_reconciled_attempt_count`, `_retirement_retry_accounted`, `mark_reconciled()`) — `accepted_reloads`/`committed_reloads` increment inline at accept; `fully_finalized_reloads`/`accepted_finalization_failures_recovered`/`delayed_completion_count` advance only via reconcile (idempotent). **`ReloadDiagnosticResult` gains 12 finalization fields** (`finalization_status`, `finalization_active_count`, `finalization_history_count`, `finalization_failure_count`, `finalization_retry_attempt_count`, `finalization_retirement_retry_attempt_count`, `finalization_last_error_step`, `finalization_last_error_message`, `finalization_pending_jobs`, `pending_swap_committed`, `accepted_generation_authoritative`, `ownership_diagnostics`) and `classify_result_category()` returns `POST_COMMIT_FINALIZATION_PENDING`/`RETIREMENT_SCHEDULE_FAILED` categories. **`ReloadResult` gains matching finalization fields** and the control server response carries them. **Ownership fallback normalized to lowercase** (`"transferred"`/`"aborted"`). **Shutdown sequence**: `wait_for_transaction_completion` → `drain_finalization_jobs` (shielded) → `adopt_for_shutdown` for unresolved jobs (none are silently dropped). Tests: `tests/unit/test_accepted_finalization_state_machine.py` + 7 `tests/integration/reload/test_plan_020_*.py` files (40 tests).
 
-- **Plan 023 — Error-Isolation Reproducer and Invariant Baseline**: Phase 1 of the upstream error isolation roadmap. Observational, test-infrastructure focused — no production behavior changes. Provides: (1) `MockUpstream` (`tests/helpers/mock_upstream.py`) — `respx`-backed mock upstream with declarative `MockResponseSpec`, `MockUpstreamRule` matching, `CapturedRequest` structured log, and 9 MiniMax-M3 scenario presets. (2) Canonical request fixtures (`tests/helpers/request_fixtures.py`) — 18+ immutable payloads covering every thinking-control variant. (3) `RequestStateAuditSnapshot` (`tests/support/state_audit.py`) — captures `DurableFacts` + `RuntimeFacts` before/after requests; `StateAuditDiff` with 5 categories; `is_clean` detects leaks. (4) `CancellationSeamRegistry` (`tests/support/cancellation_seams.py`) — 11 named `CancellationPoint` entries firing `CancelledError` exactly once. (5) Database fault seams via `Database` class-level injection hooks (`TEST_INJECT_BEFORE_COMMIT_CALL`, `set_test_inject_commit_call`, etc.). (6) `JSONOperationCounters` (`tests/support/json_counters.py`) — monkey-patches `jsonx.loads`/`dumps_bytes` with 6 category counters. (7) Performance baselines (`tests/perf/test_plan_023_request_path_baseline.py`, `tests/soak/test_plan_023_error_isolation_baseline.py`). Baseline artifact: `artifacts/plan-023-baseline.md`. Later phases (024–030) depend on this infrastructure and must keep Plan 023 tests green.
+- **Plan 023 — Error-isolation fixtures**: The durable request, cancellation, and JSON ownership behavior is covered by focused capability tests and the canonical smoke failure-recovery path. Historical baseline and soak artifacts are not part of ordinary verification.
 
 - **Plan 024 — Provider-Bound Thinking-Control Normalization**: adds an explicit provider-bound request-contract layer so thinking/reasoning controls are validated and normalized after provider/account selection, regardless of whether protocol transcoding is required. Key changes: (1) `ThinkingControlContract` (`src/eggpool/catalog/capabilities.py`) — structured contract with `mode` (`unknown`/`none`/`fixed`/`effort`/`budget`/`effort_or_budget`), `request_fields`, `accepted_efforts`, `effort_aliases`, `effort_to_budget_tokens`, `explicit_budget_min`/`max`, `historical_reasoning_content`, and `source`. (2) `ThinkingRequestIntent` — immutable normalized record of original client thinking intent stored in `ProxyRequestContext.thinking_intent`, preventing intermediate translations from becoming falsely authoritative. (3) `ProviderRequestAdaptation` (`src/eggpool/transcoder/provider_adaptation.py`) — typed pure result with `payload`, `changed`, `decision` (`passthrough`/`mapped`/`dropped`/`rejected`), `requested_controls`, `emitted_controls`, `warnings`. (4) `adapt_thinking_controls()` — pure adaptation function that validates/normalizes controls against the provider contract. (5) `_adapt_provider_thinking_controls()` in coordinator — post-selection normalization stage that runs for both native and transcoded paths, before upstream dispatch. (6) Built-in contracts (`src/eggpool/transcoder/builtin_contracts.py`) — manually curated contracts for OpenCode Go MiniMax-M3 (fixed), MiniMax native (effort), Anthropic native (effort_or_budget), and OpenAI native (effort). (7) `ProviderControlPolicyConfig` (`src/eggpool/transcoder/policy.py`) — `[transcoder.provider_control_policy]` config section with `unsupported_control`, `unknown_contract`, and `allow_compatibility_retry`. (8) Provider control adaptation counters (`provider_mapped`/`provider_dropped`/`provider_rejected`) in `ThinkingMetricsCounter`. (9) Thinking trace extended with `provider_control_decision` and `provider_control_warnings`. Tests: `tests/unit/test_plan_024_thinking_control_contract.py`, `tests/unit/test_plan_024_provider_request_adaptation.py`, `tests/unit/test_plan_024_builtin_contracts.py`, `tests/unit/test_plan_024_native_provider_normalization.py`, `tests/unit/test_plan_024_transcoded_provider_normalization.py`, `tests/unit/test_plan_024_thinking_trace.py`, `tests/unit/test_plan_024_thinking_metrics.py`, `tests/integration/test_plan_024_opencode_minimax_contract.py`, `tests/integration/test_plan_024_compatibility_retry.py`.
 - **Plan 046 — Provider Thinking-Control Normalization Closure**: closes six confirmed defects in Plan 024. (1) `ControlFieldAdaptation` replaces ambiguous `dict | None` returns with typed per-field dispositions (`unchanged`/`mapped`/`dropped`/`rejected`/`not_present`), ensuring `emitted_controls` and warnings are truthful. (2) Fixed contract now removes `thinking.type`, `thinking.effort`, and top-level `thinking_budget`; type-only thinking blocks are observably dropped. (3) `map_if_known` policy rejects unmappable controls for fixed contracts. (4) `lookup_builtin_contract` evaluates specificity before priority. (5) OpenCode Go gains URL-compatibility matching without capturing native MiniMax. (6) 42 focused unit tests in `tests/unit/test_plan_046_thinking_control_normalization.py`. (7) 8 request-path integration tests in `tests/integration/test_plan_046_request_path_body_capture.py` capturing upstream body bytes.
@@ -616,7 +616,6 @@ One GitHub Actions job on every PR:
 | `slow` | Tests exceeding normal CI budget |
 | `performance` | Manually invoked real-runtime performance checks |
 | `live` | Opt-in live provider/network verification tests |
-| `soak` | Manually invoked real-runtime duration/resource checks |
 | `network` | Tests requiring network access |
 
 ### Fault Injection Matrix (28 tests)
@@ -634,28 +633,10 @@ Every fault yields complete old state (pre-commit) or complete new state (post-c
 
 ### Consistency Audit
 
-`ConsistencyAuditor` (`src/eggpool/db/consistency_audit.py`) performs 9 read-only invariant checks after each soak:
-
-1. Pending requests with no active attempt
-2. Active reservations on non-pending requests
-3. Incomplete attempts on terminal requests
-4. Duplicate attempt numbers
-5. Orphan routing traces
-6. Orphan account backoffs
-7. Stuck reservations (active > 1 hour)
-8. Attempt ordering violations
-9. Orphan price snapshots
-
-### Resource Plateau Tolerances
-
-Defined in `docs/resource-plateau-tolerances.md`:
-
-- **Threads**: max `initial + 20`
-- **RSS**: growth ratio `< 1.5x` across cycles, slope `<= 1 MB/req` in late windows
-- **Async tasks**: final count `<= initial + 2`
-- **File descriptors**: no positive slope in late windows
-- **Reservations/pending**: exactly 0 after quiescence
-- **Writer/trace/finalization queues**: must drain after load stops
+Runtime metrics expose bounded resource and queue diagnostics for operators.
+They are operational signals, not a retained soak evidence schema or fixed
+release gate. The canonical smoke suite verifies request convergence on the
+representative failure and streaming paths.
 
 ### Pytest Configuration
 
