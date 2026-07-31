@@ -30,6 +30,7 @@ All data-plane requests flow through `RequestCoordinator`:
 ### Key Invariants
 
 - Requests must be persisted before upstream dispatch
+- Dispatch persistence is binary: a batch returns fully valid durable identities or raises; rollback never creates placeholder success results. The process-owned writer is bound to the canonical single event loop and rejects foreign-loop submissions.
 - Pre-body failures can retry; no retry after first downstream byte emitted
 - Every retryable failed attempt must reach terminal state through retained attempt cleanup before the next attempt
 - Each attempt reservation is released exactly once via `AttemptFinalizer`

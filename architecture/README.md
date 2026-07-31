@@ -2012,6 +2012,14 @@ Core flow:
 6. The coordinator receives the result, publishes runtime state,
    and proceeds with upstream dispatch.
 
+The repository contract is binary: it returns a same-order list of fully
+validated durable results or raises. It never returns placeholder IDs after a
+rollback. `PersistedDispatchResult` requires non-empty request/reservation IDs
+and a positive attempt ID; the coordinator validates the result again before
+publishing runtime ownership. The writer fans one batch exception to every
+waiter and leaves failed intents out of persisted counters. It is bound to the
+event loop captured by `start()` and rejects cross-loop submission.
+
 Key invariants:
 - No upstream request is sent before its own dispatch bundle commit
   is acknowledged.

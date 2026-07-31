@@ -54,6 +54,10 @@ class DispatchWriterShutdownError(DispatchWriterError):
     """Raised when the writer is shutting down and cannot accept work."""
 
 
+class DispatchWriterLoopError(DispatchWriterError):
+    """Raised when a writer is used from an event loop other than its owner."""
+
+
 class DispatchIntentState(enum.Enum):
     """Lifecycle states for a dispatched intent within the writer."""
 
@@ -98,6 +102,10 @@ class DispatchIntent:
     )
 
     def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        """Validate the local fields required by the persistence schema."""
         if not self.proxy_request_id:
             raise DispatchValidationError("proxy_request_id must be non-empty")
         if self.attempt_number < 1:
@@ -106,8 +114,24 @@ class DispatchIntent:
             )
         if not self.account_name:
             raise DispatchValidationError("account_name must be non-empty")
+        if self.account_id < 1:
+            raise DispatchValidationError(
+                f"account_id must be positive, got {self.account_id}"
+            )
+        if not self.provider_id:
+            raise DispatchValidationError("provider_id must be non-empty")
         if not self.model_id:
             raise DispatchValidationError("model_id must be non-empty")
+        if not self.protocol:
+            raise DispatchValidationError("protocol must be non-empty")
+        if self.estimated_tokens < 0:
+            raise DispatchValidationError("estimated_tokens must be non-negative")
+        if self.estimated_microdollars < 0:
+            raise DispatchValidationError("estimated_microdollars must be non-negative")
+        if self.attempt_number > 1 and not self.existing_db_request_id:
+            raise DispatchValidationError(
+                "attempt_number > 1 requires existing_db_request_id"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,3 +151,17 @@ class PersistedDispatchResult:
     commit_timestamp: str = ""
     queue_wait_ms: float = 0.0
     transaction_ms: float = 0.0
+
+    def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        """Validate the durable identity before it crosses the boundary."""
+        if not self.db_request_id:
+            raise DispatchValidationError("db_request_id must be non-empty")
+        if not self.reservation_id:
+            raise DispatchValidationError("reservation_id must be non-empty")
+        if isinstance(self.attempt_id, bool) or self.attempt_id < 1:
+            raise DispatchValidationError(
+                f"attempt_id must be positive, got {self.attempt_id}"
+            )

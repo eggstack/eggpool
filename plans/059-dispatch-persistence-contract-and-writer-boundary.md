@@ -1,7 +1,7 @@
 # Plan 059 — Dispatch Persistence Contract and Writer Boundary
 
 Date: 2026-07-31
-Status: ready for implementation
+Status: implemented and verified
 Parent roadmap: `plans/058-durable-convergence-exact-update-sbc-hotpath-roadmap.md`
 Planning baseline: `1a997cf862c04542a6d18e1e2873bc154ebe1fa1`
 
@@ -222,15 +222,15 @@ Fewer commits are acceptable if reviewability remains good.
 
 ## Plan acceptance criteria
 
-- [ ] `persist_dispatch_bundles()` never encodes failure as a result object.
-- [ ] All successful result objects contain non-empty request/reservation IDs and a positive attempt ID.
-- [ ] Batch failure reaches all waiting callers as an exception.
-- [ ] Failed intents do not increment persisted metrics.
-- [ ] Runtime ownership and upstream dispatch occur only after validated durable identity exists.
-- [ ] Persistence failures do not penalize providers or models.
-- [ ] A later request can succeed after a prior deterministic rollback.
-- [ ] Dispatch writer loop ownership is explicit and same-loop only.
-- [ ] No durable queue, savepoint framework, batch-replay engine, cross-loop bridge, CI job, or soak test is added.
+- [x] `persist_dispatch_bundles()` never encodes failure as a result object.
+- [x] All successful result objects contain non-empty request/reservation IDs and a positive attempt ID.
+- [x] Batch failure reaches all waiting callers as an exception.
+- [x] Failed intents do not increment persisted metrics.
+- [x] Runtime ownership and upstream dispatch occur only after validated durable identity exists.
+- [x] Persistence failures do not penalize providers or models.
+- [x] A later request can succeed after a prior deterministic rollback.
+- [x] Dispatch writer loop ownership is explicit and same-loop only.
+- [x] No durable queue, savepoint framework, batch-replay engine, cross-loop bridge, CI job, or soak test is added.
 
 ## Definition of done
 

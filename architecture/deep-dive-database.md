@@ -90,6 +90,15 @@ Buffered analytics rollups for performance.
 
 `persist_dispatch_bundles()` — durable dispatch write pipeline (Milestone C). Batches multiple dispatch intents in a single transaction.
 
+The dispatch repository validates every intent before opening the transaction.
+Its contract is binary: successful calls return one fully populated
+`PersistedDispatchResult` per input, in input order; statement, rollback, and
+unknown-commit failures raise and never return placeholder rows. A persisted
+result requires non-empty request and reservation IDs and a positive attempt ID.
+The writer propagates one failed-batch exception to every waiting caller, so
+failed intents do not increment persisted counters and later batches can
+continue after deterministic failures.
+
 ### `db/migrations.py` — MigrationRunner
 
 Schema migration execution. Ordered SQL files in `db/schema/`.
@@ -154,3 +163,5 @@ Key invariants:
 - Every intent receives exactly one outcome
 - Queue saturation fails closed
 - Isolated requests don't incur unconditional batching sleep
+- A dispatch writer is bound to the event loop captured by `start()`; cross-loop
+  submission is rejected rather than bridged.

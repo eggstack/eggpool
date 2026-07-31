@@ -35,9 +35,9 @@ Key design decisions:
 - **Backpressure**: ``submit_intent`` blocks up to
   ``enqueue_timeout_ms`` when the queue is full, then raises
   :class:`DispatchQueueSaturatedError`.
-- **Thread-safe submission**: ``submit_intent`` bridges
-  ``concurrent.futures.Future`` so callers from different event loops
-  (e.g. Granian worker threads) can safely enqueue.
+- **Single-loop submission**: ``submit_intent`` accepts calls only from
+  the event loop that started the writer. The canonical runtime has one
+  event-loop thread, so no cross-loop adapter is required.
 """
 
 from __future__ import annotations
@@ -57,6 +57,7 @@ from eggpool.request.dispatch_intent import (
     DispatchQueueClosedError,
     DispatchQueueSaturatedError,
     DispatchTransactionError,
+    DispatchWriterLoopError,
     DispatchWriterShutdownError,
     PersistedDispatchResult,
 )
@@ -105,27 +106,9 @@ class DispatchPersistenceWriter:
     Constructed with a :class:`Database` reference (process-owned).
     The drain task runs on the event loop where :meth:`start` is called.
 
-    Thread-safety strategy (Milestone F)
-    -------------------------------------
-    The writer is designed for the **single-loop model** (Model 1).
-    The drain task runs on the single event loop; the ``asyncio.Queue``
-    is bound to that loop.  Submission from other threads is bridged
-    via ``loop.call_soon_threadsafe`` which is thread-safe by design.
-
-    The writer does NOT use any ``threading.Lock`` — all internal
-    state mutations happen on the event loop via ``call_soon_threadsafe``.
-    The ``concurrent.futures.Future`` returned by ``submit_intent``
-    is thread-safe per the ``concurrent.futures`` contract.
-
-    Single-loop assumption
-    ----------------------
-    The drain task, queue, and all async machinery are bound to the
-    event loop where ``start()`` is called.  Under Model 1 (single
-    Granian worker, ``runtime_threads=1``), this is the only loop
-    in the process.  If ``runtime_threads > 1``, the drain task
-    runs on whichever loop called ``start()``; submissions from
-    other loops still work because ``call_soon_threadsafe`` is
-    loop-agnostic.
+    The writer uses EggPool's canonical single-loop model. The drain task,
+    queue, and all state mutations belong to the event loop where ``start``
+    is called. Submission from another loop is rejected immediately.
 
     Shutdown behavior
     -----------------
@@ -164,6 +147,7 @@ class DispatchPersistenceWriter:
         )
         self._state = _WriterState.INIT
         self._drain_task: asyncio.Task[None] | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._batch_counter = 0
         # Plan 029: bounded sample storage (Workstream B)
         self._sample_window = sample_window
@@ -205,7 +189,8 @@ class DispatchPersistenceWriter:
                 f"Cannot start writer in state {self._state}"
             )
         self._state = _WriterState.RUNNING
-        self._drain_task = asyncio.get_running_loop().create_task(self._drain_loop())
+        self._loop = asyncio.get_running_loop()
+        self._drain_task = self._loop.create_task(self._drain_loop())
 
     async def stop(self) -> None:
         """Signal shutdown and wait for the drain task to finish."""
@@ -241,9 +226,9 @@ class DispatchPersistenceWriter:
     def submit_intent(self, intent: DispatchIntent) -> Future[PersistedDispatchResult]:
         """Enqueue an intent and return a Future for its result.
 
-        Thread-safe: uses ``loop.call_soon_threadsafe`` to bridge
-        from any thread.  Raises :class:`DispatchQueueClosedError` if
-        the writer is not running, or
+        Requires the event loop that started the writer. Raises
+        :class:`DispatchWriterLoopError` on cross-loop use and
+        :class:`DispatchQueueClosedError` if the writer is not running, or
         :class:`DispatchQueueSaturatedError` if the queue is full
         and the enqueue timeout elapses.
         """
@@ -252,12 +237,16 @@ class DispatchPersistenceWriter:
                 f"Writer is not running (state={self._state})"
             )
         loop = asyncio.get_running_loop()
+        if self._loop is not loop:
+            raise DispatchWriterLoopError(
+                "DispatchPersistenceWriter must be submitted from its owner loop"
+            )
         future: Future[PersistedDispatchResult] = Future()
         qi = _QueuedIntent(intent=intent, future=future)
         self._submitted_total += 1
 
         try:
-            loop.call_soon_threadsafe(self._schedule_enqueue, loop, qi)
+            loop.call_soon(self._schedule_enqueue, qi)
         except RuntimeError as exc:
             self._failed_total += 1
             qi.future.set_exception(DispatchQueueClosedError("Event loop is closed"))
@@ -266,11 +255,11 @@ class DispatchPersistenceWriter:
 
     def _schedule_enqueue(
         self,
-        loop: asyncio.AbstractEventLoop,
         qi: _QueuedIntent,
     ) -> None:
         """Create the async enqueue task on the writer's event loop."""
-        loop.create_task(self._enqueue_from_event_loop(qi))
+        assert self._loop is not None
+        self._loop.create_task(self._enqueue_from_event_loop(qi))
 
     async def _enqueue_from_event_loop(self, qi: _QueuedIntent) -> None:
         """Actually place the intent on the queue from the event loop."""

@@ -6,14 +6,12 @@ This module provides the repository layer that persists one or
 more :class:`DispatchIntent` objects in a single transaction.
 
 Batch persistence guarantees atomicity: if any intent fails,
-the entire batch is rolled back and every result carries the
-failure.
+the entire batch is rolled back and the exception is propagated.
 """
 
 from __future__ import annotations
 
 import datetime as _dt
-import logging
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -25,15 +23,12 @@ from eggpool.db.repositories import (
 from eggpool.errors import DatabaseError
 from eggpool.request.dispatch_intent import (
     DispatchAmbiguousCommitError,
-    DispatchTransactionError,
     PersistedDispatchResult,
 )
 
 if TYPE_CHECKING:
     from eggpool.db.connection import Database
     from eggpool.request.dispatch_intent import DispatchIntent
-
-logger = logging.getLogger(__name__)
 
 
 def _start_timestamp_ms() -> float:
@@ -150,31 +145,25 @@ async def persist_dispatch_bundle(
     """Persist a single dispatch bundle in its own transaction.
 
     Returns a :class:`PersistedDispatchResult` on success.
-    Raises :class:`DispatchTransactionError` wrapping the underlying
-    :class:`DatabaseError` on failure.
+    Database and commit errors propagate unchanged so recovery can classify
+    rollback and unknown-commit outcomes correctly.
     """
     t0 = _start_timestamp_ms()
     request_repo = RequestRepository(db)
     reservation_repo = ReservationRepository(db)
     attempt_repo = AttemptRepository(db)
 
-    try:
-        async with db.transaction():
-            result = await _persist_one(
-                db,
-                intent,
-                batch_id=batch_id,
-                batch_size=1,
-                request_repo=request_repo,
-                reservation_repo=reservation_repo,
-                attempt_repo=attempt_repo,
-            )
-    except DispatchTransactionError:
-        raise
-    except Exception as exc:
-        raise DispatchTransactionError(
-            f"Failed to persist dispatch bundle: {exc}"
-        ) from exc
+    intent.validate()
+    async with db.transaction():
+        result = await _persist_one(
+            db,
+            intent,
+            batch_id=batch_id,
+            batch_size=1,
+            request_repo=request_repo,
+            reservation_repo=reservation_repo,
+            attempt_repo=attempt_repo,
+        )
 
     tx_ms = _start_timestamp_ms() - t0
     return _make_result(
@@ -198,13 +187,18 @@ async def persist_dispatch_bundles(
     """Persist one or more dispatch bundles in a single transaction.
 
     All intents are committed atomically.  On failure the entire
-    batch is rolled back and every result carries the failure.
+    batch is rolled back and the transaction exception is raised.
 
-    Returns a list of :class:`PersistedResult` with the same
+    Returns a list of :class:`PersistedDispatchResult` with the same
     ordering as the input ``intents``.
     """
     if not intents:
         return []
+
+    # Validate before BEGIN so malformed local input cannot trigger database
+    # work or leave callers guessing whether a transaction was attempted.
+    for intent in intents:
+        intent.validate()
 
     t0 = _start_timestamp_ms()
     batch_size = len(intents)
@@ -213,39 +207,18 @@ async def persist_dispatch_bundles(
     attempt_repo = AttemptRepository(db)
     results: list[PersistedDispatchResult] = []
 
-    try:
-        async with db.transaction():
-            for intent in intents:
-                result = await _persist_one(
-                    db,
-                    intent,
-                    batch_id=batch_id,
-                    batch_size=batch_size,
-                    request_repo=request_repo,
-                    reservation_repo=reservation_repo,
-                    attempt_repo=attempt_repo,
-                )
-                results.append(result)
-    except Exception as exc:
-        logger.warning(
-            "Batch %d persistence failed after %d/%d intents: %s",
-            batch_id,
-            len(results),
-            batch_size,
-            exc,
-        )
-        failure = _make_result(
-            db_request_id="",
-            reservation_id="",
-            attempt_id=0,
-            attempt_number=0,
-            batch_id=batch_id,
-            batch_size=batch_size,
-            commit_timestamp="",
-            queue_wait_ms=0.0,
-            transaction_ms=0.0,
-        )
-        return [failure] * batch_size
+    async with db.transaction():
+        for intent in intents:
+            result = await _persist_one(
+                db,
+                intent,
+                batch_id=batch_id,
+                batch_size=batch_size,
+                request_repo=request_repo,
+                reservation_repo=reservation_repo,
+                attempt_repo=attempt_repo,
+            )
+            results.append(result)
 
     tx_ms = _start_timestamp_ms() - t0
     return [

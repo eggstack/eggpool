@@ -1955,6 +1955,10 @@ class RequestCoordinator:
                 f"intent {intent.proxy_request_id}"
             ) from exc
 
+        # Durable identity must be proven before any runtime ownership or
+        # upstream dispatch is published. No cleanup identity exists yet.
+        result.validate()
+
         return result.db_request_id, result.reservation_id, result.attempt_id
 
     async def _publish_runtime_state(
@@ -2738,9 +2742,18 @@ class RequestCoordinator:
                         )
                     raise
 
-        assert db_request_id is not None
-        assert reservation_id is not None
-        assert attempt_id is not None
+        if (
+            not db_request_id
+            or not reservation_id
+            or not attempt_id
+            or isinstance(attempt_id, bool)
+            or attempt_id < 1
+        ):
+            if self._health_manager is not None:
+                self._health_manager.release_request(claim_identity.account_name)
+            raise DatabaseError(
+                "Dispatch persistence returned an invalid durable identity"
+            )
         post_commit_selected = SelectedAttempt(
             proxy_request_id=context.request_id,
             db_request_id=db_request_id,

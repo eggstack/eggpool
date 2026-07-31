@@ -160,6 +160,15 @@ Enforces model context and output limits before dispatch.
 Milestone C durable dispatch write pipeline:
 - `DispatchIntent`: immutable intent object
 - `DispatchPersistenceWriter`: process-owned microbatching writer
+
+Dispatch persistence is a fail-closed boundary. The repository validates
+intents before `BEGIN` and either commits a complete request/reservation/
+attempt bundle or raises the transaction error. The writer fans that same
+failure to all batch waiters and does not count those intents as persisted.
+`PersistedDispatchResult` validates its durable IDs, and the coordinator
+validates them again before runtime quota/active ownership publication. The
+writer is single-loop only: `start()` captures the owner loop and submissions
+from another loop fail immediately.
 - No upstream request sent before dispatch bundle commit acknowledged
 
 ### `request/finalization_queue.py` — FinalizationRetryQueue

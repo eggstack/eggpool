@@ -41,6 +41,7 @@ from eggpool.db.repositories import (
 )
 from eggpool.models.config import AppConfig
 from eggpool.quota.estimation import AccountQuota, QuotaEstimator
+from eggpool.request.attempt_finalizer import AttemptFinalizeResult
 from eggpool.request.coordinator import ProxyRequestContext, RequestCoordinator
 from eggpool.request.dispatch_intent import (
     DispatchAmbiguousCommitError,
@@ -117,7 +118,10 @@ class SlowDispatchWriter:
                 fut.set_result(
                     PersistedDispatchResult(
                         db_request_id=str(1000 + c),
-                        reservation_id=str(2000 + c),
+                        # The fixture's real SQLite rows use these integer
+                        # identities; keep the synthetic result compatible
+                        # with compensation's durable lookup.
+                        reservation_id=str(c),
                         attempt_id=c,
                         attempt_number=1,
                         batch_id=1,
@@ -618,10 +622,25 @@ async def test_failed_post_commit_publication_invokes_compensation() -> None:
             account_name: str,
             estimated_tokens: int,
             estimated_microdollars: int,
+            **kwargs: Any,
         ) -> None:
+            del account_name, estimated_tokens, estimated_microdollars, kwargs
             raise RuntimeError("simulated publication failure")
 
         coord._publish_runtime_state = _failing_publish  # type: ignore[method-assign]
+
+        async def _finalize_synthetic_attempt(
+            *args: Any, **kwargs: Any
+        ) -> AttemptFinalizeResult:
+            return AttemptFinalizeResult(
+                attempt_transitioned=True,
+                reservation_released=True,
+                reservation_converged=True,
+            )
+
+        coord._attempt_finalizer.finalize_failed_attempt = (  # type: ignore[method-assign]
+            _finalize_synthetic_attempt
+        )
 
         async def _run() -> None:
             ctx = _make_context("req-fail-publish")

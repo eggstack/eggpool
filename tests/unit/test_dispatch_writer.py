@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import Future as CFuture
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, NoReturn
 from unittest.mock import patch
 
@@ -33,6 +34,7 @@ from eggpool.db.dispatch_repository import (
     persist_dispatch_bundles,
 )
 from eggpool.db.migrations import MigrationRunner
+from eggpool.errors import DatabaseError
 from eggpool.request.dispatch_intent import (
     DispatchAmbiguousCommitError,
     DispatchIntent,
@@ -171,6 +173,30 @@ class TestDispatchIntentValidation:
         assert intent.enqueue_monotonic_ns > 0
         assert intent.cancelled is not None
 
+    @pytest.mark.parametrize(
+        "field_overrides, expected_fragment",
+        [
+            ({"db_request_id": ""}, "db_request_id must be non-empty"),
+            ({"reservation_id": ""}, "reservation_id must be non-empty"),
+            ({"attempt_id": 0}, "attempt_id must be positive"),
+            ({"attempt_id": -1}, "attempt_id must be positive"),
+        ],
+    )
+    def test_persisted_result_rejects_invalid_identity(
+        self, field_overrides: dict[str, Any], expected_fragment: str
+    ) -> None:
+        values: dict[str, Any] = {
+            "db_request_id": "1",
+            "reservation_id": "2",
+            "attempt_id": 1,
+            "attempt_number": 1,
+            "batch_id": 1,
+            "batch_size": 1,
+        }
+        values.update(field_overrides)
+        with pytest.raises(DispatchValidationError, match=expected_fragment):
+            PersistedDispatchResult(**values)
+
 
 # ---------------------------------------------------------------------------
 # Writer lifecycle tests
@@ -262,9 +288,8 @@ class TestQueueAndBackpressure:
             intent = _make_intent(proxy_request_id="req-future")
             future = writer.submit_intent(intent)
             assert isinstance(future, CFuture)
-            # submit_intent uses call_soon_threadsafe which won't work
-            # in same-loop context, so we can't await the result here.
-            # Just verify it returns the right type.
+            # The returned concurrent future can be awaited after the
+            # next loop turn enqueues it.
             await writer.stop()
         finally:
             await db.disconnect()
@@ -308,6 +333,32 @@ class TestQueueAndBackpressure:
             intent = _make_intent(proxy_request_id="req-after-stop")
             with pytest.raises(DispatchQueueClosedError, match="not running"):
                 writer.submit_intent(intent)
+        finally:
+            await db.disconnect()
+
+    async def test_submit_from_foreign_loop_fails_immediately(self) -> None:
+        db = await _fresh_db()
+        try:
+            writer = DispatchPersistenceWriter(db)
+            writer.start()
+
+            def submit_on_foreign_loop() -> str:
+                async def submit() -> None:
+                    writer.submit_intent(_make_intent(proxy_request_id="req-foreign"))
+
+                try:
+                    asyncio.run(submit())
+                except Exception as exc:  # return the invariant for assertion
+                    return str(exc)
+                return "no error"
+
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                message = await asyncio.wrap_future(
+                    executor.submit(submit_on_foreign_loop)
+                )
+            assert "owner loop" in message
+            assert writer._queue.empty()
+            await writer.stop()
         finally:
             await db.disconnect()
 
@@ -655,6 +706,13 @@ class TestDiagnostics:
             assert snap["submitted_total"] == 1
             assert snap["failed_total"] == 1
             assert snap["persisted_total"] == 0
+
+            # A deterministic batch failure must not poison the live writer.
+            recovered = await _enqueue_intent(
+                writer, _make_intent(proxy_request_id="req-after-failure")
+            )
+            assert (await _await_submit(recovered)).db_request_id
+            assert writer.snapshot()["persisted_total"] == 1
             await writer.stop()
         finally:
             await db.disconnect()
@@ -740,7 +798,7 @@ class TestPersistDispatchBundles:
         finally:
             await db.disconnect()
 
-    async def test_batch_failure_returns_equal_length_failure_list(self) -> None:
+    async def test_batch_failure_raises_and_rolls_back(self) -> None:
         db = await _fresh_db()
         try:
             intents = [
@@ -750,12 +808,8 @@ class TestPersistDispatchBundles:
                 )
                 for i in range(2)
             ]
-            results = await persist_dispatch_bundles(db, intents, batch_id=3)
-            assert len(results) == 2
-            for r in results:
-                assert r.db_request_id == ""
-                assert r.reservation_id == ""
-                assert r.attempt_id == 0
+            with pytest.raises(DatabaseError):
+                await persist_dispatch_bundles(db, intents, batch_id=3)
         finally:
             await db.disconnect()
 
@@ -784,14 +838,12 @@ class TestPersistDispatchBundles:
     async def test_retry_without_existing_db_request_id_fails(self) -> None:
         db = await _fresh_db()
         try:
-            intent = _make_intent(
-                proxy_request_id="req-retry-noexist",
-                attempt_number=2,
-                existing_db_request_id=None,
-            )
-            results = await persist_dispatch_bundles(db, [intent], batch_id=1)
-            assert len(results) == 1
-            assert results[0].db_request_id == ""
+            with pytest.raises(DispatchValidationError):
+                _make_intent(
+                    proxy_request_id="req-retry-noexist",
+                    attempt_number=2,
+                    existing_db_request_id=None,
+                )
         finally:
             await db.disconnect()
 
@@ -1506,9 +1558,8 @@ class TestDispatchRepositoryExtended:
 
             # Second attempt with same proxy_request_id should fail
             intent2 = _make_intent(proxy_request_id="req-dup-1")
-            results2 = await persist_dispatch_bundles(db, [intent2], batch_id=2)
-            # The batch fails because the duplicate violates a constraint
-            assert results2[0].db_request_id == ""
+            with pytest.raises(DatabaseError):
+                await persist_dispatch_bundles(db, [intent2], batch_id=2)
         finally:
             await db.disconnect()
 
@@ -1881,14 +1932,10 @@ class TestForcedStatementFailureRollback:
             )
             another_good = _make_intent(proxy_request_id="req-fk-good2")
 
-            results = await persist_dispatch_bundles(
-                db, [good, bad, another_good], batch_id=1
-            )
-            # All three get failure results (batch-rollback semantics)
-            assert len(results) == 3
-            for r in results:
-                assert r.db_request_id == ""
-                assert r.reservation_id == ""
+            with pytest.raises(DatabaseError):
+                await persist_dispatch_bundles(
+                    db, [good, bad, another_good], batch_id=1
+                )
 
             # Verify no rows were written for ANY intent in the batch
             for proxy_id in ("req-fk-good", "req-fk-bad", "req-fk-good2"):
@@ -1915,10 +1962,8 @@ class TestForcedStatementFailureRollback:
             good = _make_intent(proxy_request_id="req-unique-new")
             dup = _make_intent(proxy_request_id="req-unique-1")  # duplicate
 
-            results2 = await persist_dispatch_bundles(db, [good, dup], batch_id=2)
-            assert len(results2) == 2
-            for r in results2:
-                assert r.db_request_id == ""
+            with pytest.raises(DatabaseError):
+                await persist_dispatch_bundles(db, [good, dup], batch_id=2)
 
             # The good intent's row should NOT exist (batch rolled back)
             row = await db.fetch_one(
@@ -1942,10 +1987,8 @@ class TestForcedStatementFailureRollback:
             )
             intents.append(bad)
 
-            results = await persist_dispatch_bundles(db, intents, batch_id=1)
-            assert len(results) == 6
-            for r in results:
-                assert r.db_request_id == ""
+            with pytest.raises(DatabaseError):
+                await persist_dispatch_bundles(db, intents, batch_id=1)
 
             # Count requests — none should be added
             row = await db.fetch_one("SELECT COUNT(*) as cnt FROM requests")
@@ -2782,15 +2825,8 @@ class TestWriterFailureRealDB:
             # the second intent will fail on INSERT, rolling back the whole batch
             intent2a = _make_intent(proxy_request_id="req-dup-new")
             intent2b = _make_intent(proxy_request_id="req-dup-original")  # duplicate
-            results2 = await persist_dispatch_bundles(
-                db, [intent2a, intent2b], batch_id=2
-            )
-
-            # Both should fail (atomic rollback)
-            assert len(results2) == 2
-            for r in results2:
-                assert r.db_request_id == ""
-                assert r.attempt_id == 0
+            with pytest.raises(DatabaseError):
+                await persist_dispatch_bundles(db, [intent2a, intent2b], batch_id=2)
 
             # Original intent should still exist (rollback didn't affect it)
             row = await db.fetch_one(
@@ -2801,15 +2837,13 @@ class TestWriterFailureRealDB:
         finally:
             await db.disconnect()
 
-    async def test_single_intent_db_failure_returns_failure_result(self) -> None:
-        """Single intent with invalid account_id → failure result."""
+    async def test_single_intent_db_failure_raises(self) -> None:
+        """Single intent with invalid account_id raises the DB failure."""
         db = await _fresh_db()
         try:
             intent = _make_intent(proxy_request_id="req-fail-single", account_id=99999)
-            results = await persist_dispatch_bundles(db, [intent], batch_id=1)
-            assert len(results) == 1
-            assert results[0].db_request_id == ""
-            assert results[0].attempt_id == 0
+            with pytest.raises(DatabaseError):
+                await persist_dispatch_bundles(db, [intent], batch_id=1)
         finally:
             await db.disconnect()
 
