@@ -255,7 +255,7 @@ Do not close Plan 048 if:
 
 Recorded:
 
-- implementation commit SHA: recorded by the closing commit;
+- implementation commit SHA: `ff76c09b687e55e17f9e590b7ae98fe8553b901d`;
 - completion snapshot: `StreamCompletionSnapshot` in `proxy/sse_observer.py`;
 - EOF decision: `StreamEOFDecision` / `classify_stream_eof()` in `request/stream_completion.py`;
 - provider default policy: `ProviderConfig.stream_completion_policy = "strict"`;
