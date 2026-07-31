@@ -130,12 +130,18 @@ Retryable pre-body attempt cleanup and post-commit claim compensation are
 separate coordinator-owned commands. Each records durable transition,
 reservation, active-count, quota, health/probe, and completion progress before
 the next await, so a later duplicate caller resumes only unfinished releases.
+The durable attempt transition and reservation terminal state remain separate:
+an attempt update is not evidence that its reservation is released. A caller
+may proceed only after the progress record explicitly reports convergence;
+normal child-task completion alone is insufficient.
 Each registry is capped at 128 entries by default; capacity exhaustion fails
 closed rather than creating detached work. Generation shutdown performs one
 bounded drain and reports unresolved identities for the existing startup
 recovery safety net. If a request waiter is cancelled during either command,
 the coordinator submits the canonical `CLIENT_CANCELLED` request terminal only
-after the retained command converges.
+after the retained command converges. Between retries, attempt-scoped
+publication metadata is cleared and cancellation receives the last converged
+attempt explicitly rather than reading stale context flags.
 
 ### `request/body.py` — Request Body Reader
 

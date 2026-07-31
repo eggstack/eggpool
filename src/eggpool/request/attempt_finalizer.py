@@ -46,6 +46,7 @@ class AttemptFinalizeResult:
 
     attempt_transitioned: bool
     reservation_released: bool
+    reservation_converged: bool = False
 
 
 class AttemptFinalizer:
@@ -78,7 +79,8 @@ class AttemptFinalizer:
         """Mark a failed attempt as terminal and release its reservation.
 
         Returns AttemptFinalizeResult indicating whether the attempt
-        transitioned and whether the reservation was actually released.
+        transitioned, whether this invocation released the reservation,
+        and whether the reservation is durably terminal.
         """
         # Default is fail-closed: do not persist arbitrary provider
         # error detail. When ``persist_error_detail`` is enabled the
@@ -110,6 +112,7 @@ class AttemptFinalizer:
                 reconciliation_strategy="finalization",
             )
         )
+        reservation_converged = False
         async with self._db.transaction():
             # 1. Mark attempt completed only if not already terminal
             transitioned = bool(
@@ -151,8 +154,17 @@ class AttemptFinalizer:
                         (data.release_reason, reservation_id),
                     )
                 )
+                if reservation_released:
+                    reservation_converged = True
+
+            if reservation_id and not reservation_converged:
+                status = await self._reservation_repo.get_status(reservation_id)
+                reservation_converged = (
+                    status in self._reservation_repo.TERMINAL_STATUSES
+                )
 
         return AttemptFinalizeResult(
             attempt_transitioned=transitioned,
             reservation_released=reservation_released,
+            reservation_converged=reservation_converged,
         )

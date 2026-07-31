@@ -367,6 +367,60 @@ class TestThinkingBlockAdaptation:
         assert isinstance(thinking, dict)
         assert thinking.get("budget_tokens") == 4096
 
+    @pytest.mark.parametrize(
+        ("budget", "mapping", "policy", "expected_effort"),
+        [
+            (4096, {"low": 1024, "high": 4096}, "map_if_known", "high"),
+            (4096, {"low": 1024}, "map_if_known", None),
+            (4096, {"low": 4096, "high": 4096}, "map_if_known", None),
+            (4096, {"low": 1024}, "warn_drop", None),
+        ],
+    )
+    def test_effort_contract_nested_budget_policy(
+        self,
+        budget: int,
+        mapping: dict[str, int],
+        policy: str,
+        expected_effort: str | None,
+    ) -> None:
+        cap = _capability(
+            mode="effort",
+            accepted_efforts=["low", "high"],
+            effort_to_budget=mapping,
+        )
+        intent = _intent(budget=budget, fields=("thinking",))
+        payload = {
+            "model": "test",
+            "thinking": {"type": "enabled", "budget_tokens": budget},
+        }
+        if policy == "map_if_known" and expected_effort is None:
+            with pytest.raises(CapabilityError):
+                adapt_thinking_controls(
+                    payload=payload,
+                    client_protocol="anthropic",
+                    model_id="test-model",
+                    provider_id="test-provider",
+                    capability=cap,
+                    intent=intent,
+                    policy=ProviderControlPolicy(unsupported_control=policy),
+                )
+            return
+
+        result = adapt_thinking_controls(
+            payload=payload,
+            client_protocol="anthropic",
+            model_id="test-model",
+            provider_id="test-provider",
+            capability=cap,
+            intent=intent,
+            policy=ProviderControlPolicy(unsupported_control=policy),
+        )
+        thinking = result.payload["thinking"]
+        assert isinstance(thinking, dict)
+        assert result.decision == ("mapped" if expected_effort else "dropped")
+        assert thinking.get("effort") == expected_effort
+        assert "budget_tokens" not in thinking
+
 
 class TestThinkingBudgetFieldAdaptation:
     """Tests for top-level thinking_budget field adaptation."""

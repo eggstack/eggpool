@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from eggpool.request.attempt_finalizer import AttemptFinalizeResult
@@ -53,7 +55,7 @@ async def test_attempt_cleanup_rejoins_after_quota_failure() -> None:
             self, **kwargs: object
         ) -> AttemptFinalizeResult:
             calls["finalizer"] += 1
-            return AttemptFinalizeResult(True, True)
+            return AttemptFinalizeResult(True, True, True)
 
     class Quota:
         async def remove_reservation(self, *args: object, **kwargs: object) -> None:
@@ -121,7 +123,7 @@ async def test_claim_compensation_rejoins_after_publication_release() -> None:
             self, **kwargs: object
         ) -> AttemptFinalizeResult:
             calls["finalizer"] += 1
-            return AttemptFinalizeResult(True, True)
+            return AttemptFinalizeResult(True, True, True)
 
     class Health:
         def release_request(self, account_name: str) -> None:
@@ -158,6 +160,86 @@ async def test_claim_compensation_rejoins_after_publication_release() -> None:
     await coordinator._run_claim_compensation(progress)
     assert progress.completed
     assert calls == {"active": 1, "quota": 2, "finalizer": 1, "probe": 1}
+
+
+@pytest.mark.asyncio
+async def test_cleanup_normal_return_requires_convergence() -> None:
+    coordinator = object.__new__(RequestCoordinator)
+    selected = _selected()
+    key = (selected.proxy_request_id, selected.attempt_id)
+    coordinator._attempt_cleanup_progress = {
+        key: AttemptCleanupProgress(completed=False),
+    }
+
+    async def retained_work() -> None:
+        return
+
+    coordinator._attempt_cleanup_tasks = {key: asyncio.create_task(retained_work())}
+
+    with pytest.raises(RuntimeError, match="did not converge"):
+        await coordinator._cleanup_failed_attempt(
+            context=_context(),
+            selected=selected,
+            error=_RetryableUpstreamError("retry"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_compensation_rechecks_unconverged_reservation() -> None:
+    coordinator = object.__new__(RequestCoordinator)
+    calls = {"active": 0, "quota": 0, "finalizer": 0, "probe": 0}
+
+    class Router:
+        async def decrement_active_request_count(self, account_name: str) -> None:
+            calls["active"] += 1
+
+    class Quota:
+        async def remove_reservation(self, *args: object, **kwargs: object) -> None:
+            calls["quota"] += 1
+
+    class Finalizer:
+        async def finalize_failed_attempt(
+            self, **kwargs: object
+        ) -> AttemptFinalizeResult:
+            calls["finalizer"] += 1
+            if calls["finalizer"] == 1:
+                return AttemptFinalizeResult(True, False, False)
+            return AttemptFinalizeResult(False, False, True)
+
+    class Health:
+        def release_request(self, account_name: str) -> None:
+            calls["probe"] += 1
+
+    coordinator._router = Router()
+    coordinator._quota_estimator = Quota()
+    coordinator._attempt_finalizer = Finalizer()
+    coordinator._health_manager = Health()
+    identity = RequestCoordinator._ClaimIdentity(
+        account_name="account-1",
+        account_id=1,
+        resolved_provider_id="openai",
+        api_key="key",
+        estimated_microdollars=2,
+    )
+    progress = ClaimCompensationProgress(
+        context=_context(),
+        claim_identity=identity,
+        attempt_id=1,
+        reservation_id="reservation-1",
+        estimated_tokens=10,
+        receipt=RuntimePublicationReceipt(
+            active_count_added=True,
+            quota_reservation_added=True,
+        ),
+    )
+
+    await coordinator._run_claim_compensation(progress)
+    assert not progress.completed
+    assert calls["finalizer"] == 1
+
+    await coordinator._run_claim_compensation(progress)
+    assert progress.completed
+    assert calls == {"active": 1, "quota": 1, "finalizer": 2, "probe": 1}
 
 
 @pytest.mark.parametrize("cleanup_kind", ["attempt", "claim"])

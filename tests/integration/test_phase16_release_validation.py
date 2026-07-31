@@ -203,6 +203,7 @@ class TestAlreadyReleasedReservation:
         )
         assert attempt_result.attempt_transitioned is True
         assert attempt_result.reservation_released is True
+        assert attempt_result.reservation_converged is True
 
         resv_row = await db.fetch_one(
             "SELECT status FROM reservations WHERE id = ?", (reservation_id,)

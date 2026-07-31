@@ -200,6 +200,11 @@ DEFAULT_MAX_RETRY_ATTEMPTS = 3
 # no background retry loop for this state.
 DEFAULT_RETAINED_CLEANUP_CAPACITY = 128
 DEFAULT_RETAINED_CLEANUP_DRAIN_TIMEOUT_S = 10.0
+_ATTEMPT_SELECTION_METADATA_KEYS = (
+    "_post_commit_selected",
+    "post_commit_published",
+    "post_commit_interrupted",
+)
 
 # Ordered list of upstream request-ID header names checked during
 # finalization.  The first non-empty match wins.
@@ -610,7 +615,7 @@ class AttemptCleanupProgress:
 
     durable_transition_checked: bool = False
     durable_attempt_transitioned: bool = False
-    durable_reservation_released: bool = False
+    durable_reservation_converged: bool = False
     runtime_cleanup_required: bool = False
     quota_released: bool = False
     active_count_released: bool = False
@@ -630,7 +635,7 @@ class ClaimCompensationProgress:
     active_count_released: bool = False
     quota_reservation_released: bool = False
     durable_attempt_finalized: bool = False
-    durable_reservation_released: bool = False
+    durable_reservation_converged: bool = False
     probe_released: bool = False
     completed: bool = False
     # Retain the operation inputs so cancellation and shutdown can rejoin it.
@@ -642,6 +647,10 @@ class ClaimCompensationProgress:
     estimated_tokens: int = field(default=0, repr=False)
     error: BaseException | None = field(default=None, repr=False)
     receipt: RuntimePublicationReceipt | None = field(default=None, repr=False)
+
+
+class _RetainedCleanupIncompleteError(RuntimeError):
+    """Raised when retained work returns without converging ownership."""
 
 
 class RequestCoordinator:
@@ -926,6 +935,27 @@ class RequestCoordinator:
         if task is None:
             task = self._start_attempt_cleanup_task(key, progress)
         await asyncio.shield(task)
+        progress = self._attempt_cleanup_progress.get(key)
+        self._require_cleanup_completed(
+            identity=key,
+            progress=progress,
+            operation="attempt cleanup",
+        )
+        self._attempt_cleanup_progress.pop(key, None)
+
+    @staticmethod
+    def _require_cleanup_completed(
+        *,
+        identity: tuple[str, int],
+        progress: Any | None,
+        operation: str,
+    ) -> None:
+        """Require a retained command to prove full component convergence."""
+        if progress is None or not progress.completed:
+            raise _RetainedCleanupIncompleteError(
+                f"retained {operation} did not converge: "
+                f"request_id={identity[0]} attempt_id={identity[1]}"
+            )
 
     def _check_retained_cleanup_capacity(
         self,
@@ -964,9 +994,7 @@ class RequestCoordinator:
                 error = done.exception()
             except asyncio.CancelledError:
                 return
-            if error is None and progress.completed:
-                self._attempt_cleanup_progress.pop(key, None)
-            elif error is not None:
+            if error is not None:
                 logger.warning(
                     "Retained attempt cleanup remains resumable: request_id=%s "
                     "attempt_id=%s error=%s",
@@ -986,7 +1014,10 @@ class RequestCoordinator:
         selected = cast("SelectedAttempt", progress.selected)
         error = cast("_RetryableUpstreamError", progress.error)
 
-        if not progress.durable_transition_checked:
+        if (
+            not progress.durable_transition_checked
+            or not progress.durable_reservation_converged
+        ):
             result = await self._attempt_finalizer.finalize_failed_attempt(
                 attempt_id=selected.attempt_id,
                 reservation_id=selected.reservation_id,
@@ -1009,7 +1040,7 @@ class RequestCoordinator:
             # skip unfinished runtime cleanup.
             progress.durable_transition_checked = True
             progress.durable_attempt_transitioned = result.attempt_transitioned
-            progress.durable_reservation_released = result.reservation_released
+            progress.durable_reservation_converged = result.reservation_converged
             progress.runtime_cleanup_required = result.reservation_released
 
         if not progress.runtime_cleanup_required:
@@ -1059,8 +1090,7 @@ class RequestCoordinator:
         progress.completed = all(
             (
                 progress.durable_transition_checked,
-                progress.durable_reservation_released
-                or not progress.durable_attempt_transitioned,
+                progress.durable_reservation_converged,
                 progress.quota_released,
                 progress.active_count_released,
                 progress.health_effect_applied,
@@ -1085,7 +1115,12 @@ class RequestCoordinator:
                 )
                 return False
         progress = self._attempt_cleanup_progress.get(key)
-        return progress is None or progress.completed
+        if progress is None:
+            return True
+        if progress.completed:
+            self._attempt_cleanup_progress.pop(key, None)
+            return True
+        return False
 
     async def _finalize_cancelled_after_cleanup(
         self,
@@ -1154,9 +1189,15 @@ class RequestCoordinator:
             else max(0.1, timeout_s)
         )
         for key, progress in list(self._attempt_cleanup_progress.items()):
+            if progress.completed:
+                self._attempt_cleanup_progress.pop(key, None)
+                continue
             if key not in self._attempt_cleanup_tasks and not progress.completed:
                 self._start_attempt_cleanup_task(key, progress)
         for key, progress in list(self._claim_compensation_progress.items()):
+            if progress.completed:
+                self._claim_compensation_progress.pop(key, None)
+                continue
             if key not in self._claim_compensation_tasks and not progress.completed:
                 self._start_claim_compensation_task(key, progress)
 
@@ -1169,8 +1210,16 @@ class RequestCoordinator:
             _, pending = await asyncio.wait(tasks, timeout=timeout)
         await asyncio.sleep(0)
         unresolved = {
-            *self._attempt_cleanup_progress.keys(),
-            *self._claim_compensation_progress.keys(),
+            *(
+                key
+                for key, progress in self._attempt_cleanup_progress.items()
+                if not progress.completed
+            ),
+            *(
+                key
+                for key, progress in self._claim_compensation_progress.items()
+                if not progress.completed
+            ),
         }
         if unresolved:
             logger.warning(
@@ -1489,6 +1538,7 @@ class RequestCoordinator:
         last_upstream_response: tuple[int, list[tuple[str, str]], bytes] | None = None
         attempt_num = 0
         last_selected: SelectedAttempt | None = None
+        last_converged_selected: SelectedAttempt | None = None
         health_applied = False
 
         for attempt_num in range(1, self._max_retry_attempts + 1):
@@ -1496,7 +1546,10 @@ class RequestCoordinator:
                 selected = await self._select_and_persist_attempt(context, attempt_num)
             except asyncio.CancelledError:
                 try:
-                    await self._handle_selection_cancellation(context)
+                    await self._handle_selection_cancellation(
+                        context,
+                        fallback_selected=last_converged_selected,
+                    )
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -1600,6 +1653,9 @@ class RequestCoordinator:
                             selected.attempt_id,
                         )
                     raise
+                last_converged_selected = selected
+                for key in _ATTEMPT_SELECTION_METADATA_KEYS:
+                    context.client_metadata.pop(key, None)
                 health_applied = True
                 # If no other accounts are eligible, don't retry — pass
                 # the error directly to the client.
@@ -1979,7 +2035,25 @@ class RequestCoordinator:
         task = self._claim_compensation_tasks.get(task_key)
         if task is None:
             task = self._start_claim_compensation_task(task_key, progress)
-        await asyncio.shield(task)
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self._selection_claim_diagnostics.record_compensation(success=False)
+            raise
+
+        progress = self._claim_compensation_progress.get(task_key)
+        try:
+            self._require_cleanup_completed(
+                identity=task_key,
+                progress=progress,
+                operation="claim compensation",
+            )
+        except _RetainedCleanupIncompleteError:
+            self._selection_claim_diagnostics.record_compensation(success=False)
+            raise
+        self._claim_compensation_progress.pop(task_key, None)
 
         context.client_metadata["post_commit_interrupted"] = True
         self._selection_claim_diagnostics.record_compensation(success=True)
@@ -2005,9 +2079,7 @@ class RequestCoordinator:
                 task_error = done.exception()
             except asyncio.CancelledError:
                 return
-            if task_error is None and progress.completed:
-                self._claim_compensation_progress.pop(key, None)
-            elif task_error is not None:
+            if task_error is not None:
                 logger.warning(
                     "Retained claim compensation remains resumable: "
                     "request_id=%s attempt_id=%s error=%s",
@@ -2055,7 +2127,10 @@ class RequestCoordinator:
         elif not receipt.quota_reservation_added or self._quota_estimator is None:
             progress.quota_reservation_released = True
 
-        if not progress.durable_attempt_finalized:
+        if (
+            not progress.durable_attempt_finalized
+            or not progress.durable_reservation_converged
+        ):
             if progress.attempt_id is not None and progress.reservation_id is not None:
                 result = await self._attempt_finalizer.finalize_failed_attempt(
                     attempt_id=progress.attempt_id,
@@ -2070,11 +2145,9 @@ class RequestCoordinator:
                         is_retry_outcome=False,
                     ),
                 )
-                progress.durable_reservation_released = (
-                    result.reservation_released or result.attempt_transitioned
-                )
+                progress.durable_reservation_converged = result.reservation_converged
             else:
-                progress.durable_reservation_released = True
+                progress.durable_reservation_converged = True
             progress.durable_attempt_finalized = True
 
         if not progress.probe_released:
@@ -2087,7 +2160,7 @@ class RequestCoordinator:
                 progress.active_count_released,
                 progress.quota_reservation_released,
                 progress.durable_attempt_finalized,
-                progress.durable_reservation_released,
+                progress.durable_reservation_converged,
                 progress.probe_released,
             )
         )
@@ -2111,16 +2184,30 @@ class RequestCoordinator:
                 )
                 return False
         progress = self._claim_compensation_progress.get(key)
-        return progress is None or progress.completed
+        if progress is None:
+            return True
+        if progress.completed:
+            self._claim_compensation_progress.pop(key, None)
+            return True
+        return False
 
     async def _handle_selection_cancellation(
         self,
         context: ProxyRequestContext,
+        *,
+        fallback_selected: SelectedAttempt | None = None,
     ) -> bool:
         """Converge a committed selection before terminalizing cancellation."""
         selected_obj = context.client_metadata.get("_post_commit_selected")
         if not isinstance(selected_obj, SelectedAttempt):
-            return False
+            if fallback_selected is None:
+                return False
+            await self._finalize_cancelled_after_cleanup(
+                context=context,
+                selected=fallback_selected,
+                health_already_applied=True,
+            )
+            return True
         key = (selected_obj.proxy_request_id, selected_obj.attempt_id)
         compensation_started = (
             key in self._claim_compensation_progress

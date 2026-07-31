@@ -637,6 +637,8 @@ class RequestRepository:
 class ReservationRepository:
     """CRUD operations for reservations."""
 
+    TERMINAL_STATUSES = frozenset({"released", "expired"})
+
     def __init__(self, db: Database) -> None:
         self._db = db
 
@@ -678,6 +680,16 @@ class ReservationRepository:
             (reason, reservation_id),
         )
         return rowcount > 0
+
+    async def get_status(self, reservation_id: str) -> str | None:
+        """Return one reservation status, or ``None`` when it is missing."""
+        row = await self._db.fetch_one(
+            "SELECT status FROM reservations WHERE id = ?",
+            (reservation_id,),
+        )
+        if row is None:
+            return None
+        return str(row["status"])
 
     async def release_for_request(
         self,

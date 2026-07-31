@@ -619,7 +619,47 @@ def _adapt_thinking_block(
         if numeric_budget is not None and contract.explicit_budget_max is not None:
             valid_budget = numeric_budget <= contract.explicit_budget_max
         if contract.mode not in ("budget", "effort_or_budget"):
-            unsupported("thinking.budget_tokens", "budget is not accepted")
+            if policy.unsupported_control == "map_if_known":
+                accepted_efforts = {
+                    effort.lower() for effort in contract.accepted_efforts
+                }
+                matches = [
+                    effort
+                    for effort, mapped_budget in (
+                        contract.effort_to_budget_tokens or {}
+                    ).items()
+                    if mapped_budget == value
+                    and (not accepted_efforts or effort.lower() in accepted_efforts)
+                ]
+                existing_effort = thinking_dict.get("effort")
+                if (
+                    len(matches) == 1
+                    and valid_budget
+                    and (
+                        not isinstance(existing_effort, str)
+                        or existing_effort.lower() == matches[0].lower()
+                    )
+                ):
+                    mapped_effort = matches[0]
+                    thinking_dict.pop("budget_tokens")
+                    thinking_dict["effort"] = mapped_effort
+                    mapped_fields.append("thinking.effort")
+                    warnings.append(
+                        AdaptationWarning(
+                            kind="budget_mapped",
+                            field_name="thinking.budget_tokens",
+                            detail=(
+                                f"budget {value!r} mapped to effort {mapped_effort!r}"
+                            ),
+                        )
+                    )
+                else:
+                    reject(
+                        "thinking.budget_tokens",
+                        "budget has no unique accepted effort mapping",
+                    )
+            else:
+                unsupported("thinking.budget_tokens", "budget is not accepted")
         elif not valid_budget:
             unsupported("thinking.budget_tokens", "budget is outside provider bounds")
 
