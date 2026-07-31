@@ -96,7 +96,7 @@ Schema migration execution. Ordered SQL files in `db/schema/`.
 
 ### `db/schema/`
 
-50 SQL migration files (`0001_initial.sql` through `0050_*`), plus `checksums.json`.
+51 SQL migration files (`0001_initial.sql` through `0051_model_quarantine.sql`), plus `checksums.json`.
 
 ## Key Tables
 

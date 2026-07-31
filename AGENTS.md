@@ -4,8 +4,8 @@
 
 Project-specific skills are in `.opencode/skills/`:
 
-- `architecture` — design principles, request lifecycle, invariants, error hierarchy
-- `deployment` — production deployment, systemd, operational scripts
+- `architecture` — architecture index and quick reference; see `architecture/README.md` for full design details
+- `deployment` — production deployment, systemd, operational scripts, configuration changes
 - `development` — linting, testing, pre-commit checks, code style
 
 ## Quick Start
@@ -81,7 +81,7 @@ uv run ruff check --fix src/
 - `--strict-markers` enforced
 - respx for HTTPX upstream mocking
 - Tests in `tests/unit/`, `tests/integration/`, `tests/smoke/`, `tests/perf/`, `tests/live/`, `tests/contract/`
-- Smoke suite (`tests/smoke/`): package import, config parsing, invalid config rejection, check-config validation, DB migration, one non-stream request, one streaming request, CLI help
+- Smoke suite (`tests/smoke/`): package import, config parsing, invalid config rejection, check-config validation, DB migration, one non-stream request, one streaming request, one upstream failure followed by recovery, one premature EOF, one Anthropic request, and CLI help
 - Provider contract tests: `uv run pytest tests/unit/test_contract.py tests/unit/test_contract_urls.py -v`
 - Performance, live, and diagnostic reproducer tests are manually invoked, not run in CI
 
@@ -163,11 +163,16 @@ stream-specific regressions.
 Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or `raise ... from None`.
 
 - `AggregatorError` → `ConfigError`, `DatabaseError`, `ProxyError`
+- `ConfigError` → `ConfigValidationError` (with subclasses: `ConfigFileAccessError`, `ConfigParseError`, `ConfigSchemaError`, `ConfigStartupAuthError`, `ConfigAccountCredentialError`, `ConfigInternalError`)
 - `DatabaseError` → `DatabaseCommitError`, `DatabaseConnectionInvalidatedError`, `DatabaseRollbackError`
 - `UpstreamError` (has `status_code`) → `TemporaryUpstreamError`, `TransientUpstreamError`, `AuthenticationError`, `QuotaExhaustedError`, `RateLimitError` (has `retry_after`), `ModelUnavailableError`
+- `ProxyError` → `PrematureStreamEOFError`
 - `ModelNotFoundError` (has `model_id`), `NoEligibleAccountError`, `CatalogUnavailableError`, `AuthenticationUnavailableError`, `UpstreamExhaustedError`, `AccountSuspendedError`, `RequestTooLargeError`, `ModelInfoSourceFetchError`, `ContextLimitExceededError`, `CapabilityError`
+- `CapabilityError` → `BudgetResolutionError` (thinking budget rejection)
+- `AcceptedFinalizationInvariantError` (reload invariant violation)
 - `RuntimeManagerLeaseExhaustedError` (RuntimeError) — mapped to HTTP 503 in `proxy_request.py`
-- `PrematureStreamEOFError` (`ProxyError`) — upstream stream closed before protocol completion; carries the EOF classification and request ID
+- `TranscodeLossError` (from `transcoder.errors`) — HTTP 400 when `loss_policy = "reject"`
+- `ProtocolMismatchError` (from `catalog.protocols`) — endpoint/model-protocol mismatch
 - `ConfigValidationError(ConfigError)` and its subclasses are raised by `eggpool.config_validation.validate_config_file()`. They chain from the underlying failure and never raise `SystemExit`.
 
 ## Fast-Path CLI
