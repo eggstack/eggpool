@@ -1,7 +1,7 @@
 # Plan 052 — Selection, Persistence, and Trace Hot-Path Reduction
 
 Date: 2026-07-30
-Status: closed at 3b8976d5
+Status: closed at a274a0a
 Parent roadmap: `plans/045-upstream-streaming-hardening-hotpath-roadmap.md`
 Planning baseline: `216e615d75269cc1471a920ae81ece9ef2d21802`
 
@@ -236,6 +236,28 @@ Do not close Plan 052 if:
 - absolute SBC performance promises are made from shared CI hardware.
 
 ## Handoff record
+
+Implementation follow-up (a274a0a):
+
+- Account identity ownership: `RuntimeGenerationFactory` hydrates an immutable,
+  non-secret `AccountRuntimeIdentity` map from the committed enabled-account
+  rows before publishing a generation; the coordinator consumes it for claim
+  identity and fails closed if an active name is unexpectedly absent.
+- Claim-lock proof: account-ID/provider lookup in the claim phase is in-memory;
+  the only compatibility hydration path is performed once before the first
+  claim lock for legacy/test coordinators.
+- Routing-plan exclusions: quarantine exclusions are emitted by the eligibility
+  pass into `RoutingPlan.exclusions`; the coordinator no longer scans all
+  enabled accounts for trace diagnostics.
+- Trace operation counts: off and unsampled requests construct no trace event,
+  score-component payload, or quarantine-detail rescan; sampled/all requests
+  retain the existing bounded writer/guard path.
+- Verification: focused selection/trace/routing suites passed (122 tests),
+  smoke passed (14 tests), and local CI-equivalent Ruff format/check, Pyright,
+  and smoke checks passed. The remote CI run for `a274a0a` passed in 35 seconds.
+- The unconstrained default pytest collection and the broad marker-filtered
+  collection were stopped after becoming long quiet runs; they produced no
+  failure before interruption and are not CI jobs.
 
 Record:
 
