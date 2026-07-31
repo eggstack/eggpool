@@ -169,7 +169,7 @@ zero attempts, and zero successes all fail closed.
 - **Readiness probe is process-owned**: survives generation swaps.
 - **Process transitions execute inside `db.transaction()`**: atomic rollback on any failure.
 - **Terminal lifecycle**: streaming 4xx paths defer terminal work to `_handle_exhausted()`; they must not finalize and then raise into a second finalizer. Capability rejection is a client error with no provider penalty and uses the same retained terminal job as normal completion and cancellation.
-- **SSE diagnostics**: `stream_diagnostics` exposes canonical/compatibility completion and empty/premature/malformed EOF counters; stream content is never persisted.
+- **SSE diagnostics**: `stream_diagnostics` exposes canonical/compatibility completion, premature EOF, HTTPX transport, and provider-bound first-byte/idle/lifetime timeout outcomes. Each last-event record carries configured limits and bounded timing evidence; stream content and credentials are never persisted.
 
 ## Error Handling
 

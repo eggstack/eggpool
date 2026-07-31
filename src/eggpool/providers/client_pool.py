@@ -173,7 +173,7 @@ def _build_client(
         base_url=cfg.base_url,
         timeout=httpx.Timeout(
             connect=cfg.connect_timeout_s,
-            read=cfg.read_timeout_s,
+            read=cfg.stream_timeouts.transport_read_timeout(cfg.read_timeout_s),
             write=cfg.write_timeout_s,
             pool=cfg.pool_timeout_s,
         ),

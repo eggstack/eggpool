@@ -18,6 +18,10 @@ max_connections = 100
 max_keepalive = 20
 keepalive_timeout_s = 30
 
+# Optional provider-bound stream timers live under
+# [providers.<id>.stream_timeouts]. Omitting them preserves the HTTPX
+# read_timeout_s behavior.
+
 [database]
 path = "usage.sqlite3"
 busy_timeout_ms = 5000

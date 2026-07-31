@@ -76,6 +76,7 @@ class TestProviderClientPool:
                 connect_timeout_s=3,
                 read_timeout_s=10,
                 write_timeout_s=5,
+                stream_timeouts={"first_byte_timeout_s": 20, "idle_timeout_s": 40},
                 max_connections=50,
                 max_keepalive=10,
                 keepalive_timeout_s=15,
@@ -91,6 +92,7 @@ class TestProviderClientPool:
         alpha_client = pool.get_client("alpha")
         assert alpha_client is not None
         assert alpha_client.base_url == "https://alpha.example.com"
+        assert alpha_client.timeout.read == 40
 
         beta_client = pool.get_client("beta")
         assert beta_client is not None

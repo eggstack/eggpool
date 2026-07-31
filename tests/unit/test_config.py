@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from eggpool.errors import ConfigError
-from eggpool.models.config import AppConfig, DatabaseConfig
+from eggpool.models.config import AppConfig, DatabaseConfig, ProviderConfig
 
 
 @pytest.fixture()
@@ -71,6 +71,48 @@ def test_load_valid_config(valid_config: Path) -> None:
     finally:
         del os.environ["TEST_KEY_1"]
         del os.environ["TEST_KEY_2"]
+
+
+def test_provider_stream_timeout_defaults_preserve_httpx_behavior() -> None:
+    provider = ProviderConfig(id="test", base_url="https://example.com")
+    assert provider.stream_timeouts.first_byte_timeout_s is None
+    assert provider.stream_timeouts.idle_timeout_s is None
+    assert provider.stream_timeouts.max_lifetime_s is None
+    assert provider.stream_timeouts.transport_read_timeout(300) == 300
+
+
+def test_provider_stream_timeout_values_are_provider_bound() -> None:
+    provider = ProviderConfig(
+        id="minimax",
+        base_url="https://example.com",
+        read_timeout_s=300,
+        stream_timeouts={
+            "first_byte_timeout_s": 10,
+            "idle_timeout_s": 900,
+            "max_lifetime_s": 3600,
+        },
+    )
+    assert (
+        provider.stream_timeouts.transport_read_timeout(provider.read_timeout_s) == 900
+    )
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"idle_timeout_s": 0},
+        {"first_byte_timeout_s": -1},
+        {"idle_timeout_s": 20, "max_lifetime_s": 10},
+        {"max_lifetime_s": 86_401},
+    ],
+)
+def test_provider_stream_timeout_values_are_rejected(values: dict[str, float]) -> None:
+    with pytest.raises((ValueError, ConfigError)):
+        ProviderConfig(
+            id="test",
+            base_url="https://example.com",
+            stream_timeouts=values,
+        )
 
 
 def test_legacy_opencode_go_accounts_seed_mimo_thinking_capability() -> None:

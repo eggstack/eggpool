@@ -81,7 +81,10 @@ D2 LIVE families:
 
 - **Retention durations**: ``dashboard.retain_request_stats_days``,
   ``dashboard.retain_event_days``, ``models.ping_retain_days``.
-- **Upstream timeout**: ``upstream.read_timeout_s``.
+- **Upstream timeout**: ``upstream.read_timeout_s`` and provider-bound
+  ``providers.<id>.stream_timeouts`` are applied by the candidate generation;
+  existing streams retain the generation they acquired, while new streams use
+  the swapped provider policy.
 - **Metrics flush cadence**: ``metrics.flush_interval_s``.
 - **Backup scheduling**: ``backup.enabled``, ``backup.interval_s``,
   ``backup.retain_count``, ``backup.startup_delay_s``.  Toggling

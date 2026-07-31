@@ -47,6 +47,28 @@ STREAM_OUTCOME_EMPTY_EOF = "empty_eof"
 STREAM_OUTCOME_PREMATURE_EOF_BEFORE_BODY = "premature_eof_before_body"
 STREAM_OUTCOME_PREMATURE_EOF_MIDSTREAM = "premature_eof_midstream"
 STREAM_OUTCOME_MALFORMED_EOF = "malformed_eof"
+STREAM_OUTCOME_FIRST_BYTE_TIMEOUT = "first_byte_timeout"
+STREAM_OUTCOME_IDLE_TIMEOUT = "stream_idle_timeout"
+STREAM_OUTCOME_LIFETIME_TIMEOUT = "stream_lifetime_timeout"
+STREAM_OUTCOME_RESPONSE_HEADER_TIMEOUT = "response_header_timeout"
+
+
+class ProviderStreamTimeoutError(TimeoutError):
+    """A coordinator-owned provider stream timer expiration."""
+
+    def __init__(
+        self,
+        outcome: str,
+        *,
+        timeout_s: float,
+        elapsed_ms: int,
+        idle_ms: int | None = None,
+    ) -> None:
+        super().__init__(outcome)
+        self.outcome = outcome
+        self.timeout_s = timeout_s
+        self.elapsed_ms = elapsed_ms
+        self.idle_ms = idle_ms
 
 
 def classify_httpx_error_class(error_class: str) -> str:
@@ -86,6 +108,10 @@ class StreamOutcomeEvent:
     upstream_read_ms: int | None = None
     attempt: int | None = None
     exception_class: str | None = None
+    idle_ms: int | None = None
+    configured_first_byte_timeout_s: float | None = None
+    configured_idle_timeout_s: float | None = None
+    configured_max_lifetime_s: float | None = None
 
 
 @dataclass
@@ -163,6 +189,10 @@ class StreamDiagnostics:
             STREAM_OUTCOME_PREMATURE_EOF_BEFORE_BODY: 0,
             STREAM_OUTCOME_PREMATURE_EOF_MIDSTREAM: 0,
             STREAM_OUTCOME_MALFORMED_EOF: 0,
+            STREAM_OUTCOME_FIRST_BYTE_TIMEOUT: 0,
+            STREAM_OUTCOME_IDLE_TIMEOUT: 0,
+            STREAM_OUTCOME_LIFETIME_TIMEOUT: 0,
+            STREAM_OUTCOME_RESPONSE_HEADER_TIMEOUT: 0,
         }
         self._httpx_exception_counts: dict[str, int] = {}
         self._upstream_error_class_counts: dict[str, int] = {}
@@ -190,6 +220,10 @@ class StreamDiagnostics:
         upstream_read_ms: int | None = None,
         attempt: int | None = None,
         exception_class: str | None = None,
+        idle_ms: int | None = None,
+        configured_first_byte_timeout_s: float | None = None,
+        configured_idle_timeout_s: float | None = None,
+        configured_max_lifetime_s: float | None = None,
     ) -> None:
         """Record a terminal streaming outcome.
 
@@ -213,6 +247,10 @@ class StreamDiagnostics:
                 upstream_read_ms=upstream_read_ms,
                 attempt=attempt,
                 exception_class=exception_class,
+                idle_ms=idle_ms,
+                configured_first_byte_timeout_s=configured_first_byte_timeout_s,
+                configured_idle_timeout_s=configured_idle_timeout_s,
+                configured_max_lifetime_s=configured_max_lifetime_s,
             )
             with self._lock:
                 if outcome in self._outcomes:
@@ -276,6 +314,12 @@ class StreamDiagnostics:
                 "upstream_read_ms": last_event.upstream_read_ms,
                 "attempt": last_event.attempt,
                 "exception_class": last_event.exception_class,
+                "idle_ms": last_event.idle_ms,
+                "configured_first_byte_timeout_s": (
+                    last_event.configured_first_byte_timeout_s
+                ),
+                "configured_idle_timeout_s": last_event.configured_idle_timeout_s,
+                "configured_max_lifetime_s": last_event.configured_max_lifetime_s,
             }
         return {
             "outcomes": outcomes,

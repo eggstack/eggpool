@@ -51,10 +51,22 @@ The HTTPX pool exhausted. Open the relevant provider in
 
 ### "Read timeouts spike during long model runs (status_code=504, error_class=ReadTimeout)"
 
-The model upstream is slower than `read_timeout_s`. Increase it on
-the affected provider. Coding agents that stream long completions
-need at least `read_timeout_s = 900`; some slow tiers benefit from
-`1800`. The retry queue will hold the request open during the wait.
+The model upstream may have a long first-token delay or a long gap between
+tokens. Configure those intervals on the affected provider instead of raising
+every provider's transport timeout:
+
+```toml
+[providers.example.stream_timeouts]
+first_byte_timeout_s = 900
+idle_timeout_s = 300
+max_lifetime_s = 0
+```
+
+`read_timeout_s` remains the legacy HTTPX guardrail. Explicit stream values
+raise that guardrail only for this provider. A first-byte timeout can retry
+before downstream output; an idle timeout after output is a midstream failure.
+If the upstream closes cleanly without its required terminal marker, inspect
+the premature-EOF counters instead — increasing a timeout cannot repair EOF.
 
 ### "Routing trace writes are getting dropped (routing_trace_guard.skipped_db_pressure > 0)"
 

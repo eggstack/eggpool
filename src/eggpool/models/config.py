@@ -769,6 +769,41 @@ class ProviderVerifyConfig(BaseModel):
     require_models: bool = True
 
 
+class ProviderStreamTimeoutConfig(BaseModel):
+    """Explicit timeout policy for a provider's streaming response."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # ``None`` preserves the historical HTTPX read-timeout behaviour.  When
+    # set, the coordinator owns the first-byte/idle timer and the client pool
+    # raises its read guardrail to the largest configured stream interval.
+    first_byte_timeout_s: float | None = Field(default=None, gt=0, le=86_400)
+    idle_timeout_s: float | None = Field(default=None, gt=0, le=86_400)
+    max_lifetime_s: float | None = Field(default=None, ge=0, le=86_400)
+
+    @model_validator(mode="after")
+    def validate_lifetime(self) -> ProviderStreamTimeoutConfig:
+        if self.max_lifetime_s == 0:
+            self.max_lifetime_s = None
+        if (
+            self.max_lifetime_s is not None
+            and self.idle_timeout_s is not None
+            and self.max_lifetime_s < self.idle_timeout_s
+        ):
+            raise ConfigError(
+                "max_lifetime_s must be at least idle_timeout_s when both are set"
+            )
+        return self
+
+    def transport_read_timeout(self, configured_read_timeout_s: float) -> float:
+        """Return the HTTPX read guardrail for this policy."""
+        values = [configured_read_timeout_s]
+        for value in (self.first_byte_timeout_s, self.idle_timeout_s):
+            if value is not None:
+                values.append(value)
+        return max(values)
+
+
 class ProviderConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -793,6 +828,9 @@ class ProviderConfig(BaseModel):
     pool_timeout_s: float = Field(default=30, gt=0)
     stream_completion_policy: Literal["strict", "compatible", "permissive_observe"] = (
         "strict"
+    )
+    stream_timeouts: ProviderStreamTimeoutConfig = Field(
+        default_factory=ProviderStreamTimeoutConfig
     )
     max_connections: int = Field(default=100, gt=0)
     max_keepalive: int = Field(default=20, gt=0)

@@ -494,7 +494,8 @@ worker_threads = 2
 max_connections = 256
 max_keepalive = 128
 connect_timeout_s = 5
-read_timeout_s = 900
+read_timeout_s = 300
+stream_timeouts = { first_byte_timeout_s = 900, idle_timeout_s = 900 }
 write_timeout_s = 30
 pool_timeout_s = 60
 ```
@@ -514,7 +515,8 @@ writes hitting SQLite are correctness-critical:
 mode = "off"
 
 [providers.opencode-go]
-read_timeout_s = 1800
+read_timeout_s = 300
+stream_timeouts = { first_byte_timeout_s = 1800, idle_timeout_s = 1800 }
 ```
 
 ### Tuning warnings

@@ -284,3 +284,38 @@ Record:
 ## Definition of done
 
 Plan 049 is complete when Eggpool can tell a slow first byte, an idle stream, a transport failure, a clean premature EOF, a valid long-running stream, and a client cancellation apart; applies provider-specific bounded timeout policy without global speculation; exposes enough safe diagnostics to tune MiniMax rationally; and preserves retry, health, and cleanup correctness.
+
+## Implementation handoff
+
+The implementation adds `ProviderStreamTimeoutConfig` under
+`[providers.<id>.stream_timeouts]`. Defaults are unset, preserving the
+historical provider `read_timeout_s` behavior. Explicit first-byte and idle
+values are bounded to 86,400 seconds and raise the provider HTTPX read
+guardrail only for that provider; `max_lifetime_s = 0` disables the absolute
+cap. `max_lifetime_s` must not be shorter than `idle_timeout_s`.
+
+The coordinator now prefetches the first non-empty payload under the explicit
+first-byte timer, applies monotonic inter-chunk idle and absolute-lifetime
+timers, and closes the upstream response on every timeout path. First-byte
+timeouts become retryable pre-body attempt failures. Idle and lifetime timeout
+after downstream output are midstream failures and never retry. Response-header
+timeouts, transport timeout subclasses, protocol completion, premature EOF,
+and client cancellation remain separate diagnostics outcomes.
+
+MiniMax defaults were not changed: no live evidence was available, and the
+deterministic classification surface is now in place to support a measured
+provider-specific decision later. Diagnostics retain only bounded counters,
+the last redacted metadata event, configured limits, and timing fields; no
+stream content, credentials, or arbitrary exception bodies are persisted.
+
+Local verification before handoff:
+
+```bash
+uv run ruff format --check src/ tests/ scripts/
+uv run ruff check src/ tests/ scripts/
+uv run pyright src/ scripts/
+uv run pytest tests/smoke/ -q --tb=short --maxfail=1
+uv run pytest tests/unit/test_config.py tests/unit/test_provider_client_pool.py \
+  tests/unit/test_stream_diagnostics.py tests/integration/test_proxy_integration.py \
+  tests/integration/test_high_concurrency_streaming.py -q --tb=short --maxfail=1
+```

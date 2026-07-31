@@ -24,6 +24,10 @@ keepalive_timeout_s = 30
 # Provider blocks may set stream_completion_policy = "strict" (default),
 # "compatible", or "permissive_observe". The setting is provider-bound;
 # strict requires [DONE] for OpenAI or message_stop for Anthropic.
+# Optional provider stream timers live under each provider's
+# [providers.<id>.stream_timeouts] table. Omitting them preserves the HTTPX
+# read_timeout_s guardrail; explicit timers are provider-bound and the client
+# read guardrail is raised to the largest configured interval.
 
 [database]
 path = "usage.sqlite3"
@@ -393,6 +397,10 @@ persist_redacted_error_detail = false
 # protocols = ["openai", "anthropic"]
 # routing_priority = 0  # higher = preferred; default 0 means "load balance
 #                       # within this provider using the existing scorer".
+# [providers.opencode-go.stream_timeouts]
+# first_byte_timeout_s = 300  # headers → first non-empty payload chunk
+# idle_timeout_s = 300        # maximum gap between payload chunks
+# max_lifetime_s = 0          # optional absolute cap; omitted/0 disables
 #
 # [[providers.opencode-go.accounts]]
 # name = "personal"

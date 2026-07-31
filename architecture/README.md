@@ -3038,6 +3038,8 @@ path under a fixed label set:
 - `upstream_transport_error`
 - `stream_completed_canonical`, `stream_completed_compatibility`
 - `empty_eof`, `premature_eof_before_body`, `premature_eof_midstream`, `malformed_eof`
+- `response_header_timeout`, `first_byte_timeout`, `stream_idle_timeout`,
+  `stream_lifetime_timeout`
 
 Bounded ring histograms (`completed_ms`, `client_cancel_ms`,
 `finalizer_timeout_ms`) keep p50 / p95 / p99 of recent samples without
@@ -3046,6 +3048,25 @@ unbounded memory growth. HTTPX exceptions are recorded separately as
 exception class under `upstream_error_class_counts`. The snapshot is
 exposed under `/api/stats/runtime` and is the surface operators read
 when triaging OpenCode-visible stream drops.
+
+Provider stream timing is configured under
+`[providers.<id>.stream_timeouts]`:
+
+- `first_byte_timeout_s` bounds the interval from response headers to the
+  first non-empty payload chunk;
+- `idle_timeout_s` bounds the gap between payload chunks after streaming
+  begins; and
+- `max_lifetime_s` is an optional absolute stream cap (`0`/omitted disables it).
+
+When omitted, existing providers retain the HTTPX `read_timeout_s` behavior.
+When explicit stream values are present, the provider client uses the largest
+configured first-byte/idle value as its lower-level HTTPX read guardrail, so a
+long active stream is not cut off by the historical 300-second default. The
+coordinator timers use monotonic time, exclude finalization/database work, and
+close the response on every timeout path. First-byte timeouts remain pre-body
+retryable; idle and lifetime timeouts after downstream output are midstream
+failures and are never retried. Clean premature EOF remains a separate
+protocol-completion outcome.
 
 ### Database contention surface
 

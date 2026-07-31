@@ -12,8 +12,11 @@ runtime dashboard's stream-stability section.  Validates:
 
 from __future__ import annotations
 
+import asyncio
 import collections
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -22,6 +25,7 @@ from eggpool.request.stream_diagnostics import (
     STREAM_OUTCOME_COMPLETED,
     STREAM_OUTCOME_FINALIZER_FAILED,
     STREAM_OUTCOME_FINALIZER_TIMEOUT,
+    STREAM_OUTCOME_IDLE_TIMEOUT,
     STREAM_OUTCOME_UPSTREAM_CONNECT_ERROR,
     STREAM_OUTCOME_UPSTREAM_CONNECT_TIMEOUT,
     STREAM_OUTCOME_UPSTREAM_MIDSTREAM_ERROR,
@@ -30,11 +34,50 @@ from eggpool.request.stream_diagnostics import (
     STREAM_OUTCOME_UPSTREAM_READ_TIMEOUT,
     STREAM_OUTCOME_UPSTREAM_TRANSPORT_ERROR,
     STREAM_OUTCOME_UPSTREAM_WRITE_TIMEOUT,
+    ProviderStreamTimeoutError,
     StreamDiagnostics,
     classify_httpx_error_class,
     get_stream_diagnostics,
     reset_stream_diagnostics_for_tests,
 )
+
+
+def _timeout_stream_coordinator() -> tuple[Any, Any, Any]:
+    from eggpool.request.coordinator import RequestCoordinator
+
+    coordinator = object.__new__(RequestCoordinator)
+    coordinator._transcoder_policy = None
+    coordinator._finalization_supervisor = None
+    coordinator._persist_error_detail = False
+    coordinator._account_backoff_repo = None
+    coordinator._stream_diagnostics = StreamDiagnostics()
+    coordinator._finalizer = MagicMock()
+    coordinator._finalizer.finalize = AsyncMock()
+    context = SimpleNamespace(
+        request_id="timeout-request",
+        protocol="openai",
+        upstream_protocol="openai",
+        original_body=b"{}",
+        client_metadata={},
+        transcode_context=None,
+        thinking_trace=None,
+        segmentation=None,
+        segmentation_not_collected=False,
+        compression_observation=None,
+        compression_result=None,
+        resolved_compression_policy=None,
+        synthetic_cache_result=None,
+        upstream_connect_ms=0,
+        upstream_headers_ms=None,
+    )
+    selected = SimpleNamespace(
+        db_request_id="db-timeout",
+        provider_id="provider-a",
+        account_name="account-a",
+        model_id="model-a",
+        attempt_number=1,
+    )
+    return coordinator, context, selected
 
 
 def test_empty_snapshot_contract() -> None:
@@ -55,6 +98,16 @@ def test_empty_snapshot_contract() -> None:
         STREAM_OUTCOME_UPSTREAM_PROTOCOL_ERROR: 0,
         STREAM_OUTCOME_UPSTREAM_CONNECT_ERROR: 0,
         STREAM_OUTCOME_UPSTREAM_TRANSPORT_ERROR: 0,
+        "stream_completed_canonical": 0,
+        "stream_completed_compatibility": 0,
+        "empty_eof": 0,
+        "premature_eof_before_body": 0,
+        "premature_eof_midstream": 0,
+        "malformed_eof": 0,
+        "first_byte_timeout": 0,
+        "stream_idle_timeout": 0,
+        "stream_lifetime_timeout": 0,
+        "response_header_timeout": 0,
     }
     assert snap["httpx_exception_counts"] == {}
     assert snap["upstream_error_class_counts"] == {}
@@ -156,6 +209,46 @@ def test_bounded_ring_does_not_grow_unbounded() -> None:
     snap = diag.snapshot()
     assert snap["completed_ms"]["sample_count"] == 8
     assert snap["completed_ms"]["max_ms"] == 99.0
+
+
+@pytest.mark.asyncio()
+async def test_idle_timeout_is_distinct_and_closes_upstream_response() -> None:
+    coordinator, context, selected = _timeout_stream_coordinator()
+
+    async def chunks() -> Any:
+        yield b"data: first\n\n"
+        await asyncio.sleep(0.05)
+        yield b"data: second\n\n"
+
+    class Response:
+        headers = {"content-type": "text/event-stream"}
+
+        def aiter_bytes(self) -> Any:
+            return chunks()
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    response = Response()
+    stream = coordinator._build_stream_generator(
+        context=context,
+        upstream_response=response,
+        selected=selected,
+        resp_headers=[],
+        stream_idle_timeout_s=0.01,
+    )
+    assert await anext(stream) == b"data: first\n\n"
+    with pytest.raises(ProviderStreamTimeoutError) as error:
+        await anext(stream)
+    assert error.value.outcome == STREAM_OUTCOME_IDLE_TIMEOUT
+    assert response.closed is True
+    assert (
+        coordinator._stream_diagnostics.snapshot()["outcomes"][
+            STREAM_OUTCOME_IDLE_TIMEOUT
+        ]
+        == 1
+    )
+    coordinator._finalizer.finalize.assert_awaited_once()
 
 
 def test_new_httpx_outcome_labels_exist_in_default_counter_set() -> None:

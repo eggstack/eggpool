@@ -113,10 +113,15 @@ from eggpool.request.stream_diagnostics import (
     STREAM_OUTCOME_COMPLETED_CANONICAL,
     STREAM_OUTCOME_COMPLETED_COMPATIBILITY,
     STREAM_OUTCOME_EMPTY_EOF,
+    STREAM_OUTCOME_FIRST_BYTE_TIMEOUT,
+    STREAM_OUTCOME_IDLE_TIMEOUT,
+    STREAM_OUTCOME_LIFETIME_TIMEOUT,
     STREAM_OUTCOME_MALFORMED_EOF,
     STREAM_OUTCOME_PREMATURE_EOF_BEFORE_BODY,
     STREAM_OUTCOME_PREMATURE_EOF_MIDSTREAM,
+    STREAM_OUTCOME_RESPONSE_HEADER_TIMEOUT,
     STREAM_OUTCOME_UPSTREAM_MIDSTREAM_ERROR,
+    ProviderStreamTimeoutError,
     StreamDiagnostics,
     classify_httpx_error_class,
     get_stream_diagnostics,
@@ -2783,6 +2788,17 @@ class RequestCoordinator:
                     error_class="PoolTimeout",
                 ) from err
             except httpx.ReadTimeout as err:
+                self._stream_diagnostics.record_outcome(
+                    STREAM_OUTCOME_RESPONSE_HEADER_TIMEOUT,
+                    proxy_request_id=context.request_id,
+                    provider_id=selected.provider_id,
+                    account_name=selected.account_name,
+                    model_id=selected.model_id,
+                    protocol=context.upstream_protocol,
+                    elapsed_ms=self._elapsed_ms(context),
+                    attempt=selected.attempt_number,
+                    exception_class=type(err).__name__,
+                )
                 raise _RetryableUpstreamError(
                     f"Read timeout: {err}",
                     status_code=504,
@@ -2868,6 +2884,53 @@ class RequestCoordinator:
                     ),
                 )
 
+            provider_config = (
+                self._config.providers.get(selected.provider_id)
+                if self._config is not None
+                else None
+            )
+            stream_timeouts = getattr(provider_config, "stream_timeouts", None)
+            first_byte_timeout_s = getattr(
+                stream_timeouts, "first_byte_timeout_s", None
+            )
+            idle_timeout_s = getattr(stream_timeouts, "idle_timeout_s", None)
+            max_lifetime_s = getattr(stream_timeouts, "max_lifetime_s", None)
+            upstream_iterator = response.aiter_bytes()
+            prefetched_chunk: bytes | None = None
+            if first_byte_timeout_s is not None:
+                first_byte_started = time.monotonic()
+                try:
+                    while True:
+                        candidate = await asyncio.wait_for(
+                            anext(upstream_iterator), timeout=first_byte_timeout_s
+                        )
+                        if candidate:
+                            prefetched_chunk = candidate
+                            break
+                except StopAsyncIteration:
+                    pass
+                except TimeoutError as exc:
+                    timeout = ProviderStreamTimeoutError(
+                        STREAM_OUTCOME_FIRST_BYTE_TIMEOUT,
+                        timeout_s=first_byte_timeout_s,
+                        elapsed_ms=int((time.monotonic() - first_byte_started) * 1000),
+                    )
+                    self._stream_diagnostics.record_outcome(
+                        timeout.outcome,
+                        proxy_request_id=context.request_id,
+                        provider_id=selected.provider_id,
+                        account_name=selected.account_name,
+                        model_id=selected.model_id,
+                        protocol=context.upstream_protocol,
+                        elapsed_ms=timeout.elapsed_ms,
+                        attempt=selected.attempt_number,
+                        exception_class=type(timeout).__name__,
+                        configured_first_byte_timeout_s=first_byte_timeout_s,
+                        configured_idle_timeout_s=idle_timeout_s,
+                        configured_max_lifetime_s=max_lifetime_s,
+                    )
+                    raise timeout from exc
+
             # Build the response headers
             resp_headers = filter_response_headers(response.headers)
             resp_headers.append(("x-proxy-request-id", context.request_id))
@@ -2881,8 +2944,19 @@ class RequestCoordinator:
                 resp_headers=resp_headers,
                 request_started_monotonic=context.started_monotonic,
                 upstream_include_usage=upstream_include_usage,
+                upstream_iterator=upstream_iterator,
+                prefetched_chunk=prefetched_chunk,
+                stream_first_byte_timeout_s=first_byte_timeout_s,
+                stream_idle_timeout_s=idle_timeout_s,
+                stream_max_lifetime_s=max_lifetime_s,
             )
             generator_created = True
+        except ProviderStreamTimeoutError as err:
+            raise _RetryableUpstreamError(
+                f"Provider stream timeout: {err.outcome}",
+                status_code=504,
+                error_class=err.outcome,
+            ) from err
         finally:
             # Close the upstream response when we are NOT handing the
             # stream off to the generator.  When ``generator_created``
@@ -2924,6 +2998,11 @@ class RequestCoordinator:
         resp_headers: list[tuple[str, str]],
         request_started_monotonic: float | None = None,
         upstream_include_usage: bool | None = None,
+        upstream_iterator: AsyncIterator[bytes] | None = None,
+        prefetched_chunk: bytes | None = None,
+        stream_first_byte_timeout_s: float | None = None,
+        stream_idle_timeout_s: float | None = None,
+        stream_max_lifetime_s: float | None = None,
     ) -> AsyncIterator[bytes]:
         """Build an async generator that streams upstream bytes downstream,
         extracts usage via IncrementalSSEObserver, and finalizes the request
@@ -3013,7 +3092,45 @@ class RequestCoordinator:
                         else False
                     ),
                 )
-                async for chunk in upstream_response.aiter_bytes():
+                iterator = upstream_iterator or upstream_response.aiter_bytes()
+                pending_chunk = prefetched_chunk
+                stream_started_at = time.monotonic()
+                last_payload_at = stream_started_at
+                while True:
+                    if pending_chunk is not None:
+                        chunk = pending_chunk
+                        pending_chunk = None
+                    else:
+                        timeout_s = stream_idle_timeout_s
+                        timeout_outcome = STREAM_OUTCOME_IDLE_TIMEOUT
+                        if stream_max_lifetime_s is not None:
+                            remaining_lifetime = stream_max_lifetime_s - (
+                                time.monotonic() - stream_started_at
+                            )
+                            if timeout_s is None or remaining_lifetime < timeout_s:
+                                timeout_s = max(remaining_lifetime, 0.0)
+                                timeout_outcome = STREAM_OUTCOME_LIFETIME_TIMEOUT
+                        try:
+                            if timeout_s is None:
+                                chunk = await anext(iterator)
+                            else:
+                                chunk = await asyncio.wait_for(
+                                    anext(iterator), timeout=timeout_s
+                                )
+                        except StopAsyncIteration:
+                            break
+                        except TimeoutError as exc:
+                            now = time.monotonic()
+                            timeout = ProviderStreamTimeoutError(
+                                timeout_outcome,
+                                timeout_s=timeout_s or 0.0,
+                                elapsed_ms=int((now - reference) * 1000),
+                                idle_ms=int((now - last_payload_at) * 1000),
+                            )
+                            raise timeout from exc
+                    if not chunk:
+                        continue
+                    last_payload_at = time.monotonic()
                     if first_byte_ms == 0.0:
                         first_byte_ms = (time.monotonic() - reference) * 1000
 
@@ -3160,6 +3277,9 @@ class RequestCoordinator:
                     protocol=context.upstream_protocol,
                     bytes_emitted=downstream_bytes_emitted,
                     attempt=selected.attempt_number,
+                    configured_first_byte_timeout_s=(stream_first_byte_timeout_s),
+                    configured_idle_timeout_s=stream_idle_timeout_s,
+                    configured_max_lifetime_s=stream_max_lifetime_s,
                 )
 
                 upstream_latency_total = int((time.monotonic() - reference) * 1000)
@@ -3248,6 +3368,9 @@ class RequestCoordinator:
                     upstream_header_ms=self._upstream_header_ms(context),
                     upstream_read_ms=upstream_read_ms_value,
                     attempt=selected.attempt_number,
+                    configured_first_byte_timeout_s=(stream_first_byte_timeout_s),
+                    configured_idle_timeout_s=stream_idle_timeout_s,
+                    configured_max_lifetime_s=stream_max_lifetime_s,
                 )
 
             except asyncio.CancelledError:
@@ -3458,26 +3581,50 @@ class RequestCoordinator:
                 # Record the first-class HTTPX transport outcome when
                 # the exception class maps to a known upstream label.
                 if exc_class_name := type(exc).__name__:
-                    first_class_outcome = classify_httpx_error_class(exc_class_name)
-                    self._stream_diagnostics.record_outcome(
-                        first_class_outcome,
-                        proxy_request_id=context.request_id,
-                        db_request_id=selected.db_request_id,
-                        provider_id=selected.provider_id,
-                        account_name=selected.account_name,
-                        model_id=selected.model_id,
-                        protocol=context.upstream_protocol,
-                        elapsed_ms=mid_latency_total,
-                        bytes_emitted=bytes_emitted,
-                        first_byte_ms=(
-                            int(first_byte_ms) if first_byte_ms > 0 else None
-                        ),
-                        upstream_connect_ms=mid_connect_ms_value,
-                        upstream_header_ms=self._upstream_header_ms(context),
-                        upstream_read_ms=mid_read_ms_value,
-                        attempt=selected.attempt_number,
-                        exception_class=type(exc).__name__,
-                    )
+                    if isinstance(exc, ProviderStreamTimeoutError):
+                        self._stream_diagnostics.record_outcome(
+                            exc.outcome,
+                            proxy_request_id=context.request_id,
+                            db_request_id=selected.db_request_id,
+                            provider_id=selected.provider_id,
+                            account_name=selected.account_name,
+                            model_id=selected.model_id,
+                            protocol=context.upstream_protocol,
+                            elapsed_ms=mid_latency_total,
+                            bytes_emitted=bytes_emitted,
+                            first_byte_ms=(
+                                int(first_byte_ms) if first_byte_ms > 0 else None
+                            ),
+                            idle_ms=exc.idle_ms,
+                            attempt=selected.attempt_number,
+                            exception_class=exc_class_name,
+                            configured_idle_timeout_s=stream_idle_timeout_s,
+                            configured_first_byte_timeout_s=(
+                                stream_first_byte_timeout_s
+                            ),
+                            configured_max_lifetime_s=stream_max_lifetime_s,
+                        )
+                    if not isinstance(exc, ProviderStreamTimeoutError):
+                        first_class_outcome = classify_httpx_error_class(exc_class_name)
+                        self._stream_diagnostics.record_outcome(
+                            first_class_outcome,
+                            proxy_request_id=context.request_id,
+                            db_request_id=selected.db_request_id,
+                            provider_id=selected.provider_id,
+                            account_name=selected.account_name,
+                            model_id=selected.model_id,
+                            protocol=context.upstream_protocol,
+                            elapsed_ms=mid_latency_total,
+                            bytes_emitted=bytes_emitted,
+                            first_byte_ms=(
+                                int(first_byte_ms) if first_byte_ms > 0 else None
+                            ),
+                            upstream_connect_ms=mid_connect_ms_value,
+                            upstream_header_ms=self._upstream_header_ms(context),
+                            upstream_read_ms=mid_read_ms_value,
+                            attempt=selected.attempt_number,
+                            exception_class=type(exc).__name__,
+                        )
                 raise
             finally:
                 try:
