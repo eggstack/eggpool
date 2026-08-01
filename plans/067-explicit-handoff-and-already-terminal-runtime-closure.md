@@ -1,7 +1,7 @@
 # Plan 067 — Explicit Handoff and Already-Terminal Runtime Closure
 
 Date: 2026-08-01
-Status: ready for implementation
+Status: completed
 Parent roadmap: `plans/058-durable-convergence-exact-update-sbc-hotpath-roadmap.md`
 Corrective predecessor: `plans/066-terminal-runtime-ownership-and-supervisor-closure.md`
 Planning baseline: `052b81ed38598c2c07cfa283d0a1968ee2e5519c`
@@ -265,18 +265,18 @@ When implementation and focused verification complete:
 
 ## Plan acceptance criteria
 
-- [ ] Capacity handling uses an explicit downstream-handoff fact rather than `bytes_emitted`.
-- [ ] Non-streaming finalization before response return is pre-handoff regardless of body size.
-- [ ] Streaming finalization inside the active iterator is post-handoff even with zero emitted body bytes.
-- [ ] Pre-handoff saturation fails closed with the typed local invariant error.
-- [ ] Post-handoff saturation records a bounded diagnostic without recursive finalization or response replacement.
-- [ ] Lease-owned usage, health, and account-runtime obligations are independent of `request_transitioned`.
-- [ ] Already-terminal durable state can converge all outstanding runtime obligations.
-- [ ] Partial runtime failure resumes from the unfinished component without replaying durable or completed runtime work.
-- [ ] Runtime result fields remain truthful throughout incomplete and completed convergence.
-- [ ] Focused regressions cover both defects and the existing smoke gate passes.
-- [ ] Plans 058, 066, and 067 have coherent status and acceptance metadata.
-- [ ] No migration, new queue, lifecycle framework, runtime dependency, CI expansion, soak gate, benchmark gate, or evidence system is introduced.
+- [x] Capacity handling uses an explicit downstream-handoff fact rather than `bytes_emitted`.
+- [x] Non-streaming finalization before response return is pre-handoff regardless of body size.
+- [x] Streaming finalization inside the active iterator is post-handoff even with zero emitted body bytes.
+- [x] Pre-handoff saturation fails closed with the typed local invariant error.
+- [x] Post-handoff saturation records a bounded diagnostic without recursive finalization or response replacement.
+- [x] Lease-owned usage, health, and account-runtime obligations are independent of `request_transitioned`.
+- [x] Already-terminal durable state can converge all outstanding runtime obligations.
+- [x] Partial runtime failure resumes from the unfinished component without replaying durable or completed runtime work.
+- [x] Runtime result fields remain truthful throughout incomplete and completed convergence.
+- [x] Focused regressions cover both defects and the existing smoke gate passes.
+- [x] Plans 058, 066, and 067 have coherent status and acceptance metadata.
+- [x] No migration, new queue, lifecycle framework, runtime dependency, CI expansion, soak gate, benchmark gate, or evidence system is introduced.
 
 ## Rejection conditions
 
@@ -295,3 +295,26 @@ Do not close this plan if:
 ## Definition of done
 
 This corrective pass is complete when response mutability is represented by one explicit handoff fact, retained runtime leases own outcome obligations independently of durable transition, already-terminal durable state can converge all outstanding process-local components exactly once, the focused regressions and existing smoke gate pass, and Plans 058, 066, and 067 accurately report closure without adding new infrastructure.
+
+## Implementation closure
+
+Implemented with `FinalizationData.downstream_started` and explicit
+`AttemptRuntimeLease` outcome-obligation flags. Focused verification passed:
+
+```text
+uv run pytest tests/unit/test_request_coordinator_cleanup.py tests/unit/test_request_finalization_state_machine.py tests/unit/test_request_finalizer.py -q --tb=short --maxfail=1
+46 passed
+uv run pyright src/eggpool/request/finalization_job.py src/eggpool/request/finalizer.py src/eggpool/request/coordinator.py
+0 errors, 0 warnings, 0 informations
+uv run ruff format --check src/ tests/ scripts/
+734 files already formatted
+uv run ruff check src/ tests/ scripts/
+All checks passed
+uv run pyright src/ scripts/
+0 errors, 0 warnings, 0 informations
+uv run pytest tests/smoke/ -q --tb=short --maxfail=1
+14 passed
+```
+
+The relevant coordinator integration suite also passed with 59 tests. No new
+CI job, queue, migration, dependency, or evidence format was added.

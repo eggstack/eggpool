@@ -15,10 +15,103 @@ from eggpool.db.repositories import (
     ReservationRepository,
 )
 from eggpool.request.finalizer import (
+    AttemptRuntimeLease,
+    DurableFinalizationResult,
     FinalizationData,
     FinalizationOutcome,
     RequestFinalizer,
 )
+
+
+@pytest.mark.asyncio
+async def test_already_terminal_durable_state_converges_owned_runtime_outcomes() -> (
+    None
+):
+    calls = {"usage": 0, "health_release": 0, "health": 0, "account": 0}
+
+    class Quota:
+        async def remove_reservation(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def record_usage_and_snapshot(
+            self, *args: object, **kwargs: object
+        ) -> None:
+            calls["usage"] += 1
+
+    class Router:
+        async def decrement_active_request_count(self, account_name: str) -> None:
+            pass
+
+    class Health:
+        async def release_request(self, account_name: str) -> None:
+            calls["health_release"] += 1
+
+        def record_failure(self, *args: object, **kwargs: object) -> None:
+            calls["health"] += 1
+
+    class AccountState:
+        def record_failure(self, reason: str) -> None:
+            calls["account"] += 1
+
+    class Registry:
+        def get_state(self, account_name: str) -> AccountState:
+            return AccountState()
+
+    finalizer = object.__new__(RequestFinalizer)
+    finalizer._router = Router()
+    finalizer._quota_estimator = Quota()
+    finalizer._health_manager = Health()
+    finalizer._registry = Registry()
+    finalizer._effects_applier = None
+    finalizer._quarantine = None
+    selected = SimpleNamespace(
+        account_name="acct",
+        model_id="model",
+        estimated_tokens=10,
+        estimated_microdollars=20,
+        provider_id="provider",
+        protocol="openai",
+    )
+    lease = AttemptRuntimeLease(
+        account_name="acct",
+        estimated_tokens=10,
+        estimated_microdollars=20,
+        active_count_acquired=True,
+        quota_reservation_acquired=True,
+        health_probe_acquired=True,
+        usage_outcome_required=True,
+        health_outcome_required=True,
+        account_runtime_outcome_required=True,
+    )
+    durable = DurableFinalizationResult(
+        request_terminal=True,
+        request_transitioned=False,
+        attempt_transitioned=False,
+        attempt_terminal=True,
+        reservation_terminal=True,
+        reservation_transitioned=False,
+        cost_microdollars=20,
+    )
+
+    await finalizer.apply_runtime_convergence(
+        selected=selected,
+        data=FinalizationData(
+            outcome=FinalizationOutcome.UPSTREAM_ERROR,
+            input_tokens=3,
+            output_tokens=2,
+        ),
+        durable=durable,
+        runtime_lease=lease,
+    )
+    await finalizer.apply_runtime_convergence(
+        selected=selected,
+        data=FinalizationData(outcome=FinalizationOutcome.UPSTREAM_ERROR),
+        durable=durable,
+        runtime_lease=lease,
+    )
+
+    assert lease.released
+    assert calls == {"usage": 1, "health_release": 0, "health": 1, "account": 1}
 
 
 async def _fresh_finalizer_db() -> tuple[

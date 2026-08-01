@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from eggpool.request.finalization_job import (
+    AttemptRuntimeLease,
     FinalizationCapacityError,
     FinalizationIdentity,
     FinalizationInvariantError,
@@ -18,6 +19,11 @@ from eggpool.request.finalization_job import (
     RequestFinalizationJob,
     RequestFinalizationSupervisor,
     TerminalConflictError,
+)
+from eggpool.request.finalizer import (
+    DurableFinalizationResult,
+    FinalizationData,
+    FinalizationOutcome,
 )
 
 
@@ -169,6 +175,62 @@ class TestRequestFinalizationJob:
 
         with pytest.raises((FinalizationInvariantError, Exception)):
             asyncio.run(_run())
+
+    @pytest.mark.asyncio
+    async def test_runtime_failure_resumes_without_repeating_durable_finalization(
+        self,
+    ) -> None:
+        lease = AttemptRuntimeLease(
+            account_name="acct",
+            usage_outcome_required=True,
+            health_outcome_required=True,
+            account_runtime_outcome_required=True,
+        )
+        durable = DurableFinalizationResult(
+            request_terminal=True,
+            request_transitioned=True,
+            attempt_transitioned=True,
+            attempt_terminal=True,
+            reservation_terminal=True,
+            reservation_transitioned=True,
+        )
+        calls = {"durable": 0, "runtime": 0}
+
+        class FlakyFinalizer:
+            async def finalize(self, selected: object, data: object) -> object:
+                calls["durable"] += 1
+                return durable
+
+            async def apply_runtime_convergence(self, **kwargs: object) -> None:
+                calls["runtime"] += 1
+                if calls["runtime"] == 1:
+                    raise RuntimeError("health busy")
+                runtime_lease = kwargs["runtime_lease"]
+                runtime_lease.mark_component_complete("usage")
+                runtime_lease.mark_component_complete("health")
+                runtime_lease.mark_component_complete("account_runtime")
+                runtime_lease.released = True
+
+        job = RequestFinalizationJob(
+            identity=_make_identity(),
+            outcome=FinalizationOutcome.COMPLETED.value,
+            finalization_data=FinalizationData(
+                outcome=FinalizationOutcome.COMPLETED,
+            ),
+            runtime_lease=lease,
+        )
+        job.set_dependencies(finalizer=FlakyFinalizer(), selected=object())
+
+        with pytest.raises(RuntimeError, match="health busy"):
+            await job.run()
+        assert job.progress == FinalizationProgress.RUNTIME_RELEASE_PENDING
+        assert not job.result.runtime_cleanup_complete
+        assert calls == {"durable": 1, "runtime": 1}
+
+        await job.run()
+        assert job.is_complete
+        assert job.result.runtime_cleanup_complete
+        assert calls == {"durable": 1, "runtime": 2}
 
 
 # ---------------------------------------------------------------------------

@@ -157,6 +157,11 @@ when needed, is configured with `[providers.<id>].stream_completion_policy`;
 the default is `strict`. EOF classified inside the handed-off stream iterator
 is terminal for the selected attempt: premature EOF is never retried after
 response handoff, including when no downstream body byte has arrived yet.
+Terminal finalization carries this response-lifecycle handoff fact explicitly;
+`bytes_emitted` remains payload accounting and never decides whether response
+status or headers can still change. Retained runtime leases independently
+converge usage, health, and account-runtime outcomes, including when durable
+finalization observes an already-terminal request.
 
 ## Request shaping
 

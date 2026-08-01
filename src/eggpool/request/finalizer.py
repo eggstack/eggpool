@@ -145,6 +145,8 @@ class FinalizationData:
     upstream_latency_ms: int | None = None
     first_byte_ms: int | None = None
     bytes_emitted: int = 0
+    # Explicit response lifecycle fact; payload size is accounting only.
+    downstream_started: bool = False
     bytes_received: int = 0
     upstream_request_id: str | None = None
     error_class: str | None = None
@@ -907,6 +909,17 @@ class RequestFinalizer:
                 ),
             )
 
+        if (
+            runtime_lease.usage_outcome_required is None
+            or runtime_lease.health_outcome_required is None
+            or runtime_lease.account_runtime_outcome_required is None
+        ):
+            runtime_lease.bind_outcome_obligations(
+                usage_required=True,
+                health_required=not data.health_already_applied,
+                account_runtime_required=not data.health_already_applied,
+            )
+
         release_health = (
             data.outcome
             in (
@@ -914,7 +927,7 @@ class RequestFinalizer:
                 FinalizationOutcome.CLIENT_ERROR,
                 FinalizationOutcome.MIDSTREAM_ERROR,
             )
-            and not data.health_already_applied
+            and runtime_lease.health_outcome_required is not False
         )
         outcomes = await runtime_lease.release_once(
             reason=data.outcome.value,
@@ -926,7 +939,7 @@ class RequestFinalizer:
             raise RuntimeError("runtime release incomplete")
 
         if (
-            durable.request_transitioned
+            runtime_lease.usage_outcome_required
             and durable.cost_microdollars > 0
             and not runtime_lease.component_complete("usage")
         ):
@@ -944,13 +957,12 @@ class RequestFinalizer:
                     model_id=_get_model_id(selected),
                 )
             runtime_lease.mark_component_complete("usage")
-        elif durable.request_transitioned:
+        elif runtime_lease.usage_outcome_required:
             runtime_lease.mark_component_complete("usage")
 
         if (
-            durable.request_transitioned
+            runtime_lease.health_outcome_required
             and runtime_lease.health_probe_acquired
-            and not data.health_already_applied
             and not runtime_lease.component_complete("health")
         ):
             if self._health_manager is not None:
@@ -979,12 +991,11 @@ class RequestFinalizer:
                             reason=category.value,
                         )
             runtime_lease.mark_component_complete("health")
-        elif durable.request_transitioned:
+        elif runtime_lease.health_outcome_required:
             runtime_lease.mark_component_complete("health")
 
         if (
-            durable.request_transitioned
-            and not data.health_already_applied
+            runtime_lease.account_runtime_outcome_required
             and not runtime_lease.component_complete("account_runtime")
         ):
             if self._registry is not None:
@@ -1002,7 +1013,7 @@ class RequestFinalizer:
                         )
                         state.record_failure(category.value)
             runtime_lease.mark_component_complete("account_runtime")
-        elif durable.request_transitioned:
+        elif runtime_lease.account_runtime_outcome_required:
             runtime_lease.mark_component_complete("account_runtime")
 
         required = {
@@ -1026,8 +1037,12 @@ class RequestFinalizer:
             runtime_lease.completed_components
         ) and all(
             marker in runtime_lease.completed_components
-            for marker in ("usage", "health", "account_runtime")
-            if durable.request_transitioned
+            for marker, required in (
+                ("usage", runtime_lease.usage_outcome_required),
+                ("health", runtime_lease.health_outcome_required),
+                ("account_runtime", runtime_lease.account_runtime_outcome_required),
+            )
+            if required
         )
         if not runtime_lease.released:
             raise RuntimeError("runtime cleanup incomplete")

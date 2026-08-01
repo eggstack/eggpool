@@ -1,12 +1,16 @@
 # Plan 066 — Terminal Runtime Ownership and Supervisor Closure
 
 Date: 2026-08-01
-Status: corrective follow-up pending
+Status: completed
 Parent roadmap: `plans/058-durable-convergence-exact-update-sbc-hotpath-roadmap.md`
 Corrective predecessor: `plans/065-terminal-recovery-and-small-regression-closure.md`
 Corrective successor: `plans/067-explicit-handoff-and-already-terminal-runtime-closure.md`
 Planning baseline: `d504005e46625bb5d8df72f5306d6eafb11d43b8`
 Implementation commit: `052b81ed38598c2c07cfa283d0a1968ee2e5519c`
+
+Post-implementation review: Plan 067 completed the two narrow residual
+semantic defects identified after this plan—response handoff is explicit and
+lease-owned outcome obligations no longer depend on durable request transition.
 
 ## Purpose
 
@@ -319,19 +323,19 @@ Prefer one or two coherent runtime commits plus one documentation closure commit
 ## Plan acceptance criteria
 
 - [x] Every production selected terminal job carries explicit runtime ownership derived from publication facts.
-- [ ] `AttemptRuntimeLease` owns every required runtime outcome independently of whether the final durable call transitioned the request.
+- [x] `AttemptRuntimeLease` owns every required runtime outcome independently of whether the final durable call transitioned the request.
 - [x] A partial runtime failure from a transitioning durable result resumes at the unfinished component without replaying durable finalization or completed runtime components.
 - [x] Durable reservation release is not reported as live quota reservation removal.
-- [ ] Runtime result fields remain truthful when durable state is already terminal but lease-owned outcome work is incomplete.
+- [x] Runtime result fields remain truthful when durable state is already terminal but lease-owned outcome work is incomplete.
 - [x] Direct/no-supervisor finalization uses the same runtime-convergence implementation.
 - [x] No timer-driven retry begins after the configured absolute retry age.
 - [x] Retry exhaustion still frees capacity and releases operational references.
-- [ ] Coordinator capacity rejection uses an explicit downstream-handoff fact rather than payload byte count.
+- [x] Coordinator capacity rejection uses an explicit downstream-handoff fact rather than payload byte count.
 - [x] Capacity rejection creates no detached work, second queue, or provider penalty.
 - [x] Runtime metrics expose the existing supervisor's bounded snapshot.
 - [x] Operator documentation matches the emitted runtime field.
-- [ ] Plans 058, 065, 066, and 067 have coherent status and checked acceptance metadata.
-- [ ] The missing handoff, already-terminal, component-resume, and result-truthfulness regressions pass together with the existing smoke suite.
+- [x] Plans 058, 065, 066, and 067 have coherent status and checked acceptance metadata.
+- [x] The missing handoff, already-terminal, component-resume, and result-truthfulness regressions pass together with the existing smoke suite.
 - [x] No migration, runtime dependency, durable queue, workflow framework, CI job, test matrix, soak gate, benchmark gate, or evidence format is introduced.
 
 ## Post-implementation review of `052b81ed`

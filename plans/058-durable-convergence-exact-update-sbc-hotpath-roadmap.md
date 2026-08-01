@@ -2,7 +2,7 @@
 
 Date: 2026-07-31
 Last reviewed: 2026-08-01
-Status: corrective closure pending
+Status: completed
 Plan: 058
 Planning baseline: `daef79cd98f23b11cc8d5a254c28abf64df1791a`
 Implementation review baseline: `052b81ed38598c2c07cfa283d0a1968ee2e5519c`
@@ -211,9 +211,9 @@ Plan 067 is capped at four focused regressions plus the existing lint, type, and
 - [x] Partial post-commit runtime failure from a transitioning durable result resumes without replaying durable or completed runtime components.
 - [x] Durable reservation release is distinguished from live quota/router/health convergence in results.
 - [x] No timer-driven retry begins after the configured absolute retry age.
-- [ ] Coordinator capacity rejection distinguishes pre-handoff and post-handoff using an explicit response lifecycle fact.
-- [ ] Already-terminal durable state can converge every outstanding lease-owned usage, health, and account-runtime obligation.
-- [ ] Runtime result fields remain incomplete until all acquired and required components actually converge.
+- [x] Coordinator capacity rejection distinguishes pre-handoff and post-handoff using an explicit response lifecycle fact.
+- [x] Already-terminal durable state can converge every outstanding lease-owned usage, health, and account-runtime obligation.
+- [x] Runtime result fields remain incomplete until all acquired and required components actually converge.
 - [x] Runtime metrics expose the active finalization supervisor's bounded snapshot.
 - [x] The legacy finalization queue and drain task no longer participate in production ownership.
 - [x] Successful recovery leaves controller state, database lifecycle state, and admission flags coherently `READY`.
@@ -224,7 +224,7 @@ Plan 067 is capped at four focused regressions plus the existing lint, type, and
 - [x] Out-of-order quota observations expire against the newest known timestamp.
 - [x] Rolling snapshots demonstrably expire old usage during long-lived operation.
 - [x] Routing traces use a true batch write and unexpected database failures are not silently suppressed.
-- [ ] Focused handoff, already-terminal, component-resume, and result-truthfulness regressions pass together with the existing smoke gate.
+- [x] Focused handoff, already-terminal, component-resume, and result-truthfulness regressions pass together with the existing smoke gate.
 - [x] No new CI job, matrix, coverage threshold, soak gate, evidence format, workflow engine, durable work queue, or generalized cross-loop runtime is introduced.
 
 ## Rejection conditions
@@ -261,9 +261,9 @@ runtime step, retries enforce the absolute age deadline, durable and runtime
 facts are separated, the legacy queue is absent from production, and supervisor
 diagnostics are exposed.
 
-Final closure is limited to Plan 067. The implementation must replace
-`bytes_emitted` handoff inference with an explicit local response-lifecycle
-fact, make usage/health/account-runtime obligations independent of
-`request_transitioned`, add the four focused regressions, and then reconcile
-Plans 058, 066, and 067. No additional roadmap, queue, migration, CI expansion,
-or verification framework is warranted.
+Plan 067 completed final closure: response handoff uses the explicit
+`FinalizationData.downstream_started` fact, lease-owned usage/health/account-
+runtime obligations are independent of `request_transitioned`, and focused
+regressions cover handoff, already-terminal convergence, retry resumption, and
+truthful runtime results. No additional roadmap, queue, migration, CI
+expansion, or verification framework was warranted.

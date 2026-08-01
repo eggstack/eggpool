@@ -876,6 +876,11 @@ class RequestCoordinator:
         runtime_lease = selected.runtime_lease or AttemptRuntimeLease(
             account_name=selected.account_name,
         )
+        runtime_lease.bind_outcome_obligations(
+            usage_required=True,
+            health_required=not data.health_already_applied,
+            account_runtime_required=not data.health_already_applied,
+        )
         if supervisor is None:
             selected = replace(selected, runtime_lease=runtime_lease)
             durable = await self._finalizer.finalize(selected, data)
@@ -912,13 +917,15 @@ class RequestCoordinator:
         except FinalizationCapacityError as exc:
             logger.error(
                 "Finalization supervisor capacity rejected terminal ownership: "
-                "request_id=%s attempt_id=%s outcome=%s bytes_emitted=%s",
+                "request_id=%s attempt_id=%s outcome=%s downstream_started=%s "
+                "bytes_emitted=%s",
                 context.request_id,
                 selected.attempt_id,
                 data.outcome.value,
+                data.downstream_started,
                 data.bytes_emitted,
             )
-            if data.bytes_emitted <= 0:
+            if not data.downstream_started:
                 raise AcceptedFinalizationInvariantError(
                     "terminal finalization capacity exhausted before handoff",
                     step="finalization_capacity",
@@ -3876,6 +3883,7 @@ class RequestCoordinator:
                         selected,
                         FinalizationData(
                             outcome=FinalizationOutcome.MIDSTREAM_ERROR,
+                            downstream_started=True,
                             first_byte_ms=(
                                 int(first_byte_ms) if first_byte_ms > 0 else None
                             ),
@@ -3975,6 +3983,7 @@ class RequestCoordinator:
                     selected,
                     FinalizationData(
                         outcome=FinalizationOutcome.COMPLETED,
+                        downstream_started=True,
                         status_code=upstream_response.status_code,
                         input_tokens=usage_result.input_tokens,
                         output_tokens=usage_result.output_tokens,
@@ -4068,6 +4077,7 @@ class RequestCoordinator:
                     )
                     fin_data = FinalizationData(
                         outcome=FinalizationOutcome.CLIENT_CANCELLED,
+                        downstream_started=True,
                         first_byte_ms=(
                             int(first_byte_ms) if first_byte_ms > 0 else None
                         ),
@@ -4147,6 +4157,7 @@ class RequestCoordinator:
                     selected,
                     FinalizationData(
                         outcome=FinalizationOutcome.MIDSTREAM_ERROR,
+                        downstream_started=True,
                         first_byte_ms=int(first_byte_ms) if first_byte_ms > 0 else None,
                         upstream_latency_ms=mid_latency_total,
                         bytes_emitted=bytes_emitted,

@@ -3124,6 +3124,15 @@ remains as a fallback when no supervisor is available.
   whether this invocation transitioned it, reservation convergence, and
   runtime cleanup completion. Already-terminal durable state is converged,
   not a retry failure.
+- **Response lifecycle is explicit**. `FinalizationData.downstream_started`
+  is set by the call site that owns the local response boundary: non-streaming
+  finalization before `PreparedProxyResponse` return is false, while work
+  inside the active stream iterator is true. `bytes_emitted` remains payload
+  accounting and never classifies response mutability.
+- **Runtime obligations are lease-owned**. Usage, health, and account-runtime
+  outcome components are bound to `AttemptRuntimeLease` and are not inferred
+  from `DurableFinalizationResult.request_transitioned`. An already-terminal
+  durable row therefore cannot suppress outstanding process-local convergence.
 - **One owner**. Retryable failures are scheduled by one supervisor timer with
   capped exponential backoff and maximum retry age. Capacity rejects before
   ownership transfer; detached terminal work is never returned.

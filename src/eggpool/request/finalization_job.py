@@ -132,6 +132,12 @@ class AttemptRuntimeLease:
     active_count_acquired: bool = False
     quota_reservation_acquired: bool = False
     health_probe_acquired: bool = False
+    # Terminal outcome obligations are bound when the terminal command is
+    # registered.  ``None`` keeps direct legacy callers compatible until
+    # their finalization data supplies the facts.
+    usage_outcome_required: bool | None = None
+    health_outcome_required: bool | None = None
+    account_runtime_outcome_required: bool | None = None
     released: bool = False
     _released_components: set[str] = field(default_factory=lambda: set[str]())
 
@@ -142,6 +148,28 @@ class AttemptRuntimeLease:
     def mark_component_complete(self, component: str) -> None:
         """Record successful convergence of one runtime component."""
         self._released_components.add(component)
+
+    def bind_outcome_obligations(
+        self,
+        *,
+        usage_required: bool,
+        health_required: bool,
+        account_runtime_required: bool,
+    ) -> None:
+        """Bind and validate process-local terminal outcome ownership."""
+        facts = (
+            ("usage_outcome_required", usage_required),
+            ("health_outcome_required", health_required),
+            ("account_runtime_outcome_required", account_runtime_required),
+        )
+        for field_name, value in facts:
+            existing = getattr(self, field_name)
+            if existing is not None and existing != value:
+                raise FinalizationInvariantError(
+                    "incompatible runtime outcome obligations",
+                    step="bind_outcome_obligations",
+                )
+            setattr(self, field_name, value)
 
     @property
     def completed_components(self) -> frozenset[str]:
@@ -443,6 +471,9 @@ class RequestFinalizationJob:
             "active_count_acquired",
             "quota_reservation_acquired",
             "health_probe_acquired",
+            "usage_outcome_required",
+            "health_outcome_required",
+            "account_runtime_outcome_required",
         )
         if any(
             getattr(existing, field) != getattr(runtime_lease, field)

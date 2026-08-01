@@ -16,6 +16,8 @@ from eggpool.request.coordinator import (
     SelectedAttempt,
     _RetryableUpstreamError,
 )
+from eggpool.request.finalization_job import FinalizationCapacityError
+from eggpool.request.finalizer import FinalizationData, FinalizationOutcome
 
 
 def _context() -> ProxyRequestContext:
@@ -300,3 +302,34 @@ async def test_retained_cleanup_capacity_fails_closed() -> None:
         )
     assert coordinator._attempt_cleanup_tasks == {}
     assert coordinator._retained_cleanup_capacity_rejections == 1
+
+
+@pytest.mark.parametrize(
+    ("downstream_started", "bytes_emitted", "raises"),
+    [(False, 128, True), (True, 0, False)],
+)
+@pytest.mark.asyncio
+async def test_finalization_capacity_uses_explicit_handoff(
+    downstream_started: bool,
+    bytes_emitted: int,
+    raises: bool,
+) -> None:
+    coordinator = object.__new__(RequestCoordinator)
+
+    class FullSupervisor:
+        def register_or_get(self, *args: object, **kwargs: object) -> None:
+            raise FinalizationCapacityError("full")
+
+    coordinator._finalization_supervisor = FullSupervisor()
+    coordinator._finalizer = object()
+    data = FinalizationData(
+        outcome=FinalizationOutcome.COMPLETED,
+        bytes_emitted=bytes_emitted,
+        downstream_started=downstream_started,
+    )
+    call = coordinator._finalize_terminal(_context(), _selected(), data)
+    if raises:
+        with pytest.raises(Exception, match="before handoff"):
+            await call
+    else:
+        await call
