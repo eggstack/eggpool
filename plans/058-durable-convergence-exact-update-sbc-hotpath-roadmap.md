@@ -1,9 +1,11 @@
 # Durable Convergence, Exact-Version Update, and SBC Hot-Path Roadmap
 
 Date: 2026-07-31
-Status: completed
+Last reviewed: 2026-08-01
+Status: corrective closure pending
 Plan: 058
 Planning baseline: `daef79cd98f23b11cc8d5a254c28abf64df1791a`
+Implementation review baseline: `d504005e46625bb5d8df72f5306d6eafb11d43b8`
 
 Related completed and corrective work:
 
@@ -21,6 +23,8 @@ Implementation plans:
 - `plans/062-stale-runtime-accounting-closure.md`
 - `plans/063-exact-version-update-command.md`
 - `plans/064-quota-and-sqlite-hotpath-reduction.md`
+- `plans/065-terminal-recovery-and-small-regression-closure.md`
+- `plans/066-terminal-runtime-ownership-and-supervisor-closure.md`
 
 ## Purpose
 
@@ -65,6 +69,22 @@ The design center remains a private EggPool deployment on one SBC or small LAN h
 16. Routing trace batch persistence loops over individual inserts and broadly suppresses database errors.
 17. Dispatch microbatching should be retained only if a small local comparison shows benefit at realistic SBC concurrency; it must not accumulate more batching machinery.
 
+## Post-implementation review
+
+The implementation through `d504005e46625bb5d8df72f5306d6eafb11d43b8` closed the main dispatch, recovery, durable-finalization, stale-accounting, exact-update, quota, and SQLite objectives. Plan 065 also removed the legacy production retry queue, retired exhausted jobs, rejected detached saturation work, introduced truthful durable convergence fields, aligned database `READY` state with admission, corrected the quota late-event anchor, and restored bare update output.
+
+A final bounded runtime-ownership gap remains:
+
+1. production retained jobs are registered without `AttemptRuntimeLease` ownership;
+2. retryable quota/router/usage/health cleanup remains inside `RequestFinalizer` and is skipped after an already-terminal retry;
+3. runtime result fields can report durable reservation facts as in-memory cleanup;
+4. retry age is not rechecked when a due heap entry executes;
+5. coordinator capacity rejection lacks explicit pre/post-handoff semantics;
+6. operator documentation references a finalization-supervisor runtime snapshot that is not exposed;
+7. roadmap and Plan 065 status/checklist metadata require final reconciliation.
+
+Plan 066 is the sole corrective closure plan for these residuals. It must extend the existing lease and supervisor rather than add another queue, lifecycle framework, migration, or verification system.
+
 ## Governing constraints
 
 1. **No production-control-plane expansion.** Do not add distributed consensus, external queues, workflow engines, or multi-node recovery semantics.
@@ -104,17 +124,25 @@ Add one optional version argument to `eggpool update`, normalize a leading `v`, 
 
 Convert quota pruning to an amortized constant-time normal path, prove rolling snapshots age correctly, batch trace inserts, and reduce finalization write cost only where a compact local measurement proves it material.
 
+### Plan 065 — Terminal Ownership, Recovery State, and Small Regression Closure
+
+Retire exhausted jobs, reject saturation before detached ownership, return explicit durable convergence facts, remove the legacy production retry queue, align recovery state with admission, correct quota late-event pruning, and restore bare update output.
+
+### Plan 066 — Terminal Runtime Ownership and Supervisor Closure
+
+Carry explicit runtime publication ownership into the retained job, make post-commit runtime convergence resumable and exactly-once, enforce retry age at execution, define capacity rejection semantics, expose supervisor diagnostics, and reconcile closure metadata.
+
 ## Dependency order
 
 ```text
 059 dispatch persistence --------+
-060 database recovery -----------+--> 061 terminal convergence --> 062 stale accounting
-                                 |
-063 exact-version update --------+    independent
-064 quota/SQLite hot path -------+    independent after correctness phases begin
+060 database recovery -----------+--> 061 terminal convergence --> 062 stale accounting --+
+                                 |                                                        |
+063 exact-version update --------+--------------------------------------------------------+--> 065 durable closure --> 066 runtime closure
+064 quota/SQLite hot path -------+--------------------------------------------------------+
 ```
 
-Plan 061 depends on the transaction and recovery semantics from Plan 060. Plan 062 should consume the structured convergence result from Plan 061 rather than adding another stale-cleanup interpretation. Plans 063 and 064 are independent and may be implemented in parallel.
+Plan 061 depends on the transaction and recovery semantics from Plan 060. Plan 062 consumes the durable finalization and accounting semantics. Plans 063 and 064 are otherwise independent. Plan 065 closed the bounded durable/recovery regressions. Plan 066 closes the remaining in-process runtime ownership and operator-diagnostic gap without reopening completed dispatch, recovery, update, or hot-path architecture.
 
 ## Cross-phase invariants
 
@@ -123,13 +151,19 @@ Plan 061 depends on the transaction and recovery semantics from Plan 060. Plan 0
 - Ambiguous-operation metadata belongs to the transaction holding the database lock.
 - Reads and writes remain rejected while recovery is opening, verifying, probing, or reconciling.
 - Recovery cannot report ready while any correctness-critical ambiguity is unresolved.
+- Controller state, database lifecycle state, and admission flags agree after recovery.
 - Request finalization and attempt finalization use distinct strategy names and identity fields.
-- An already-terminal durable row is a converged result, not a retry failure.
-- Runtime quota, active-count, health, and probe release occur at most once per owned component.
+- An already-terminal request is fully converged only when required attempt, durable reservation, and runtime ownership are also converged.
+- Every production selected terminal job carries explicit runtime ownership derived from publication facts.
+- Durable reservation release and in-memory quota reservation removal are separate facts.
+- Runtime quota, active-count, usage, health, account-state, and probe convergence occur at most once per owned component.
+- One supervisor owns automatic in-process terminal retry; no retry begins after the absolute configured retry age.
+- Capacity rejection is fail-closed and observable and never creates detached work.
 - One stale request contributes one active-request decrement even when several stale requests share an account.
 - A reservation with zero monetary cost can still own request and token pressure and must be released.
-- `eggpool update` with no argument still targets the latest live PyPI version.
+- `eggpool update` with no argument still targets the latest live PyPI version and reports current/latest versions before its conclusion.
 - `eggpool update vX.Y.Z` and `eggpool update X.Y.Z` resolve to the same exact target.
+- Ordered quota-window work remains amortized constant-time; the rare rebuild expires against the newest observation timestamp.
 - Performance changes remove deterministic work or are justified by one compact local measurement; no timing percentage becomes a CI gate.
 
 ## Verification budget
@@ -140,7 +174,7 @@ The implementation plans define focused cases, but the aggregate rules are:
 - normally add no more than four to six focused cases per implementation plan;
 - use parameterization for equivalent input shapes;
 - use one real SQLite transaction test where mocking could hide ownership or row-shape behavior;
-- use one CLI runner file for exact-version behavior and one update-checker file for HTTP parsing;
+- use one CLI runner file for exact-version/latest behavior and one update-checker file for HTTP parsing;
 - do not duplicate every install method through full subprocess execution; assert command construction and run one representative invocation path;
 - no live provider credentials;
 - no mandatory PyPI network access in tests;
@@ -150,48 +184,67 @@ The implementation plans define focused cases, but the aggregate rules are:
 
 ## Roadmap acceptance criteria
 
-- [ ] A rolled-back dispatch batch cannot publish runtime ownership or send an upstream request.
-- [ ] Persisted dispatch results reject empty IDs and non-positive attempt IDs.
-- [ ] Ambiguous-operation descriptors cannot be overwritten by another waiting transaction.
-- [ ] Database admission remains closed until verification, probing, and reconciliation all succeed.
-- [ ] Failed recovery closes the replacement connection and leaves the admission event clear.
-- [ ] Unresolved or conflicting ambiguous operations remain visible and prevent a false ready state.
-- [ ] Request and attempt finalization reconcile against the correct durable rows and status vocabulary.
-- [ ] The existing finalization supervisor performs bounded retries and never returns detached untracked work.
-- [ ] Already-terminal operations are treated as converged and outstanding runtime ownership can still be repaired exactly once.
-- [ ] Stale cleanup decrements the exact number of active requests and releases zero-cost request/token reservations.
-- [ ] Bare `eggpool update` preserves latest-update behavior.
-- [ ] Exact-version update accepts with or without a leading `v`, verifies release existence, supports newer or older targets, and reports a clear error for a missing release.
-- [ ] Quota-window update cost does not grow linearly with retained observation count on the ordered-time path.
-- [ ] Rolling snapshots demonstrably expire old usage during long-lived operation.
-- [ ] Routing traces use a true batch write and unexpected database failures are not silently suppressed.
-- [ ] No new CI job, matrix, coverage threshold, soak gate, evidence format, workflow engine, durable work queue, or generalized cross-loop runtime is introduced.
+- [x] A rolled-back dispatch batch cannot publish runtime ownership or send an upstream request.
+- [x] Persisted dispatch results reject empty IDs and non-positive attempt IDs.
+- [x] Ambiguous-operation descriptors cannot be overwritten by another waiting transaction.
+- [x] Database admission remains closed until verification, probing, and reconciliation all succeed.
+- [x] Failed recovery closes the replacement connection and leaves the admission event clear.
+- [x] Unresolved or conflicting ambiguous operations remain visible and prevent a false ready state.
+- [x] Request and attempt finalization reconcile against the correct durable rows and status vocabulary.
+- [x] Durable finalization reports actual request, attempt, and reservation convergence facts.
+- [x] The finalization supervisor schedules bounded retries, retires exhausted work, and rejects capacity before returning detached work.
+- [ ] Every production selected terminal job carries explicit runtime ownership.
+- [ ] Partial post-commit runtime failure resumes without replaying durable or completed runtime components.
+- [ ] Durable reservation release is distinguished from live quota/router/health convergence in results.
+- [ ] No timer-driven retry begins after the configured absolute retry age.
+- [ ] Coordinator capacity rejection has explicit pre-handoff and post-handoff semantics.
+- [ ] Runtime metrics expose the active finalization supervisor's bounded snapshot.
+- [x] The legacy finalization queue and drain task no longer participate in production ownership.
+- [x] Successful recovery leaves controller state, database lifecycle state, and admission flags coherently `READY`.
+- [x] Stale cleanup decrements the exact number of active requests and releases zero-cost request/token reservations.
+- [x] Bare `eggpool update` preserves latest-update behavior and established current/latest output.
+- [x] Exact-version update accepts with or without a leading `v`, verifies release existence, supports newer or older targets, and reports a clear error for a missing release.
+- [x] Quota-window update cost does not grow linearly with retained observation count on the ordered-time path.
+- [x] Out-of-order quota observations expire against the newest known timestamp.
+- [x] Rolling snapshots demonstrably expire old usage during long-lived operation.
+- [x] Routing traces use a true batch write and unexpected database failures are not silently suppressed.
+- [x] No new CI job, matrix, coverage threshold, soak gate, evidence format, workflow engine, durable work queue, or generalized cross-loop runtime is introduced.
 
 ## Rejection conditions
 
 Do not close this roadmap if:
 
 - any failure path still fabricates successful persistence identifiers;
-- recovery sets the ready/admission state before reconciliation completes;
+- recovery sets the ready/admission state before reconciliation completes or reports lifecycle state inconsistent with admission;
 - conflicts are counted as successful reconciliation;
-- terminal retry ownership remains split across mechanisms with contradictory success semantics;
+- a production retained terminal job has no explicit runtime ownership;
+- a retry after durable commit can skip unfinished quota, active-count, usage, health, account-state, or probe convergence;
+- runtime completion is inferred from durable reservation state;
+- a retry begins after the absolute retry deadline;
+- saturation creates detached work or escapes without explicit coordinator semantics;
+- operator documentation references supervisor diagnostics not exposed by the runtime API;
 - exact-version update silently substitutes latest for a missing requested release;
 - explicit downgrade is blocked by a latest-only comparison;
 - source-checkout limitations are hidden rather than reported clearly;
+- an expired late quota observation remains counted relative to a newer observation;
 - a performance phase introduces a new framework without measured need;
 - test-support code or CI complexity grows materially relative to the runtime fix.
 
 ## Definition of done
 
-This roadmap is complete when durable persistence, recovery, finalization, and stale-accounting paths agree on explicit identities and convergence; exact-version updates work without changing the bare command; the quota and trace hot paths have bounded normal-path cost; focused regressions and the existing smoke suite pass; and the repository remains simpler to iterate on than a production-grade service with equivalent failure machinery.
+This roadmap is complete when Plans 059–065 remain intact, Plan 066 closes the bounded runtime ownership, deadline, capacity, diagnostic, and metadata residuals, durable persistence, recovery, finalization, runtime accounting, and stale repair agree on explicit identities and convergence, exact-version and bare latest updates behave as documented, quota and trace hot paths have bounded normal-path cost, focused regressions and the existing smoke suite pass, and the repository remains simpler to iterate on than a production-grade service with equivalent failure machinery.
 
-## Implementation closure
+## Current implementation state
 
-Plans 059–064 and corrective Plan 065 are complete. Durable dispatch,
-recovery admission, terminal convergence, stale accounting, exact-version
-updates, and the bounded quota/SQLite hot paths now share explicit ownership
-and convergence rules. The finalization supervisor is the only automatic
-in-process terminal retry owner; the legacy retry queue is no longer wired
-into production. Focused regressions and the existing smoke gate passed
-locally without adding migrations, CI jobs, timing gates, or evidence
-artifacts.
+Plans 059–064 and most of Plan 065 are implemented. Durable dispatch,
+recovery admission, durable terminal convergence, stale accounting,
+exact-version updates, quota-window maintenance, and trace batching are in
+place. The legacy production retry queue is removed and the supervisor now
+performs bounded retries and clean exhaustion.
+
+Final closure remains pending on Plan 066 because the production retained job
+does not yet carry resumable runtime ownership, retry execution does not yet
+enforce the absolute age at the due boundary, capacity rejection lacks
+explicit coordinator semantics, and runtime metrics do not yet expose the
+supervisor snapshot. No additional roadmap or verification framework is
+warranted.
