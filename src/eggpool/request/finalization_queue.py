@@ -279,14 +279,14 @@ class FinalizationRetryQueue:
             streamed=True,
         )
 
-        transitioned = await self._finalizer.finalize(
+        result = await self._finalizer.finalize(
             stub,
             FinalizationData(
                 outcome=outcome,
                 upstream_protocol=entry.protocol,
             ),
         )
-        return bool(transitioned)
+        return result.durable_converged
 
     async def snapshot(self) -> dict[str, Any]:
         async with self._lock:

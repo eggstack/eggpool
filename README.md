@@ -19,7 +19,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Provider-neutral request shaping: cache reporting, safe suffix compression, policy-scoped overrides, optional synthetic cache controls, and advisory threshold tuning
 - Single-decode provider payload lifecycle: selected-provider transforms share one immutable client snapshot, generation-aware provider payload, and final serialization cache
 - Thinking/reasoning capability-aware routing with configurable budget mapping
-- High-concurrency stream stability: bounded retry queue, lock-contention diagnostics, and an OpenCode-specific operator playbook for sustained coding-agent streaming loads
+- High-concurrency stream stability: bounded terminal-finalization supervision, lock-contention diagnostics, and an OpenCode-specific operator playbook for sustained coding-agent streaming loads
 - Protocol-aware stream completion: clean EOF is classified from upstream `[DONE]`/`message_stop` evidence; truncated streams are never recorded as successful
 - Dispatch timing: distinct `local_pre_upstream` (full EggPool-side) and `dispatch_overhead` (coordinator-internal) metrics with cadence drift diagnostics for background tasks
 - Selection hot path: generation-hydrated account identities keep SQLite outside the claim lock, while routing plans carry quarantine exclusions directly into sampled diagnostic traces

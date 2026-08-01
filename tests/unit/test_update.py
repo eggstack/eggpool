@@ -187,6 +187,16 @@ class TestUpdateCheckOnly:
         assert code == 0
         assert "Already up to date." in output
 
+    def test_bare_up_to_date_reports_current_and_latest_first(self) -> None:
+        code, output, calls = _invoke_update(current="0.1.0", latest="0.1.0")
+        assert code == 0
+        assert (
+            output.index("Current version: 0.1.0")
+            < output.index("Latest version: 0.1.0")
+            < output.index("Already up to date.")
+        )
+        assert calls is None
+
     def test_no_install_run(self) -> None:
         """--check never runs subprocess."""
         code, _, calls = _invoke_update(

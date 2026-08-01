@@ -414,6 +414,17 @@ class Database:
         """
         self._recovery_controller = controller
 
+    def admit_recovered_connection(self) -> None:
+        """Atomically publish a verified replacement connection as ready."""
+        if self._conn is None:
+            raise DatabaseError("Cannot admit a disconnected recovery candidate")
+        self._writes_admitted = True
+        self._reads_admitted = True
+        self._writes_admitted_event.set()
+        self._generation_replaced_at = time.monotonic()
+        self._recovery_count += 1
+        self._transition_state(DatabaseLifecycleState.READY)
+
     def pending_ambiguous_operations(self) -> tuple[AmbiguousDatabaseOperation, ...]:
         """Return a snapshot of ambiguous operations awaiting reconciliation.
 

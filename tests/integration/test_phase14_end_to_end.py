@@ -635,7 +635,7 @@ class TestHealthIdempotency:
                 error_class="InternalServerError",
             ),
         )
-        assert t1 is True
+        assert t1.request_transitioned is True
 
         # Second finalization
         t2 = await finalizer.finalize(
@@ -646,7 +646,7 @@ class TestHealthIdempotency:
                 error_class="InternalServerError",
             ),
         )
-        assert t2 is False
+        assert t2.request_transitioned is False
 
         # Only one event
         events = await two_account_db.fetch_all(

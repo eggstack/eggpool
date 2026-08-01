@@ -852,36 +852,9 @@ async def test_rollup_freshness_disabled_and_staleness(
     assert freshness["staleness_seconds"] == pytest.approx(expected_gap)
 
 
-# -- Finalization retry queue snapshot (async) -------------------------------
-
-
-class _StubFinalizerForMetrics:
-    """Minimal stub satisfying FinalizationRetryQueue's finalizer protocol."""
-
-    async def finalize(self, selected: Any, data: Any) -> bool:
-        return True
-
-
 @pytest.mark.asyncio
 async def test_finalization_retry_queue_snapshot_contract(db: Database) -> None:
-    """FRQ section is enabled with size, calls report no errors, plain values only."""
-    import json
-
-    from eggpool.request.finalization_queue import FinalizationRetryQueue
-
-    queue = FinalizationRetryQueue(db=db, finalizer=_StubFinalizerForMetrics())
-    service = _make_service(db, finalization_retry_queue=queue)
+    """Legacy retry queue diagnostics are no longer exposed."""
+    service = _make_service(db)
     snapshot = await service.snapshot()
-    frq = snapshot["finalization_retry_queue"]
-    assert frq["enabled"] is True
-    assert frq["size"] == 0
-    for key, value in frq.items():
-        assert not callable(value), f"Field {key!r} is a callable: {value!r}"
-    for err in snapshot["probe_errors"]:
-        assert "finalization retry queue" not in err.lower()
-    serialized = json.dumps(snapshot, default=str)
-    assert "finalization_retry_queue" in serialized
-
-    none_service = _make_service(db, finalization_retry_queue=None)
-    none_snapshot = await none_service.snapshot()
-    assert none_snapshot["finalization_retry_queue"] == {"enabled": False}
+    assert "finalization_retry_queue" not in snapshot

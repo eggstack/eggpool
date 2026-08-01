@@ -4015,6 +4015,8 @@ def update(
             click.echo("Could not determine latest version from PyPI.", err=True)
             sys.exit(1)
 
+        click.echo(f"Current version: {current_version}")
+        click.echo(f"Latest version: {latest_version}")
         if not is_newer_version(current_version, latest_version):
             click.echo("Already up to date.")
             return

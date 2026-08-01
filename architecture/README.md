@@ -3132,16 +3132,10 @@ remains as a fallback when no supervisor is available.
   named columns directly and keeps unknown statuses or mismatched tuples
   unresolved.
 
-`FinalizationRetryQueue` is retained only as a bounded one-shot compatibility
-adapter. It does not maintain an independent retry budget or drop an
-already-terminal operation as failed.
-
-The queue does NOT substitute for `_crash_recovery`: durable rows
-that never converge are still recovered at every startup.
-`RuntimeMetricsService._snapshot_finalization_retry_queue()` is async
-and correctly awaits the queue's `snapshot()` method so the
-`/api/stats/runtime` endpoint serializes retry queue state without
-coroutine leaks or fallback errors.
+The historical `FinalizationRetryQueue` is no longer constructed,
+scheduled, or exposed by production generations. Terminal retry ownership
+belongs only to `RequestFinalizationSupervisor`; stale-request and startup
+recovery remain separate durable safety nets.
 
 ### Routing-trace pressure guard
 
@@ -3465,8 +3459,7 @@ model via `TaskOwnership` (`src/eggpool/runtime_task_inventory.py`):
   in place via `apply_spec_diff()`.
 - **Generation-leased** tasks (`catalog_refresh`,
   `model_info_refresh`, `model_info_canonical_backfill`,
-  `retention_cleanup`, `usage_window_refresh`,
-  `finalization_retry_drain`, `stale_request_finalizer`,
+  `retention_cleanup`, `usage_window_refresh`, `stale_request_finalizer`,
   `health_disabled_models_prune`) acquire a generation lease on
   every tick and are retired when their generation is retired;
   a new generation gets a fresh registration.

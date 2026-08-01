@@ -1,7 +1,7 @@
 # Plan 065 — Terminal Ownership, Recovery State, and Small Regression Closure
 
 Date: 2026-08-01
-Status: ready for implementation
+Status: completed
 Parent roadmap: `plans/058-durable-convergence-exact-update-sbc-hotpath-roadmap.md`
 Corrective predecessors:
 
@@ -390,3 +390,12 @@ Do not close this plan if:
 ## Definition of done
 
 This corrective pass is complete when terminal work has one bounded owner with truthful durable/runtime results and clean exhaustion behavior, recovery state agrees with admission, the quota late-event path expires against the correct time anchor, bare update restores its established output, the parent roadmap accurately reflects closure, and the repository retains its lean SBC/LAN testing and operational posture.
+
+## Implementation closure
+
+Implemented and verified locally on 2026-08-01. The supervisor now retires
+exhausted jobs, counts timer retries accurately, rejects capacity before
+ownership transfer, and consumes explicit durable convergence facts. The
+legacy queue is no longer constructed or scheduled, recovery admission uses a
+database-owned `READY` transition, quota rebuilds use the newest timestamp,
+and bare updates print current/latest versions before the conclusion.

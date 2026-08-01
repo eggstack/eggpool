@@ -319,6 +319,10 @@ async def test_admission_blocks_writes_during_recovery(
         )
         assert ready is True
         assert controller.admission_admitted is True
+        assert controller.state is DatabaseLifecycleState.READY
+        assert test_db.lifecycle_state is DatabaseLifecycleState.READY
+        assert test_db.writes_admitted is True
+        assert test_db.reads_admitted is True
     finally:
         await asyncio.wait_for(controller.shutdown(), timeout=5.0)
 

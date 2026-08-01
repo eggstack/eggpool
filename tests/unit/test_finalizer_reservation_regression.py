@@ -148,7 +148,7 @@ async def test_non_retryable_failure_releases_in_memory_reservation() -> None:
         ),
     )
 
-    assert transitioned is True
+    assert transitioned.request_transitioned is True
     assert await quota_estimator.get_account_reserved_cost("test-acct") == 0
 
     resv_row = await db.fetch_one(
@@ -205,7 +205,7 @@ async def test_idempotent_finalize_does_not_underflow_reservation() -> None:
             health_already_applied=True,
         ),
     )
-    assert first is True
+    assert first.request_transitioned is True
     assert await quota_estimator.get_account_reserved_cost("test-acct") == 0
 
     second = await finalizer.finalize(
@@ -217,7 +217,7 @@ async def test_idempotent_finalize_does_not_underflow_reservation() -> None:
             health_already_applied=True,
         ),
     )
-    assert second is False
+    assert second.request_transitioned is False
     assert await quota_estimator.get_account_reserved_cost("test-acct") == 0
 
     await db.disconnect()

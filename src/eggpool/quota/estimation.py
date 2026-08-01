@@ -83,7 +83,7 @@ class QuotaWindow:
             self._last_observation_timestamp,
             timestamp,
         )
-        self._rebuild_totals_and_prune(timestamp)
+        self._rebuild_totals_and_prune(self._last_observation_timestamp)
 
     def _prune_old_observations(self, current_time: float) -> None:
         """Remove observations older than the window from the left edge."""

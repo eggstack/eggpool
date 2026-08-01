@@ -151,7 +151,6 @@ class RuntimeMetricsService:
         self._model_info = model_info
         self._dashboard_telemetry = dashboard_telemetry
         self._stream_diagnostics = stream_diagnostics
-        self._finalization_retry_queue = finalization_retry_queue
         self._routing_trace_guard = routing_trace_guard
         self._runtime_manager = runtime_manager
         self._reload_manager = reload_manager
@@ -250,10 +249,6 @@ class RuntimeMetricsService:
         result["dashboard_telemetry"] = self._snapshot_dashboard_telemetry(probe_errors)
 
         result["stream_diagnostics"] = self._snapshot_stream_diagnostics(probe_errors)
-
-        result[
-            "finalization_retry_queue"
-        ] = await self._snapshot_finalization_retry_queue(probe_errors)
 
         result["routing_trace_guard"] = self._snapshot_routing_trace_guard(probe_errors)
 
@@ -1103,28 +1098,6 @@ class RuntimeMetricsService:
         except Exception as exc:
             _append_probe_error(
                 probe_errors, f"Stream diagnostics snapshot failed: {exc}"
-            )
-            return {"enabled": True, "error": str(exc)}
-
-    async def _snapshot_finalization_retry_queue(
-        self, probe_errors: list[str]
-    ) -> dict[str, Any]:
-        """Best-effort snapshot of the bounded finalization retry queue.
-
-        Returns ``enabled: False`` when no retry queue is wired (older
-        test harnesses or downstream callers without the queue).
-        """
-        if self._finalization_retry_queue is None:
-            return {"enabled": False}
-        try:
-            return {
-                "enabled": True,
-                **await self._finalization_retry_queue.snapshot(),
-            }
-        except Exception as exc:
-            _append_probe_error(
-                probe_errors,
-                f"Finalization retry queue snapshot failed: {exc}",
             )
             return {"enabled": True, "error": str(exc)}
 

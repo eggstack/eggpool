@@ -733,6 +733,14 @@ class ReservationRepository:
 class AttemptRepository:
     """CRUD operations for request_attempts."""
 
+    async def get_by_id(self, attempt_id: int) -> dict[str, Any] | None:
+        """Fetch one attempt by its durable identity."""
+        row = await self._db.fetch_one(
+            "SELECT * FROM request_attempts WHERE id = ?",
+            (attempt_id,),
+        )
+        return dict(row) if row is not None else None
+
     def __init__(self, db: Database) -> None:
         self._db = db
 

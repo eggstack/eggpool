@@ -363,11 +363,7 @@ class DatabaseRecoveryController:
                 self._successful_recoveries += 1
                 self._state = DatabaseLifecycleState.READY
                 self._admission_admitted = True
-                self.db._writes_admitted = True  # type: ignore[reportPrivateUsage]
-                self.db._reads_admitted = True  # type: ignore[reportPrivateUsage]
-                self.db._writes_admitted_event.set()  # type: ignore[reportPrivateUsage]
-                self.db._generation_replaced_at = time.monotonic()  # type: ignore[reportPrivateUsage]
-                self.db._recovery_count += 1  # type: ignore[reportPrivateUsage]
+                self.db.admit_recovered_connection()
                 self._fire_recovery_complete(success=True)
                 self._waiters_event.set()
                 return last_result

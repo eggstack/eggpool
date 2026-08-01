@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from eggpool.request.finalization_job import (
+    FinalizationCapacityError,
     FinalizationIdentity,
     FinalizationInvariantError,
     FinalizationProgress,
@@ -216,12 +217,12 @@ class TestRequestFinalizationSupervisor:
         sup.register_or_get(
             _make_identity(proxy_request_id="req-2"), "client_cancelled"
         )
-        # Third registration exceeds capacity — returns a detached job
-        job3 = sup.register_or_get(
-            _make_identity(proxy_request_id="req-3"), "client_cancelled"
-        )
+        # Third registration exceeds capacity before ownership transfer.
+        with pytest.raises(FinalizationCapacityError):
+            sup.register_or_get(
+                _make_identity(proxy_request_id="req-3"), "client_cancelled"
+            )
         assert sup.active_count == 2  # Only 2 tracked
-        assert job3.request_id == "req-3"  # But job is returned
 
     def test_get_job(self) -> None:
         sup = self._make_supervisor()
@@ -288,10 +289,10 @@ class TestRequestFinalizationSupervisor:
         sup.register_or_get(
             _make_identity(proxy_request_id="req-1"), "client_cancelled"
         )
-        # This should be rejected (detached job)
-        sup.register_or_get(
-            _make_identity(proxy_request_id="req-2"), "client_cancelled"
-        )
+        with pytest.raises(FinalizationCapacityError):
+            sup.register_or_get(
+                _make_identity(proxy_request_id="req-2"), "client_cancelled"
+            )
         snap = sup.snapshot()
         assert snap["counters"]["saturation_rejections"] == 1
 
@@ -318,5 +319,28 @@ class TestRequestFinalizationSupervisor:
         await asyncio.sleep(0.05)
         assert calls == 2
         assert job.is_complete
+        assert job.attempt_count == 2
+        assert job.failure_count == 1
+        assert job._retry_count == 1
         assert sup.active_count == 0
         await sup.shutdown(timeout_s=1.0)
+
+    def test_retry_age_exhaustion_retires_job_and_frees_capacity(self) -> None:
+        sup = self._make_supervisor(max_active_jobs=1, max_retry_age_s=1.0)
+        job = sup.register_or_get(_make_identity(), "client_cancelled")
+        selected = MagicMock()
+        finalizer = MagicMock()
+        job.set_dependencies(finalizer=finalizer, selected=selected)
+        object.__setattr__(job, "_created_at", 0.0)
+
+        sup._schedule_retry(job)
+
+        assert job.health == "failed"
+        assert sup.active_count == 0
+        assert job._finalizer is None
+        assert len(sup._failed_jobs) == 1
+        assert sup._retry_heap == []
+        replacement = sup.register_or_get(
+            _make_identity(proxy_request_id="req-2"), "client_cancelled"
+        )
+        assert replacement.request_id == "req-2"

@@ -783,7 +783,6 @@ class RequestCoordinator:
         self._compression_tuning_registry = compression_tuning_registry
         self._compression_policy = compression_policy
         self._stream_diagnostics = stream_diagnostics or get_stream_diagnostics()
-        self._finalization_retry_queue = finalization_retry_queue
         self._finalization_supervisor: Any = None
         if routing_trace_guard is None:
             from eggpool.request.routing_trace_guard import (

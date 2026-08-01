@@ -343,3 +343,11 @@ Recommended commits:
 ## Definition of done
 
 The plan is complete when request and attempt finalization use explicit identities and statuses, one structured result distinguishes durable transition from convergence and runtime cleanup, the existing supervisor owns bounded retries, recovery uses the same convergence logic, and focused regressions plus the existing smoke suite pass.
+
+## Corrective follow-up
+
+Plan 065 completed the residual ownership closure: capacity now rejects
+before ownership transfer, retry-age exhaustion retires jobs and releases
+references, and durable finalization reports independent request, attempt,
+and reservation facts. The legacy queue is not constructed or scheduled in
+production.

@@ -72,8 +72,7 @@ via ``TaskOwnership`` (``src/eggpool/runtime_task_inventory.py``):
   in place.
 - **Generation-leased** tasks (``catalog_refresh``,
   ``model_info_refresh``, ``model_info_canonical_backfill``,
-  ``retention_cleanup``, ``usage_window_refresh``,
-  ``finalization_retry_drain``, ``stale_request_finalizer``,
+  ``retention_cleanup``, ``usage_window_refresh``, ``stale_request_finalizer``,
   ``health_disabled_models_prune``) acquire a generation lease on
   every tick and are retired when their generation is retired.
 

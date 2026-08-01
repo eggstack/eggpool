@@ -428,8 +428,7 @@ class TestInventoryMatchesRegistration:
         assert specs["usage_window_refresh"].interval_s == 60.0
         assert specs["usage_window_refresh"].initial_delay_s == 15.0
 
-        assert specs["finalization_retry_drain"].interval_s == 15.0
-        assert specs["finalization_retry_drain"].initial_delay_s == 5.0
+        assert "finalization_retry_drain" not in specs
 
         assert specs["stale_request_finalizer"].interval_s == 60.0
         assert specs["stale_request_finalizer"].initial_delay_s == 25.0
@@ -459,7 +458,6 @@ class TestInventoryMatchesRegistration:
             "model_info_canonical_backfill",
             "retention_cleanup",
             "usage_window_refresh",
-            "finalization_retry_drain",
             "stale_request_finalizer",
             "health_disabled_models_prune",
         ):

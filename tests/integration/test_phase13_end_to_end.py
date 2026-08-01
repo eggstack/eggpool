@@ -1455,7 +1455,7 @@ class TestDuplicateFinalization:
             ),
         )
         # Second finalization should return False (idempotent)
-        assert result is False, (
+        assert result.request_transitioned is False, (
             "Second finalization should return False for already-terminal request"
         )
 

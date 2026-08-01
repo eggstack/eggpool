@@ -70,6 +70,13 @@ class TestQuotaWindow:
         assert window.get_usage(150.0) == (90, 120)
         assert window.get_usage(211.0) == (0, 0)
 
+        window = QuotaWindow(window_seconds=60.0)
+        window.add_observation(100.0, 10, 20)
+        window.add_observation(200.0, 30, 40)
+        window.add_observation(120.0, 50, 60)
+        assert window.used_tokens == 30
+        assert window.used_cost_microdollars == 40
+
 
 class TestAccountQuota:
     """Tests for AccountQuota."""

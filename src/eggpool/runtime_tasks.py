@@ -328,20 +328,6 @@ def register_runtime_tasks(
         initial_delay_s=15.0,
     )
 
-    # ----- finalization retry drain --------------------------------------
-    async def _finalization_retry_tick() -> None:
-        from eggpool.runtime_manager import leased_runtime  # noqa: PLC0415
-
-        async with leased_runtime(runtime_manager) as gen:
-            await gen.finalization_retry_queue.drain_once()
-
-    supervisor.register_periodic(
-        "finalization_retry_drain",
-        _finalization_retry_tick,
-        interval_s=15.0,
-        initial_delay_s=5.0,
-    )
-
     # ----- stale request finalizer ---------------------------------------
     # Reads upstream.read_timeout_s from the current generation's config
     # on each tick so the timeout threshold takes effect without restart.
@@ -730,18 +716,6 @@ def build_callback_factories_for_specs(
                     await gen.router.quota_estimator.load_persisted_windows()
 
             factories[name] = _usage_window_refresh_factory
-
-        elif name == "finalization_retry_drain":
-
-            async def _finalization_retry_factory() -> None:
-                from eggpool.runtime_manager import (  # noqa: PLC0415
-                    leased_runtime,
-                )
-
-                async with leased_runtime(runtime_manager) as gen:
-                    await gen.finalization_retry_queue.drain_once()
-
-            factories[name] = _finalization_retry_factory
 
         elif name == "stale_request_finalizer":
 

@@ -217,7 +217,7 @@ class TestFinalizerEmitsUsageEvent:
 
         transitioned = await finalizer.finalize(selected, data)
 
-        assert transitioned is True
+        assert transitioned.request_transitioned is True
         coalescer.record_usage.assert_called_once()
         event = coalescer.record_usage.call_args[0][0]
         assert isinstance(event, UsageMetricEvent)
@@ -277,7 +277,7 @@ class TestFinalizerEmitsUsageEvent:
 
         transitioned = await finalizer.finalize(selected, data)
 
-        assert transitioned is True
+        assert transitioned.request_transitioned is True
         event = coalescer.record_usage.call_args[0][0]
         assert isinstance(event, UsageMetricEvent)
         assert event.protocol == "anthropic"
@@ -329,7 +329,7 @@ class TestFinalizerEmitsUsageEvent:
 
         transitioned = await finalizer.finalize(selected, data)
 
-        assert transitioned is False
+        assert transitioned.request_transitioned is False
         coalescer.record_usage.assert_not_called()
 
     @pytest.mark.asyncio()
@@ -374,7 +374,7 @@ class TestFinalizerEmitsUsageEvent:
         )
 
         transitioned = await finalizer.finalize(selected, data)
-        assert transitioned is True
+        assert transitioned.request_transitioned is True
 
 
 class TestFlushErrorBehavior:

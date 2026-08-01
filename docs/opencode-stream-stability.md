@@ -19,10 +19,9 @@ spike in pending requests, walk through this list in order:
    Anything above `200 ms` means SQLite is the bottleneck. The routing
    trace guardrail should be skipping writes; confirm via
    `routing_trace_guard.skipped_db_pressure`.
-3. **`/api/stats/runtime` JSON — `finalization_retry_queue.depth`.**
-   Non-zero depth means the shielded finalizer timed out. The retry
-   queue will drain on its own cadence; if depth keeps growing, the
-   upstream is the problem, not the local finalizer.
+3. **`/api/stats/runtime` JSON — terminal finalization supervisor.**
+   Inspect active jobs, retry-pending work, and failed bounded diagnostics.
+   The supervisor is the only automatic in-process terminal retry owner.
 4. **Per-account health** (`/v1/healthz` or the health tab). Repeated
    `consecutive_failures` on a single account points at an upstream
    issue, not a code regression.
@@ -37,10 +36,9 @@ The 10 s shielded finalizer hit the SQLite lock. Two usual causes:
   `db_contention.lock_wait_count` and the rolling p95. If they spike,
   set `[routing.trace] mode = "off"` to drop the diagnostic writes
   and verify the contention drops.
-- **Finalizer retry queue depth growing unbounded.** Confirm the
-  periodic drain task is running (`/api/stats/runtime.background_tasks`
-  should show `finalization_retry_drain.last_tick_status=ok`). If the
-  task is missing, restart the service.
+- **Terminal finalization retry-pending work growing.** Confirm the
+  supervisor diagnostics and SQLite contention counters. Jobs retire after
+  the bounded retry age; durable stale/startup recovery remains the safety net.
 
 ### "OpenCode streams drop mid-edit (status_code=502, error_class=PoolTimeout)"
 
@@ -80,7 +78,7 @@ the threshold or set `mode = "off"` and accept the gap.
 Reservations are released at finalization. If the count grows, the
 finalizer is not running for some requests. Walk through:
 
-1. Confirm `finalization_retry_queue` is not backed up.
+1. Confirm the finalization supervisor is running and not at capacity.
 2. Confirm `_crash_recovery` ran at startup (look for the
    "Recovered N pending requests" log line in supervisor output).
 3. Run `eggpool stats repair-costs` to reconcile any stale cost data.
@@ -150,7 +148,7 @@ A clean run should produce:
 - `leaked_pending_rows == 0`
 - `leaked_active_reservations == 0`
 - `router_active_requests_after == 0`
-- `finalization_retry_queue_size == 0`
+- finalization supervisor `active_count` returns to zero
 - `quota_reserved_cost_delta == 0`
 - DB lock p95/max present when contention was observed (concurrency > 1)
 - Stream diagnostics `stream_completed` delta matches the number of non-cancelled streams
@@ -161,6 +159,6 @@ A clean run should produce:
 The `/api/stats/runtime` endpoint exposes these stream-stability sections:
 
 - `stream_diagnostics` — outcome counters and histograms
-- `finalization_retry_queue` — queue depth, drain stats, overflow/duplicate counters
+- finalization supervisor — active jobs, retry-pending work, bounded failures, and saturation
 - `routing_trace_guard` — skip rate and lock-pressure threshold
 - `db.contention` — lock-wait p50/p95/p99/max and sample count

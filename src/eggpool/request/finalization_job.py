@@ -337,7 +337,6 @@ class RequestFinalizationJob:
     _updated_at: float = field(default_factory=time.monotonic)
     _run_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _run_task: asyncio.Task[None] | None = None
-    _capacity_rejected: bool = False
     on_completion: Any = None  # callback(RequestFinalizationJob)
     _release_outcomes: list[RuntimeReleaseOutcome] = field(  # pyright: ignore[reportUnknownVariableType]
         default_factory=list
@@ -379,6 +378,10 @@ class RequestFinalizationJob:
     @property
     def attempt_count(self) -> int:
         return self._attempt_count
+
+    def increment_retry_count(self) -> None:
+        """Record one scheduler-initiated retry before execution."""
+        self._retry_count += 1
 
     @property
     def result(self) -> FinalizationResult:
@@ -446,10 +449,6 @@ class RequestFinalizationJob:
         ``asyncio.shield``.  Cancellation of the caller does not
         cancel the retained task.
         """
-        if self._capacity_rejected:
-            raise FinalizationCapacityError(
-                f"finalization supervisor capacity exhausted for {self.request_id}"
-            )
         if self.is_complete:
             return
         async with self._run_lock:
@@ -538,21 +537,30 @@ class RequestFinalizationJob:
         if self.finalization_data is None:
             return
 
-        transitioned = await self._finalizer.finalize(
-            self._selected, self.finalization_data
-        )
+        durable = await self._finalizer.finalize(self._selected, self.finalization_data)
+        if not durable.durable_converged:
+            self._result = FinalizationResult(
+                attempt_transitioned=durable.attempt_transitioned,
+                request_transitioned=durable.request_transitioned,
+                reservation_released=durable.reservation_transitioned,
+                quota_reservation_removed=durable.reservation_transitioned,
+                durable_terminal=durable.request_terminal,
+                durable_transitioned=durable.request_transitioned,
+                reservation_converged=durable.reservation_terminal,
+                retryable=durable.retryable,
+                detail=durable.detail,
+            )
+            raise RuntimeError(durable.detail or "durable finalization incomplete")
         self._result = FinalizationResult(
-            attempt_transitioned=transitioned,
-            request_transitioned=transitioned,
-            reservation_released=transitioned,
-            quota_reservation_removed=transitioned,
-            active_count_decremented=transitioned,
-            health_released_or_recorded=transitioned,
-            effects_applied=transitioned,
-            durable_terminal=True,
-            durable_transitioned=transitioned,
-            reservation_converged=transitioned,
-            retryable=False,
+            attempt_transitioned=durable.attempt_transitioned,
+            request_transitioned=durable.request_transitioned,
+            reservation_released=durable.reservation_transitioned,
+            quota_reservation_removed=durable.reservation_transitioned,
+            durable_terminal=durable.request_terminal,
+            durable_transitioned=durable.request_transitioned,
+            reservation_converged=durable.reservation_terminal,
+            retryable=durable.retryable,
+            detail=durable.detail,
         )
 
     async def _execute_runtime_release(self) -> None:
@@ -753,9 +761,8 @@ class RequestFinalizationSupervisor:
     ) -> RequestFinalizationJob:
         """Register a new finalization job or return the existing one.
 
-        Deduplicates by request and durable attempt identity.  When the queue is at
-        capacity, returns ``None`` and increments the saturation
-        counter.
+        Deduplicates by request and durable attempt identity.  Capacity
+        rejection occurs before a job is constructed or returned.
         """
         request_id = identity.proxy_request_id
         job_key = f"{request_id}:{identity.attempt_id}"
@@ -797,13 +804,8 @@ class RequestFinalizationSupervisor:
                 self._max_active_jobs,
                 request_id,
             )
-            return RequestFinalizationJob(
-                identity=identity,
-                outcome=outcome,
-                finalization_data=finalization_data,
-                runtime_lease=runtime_lease,
-                failure_effects=failure_effects,
-                _capacity_rejected=True,
+            raise FinalizationCapacityError(
+                f"finalization supervisor capacity exhausted for {request_id}"
             )
 
         job = RequestFinalizationJob(
@@ -832,17 +834,19 @@ class RequestFinalizationSupervisor:
         self._retry_scheduler_task = loop.create_task(self._retry_scheduler())
 
     def _schedule_retry(self, job: RequestFinalizationJob) -> None:
+        key = f"{job.identity.proxy_request_id}:{job.identity.attempt_id}"
+        if self._active_jobs.get(key) is not job or job.health == "failed":
+            return
         age = time.monotonic() - job.created_at
         if age >= self._max_retry_age_s:
             job.mark_retry_exhausted()
-            self._failed_jobs.append(job.to_record())
+            self._retire_exhausted_job(job)
             return
         self._retry_sequence += 1
         delay = min(
             self._retry_backoff_cap_s,
             self._retry_backoff_base_s * (2 ** max(job.failure_count - 1, 0)),
         )
-        key = f"{job.identity.proxy_request_id}:{job.identity.attempt_id}"
         heapq.heappush(
             self._retry_heap,
             (time.monotonic() + delay, self._retry_sequence, key),
@@ -876,9 +880,19 @@ class RequestFinalizationSupervisor:
             if job is None or job.is_complete:
                 continue
             try:
+                job.increment_retry_count()
                 await job.run()
             except Exception:
                 continue
+
+    def _retire_exhausted_job(self, job: RequestFinalizationJob) -> None:
+        """Retire an over-age job and release its operational ownership."""
+        key = f"{job.identity.proxy_request_id}:{job.identity.attempt_id}"
+        if self._active_jobs.get(key) is not job:
+            return
+        self._active_jobs.pop(key, None)
+        self._failed_jobs.append(job.to_record())
+        job.release_references()
 
     def _on_job_completion(self, job: RequestFinalizationJob) -> None:
         """Process-owned completion callback and retry handoff."""

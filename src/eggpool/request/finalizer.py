@@ -28,6 +28,7 @@ from eggpool.failure import (
 )
 from eggpool.failure.classifier import classify_failure_effects
 from eggpool.health.health_manager import classify_failure_category
+from eggpool.request.terminal_status import REQUEST_TERMINAL_STATUSES
 from eggpool.security.redaction import (
     MAX_REDACTED_ERROR_DETAIL_CHARS,
     redact_error_detail,
@@ -231,6 +232,29 @@ class FinalizationData:
     synthetic_cache_result: Any | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class DurableFinalizationResult:
+    """Facts proven by one durable finalization transaction."""
+
+    request_terminal: bool
+    request_transitioned: bool
+    attempt_transitioned: bool
+    attempt_terminal: bool
+    reservation_terminal: bool
+    reservation_transitioned: bool
+    retryable: bool = False
+    detail: str = ""
+
+    @property
+    def durable_converged(self) -> bool:
+        """Whether every durable component required by the job is terminal."""
+        return (
+            self.request_terminal
+            and self.attempt_terminal
+            and self.reservation_terminal
+        )
+
+
 class RequestFinalizer:
     """Finalizes requests exactly once, handling all terminal outcomes.
 
@@ -281,14 +305,20 @@ class RequestFinalizer:
         self,
         selected: Any,
         data: FinalizationData,
-    ) -> bool:
+    ) -> DurableFinalizationResult:
         """Finalize a request exactly once.
 
-        Returns True if this call performed the terminal transition,
-        False if the request was already finalized (idempotent).
+        Returns the independently observed request, attempt, and
+        reservation convergence facts.  This remains idempotent while
+        distinguishing an already-terminal request from incomplete
+        durable components.
         """
         transitioned = False
+        attempt_transitioned = False
         reservation_released = False
+        attempt_terminal = False
+        reservation_terminal = False
+        request_terminal = False
         cost_microdollars = 0
         exactness = "unknown"
 
@@ -673,23 +703,45 @@ class RequestFinalizer:
 
             # 4. Finalize attempt only if request transitioned and attempt
             #    is still incomplete (idempotent; preserves first terminal data)
-            if transitioned:
-                await self._attempt_repo.finalize_if_incomplete(
-                    attempt_id=selected.attempt_id,
-                    status_code=data.status_code,
-                    error_class=data.error_class,
-                    error_detail=error_detail,
-                    upstream_request_id=data.upstream_request_id,
-                    bytes_emitted=data.bytes_emitted,
-                    retry_category=self._retry_category_for_outcome(data.outcome),
-                    release_reason=data.release_reason
-                    or self._release_reason_for_outcome(data.outcome),
+            request_row = await self._request_repo.get_by_id(db_request_id)
+            request_terminal = transitioned or bool(
+                isinstance(request_row, dict)
+                and request_row.get("status") in REQUEST_TERMINAL_STATUSES
+            )
+            if request_terminal:
+                attempt_transitioned = bool(
+                    await self._attempt_repo.finalize_if_incomplete(
+                        attempt_id=selected.attempt_id,
+                        status_code=data.status_code,
+                        error_class=data.error_class,
+                        error_detail=error_detail,
+                        upstream_request_id=data.upstream_request_id,
+                        bytes_emitted=data.bytes_emitted,
+                        retry_category=self._retry_category_for_outcome(data.outcome),
+                        release_reason=data.release_reason
+                        or self._release_reason_for_outcome(data.outcome),
+                    )
                 )
 
                 # 5. Release reservation
-                reservation_released = await self._reservation_repo.release(
-                    selected.reservation_id, reason=status
+                reservation_released = bool(
+                    await self._reservation_repo.release(
+                        selected.reservation_id, reason=status
+                    )
                 )
+
+                attempt_row = await self._attempt_repo.get_by_id(selected.attempt_id)
+                attempt_terminal = attempt_transitioned or bool(
+                    isinstance(attempt_row, dict)
+                    and attempt_row.get("completed_at") is not None
+                )
+                reservation_status = await self._reservation_repo.get_status(
+                    selected.reservation_id
+                )
+                reservation_terminal = reservation_released or reservation_status in {
+                    "released",
+                    "expired",
+                }
 
                 # 6. Insert account event for significant failures
                 if (
@@ -876,7 +928,22 @@ class RequestFinalizer:
             except Exception:
                 logger.debug("Failed to emit usage metric event", exc_info=True)
 
-        return transitioned
+        return DurableFinalizationResult(
+            request_terminal=request_terminal,
+            request_transitioned=transitioned,
+            attempt_transitioned=attempt_transitioned,
+            attempt_terminal=attempt_terminal,
+            reservation_terminal=reservation_terminal,
+            reservation_transitioned=reservation_released,
+            retryable=not (
+                request_terminal and attempt_terminal and reservation_terminal
+            ),
+            detail=(
+                "durable finalization incomplete"
+                if not (request_terminal and attempt_terminal and reservation_terminal)
+                else ""
+            ),
+        )
 
     @staticmethod
     def _outcome_to_status(outcome: FinalizationOutcome) -> str:

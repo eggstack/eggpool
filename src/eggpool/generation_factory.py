@@ -41,7 +41,6 @@ if TYPE_CHECKING:
     from eggpool.providers.dns_cache import DnsNetworkBackend
     from eggpool.providers.outbound import OutboundClientManager
     from eggpool.request.coordinator import RequestCoordinator
-    from eggpool.request.finalization_queue import FinalizationRetryQueue
     from eggpool.request.routing_trace_guard import RoutingTraceGuard
     from eggpool.routing.router import Router
     from eggpool.runtime_dispatch import (
@@ -92,7 +91,6 @@ class PreparedRuntimeGeneration:
     account_backoff_repo: Any
     stats_service: StatsService
     supervisor: TaskSupervisor
-    finalization_retry_queue: FinalizationRetryQueue
     routing_trace_guard: RoutingTraceGuard | None
     routing_trace_writer: Any
     local_pre_upstream_recorder: Any = None
@@ -380,21 +378,6 @@ class RuntimeGenerationFactory:
             account_identities=account_identities,
         )
 
-        # -- Finalization retry queue ---------------------------------------
-        from eggpool.request.finalization_queue import (  # noqa: PLC0415
-            FinalizationRetryQueue,
-        )
-
-        finalization_retry_queue = FinalizationRetryQueue(
-            db=db,
-            finalizer=coordinator._finalizer,  # pyright: ignore[reportPrivateUsage]
-            router=router,
-            quota_estimator=router.quota_estimator,
-        )
-        coordinator._finalization_retry_queue = (  # pyright: ignore[reportPrivateUsage]
-            finalization_retry_queue
-        )
-
         # -- Finalization supervisor (Plan 026) ------------------------------
         # Process-owned supervisor for request finalization jobs.  Provides
         # retained-task finalization, bounded retry, and diagnostics.
@@ -491,7 +474,6 @@ class RuntimeGenerationFactory:
             account_backoff_repo=account_backoff_repo,
             stats_service=stats_service,
             supervisor=supervisor,
-            finalization_retry_queue=finalization_retry_queue,
             routing_trace_guard=routing_trace_guard,
             routing_trace_writer=routing_trace_writer,
             effects_applier=effects_applier,
@@ -519,7 +501,6 @@ class RuntimeGenerationFactory:
             account_backoff_repo=account_backoff_repo,
             stats_service=stats_service,
             supervisor=supervisor,
-            finalization_retry_queue=finalization_retry_queue,
             routing_trace_guard=routing_trace_guard,
             routing_trace_writer=routing_trace_writer,
             local_pre_upstream_recorder=local_pre_upstream_recorder,

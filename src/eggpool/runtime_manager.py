@@ -85,8 +85,8 @@ table and ``_RUNTIME_OWNED_APP_STATE_ATTRS``.
 - ``TranscoderPolicy`` / ``CompressionPolicy`` / ``CacheConfig``
   / ``CompressionTuningRegistry`` -- frozen config snapshots.
 - ``DispatchOverheadRecorder`` / ``DispatchSpanRecorder``
-  / ``StreamDiagnostics`` / ``FinalizationRetryQueue``
-  / ``RoutingTraceGuard`` -- per-generation telemetry/guardrails.
+  / ``StreamDiagnostics`` / ``RoutingTraceGuard`` -- per-generation
+  telemetry/guardrails.
 
 **Closures that capture startup services** (reload hazard):
 
@@ -552,7 +552,6 @@ class RuntimeGeneration:
     account_backoff_repo: Any
     stats_service: StatsService
     supervisor: Any
-    finalization_retry_queue: Any
     routing_trace_guard: Any
     routing_trace_writer: Any
     created_at_monotonic: float
@@ -568,6 +567,9 @@ class RuntimeGeneration:
             local_credential_headers=frozenset(),
         ),
     )
+    # Deprecated test/integration compatibility only. Production generations
+    # leave this unset; terminal retry ownership belongs to the supervisor.
+    finalization_retry_queue: Any = None
 
 
 # ---------------------------------------------------------------------------
@@ -1115,9 +1117,10 @@ class ActiveGenerationView:
     dispatch_overhead_recorder: Any  # noqa: ANN401
     dispatch_span_recorder: Any  # noqa: ANN401
     stream_diagnostics: Any  # noqa: ANN401
-    finalization_retry_queue: Any  # noqa: ANN401
     routing_trace_guard: Any  # noqa: ANN401
     supervisor: Any  # noqa: ANN401
+    # Deprecated compatibility mirror; never populated by production views.
+    finalization_retry_queue: Any = None  # noqa: ANN401
 
 
 @dataclass(frozen=True)
@@ -1596,7 +1599,6 @@ class RuntimeManager:
             dispatch_overhead_recorder=gen.dispatch_overhead_recorder,
             dispatch_span_recorder=gen.dispatch_span_recorder,
             stream_diagnostics=getattr(gen, "stream_diagnostics", None),
-            finalization_retry_queue=gen.finalization_retry_queue,
             routing_trace_guard=gen.routing_trace_guard,
             supervisor=gen.supervisor,
         )
@@ -2219,7 +2221,6 @@ class RuntimeGenerationBuilder:
             account_backoff_repo=services["account_backoff_repo"],
             stats_service=services["stats_service"],
             supervisor=services["supervisor"],
-            finalization_retry_queue=services.get("finalization_retry_queue"),
             routing_trace_guard=services.get("routing_trace_guard"),
             routing_trace_writer=services.get("routing_trace_writer"),
             effects_applier=services.get("effects_applier"),
@@ -2336,7 +2337,6 @@ _RUNTIME_OWNED_APP_STATE_ATTRS: frozenset[str] = frozenset(
         "dispatch_overhead_recorder",
         "dispatch_span_recorder",
         "coordinator",
-        "finalization_retry_queue",
         "routing_trace_guard",
         "supervisor",
         "task_monitor",

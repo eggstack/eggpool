@@ -606,7 +606,6 @@ def mirror_generation_on_app_state(
         "dispatch_span_recorder": generation.dispatch_span_recorder,
         "stats": generation.stats_service,
         "supervisor": generation.supervisor,
-        "finalization_retry_queue": generation.finalization_retry_queue,
         "routing_trace_guard": generation.routing_trace_guard,
         "stream_diagnostics": getattr(generation, "stream_diagnostics", None),
         "local_pre_upstream_recorder": getattr(
@@ -1041,7 +1040,6 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     app.state.dispatch_span_recorder = gen_result.dispatch_span_recorder
     app.state.stats = gen_result.stats_service
     app.state.supervisor = gen_result.supervisor
-    app.state.finalization_retry_queue = gen_result.finalization_retry_queue
     app.state.routing_trace_guard = gen_result.routing_trace_guard
     app.state.stream_diagnostics = gen_result.stream_diagnostics
     app.state.local_pre_upstream_recorder = gen_result.local_pre_upstream_recorder
@@ -1206,7 +1204,6 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         model_info=model_info,
         dashboard_telemetry=app.state.dashboard_telemetry,
         stream_diagnostics=app.state.stream_diagnostics,
-        finalization_retry_queue=getattr(app.state, "finalization_retry_queue", None),
         routing_trace_guard=getattr(app.state, "routing_trace_guard", None),
         runtime_manager=None,  # wired in step 24 below
         process=process,

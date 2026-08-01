@@ -327,3 +327,9 @@ The plan is complete when quota-window work remains bounded as process age grows
 Focused verification covers ordered expiry, out-of-order observations, and
 one-batch trace persistence. No schema migration, benchmark artifact, CI timing
 gate, or soak requirement was introduced.
+
+## Corrective follow-up
+
+Plan 065 corrected the remaining quota slow-path anchor: an out-of-order
+observation rebuild now prunes against the newest known timestamp, so a late
+already-expired observation cannot remain counted until a later operation.

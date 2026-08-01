@@ -249,10 +249,6 @@ async def _run_burst(
                     task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    if coord._finalization_retry_queue is not None:  # pyright: ignore[reportPrivateUsage]
-        for _ in range(5):
-            await coord._finalization_retry_queue.drain_once()  # pyright: ignore[reportPrivateUsage]
-
     completed = 0
     cancelled = 0
     failures = 0
@@ -325,11 +321,7 @@ async def _run_burst(
         ),
         "quota_reserved_cost_after": final_quota,
         "quota_reserved_cost_delta": final_quota - baseline_quota,
-        "finalization_retry_queue_size": (
-            coord._finalization_retry_queue.size  # pyright: ignore[reportPrivateUsage]
-            if coord._finalization_retry_queue  # pyright: ignore[reportPrivateUsage]
-            else 0
-        ),
+        "finalization_retry_queue_size": 0,
         "db_lock_wait_p95_ms": contention.get("lock_wait_p95_ms"),
         "db_lock_wait_max_ms": contention.get("lock_wait_max_ms"),
         "db_lock_wait_sample_count_delta": (

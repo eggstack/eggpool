@@ -331,7 +331,7 @@ class TestExhaustedRetryCleanup:
                 error_class="InternalServerError",
             ),
         )
-        assert transitioned is True
+        assert transitioned.request_transitioned is True
 
         # Verify A is now terminal
         row_a = await db.fetch_one(
