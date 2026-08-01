@@ -2,10 +2,10 @@
 
 Date: 2026-07-31
 Last reviewed: 2026-08-01
-Status: completed
+Status: corrective closure pending
 Plan: 058
 Planning baseline: `daef79cd98f23b11cc8d5a254c28abf64df1791a`
-Implementation review baseline: `d504005e46625bb5d8df72f5306d6eafb11d43b8`
+Implementation review baseline: `052b81ed38598c2c07cfa283d0a1968ee2e5519c`
 
 Related completed and corrective work:
 
@@ -25,6 +25,7 @@ Implementation plans:
 - `plans/064-quota-and-sqlite-hotpath-reduction.md`
 - `plans/065-terminal-recovery-and-small-regression-closure.md`
 - `plans/066-terminal-runtime-ownership-and-supervisor-closure.md`
+- `plans/067-explicit-handoff-and-already-terminal-runtime-closure.md`
 
 ## Purpose
 
@@ -73,19 +74,22 @@ The design center remains a private EggPool deployment on one SBC or small LAN h
 
 The implementation through `d504005e46625bb5d8df72f5306d6eafb11d43b8` closed the main dispatch, recovery, durable-finalization, stale-accounting, exact-update, quota, and SQLite objectives. Plan 065 also removed the legacy production retry queue, retired exhausted jobs, rejected detached saturation work, introduced truthful durable convergence fields, aligned database `READY` state with admission, corrected the quota late-event anchor, and restored bare update output.
 
-A final bounded runtime-ownership gap remains:
+Plan 066 implementation commit `052b81ed38598c2c07cfa283d0a1968ee2e5519c` then landed the principal terminal-runtime architecture:
 
-1. production retained jobs are registered without `AttemptRuntimeLease` ownership;
-2. retryable quota/router/usage/health cleanup remains inside `RequestFinalizer` and is skipped after an already-terminal retry;
-3. runtime result fields can report durable reservation facts as in-memory cleanup;
-4. retry age is not rechecked when a due heap entry executes;
-5. coordinator capacity rejection lacks explicit pre/post-handoff semantics;
-6. operator documentation references a finalization-supervisor runtime snapshot that is not exposed;
-7. roadmap and Plan 065 status/checklist metadata require final reconciliation.
+- selected attempts carry explicit runtime publication leases;
+- retained jobs resume partial cleanup from `RUNTIME_RELEASE_PENDING`;
+- durable and runtime result fields are separated;
+- retries enforce an execution-time absolute age deadline;
+- coordinator capacity rejection is caught at the canonical boundary;
+- the existing supervisor snapshot is exposed through `/api/stats/runtime`;
+- no new queue, migration, workflow framework, or CI apparatus was added.
 
-Plan 066 was the sole corrective closure plan for these residuals. It extended
-the existing lease and supervisor without adding another queue, lifecycle
-framework, migration, or verification system.
+A final narrow review found two remaining semantic defects:
+
+1. capacity handling uses `bytes_emitted` as the pre/post-handoff discriminator, which misclassifies non-streaming non-empty responses and started zero-byte streams; and
+2. lease-owned usage, health, and account-runtime obligations remain gated by `DurableFinalizationResult.request_transitioned`, so already-terminal durable state can suppress outstanding process-local outcome work.
+
+The focused Plan 066 regressions for those paths were also absent. Plan 067 is the sole corrective closure plan for these residuals. It must preserve the existing lease, supervisor, deadline, metrics, durable transaction, and verification architecture.
 
 ## Governing constraints
 
@@ -132,7 +136,11 @@ Retire exhausted jobs, reject saturation before detached ownership, return expli
 
 ### Plan 066 — Terminal Runtime Ownership and Supervisor Closure
 
-Carry explicit runtime publication ownership into the retained job, make post-commit runtime convergence resumable and exactly-once, enforce retry age at execution, define capacity rejection semantics, expose supervisor diagnostics, and reconcile closure metadata.
+Carry explicit runtime publication ownership into the retained job, make post-commit runtime convergence resumable and exactly-once, enforce retry age at execution, define capacity rejection handling, expose supervisor diagnostics, and reconcile closure metadata.
+
+### Plan 067 — Explicit Handoff and Already-Terminal Runtime Closure
+
+Replace payload-byte handoff inference with one explicit response lifecycle fact, make lease-owned usage/health/account obligations independent of durable request transition, add the missing focused regressions, and close the roadmap metadata.
 
 ## Dependency order
 
@@ -140,11 +148,11 @@ Carry explicit runtime publication ownership into the retained job, make post-co
 059 dispatch persistence --------+
 060 database recovery -----------+--> 061 terminal convergence --> 062 stale accounting --+
                                  |                                                        |
-063 exact-version update --------+--------------------------------------------------------+--> 065 durable closure --> 066 runtime closure
+063 exact-version update --------+--------------------------------------------------------+--> 065 durable closure --> 066 runtime ownership --> 067 semantic closure
 064 quota/SQLite hot path -------+--------------------------------------------------------+
 ```
 
-Plan 061 depends on the transaction and recovery semantics from Plan 060. Plan 062 consumes the durable finalization and accounting semantics. Plans 063 and 064 are otherwise independent. Plan 065 closed the bounded durable/recovery regressions. Plan 066 closes the remaining in-process runtime ownership and operator-diagnostic gap without reopening completed dispatch, recovery, update, or hot-path architecture.
+Plan 061 depends on the transaction and recovery semantics from Plan 060. Plan 062 consumes the durable finalization and accounting semantics. Plans 063 and 064 are otherwise independent. Plan 065 closed the bounded durable/recovery regressions. Plan 066 landed the retained lease, retry deadline, and diagnostics. Plan 067 is limited to the final handoff and already-terminal runtime obligation semantics.
 
 ## Cross-phase invariants
 
@@ -159,8 +167,10 @@ Plan 061 depends on the transaction and recovery semantics from Plan 060. Plan 0
 - Every production selected terminal job carries explicit runtime ownership derived from publication facts.
 - Durable reservation release and in-memory quota reservation removal are separate facts.
 - Runtime quota, active-count, usage, health, account-state, and probe convergence occur at most once per owned component.
+- Lease-owned runtime outcome requirements do not disappear merely because the current durable call observes an already-terminal request.
 - One supervisor owns automatic in-process terminal retry; no retry begins after the absolute configured retry age.
 - Capacity rejection is fail-closed and observable and never creates detached work.
+- Response handoff is an explicit local lifecycle fact and is never inferred from payload byte count.
 - One stale request contributes one active-request decrement even when several stale requests share an account.
 - A reservation with zero monetary cost can still own request and token pressure and must be released.
 - `eggpool update` with no argument still targets the latest live PyPI version and reports current/latest versions before its conclusion.
@@ -184,6 +194,8 @@ The implementation plans define focused cases, but the aggregate rules are:
 - ordinary CI remains the existing single smoke job;
 - local performance checks are diagnostic scripts or direct commands, not retained CI infrastructure.
 
+Plan 067 is capped at four focused regressions plus the existing lint, type, and smoke gate. It must not add a new harness or retained evidence bundle.
+
 ## Roadmap acceptance criteria
 
 - [x] A rolled-back dispatch batch cannot publish runtime ownership or send an upstream request.
@@ -196,10 +208,12 @@ The implementation plans define focused cases, but the aggregate rules are:
 - [x] Durable finalization reports actual request, attempt, and reservation convergence facts.
 - [x] The finalization supervisor schedules bounded retries, retires exhausted work, and rejects capacity before returning detached work.
 - [x] Every production selected terminal job carries explicit runtime ownership.
-- [x] Partial post-commit runtime failure resumes without replaying durable or completed runtime components.
+- [x] Partial post-commit runtime failure from a transitioning durable result resumes without replaying durable or completed runtime components.
 - [x] Durable reservation release is distinguished from live quota/router/health convergence in results.
 - [x] No timer-driven retry begins after the configured absolute retry age.
-- [x] Coordinator capacity rejection has explicit pre-handoff and post-handoff semantics.
+- [ ] Coordinator capacity rejection distinguishes pre-handoff and post-handoff using an explicit response lifecycle fact.
+- [ ] Already-terminal durable state can converge every outstanding lease-owned usage, health, and account-runtime obligation.
+- [ ] Runtime result fields remain incomplete until all acquired and required components actually converge.
 - [x] Runtime metrics expose the active finalization supervisor's bounded snapshot.
 - [x] The legacy finalization queue and drain task no longer participate in production ownership.
 - [x] Successful recovery leaves controller state, database lifecycle state, and admission flags coherently `READY`.
@@ -210,6 +224,7 @@ The implementation plans define focused cases, but the aggregate rules are:
 - [x] Out-of-order quota observations expire against the newest known timestamp.
 - [x] Rolling snapshots demonstrably expire old usage during long-lived operation.
 - [x] Routing traces use a true batch write and unexpected database failures are not silently suppressed.
+- [ ] Focused handoff, already-terminal, component-resume, and result-truthfulness regressions pass together with the existing smoke gate.
 - [x] No new CI job, matrix, coverage threshold, soak gate, evidence format, workflow engine, durable work queue, or generalized cross-loop runtime is introduced.
 
 ## Rejection conditions
@@ -222,8 +237,10 @@ Do not close this roadmap if:
 - a production retained terminal job has no explicit runtime ownership;
 - a retry after durable commit can skip unfinished quota, active-count, usage, health, account-state, or probe convergence;
 - runtime completion is inferred from durable reservation state;
+- an already-terminal durable result suppresses an outstanding lease-owned runtime outcome;
 - a retry begins after the absolute retry deadline;
 - saturation creates detached work or escapes without explicit coordinator semantics;
+- downstream response handoff is inferred from `bytes_emitted` or another payload-size proxy;
 - operator documentation references supervisor diagnostics not exposed by the runtime API;
 - exact-version update silently substitutes latest for a missing requested release;
 - explicit downgrade is blocked by a latest-only comparison;
@@ -234,19 +251,19 @@ Do not close this roadmap if:
 
 ## Definition of done
 
-This roadmap is complete when Plans 059–065 remain intact, Plan 066 closes the bounded runtime ownership, deadline, capacity, diagnostic, and metadata residuals, durable persistence, recovery, finalization, runtime accounting, and stale repair agree on explicit identities and convergence, exact-version and bare latest updates behave as documented, quota and trace hot paths have bounded normal-path cost, focused regressions and the existing smoke suite pass, and the repository remains simpler to iterate on than a production-grade service with equivalent failure machinery.
+This roadmap is complete when Plans 059–066 remain intact, Plan 067 closes the explicit response-handoff and already-terminal lease-obligation residuals, durable persistence, recovery, finalization, runtime accounting, and stale repair agree on explicit identities and convergence, exact-version and bare latest updates behave as documented, quota and trace hot paths have bounded normal-path cost, the four focused regressions and existing smoke suite pass, and the repository remains simpler to iterate on than a production-grade service with equivalent failure machinery.
 
 ## Current implementation state
 
-Plans 059–064 and most of Plan 065 are implemented. Durable dispatch,
-recovery admission, durable terminal convergence, stale accounting,
-exact-version updates, quota-window maintenance, and trace batching are in
-place. The legacy production retry queue is removed and the supervisor now
-performs bounded retries and clean exhaustion.
+Plans 059–065 are complete. Plan 066's principal architecture is implemented:
+selected terminal attempts carry runtime leases, partial cleanup resumes from the
+runtime step, retries enforce the absolute age deadline, durable and runtime
+facts are separated, the legacy queue is absent from production, and supervisor
+diagnostics are exposed.
 
-Final closure remains pending on Plan 066 because the production retained job
-does not yet carry resumable runtime ownership, retry execution does not yet
-enforce the absolute age at the due boundary, capacity rejection lacks
-explicit coordinator semantics, and runtime metrics do not yet expose the
-supervisor snapshot. No additional roadmap or verification framework is
-warranted.
+Final closure is limited to Plan 067. The implementation must replace
+`bytes_emitted` handoff inference with an explicit local response-lifecycle
+fact, make usage/health/account-runtime obligations independent of
+`request_transitioned`, add the four focused regressions, and then reconcile
+Plans 058, 066, and 067. No additional roadmap, queue, migration, CI expansion,
+or verification framework is warranted.
