@@ -690,6 +690,11 @@ The output covers:
   counters (cumulative lock wait, max lock wait, write/read ops).
 - **Routing** — active requests, pending count, active reservations,
   reserved microdollars, health states, active backoff rows.
+- **Terminal finalization** — the bounded `finalization_supervisor` snapshot
+  reports active and retry-pending jobs, bounded failures/history, saturation
+  counters, and configured capacity/retry-age limits. `null` means the server
+  has no active production generation supervisor (for example during partial
+  startup).
 
 For a focused view of active upstream-derived suppression, call
 `GET /api/backoffs`. The endpoint returns persisted `account_backoffs`

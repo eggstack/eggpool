@@ -4257,9 +4257,9 @@ Makes selected-attempt cleanup independent of the client request task. Once EggP
 
 - `FinalizationIdentity` (`src/eggpool/request/finalization_job.py`) — immutable frozen dataclass containing all data needed to finalize without querying mutable request context.
 - `FinalizationProgress` — progress state machine (`created → durable_finalization_pending → durable_finalized → runtime_release_pending → runtime_released → analytics_pending → completed`); only `completed` is terminal.
-- `AttemptRuntimeLease` — idempotent runtime ownership token tracking active-count, quota-reservation, and health-probe acquisition/release facts.
+- `AttemptRuntimeLease` — explicit publication receipt and idempotent runtime ownership token tracking active-count, quota-reservation, and health-probe acquisition facts plus resumable usage, health, and account-runtime convergence.
 - `RequestFinalizationJob` — process-owned job with retained `asyncio.Task`, single-flight `run()` via `asyncio.shield`, concurrent-caller sharing, and completion callback.
-- `RequestFinalizationSupervisor` — bounded, deduplicated registry of active jobs with process-owned completion reconciliation, bounded history deque (scalar-only records), startup stale-state reconciliation, and shutdown drain/adopt.
+- `RequestFinalizationSupervisor` — bounded, deduplicated registry of active jobs with process-owned completion reconciliation, execution-time absolute retry-age enforcement, bounded history deque (scalar-only records), startup stale-state reconciliation, and shutdown drain/adopt. Its existing bounded `snapshot()` is exposed as `finalization_supervisor` by `/api/stats/runtime`; no retry-queue field is emitted.
 
 ### Streaming cancellation integration
 
@@ -4302,7 +4302,8 @@ exhausted-outcome path performs the single terminal submission.
   of making callers infer completion from request status alone.
 - `AttemptRuntimeLease` records each runtime component independently. A failed
   component release remains retryable without repeating components that already
-  succeeded.
+  succeeded. Durable reservation release is reported separately from live quota
+  removal, router decrement, usage, health/probe, and account-runtime facts.
 
 Capability rejection is a request-local client error: it releases the selected
   attempt and runtime ownership through the canonical job and never applies a

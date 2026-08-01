@@ -19,8 +19,10 @@ spike in pending requests, walk through this list in order:
    Anything above `200 ms` means SQLite is the bottleneck. The routing
    trace guardrail should be skipping writes; confirm via
    `routing_trace_guard.skipped_db_pressure`.
-3. **`/api/stats/runtime` JSON — terminal finalization supervisor.**
-   Inspect active jobs, retry-pending work, and failed bounded diagnostics.
+3. **`/api/stats/runtime` JSON — `finalization_supervisor`.**
+   Inspect active jobs, retry-pending work, failed bounded diagnostics, and
+   saturation counters. The snapshot also reports configured capacity and the
+   absolute retry-age limit.
    The supervisor is the only automatic in-process terminal retry owner.
 4. **Per-account health** (`/v1/healthz` or the health tab). Repeated
    `consecutive_failures` on a single account points at an upstream
@@ -159,6 +161,6 @@ A clean run should produce:
 The `/api/stats/runtime` endpoint exposes these stream-stability sections:
 
 - `stream_diagnostics` — outcome counters and histograms
-- finalization supervisor — active jobs, retry-pending work, bounded failures, and saturation
+- `finalization_supervisor` — active jobs, retry-pending work, bounded failures, saturation, and retry limits
 - `routing_trace_guard` — skip rate and lock-pressure threshold
 - `db.contention` — lock-wait p50/p95/p99/max and sample count

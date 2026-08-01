@@ -168,6 +168,9 @@ Provider-bound `ThinkingControlContract` validates/normalizes thinking controls.
 - `StreamDiagnostics` — stream outcomes with bounded ring histograms
 - `EventLoopLagMonitor` — bounded event-loop lag telemetry
 - `MetricsWriteCoalescer` — dual locks for thread-safe buffering
+- `RuntimeMetricsService.snapshot()["finalization_supervisor"]` — the active
+  generation's bounded terminal-job supervisor snapshot, or `None` during
+  lightweight/partial startup.
 
 ## Database Recovery
 

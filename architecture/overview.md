@@ -244,7 +244,7 @@ SQLite WAL with single-connection serialization. All DML runs inside `async with
 `ProviderBoundRequest` is the single provider-payload authority after client parsing. Copy-on-write generation-aware mutations, one final serialization cache, frozen before dispatch. `ProxyRequestContext.upstream_body` is a compatibility mirror only.
 
 ### Request Finalization
-Every request-terminal outcome is owned by one retained `RequestFinalizationJob`. Retryable failed attempts use coordinator-retained cleanup with 128-entry capacity. The stale-request finalizer is a recovery safety net, not a normal terminal path.
+Every request-terminal outcome is owned by one retained `RequestFinalizationJob` carrying explicit runtime publication ownership. Retryable runtime cleanup resumes component-by-component from `RUNTIME_RELEASE_PENDING`; the supervisor enforces one absolute retry-age deadline and exposes its bounded snapshot as `finalization_supervisor` in `/api/stats/runtime`. The stale-request finalizer is a recovery safety net, not a normal terminal path.
 
 ## Directory Structure
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -344,3 +345,21 @@ class TestRequestFinalizationSupervisor:
             _make_identity(proxy_request_id="req-2"), "client_cancelled"
         )
         assert replacement.request_id == "req-2"
+
+    @pytest.mark.asyncio
+    async def test_due_retry_expired_at_execution_is_not_started(self) -> None:
+        sup = self._make_supervisor(max_retry_age_s=1.0)
+        job = sup.register_or_get(_make_identity(), "client_cancelled")
+        job._execute_durable_finalization = MagicMock(  # type: ignore[method-assign]
+            side_effect=AssertionError("expired retry must not execute")
+        )
+        object.__setattr__(job, "_created_at", time.monotonic() - 2.0)
+        key = "req-1:1"
+        sup._retry_heap.append((time.monotonic(), 1, key))
+        task = asyncio.create_task(sup._retry_scheduler())
+        await asyncio.sleep(0)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        assert sup.active_count == 0
+        assert job.attempt_count == 0

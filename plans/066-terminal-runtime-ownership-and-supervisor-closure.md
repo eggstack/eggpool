@@ -1,7 +1,7 @@
 # Plan 066 — Terminal Runtime Ownership and Supervisor Closure
 
 Date: 2026-08-01
-Status: ready for implementation
+Status: completed
 Parent roadmap: `plans/058-durable-convergence-exact-update-sbc-hotpath-roadmap.md`
 Corrective predecessor: `plans/065-terminal-recovery-and-small-regression-closure.md`
 Planning baseline: `d504005e46625bb5d8df72f5306d6eafb11d43b8`
@@ -316,21 +316,21 @@ Prefer one or two coherent runtime commits plus one documentation closure commit
 
 ## Plan acceptance criteria
 
-- [ ] Every production selected terminal job carries explicit runtime ownership derived from publication facts.
-- [ ] `AttemptRuntimeLease` owns retryable quota, router, usage, health/probe, and account-runtime convergence required by the terminal path.
-- [ ] A partial runtime failure resumes at the unfinished component without replaying durable finalization or completed runtime components.
-- [ ] Durable reservation release is not reported as live quota reservation removal.
-- [ ] Runtime result fields reflect actual component outcomes.
-- [ ] Direct/no-supervisor finalization uses the same runtime-convergence implementation.
-- [ ] No timer-driven retry begins after the configured absolute retry age.
-- [ ] Retry exhaustion still frees capacity and releases operational references.
-- [ ] Coordinator capacity rejection is explicitly handled before and after downstream handoff.
-- [ ] Capacity rejection creates no detached work, second queue, or provider penalty.
-- [ ] Runtime metrics expose the existing supervisor's bounded snapshot.
-- [ ] Operator documentation matches the emitted runtime field.
-- [ ] Plans 058, 065, and 066 have coherent status and checked acceptance metadata.
-- [ ] Focused regressions and the existing smoke suite pass.
-- [ ] No migration, runtime dependency, durable queue, workflow framework, CI job, test matrix, soak gate, benchmark gate, or evidence format is introduced.
+- [x] Every production selected terminal job carries explicit runtime ownership derived from publication facts.
+- [x] `AttemptRuntimeLease` owns retryable quota, router, usage, health/probe, and account-runtime convergence required by the terminal path.
+- [x] A partial runtime failure resumes at the unfinished component without replaying durable finalization or completed runtime components.
+- [x] Durable reservation release is not reported as live quota reservation removal.
+- [x] Runtime result fields reflect actual component outcomes.
+- [x] Direct/no-supervisor finalization uses the same runtime-convergence implementation.
+- [x] No timer-driven retry begins after the configured absolute retry age.
+- [x] Retry exhaustion still frees capacity and releases operational references.
+- [x] Coordinator capacity rejection is explicitly handled before and after downstream handoff.
+- [x] Capacity rejection creates no detached work, second queue, or provider penalty.
+- [x] Runtime metrics expose the existing supervisor's bounded snapshot.
+- [x] Operator documentation matches the emitted runtime field.
+- [x] Plans 058, 065, and 066 have coherent status and checked acceptance metadata.
+- [x] Focused regressions and the existing smoke suite pass.
+- [x] No migration, runtime dependency, durable queue, workflow framework, CI job, test matrix, soak gate, benchmark gate, or evidence format is introduced.
 
 ## Rejection conditions
 
@@ -346,6 +346,15 @@ Do not close this plan if:
 - runtime documentation references supervisor diagnostics that the API does not expose;
 - completed planning documents retain contradictory status/checklist state;
 - implementation adds a second retry mechanism or disproportionate verification infrastructure.
+
+## Implementation closure
+
+Implemented on 2026-08-01. Publication receipts now create explicit runtime
+leases carried by selected terminal jobs. Durable and runtime convergence facts
+are separate, runtime cleanup resumes per component, retry execution enforces
+the absolute age deadline, capacity rejection is classified at the coordinator
+boundary, and the active supervisor snapshot is exposed as
+`finalization_supervisor` in `/api/stats/runtime`.
 
 ## Definition of done
 

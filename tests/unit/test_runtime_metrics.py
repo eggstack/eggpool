@@ -71,6 +71,7 @@ def _make_service(
     dispatch_overhead_recorder: Any | None = None,
     dispatch_span_recorder: Any | None = None,
     finalization_retry_queue: Any | None = None,
+    finalization_supervisor: Any | None = None,
 ) -> RuntimeMetricsService:
     if config is None:
         config = _build_config()
@@ -91,6 +92,7 @@ def _make_service(
         dispatch_overhead_recorder=dispatch_overhead_recorder,
         dispatch_span_recorder=dispatch_span_recorder,
         finalization_retry_queue=finalization_retry_queue,
+        finalization_supervisor=finalization_supervisor,
     )
 
 
@@ -207,6 +209,22 @@ async def test_snapshot_returns_all_top_level_keys(db: Database) -> None:
     assert set(snap1["memory"].keys()) == set(snap2["memory"].keys())
     assert set(snap1["db"].keys()) == set(snap2["db"].keys())
     assert set(snap1["routing_runtime"].keys()) == set(snap2["routing_runtime"].keys())
+
+
+@pytest.mark.asyncio
+async def test_snapshot_exposes_bounded_finalization_supervisor(
+    db: Database,
+) -> None:
+    supervisor = type(
+        "Supervisor",
+        (),
+        {"snapshot": lambda _self: {"active_count": 2, "retry_pending_count": 1}},
+    )()
+    snapshot = await _make_service(db, finalization_supervisor=supervisor).snapshot()
+    assert snapshot["finalization_supervisor"] == {
+        "active_count": 2,
+        "retry_pending_count": 1,
+    }
 
 
 # -- Server fields ---------------------------------------------------------

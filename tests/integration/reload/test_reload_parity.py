@@ -45,7 +45,7 @@ async def test_candidate_generation_has_required_services(
     assert active.account_backoff_repo is not None
     assert active.stats_service is not None
     assert active.supervisor is not None
-    assert active.finalization_retry_queue is not None
+    assert active.finalization_supervisor is not None
     assert active.routing_trace_guard is not None
 
 

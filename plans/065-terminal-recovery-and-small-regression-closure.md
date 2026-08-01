@@ -359,20 +359,25 @@ Keep commits small enough for review, but do not split each one-line correction 
 
 ## Plan acceptance criteria
 
-- [ ] Retry-age exhaustion removes the job from active ownership and releases operational references.
-- [ ] Retry diagnostics accurately distinguish initial attempts, failures, and timer-driven retries.
-- [ ] Finalization capacity rejects before returning a detached job.
-- [ ] Durable finalization reports actual request/attempt/reservation convergence facts.
-- [ ] Already-terminal durable state is success only when all required durable components are terminal.
-- [ ] Runtime cleanup remains separately tracked and idempotent.
-- [ ] The legacy finalization queue and drain task no longer participate in production ownership.
-- [ ] `RequestFinalizationSupervisor` is the only automatic in-process terminal retry owner.
-- [ ] Successful recovery leaves controller state, database lifecycle state, and admission flags coherently `READY`.
-- [ ] Failed or unresolved recovery remains coherently fail-closed.
-- [ ] Out-of-order quota observations are pruned against the newest observation timestamp.
-- [ ] Bare update restores current/latest version output without changing exact-version semantics.
-- [ ] No new migration, runtime dependency, durable queue, workflow framework, CI job, test matrix, soak gate, benchmark gate, or evidence format is introduced.
-- [ ] Focused regressions and the existing smoke suite pass.
+- [x] Retry-age exhaustion removes the job from active ownership and releases operational references.
+- [x] Retry diagnostics accurately distinguish initial attempts, failures, and timer-driven retries.
+- [x] Finalization capacity rejects before returning a detached job.
+- [x] Durable finalization reports actual request/attempt/reservation convergence facts.
+- [x] Already-terminal durable state is success only when all required durable components are terminal.
+- [x] Runtime cleanup remains separately tracked and idempotent.
+- [x] The legacy finalization queue and drain task no longer participate in production ownership.
+- [x] `RequestFinalizationSupervisor` is the only automatic in-process terminal retry owner.
+- [x] Successful recovery leaves controller state, database lifecycle state, and admission flags coherently `READY`.
+- [x] Failed or unresolved recovery remains coherently fail-closed.
+- [x] Out-of-order quota observations are pruned against the newest observation timestamp.
+- [x] Bare update restores current/latest version output without changing exact-version semantics.
+- [x] No new migration, runtime dependency, durable queue, workflow framework, CI job, test matrix, soak gate, benchmark gate, or evidence format is introduced.
+- [x] Focused regressions and the existing smoke suite pass.
+
+## Corrective follow-up
+
+Plan 066 completed the remaining runtime-ownership and supervisor-diagnostic
+corrections without changing Plan 065's historical implementation record.
 
 ## Rejection conditions
 

@@ -135,6 +135,19 @@ class AttemptRuntimeLease:
     released: bool = False
     _released_components: set[str] = field(default_factory=lambda: set[str]())
 
+    def component_complete(self, component: str) -> bool:
+        """Return whether a runtime component has converged."""
+        return component in self._released_components
+
+    def mark_component_complete(self, component: str) -> None:
+        """Record successful convergence of one runtime component."""
+        self._released_components.add(component)
+
+    @property
+    def completed_components(self) -> frozenset[str]:
+        """Return an immutable view of converged runtime components."""
+        return frozenset(self._released_components)
+
     async def release_once(
         self,
         *,
@@ -342,6 +355,7 @@ class RequestFinalizationJob:
         default_factory=list
     )
     _result: FinalizationResult = field(default_factory=FinalizationResult)
+    _durable_result: Any = field(default=None, repr=False)  # noqa: ANN401
 
     # Dependencies — set after construction
     _finalizer: RequestFinalizer | None = None
@@ -413,6 +427,32 @@ class RequestFinalizationJob:
         self.outcome = outcome
         if finalization_data is not None:
             self.finalization_data = finalization_data
+
+    def bind_runtime_lease(self, runtime_lease: AttemptRuntimeLease | None) -> None:
+        """Join duplicate registration only when ownership facts agree."""
+        if runtime_lease is None:
+            return
+        existing = self.runtime_lease
+        if existing is None:
+            self.runtime_lease = runtime_lease
+            return
+        fields = (
+            "account_name",
+            "estimated_tokens",
+            "estimated_microdollars",
+            "active_count_acquired",
+            "quota_reservation_acquired",
+            "health_probe_acquired",
+        )
+        if any(
+            getattr(existing, field) != getattr(runtime_lease, field)
+            for field in fields
+        ):
+            raise FinalizationInvariantError(
+                "incompatible runtime ownership for duplicate terminal submission",
+                step="bind_runtime_lease",
+                request_id=self.request_id,
+            )
 
     @property
     def failure_count(self) -> int:
@@ -538,12 +578,13 @@ class RequestFinalizationJob:
             return
 
         durable = await self._finalizer.finalize(self._selected, self.finalization_data)
+        self._durable_result = durable
         if not durable.durable_converged:
             self._result = FinalizationResult(
                 attempt_transitioned=durable.attempt_transitioned,
                 request_transitioned=durable.request_transitioned,
                 reservation_released=durable.reservation_transitioned,
-                quota_reservation_removed=durable.reservation_transitioned,
+                quota_reservation_removed=False,
                 durable_terminal=durable.request_terminal,
                 durable_transitioned=durable.request_transitioned,
                 reservation_converged=durable.reservation_terminal,
@@ -555,7 +596,7 @@ class RequestFinalizationJob:
             attempt_transitioned=durable.attempt_transitioned,
             request_transitioned=durable.request_transitioned,
             reservation_released=durable.reservation_transitioned,
-            quota_reservation_removed=durable.reservation_transitioned,
+            quota_reservation_removed=False,
             durable_terminal=durable.request_terminal,
             durable_transitioned=durable.request_transitioned,
             reservation_converged=durable.reservation_terminal,
@@ -568,31 +609,39 @@ class RequestFinalizationJob:
         if self.runtime_lease is None:
             self._result = replace(self._result, runtime_cleanup_complete=True)
             return
-        outcomes = await self.runtime_lease.release_once(
-            reason=self.outcome,
-            router=self._router,
-            quota_estimator=self._quota_estimator,
-            health_manager=self._health_manager,
-        )
-        self._release_outcomes.extend(outcomes)
-        for outcome in outcomes:
-            if not outcome.released:
-                logger.warning(
-                    "Runtime release failed: component=%s error=%s request_id=%s",
-                    outcome.component,
-                    outcome.error,
-                    self.identity.proxy_request_id,
+        if self._finalizer is None or self._selected is None:
+            self.runtime_lease.released = True
+        else:
+            durable = self._durable_result
+            if durable is None:
+                raise FinalizationInvariantError(
+                    "runtime convergence has no durable result",
+                    step="runtime_release",
+                    request_id=self.request_id,
                 )
-        if any(not outcome.released for outcome in outcomes):
-            self._result = replace(
-                self._result,
-                runtime_cleanup_complete=False,
-                retryable=True,
-                detail="runtime cleanup incomplete",
-            )
-            raise RuntimeError("runtime cleanup incomplete")
+            try:
+                await self._finalizer.apply_runtime_convergence(
+                    selected=self._selected,
+                    data=self.finalization_data,
+                    durable=durable,
+                    runtime_lease=self.runtime_lease,
+                )
+            except Exception:
+                self._result = replace(
+                    self._result,
+                    runtime_cleanup_complete=False,
+                    retryable=True,
+                    detail="runtime cleanup incomplete",
+                )
+                raise
+        components = self.runtime_lease.completed_components
         self._result = replace(
             self._result,
+            quota_reservation_removed="quota_reservation" in components,
+            active_count_decremented="active_count" in components,
+            health_released_or_recorded=(
+                "health_probe" in components or "health" in components
+            ),
             runtime_cleanup_complete=self.runtime_lease.released,
         )
 
@@ -770,6 +819,7 @@ class RequestFinalizationSupervisor:
         if existing is not None:
             try:
                 existing.bind_terminal(outcome, finalization_data)
+                existing.bind_runtime_lease(runtime_lease)
             except TerminalConflictError:
                 self._terminal_conflicts += 1
                 raise
@@ -847,9 +897,10 @@ class RequestFinalizationSupervisor:
             self._retry_backoff_cap_s,
             self._retry_backoff_base_s * (2 ** max(job.failure_count - 1, 0)),
         )
+        deadline = job.created_at + self._max_retry_age_s
         heapq.heappush(
             self._retry_heap,
-            (time.monotonic() + delay, self._retry_sequence, key),
+            (min(time.monotonic() + delay, deadline), self._retry_sequence, key),
         )
         if self._retry_wakeup is not None:
             self._retry_wakeup.set()
@@ -878,6 +929,10 @@ class RequestFinalizationSupervisor:
             heapq.heappop(self._retry_heap)
             job = self._active_jobs.get(key)
             if job is None or job.is_complete:
+                continue
+            if time.monotonic() >= job.created_at + self._max_retry_age_s:
+                job.mark_retry_exhausted()
+                self._retire_exhausted_job(job)
                 continue
             try:
                 job.increment_retry_count()

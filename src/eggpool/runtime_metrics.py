@@ -123,6 +123,7 @@ class RuntimeMetricsService:
         dashboard_telemetry: Any | None = None,  # noqa: ANN401
         stream_diagnostics: Any | None = None,  # noqa: ANN401
         finalization_retry_queue: Any | None = None,  # noqa: ANN401
+        finalization_supervisor: Any | None = None,  # noqa: ANN401
         routing_trace_guard: Any | None = None,  # noqa: ANN401
         runtime_manager: Any | None = None,  # noqa: ANN401
         reload_manager: Any | None = None,  # noqa: ANN401
@@ -151,6 +152,7 @@ class RuntimeMetricsService:
         self._model_info = model_info
         self._dashboard_telemetry = dashboard_telemetry
         self._stream_diagnostics = stream_diagnostics
+        self._finalization_supervisor = finalization_supervisor
         self._routing_trace_guard = routing_trace_guard
         self._runtime_manager = runtime_manager
         self._reload_manager = reload_manager
@@ -200,6 +202,9 @@ class RuntimeMetricsService:
         # guessing from process logs.  Tolerates a missing manager
         # (older builds, partial app.state) by returning ``None``.
         result["runtime_manager"] = self._snapshot_runtime_manager(probe_errors)
+        result["finalization_supervisor"] = self._snapshot_finalization_supervisor(
+            probe_errors
+        )
 
         # Phase 6 fine-grained dispatch spans (Phase 1 hot-path optimization).
         # Per-span latency (avg / p50 / p95 / p99) for the named proxy
@@ -267,6 +272,33 @@ class RuntimeMetricsService:
         result["readiness_probe"] = await self._snapshot_readiness_probe(probe_errors)
 
         return result
+
+    def _snapshot_finalization_supervisor(
+        self, probe_errors: list[str]
+    ) -> dict[str, Any] | None:
+        """Return the active generation's bounded finalization snapshot."""
+        supervisor = self._finalization_supervisor
+        if supervisor is None and self._runtime_manager is not None:
+            try:
+                generation = self._runtime_manager.active_snapshot()
+                supervisor = getattr(generation, "finalization_supervisor", None)
+            except Exception as exc:
+                _append_probe_error(
+                    probe_errors,
+                    f"finalization supervisor probe failed: {type(exc).__name__}",
+                )
+                return None
+        if supervisor is None:
+            return None
+        try:
+            snapshot = supervisor.snapshot()
+        except Exception as exc:
+            _append_probe_error(
+                probe_errors,
+                f"finalization supervisor snapshot failed: {type(exc).__name__}",
+            )
+            return None
+        return snapshot if isinstance(snapshot, dict) else None  # type: ignore[return-value]
 
     # -- Server / process ---------------------------------------------------
 

@@ -2,7 +2,7 @@
 
 Date: 2026-07-31
 Last reviewed: 2026-08-01
-Status: corrective closure pending
+Status: completed
 Plan: 058
 Planning baseline: `daef79cd98f23b11cc8d5a254c28abf64df1791a`
 Implementation review baseline: `d504005e46625bb5d8df72f5306d6eafb11d43b8`
@@ -83,7 +83,9 @@ A final bounded runtime-ownership gap remains:
 6. operator documentation references a finalization-supervisor runtime snapshot that is not exposed;
 7. roadmap and Plan 065 status/checklist metadata require final reconciliation.
 
-Plan 066 is the sole corrective closure plan for these residuals. It must extend the existing lease and supervisor rather than add another queue, lifecycle framework, migration, or verification system.
+Plan 066 was the sole corrective closure plan for these residuals. It extended
+the existing lease and supervisor without adding another queue, lifecycle
+framework, migration, or verification system.
 
 ## Governing constraints
 
@@ -193,12 +195,12 @@ The implementation plans define focused cases, but the aggregate rules are:
 - [x] Request and attempt finalization reconcile against the correct durable rows and status vocabulary.
 - [x] Durable finalization reports actual request, attempt, and reservation convergence facts.
 - [x] The finalization supervisor schedules bounded retries, retires exhausted work, and rejects capacity before returning detached work.
-- [ ] Every production selected terminal job carries explicit runtime ownership.
-- [ ] Partial post-commit runtime failure resumes without replaying durable or completed runtime components.
-- [ ] Durable reservation release is distinguished from live quota/router/health convergence in results.
-- [ ] No timer-driven retry begins after the configured absolute retry age.
-- [ ] Coordinator capacity rejection has explicit pre-handoff and post-handoff semantics.
-- [ ] Runtime metrics expose the active finalization supervisor's bounded snapshot.
+- [x] Every production selected terminal job carries explicit runtime ownership.
+- [x] Partial post-commit runtime failure resumes without replaying durable or completed runtime components.
+- [x] Durable reservation release is distinguished from live quota/router/health convergence in results.
+- [x] No timer-driven retry begins after the configured absolute retry age.
+- [x] Coordinator capacity rejection has explicit pre-handoff and post-handoff semantics.
+- [x] Runtime metrics expose the active finalization supervisor's bounded snapshot.
 - [x] The legacy finalization queue and drain task no longer participate in production ownership.
 - [x] Successful recovery leaves controller state, database lifecycle state, and admission flags coherently `READY`.
 - [x] Stale cleanup decrements the exact number of active requests and releases zero-cost request/token reservations.

@@ -184,8 +184,10 @@ from another loop fail immediately.
 The supervisor is the single process-owned terminal retry owner. It retains
 jobs by `(proxy_request_id, attempt_id)`, reports structured convergence facts,
 and schedules bounded retryable failures through one timer using configured
-backoff and maximum retry age. Capacity rejects before ownership transfer;
-there is no detached terminal task.
+backoff and an absolute execution-time maximum retry age. Each selected job
+carries an `AttemptRuntimeLease` made from publication facts, and runtime
+cleanup resumes component-by-component after durable convergence. Capacity
+rejects before ownership transfer; there is no detached terminal task.
 
 `request/finalization_queue.py` remains only as a one-shot compatibility adapter
 for older integrations. It does not own retry counts, backoff, or drop policy.

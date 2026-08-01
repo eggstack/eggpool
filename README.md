@@ -27,7 +27,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Amortized quota-window maintenance: ordered observations expire incrementally, while rare out-of-order timestamps remain correct through a bounded slow path
 - Bounded observability: request-coherent span sampling (5% default), bounded rolling-window metrics, and constant-bounded snapshot cost regardless of uptime
 - Error isolation: provider-specific validation errors (e.g. unsupported MiniMax-M3 thinking through OpenCode Go) are contained to a single request — no account/model/circuit/quarantine penalties, no restart or database deletion required
-- Process-owned finalization: every selected request-terminal outcome (completion, cancellation, capability rejection, upstream client error, or stream failure) is reconciled by one bounded, attempt-keyed retained job; the supervisor owns capped timer-driven retries and exposes durable-terminal, reservation, and runtime-cleanup convergence separately
+- Process-owned finalization: every selected request-terminal outcome (completion, cancellation, capability rejection, upstream client error, or stream failure) is reconciled by one bounded, attempt-keyed retained job with explicit runtime ownership; the supervisor owns capped timer-driven retries, enforces an absolute retry-age deadline, and exposes durable-terminal, reservation, and runtime-cleanup convergence separately
 - Bounded stale-request recovery: exact per-request active-count ownership is released, including zero-cost reservations that still carry request or token pressure; underflow is visible and clamped safely
 - Database recovery: staged, fail-closed connection recovery with transaction-owned ambiguity metadata, retained unresolved work, and single-flight reconciliation
 - Bounded model quarantine: TTL-based suspected/quarantined state with corroboration thresholds and automatic recovery
@@ -194,7 +194,7 @@ The stack covers provider cache counters, request segmentation, native cache pre
 | `GET` | `/api/stats/synthetic-cache-observability` | Synthetic cache candidate / applied / native-preserved counts |
 | `GET` | `/api/stats/compression-tuning` | Threshold tuning recommendations |
 | `GET` | `/api/stats/request-shaping` | Operator-facing request-shaping summary |
-| `GET` | `/api/stats/runtime` | Runtime metrics, routing guardrails, background task summaries, stream diagnostics |
+| `GET` | `/api/stats/runtime` | Runtime metrics, routing guardrails, background task summaries, stream diagnostics, and the bounded `finalization_supervisor` snapshot |
 | `GET` | `/api/stats/summary` | Aggregate request stats (counts, tokens, cost, latency) |
 | `GET` | `/api/stats/thinking` | Thinking/reasoning decision counter snapshot |
 | `GET` | `/api/stats/update` | PyPI update check status |

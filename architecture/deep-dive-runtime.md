@@ -67,6 +67,10 @@ Both use monotonic/performance clocks. Metrics additive: `local_pre_upstream` in
 - Selection claim diagnostics
 - Dispatch writer diagnostics
 - Model info health snapshot
+- `finalization_supervisor`: the active generation's bounded retained-terminal
+  job snapshot, including active/retry-pending/failed counts, saturation and
+  registration counters, and retry capacity/age limits. It is `null` during
+  lightweight or partial startup when no supervisor is available.
 
 ### `runtime_paths.py` — Path Resolution (stdlib-only)
 

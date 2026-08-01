@@ -9,7 +9,7 @@ import logging
 import sys
 import time
 import typing
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, cast
 
@@ -33,6 +33,7 @@ from eggpool.db.repositories import (
     UsageWindowRepository,
 )
 from eggpool.errors import (
+    AcceptedFinalizationInvariantError,
     AggregatorError,
     AuthenticationError,
     CapabilityError,
@@ -87,6 +88,10 @@ from eggpool.request.attempt_finalizer import (
     AttemptFinalizer,
 )
 from eggpool.request.body import encode_json_body
+from eggpool.request.finalization_job import (
+    AttemptRuntimeLease,
+    FinalizationCapacityError,
+)
 from eggpool.request.finalizer import (
     FinalizationData,
     FinalizationOutcome,
@@ -584,6 +589,7 @@ class SelectedAttempt:
     requires_transcode: bool = False
     protocol: str = "openai"
     streamed: bool = False
+    runtime_lease: AttemptRuntimeLease | None = field(default=None, repr=False)
 
 
 @dataclass(slots=True)
@@ -607,6 +613,7 @@ class RuntimePublicationReceipt:
 
     active_count_added: bool = False
     quota_reservation_added: bool = False
+    health_probe_acquired: bool = False
 
 
 @dataclass(slots=True)
@@ -866,8 +873,18 @@ class RequestCoordinator:
         not install a supervisor.
         """
         supervisor = self._finalization_supervisor
+        runtime_lease = selected.runtime_lease or AttemptRuntimeLease(
+            account_name=selected.account_name,
+        )
         if supervisor is None:
-            await self._finalizer.finalize(selected, data)
+            selected = replace(selected, runtime_lease=runtime_lease)
+            durable = await self._finalizer.finalize(selected, data)
+            await self._finalizer.apply_runtime_convergence(
+                selected=selected,
+                data=data,
+                durable=durable,
+                runtime_lease=runtime_lease,
+            )
             return
 
         from eggpool.request.finalization_job import FinalizationIdentity
@@ -885,18 +902,36 @@ class RequestCoordinator:
             upstream_protocol=context.upstream_protocol,
             attempt_number=selected.attempt_number,
         )
-        job = supervisor.register_or_get(
-            identity,
-            data.outcome.value,
-            finalization_data=data,
-        )
+        try:
+            job = supervisor.register_or_get(
+                identity,
+                data.outcome.value,
+                finalization_data=data,
+                runtime_lease=runtime_lease,
+            )
+        except FinalizationCapacityError as exc:
+            logger.error(
+                "Finalization supervisor capacity rejected terminal ownership: "
+                "request_id=%s attempt_id=%s outcome=%s bytes_emitted=%s",
+                context.request_id,
+                selected.attempt_id,
+                data.outcome.value,
+                data.bytes_emitted,
+            )
+            if data.bytes_emitted <= 0:
+                raise AcceptedFinalizationInvariantError(
+                    "terminal finalization capacity exhausted before handoff",
+                    step="finalization_capacity",
+                    request_id=context.request_id,
+                ) from exc
+            return
         job.set_dependencies(
             finalizer=self._finalizer,
             selected=selected,
             effects_applier=self._effects_applier,
-            router=None,
-            quota_estimator=None,
-            health_manager=None,
+            router=self._router,
+            quota_estimator=self._quota_estimator,
+            health_manager=self._health_manager,
             stream_diagnostics=self._stream_diagnostics,
         )
         await job.run()
@@ -1988,6 +2023,7 @@ class RequestCoordinator:
                 tokens=estimated_tokens,
             )
             receipt.quota_reservation_added = True
+        receipt.health_probe_acquired = self._health_manager is not None
         self._selection_claim_diagnostics.record_claim_published()
 
     async def _compensate_or_rollback_claim(
@@ -2832,6 +2868,20 @@ class RequestCoordinator:
                     receipt=publication_receipt,
                 )
             raise
+
+        runtime_lease = AttemptRuntimeLease(
+            account_name=claim_identity.account_name,
+            estimated_tokens=estimated_tokens,
+            estimated_microdollars=claim_identity.estimated_microdollars,
+            active_count_acquired=publication_receipt.active_count_added,
+            quota_reservation_acquired=publication_receipt.quota_reservation_added,
+            health_probe_acquired=publication_receipt.health_probe_acquired,
+        )
+        post_commit_selected = replace(
+            post_commit_selected,
+            runtime_lease=runtime_lease,
+        )
+        context.client_metadata["_post_commit_selected"] = post_commit_selected
 
         # Record broad Phase 5 selection-lock spans as the combined
         # wait/held timing of the two narrow acquisitions.  The

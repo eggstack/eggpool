@@ -28,6 +28,7 @@ from eggpool.failure import (
 )
 from eggpool.failure.classifier import classify_failure_effects
 from eggpool.health.health_manager import classify_failure_category
+from eggpool.request.finalization_job import AttemptRuntimeLease
 from eggpool.request.terminal_status import REQUEST_TERMINAL_STATUSES
 from eggpool.security.redaction import (
     MAX_REDACTED_ERROR_DETAIL_CHARS,
@@ -242,6 +243,7 @@ class DurableFinalizationResult:
     attempt_terminal: bool
     reservation_terminal: bool
     reservation_transitioned: bool
+    cost_microdollars: int = 0
     retryable: bool = False
     detail: str = ""
 
@@ -798,101 +800,24 @@ class RequestFinalizer:
             except Exception:
                 logger.exception("Failed to record account event")
 
-        # Post-commit: update in-memory state only if we performed the transition
-        if transitioned:
-            if reservation_released:
-                if self._quota_estimator is not None:
-                    # Reverse the in-memory reservation: cost (audit),
-                    # one in-flight request, and the projected token
-                    # volume for the request.
-                    await self._quota_estimator.remove_reservation(
-                        selected.account_name,
-                        selected.estimated_microdollars,
-                        requests=1,
-                        tokens=selected.estimated_tokens,
-                    )
-
-                if self._router is not None:
-                    await self._router.decrement_active_request_count(
-                        selected.account_name
-                    )
-
-            # 2. Add final cost to live quota state whenever the request
-            #    transitioned. This is independent of the reservation path:
-            #    even when the attempt finalizer already released the
-            #    reservation, the request-level cost must still be recorded
-            #    so that routing decisions observe it immediately.
-            if self._quota_estimator is not None and cost_microdollars > 0:
-                total_tokens = (
-                    data.input_tokens
-                    + data.output_tokens
-                    + data.cache_read_tokens
-                    + data.cache_write_tokens
-                )
-                # record_usage + persisted snapshot increment must be
-                # atomic so concurrent finalizers cannot interleave.
-                await self._quota_estimator.record_usage_and_snapshot(
-                    selected.account_name,
-                    tokens=total_tokens,
+        # Lightweight direct callers predate the retained job.  Keep their
+        # synchronous compatibility behaviour, while production callers pass
+        # an explicit runtime lease and converge through the retained job.
+        if getattr(selected, "runtime_lease", None) is None:
+            await self.apply_runtime_convergence(
+                selected=selected,
+                data=data,
+                durable=DurableFinalizationResult(
+                    request_terminal=request_terminal,
+                    request_transitioned=transitioned,
+                    attempt_transitioned=attempt_transitioned,
+                    attempt_terminal=attempt_terminal,
+                    reservation_terminal=reservation_terminal,
+                    reservation_transitioned=reservation_released,
                     cost_microdollars=cost_microdollars,
-                    model_id=_get_model_id(selected),
-                )
-
-            # 4. Update health state. health_already_applied is honored to
-            #    keep health transitions idempotent across retried attempts.
-            if self._health_manager is not None and not data.health_already_applied:
-                mid = _get_model_id(selected)
-                if data.outcome == FinalizationOutcome.COMPLETED:
-                    self._health_manager.record_success(selected.account_name, mid)
-                    self._clear_quarantine_on_success(selected, mid)
-                elif data.outcome in (
-                    FinalizationOutcome.UPSTREAM_ERROR,
-                    FinalizationOutcome.TIMEOUT,
-                    FinalizationOutcome.INTERRUPTED,
-                ):
-                    applied = self._apply_finalizer_failure_effects(
-                        selected=selected,
-                        mid=mid,
-                        error_class=data.error_class,
-                        status_code=data.status_code,
-                    )
-                    if not applied:
-                        category = classify_failure_category(
-                            data.error_class, data.status_code
-                        )
-                        self._health_manager.record_failure(
-                            selected.account_name,
-                            model_id=mid,
-                            reason=category.value,
-                        )
-                elif data.outcome in (
-                    FinalizationOutcome.CLIENT_CANCELLED,
-                    FinalizationOutcome.CLIENT_ERROR,
-                    FinalizationOutcome.MIDSTREAM_ERROR,
-                ):
-                    # These outcomes don't penalize health but must
-                    # release any consumed half-open probe slot.
-                    self._health_manager.release_request(selected.account_name)
-
-            # 5. Update runtime state. Request-level success and terminal
-            #    state must always update the runtime view, independent of
-            #    the reservation path.  health_already_applied also
-            #    guards runtime state to prevent duplicate failure records
-            #    when the coordinator already applied the health transition.
-            if self._registry is not None and not data.health_already_applied:
-                state = self._registry.get_state(selected.account_name)
-                if state is not None:
-                    if data.outcome == FinalizationOutcome.COMPLETED:
-                        state.record_success()
-                    elif data.outcome in (
-                        FinalizationOutcome.UPSTREAM_ERROR,
-                        FinalizationOutcome.TIMEOUT,
-                        FinalizationOutcome.INTERRUPTED,
-                    ):
-                        category = classify_failure_category(
-                            data.error_class, data.status_code
-                        )
-                        state.record_failure(category.value)
+                ),
+                runtime_lease=None,
+            )
 
         # 6. Emit analytics event to the metrics coalescer (non-blocking).
         #    Only emit when this call performed the terminal transition to
@@ -935,6 +860,7 @@ class RequestFinalizer:
             attempt_terminal=attempt_terminal,
             reservation_terminal=reservation_terminal,
             reservation_transitioned=reservation_released,
+            cost_microdollars=cost_microdollars,
             retryable=not (
                 request_terminal and attempt_terminal and reservation_terminal
             ),
@@ -944,6 +870,167 @@ class RequestFinalizer:
                 else ""
             ),
         )
+
+    async def apply_runtime_convergence(
+        self,
+        *,
+        selected: Any,
+        data: FinalizationData,
+        durable: DurableFinalizationResult,
+        runtime_lease: AttemptRuntimeLease | None,
+    ) -> None:
+        """Converge process-local ownership after durable finalization.
+
+        The retained finalization job calls this method while it remains the
+        owner of ``runtime_lease``.  Each marker is written only after its
+        operation succeeds, so a later retry resumes at the failed component.
+        ``runtime_lease=None`` is the compatibility path for older direct
+        finalizer callers and uses the same implementation with explicit
+        facts derived from the durable transition.
+        """
+        if runtime_lease is None:
+            runtime_lease = AttemptRuntimeLease(
+                account_name=selected.account_name,
+                estimated_tokens=int(getattr(selected, "estimated_tokens", 0) or 0),
+                estimated_microdollars=int(
+                    getattr(selected, "estimated_microdollars", 0) or 0
+                ),
+                active_count_acquired=(
+                    durable.request_transitioned and self._router is not None
+                ),
+                quota_reservation_acquired=(
+                    durable.reservation_transitioned
+                    and self._quota_estimator is not None
+                ),
+                health_probe_acquired=(
+                    durable.request_transitioned and self._health_manager is not None
+                ),
+            )
+
+        release_health = (
+            data.outcome
+            in (
+                FinalizationOutcome.CLIENT_CANCELLED,
+                FinalizationOutcome.CLIENT_ERROR,
+                FinalizationOutcome.MIDSTREAM_ERROR,
+            )
+            and not data.health_already_applied
+        )
+        outcomes = await runtime_lease.release_once(
+            reason=data.outcome.value,
+            router=self._router,
+            quota_estimator=self._quota_estimator,
+            health_manager=self._health_manager if release_health else None,
+        )
+        if any(not outcome.released for outcome in outcomes):
+            raise RuntimeError("runtime release incomplete")
+
+        if (
+            durable.request_transitioned
+            and durable.cost_microdollars > 0
+            and not runtime_lease.component_complete("usage")
+        ):
+            if self._quota_estimator is not None:
+                total_tokens = (
+                    data.input_tokens
+                    + data.output_tokens
+                    + data.cache_read_tokens
+                    + data.cache_write_tokens
+                )
+                await self._quota_estimator.record_usage_and_snapshot(
+                    selected.account_name,
+                    tokens=total_tokens,
+                    cost_microdollars=durable.cost_microdollars,
+                    model_id=_get_model_id(selected),
+                )
+            runtime_lease.mark_component_complete("usage")
+        elif durable.request_transitioned:
+            runtime_lease.mark_component_complete("usage")
+
+        if (
+            durable.request_transitioned
+            and runtime_lease.health_probe_acquired
+            and not data.health_already_applied
+            and not runtime_lease.component_complete("health")
+        ):
+            if self._health_manager is not None:
+                mid = _get_model_id(selected)
+                if data.outcome == FinalizationOutcome.COMPLETED:
+                    self._health_manager.record_success(selected.account_name, mid)
+                    self._clear_quarantine_on_success(selected, mid)
+                elif data.outcome in (
+                    FinalizationOutcome.UPSTREAM_ERROR,
+                    FinalizationOutcome.TIMEOUT,
+                    FinalizationOutcome.INTERRUPTED,
+                ):
+                    applied = self._apply_finalizer_failure_effects(
+                        selected=selected,
+                        mid=mid,
+                        error_class=data.error_class,
+                        status_code=data.status_code,
+                    )
+                    if not applied:
+                        category = classify_failure_category(
+                            data.error_class, data.status_code
+                        )
+                        self._health_manager.record_failure(
+                            selected.account_name,
+                            model_id=mid,
+                            reason=category.value,
+                        )
+            runtime_lease.mark_component_complete("health")
+        elif durable.request_transitioned:
+            runtime_lease.mark_component_complete("health")
+
+        if (
+            durable.request_transitioned
+            and not data.health_already_applied
+            and not runtime_lease.component_complete("account_runtime")
+        ):
+            if self._registry is not None:
+                state = self._registry.get_state(selected.account_name)
+                if state is not None:
+                    if data.outcome == FinalizationOutcome.COMPLETED:
+                        state.record_success()
+                    elif data.outcome in (
+                        FinalizationOutcome.UPSTREAM_ERROR,
+                        FinalizationOutcome.TIMEOUT,
+                        FinalizationOutcome.INTERRUPTED,
+                    ):
+                        category = classify_failure_category(
+                            data.error_class, data.status_code
+                        )
+                        state.record_failure(category.value)
+            runtime_lease.mark_component_complete("account_runtime")
+        elif durable.request_transitioned:
+            runtime_lease.mark_component_complete("account_runtime")
+
+        required = {
+            component
+            for component, acquired, dependency in (
+                ("active_count", runtime_lease.active_count_acquired, self._router),
+                (
+                    "quota_reservation",
+                    runtime_lease.quota_reservation_acquired,
+                    self._quota_estimator,
+                ),
+                (
+                    "health_probe",
+                    runtime_lease.health_probe_acquired,
+                    self._health_manager if release_health else None,
+                ),
+            )
+            if acquired and dependency is not None
+        }
+        runtime_lease.released = required.issubset(
+            runtime_lease.completed_components
+        ) and all(
+            marker in runtime_lease.completed_components
+            for marker in ("usage", "health", "account_runtime")
+            if durable.request_transitioned
+        )
+        if not runtime_lease.released:
+            raise RuntimeError("runtime cleanup incomplete")
 
     @staticmethod
     def _outcome_to_status(outcome: FinalizationOutcome) -> str:
