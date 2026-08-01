@@ -1,10 +1,12 @@
 # Plan 066 — Terminal Runtime Ownership and Supervisor Closure
 
 Date: 2026-08-01
-Status: completed
+Status: corrective follow-up pending
 Parent roadmap: `plans/058-durable-convergence-exact-update-sbc-hotpath-roadmap.md`
 Corrective predecessor: `plans/065-terminal-recovery-and-small-regression-closure.md`
+Corrective successor: `plans/067-explicit-handoff-and-already-terminal-runtime-closure.md`
 Planning baseline: `d504005e46625bb5d8df72f5306d6eafb11d43b8`
+Implementation commit: `052b81ed38598c2c07cfa283d0a1968ee2e5519c`
 
 ## Purpose
 
@@ -86,7 +88,7 @@ Planning and operator documentation:
 - a workflow engine, saga abstraction, or generic cleanup framework;
 - new request, attempt, or reservation tables or migrations;
 - unbounded retries or retry persistence across process restart;
-- changing upstream request retry policy;
+- changing upstream retry policy;
 - broad health-manager or quota-estimator redesign;
 - adding a new runtime metrics subsystem;
 - new CI jobs, matrices, coverage thresholds, soak tests, timing gates, benchmark gates, or evidence bundles;
@@ -317,20 +319,38 @@ Prefer one or two coherent runtime commits plus one documentation closure commit
 ## Plan acceptance criteria
 
 - [x] Every production selected terminal job carries explicit runtime ownership derived from publication facts.
-- [x] `AttemptRuntimeLease` owns retryable quota, router, usage, health/probe, and account-runtime convergence required by the terminal path.
-- [x] A partial runtime failure resumes at the unfinished component without replaying durable finalization or completed runtime components.
+- [ ] `AttemptRuntimeLease` owns every required runtime outcome independently of whether the final durable call transitioned the request.
+- [x] A partial runtime failure from a transitioning durable result resumes at the unfinished component without replaying durable finalization or completed runtime components.
 - [x] Durable reservation release is not reported as live quota reservation removal.
-- [x] Runtime result fields reflect actual component outcomes.
+- [ ] Runtime result fields remain truthful when durable state is already terminal but lease-owned outcome work is incomplete.
 - [x] Direct/no-supervisor finalization uses the same runtime-convergence implementation.
 - [x] No timer-driven retry begins after the configured absolute retry age.
 - [x] Retry exhaustion still frees capacity and releases operational references.
-- [x] Coordinator capacity rejection is explicitly handled before and after downstream handoff.
+- [ ] Coordinator capacity rejection uses an explicit downstream-handoff fact rather than payload byte count.
 - [x] Capacity rejection creates no detached work, second queue, or provider penalty.
 - [x] Runtime metrics expose the existing supervisor's bounded snapshot.
 - [x] Operator documentation matches the emitted runtime field.
-- [x] Plans 058, 065, and 066 have coherent status and checked acceptance metadata.
-- [x] Focused regressions and the existing smoke suite pass.
+- [ ] Plans 058, 065, 066, and 067 have coherent status and checked acceptance metadata.
+- [ ] The missing handoff, already-terminal, component-resume, and result-truthfulness regressions pass together with the existing smoke suite.
 - [x] No migration, runtime dependency, durable queue, workflow framework, CI job, test matrix, soak gate, benchmark gate, or evidence format is introduced.
+
+## Post-implementation review of `052b81ed`
+
+The implementation correctly landed the main Plan 066 architecture:
+
+- publication receipts create explicit `AttemptRuntimeLease` ownership;
+- retained jobs resume partial cleanup from `RUNTIME_RELEASE_PENDING`;
+- durable and runtime result fields are separated;
+- retry execution rechecks the absolute age deadline;
+- supervisor diagnostics are exposed through `/api/stats/runtime`;
+- no new queue, migration, CI workflow, or lifecycle framework was introduced.
+
+A subsequent review found two narrower semantic defects:
+
+1. `_finalize_terminal()` classifies response handoff from `bytes_emitted`, which misclassifies non-streaming non-empty responses and started zero-byte streams; and
+2. usage, health, and account-runtime obligations remain gated by `durable.request_transitioned`, allowing an already-terminal durable result to suppress outstanding lease-owned outcome work.
+
+The focused Plan 066 acceptance tests for those paths were also not added. Plan 067 is the sole corrective follow-up. It must preserve the implemented lease, scheduler, metrics, and durable architecture while correcting these two facts.
 
 ## Rejection conditions
 
@@ -343,19 +363,16 @@ Do not close this plan if:
 - quota/router/usage/health effects can be applied twice after partial failure;
 - a retry begins after the absolute retry deadline;
 - capacity rejection escapes the canonical coordinator boundary without explicit semantics;
+- response handoff is inferred from `bytes_emitted`;
+- already-terminal durable state suppresses an outstanding lease-owned usage, health, or account-runtime obligation;
 - runtime documentation references supervisor diagnostics that the API does not expose;
 - completed planning documents retain contradictory status/checklist state;
 - implementation adds a second retry mechanism or disproportionate verification infrastructure.
 
 ## Implementation closure
 
-Implemented on 2026-08-01. Publication receipts now create explicit runtime
-leases carried by selected terminal jobs. Durable and runtime convergence facts
-are separate, runtime cleanup resumes per component, retry execution enforces
-the absolute age deadline, capacity rejection is classified at the coordinator
-boundary, and the active supervisor snapshot is exposed as
-`finalization_supervisor` in `/api/stats/runtime`.
+Implementation commit `052b81ed38598c2c07cfa283d0a1968ee2e5519c` completed the principal lease, retry deadline, and diagnostic work. Full closure is deferred to Plan 067 for explicit response handoff and already-terminal runtime obligation semantics.
 
 ## Definition of done
 
-This corrective pass is complete when the existing retained finalization job carries and resumes all required runtime ownership after durable convergence, each runtime result field is truthful, retry execution respects the absolute age limit, saturation has explicit fail-closed coordinator semantics, operators can inspect the supervisor through the existing runtime endpoint, focused regressions and the smoke gate pass, and the parent roadmap can be closed without introducing new infrastructure.
+This corrective pass is complete when the existing retained finalization job carries and resumes all required runtime ownership after durable convergence, each runtime result field is truthful, retry execution respects the absolute age limit, saturation has explicit fail-closed coordinator semantics based on actual response handoff, operators can inspect the supervisor through the existing runtime endpoint, focused regressions and the smoke gate pass, and the parent roadmap can be closed without introducing new infrastructure.
