@@ -191,6 +191,8 @@ rejects before ownership transfer; there is no detached terminal task.
 `FinalizationResult` is refreshed from the lease after both successful and
 failed convergence attempts, so completed active-count, quota, health, or
 probe components remain visible while an outstanding component is retried.
+When the lease is released, transient runtime-retry metadata is cleared so the
+completed result is non-retryable and has no stale cleanup detail.
 
 `request/finalization_queue.py` remains only as a one-shot compatibility adapter
 for older integrations. It does not own retry counts, backoff, or drop policy.

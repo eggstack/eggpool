@@ -4,6 +4,7 @@ Date: 2026-08-03
 Status: completed
 Parent roadmap: `plans/058-durable-convergence-exact-update-sbc-hotpath-roadmap.md`
 Corrective predecessor: `plans/067-explicit-handoff-and-already-terminal-runtime-closure.md`
+Corrective successor: `plans/069-final-runtime-result-and-roadmap-closure.md`
 Planning baseline: `9e53ecd125f69cf822cd9376662279c1ad7a5036`
 
 ## Purpose
@@ -18,6 +19,12 @@ Plan 067 correctly fixed the operational defects:
 - component markers prevent completed work from being replayed on retry.
 
 The remaining defect is narrower. `RequestFinalizationJob._execute_runtime_release()` projects lease component markers into `FinalizationResult` only after `apply_runtime_convergence()` returns successfully. If several components complete and a later component raises, the lease is truthful but the structured result remains stale until the retry fully completes.
+
+Post-review found one final projection residual: after that retry converges, the
+result could retain the transient `retryable` flag and `runtime cleanup
+incomplete` detail. Plan 069 is the narrow corrective successor for that result
+normalization and the remaining roadmap registry closure; the partial-progress
+work in this plan remains complete.
 
 This polish pass must keep `FinalizationResult` synchronized with the lease on both success and failure paths and replace the weak mocked retry regression with a real middle-component failure that proves partial progress, truthful reporting, and non-replay.
 
@@ -235,6 +242,7 @@ This should be one runtime/test commit plus one optional documentation closure c
 - [x] Retry completes only the outstanding runtime components and produces truthful final state.
 - [x] Focused tests prove partial and final result truthfulness.
 - [x] Plans 058, 066, 067, and 068 have coherent closure metadata.
+- [x] Plan 069 is identified as the narrow corrective successor for final result metadata.
 - [x] Focused checks and the existing smoke gate pass.
 - [x] No queue, migration, dependency, result hierarchy, lifecycle framework, CI expansion, fault matrix, soak gate, benchmark gate, or evidence system is introduced.
 
@@ -253,7 +261,7 @@ Do not close this plan if:
 
 ## Definition of done
 
-This polish pass is complete when a retry-pending finalization result truthfully exposes every runtime component that has already converged, remains incomplete for outstanding work, resumes the real component loop without replay, becomes complete after the remaining components succeed, passes the two focused regression shapes and existing smoke gate, and closes Plans 058, 066, 067, and 068 without adding infrastructure.
+This polish pass is complete when a retry-pending finalization result truthfully exposes every runtime component that has already converged, remains incomplete for outstanding work, resumes the real component loop without replay, becomes complete after the remaining components succeed, passes the two focused regression shapes and existing smoke gate, and closes Plans 058, 066, 067, 068, and its narrow corrective successor Plan 069 without adding infrastructure.
 
 ## Implementation closure
 
@@ -288,6 +296,12 @@ rtk uv run pyright src/ scripts/
 rtk uv run pytest tests/smoke/ -q --tb=short --maxfail=1
 14 passed
 ```
+
+Post-review follow-up verification also passed the final-state assertions in
+`tests/unit/test_request_finalization_state_machine.py`: successful lease
+convergence now clears transient retry metadata while preserving durable and
+reservation facts. Plan 069 records the exact closure commands and final
+roadmap registration.
 
 An unfiltered `rtk uv run pytest -q --tb=short --maxfail=1` run was also
 started, but was interrupted after several minutes while blocked in the

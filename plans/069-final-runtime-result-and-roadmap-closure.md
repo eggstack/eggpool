@@ -1,7 +1,7 @@
 # Plan 069 — Final Runtime Result and Roadmap Closure
 
 Date: 2026-08-04
-Status: ready for implementation
+Status: completed
 Parent roadmap: `plans/058-durable-convergence-exact-update-sbc-hotpath-roadmap.md`
 Corrective predecessor: `plans/068-partial-runtime-result-truthfulness-polish.md`
 Planning baseline: `1d3b5fe46c339727881a6b3b7a39462417ed48ea`
@@ -252,18 +252,18 @@ Do not require an unfiltered full-suite run for this patch. Do not add CI or ret
 
 ## Plan acceptance criteria
 
-- [ ] A released runtime lease produces `runtime_cleanup_complete=True` and `retryable=False`.
-- [ ] Successful retry removes stale `runtime cleanup incomplete` detail.
-- [ ] Partial failure continues to expose completed runtime components while remaining retryable and incomplete.
-- [ ] Durable terminal and reservation fields remain intact across failed and successful runtime projections.
-- [ ] The existing real component-resume test asserts coherent partial and final result states.
-- [ ] Retry still does not replay durable finalization or completed active/quota/usage components.
-- [ ] Roadmap 058 registers Plans 068 and 069 in its implementation-plan list.
-- [ ] Roadmap 058’s dependency sequence extends through Plan 069.
-- [ ] Plan 068 identifies Plan 069 as its narrow corrective successor.
-- [ ] Plans 058, 068, and 069 have coherent status and acceptance metadata after verification.
-- [ ] Focused formatting, lint, type, unit, and smoke checks pass.
-- [ ] No queue, migration, dependency, result hierarchy, state machine, CI expansion, fault matrix, soak gate, benchmark gate, or evidence system is introduced.
+- [x] A released runtime lease produces `runtime_cleanup_complete=True` and `retryable=False`.
+- [x] Successful retry removes stale `runtime cleanup incomplete` detail.
+- [x] Partial failure continues to expose completed runtime components while remaining retryable and incomplete.
+- [x] Durable terminal and reservation fields remain intact across failed and successful runtime projections.
+- [x] The existing real component-resume test asserts coherent partial and final result states.
+- [x] Retry still does not replay durable finalization or completed active/quota/usage components.
+- [x] Roadmap 058 registers Plans 068 and 069 in its implementation-plan list.
+- [x] Roadmap 058’s dependency sequence extends through Plan 069.
+- [x] Plan 068 identifies Plan 069 as its narrow corrective successor.
+- [x] Plans 058, 068, and 069 have coherent status and acceptance metadata after verification.
+- [x] Focused formatting, lint, type, unit, and smoke checks pass.
+- [x] No queue, migration, dependency, result hierarchy, state machine, CI expansion, fault matrix, soak gate, benchmark gate, or evidence system is introduced.
 
 ## Rejection conditions
 
@@ -281,3 +281,37 @@ Do not close this plan if:
 ## Definition of done
 
 This final closure patch is complete when the retained finalization result is coherent both while retry-pending and after successful convergence, the existing real component-resume regression proves those states and non-replay, Roadmap 058 accurately registers the full Plan 059–069 sequence, Plans 058, 068, and 069 report truthful closure, and the existing focused plus smoke verification passes without expanding the project’s architecture or CI burden.
+
+## Implementation closure
+
+Implemented in the existing lease-to-result projection helper. A released lease
+now normalizes transient runtime retry metadata to `retryable=False` and
+`detail=""`; incomplete convergence still reports partial component progress
+with `retryable=True` and `detail="runtime cleanup incomplete"`.
+
+The existing real middle-component regression now asserts the coherent final
+result and preserved durable/reservation facts without replaying completed
+runtime components.
+
+Focused and repository CI-equivalent verification completed:
+
+```text
+rtk uv run ruff format src/eggpool/request/finalization_job.py tests/unit/test_request_finalization_state_machine.py
+2 files left unchanged
+rtk uv run ruff check src/eggpool/request/finalization_job.py tests/unit/test_request_finalization_state_machine.py
+All checks passed
+rtk uv run pytest tests/unit/test_request_finalization_state_machine.py -q --tb=short --maxfail=1
+26 passed
+rtk uv run pyright src/eggpool/request/finalization_job.py
+0 errors, 0 warnings, 0 informations
+rtk uv run pytest tests/unit/test_request_coordinator_cleanup.py tests/unit/test_request_finalization_state_machine.py tests/unit/test_request_finalizer.py -q --tb=short --maxfail=1
+46 passed
+rtk uv run ruff format --check src/ tests/ scripts/
+734 files already formatted
+rtk uv run ruff check src/ tests/ scripts/
+All checks passed
+rtk uv run pyright src/ scripts/
+0 errors, 0 warnings, 0 informations
+rtk uv run pytest tests/smoke/ -q --tb=short --maxfail=1
+14 passed
+```

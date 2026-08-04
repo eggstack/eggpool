@@ -288,6 +288,7 @@ class TestRequestFinalizationJob:
         assert job.result.durable_terminal
         assert job.result.reservation_converged
         assert job.result.retryable
+        assert job.result.detail == "runtime cleanup incomplete"
         assert lease.completed_components == frozenset(
             {"active_count", "quota_reservation", "usage"}
         )
@@ -307,6 +308,14 @@ class TestRequestFinalizationJob:
         assert job.result.quota_reservation_removed
         assert job.result.health_released_or_recorded
         assert lease.released
+        assert job.result.retryable is False
+        assert job.result.detail == ""
+        assert job.result.attempt_transitioned
+        assert job.result.request_transitioned
+        assert job.result.reservation_released
+        assert job.result.durable_terminal
+        assert job.result.durable_transitioned
+        assert job.result.reservation_converged
         assert calls == {
             "durable": 1,
             "active": 1,

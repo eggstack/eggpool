@@ -673,6 +673,7 @@ class RequestFinalizationJob:
         if self.runtime_lease is None:
             return
         components = self.runtime_lease.completed_components
+        runtime_cleanup_complete = self.runtime_lease.released
         self._result = replace(
             self._result,
             quota_reservation_removed="quota_reservation" in components,
@@ -680,7 +681,9 @@ class RequestFinalizationJob:
             health_released_or_recorded=(
                 "health_probe" in components or "health" in components
             ),
-            runtime_cleanup_complete=self.runtime_lease.released,
+            runtime_cleanup_complete=runtime_cleanup_complete,
+            retryable=False if runtime_cleanup_complete else self._result.retryable,
+            detail="" if runtime_cleanup_complete else self._result.detail,
         )
 
     async def _execute_analytics(self) -> None:

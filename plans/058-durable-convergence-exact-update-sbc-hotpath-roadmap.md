@@ -26,6 +26,8 @@ Implementation plans:
 - `plans/065-terminal-recovery-and-small-regression-closure.md`
 - `plans/066-terminal-runtime-ownership-and-supervisor-closure.md`
 - `plans/067-explicit-handoff-and-already-terminal-runtime-closure.md`
+- `plans/068-partial-runtime-result-truthfulness-polish.md`
+- `plans/069-final-runtime-result-and-roadmap-closure.md`
 
 ## Purpose
 
@@ -148,17 +150,23 @@ Project completed runtime lease components into `FinalizationResult` even when
 later convergence fails, prove the real component loop resumes without replay,
 and close the final result-truthfulness metadata gap.
 
+### Plan 069 — Final Runtime Result and Roadmap Closure
+
+Normalize transient retry metadata when a retained runtime lease converges,
+extend the existing component-resume regression with final-state assertions,
+and close the roadmap registry and dependency metadata through Plan 069.
+
 ## Dependency order
 
 ```text
 059 dispatch persistence --------+
 060 database recovery -----------+--> 061 terminal convergence --> 062 stale accounting --+
                                  |                                                        |
-063 exact-version update --------+--------------------------------------------------------+--> 065 durable closure --> 066 runtime ownership --> 067 semantic closure
+063 exact-version update --------+--------------------------------------------------------+--> 065 durable closure --> 066 runtime ownership --> 067 semantic closure --> 068 result truthfulness --> 069 final metadata closure
 064 quota/SQLite hot path -------+--------------------------------------------------------+
 ```
 
-Plan 061 depends on the transaction and recovery semantics from Plan 060. Plan 062 consumes the durable finalization and accounting semantics. Plans 063 and 064 are otherwise independent. Plan 065 closed the bounded durable/recovery regressions. Plan 066 landed the retained lease, retry deadline, and diagnostics. Plan 067 closed the final handoff and already-terminal runtime obligation semantics. Plan 068 is limited to truthful partial runtime result projection and real component-resume coverage.
+Plan 061 depends on the transaction and recovery semantics from Plan 060. Plan 062 consumes the durable finalization and accounting semantics. Plans 063 and 064 are otherwise independent. Plan 065 closed the bounded durable/recovery regressions. Plan 066 landed the retained lease, retry deadline, and diagnostics. Plan 067 closed the final handoff and already-terminal runtime obligation semantics. Plan 068 covered truthful partial runtime result projection and real component-resume coverage. Plan 069 clears stale retry metadata after convergence and closes the registry.
 
 ## Cross-phase invariants
 
@@ -220,6 +228,7 @@ Plan 067 is capped at four focused regressions plus the existing lint, type, and
 - [x] Coordinator capacity rejection distinguishes pre-handoff and post-handoff using an explicit response lifecycle fact.
 - [x] Already-terminal durable state can converge every outstanding lease-owned usage, health, and account-runtime obligation.
 - [x] Runtime result fields remain incomplete until all acquired and required components actually converge.
+- [x] A released runtime lease produces a non-retryable result without stale runtime-cleanup detail.
 - [x] Runtime metrics expose the active finalization supervisor's bounded snapshot.
 - [x] The legacy finalization queue and drain task no longer participate in production ownership.
 - [x] Successful recovery leaves controller state, database lifecycle state, and admission flags coherently `READY`.
@@ -257,7 +266,7 @@ Do not close this roadmap if:
 
 ## Definition of done
 
-This roadmap is complete when Plans 059–068 remain intact, Plan 068 closes the partial runtime result-truthfulness residual, durable persistence, recovery, finalization, runtime accounting, and stale repair agree on explicit identities and convergence, exact-version and bare latest updates behave as documented, quota and trace hot paths have bounded normal-path cost, the focused handoff, already-terminal, component-resume, and partial-result regressions and existing smoke suite pass, and the repository remains simpler to iterate on than a production-grade service with equivalent failure machinery.
+This roadmap is complete when Plans 059–069 remain intact, Plan 069 closes the final runtime-result and metadata residual, durable persistence, recovery, finalization, runtime accounting, and stale repair agree on explicit identities and convergence, exact-version and bare latest updates behave as documented, quota and trace hot paths have bounded normal-path cost, the focused handoff, already-terminal, component-resume, partial-result, and final-result regressions and existing smoke suite pass, and the repository remains simpler to iterate on than a production-grade service with equivalent failure machinery.
 
 ## Current implementation state
 
@@ -271,8 +280,10 @@ Plan 067 completed final closure: response handoff uses the explicit
 `FinalizationData.downstream_started` fact, lease-owned usage/health/account-
 runtime obligations are independent of `request_transitioned`, and focused
 regressions cover handoff, already-terminal convergence, retry resumption, and
-truthful runtime results. Plan 068 completed the final polish: retained job
-results now project completed lease markers after partial convergence failures,
-and the real runtime component loop proves non-replay on retry. No additional
-roadmap, queue, migration, CI expansion, or verification framework was
-warranted.
+truthful runtime results. Plan 068 completed the partial-result polish: retained
+job results now project completed lease markers after partial convergence
+failures, and the real runtime component loop proves non-replay on retry. Plan
+069 completed the final polish: a released lease clears transient retry
+metadata, the existing regression proves coherent final state, and the plan
+registry and dependency sequence are complete. No additional roadmap, queue,
+migration, CI expansion, or verification framework was warranted.
