@@ -154,7 +154,16 @@ Provider-bound `ThinkingControlContract` validates/normalizes thinking controls.
 
 ## Failure Effects and Quarantine
 
-`classify_failure_effects()` centralizes consequences. `ModelQuarantine` — bounded state machine with corroboration before terminal withdrawal.
+`classify_failure_effects()` is the canonical pure classifier for one immutable
+retry/effects decision. Its bounded response signal, source, provider
+attribution, circuit transition, and probe-convergence fields travel unchanged
+through coordinator retry, retained attempt cleanup, and finalization.
+Idempotency is scoped to the durable `(proxy_request_id, attempt_id)` lifecycle:
+component progress is retained by the cleanup/finalization owner and retired
+after convergence. `HealthManager.record_failure()` owns a circuit failure;
+the applier must not record it again. Request-local failures release a
+half-open probe without provider penalties. `ModelQuarantine` remains a
+bounded state machine with corroboration before terminal withdrawal.
 
 ## Background Tasks
 

@@ -1,7 +1,7 @@
 # Plan 071 — Attempt-Scoped Failure Classification and Effects
 
 Date: 2026-08-04
-Status: ready for implementation
+Status: complete
 Parent roadmap: `plans/070-failure-resilience-router-recovery-and-sbc-simplification-roadmap.md`
 Planning baseline: `e73db213e7e381043cda3cfb8a3dd8109f3f39ca`
 
@@ -317,19 +317,19 @@ Do not add CI jobs or require live providers.
 
 ## Plan acceptance criteria
 
-- [ ] One canonical failure decision includes retry and shared-state effects.
-- [ ] Provider response-body signals reach the effect path unchanged.
-- [ ] Transport failures are classified as transport failures.
-- [ ] Unknown/local failures default to no provider penalty.
-- [ ] Effect identity is `(proxy_request_id, attempt_id)` or an equivalent durable attempt identity.
-- [ ] Two independent identical failures do not collide.
-- [ ] Replay of one attempt does not replay effects.
-- [ ] Effect progress is retired and cannot grow with lifetime request count.
-- [ ] One failed attempt records at most one circuit failure.
-- [ ] Every selected terminal path explicitly converges the probe slot.
-- [ ] Duplicate retry/effect decision tables are removed from production paths.
-- [ ] Focused tests and the existing smoke gate pass.
-- [ ] No schema, dependency, policy engine, provider plugin system, CI expansion, or exhaustive fault matrix is added.
+- [x] One canonical failure decision includes retry and shared-state effects.
+- [x] Provider response-body signals reach the effect path unchanged.
+- [x] Transport failures are classified as transport failures.
+- [x] Unknown/local failures default to no provider penalty.
+- [x] Effect identity is `(proxy_request_id, attempt_id)` or an equivalent durable attempt identity.
+- [x] Two independent identical failures do not collide.
+- [x] Replay of one attempt does not replay effects.
+- [x] Effect progress is retired and cannot grow with lifetime request count.
+- [x] One failed attempt records at most one circuit failure.
+- [x] Every selected terminal path explicitly converges the probe slot.
+- [x] Duplicate retry/effect decision tables are removed from production paths.
+- [x] Focused tests and the existing smoke gate pass.
+- [x] No schema, dependency, policy engine, provider plugin system, CI expansion, or exhaustive fault matrix is added.
 
 ## Rejection conditions
 

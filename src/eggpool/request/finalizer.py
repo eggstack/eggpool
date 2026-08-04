@@ -23,10 +23,13 @@ from eggpool.db.repositories import (
 )
 from eggpool.failure import (
     EffectsApplier,
+    FailureEffectProgress,
+    FailureEffects,
     FailureObservation,
     ModelQuarantine,
 )
 from eggpool.failure.classifier import classify_failure_effects
+from eggpool.failure.signal import FailureSignal
 from eggpool.health.health_manager import classify_failure_category
 from eggpool.request.finalization_job import AttemptRuntimeLease
 from eggpool.request.terminal_status import REQUEST_TERMINAL_STATUSES
@@ -233,6 +236,12 @@ class FinalizationData:
     # (``synthetic_cache_status = NULL``,
     # ``synthetic_cache_dry_run = 1``) for backwards compatibility.
     synthetic_cache_result: Any | None = None
+    # Canonical decision and normalized input from the failure boundary.  The
+    # retained finalization owner reuses these exact objects rather than
+    # reconstructing a decision from status/error class.
+    failure_observation: FailureObservation | None = None
+    failure_effects: FailureEffects | None = None
+    effect_progress: FailureEffectProgress | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -980,6 +989,11 @@ class RequestFinalizer:
                         mid=mid,
                         error_class=data.error_class,
                         status_code=data.status_code,
+                        failure_observation=data.failure_observation,
+                        failure_effects=data.failure_effects,
+                        effect_progress=data.effect_progress,
+                        downstream_started=data.downstream_started,
+                        midstream=(data.outcome == FinalizationOutcome.MIDSTREAM_ERROR),
                     )
                     if not applied:
                         category = classify_failure_category(
@@ -1404,6 +1418,11 @@ class RequestFinalizer:
         mid: str,
         error_class: str | None,
         status_code: int | None,
+        failure_observation: FailureObservation | None = None,
+        failure_effects: FailureEffects | None = None,
+        effect_progress: FailureEffectProgress | None = None,
+        downstream_started: bool = False,
+        midstream: bool = False,
     ) -> bool:
         """Apply Plan 025 typed effects for a finalization failure.
 
@@ -1417,8 +1436,8 @@ class RequestFinalizer:
         provider_id = getattr(selected, "provider_id", None) or "unknown"
         upstream_protocol = getattr(selected, "protocol", None) or "openai"
         client_protocol = upstream_protocol
-        observation = FailureObservation(
-            source="upstream_http",
+        observation = failure_observation or FailureObservation(
+            source="stream" if midstream else "upstream_http",
             status_code=status_code,
             error_class=error_class,
             provider_id=provider_id,
@@ -1427,19 +1446,23 @@ class RequestFinalizer:
             upstream_model_id=mid,
             client_protocol=client_protocol,
             upstream_protocol=upstream_protocol,
-            response_signal=None,
+            response_signal=FailureSignal.TRANSPORT_FAILURE if midstream else None,
             retry_after_s=None,
-            response_started=False,
+            response_started=downstream_started or midstream,
+            proxy_request_id=getattr(selected, "proxy_request_id", None),
+            attempt_id=getattr(selected, "attempt_id", None),
+            downstream_started=downstream_started,
         )
-        effects = classify_failure_effects(observation)
+        effects = failure_effects or classify_failure_effects(observation)
         attempt_key = (
-            f"finalize|{selected.account_name}|{mid}|{provider_id}"
-            f"|{upstream_protocol}|{status_code}|{error_class or ''}"
+            f"{observation.proxy_request_id or selected.account_name}:"
+            f"{observation.attempt_id or status_code or 'unselected'}"
         )
         self._effects_applier.apply_once(
             attempt_key=attempt_key,
             observation=observation,
             effects=effects,
+            progress=effect_progress,
         )
         return True
 

@@ -21,7 +21,8 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from collections import OrderedDict
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from eggpool.failure.quarantine import (
@@ -47,6 +48,37 @@ class AppliedEffects:
     effects: FailureEffects
     observation: FailureObservation
     applied_at: float
+
+
+@dataclass(slots=True)
+class FailureEffectProgress:
+    """Component progress owned by one retained attempt lifecycle."""
+
+    attempt_key: str
+    account_applied: bool = False
+    model_applied: bool = False
+    circuit_applied: bool = False
+    probe_converged: bool = False
+    backoff_persistence_attempted: bool = False
+    backoff_persistence_completed: bool = False
+    metrics_emitted: bool = False
+    record: AppliedEffects | None = field(default=None, repr=False)
+
+    @property
+    def completed(self) -> bool:
+        """Whether all in-memory effect components have converged."""
+        return all(
+            (
+                self.account_applied,
+                self.model_applied,
+                self.circuit_applied,
+                self.probe_converged,
+                (
+                    not self.backoff_persistence_attempted
+                    or self.backoff_persistence_completed
+                ),
+            )
+        )
 
 
 class EffectsApplier:
@@ -76,7 +108,12 @@ class EffectsApplier:
         self._quarantine = quarantine
         self._catalog_cache = catalog_cache
         self._persist_backoff = persist_backoff
-        self._applied: dict[str, AppliedEffects] = {}
+        # Compatibility callers that do not retain a lifecycle owner get a
+        # bounded cache. Production callers pass FailureEffectProgress owned
+        # by AttemptCleanupProgress or RequestFinalizationJob and never use
+        # this cache as their idempotency boundary.
+        self._compat_progress: OrderedDict[str, FailureEffectProgress] = OrderedDict()
+        self._compat_capacity = 128
 
     def apply_once(
         self,
@@ -84,6 +121,7 @@ class EffectsApplier:
         observation: FailureObservation,
         effects: FailureEffects,
         *,
+        progress: FailureEffectProgress | None = None,
         now: float | None = None,
     ) -> AppliedEffects | None:
         """Apply effects for a given attempt, idempotently.
@@ -92,7 +130,15 @@ class EffectsApplier:
         application, or ``None`` if the effects were already applied
         for this attempt key (idempotent no-op).
         """
-        if attempt_key in self._applied:
+        if progress is None:
+            progress = self._compat_progress.get(attempt_key)
+            if progress is None:
+                progress = FailureEffectProgress(attempt_key=attempt_key)
+                self._compat_progress[attempt_key] = progress
+                self._compat_progress.move_to_end(attempt_key)
+                while len(self._compat_progress) > self._compat_capacity:
+                    self._compat_progress.popitem(last=False)
+        if progress.completed:
             logger.debug(
                 "effects_applier: already applied for attempt=%s",
                 attempt_key,
@@ -102,24 +148,40 @@ class EffectsApplier:
         if now is None:
             now = time.time()
 
-        self._apply_account_effect(observation, effects, now)
-        self._apply_model_effect(observation, effects, now)
-        self._apply_circuit_penalty(observation, effects)
-        self._apply_probe_release(observation, effects)
-        self._emit_metrics(observation, effects)
-
+        if not progress.account_applied:
+            self._apply_account_effect(observation, effects, now)
+            progress.account_applied = True
+        if not progress.model_applied:
+            self._apply_model_effect(observation, effects, now)
+            progress.model_applied = True
+        if not progress.circuit_applied:
+            # HealthManager.record_failure owns the circuit transition. The
+            # former applier-side record_failure call double-counted the same
+            # observation and could open a circuit one attempt early.
+            progress.circuit_applied = True
+        if not progress.probe_converged:
+            self._apply_probe_release(observation, effects)
+            progress.probe_converged = True
         record = AppliedEffects(
             attempt_key=attempt_key,
             effects=effects,
             observation=observation,
             applied_at=now,
         )
-        self._applied[attempt_key] = record
+        progress.record = record
+        if not progress.metrics_emitted:
+            self._emit_metrics(observation, effects)
+            progress.metrics_emitted = True
         return record
 
     def is_applied(self, attempt_key: str) -> bool:
         """Check if effects have already been applied for this attempt."""
-        return attempt_key in self._applied
+        progress = self._compat_progress.get(attempt_key)
+        return progress is not None and progress.completed
+
+    def retire(self, attempt_key: str) -> None:
+        """Retire compatibility progress after its attempt owner converges."""
+        self._compat_progress.pop(attempt_key, None)
 
     def _apply_account_effect(
         self,
@@ -235,19 +297,6 @@ class EffectsApplier:
                 self._catalog_cache.mark_model_unavailable(
                     obs.account_name, obs.model_id
                 )
-
-    def _apply_circuit_penalty(
-        self,
-        obs: FailureObservation,
-        effects: FailureEffects,
-    ) -> None:
-        """Apply circuit breaker penalty."""
-        if not effects.circuit_penalty:
-            return
-        if self._health_manager is None or obs.account_name is None:
-            return
-        health = self._health_manager.get_account_health(obs.account_name)
-        health.circuit_breaker.record_failure()
 
     def _apply_probe_release(
         self,

@@ -72,6 +72,26 @@ Upstream-derived backoffs (429, 402, model-unavailable) persist across restarts 
 
 Local-estimate overage never produces a backoff row — only upstream-observed failures suppress routing.
 
+## Attempt-Scoped Failure Decisions
+
+`classify_failure_effects()` consumes one immutable `FailureObservation` and
+returns the complete retry/effects decision. The coordinator carries that same
+decision through account failover, retained attempt cleanup, and terminal
+finalization; it does not reconstruct health effects from an exception class.
+Response bodies are reduced to bounded `FailureSignal` values before
+classification, and transport failures use `source="transport"` so they do
+not fall through the upstream-HTTP path.
+
+Effect identity is the durable `(proxy_request_id, attempt_id)` pair. Component
+progress (`account`, `model`, `circuit`, `probe`, and durable backoff
+persistence) is retained by the attempt cleanup or finalization owner and is
+released with that owner after convergence. Separate attempts with identical
+status/model/account facts therefore apply independently, while replaying one
+attempt resumes only incomplete components. `HealthManager.record_failure()`
+records the circuit failure; the effects applier never records that same
+transition a second time. Request-local errors and cancellation release a
+half-open probe without provider penalties.
+
 ## Key Invariants
 
 - Health driven solely by upstream-observed failures, operator disablement, and catalog/protocol incompatibility

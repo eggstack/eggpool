@@ -23,6 +23,7 @@ class TestExplicitStatuses:
     def test_401_auth_failure(self, classifier: RetryClassifier) -> None:
         result = classifier.classify(401)
         assert result.category == RetryCategory.AUTH_FAILURE
+        assert result.is_retryable
         assert result.should_disable_account
 
     def test_402_quota_exceeded(self, classifier: RetryClassifier) -> None:
@@ -30,9 +31,11 @@ class TestExplicitStatuses:
         assert result.category == RetryCategory.QUOTA_EXCEEDED
         assert result.is_retryable
 
-    def test_403_auth_failure(self, classifier: RetryClassifier) -> None:
+    def test_403_without_evidence_is_request_local(
+        self, classifier: RetryClassifier
+    ) -> None:
         result = classifier.classify(403)
-        assert result.category == RetryCategory.AUTH_FAILURE
+        assert result.category == RetryCategory.BAD_REQUEST
 
     def test_404_not_model_specific(self, classifier: RetryClassifier) -> None:
         result = classifier.classify(404, body=b'{"error": "not found"}')
@@ -202,9 +205,11 @@ class TestPhase6StatusCodes:
         result = classifier.classify(403, body=body)
         assert result.category == RetryCategory.QUOTA_EXCEEDED
 
-    def test_403_without_quota_body_is_auth(self, classifier: RetryClassifier) -> None:
+    def test_403_without_quota_body_is_request_local(
+        self, classifier: RetryClassifier
+    ) -> None:
         result = classifier.classify(403)
-        assert result.category == RetryCategory.AUTH_FAILURE
+        assert result.category == RetryCategory.BAD_REQUEST
 
 
 class TestProviderSignalDetection:

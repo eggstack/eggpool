@@ -4237,28 +4237,30 @@ Closes six confirmed defects in the Plan 024 thinking-control adaptation layer, 
 
 ## Typed Failure Effects and Bounded Model Quarantine (Plan 025)
 
-Phase 3 of the upstream error isolation roadmap. Centralizes the consequences of request and upstream failures into one typed, test-pinned decision. Replaces first-observation indefinite model withdrawal with bounded, provider/account/model/protocol-scoped quarantine that requires corroboration before becoming terminal and automatically clears on recovery.
+Phase 3 of the upstream error isolation roadmap, extended by Plan 071.
+Failure classification now produces one immutable, attempt-scoped decision
+covering retry and shared-state consequences. Response evidence is bounded
+before classification, and the same decision is carried through retry,
+attempt cleanup, finalization, health, circuit, backoff, and quarantine work.
+Model withdrawal remains bounded, provider/account/model/protocol-scoped, and
+requires corroboration before becoming terminal.
 
 ### Key components
 
-- `FailureObservation` (`src/eggpool/failure/observation.py`) — immutable input record with source, status_code, error_class, provider/account/model scope, response_signal, retry_after, and response_started.
-- `FailureEffects` (`src/eggpool/failure/effects.py`) — immutable decision output with retry, retry_scope, client_outcome, account_effect, model_effect, circuit_penalty, persist_backoff, backoff_reason/until, release_probe_only, and evidence_class.
-- `classify_failure_effects()` (`src/eggpool/failure/classifier.py`) — single pure classifier with table-driven decision logic covering every status/body/error-class matrix row.
+- `FailureObservation` (`src/eggpool/failure/observation.py`) — immutable normalized input with source, durable request/attempt identity, status/error facts, bounded response signal, retry-after, response-start, and downstream-handoff facts.
+- `FailureEffects` / `FailureDecision` (`src/eggpool/failure/effects.py`) — immutable combined decision output with retry, retry_scope, client_outcome, provider attribution, account/model effects, circuit transition, backoff, probe convergence, and evidence.
+- `classify_failure_effects()` (`src/eggpool/failure/classifier.py`) — the only production classifier for retry and shared-state consequences; the retry module is a compatibility adapter.
 - `ModelQuarantine` (`src/eggpool/failure/quarantine.py`) — state machine (`healthy → suspected → quarantined → terminal_withdrawn`) keyed by (provider_id, account_id, canonical_model_id, upstream_model_id, upstream_protocol).
-- `EffectsApplier` (`src/eggpool/failure/applier.py`) — applies effects exactly once per attempt via idempotency key.
+- `EffectsApplier` (`src/eggpool/failure/applier.py`) — applies effects component-by-component using progress retained by the `(proxy_request_id, attempt_id)` cleanup/finalization owner. Its compatibility cache is bounded and retired; it is not the production idempotency boundary. `HealthManager.record_failure()` owns the circuit-failure transition.
 - `extract_failure_signal()` (`src/eggpool/failure/signal_extract.py`) — bounded conservative signal extraction from response bodies.
 
 ### Tests
 
-- `tests/unit/test_plan_025_failure_effects_table.py` — pure classifier unit tests
-- `tests/unit/test_plan_025_failure_signal_extraction.py` — signal extraction tests
-- `tests/unit/test_plan_025_model_quarantine_state_machine.py` — state machine transitions
-- `tests/unit/test_plan_025_effects_idempotency.py` — applier idempotency
-- `tests/unit/test_plan_025_quarantine_hydration.py` — hydration from SQLite
-- `tests/unit/test_plan_025_quarantine_cli.py` — operator CLI
-- `tests/integration/test_plan_025_error_isolation.py` — error isolation matrix
-- `tests/integration/test_plan_025_cross_provider_quarantine.py` — cross-provider quarantine
-- `tests/integration/test_plan_025_closure_evidence.py` — end-to-end pipeline verification
+- `tests/unit/test_failure_effects_table.py` — representative canonical decisions
+- `tests/unit/test_failure_signal_extraction.py` — bounded response signals
+- `tests/unit/test_effects_idempotency.py` — attempt-owned replay, circuit, and bounded progress
+- `tests/integration/test_request_error_isolation.py` — request-local/provider isolation and probe release
+- `tests/integration/test_cross_provider_quarantine.py` — provider/account quarantine scope
 
 ## Process-Owned Request Finalization (Plan 026)
 

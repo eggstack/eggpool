@@ -33,7 +33,7 @@ class TestRetryClassifier:
         classifier = RetryClassifier()
         error = classifier.classify(401)
         assert error.category == RetryCategory.AUTH_FAILURE
-        assert not error.is_retryable
+        assert error.is_retryable
         assert error.should_disable_account
 
     def test_classify_404(self) -> None:

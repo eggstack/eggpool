@@ -6,7 +6,7 @@ attempt key and that retried finalizations do not double-penalize.
 
 from __future__ import annotations
 
-from eggpool.failure.applier import EffectsApplier
+from eggpool.failure.applier import EffectsApplier, FailureEffectProgress
 from eggpool.failure.classifier import classify_failure_effects
 from eggpool.failure.observation import FailureObservation
 from eggpool.failure.quarantine import ModelQuarantine
@@ -86,6 +86,28 @@ class TestEffectsIdempotency:
         applier.apply_once("attempt-1", obs, effects)
         health_after = hm.get_account_health("acct-1").consecutive_failures
         assert health_before == health_after
+
+    def test_circuit_failure_is_recorded_once(self) -> None:
+        hm = HealthManager()
+        applier = EffectsApplier(health_manager=hm)
+        obs = _obs(status_code=500)
+        effects = classify_failure_effects(obs)
+        progress = FailureEffectProgress("request-1:1")
+        applier.apply_once("request-1:1", obs, effects, progress=progress)
+        applier.apply_once("request-1:1", obs, effects, progress=progress)
+        stats = hm.get_account_health("acct-1").circuit_breaker.get_stats()
+        assert stats["failure_count"] == 1
+
+    def test_completed_progress_can_be_retired(self) -> None:
+        applier = EffectsApplier()
+        obs = _obs()
+        effects = classify_failure_effects(obs)
+        for index in range(200):
+            key = f"request-{index}:1"
+            applier.apply_once(key, obs, effects)
+        assert len(applier._compat_progress) <= 128  # noqa: SLF001
+        applier.retire("request-199:1")
+        assert applier.is_applied("request-199:1") is False
 
     def test_quarantine_not_double_counted(self) -> None:
         quarantine = ModelQuarantine()

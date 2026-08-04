@@ -90,12 +90,19 @@ class TestRequestLocalFailureIsolation:
         hm = HealthManager()
         applier = EffectsApplier(health_manager=hm)
 
+        health = hm.get_account_health("acct-1")
+        health.circuit_breaker.failure_threshold = 1
+        health.circuit_breaker.recovery_timeout = 0
+        health.circuit_breaker.record_failure()
+        assert hm.try_acquire_request("acct-1", "gpt-4o") is True
+
         obs = _obs(source="client_validation")
         effects = classify_failure_effects(obs)
         applier.apply_once("attempt-1", obs, effects)
 
         # release_probe_only should be True
         assert effects.release_probe_only is True
+        assert hm.try_acquire_request("acct-1", "gpt-4o") is True
 
 
 class TestProviderFailureIsolation:

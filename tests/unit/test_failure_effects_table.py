@@ -117,7 +117,7 @@ class TestFailureEffectsMatrix:
     def test_http_401_auth_failure(self) -> None:
         obs = _obs(status_code=401)
         fx = classify_failure_effects(obs)
-        assert fx.retry is False
+        assert fx.retry is True
         assert fx.retry_scope == "other_account"
         assert fx.client_outcome == "client_error"
         assert fx.account_effect == "disable_auth"
@@ -132,7 +132,7 @@ class TestFailureEffectsMatrix:
     def test_http_402_quota(self) -> None:
         obs = _obs(status_code=402)
         fx = classify_failure_effects(obs)
-        assert fx.retry is False
+        assert fx.retry is True
         assert fx.retry_scope == "other_account"
         assert fx.account_effect == "quota"
         assert fx.model_effect == "none"
@@ -184,6 +184,7 @@ class TestFailureEffectsMatrix:
             response_signal=FailureSignal.MODEL_ABSENT,
         )
         fx = classify_failure_effects(obs)
+        assert fx.retry is True
         assert fx.retry_scope == "other_account"
         assert fx.account_effect == "none"
         assert fx.model_effect == "quarantine"
@@ -198,12 +199,14 @@ class TestFailureEffectsMatrix:
             source="provider_catalog",
         )
         fx = classify_failure_effects(obs)
+        assert fx.retry is True
         assert fx.model_effect == "terminal_withdrawal"
         assert fx.backoff_until is None  # terminal
 
     def test_http_404_model_unavailable_error_class(self) -> None:
         obs = _obs(status_code=404, error_class="ModelUnavailable")
         fx = classify_failure_effects(obs)
+        assert fx.retry is True
         assert fx.model_effect == "quarantine"
 
     # --- HTTP 404 generic ---
@@ -241,6 +244,15 @@ class TestFailureEffectsMatrix:
         assert fx.model_effect == "none"
         assert fx.release_probe_only is True
 
+    def test_http_409_quota_signal_retries(self) -> None:
+        obs = _obs(
+            status_code=409,
+            response_signal=FailureSignal.QUOTA_EXHAUSTED,
+        )
+        fx = classify_failure_effects(obs)
+        assert fx.retry is True
+        assert fx.account_effect == "quota"
+
     def test_http_422_provider_specific(self) -> None:
         obs = _obs(status_code=422)
         fx = classify_failure_effects(obs)
@@ -248,6 +260,15 @@ class TestFailureEffectsMatrix:
         assert fx.account_effect == "none"
         assert fx.model_effect == "none"
         assert fx.release_probe_only is True
+
+    def test_http_422_quota_signal_retries(self) -> None:
+        obs = _obs(
+            status_code=422,
+            response_signal=FailureSignal.RATE_LIMITED,
+        )
+        fx = classify_failure_effects(obs)
+        assert fx.retry is True
+        assert fx.account_effect == "rate_limit"
 
     # --- HTTP 429 ---
 
@@ -339,7 +360,7 @@ class TestFailureEffectsMatrix:
     def test_transport_failure(self) -> None:
         obs = _obs(source="transport")
         fx = classify_failure_effects(obs)
-        assert fx.retry is False
+        assert fx.retry is True
         assert fx.account_effect == "failure"
         assert fx.model_effect == "none"
         assert fx.circuit_penalty is True

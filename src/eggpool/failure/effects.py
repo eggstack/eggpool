@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from eggpool.failure.signal import FailureSignal
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,3 +56,24 @@ class FailureEffects:
     evidence_class: str
     """Human-readable classification of the evidence that drove this
     decision, for diagnostics and routing traces."""
+
+    # The following fields make this object the complete immutable decision
+    # carried from the failure boundary through retry, cleanup, and
+    # finalization.  Defaults keep the Plan 025 constructor surface usable by
+    # compatibility callers while production classifiers populate them.
+    circuit_transition: str = "none"
+    """``none``, ``success``, or ``failure`` for the circuit component."""
+
+    probe_convergence: str = "release"
+    """How the selected attempt must converge its probe slot."""
+
+    provider_attributable: bool = False
+    """Whether the decision permits provider/account consequences."""
+
+    source: str = "unknown"
+    response_signal: FailureSignal | None = None
+    retry_after_s: float | None = None
+
+
+FailureDecision = FailureEffects
+"""Compatibility name for the canonical combined retry/effects decision."""

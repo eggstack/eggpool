@@ -63,3 +63,19 @@ class FailureObservation:
     """``True`` when at least one byte was received from upstream.
     Client cancellation after response start may differ from
     cancellation before any bytes."""
+
+    proxy_request_id: str | None = None
+    """Public request identity, when the request has been accepted."""
+
+    attempt_id: int | None = None
+    """Durable selected-attempt identity, when one exists."""
+
+    downstream_started: bool = False
+    """Whether the response was handed to the downstream client."""
+
+    @property
+    def attempt_identity(self) -> tuple[str, int] | None:
+        """Return the durable attempt identity used for effect ownership."""
+        if self.proxy_request_id is None or self.attempt_id is None:
+            return None
+        return (self.proxy_request_id, self.attempt_id)

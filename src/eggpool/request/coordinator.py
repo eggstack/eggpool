@@ -50,10 +50,13 @@ from eggpool.errors import (
 )
 from eggpool.failure import (
     EffectsApplier,
+    FailureEffectProgress,
+    FailureEffects,
     FailureObservation,
     ModelQuarantine,
 )
 from eggpool.failure.classifier import classify_failure_effects
+from eggpool.failure.signal_extract import extract_failure_signal
 from eggpool.health.health_manager import (
     FailureCategory,
     classify_failure_category,
@@ -628,6 +631,7 @@ class AttemptCleanupProgress:
     active_count_released: bool = False
     health_effect_applied: bool = False
     probe_released: bool = False
+    effect_progress: FailureEffectProgress | None = field(default=None, repr=False)
     completed: bool = False
     # Retain the operation inputs so shutdown can rejoin a failed command.
     context: Any = field(default=None, repr=False)
@@ -873,6 +877,10 @@ class RequestCoordinator:
         not install a supervisor.
         """
         supervisor = self._finalization_supervisor
+        if data.failure_effects is not None and data.effect_progress is None:
+            data.effect_progress = FailureEffectProgress(
+                attempt_key=f"{selected.proxy_request_id}:{selected.attempt_id}"
+            )
         runtime_lease = selected.runtime_lease or AttemptRuntimeLease(
             account_name=selected.account_name,
         )
@@ -913,6 +921,7 @@ class RequestCoordinator:
                 data.outcome.value,
                 finalization_data=data,
                 runtime_lease=runtime_lease,
+                failure_effects=data.failure_effects,
             )
         except FinalizationCapacityError as exc:
             logger.error(
@@ -970,6 +979,9 @@ class RequestCoordinator:
                 context=context,
                 selected=selected,
                 error=error,
+                effect_progress=FailureEffectProgress(
+                    attempt_key=f"{selected.proxy_request_id}:{selected.attempt_id}"
+                ),
             )
             self._attempt_cleanup_progress[key] = progress
         task = self._attempt_cleanup_tasks.get(key)
@@ -1121,6 +1133,7 @@ class RequestCoordinator:
                 provider_id=selected.provider_id,
                 upstream_protocol=context.upstream_protocol,
                 client_protocol=context.protocol,
+                effect_progress=progress.effect_progress,
             )
             progress.health_effect_applied = True
             # Every health transition path either records a success/failure,
@@ -1743,31 +1756,33 @@ class RequestCoordinator:
                     self._effects_applier is not None
                     and self._health_manager is not None
                 ):
-                    observation = FailureObservation(
-                        source="upstream_http",
-                        status_code=err.status_code,
-                        error_class=None,
-                        provider_id=selected.provider_id,
-                        account_name=selected.account_name,
-                        model_id=context.model_id,
-                        upstream_model_id=context.model_id,
-                        client_protocol=context.protocol,
-                        upstream_protocol=context.upstream_protocol,
-                        response_signal=None,
-                        retry_after_s=None,
-                        response_started=False,
+                    observation = (
+                        err.failure_observation
+                        or self._build_failure_observation(
+                            context=context,
+                            selected=selected,
+                            status_code=err.status_code,
+                            body=(
+                                err.upstream_response[2]
+                                if err.upstream_response
+                                else None
+                            ),
+                            error_class=err.error_class,
+                        )
                     )
-                    effects = classify_failure_effects(observation)
+                    effects = err.failure_effects or classify_failure_effects(
+                        observation
+                    )
                     attempt_key = (
-                        f"nonretry|{selected.account_name}|{context.model_id}"
-                        f"|{selected.provider_id}|{context.upstream_protocol}"
-                        f"|{err.status_code}"
+                        f"{observation.proxy_request_id or selected.account_name}:"
+                        f"{observation.attempt_id or err.status_code or 'unselected'}"
                     )
                     if (
                         self._effects_applier.apply_once(
                             attempt_key=attempt_key,
                             observation=observation,
                             effects=effects,
+                            progress=FailureEffectProgress(attempt_key=attempt_key),
                         )
                         is not None
                     ):
@@ -1781,7 +1796,7 @@ class RequestCoordinator:
                             else None,
                             reason=effects.backoff_reason,
                             status_code=err.status_code,
-                            error_class=None,
+                            error_class=err.error_class,
                             backoff_until=effects.backoff_until,
                             consecutive_failures=(
                                 self._health_manager.get_account_health(
@@ -3244,8 +3259,14 @@ class RequestCoordinator:
                 resp_body = response.content
 
                 # Check if this is retryable
-                error = self._classify_upstream_error(
-                    response.status_code, resp_headers, body=resp_body
+                error, failure_observation, failure_effects = (
+                    self._classify_upstream_failure(
+                        context=context,
+                        selected=selected,
+                        status_code=response.status_code,
+                        headers=resp_headers,
+                        body=resp_body,
+                    )
                 )
                 if error is not None:
                     # Retryable error - raise for retry
@@ -3253,22 +3274,26 @@ class RequestCoordinator:
                         str(error),
                         status_code=response.status_code,
                         error_class=type(error).__name__,
-                        retry_after=getattr(error, "retry_after", None),
+                        retry_after=failure_effects.retry_after_s,
                         upstream_response=(
                             response.status_code,
                             resp_headers,
                             resp_body,
                         ),
-                        retry_category=self._classifier.classify(
-                            response.status_code,
-                            {k.lower(): v for k, v in resp_headers},
-                            body=resp_body,
-                        ).category,
+                        retry_category=None,
+                        failure_observation=failure_observation,
+                        failure_effects=failure_effects,
                     ) from error
 
                 # Non-retryable client error (400, 404) - finalize and pass through
                 await self._finalize_non_retryable(
-                    context, selected, response.status_code, resp_headers, resp_body
+                    context,
+                    selected,
+                    response.status_code,
+                    resp_headers,
+                    resp_body,
+                    failure_observation=failure_observation,
+                    failure_effects=failure_effects,
                 )
                 # Phase 2: re-render upstream error in client protocol.
                 # Plan 028: reuse the already-parsed response instead of
@@ -3554,25 +3579,29 @@ class RequestCoordinator:
                 resp_headers = filter_response_headers(response.headers)
                 resp_body = response.content
 
-                error = self._classify_upstream_error(
-                    response.status_code, resp_headers, body=resp_body
+                error, failure_observation, failure_effects = (
+                    self._classify_upstream_failure(
+                        context=context,
+                        selected=selected,
+                        status_code=response.status_code,
+                        headers=resp_headers,
+                        body=resp_body,
+                    )
                 )
                 if error is not None:
                     raise _RetryableUpstreamError(
                         str(error),
                         status_code=response.status_code,
                         error_class=type(error).__name__,
-                        retry_after=getattr(error, "retry_after", None),
+                        retry_after=failure_effects.retry_after_s,
                         upstream_response=(
                             response.status_code,
                             resp_headers,
                             resp_body,
                         ),
-                        retry_category=self._classifier.classify(
-                            response.status_code,
-                            {k.lower(): v for k, v in resp_headers},
-                            body=resp_body,
-                        ).category,
+                        retry_category=None,
+                        failure_observation=failure_observation,
+                        failure_effects=failure_effects,
                     ) from error
 
                 # Non-retryable client error - defer the single terminal
@@ -3581,6 +3610,8 @@ class RequestCoordinator:
                 raise _NonRetryableUpstreamError(
                     f"Upstream returned {response.status_code}",
                     status_code=response.status_code,
+                    failure_observation=failure_observation,
+                    failure_effects=failure_effects,
                     upstream_response=(
                         response.status_code,
                         resp_headers,
@@ -4465,6 +4496,109 @@ class RequestCoordinator:
             return None
         return max(0, total_ms - connect_ms - read_ms)
 
+    def _build_failure_observation(
+        self,
+        *,
+        context: ProxyRequestContext | None,
+        selected: SelectedAttempt | None,
+        status_code: int | None,
+        headers: list[tuple[str, str]] | None = None,
+        body: bytes | None = None,
+        error_class: str | None = None,
+        source: str = "upstream_http",
+        response_started: bool = False,
+        downstream_started: bool = False,
+    ) -> FailureObservation:
+        """Normalize one upstream failure without retaining raw wire data."""
+        header_map = {key.lower(): value for key, value in (headers or [])}
+        retry_after = self._classifier.parse_retry_after(
+            header_map,
+            default=None,
+        )
+        return FailureObservation(
+            source=source,
+            status_code=status_code,
+            error_class=error_class,
+            provider_id=selected.provider_id if selected is not None else None,
+            account_name=selected.account_name if selected is not None else None,
+            model_id=context.model_id if context is not None else None,
+            upstream_model_id=context.model_id if context is not None else None,
+            client_protocol=context.protocol if context is not None else "openai",
+            upstream_protocol=(
+                context.upstream_protocol if context is not None else "openai"
+            ),
+            response_signal=extract_failure_signal(
+                body,
+                error_class=error_class,
+                status_code=status_code,
+            ),
+            retry_after_s=retry_after,
+            response_started=response_started,
+            proxy_request_id=context.request_id if context is not None else None,
+            attempt_id=selected.attempt_id if selected is not None else None,
+            downstream_started=downstream_started,
+        )
+
+    @staticmethod
+    def _error_from_failure_effects(
+        effects: FailureEffects,
+        *,
+        status_code: int | None,
+    ) -> UpstreamError | None:
+        """Adapt the canonical decision to the public upstream errors."""
+        if effects.account_effect == "disable_auth":
+            return AuthenticationError("Authentication failed", status_code=status_code)
+        if effects.account_effect == "rate_limit":
+            return RateLimitError(
+                "Rate limited",
+                status_code=status_code,
+                retry_after=effects.retry_after_s or 60.0,
+            )
+        if effects.account_effect == "quota":
+            return QuotaExhaustedError("Quota exhausted", status_code=status_code)
+        if effects.model_effect != "none":
+            return ModelUnavailableError("Model unavailable", status_code=status_code)
+        if effects.account_effect in {"cooldown", "failure"}:
+            if status_code in {408, 502, 504}:
+                return TransientUpstreamError(
+                    effects.evidence_class,
+                    status_code=status_code,
+                )
+            return TemporaryUpstreamError(
+                effects.evidence_class,
+                status_code=status_code,
+            )
+        if effects.retry:
+            return TemporaryUpstreamError(
+                effects.evidence_class,
+                status_code=status_code,
+            )
+        return None
+
+    def _classify_upstream_failure(
+        self,
+        *,
+        context: ProxyRequestContext,
+        selected: SelectedAttempt,
+        status_code: int,
+        headers: list[tuple[str, str]],
+        body: bytes | None,
+    ) -> tuple[UpstreamError | None, FailureObservation, FailureEffects]:
+        """Classify an upstream response once for retry and shared effects."""
+        observation = self._build_failure_observation(
+            context=context,
+            selected=selected,
+            status_code=status_code,
+            headers=headers,
+            body=body,
+        )
+        effects = classify_failure_effects(observation)
+        return (
+            self._error_from_failure_effects(effects, status_code=status_code),
+            observation,
+            effects,
+        )
+
     def _classify_upstream_error(
         self,
         status_code: int,
@@ -4476,33 +4610,17 @@ class RequestCoordinator:
         Returns None for non-retryable client errors (400, non-model-specific 404)
         where the response body should be passed through as-is.
         """
-        headers_dict = {k.lower(): v for k, v in headers}
-        error = self._classifier.classify(status_code, headers_dict, body=body)
-
-        if error.category == RetryCategory.AUTH_FAILURE:
-            return AuthenticationError(error.message, status_code=status_code)
-        if error.category == RetryCategory.QUOTA_EXCEEDED:
-            if status_code == 429:
-                retry_after = error.retry_after
-                return RateLimitError(
-                    error.message,
-                    status_code=status_code,
-                    retry_after=retry_after if retry_after is not None else 60.0,
-                )
-            return QuotaExhaustedError(error.message, status_code=status_code)
-        if error.category == RetryCategory.MODEL_UNAVAILABLE:
-            return ModelUnavailableError(error.message, status_code=status_code)
-        if error.category == RetryCategory.BAD_REQUEST:
-            return None
-        if error.category in (RetryCategory.TEMPORARY, RetryCategory.TRANSIENT):
-            if error.category == RetryCategory.TEMPORARY:
-                return TemporaryUpstreamError(error.message, status_code=status_code)
-            return TransientUpstreamError(error.message, status_code=status_code)
-
-        if error.category in (RetryCategory.FATAL, RetryCategory.NEVER):
-            return UpstreamError(error.message, status_code=status_code)
-
-        return None
+        observation = self._build_failure_observation(
+            context=None,
+            selected=None,
+            status_code=status_code,
+            headers=headers,
+            body=body,
+        )
+        return self._error_from_failure_effects(
+            classify_failure_effects(observation),
+            status_code=status_code,
+        )
 
     def _get_upstream_url(self, protocol: str, provider_id: str | None = None) -> str:
         """Get the absolute upstream URL for a protocol and provider.
@@ -5102,6 +5220,7 @@ class RequestCoordinator:
         provider_id: str | None = None,
         upstream_protocol: str = "openai",
         client_protocol: str = "openai",
+        effect_progress: FailureEffectProgress | None = None,
     ) -> None:
         """Apply health transitions for a failed account.
 
@@ -5125,6 +5244,7 @@ class RequestCoordinator:
                 upstream_protocol=upstream_protocol,
                 client_protocol=client_protocol,
                 err=err,
+                effect_progress=effect_progress,
             )
             return
 
@@ -5211,6 +5331,7 @@ class RequestCoordinator:
         upstream_protocol: str,
         client_protocol: str,
         err: _RetryableUpstreamError,
+        effect_progress: FailureEffectProgress | None = None,
     ) -> None:
         """Apply Plan 025 typed failure effects via :class:`EffectsApplier`.
 
@@ -5223,8 +5344,8 @@ class RequestCoordinator:
         if self._effects_applier is None:
             return
 
-        observation = FailureObservation(
-            source="upstream_http",
+        observation = err.failure_observation or FailureObservation(
+            source=err.source,
             status_code=err.status_code,
             error_class=err.error_class,
             provider_id=provider_id,
@@ -5237,11 +5358,11 @@ class RequestCoordinator:
             retry_after_s=err.retry_after,
             response_started=False,
         )
-        effects = classify_failure_effects(observation)
+        effects = err.failure_effects or classify_failure_effects(observation)
 
         attempt_key = (
-            f"attempt|{account_name}|{model_id}|{provider_id or ''}"
-            f"|{upstream_protocol}|{err.status_code}|{err.error_class or ''}"
+            f"{observation.proxy_request_id or account_name}:"
+            f"{observation.attempt_id or err.status_code or 'unselected'}"
         )
 
         # The applier mutates health manager / quarantine / circuit
@@ -5251,27 +5372,39 @@ class RequestCoordinator:
             attempt_key=attempt_key,
             observation=observation,
             effects=effects,
+            progress=effect_progress,
         )
 
         # Persist backoff using the same helper as the legacy path.
         if effects.persist_backoff and effects.backoff_reason:
-            await self._persist_backoff(
-                account_name=account_name,
-                model_id=model_id
-                if effects.model_effect in ("quarantine", "terminal_withdrawal")
-                else None,
-                reason=effects.backoff_reason,
-                status_code=err.status_code,
-                error_class=err.error_class,
-                backoff_until=effects.backoff_until,
-                consecutive_failures=(
-                    self._health_manager.get_account_health(
-                        account_name
-                    ).consecutive_failures
-                    if self._health_manager is not None
-                    else 0
-                ),
-            )
+            if (
+                effect_progress is None
+                or not effect_progress.backoff_persistence_completed
+            ):
+                if effect_progress is not None:
+                    effect_progress.backoff_persistence_attempted = True
+                await self._persist_backoff(
+                    account_name=account_name,
+                    model_id=model_id
+                    if effects.model_effect in ("quarantine", "terminal_withdrawal")
+                    else None,
+                    reason=effects.backoff_reason,
+                    status_code=err.status_code,
+                    error_class=err.error_class,
+                    backoff_until=effects.backoff_until,
+                    consecutive_failures=(
+                        self._health_manager.get_account_health(
+                            account_name
+                        ).consecutive_failures
+                        if self._health_manager is not None
+                        else 0
+                    ),
+                )
+                if effect_progress is not None:
+                    effect_progress.backoff_persistence_completed = True
+        elif effect_progress is not None:
+            effect_progress.backoff_persistence_attempted = True
+            effect_progress.backoff_persistence_completed = True
 
         # Update runtime state with the normalized category so the
         # routing layer can still observe failure counts even when the
@@ -5401,6 +5534,9 @@ class RequestCoordinator:
         status_code: int,
         resp_headers: list[tuple[str, str]],
         resp_body: bytes,
+        *,
+        failure_observation: FailureObservation | None = None,
+        failure_effects: FailureEffects | None = None,
     ) -> None:
         """Finalize a non-retryable client error (4xx)."""
         elapsed_ms = self._elapsed_ms(context)
@@ -5417,6 +5553,8 @@ class RequestCoordinator:
                 ),
                 bytes_received=len(context.original_body),
                 upstream_protocol=context.upstream_protocol,
+                failure_observation=failure_observation,
+                failure_effects=failure_effects,
                 thinking_trace_json=_serialize_thinking_trace(context.thinking_trace),
                 segmentation=context.segmentation,
                 segmentation_not_collected=context.segmentation_not_collected,
@@ -5487,6 +5625,16 @@ class RequestCoordinator:
                     health_already_applied=health_already_applied,
                     bytes_received=len(context.original_body),
                     upstream_protocol=context.upstream_protocol,
+                    failure_observation=(
+                        getattr(last_error, "failure_observation", None)
+                        if last_error is not None
+                        else None
+                    ),
+                    failure_effects=(
+                        getattr(last_error, "failure_effects", None)
+                        if last_error is not None
+                        else None
+                    ),
                     thinking_trace_json=_serialize_thinking_trace(
                         context.thinking_trace
                     ),
@@ -6103,6 +6251,9 @@ class _RetryableUpstreamError(Exception):
         retry_after: float | None = None,
         upstream_response: tuple[int, list[tuple[str, str]], bytes] | None = None,
         retry_category: RetryCategory | None = None,
+        failure_observation: FailureObservation | None = None,
+        failure_effects: FailureEffects | None = None,
+        source: str = "transport",
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
@@ -6110,6 +6261,9 @@ class _RetryableUpstreamError(Exception):
         self.retry_after = retry_after
         self.upstream_response = upstream_response
         self.retry_category = retry_category
+        self.failure_observation = failure_observation
+        self.failure_effects = failure_effects
+        self.source = source
 
 
 class _NonRetryableUpstreamError(Exception):
@@ -6120,8 +6274,14 @@ class _NonRetryableUpstreamError(Exception):
         message: str = "",
         *,
         status_code: int | None = None,
+        error_class: str | None = None,
         upstream_response: tuple[int, list[tuple[str, str]], bytes] | None = None,
+        failure_observation: FailureObservation | None = None,
+        failure_effects: FailureEffects | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.error_class = error_class
         self.upstream_response = upstream_response
+        self.failure_observation = failure_observation
+        self.failure_effects = failure_effects

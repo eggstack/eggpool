@@ -1,23 +1,14 @@
-"""Pure failure-effects classifier with table-driven decision logic.
+"""Pure canonical classifier for retry and shared-state failure effects.
 
-The classifier is a single pure function that maps a
-:class:`FailureObservation` to a :class:`FailureEffects`.  Every
-coordinator, finalizer, and health call site must consume the output
-rather than independently reclassifying status and error class.
-
-Design rules:
-
-* Unknown validation defaults to zero shared-state effects and only
-  releases any acquired probe slot.
-* Local capability rejection (``CapabilityError``, ``ContextLimitExceededError``)
-  produces no account/model/circuit effect.
-* Upstream unsupported thinking control changes no shared health state.
-* Client cancellation changes no provider health state.
-* Finalization/database errors never create provider backoff.
+The classifier is deliberately small and closed: it accepts one normalized
+observation and returns one immutable decision.  Response bodies are reduced
+to :class:`FailureSignal` before they reach this module; no raw payload or
+traceback is retained here.
 """
 
 from __future__ import annotations
 
+import math
 import time
 from typing import TYPE_CHECKING
 
@@ -27,9 +18,6 @@ from eggpool.failure.signal import FailureSignal
 if TYPE_CHECKING:
     from eggpool.failure.observation import FailureObservation
 
-# ---------------------------------------------------------------------------
-# Evidence provenance labels (Workstream E)
-# ---------------------------------------------------------------------------
 EVIDENCE_RUNTIME_HTTP = "runtime_http"
 EVIDENCE_PROVIDER_CATALOG = "provider_catalog"
 EVIDENCE_MODEL_INFO = "model_info"
@@ -37,451 +25,309 @@ EVIDENCE_MANUAL_OVERRIDE = "manual_override"
 EVIDENCE_OPERATOR_ACTION = "operator_action"
 EVIDENCE_MIGRATION_LEGACY = "migration_legacy"
 
-# Client-outcome mapping
-_CLIENT_OUTCOME_MAP: dict[int | None, str] = {
-    None: "upstream_error",
-    # 4xx → client_error (except 408 which is timeout)
-    400: "client_error",
-    401: "client_error",
-    402: "upstream_error",
-    403: "client_error",
-    404: "client_error",
-    408: "timeout",
-    409: "client_error",
-    422: "client_error",
-    429: "upstream_error",
-}
-
-# Backoff epoch helpers
-_TERMINAL_BACKOFF = None  # auth failures: persist indefinitely
-_NO_BACKOFF = None
-
 
 def _now() -> float:
     return time.time()
 
 
-def _classify_client_outcome(obs: FailureObservation) -> str:
-    """Determine the client-visible outcome category."""
-    if obs.source in ("client_validation",):
+def _client_outcome(obs: FailureObservation) -> str:
+    if obs.source in {"client_validation", "local_preparation", "transcoding"}:
         return "client_error"
-    if obs.source in ("finalization", "database"):
+    if obs.source in {"finalization", "database"}:
         return "upstream_error"
     if obs.source == "transport":
         return "service_unavailable"
-    if obs.source == "stream":
+    if obs.source in {"stream", "cancellation"}:
         return "upstream_error"
-    # upstream_http — map by status code
-    if obs.status_code is not None:
-        if obs.status_code == 408:
-            return "timeout"
-        if 400 <= obs.status_code < 500:
-            return "client_error"
-        if 500 <= obs.status_code < 600:
-            return "upstream_error"
+    if obs.status_code == 408:
+        return "timeout"
+    if obs.status_code is not None and 400 <= obs.status_code < 500:
+        return "client_error"
     return "upstream_error"
 
 
+def _decision(
+    obs: FailureObservation,
+    *,
+    retry: bool = False,
+    client_outcome: str | None = None,
+    account_effect: str = "none",
+    model_effect: str = "none",
+    circuit_penalty: bool = False,
+    persist_backoff: bool = False,
+    backoff_reason: str | None = None,
+    backoff_until: float | None = None,
+    release_probe_only: bool = True,
+    evidence_class: str,
+    provider_attributable: bool = False,
+) -> FailureEffects:
+    """Construct a complete decision and derive its component metadata."""
+    return FailureEffects(
+        retry=retry and not obs.downstream_started,
+        retry_scope="other_account" if retry and not obs.downstream_started else "none",
+        client_outcome=client_outcome or _client_outcome(obs),
+        account_effect=account_effect,
+        model_effect=model_effect,
+        circuit_penalty=circuit_penalty,
+        persist_backoff=persist_backoff,
+        backoff_reason=backoff_reason,
+        backoff_until=backoff_until,
+        release_probe_only=release_probe_only,
+        evidence_class=evidence_class,
+        circuit_transition="failure" if circuit_penalty else "none",
+        probe_convergence=(
+            "recorded"
+            if account_effect in {"failure", "cooldown", "disable_auth"}
+            else "released"
+        ),
+        provider_attributable=provider_attributable,
+        source=obs.source,
+        response_signal=obs.response_signal,
+        retry_after_s=obs.retry_after_s,
+    )
+
+
+def _bounded_retry_after(value: float | None) -> float:
+    if value is None or not math.isfinite(value):
+        return 60.0
+    return max(0.0, value)
+
+
 def classify_failure_effects(obs: FailureObservation) -> FailureEffects:
-    """Pure classifier: maps a failure observation to typed effects.
-
-    This is the single authoritative decision point for all
-    retry/shared-state effects.  Call sites must not reclassify
-    independently.
-
-    Decision table (see plans/025-failure-effects-and-model-quarantine.md
-    Workstream C for the full matrix):
-
-    * Client validation → release_probe_only
-    * Context limit / capability rejection → release_probe_only
-    * Generic HTTP 400/409/422 → release_probe_only
-    * HTTP 401 confirmed auth → disable_auth, circuit penalty, persist
-    * HTTP 403 quota signal → quota, persist
-    * HTTP 403 without auth/quota → release_probe_only
-    * HTTP 402 quota → quota, persist
-    * HTTP 404 model-like → quarantine, persist (bounded)
-    * HTTP 404 authoritative → terminal_withdrawal, persist
-    * HTTP 404 generic → release_probe_only
-    * HTTP 408/timeout → cooldown, circuit penalty, persist
-    * HTTP 429 → rate_limit, persist
-    * HTTP 5xx → cooldown, circuit penalty, persist
-    * Client cancellation → release_probe_only
-    * Midstream transport → failure, circuit penalty, persist
-    * Finalization/database → no provider effect
-    """
-    # ------------------------------------------------------------------
-    # Client validation / request-local failures
-    # ------------------------------------------------------------------
-    if obs.source == "client_validation":
-        return FailureEffects(
-            retry=False,
-            retry_scope="none",
-            client_outcome="client_error",
-            account_effect="none",
-            model_effect="none",
-            circuit_penalty=False,
-            persist_backoff=False,
-            backoff_reason=None,
-            backoff_until=None,
-            release_probe_only=True,
-            evidence_class="client_validation",
-        )
-
-    # Context-limit / capability rejection
-    if obs.response_signal in (
-        FailureSignal.CONTEXT_LIMIT_EXCEEDED,
-        FailureSignal.UNSUPPORTED_REQUEST_CONTROL,
-        FailureSignal.GENERIC_CLIENT_VALIDATION,
-    ):
-        return FailureEffects(
-            retry=False,
-            retry_scope="none",
-            client_outcome=_classify_client_outcome(obs),
-            account_effect="none",
-            model_effect="none",
-            circuit_penalty=False,
-            persist_backoff=False,
-            backoff_reason=None,
-            backoff_until=None,
-            release_probe_only=True,
-            evidence_class=(
-                f"request_local_{obs.response_signal.value}"
-                if obs.response_signal is not None
-                else "request_local_unknown"
-            ),
-        )
-
-    # Error-class based request-local detection
+    """Return the one canonical retry/effects decision for ``obs``."""
     ec = (obs.error_class or "").lower()
-    if "contextlimitexceeded" in ec or "context_limit_exceeded" in ec:
-        return FailureEffects(
-            retry=False,
-            retry_scope="none",
-            client_outcome=_classify_client_outcome(obs),
-            account_effect="none",
-            model_effect="none",
-            circuit_penalty=False,
-            persist_backoff=False,
-            backoff_reason=None,
-            backoff_until=None,
-            release_probe_only=True,
-            evidence_class="request_local_context_limit",
+
+    # Request-local and operational failures never suppress a provider.
+    if obs.source in {
+        "client_validation",
+        "local_preparation",
+        "transcoding",
+        "finalization",
+        "database",
+        "cancellation",
+    }:
+        local_evidence = (
+            "client_validation"
+            if obs.source == "client_validation"
+            else f"{obs.source}_local"
+        )
+        return _decision(
+            obs,
+            client_outcome=(
+                "client_error" if obs.source != "finalization" else "upstream_error"
+            ),
+            evidence_class=local_evidence,
+        )
+    if (
+        obs.response_signal
+        in {
+            FailureSignal.CONTEXT_LIMIT_EXCEEDED,
+            FailureSignal.UNSUPPORTED_REQUEST_CONTROL,
+            FailureSignal.GENERIC_CLIENT_VALIDATION,
+        }
+        or "contextlimitexceeded" in ec
+        or "context_limit_exceeded" in ec
+    ):
+        return _decision(
+            obs,
+            client_outcome="client_error",
+            evidence_class="request_local_context_or_capability",
         )
     if "capability" in ec or "unsupported" in ec:
-        return FailureEffects(
-            retry=False,
-            retry_scope="none",
-            client_outcome=_classify_client_outcome(obs),
-            account_effect="none",
-            model_effect="none",
-            circuit_penalty=False,
-            persist_backoff=False,
-            backoff_reason=None,
-            backoff_until=None,
-            release_probe_only=True,
+        return _decision(
+            obs,
+            client_outcome="client_error",
             evidence_class="request_local_capability",
         )
 
-    # ------------------------------------------------------------------
-    # Non-HTTP sources
-    # ------------------------------------------------------------------
-    if obs.source == "finalization" or obs.source == "database":
-        return FailureEffects(
-            retry=False,
-            retry_scope="none",
-            client_outcome="upstream_error",
-            account_effect="none",
-            model_effect="none",
-            circuit_penalty=False,
-            persist_backoff=False,
-            backoff_reason=None,
-            backoff_until=None,
-            release_probe_only=True,
-            evidence_class=f"provider_local_{obs.source}",
-        )
+    # Cancellation is represented explicitly by newer callers and by the
+    # legacy stream/no-response-start fact.
+    if (
+        obs.source == "stream"
+        and obs.response_signal is None
+        and not obs.response_started
+    ):
+        return _decision(obs, evidence_class="client_cancellation")
 
     if obs.source == "transport":
-        return FailureEffects(
-            retry=False,
-            retry_scope="none",
-            client_outcome="service_unavailable",
+        return _decision(
+            obs,
+            retry=True,
             account_effect="failure",
-            model_effect="none",
             circuit_penalty=True,
             persist_backoff=True,
             backoff_reason="connection_failure",
             backoff_until=_now() + 30.0,
             release_probe_only=False,
             evidence_class="transport_failure",
+            provider_attributable=True,
         )
 
     if (
         obs.source == "stream"
         and obs.response_signal == FailureSignal.TRANSPORT_FAILURE
     ):
-        # Midstream transport failure — no retry after bytes received
-        return FailureEffects(
-            retry=False,
-            retry_scope="none",
-            client_outcome="upstream_error",
+        return _decision(
+            obs,
             account_effect="failure",
-            model_effect="none",
             circuit_penalty=True,
             persist_backoff=True,
             backoff_reason="connection_failure",
             backoff_until=_now() + 30.0,
             release_probe_only=False,
             evidence_class="midstream_transport_failure",
+            provider_attributable=True,
         )
 
-    # Client cancellation (any source)
-    if (
-        obs.source == "stream"
-        and obs.response_signal is None
-        and not obs.response_started
-    ):
-        return FailureEffects(
-            retry=False,
-            retry_scope="none",
-            client_outcome="upstream_error",
-            account_effect="none",
-            model_effect="none",
-            circuit_penalty=False,
-            persist_backoff=False,
-            backoff_reason=None,
-            backoff_until=None,
-            release_probe_only=True,
-            evidence_class="client_cancellation",
-        )
-
-    # ------------------------------------------------------------------
-    # HTTP status-based classification
-    # ------------------------------------------------------------------
     sc = obs.status_code
-
-    # HTTP 400 — generic bad request
     if sc == 400:
-        return FailureEffects(
-            retry=False,
-            retry_scope="none",
-            client_outcome="client_error",
-            account_effect="none",
-            model_effect="none",
-            circuit_penalty=False,
-            persist_backoff=False,
-            backoff_reason=None,
-            backoff_until=None,
-            release_probe_only=True,
-            evidence_class="http_400_validation",
+        return _decision(
+            obs, client_outcome="client_error", evidence_class="http_400_validation"
         )
-
-    # HTTP 401 — confirmed authentication failure
     if sc == 401:
-        return FailureEffects(
-            retry=False,
-            retry_scope="other_account",
+        return _decision(
+            obs,
+            retry=True,
             client_outcome="client_error",
             account_effect="disable_auth",
-            model_effect="none",
             circuit_penalty=True,
             persist_backoff=True,
             backoff_reason="authentication_failed",
-            backoff_until=None,  # terminal
             release_probe_only=False,
             evidence_class="http_401_auth_failure",
+            provider_attributable=True,
         )
-
-    # HTTP 402 — quota exhausted
     if sc == 402:
-        return FailureEffects(
-            retry=False,
-            retry_scope="other_account",
-            client_outcome="upstream_error",
+        return _decision(
+            obs,
+            retry=True,
             account_effect="quota",
-            model_effect="none",
-            circuit_penalty=False,
             persist_backoff=True,
             backoff_reason="quota_exhausted",
             backoff_until=_now() + 300.0,
             release_probe_only=False,
             evidence_class="http_402_quota_exhausted",
+            provider_attributable=True,
         )
-
-    # HTTP 403 — ambiguous: check signal
     if sc == 403:
         if obs.response_signal == FailureSignal.QUOTA_EXHAUSTED:
-            return FailureEffects(
-                retry=False,
-                retry_scope="other_account",
+            return _decision(
+                obs,
+                retry=True,
                 client_outcome="client_error",
                 account_effect="quota",
-                model_effect="none",
-                circuit_penalty=False,
                 persist_backoff=True,
                 backoff_reason="quota_exhausted",
                 backoff_until=_now() + 300.0,
                 release_probe_only=False,
                 evidence_class="http_403_quota_signal",
+                provider_attributable=True,
             )
         if obs.response_signal == FailureSignal.AUTHENTICATION_FAILED:
-            return FailureEffects(
-                retry=False,
-                retry_scope="other_account",
+            return _decision(
+                obs,
+                retry=True,
                 client_outcome="client_error",
                 account_effect="disable_auth",
-                model_effect="none",
                 circuit_penalty=True,
                 persist_backoff=True,
                 backoff_reason="authentication_failed",
-                backoff_until=None,
                 release_probe_only=False,
                 evidence_class="http_403_auth_signal",
+                provider_attributable=True,
             )
-        # 403 without auth/quota evidence → request-local
-        return FailureEffects(
-            retry=False,
-            retry_scope="none",
-            client_outcome="client_error",
-            account_effect="none",
-            model_effect="none",
-            circuit_penalty=False,
-            persist_backoff=False,
-            backoff_reason=None,
-            backoff_until=None,
-            release_probe_only=True,
-            evidence_class="http_403_no_evidence",
+        return _decision(
+            obs, client_outcome="client_error", evidence_class="http_403_no_evidence"
         )
-
-    # HTTP 404 — model-specific vs generic
     if sc == 404:
-        is_model_404 = obs.response_signal == FailureSignal.MODEL_ABSENT
-        # Also detect by error class
-        if not is_model_404:
-            is_model_404 = "modelunavailable" in ec or "model_not_found" in ec
-
-        if is_model_404:
-            # Check if this is authoritative (provider catalog) or runtime-only
-            if obs.source == "provider_catalog":
-                return FailureEffects(
-                    retry=False,
-                    retry_scope="other_account",
-                    client_outcome="client_error",
-                    account_effect="none",
-                    model_effect="terminal_withdrawal",
-                    circuit_penalty=False,
-                    persist_backoff=True,
-                    backoff_reason="model_unavailable",
-                    backoff_until=None,  # terminal
-                    release_probe_only=False,
-                    evidence_class=EVIDENCE_PROVIDER_CATALOG,
-                )
-            # Runtime-only model-like 404 → bounded quarantine
-            return FailureEffects(
-                retry=False,
-                retry_scope="other_account",
+        model_like = obs.response_signal == FailureSignal.MODEL_ABSENT or (
+            "modelunavailable" in ec or "model_not_found" in ec
+        )
+        if model_like:
+            authoritative = obs.source == "provider_catalog"
+            return _decision(
+                obs,
+                retry=True,
                 client_outcome="client_error",
-                account_effect="none",
-                model_effect="quarantine",
-                circuit_penalty=False,
+                model_effect=("terminal_withdrawal" if authoritative else "quarantine"),
                 persist_backoff=True,
                 backoff_reason="model_unavailable",
-                backoff_until=_now() + 300.0,
+                backoff_until=None if authoritative else _now() + 300.0,
                 release_probe_only=False,
-                evidence_class="runtime_model_absent_404",
+                evidence_class=(
+                    EVIDENCE_PROVIDER_CATALOG
+                    if authoritative
+                    else "runtime_model_absent_404"
+                ),
+                provider_attributable=True,
             )
-        # Generic 404 (route not found)
-        return FailureEffects(
-            retry=False,
-            retry_scope="none",
-            client_outcome="client_error",
-            account_effect="none",
-            model_effect="none",
-            circuit_penalty=False,
-            persist_backoff=False,
-            backoff_reason=None,
-            backoff_until=None,
-            release_probe_only=True,
-            evidence_class="http_404_generic",
+        return _decision(
+            obs, client_outcome="client_error", evidence_class="http_404_generic"
         )
-
-    # HTTP 408 — timeout
     if sc == 408:
-        return FailureEffects(
+        return _decision(
+            obs,
             retry=True,
-            retry_scope="other_account",
             client_outcome="timeout",
             account_effect="cooldown",
-            model_effect="none",
             circuit_penalty=True,
             persist_backoff=True,
             backoff_reason="connect_timeout",
             backoff_until=_now() + 30.0,
             release_probe_only=False,
             evidence_class="http_408_timeout",
+            provider_attributable=True,
         )
-
-    # HTTP 409 / 422 — provider-specific client errors
     if sc in (409, 422):
-        return FailureEffects(
-            retry=False,
-            retry_scope="none",
-            client_outcome="client_error",
-            account_effect="none",
-            model_effect="none",
-            circuit_penalty=False,
-            persist_backoff=False,
-            backoff_reason=None,
-            backoff_until=None,
-            release_probe_only=True,
-            evidence_class=f"http_{sc}_provider_specific",
+        if obs.response_signal in {
+            FailureSignal.QUOTA_EXHAUSTED,
+            FailureSignal.RATE_LIMITED,
+        }:
+            rate = obs.response_signal == FailureSignal.RATE_LIMITED
+            return _decision(
+                obs,
+                retry=True,
+                account_effect="rate_limit" if rate else "quota",
+                persist_backoff=True,
+                backoff_reason="rate_limited" if rate else "quota_exhausted",
+                backoff_until=_now() + _bounded_retry_after(obs.retry_after_s),
+                release_probe_only=False,
+                evidence_class=f"http_{sc}_{'rate' if rate else 'quota'}_signal",
+                provider_attributable=True,
+            )
+        return _decision(
+            obs, client_outcome="client_error", evidence_class=f"http_{sc}_no_evidence"
         )
-
-    # HTTP 429 — rate limited
     if sc == 429:
-        retry_after = obs.retry_after_s if obs.retry_after_s is not None else 60.0
-        return FailureEffects(
+        return _decision(
+            obs,
             retry=True,
-            retry_scope="other_account",
-            client_outcome="upstream_error",
             account_effect="rate_limit",
-            model_effect="none",
-            circuit_penalty=False,
             persist_backoff=True,
             backoff_reason="rate_limited",
-            backoff_until=_now() + retry_after,
+            backoff_until=_now() + _bounded_retry_after(obs.retry_after_s),
             release_probe_only=False,
             evidence_class="http_429_rate_limited",
+            provider_attributable=True,
         )
-
-    # HTTP 5xx
     if sc is not None and 500 <= sc < 600:
-        return FailureEffects(
+        return _decision(
+            obs,
             retry=True,
-            retry_scope="other_account",
-            client_outcome="upstream_error",
             account_effect="cooldown",
-            model_effect="none",
             circuit_penalty=True,
             persist_backoff=True,
             backoff_reason="upstream_server_error",
             backoff_until=_now() + 20.0,
             release_probe_only=False,
             evidence_class=f"http_{sc}_server_error",
+            provider_attributable=True,
         )
-
-    # ------------------------------------------------------------------
-    # Fallback: unknown — zero shared-state effects
-    # ------------------------------------------------------------------
-    return FailureEffects(
-        retry=False,
-        retry_scope="none",
-        client_outcome=_classify_client_outcome(obs),
-        account_effect="none",
-        model_effect="none",
-        circuit_penalty=False,
-        persist_backoff=False,
-        backoff_reason=None,
-        backoff_until=None,
-        release_probe_only=True,
-        evidence_class="unknown_fallback",
+    return _decision(
+        obs, client_outcome=_client_outcome(obs), evidence_class="unknown_fallback"
     )
+
+
+def classify_failure(obs: FailureObservation) -> FailureEffects:
+    """Canonical-name adapter for callers migrating from Plan 025."""
+    return classify_failure_effects(obs)
