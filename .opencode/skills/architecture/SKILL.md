@@ -130,7 +130,16 @@ Plus `RuntimeManagerLeaseExhaustedError` (RuntimeError, mapped to HTTP 503).
 
 ## Health Management
 
-`src/eggpool/health/` — `HealthManager` circuit breaker, per-account health tracking, `DatabaseWritableProbe` (real SQLite write probes, cached for `/readyz`).
+`src/eggpool/health/` — `HealthManager` circuit breaker, per-account health
+tracking, and bounded self-healing backoff. Every nonterminal runtime
+suppression is capped at 1,800 seconds after exponential growth, provider
+`Retry-After`, and jitter. Durable rows are restart hints: startup hydration
+ignores expired, malformed, unknown, disabled-account, contradictory-scope,
+and overlong state, while authentication and authoritative model withdrawal
+remain explicit terminal states. Validated rehash resets only the changed
+account's resolved credential/provider binding and its durable auth hint.
+`DatabaseWritableProbe` uses real SQLite writes but is process-owned and cached
+for `/readyz`.
 
 ## Request Finalization
 

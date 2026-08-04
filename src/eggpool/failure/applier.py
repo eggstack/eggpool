@@ -211,7 +211,11 @@ class EffectsApplier:
             )
             self._health_manager.release_request(account)
         elif effects.account_effect == "rate_limit":
-            retry_after = effects.backoff_until - now if effects.backoff_until else 60.0
+            retry_after = (
+                max(0.0, effects.backoff_until - now)
+                if effects.backoff_until is not None
+                else 60.0
+            )
             self._health_manager.record_rate_limit(account, retry_after)
             self._health_manager.release_request(account)
         elif effects.account_effect in ("failure", "cooldown"):
@@ -291,6 +295,7 @@ class EffectsApplier:
                 self._health_manager.disable_model(
                     obs.account_name,
                     obs.model_id,
+                    terminal=True,
                 )
                 self._health_manager.release_request(obs.account_name)
             if self._catalog_cache is not None:
@@ -393,7 +398,7 @@ class EffectsApplier:
                 reason="successful_request",
             )
         if self._health_manager is not None and account_id and canonical_model_id:
-            self._health_manager.enable_model(account_id, canonical_model_id)
+            self._health_manager.clear_model_on_success(account_id, canonical_model_id)
         return cleared
 
     def clear_authoritative_reappearance(

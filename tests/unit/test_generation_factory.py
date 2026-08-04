@@ -6,6 +6,7 @@ generations through the shared RuntimeGenerationFactory.
 
 from __future__ import annotations
 
+import datetime as dt
 import time
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock
@@ -756,22 +757,23 @@ class TestBackoffHydrationParity:
             process = _make_process(db=db, stats_db=db)
             config = _make_config()
 
-            # Manually insert a backoff record
-            from eggpool.db.repositories import AccountBackoffRepository
-
-            backoff_repo = AccountBackoffRepository(db)
             account_id = await account_repo.get_id_by_name("acct-1")
             assert account_id is not None
-            future_epoch = int(time.time()) + 3600  # 1 hour from now
+            # Insert a legacy row directly so hydration, rather than the
+            # current write normalizer, has to clamp the old long deadline.
+            future_epoch = int(time.time()) + 86400
+            legacy_until = dt.datetime.fromtimestamp(future_epoch, tz=dt.UTC).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
             async with db.transaction():
-                await backoff_repo.upsert_failure(
-                    account_id=account_id,
-                    model_id=None,
-                    reason="rate_limited",
-                    status_code=429,
-                    error_class=None,
-                    backoff_until=future_epoch,
-                    consecutive_failures=1,
+                await db.execute_write(
+                    """
+                    INSERT INTO account_backoffs (
+                        account_id, model_id, reason, status_code,
+                        consecutive_failures, backoff_until
+                    ) VALUES (?, NULL, 'rate_limited', 429, 1, ?)
+                    """,
+                    (account_id, legacy_until),
                 )
 
             # Factory should hydrate the backoff
@@ -786,6 +788,7 @@ class TestBackoffHydrationParity:
             # Account should be suppressed
             health = result.health_manager.get_account_health("acct-1")
             assert health.is_healthy is False
+            assert health.cooldown_until - time.time() <= 1801.0
         finally:
             await db.disconnect()
 

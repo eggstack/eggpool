@@ -136,6 +136,7 @@ def _make_selected_attempt(
 ) -> Any:
     """Build a ``SelectedAttempt`` for a synthetic already-selected attempt."""
     from eggpool.request.coordinator import SelectedAttempt
+    from eggpool.request.finalization_job import AttemptRuntimeLease
 
     return SelectedAttempt(
         proxy_request_id="req-budget-cleanup",
@@ -153,6 +154,14 @@ def _make_selected_attempt(
         requires_transcode=True,
         protocol="openai",
         streamed=streamed,
+        runtime_lease=AttemptRuntimeLease(
+            account_name=account_name,
+            estimated_tokens=100,
+            estimated_microdollars=estimated_microdollars,
+            active_count_acquired=True,
+            quota_reservation_acquired=True,
+            health_probe_acquired=True,
+        ),
     )
 
 

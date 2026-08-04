@@ -137,10 +137,13 @@ class TestFinalizerAccountIdReuse:
 
         request_repo = MagicMock()
         request_repo.finalize_if_pending = AsyncMock(return_value=True)
+        request_repo.get_by_id = AsyncMock(return_value=None)
         attempt_repo = MagicMock()
         attempt_repo.finalize_if_incomplete = AsyncMock()
+        attempt_repo.get_by_id = AsyncMock(return_value=None)
         reservation_repo = MagicMock()
         reservation_repo.release = AsyncMock(return_value=True)
+        reservation_repo.get_status = AsyncMock(return_value="released")
 
         mock_event_repo = MagicMock()
         mock_event_repo.record = AsyncMock()

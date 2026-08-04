@@ -25,11 +25,18 @@ Design rules:
 from __future__ import annotations
 
 import logging
+import math
 import random
 from dataclasses import dataclass
 from enum import StrEnum
 
 logger = logging.getLogger(__name__)
+
+# Runtime suppression is deliberately short-lived.  Durable rows are only
+# restart hints; this is also the maximum delay accepted by the in-memory
+# policy and by hydration of legacy rows.
+MAX_NONTERMINAL_BACKOFF_SECONDS = 1800.0
+TERMINAL_BACKOFF_REASONS = frozenset({"authentication_failed", "model_unavailable"})
 
 
 class BackoffReason(StrEnum):
@@ -113,9 +120,10 @@ def get_backoff_policy(reason: str) -> BackoffPolicy | None:
         return BackoffPolicy(
             base_delay=300.0,  # 5 minutes
             multiplier=2.0,
-            cap=86400.0,  # 24 hours
+            cap=MAX_NONTERMINAL_BACKOFF_SECONDS,
             jitter=0.15,
             scope="account",
+            max_consecutive=3,
         )
     if r is BackoffReason.RATE_LIMITED:
         # Retry-After (when present) takes precedence over the
@@ -123,17 +131,19 @@ def get_backoff_policy(reason: str) -> BackoffPolicy | None:
         return BackoffPolicy(
             base_delay=60.0,
             multiplier=2.0,
-            cap=86400.0,
+            cap=MAX_NONTERMINAL_BACKOFF_SECONDS,
             jitter=0.15,
             scope="account",
+            max_consecutive=5,
         )
     if r is BackoffReason.UPSTREAM_SERVER_ERROR:
         return BackoffPolicy(
             base_delay=20.0,  # 15-30s midpoint
             multiplier=2.0,
-            cap=1800.0,  # 30 minutes
+            cap=MAX_NONTERMINAL_BACKOFF_SECONDS,
             jitter=0.15,
             scope="account",
+            max_consecutive=7,
         )
     if r in (
         BackoffReason.CONNECT_TIMEOUT,
@@ -143,17 +153,19 @@ def get_backoff_policy(reason: str) -> BackoffPolicy | None:
         return BackoffPolicy(
             base_delay=30.0,
             multiplier=2.0,
-            cap=1800.0,
+            cap=MAX_NONTERMINAL_BACKOFF_SECONDS,
             jitter=0.15,
             scope="account",
+            max_consecutive=6,
         )
     if r is BackoffReason.MODEL_UNAVAILABLE:
         return BackoffPolicy(
             base_delay=300.0,
             multiplier=2.0,
-            cap=86400.0,
+            cap=MAX_NONTERMINAL_BACKOFF_SECONDS,
             jitter=0.15,
             scope="account_model",
+            max_consecutive=3,
         )
     if r is BackoffReason.CONTEXT_LIMIT_EXCEEDED:
         # No account-level suppression for context-limit errors.
@@ -197,11 +209,13 @@ def compute_backoff_seconds(
     if policy is None or policy.base_delay <= 0 or policy.cap <= 0:
         return None
 
-    # Honor upstream Retry-After before computing exponential growth.
-    # The provider's explicit cooldown is always at least as trustworthy
-    # as our local schedule.
+    # Honor a valid upstream Retry-After before computing exponential growth.
+    # Invalid values use the bounded local schedule; they must never become
+    # an accidental cap-sized suppression.  A valid zero remains zero even
+    # when jitter is enabled.
     if (
         retry_after is not None
+        and math.isfinite(retry_after)
         and retry_after >= 0
         and reason
         in (
@@ -209,27 +223,31 @@ def compute_backoff_seconds(
             BackoffReason.QUOTA_EXHAUSTED.value,
         )
     ):
-        delay = min(float(retry_after), policy.cap)
+        delay = min(float(retry_after), MAX_NONTERMINAL_BACKOFF_SECONDS)
         if jitter:
             delay = _jitterize(delay, policy.jitter)
-        return max(0.0, delay)
+        return min(max(0.0, delay), MAX_NONTERMINAL_BACKOFF_SECONDS)
 
     if consecutive_failures <= 1:
         delay = policy.base_delay
     else:
         # Cap the exponent explicitly so pathological counters cannot
-        # overflow or exceed ``max_consecutive`` doublings.
+        # construct an enormous integer or overflow a float.
         doublings = max(
             0, min(consecutive_failures - 1, max(policy.max_consecutive, 0))
         )
-        delay = policy.base_delay * (policy.multiplier**doublings)
-        if delay > policy.cap or delay <= 0:
+        delay = policy.base_delay
+        for _ in range(doublings):
+            if delay >= policy.cap:
+                break
+            delay = min(policy.cap, delay * policy.multiplier)
+        if not math.isfinite(delay) or delay <= 0:
             delay = policy.cap
 
     if jitter:
         delay = _jitterize(delay, policy.jitter)
 
-    return min(max(0.0, delay), policy.cap)
+    return min(max(0.0, delay), MAX_NONTERMINAL_BACKOFF_SECONDS)
 
 
 def is_backoff_reason(reason: str) -> bool:

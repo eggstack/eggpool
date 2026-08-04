@@ -4265,6 +4265,33 @@ requires corroboration before becoming terminal.
 - `tests/integration/test_request_error_isolation.py` — request-local/provider isolation and probe release
 - `tests/integration/test_cross_provider_quarantine.py` — provider/account quarantine scope
 
+## Bounded Backoff and Router Self-Healing (Plan 073)
+
+All nonterminal runtime suppression is bounded to 1,800 seconds. The bound is
+applied after exponential growth, provider `Retry-After`, and jitter; invalid,
+negative, non-finite, and absurd values use a safe local fallback. Runtime
+model absence is scoped to the exact account/model/protocol identity. It never
+creates account-wide or permanent withdrawal without authoritative catalog or
+operator evidence.
+
+`account_backoffs` is a restart hint rather than the sole routing authority.
+Startup and rehash hydration ignore rows for disabled/missing accounts,
+unknown reasons, contradictory scopes, malformed deadlines, and expired rows;
+legacy future deadlines are clamped to `now + 1800s` in memory and rewritten
+best-effort. A failed hint write or cleanup cannot fail otherwise valid proxy
+traffic.
+
+Success and expiry are scoped recovery paths: matching account/model success
+clears transient health, the matching bounded quarantine, and matching durable
+rows, while preserving authentication failure and authoritative withdrawal.
+Catalog reappearance and explicit operator credential/account/model enable
+actions are the terminal exits. A validated rehash clears only an account whose
+resolved credential or provider/key binding changed, including its durable auth
+hint, in the same transaction as the account sync. Circuit probes are leased per attempt and
+converge exactly once through provider success, provider failure, cancellation,
+local rejection, or retained cleanup; a half-open failure reopens once and a
+successful default probe closes the circuit.
+
 ## Process-Owned Request Finalization (Plan 026)
 
 Makes selected-attempt cleanup independent of the client request task. Once EggPool has durably created a request, attempt, or reservation and claimed runtime ownership, one retained process-owned finalization job must own terminal reconciliation until every durable and in-memory obligation has either completed or entered a bounded, observable retry state.

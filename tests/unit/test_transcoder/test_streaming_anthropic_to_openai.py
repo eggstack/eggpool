@@ -404,8 +404,9 @@ class TestEmptyStream:
         combined = b"".join(raw)
         frames = _parse_sse_frames(combined)
 
-        assert len(frames) >= 1
-        assert frames[-1]["data"] == "[DONE]"
+        # Without a canonical Anthropic message lifecycle there is no
+        # truthful OpenAI completion frame to synthesize.
+        assert frames == []
 
 
 class TestIdAndModelPreserved:

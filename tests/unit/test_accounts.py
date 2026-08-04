@@ -203,13 +203,13 @@ def test_account_registry_eligible_states() -> None:
         del os.environ["TEST_ELIGIBLE_KEY"]
 
 
-def test_backoff_max_is_one_hour() -> None:
-    """Backoff cap should be 3600 seconds (1 hour)."""
-    assert DEFAULT_BACKOFF_MAX_SECONDS == 3600.0
+def test_backoff_max_is_30_minutes() -> None:
+    """Backoff cap should be 1800 seconds (30 minutes)."""
+    assert DEFAULT_BACKOFF_MAX_SECONDS == 1800.0
 
 
 def test_backoff_exponential_with_cap() -> None:
-    """Backoff should double each failure, capped at 1 hour."""
+    """Backoff should double each failure, capped at 30 minutes."""
     state = AccountRuntimeState(name="test")
     before = time.time()
 
@@ -243,20 +243,20 @@ def test_backoff_exponential_with_cap() -> None:
     assert state.cooldown_until > before + 955.0
     assert state.cooldown_until <= before + 965.0
 
-    # 7th failure: 1920s
+    # 7th failure: 1800s (capped)
     state.record_failure("rate_limited")
-    assert state.cooldown_until > before + 1915.0
-    assert state.cooldown_until <= before + 1925.0
+    assert state.cooldown_until > before + 1795.0
+    assert state.cooldown_until <= before + 1805.0
 
-    # 8th failure: 3600s (capped)
+    # 8th failure: still 1800s (capped)
     state.record_failure("rate_limited")
-    assert state.cooldown_until > before + 3595.0
-    assert state.cooldown_until <= before + 3605.0
+    assert state.cooldown_until > before + 1795.0
+    assert state.cooldown_until <= before + 1805.0
 
-    # 9th failure: still 3600s (capped)
+    # 9th failure: still 1800s (capped)
     state.record_failure("rate_limited")
-    assert state.cooldown_until > before + 3595.0
-    assert state.cooldown_until <= before + 3605.0
+    assert state.cooldown_until > before + 1795.0
+    assert state.cooldown_until <= before + 1805.0
 
 
 def test_backoff_resets_on_different_error_class() -> None:

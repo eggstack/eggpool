@@ -393,17 +393,13 @@ class TestArbitraryChunkBoundaries:
 
 
 class TestSseParserEventNameReset:
-    """Regression: event-only frames must not leak their event name into
-    a following data-only frame.  Previously ``_emit_frame`` returned
-    ``None`` for event-only frames without resetting ``_current_event``,
-    so a leading ``event: ping`` would contaminate the next data frame.
-    """
+    """Event-only frames must not contaminate subsequent data frames."""
 
     def test_event_only_frame_resets_current_event(self) -> None:
         transcoder = OpenAIToAnthropicStreaming()
         chunk = b'event: ping\n\ndata: {"choices":[{"delta":{"role":"assistant"}}]}\n\n'
-        frames = transcoder._parse_chunk(chunk)
-        assert frames == [("", '{"choices":[{"delta":{"role":"assistant"}}]}')]
+        frames = _parse_sse_frames(b"".join(transcoder.feed(chunk)))
+        assert [frame["event"] for frame in frames] == ["message_start"]
 
     def test_multiple_event_only_frames_in_a_row(self) -> None:
         transcoder = OpenAIToAnthropicStreaming()
@@ -413,17 +409,20 @@ class TestSseParserEventNameReset:
             b"event: ping\n\n"
             b'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n'
         )
-        frames = transcoder._parse_chunk(chunk)
-        assert frames == [("", '{"choices":[{"delta":{"role":"assistant"}}]}')]
+        frames = _parse_sse_frames(b"".join(transcoder.feed(chunk)))
+        assert [frame["event"] for frame in frames] == ["message_start"]
 
     def test_data_only_frame_after_reset(self) -> None:
         transcoder = OpenAIToAnthropicStreaming()
         chunk = b'event: ping\n\ndata: {"choices":[{"delta":{"role":"assistant"}}]}\n\n'
-        transcoder._parse_chunk(chunk)
+        transcoder.feed(chunk)
         second_chunk = b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'
-        frames = transcoder._parse_chunk(second_chunk)
-        assert all(event == "" for event, _ in frames)
-        assert frames[0][1] == '{"choices":[{"delta":{"content":"hi"}}]}'
+        frames = _parse_sse_frames(b"".join(transcoder.feed(second_chunk)))
+        assert [frame["event"] for frame in frames] == [
+            "content_block_start",
+            "content_block_delta",
+        ]
+        assert json.loads(frames[1]["data"])["delta"]["text"] == "hi"
 
 
 class TestToolCallStreaming:

@@ -53,7 +53,7 @@ from eggpool.db.repositories import (
 from eggpool.providers.client_pool import ProviderClientPool
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     import httpx
 
@@ -200,6 +200,9 @@ class CatalogService:
         self._protocol_resolver = ModelProtocolResolver(config)
         self._limit_resolver = ModelLimitResolver(config)
         self._price_change_callback: Callable[[str, str | None], None] | None = None
+        self._model_reappearance_callback: (
+            Callable[[str, str, list[dict[str, Any]]], Awaitable[None]] | None
+        ) = None
         # Track model_ids that have already produced an unresolved-protocol
         # warning during persistence. A persistent unresolved model would
         # otherwise spam the log every refresh cycle; the warning is the
@@ -300,6 +303,13 @@ class CatalogService:
     ) -> None:
         """Register a callback used to invalidate derived pricing caches."""
         self._price_change_callback = callback
+
+    def set_model_reappearance_callback(
+        self,
+        callback: Callable[[str, str, list[dict[str, Any]]], Awaitable[None]],
+    ) -> None:
+        """Register authoritative catalog recovery for model quarantine."""
+        self._model_reappearance_callback = callback
 
     async def attach_pricing_resolvers(self) -> None:
         """Initialize the alias resolver + external catalog pipeline.
@@ -962,6 +972,22 @@ class CatalogService:
                     account_name,
                     provider_id,
                 )
+            elif self._model_reappearance_callback is not None:
+                try:
+                    await self._model_reappearance_callback(
+                        account_name,
+                        provider_id,
+                        models,
+                    )
+                except Exception:
+                    # Quarantine recovery is best-effort and must not turn a
+                    # valid catalog refresh into a failed refresh.
+                    logger.exception(
+                        "Failed to clear model quarantine after catalog "
+                        "reappearance for account=%r provider=%r",
+                        account_name,
+                        provider_id,
+                    )
             logger.debug(
                 "Account %r: %s found %d models (added=%d, updated=%d, "
                 "preserved=%d, withdrawn=%d)",

@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 from eggpool.failure.effects import FailureEffects
 from eggpool.failure.signal import FailureSignal
+from eggpool.health.backoff import MAX_NONTERMINAL_BACKOFF_SECONDS
 
 if TYPE_CHECKING:
     from eggpool.failure.observation import FailureObservation
@@ -88,9 +89,15 @@ def _decision(
 
 
 def _bounded_retry_after(value: float | None) -> float:
-    if value is None or not math.isfinite(value):
+    """Return a safe provider delay for the failure decision.
+
+    Parsing happens at the HTTP boundary.  Missing, malformed, non-finite,
+    and negative values use a short local fallback; a valid provider value is
+    still bounded before it becomes a durable deadline.
+    """
+    if value is None or not math.isfinite(value) or value < 0.0:
         return 60.0
-    return max(0.0, value)
+    return min(value, MAX_NONTERMINAL_BACKOFF_SECONDS)
 
 
 def classify_failure_effects(obs: FailureObservation) -> FailureEffects:

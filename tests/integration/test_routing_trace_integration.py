@@ -491,17 +491,17 @@ async def test_stale_parent_row_silently_skipped() -> None:
             )
             await asyncio.sleep(0.3)
 
-            # The orphan event should be silently skipped (FK violation)
-            # and not crash the batch. The surviving event for request_id=2
-            # should still be in the DB.
+            # The orphan event is rejected as one bounded batch flush error;
+            # the surviving event for request_id=2 should still be in the DB.
             count_after = await _count_routing_traces(db)
             assert count_after == 1, (
                 f"Stale parent should be silently skipped, got {count_after} rows"
             )
 
-            # No flush error — the batch completed successfully
+            # The repository reports the FK failure to the writer without
+            # crashing the background task.
             snap = writer.snapshot()
-            assert snap["dropped_flush_error"] == 0
+            assert snap["dropped_flush_error"] == 1
         finally:
             await writer.stop()
     finally:

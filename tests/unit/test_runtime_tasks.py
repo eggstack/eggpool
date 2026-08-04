@@ -151,7 +151,6 @@ class TestParity:
             "retention_cleanup",
             "checkpoint",
             "usage_window_refresh",
-            "finalization_retry_drain",
             "stale_request_finalizer",
             "health_disabled_models_prune",
         }
@@ -268,7 +267,6 @@ class TestProcessSupervisorRouting:
             "model_info_canonical_backfill",
             "retention_cleanup",
             "usage_window_refresh",
-            "finalization_retry_drain",
             "stale_request_finalizer",
             "health_disabled_models_prune",
         }

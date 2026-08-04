@@ -33,6 +33,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Bounded stale-request recovery: exact per-request active-count ownership is released, including zero-cost reservations that still carry request or token pressure; underflow is visible and clamped safely
 - Database recovery: staged, fail-closed connection recovery with transaction-owned ambiguity metadata, retained unresolved work, and single-flight reconciliation
 - Bounded model quarantine: TTL-based suspected/quarantined state with corroboration thresholds and automatic recovery
+- Self-healing provider health: every nonterminal account/model suppression is capped at 30 minutes, durable hints are bounded during hydration, and half-open probes always converge
 - Designed for lightweight deployments (Raspberry Pi, SBCs)
 
 ## Quick Start
@@ -169,6 +170,16 @@ Non-streaming responses are adapted before a request can be durably marked
 `COMPLETED`. Native protocol responses retain bounded pass-through behavior,
 including non-JSON bodies where usage extraction is optional; required
 transcoded responses that cannot be adapted become truthful local errors.
+
+Provider health suppression is bounded to 1,800 seconds for quota, rate-limit,
+transport, server, protocol, and runtime model-absence observations. Successful
+traffic and expiry restore only the matching transient account/model state.
+Authentication failures and authoritative catalog withdrawals remain terminal;
+corrected credentials during validated `eggpool rehash`, explicit operator
+enable/reset, or authoritative model reappearance are their recovery paths.
+Rehash clears only the changed account's auth state. `/api/backoffs` exposes
+the active provider-derived hints; malformed or stale durable rows have no
+routing effect.
 
 ## Request shaping
 

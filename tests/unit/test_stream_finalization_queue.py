@@ -24,6 +24,7 @@ from eggpool.request.finalization_queue import (
     FinalizationRetryEntry,
     FinalizationRetryQueue,
 )
+from eggpool.request.finalizer import DurableFinalizationResult
 
 
 class _StubFinalizer:
@@ -37,9 +38,16 @@ class _StubFinalizer:
         self,
         selected: Any,
         data: Any,
-    ) -> bool:
+    ) -> DurableFinalizationResult:
         self.calls.append((selected.db_request_id, data.outcome.value))
-        return self._transition
+        return DurableFinalizationResult(
+            request_terminal=self._transition,
+            request_transitioned=self._transition,
+            attempt_transitioned=self._transition,
+            attempt_terminal=self._transition,
+            reservation_terminal=self._transition,
+            reservation_transitioned=self._transition,
+        )
 
 
 def _make_entry(
@@ -163,7 +171,7 @@ async def test_enqueue_max_age_drops() -> None:
 
 @pytest.mark.asyncio()
 async def test_drain_idempotent_when_already_finalized() -> None:
-    """Re-finalizing an already-finalized row returns False (no-op)."""
+    """Re-finalizing an already-finalized row is not counted as a transition."""
     finalizer = _StubFinalizer(transition=False)
     queue = FinalizationRetryQueue(
         db=None,  # type: ignore[arg-type]
@@ -310,7 +318,7 @@ async def test_drain_returns_succeeded_count() -> None:
 
 @pytest.mark.asyncio()
 async def test_drain_with_mixed_outcomes() -> None:
-    """drain_once counts only entries where the finalizer returned True."""
+    """drain_once counts only entries with durable convergence."""
 
     class _MixedFinalizer(_StubFinalizer):
         def __init__(self) -> None:
@@ -320,9 +328,17 @@ async def test_drain_with_mixed_outcomes() -> None:
             self,
             selected: Any,
             data: Any,
-        ) -> bool:
+        ) -> DurableFinalizationResult:
             self.calls.append((selected.db_request_id, data.outcome.value))
-            return selected.db_request_id != "db-fail"
+            transition = selected.db_request_id != "db-fail"
+            return DurableFinalizationResult(
+                request_terminal=transition,
+                request_transitioned=transition,
+                attempt_transitioned=transition,
+                attempt_terminal=transition,
+                reservation_terminal=transition,
+                reservation_transitioned=transition,
+            )
 
     queue = FinalizationRetryQueue(
         db=None,  # type: ignore[arg-type]

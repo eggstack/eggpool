@@ -43,9 +43,11 @@ from eggpool.request.stream_diagnostics import (
 
 
 def _timeout_stream_coordinator() -> tuple[Any, Any, Any]:
-    from eggpool.request.coordinator import RequestCoordinator
+    from eggpool.request.coordinator import RequestCoordinator, SelectedAttempt
+    from eggpool.retry.classification import RetryClassifier
 
     coordinator = object.__new__(RequestCoordinator)
+    coordinator._classifier = RetryClassifier()
     coordinator._transcoder_policy = None
     coordinator._finalization_supervisor = None
     coordinator._persist_error_detail = False
@@ -53,8 +55,10 @@ def _timeout_stream_coordinator() -> tuple[Any, Any, Any]:
     coordinator._stream_diagnostics = StreamDiagnostics()
     coordinator._finalizer = MagicMock()
     coordinator._finalizer.finalize = AsyncMock()
+    coordinator._finalizer.apply_runtime_convergence = AsyncMock()
     context = SimpleNamespace(
         request_id="timeout-request",
+        model_id="model-a",
         protocol="openai",
         upstream_protocol="openai",
         original_body=b"{}",
@@ -70,11 +74,19 @@ def _timeout_stream_coordinator() -> tuple[Any, Any, Any]:
         upstream_connect_ms=0,
         upstream_headers_ms=None,
     )
-    selected = SimpleNamespace(
+    selected = SelectedAttempt(
+        attempt_id=1,
+        proxy_request_id="timeout-request",
+        runtime_lease=None,
         db_request_id="db-timeout",
+        reservation_id="reservation-timeout",
+        account_id=1,
         provider_id="provider-a",
         account_name="account-a",
+        api_key="key-a",
         model_id="model-a",
+        estimated_tokens=0,
+        estimated_microdollars=0,
         attempt_number=1,
     )
     return coordinator, context, selected

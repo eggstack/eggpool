@@ -296,9 +296,10 @@ async def _run_concurrent_burst(
                     task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    if coordinator._finalization_retry_queue is not None:  # pyright: ignore[reportPrivateUsage]
+    retry_queue = getattr(coordinator, "_finalization_retry_queue", None)
+    if retry_queue is not None:
         for _ in range(5):
-            await coordinator._finalization_retry_queue.drain_once()  # pyright: ignore[reportPrivateUsage]
+            await retry_queue.drain_once()
 
     completed_count = 0
     cancelled_count = 0
@@ -375,11 +376,8 @@ async def _post_burst_assertions(
     active_requests_total = 0
     for state in coordinator._router._registry.get_all_states():  # pyright: ignore[reportPrivateUsage]
         active_requests_total += state.active_request_count
-    queue_size = (
-        coordinator._finalization_retry_queue.size  # pyright: ignore[reportPrivateUsage]
-        if coordinator._finalization_retry_queue is not None  # pyright: ignore[reportPrivateUsage]
-        else 0
-    )
+    retry_queue = getattr(coordinator, "_finalization_retry_queue", None)
+    queue_size = retry_queue.size if retry_queue is not None else 0
     quota_estimator = coordinator._router.quota_estimator  # pyright: ignore[reportPrivateUsage]
     quota_reserved_cost_total = sum(
         quota_estimator._account_reserved_cost.values()  # pyright: ignore[reportPrivateUsage]
@@ -724,9 +722,10 @@ async def test_read_timeout_scenario_classifies_as_httpx_timeout(
         # valid terminal states for a stalled upstream.
         await asyncio.wait_for(_drive(), timeout=5.0)
 
-    if coordinator._finalization_retry_queue is not None:  # pyright: ignore[reportPrivateUsage]
+    retry_queue = getattr(coordinator, "_finalization_retry_queue", None)
+    if retry_queue is not None:
         for _ in range(5):
-            await coordinator._finalization_retry_queue.drain_once()  # pyright: ignore[reportPrivateUsage]
+            await retry_queue.drain_once()
 
     final_snap = diagnostics.snapshot()
     final_httpx = dict(final_snap.get("httpx_exception_counts", {}))

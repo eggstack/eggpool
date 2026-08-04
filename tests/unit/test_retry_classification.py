@@ -154,8 +154,9 @@ class TestRetryAfterParsing:
         past_ts = time.time() - 60
         date_str = email.utils.formatdate(past_ts, usegmt=True)
         result = classifier.classify(429, headers={"retry-after": date_str})
-        assert result.retry_after is not None
-        assert result.retry_after == 0.0
+        # A negative HTTP-date delta is invalid for a bounded backoff and
+        # must use the caller's missing/invalid fallback.
+        assert result.retry_after is None
 
     def test_invalid_value_returns_none(self, classifier: RetryClassifier) -> None:
         result = classifier.classify(429, headers={"retry-after": "not-a-date"})

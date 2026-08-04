@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from eggpool.health.backoff import MAX_NONTERMINAL_BACKOFF_SECONDS
 from eggpool.health.circuit_breaker import CircuitBreaker
 
 
@@ -111,6 +113,7 @@ class AccountHealth:
     disabled_models: dict[str, float | None] = field(
         default_factory=dict[str, float | None]
     )
+    terminal_models: set[str] = field(default_factory=set[str])
     disabled_until: float | None = None
     disabled_reason: str = ""
     cooldown_until: float = 0.0
@@ -173,6 +176,8 @@ class HealthManager:
             health.is_healthy = True
             health.health_state = "healthy"
             health.cooldown_until = 0.0
+        if model_id is not None:
+            self.clear_model_on_success(account_name, model_id)
         health.circuit_breaker.record_success()
 
     def record_failure(
@@ -201,13 +206,27 @@ class HealthManager:
         """Place account into a bounded quota-exhausted cooldown."""
         health = self.get_account_health(account_name)
         health.health_state = "quota_exhausted"
-        health.cooldown_until = time.time() + cooldown_seconds
+        delay = (
+            cooldown_seconds
+            if math.isfinite(cooldown_seconds) and cooldown_seconds >= 0.0
+            else 300.0
+        )
+        health.cooldown_until = time.time() + min(
+            delay, MAX_NONTERMINAL_BACKOFF_SECONDS
+        )
         health.is_healthy = False
 
     def record_rate_limit(self, account_name: str, retry_after_seconds: float) -> None:
         """Record a rate limit with explicit cooldown."""
         health = self.get_account_health(account_name)
-        health.cooldown_until = time.time() + max(0.0, retry_after_seconds)
+        delay = (
+            retry_after_seconds
+            if math.isfinite(retry_after_seconds) and retry_after_seconds >= 0.0
+            else 60.0
+        )
+        health.cooldown_until = time.time() + min(
+            delay, MAX_NONTERMINAL_BACKOFF_SECONDS
+        )
         health.health_state = "rate_limited"
         health.is_healthy = False
 
@@ -264,6 +283,12 @@ class HealthManager:
             # No account-level suppression for context-limit errors.
             return None
 
+        if reason == "model_unavailable":
+            # Runtime model absence is account/model scoped. This helper has
+            # no model identity, so it must never fall through to an
+            # account-wide cooldown.
+            return None
+
         policy: BackoffPolicy | None = get_backoff_policy(reason)
         if policy is None:
             # Unknown reason: fall back to the legacy record_failure
@@ -273,20 +298,14 @@ class HealthManager:
 
         if policy.base_delay <= 0 or policy.cap <= 0:
             # Terminal (auth) or zero-policy reasons already routed
-            # above; this branch handles ``model_unavailable`` whose
-            # policy exists but uses an empty base to signal "no
-            # exponential backoff".
-            if reason == "model_unavailable":
-                # Per-model disable lives outside this method because
-                # it requires the model id; the coordinator calls
-                # ``disable_model`` directly.
-                return None
             return None
 
         health = self.get_account_health(account_name)
+        health.consecutive_failures += 1
+        health.last_check = time.time()
         delay = compute_backoff_seconds(
             reason,
-            consecutive_failures=health.consecutive_failures + 1,
+            consecutive_failures=health.consecutive_failures,
             retry_after=retry_after,
             jitter=True,
         )
@@ -306,8 +325,6 @@ class HealthManager:
         health.cooldown_until = time.time() + delay
         health.health_state = "cooldown"
         health.is_healthy = False
-        health.consecutive_failures += 1
-        health.last_check = time.time()
         return delay
 
     def disable_account(
@@ -341,6 +358,8 @@ class HealthManager:
         account_name: str,
         model_id: str,
         duration_seconds: float | None = None,
+        *,
+        terminal: bool = False,
     ) -> None:
         """Disable a model for an account.
 
@@ -350,16 +369,34 @@ class HealthManager:
         called.
         """
         health = self.get_account_health(account_name)
+        if terminal or duration_seconds is None:
+            health.terminal_models.add(model_id)
+        else:
+            health.terminal_models.discard(model_id)
         health.disabled_models[model_id] = (
             None
             if duration_seconds is None
-            else time.time() + max(0.0, duration_seconds)
+            else time.time()
+            + min(
+                max(0.0, duration_seconds)
+                if math.isfinite(duration_seconds)
+                else 300.0,
+                MAX_NONTERMINAL_BACKOFF_SECONDS,
+            )
         )
 
     def enable_model(self, account_name: str, model_id: str) -> None:
         """Enable a model for an account."""
         health = self.get_account_health(account_name)
         health.disabled_models.pop(model_id, None)
+        health.terminal_models.discard(model_id)
+
+    def clear_model_on_success(self, account_name: str, model_id: str) -> bool:
+        """Clear only bounded runtime model suppression after success."""
+        health = self.get_account_health(account_name)
+        if model_id in health.terminal_models:
+            return False
+        return health.disabled_models.pop(model_id, None) is not None
 
     def prune_disabled_models(
         self,
@@ -381,6 +418,7 @@ class HealthManager:
         stale = [mid for mid in health.disabled_models if mid not in advertised_models]
         for mid in stale:
             del health.disabled_models[mid]
+            health.terminal_models.discard(mid)
         return len(stale)
 
     def _refresh_transient_state(self, health: AccountHealth) -> None:
@@ -473,4 +511,7 @@ class HealthManager:
             "disabled_models": list(health.disabled_models),
             "disabled_until": health.disabled_until or 0,
             "disabled_reason": health.disabled_reason,
+            "cooldown_until": health.cooldown_until,
+            "health_state": health.health_state,
+            "terminal_models": sorted(health.terminal_models),
         }

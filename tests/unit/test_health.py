@@ -144,6 +144,22 @@ class TestCircuitBreaker:
         cb.record_failure()
         assert cb.state == CircuitState.OPEN
 
+    def test_probe_self_heals_with_injected_clock(self) -> None:
+        now = [100.0]
+        cb = CircuitBreaker(
+            failure_threshold=1,
+            recovery_timeout=10.0,
+            clock=lambda: now[0],
+        )
+        cb.record_failure()
+        now[0] = 110.0
+        assert cb.allow_request()
+        assert not cb.allow_request()
+        cb.release_probe()
+        assert cb.allow_request()
+        cb.record_success()
+        assert cb.state is CircuitState.CLOSED
+
     def test_reset(self) -> None:
         """Test circuit breaker reset."""
         cb = CircuitBreaker(failure_threshold=2)
@@ -356,6 +372,20 @@ class TestHealthManager:
         assert manager.get_account_health("account1").health_state == (
             "authentication_failed"
         )
+
+    def test_record_success_preserves_terminal_model_withdrawal(self) -> None:
+        manager = HealthManager()
+        manager.disable_model("account1", "model1", terminal=True)
+        manager.record_success("account1", "model1")
+        assert not manager.is_model_healthy("account1", "model1")
+        manager.enable_model("account1", "model1")
+        assert manager.is_model_healthy("account1", "model1")
+
+    def test_bounded_model_disable_clears_on_success(self) -> None:
+        manager = HealthManager()
+        manager.disable_model("account1", "model1", duration_seconds=300.0)
+        manager.record_success("account1", "model1")
+        assert manager.is_model_healthy("account1", "model1")
 
     def test_disable_model_only_affects_that_model(self) -> None:
         """Disabling model A should not affect model B on same account."""

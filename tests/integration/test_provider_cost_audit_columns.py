@@ -335,7 +335,7 @@ class TestFinalizeIfPending:
                     local_cost_microdollars=2_000_000,
                     local_cost_exactness="derived",
                 )
-            assert first.request_transitioned is True
+            assert first is True
 
             async with db.transaction():
                 second = await request_repo.finalize_if_pending(
@@ -346,7 +346,7 @@ class TestFinalizeIfPending:
                     local_cost_microdollars=99_000_000,
                     local_cost_exactness="estimated",
                 )
-            assert second.request_transitioned is False
+            assert second is False
 
             row = await db.fetch_one(
                 "SELECT provider_cost_microdollars, provider_cost_source, "

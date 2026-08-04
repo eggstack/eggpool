@@ -145,6 +145,14 @@ Accounts excluded when:
 - Health circuit breaker open
 - `local_quota_mode = "hard_cap"` AND local estimate exceeds capacity (opt-in legacy)
 
+Transient upstream exclusions are self-healing: quota, rate-limit, server,
+transport, protocol, and runtime model-absence suppression expires within at
+most 1,800 seconds. A runtime model absence is scoped to the exact
+account/model/protocol identity and cannot disable the whole account.
+Authentication failure and authoritative catalog withdrawal are separate
+terminal gates; they recover only through corrected credentials/operator action
+or authoritative model reappearance.
+
 ## Score Components
 
 Every `routing_decisions` row carries `score_components_json`:
@@ -161,4 +169,5 @@ Every `routing_decisions` row carries `score_components_json`:
 - Priority tier boundaries are strict: lower-priority never advance ahead of higher-priority
 - `weight` orders accounts within a tier; `routing_priority` orders tiers
 - Upstream-derived backoffs persist across restarts in `account_backoffs` table
+- Durable backoffs are restart hints only; malformed, expired, unknown, or overlong rows have zero routing effect
 - Local-estimate overage never produces a backoff row

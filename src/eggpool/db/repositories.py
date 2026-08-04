@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import datetime as _dt
 import logging
+import math
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -129,6 +130,14 @@ class AccountRepository:
         """Fetch account name by id; ``None`` when not found."""
         row = await self._db.fetch_one(
             "SELECT name FROM accounts WHERE id = ?",
+            (account_id,),
+        )
+        return str(row["name"]) if row is not None else None
+
+    async def get_enabled_name_by_id(self, account_id: int) -> str | None:
+        """Fetch an enabled account name for restart-state hydration."""
+        row = await self._db.fetch_one(
+            "SELECT name FROM accounts WHERE id = ? AND enabled = 1",
             (account_id,),
         )
         return str(row["name"]) if row is not None else None
@@ -1668,6 +1677,17 @@ class AccountBackoffRepository:
     def __init__(self, db: Database) -> None:
         self._db = db
 
+    async def clear_authentication(self, account_id: int) -> int:
+        """Clear terminal authentication hints for one account."""
+        async with self._db.transaction():
+            return int(
+                await self._db.execute_write(
+                    "DELETE FROM account_backoffs "
+                    "WHERE account_id = ? AND reason = 'authentication_failed'",
+                    (account_id,),
+                )
+            )
+
     async def upsert_failure(
         self,
         *,
@@ -1693,6 +1713,37 @@ class AccountBackoffRepository:
         paths share the same transaction boundary so the row remains
         consistent with concurrent reads.
         """
+        from eggpool.health.backoff import (
+            MAX_NONTERMINAL_BACKOFF_SECONDS,
+            TERMINAL_BACKOFF_REASONS,
+            get_backoff_policy,
+        )
+
+        if get_backoff_policy(reason) is None:
+            raise ValueError(f"unknown backoff reason: {reason!r}")
+        if reason == "authentication_failed":
+            backoff_until = None
+        elif backoff_until is None and reason not in TERMINAL_BACKOFF_REASONS:
+            raise ValueError(f"nonterminal backoff requires a deadline: {reason!r}")
+        elif backoff_until is not None:
+            if not math.isfinite(backoff_until):
+                raise ValueError("backoff deadline must be finite")
+            backoff_until = min(
+                backoff_until,
+                time.time() + MAX_NONTERMINAL_BACKOFF_SECONDS,
+            )
+
+        bounded_consecutive = min(max(int(consecutive_failures), 0), 1_000_000)
+        bounded_status = (
+            int(status_code)
+            if status_code is not None and 100 <= status_code <= 599
+            else None
+        )
+        bounded_error_class = (
+            str(error_class).replace("\n", " ").replace("\r", " ")[:128]
+            if error_class is not None
+            else None
+        )
         backoff_iso = (
             _epoch_to_iso(backoff_until) if backoff_until is not None else None
         )
@@ -1723,9 +1774,9 @@ class AccountBackoffRepository:
                         account_id,
                         model_id,
                         reason,
-                        status_code,
-                        error_class,
-                        consecutive_failures,
+                        bounded_status,
+                        bounded_error_class,
+                        bounded_consecutive,
                         backoff_iso,
                     ),
                 )
@@ -1742,9 +1793,9 @@ class AccountBackoffRepository:
                     WHERE id = ?
                     """,
                     (
-                        status_code,
-                        error_class,
-                        consecutive_failures,
+                        bounded_status,
+                        bounded_error_class,
+                        bounded_consecutive,
                         backoff_iso,
                         int(existing["id"]),
                     ),
@@ -1823,6 +1874,60 @@ class AccountBackoffRepository:
             entry.pop("acct_id", None)
             results.append(entry)
         return results
+
+    async def list_all(self, *, limit: int = 5000) -> list[dict[str, Any]]:
+        """Return all rows for defensive startup/rehash hydration.
+
+        Unlike :meth:`list_active`, this includes expired and malformed
+        hints so hydration can ignore them before routing and opportunistically
+        remove rows that cannot have any current effect.
+        """
+        rows = await self._db.fetch_all(
+            """
+            SELECT id, account_id, model_id, reason, status_code, error_class,
+                   consecutive_failures, backoff_until, last_failure_at, updated_at
+            FROM account_backoffs
+            ORDER BY account_id, model_id, reason
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            entry = dict(row)
+            raw_until = entry.get("backoff_until")
+            entry["backoff_until_epoch"] = _iso_to_epoch(raw_until)
+            entry["backoff_until_valid"] = (
+                raw_until is None or entry["backoff_until_epoch"] is not None
+            )
+            results.append(entry)
+        return results
+
+    async def delete_row(self, *, row_id: int) -> int:
+        """Delete one invalid or expired restart hint."""
+        async with self._db.transaction():
+            return int(
+                await self._db.execute_write(
+                    "DELETE FROM account_backoffs WHERE id = ?",
+                    (row_id,),
+                )
+            )
+
+    async def update_deadline(self, *, row_id: int, backoff_until: float) -> int:
+        """Clamp a legacy nonterminal deadline during hydration."""
+        if not math.isfinite(backoff_until):
+            raise ValueError("backoff deadline must be finite")
+        async with self._db.transaction():
+            return int(
+                await self._db.execute_write(
+                    """
+                    UPDATE account_backoffs
+                    SET backoff_until = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (_epoch_to_iso(backoff_until), row_id),
+                )
+            )
 
     async def expire_old(self, *, now: float | None = None) -> int:
         """Delete expired backoff rows; returns count removed.

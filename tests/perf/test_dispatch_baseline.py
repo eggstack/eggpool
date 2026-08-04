@@ -1101,7 +1101,7 @@ class TestDispatchWriterDBContention:
 
         snap_after = perf_db.contention_snapshot()
         # Lock wait should be bounded — the writer serializes DB access
-        lock_wait_p95 = snap_after.get("lock_wait_p95_ms", 0.0)
+        lock_wait_p95 = snap_after.get("lock_wait_p95_ms") or 0.0
         assert lock_wait_p95 < 100.0, (
             f"Lock wait p95 under contention: {lock_wait_p95:.1f}ms"
         )

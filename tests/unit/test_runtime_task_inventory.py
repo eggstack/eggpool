@@ -87,7 +87,6 @@ class TestInventoryConsistency:
             "retention_cleanup",
             "checkpoint",
             "usage_window_refresh",
-            "finalization_retry_drain",
             "stale_request_finalizer",
             "health_disabled_models_prune",
             "metrics_flush",
@@ -143,7 +142,6 @@ class TestOwnershipClassification:
             "model_info_canonical_backfill",
             "retention_cleanup",
             "usage_window_refresh",
-            "finalization_retry_drain",
             "stale_request_finalizer",
             "health_disabled_models_prune",
         }

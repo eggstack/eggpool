@@ -66,6 +66,7 @@ unknown_request_reservation_microdollars = 1000000
 inflight_penalty = 100000
 health_penalty = 500000
 randomize_near_ties = true
+# Maximum transient quota cooldown; runtime suppression is capped at 1,800s.
 quota_exhausted_cooldown_seconds = 300
 # "score_only" (default) keeps above-capacity accounts eligible; only
 # upstream-observed failures suppress routing. Switch to "hard_cap"

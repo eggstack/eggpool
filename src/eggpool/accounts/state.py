@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 
@@ -14,7 +15,7 @@ from dataclasses import dataclass, field
 # authoritative ``HealthManager``.
 DEFAULT_QUOTA_EXHAUSTED_COOLDOWN_SECONDS = 300.0
 DEFAULT_BACKOFF_BASE_SECONDS = 30.0
-DEFAULT_BACKOFF_MAX_SECONDS = 3600.0  # 1 hour max backoff for rate limits
+DEFAULT_BACKOFF_MAX_SECONDS = 1800.0  # 30 minute max for runtime suppression
 
 
 def _failure_backoff(consecutive_failures: int) -> float:
@@ -29,6 +30,13 @@ def _failure_backoff(consecutive_failures: int) -> float:
         DEFAULT_BACKOFF_BASE_SECONDS * (2**doublings),
         DEFAULT_BACKOFF_MAX_SECONDS,
     )
+
+
+def _bounded_delay(value: float, *, fallback: float) -> float:
+    """Normalize a runtime cooldown without allowing sticky suppression."""
+    if not math.isfinite(value) or value < 0.0:
+        return fallback
+    return min(value, DEFAULT_BACKOFF_MAX_SECONDS)
 
 
 @dataclass(slots=True)
@@ -140,13 +148,19 @@ class AccountRuntimeState:
                 if cooldown_seconds is not None
                 else DEFAULT_QUOTA_EXHAUSTED_COOLDOWN_SECONDS
             )
-            self.cooldown_until = time.time() + duration
+            self.cooldown_until = time.time() + _bounded_delay(
+                duration,
+                fallback=DEFAULT_QUOTA_EXHAUSTED_COOLDOWN_SECONDS,
+            )
         elif error_class == "rate_limited":
             # Mirror HealthManager.record_rate_limit so both state
             # machines expose the same label for the same event.
             self.health_state = "rate_limited"
             if rate_limit_retry_after is not None:
-                self.cooldown_until = time.time() + max(0.0, rate_limit_retry_after)
+                self.cooldown_until = time.time() + _bounded_delay(
+                    rate_limit_retry_after,
+                    fallback=_failure_backoff(self.consecutive_failures),
+                )
             else:
                 self.cooldown_until = time.time() + _failure_backoff(
                     self.consecutive_failures

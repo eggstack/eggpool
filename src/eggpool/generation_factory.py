@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -338,6 +339,59 @@ class RuntimeGenerationFactory:
             quarantine=quarantine,
             catalog_cache=catalog.cache,
         )
+        from eggpool.db.repositories import AccountRepository
+
+        async def _clear_model_reappearance(
+            account_name: str,
+            provider_id: str,
+            models: list[dict[str, Any]],
+        ) -> None:
+            """Clear exact model quarantine after authoritative reappearance."""
+            account_id = await AccountRepository(db).get_id_by_name(account_name)
+            for model in models:
+                model_id = str(model.get("model_id") or "")
+                protocol = str(model.get("protocol") or "")
+                if not model_id or not protocol:
+                    continue
+                effects_applier.clear_authoritative_reappearance(
+                    provider_id=provider_id,
+                    account_id=account_name,
+                    canonical_model_id=model_id,
+                    upstream_model_id=model_id,
+                    upstream_protocol=protocol,
+                )
+                try:
+                    await model_quarantine_repo.mark_cleared(
+                        provider_id=provider_id,
+                        account_id=account_name,
+                        canonical_model_id=model_id,
+                        upstream_model_id=model_id,
+                        upstream_protocol=protocol,
+                        clear_reason="catalog_reappearance",
+                        cleared_epoch=time.time(),
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to clear durable model quarantine for %s/%s",
+                        account_name,
+                        model_id,
+                    )
+                if account_id is not None:
+                    try:
+                        await account_backoff_repo.clear_success(
+                            account_id=account_id,
+                            model_id=model_id,
+                            reasons=["model_unavailable"],
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Failed to clear model backoff after catalog "
+                            "reappearance for account=%s model=%s",
+                            account_name,
+                            model_id,
+                        )
+
+        catalog.set_model_reappearance_callback(_clear_model_reappearance)
 
         # -- Request coordinator --------------------------------------------
         coordinator = RequestCoordinator(
@@ -679,42 +733,124 @@ async def _hydrate_health_from_backoffs(
     from eggpool.db.repositories import AccountRepository  # noqa: PLC0415
 
     account_repo = AccountRepository(repo._db)  # type: ignore[arg-type]  # noqa: SLF001
-    active = await repo.list_active()
-    if not active:
+    from eggpool.health.backoff import (
+        MAX_NONTERMINAL_BACKOFF_SECONDS,
+        get_backoff_policy,
+    )
+
+    list_all = getattr(repo, "list_all", None)
+    rows = await (list_all() if list_all is not None else repo.list_active())
+    if not rows:
         return
     logger.info(
         "Hydrating %d persisted upstream backoffs into HealthManager",
-        len(active),
+        len(rows),
     )
-    for row in active:
-        account_name = await account_repo.get_name_by_id(int(row["account_id"]))
+    now = time.time()
+    for row in rows:
+        try:
+            account_id = int(row["account_id"])
+        except (KeyError, TypeError, ValueError):
+            logger.warning("Ignoring malformed persisted backoff row: invalid account")
+            continue
+        account_name = await account_repo.get_enabled_name_by_id(account_id)
         if account_name is None:
+            logger.info(
+                "Ignoring backoff for missing or disabled account_id=%s", account_id
+            )
             continue
         reason = str(row.get("reason") or "")
-        model_id = row.get("model_id")
-        backoff_until_epoch = row.get("backoff_until_epoch")
-        if reason == "model_unavailable" and backoff_until_epoch is None:
-            if model_id:
-                health_manager.disable_model(account_name, str(model_id))
+        if get_backoff_policy(reason) is None:
+            logger.warning("Ignoring persisted backoff with unknown reason=%r", reason)
             continue
-        if backoff_until_epoch is None:
+        model_value = row.get("model_id")
+        model_id = str(model_value) if model_value is not None else None
+        if reason == "model_unavailable" and not model_id:
+            logger.warning("Ignoring account-wide model_unavailable backoff")
             continue
-        remaining = max(0.0, float(backoff_until_epoch) - time.time())
-        if remaining <= 0:
+
+        deadline = row.get("backoff_until_epoch")
+        raw_valid = row.get("backoff_until_valid", True)
+        try:
+            deadline_value = None if deadline is None else float(deadline)
+        except (TypeError, ValueError):
+            deadline_value = None
+            raw_valid = False
+        if not raw_valid or (
+            deadline_value is not None and not math.isfinite(deadline_value)
+        ):
+            logger.warning(
+                "Ignoring malformed persisted backoff row id=%s", row.get("id")
+            )
             continue
-        if reason == "quota_exhausted":
-            health_manager.record_quota_exhausted(account_name, remaining)
-        elif reason == "rate_limited":
-            health_manager.record_rate_limit(account_name, remaining)
-        elif reason == "authentication_failed":
+
+        if reason == "authentication_failed":
+            # Authentication is terminal. A stale finite deadline from an
+            # older release must never turn it into a timed suppression.
             health_manager.disable_account(
                 account_name,
                 reason="authentication_failed",
+            )
+            continue
+
+        if deadline is None:
+            assert model_id is not None
+            health_manager.disable_model(
+                account_name,
+                model_id,
+                terminal=True,
+            )
+            continue
+
+        assert deadline_value is not None
+        if deadline_value <= now:
+            try:
+                await repo.delete_row(row_id=int(row["id"]))
+            except Exception:
+                logger.warning(
+                    "Could not delete expired backoff hint id=%s",
+                    row.get("id"),
+                    exc_info=True,
+                )
+            continue
+
+        bounded_deadline = min(
+            deadline_value,
+            now + MAX_NONTERMINAL_BACKOFF_SECONDS,
+        )
+        if bounded_deadline != deadline_value:
+            try:
+                await repo.update_deadline(
+                    row_id=int(row["id"]),
+                    backoff_until=bounded_deadline,
+                )
+            except Exception:
+                logger.warning(
+                    "Could not clamp persisted backoff hint id=%s",
+                    row.get("id"),
+                    exc_info=True,
+                )
+
+        remaining = bounded_deadline - now
+        if reason == "model_unavailable":
+            assert model_id is not None
+            health_manager.disable_model(
+                account_name,
+                model_id,
                 duration_seconds=remaining,
             )
+        elif model_id is not None:
+            logger.warning(
+                "Ignoring contradictory account-wide backoff with model_id=%r",
+                model_id,
+            )
+        elif reason == "quota_exhausted":
+            health_manager.record_quota_exhausted(account_name, remaining)
+        elif reason == "rate_limited":
+            health_manager.record_rate_limit(account_name, remaining)
         else:
             health = health_manager.get_account_health(account_name)
-            health.cooldown_until = time.time() + remaining
+            health.cooldown_until = now + remaining
             health.health_state = "cooldown"
             health.is_healthy = False
 

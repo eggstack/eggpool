@@ -1946,7 +1946,13 @@ class ReloadManager:
                 generation_id=generation_id,
                 digest_prefix=digest_prefix,
             )
-            persistence_delta = self._prepare_persistence_delta(validation.config)
+            persistence_delta = self._prepare_persistence_delta(
+                validation.config,
+                candidate_registry=(_gen.registry if _gen is not None else None),
+            )
+            if _gen is not None:
+                for account_name in persistence_delta.authentication_reset_names:
+                    _gen.health_manager.enable_account(account_name)
             txn.mark_persistence_prepared(persistence_delta)
             # Observer: reconcile prepared
             await self._observer.on_reconcile_prepared(
@@ -3230,6 +3236,8 @@ class ReloadManager:
     def _prepare_persistence_delta(
         self,
         candidate_config: AppConfig,
+        *,
+        candidate_registry: Any | None = None,
     ) -> PersistenceDelta:
         """Calculate persistence changes without applying them.
 
@@ -3248,9 +3256,36 @@ class ReloadManager:
             for pid, pcfg in candidate_config.providers.items()
         }
         config_accounts = account_config_rows(candidate_config)
+        authentication_reset_names: list[str] = []
+        if candidate_registry is not None:
+            active = self._runtime_manager.active_snapshot()
+            old_registry = active.registry
+            for candidate_state in candidate_registry.get_all_states():
+                if not candidate_state.enabled:
+                    continue
+                account_name = candidate_state.name
+                old_state = old_registry.get_state(account_name)
+                if old_state is None:
+                    continue
+                old_config = old_registry.get_account_config(account_name)
+                new_config = candidate_registry.get_account_config(account_name)
+                credential_changed = old_registry.get_api_key(
+                    account_name
+                ) != candidate_registry.get_api_key(account_name)
+                config_identity_changed = old_registry.get_provider_for_account(
+                    account_name
+                ) != candidate_registry.get_provider_for_account(account_name) or (
+                    old_config is not None
+                    and new_config is not None
+                    and old_config.api_key_env != new_config.api_key_env
+                )
+                reenabled = not old_state.enabled
+                if credential_changed or config_identity_changed or reenabled:
+                    authentication_reset_names.append(account_name)
         return PersistenceDelta(
             configured_providers=configured_providers,
             config_accounts=tuple(config_accounts),
+            authentication_reset_names=tuple(sorted(authentication_reset_names)),
         )
 
     def _prepare_process_transitions(
@@ -3378,6 +3413,7 @@ class ReloadManager:
         compatibility with direct callers.
         """
         from eggpool.db.repositories import (  # noqa: PLC0415
+            AccountBackoffRepository,
             AccountRepository,
             ProviderRepository,
         )
@@ -3392,6 +3428,11 @@ class ReloadManager:
 
                 account_repo = AccountRepository(db)
                 await account_repo.sync_from_config(list(delta.config_accounts))
+                backoff_repo = AccountBackoffRepository(db)
+                for account_name in delta.authentication_reset_names:
+                    account_id = await account_repo.get_id_by_name(account_name)
+                    if account_id is not None:
+                        await backoff_repo.clear_authentication(account_id)
             else:
                 async with db.transaction():
                     provider_repo = ProviderRepository(db)
@@ -3399,6 +3440,11 @@ class ReloadManager:
 
                     account_repo = AccountRepository(db)
                     await account_repo.sync_from_config(list(delta.config_accounts))
+                    backoff_repo = AccountBackoffRepository(db)
+                    for account_name in delta.authentication_reset_names:
+                        account_id = await account_repo.get_id_by_name(account_name)
+                        if account_id is not None:
+                            await backoff_repo.clear_authentication(account_id)
         except Exception as exc:
             logger.exception("Persistence delta application failed")
             raise ReloadReconciliationError(

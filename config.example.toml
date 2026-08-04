@@ -152,6 +152,7 @@ unknown_request_reservation_microdollars = 1000000
 inflight_penalty = 100000
 health_penalty = 500000
 randomize_near_ties = true
+# Maximum transient quota cooldown; runtime suppression is capped at 1,800s.
 quota_exhausted_cooldown_seconds = 300
 # Local quota mode controls whether locally estimated over-capacity
 # usage hard-excludes accounts from routing or only affects rank.

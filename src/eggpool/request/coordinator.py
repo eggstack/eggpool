@@ -233,6 +233,10 @@ _TRANSIENT_BACKOFF_REASONS: tuple[str, ...] = (
     "connection_failure",
     "protocol_error",
 )
+_SUCCESS_CLEAR_BACKOFF_REASONS: tuple[str, ...] = (
+    *_TRANSIENT_BACKOFF_REASONS,
+    "model_unavailable",
+)
 
 
 def _prepare_error_detail(value: object | None, persist: bool) -> str | None:
@@ -3472,14 +3476,13 @@ class RequestCoordinator:
             )
 
             # Clear persisted backoff rows on a successful request so
-            # restart-time hydration starts from a clean slate for
-            # this account. Only transient reasons are cleared;
-            # terminal ones (authentication_failed, model_unavailable)
-            # are preserved.
+            # restart-time hydration starts from a clean slate for this
+            # account/model. Authentication remains terminal; matching
+            # bounded model quarantine is recoverable on successful traffic.
             await self._clear_backoff(
                 selected.account_name,
-                model_id=None,
-                reasons=list(_TRANSIENT_BACKOFF_REASONS),
+                model_id=selected.model_id,
+                reasons=list(_SUCCESS_CLEAR_BACKOFF_REASONS),
             )
 
             resp_headers.append(("x-proxy-request-id", context.request_id))
@@ -4146,16 +4149,14 @@ class RequestCoordinator:
                     ),
                 )
 
-                # Clear persisted transient backoff rows on a
-                # successful streaming request so restart-time
-                # hydration starts clean for this account. Local
-                # estimate quota overage is never persisted, so this
-                # call only touches real upstream backoffs.
+                # Clear matching persisted transient/model backoff rows on a
+                # successful streaming request. Authentication remains
+                # terminal and local quota estimates are never persisted.
                 if account_backoff_repo is not None:
                     await clear_backoff(
                         selected.account_name,
-                        model_id=None,
-                        reasons=list(_TRANSIENT_BACKOFF_REASONS),
+                        model_id=selected.model_id,
+                        reasons=list(_SUCCESS_CLEAR_BACKOFF_REASONS),
                     )
 
                 self._stream_diagnostics.record_outcome(
@@ -4782,7 +4783,9 @@ class RequestCoordinator:
             return RateLimitError(
                 "Rate limited",
                 status_code=status_code,
-                retry_after=effects.retry_after_s or 60.0,
+                retry_after=(
+                    effects.retry_after_s if effects.retry_after_s is not None else 60.0
+                ),
             )
         if effects.account_effect == "quota":
             return QuotaExhaustedError("Quota exhausted", status_code=status_code)
@@ -5485,8 +5488,8 @@ class RequestCoordinator:
             self._health_manager.record_failure(
                 account_name, model_id=model_id, reason="authentication_failed"
             )
-            # Terminal; persist a long-ish backoff so restarts honor it.
-            backoff_until_epoch = time.time() + 365 * 86400
+            # Terminal; the repository persists this as a NULL deadline.
+            backoff_until_epoch = None
         elif category == FailureCategory.RATE_LIMITED:
             rate_limit_retry_after = (
                 60.0 if err.retry_after is None else err.retry_after
@@ -5502,12 +5505,23 @@ class RequestCoordinator:
             self._health_manager.release_request(account_name)
             backoff_until_epoch = time.time() + self._quota_exhausted_cooldown_seconds
         elif category == FailureCategory.MODEL_UNAVAILABLE:
-            self._health_manager.disable_model(account_name, model_id)
+            from eggpool.health.backoff import compute_backoff_seconds
+
+            delay = compute_backoff_seconds(
+                category.value,
+                consecutive_failures=1,
+                jitter=False,
+            )
+            if delay is None:
+                delay = 300.0
+            self._health_manager.disable_model(
+                account_name,
+                model_id,
+                duration_seconds=delay,
+            )
             self._health_manager.release_request(account_name)
             self._catalog.cache.mark_model_unavailable(account_name, model_id)
-            # model_unavailable rows with NULL backoff_until are
-            # terminal in the hydration path.
-            backoff_until_epoch = None
+            backoff_until_epoch = time.time() + delay
         else:
             self._health_manager.record_failure(
                 account_name, model_id=model_id, reason=category.value

@@ -365,9 +365,12 @@ async def test_no_provider_suffix_defaults_to_opencode_go(
     client: httpx.AsyncClient,
     auth_headers: dict[str, str],
 ) -> None:
-    """Request without provider suffix uses default opencode-go provider."""
+    """Request without provider suffix can use an eligible provider."""
     with respx.mock:
         respx.post(f"{OPENCODE_BASE}/chat/completions").mock(
+            return_value=httpx.Response(200, json=MOCK_OPENAI_RESPONSE)
+        )
+        respx.post(f"{MINIMAX_BASE}/v1/chat/completions").mock(
             return_value=httpx.Response(200, json=MOCK_OPENAI_RESPONSE)
         )
 

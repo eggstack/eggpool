@@ -428,7 +428,12 @@ class RoutingConfig(BaseModel):
     inflight_penalty: int = Field(default=100_000, ge=0)
     health_penalty: int = Field(default=500_000, ge=0)
     randomize_near_ties: bool = True
-    quota_exhausted_cooldown_seconds: float = Field(default=300.0, ge=0)
+    quota_exhausted_cooldown_seconds: float = Field(
+        default=300.0,
+        ge=0,
+        le=1800.0,
+        description="Maximum transient quota cooldown in seconds (at most 30 minutes).",
+    )
     # Local quota mode controls whether locally estimated over-capacity
     # usage hard-excludes accounts from routing or only affects rank.
     # "score_only" (default) is safe for subscription aggregation:

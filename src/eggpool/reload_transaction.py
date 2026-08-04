@@ -326,6 +326,7 @@ class PersistenceDelta:
 
     configured_providers: dict[str, dict[str, Any]]
     config_accounts: tuple[dict[str, Any], ...]
+    authentication_reset_names: tuple[str, ...] = ()
 
 
 class ProcessTransition:

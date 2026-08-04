@@ -100,7 +100,7 @@ async def test_get_for_accounts_batches_account_rows(
         reason="rate_limited",
         status_code=429,
         error_class="RateLimitError",
-        backoff_until=None,
+        backoff_until=time.time() + 60,
         consecutive_failures=2,
     )
 
@@ -199,6 +199,37 @@ async def test_clear_success_all_reasons(
     removed = await repo.clear_success(account_id=1, model_id=None)
     assert removed == 2
     assert await repo.list_active() == []
+
+
+@pytest.mark.asyncio
+async def test_clear_authentication_is_account_scoped(
+    repo: AccountBackoffRepository,
+) -> None:
+    """Credential reset removes only the selected account's auth hint."""
+    await repo.upsert_failure(
+        account_id=1,
+        model_id=None,
+        reason="authentication_failed",
+        status_code=401,
+        error_class="AuthenticationError",
+        backoff_until=None,
+        consecutive_failures=1,
+    )
+    await repo.upsert_failure(
+        account_id=2,
+        model_id=None,
+        reason="authentication_failed",
+        status_code=401,
+        error_class="AuthenticationError",
+        backoff_until=None,
+        consecutive_failures=1,
+    )
+
+    assert await repo.clear_authentication(1) == 1
+    rows = await repo.list_all()
+    assert [(row["account_id"], row["reason"]) for row in rows] == [
+        (2, "authentication_failed")
+    ]
 
 
 @pytest.mark.asyncio

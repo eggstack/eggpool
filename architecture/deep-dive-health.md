@@ -53,7 +53,10 @@ Circuit breaker implementation:
 
 ### `health/backoff.py`
 
-Backoff tracking for upstream errors. Tracks per-account backoff state with bounded windows.
+Backoff tracking for upstream errors. Every nonterminal policy is capped at
+1,800 seconds (30 minutes), including provider `Retry-After` and final jitter.
+Authentication is terminal and has no timed expiry; runtime model absence is
+account/model scoped and bounded.
 
 ## Health Events
 
@@ -71,6 +74,21 @@ Backoff tracking for upstream errors. Tracks per-account backoff state with boun
 Upstream-derived backoffs (429, 402, model-unavailable) persist across restarts in `account_backoffs` table. Rehydrated into `HealthManager` at startup.
 
 Local-estimate overage never produces a backoff row — only upstream-observed failures suppress routing.
+
+The table is a restart hint, not the sole process-local authority. Hydration
+ignores disabled-account, unknown-reason, contradictory-scope, malformed, and
+expired rows; expired rows are deleted on a best-effort basis. Legacy future
+deadlines are clamped in memory and opportunistically rewritten to `now +
+1800s`. Persistence failures are logged without failing proxy traffic.
+
+Recovery is scoped. A successful account/model request clears matching
+transient account rows and that model's bounded quarantine, but never clears an
+authentication failure or unrelated model. An authoritative catalog
+reappearance or explicit operator enable/reset clears terminal model state.
+Validated live rehash compares the old and candidate account identity and
+resolved credentials; a changed credential/provider/key binding re-enables the
+candidate account and clears that account's terminal authentication hint in the
+same SQLite transaction. Unchanged accounts retain their authentication state.
 
 ## Attempt-Scoped Failure Decisions
 
@@ -99,5 +117,8 @@ half-open probe without provider penalties.
 - Compression fallbacks do NOT write `account_backoffs` rows
 - Compression fallbacks do NOT call `HealthManager.mark_*`
 - Backoff rows persist across restarts
+- Nonterminal backoff, including `Retry-After` and jitter, never exceeds 1,800 seconds
+- Successful requests do not clear authentication or authoritative model withdrawal
+- Half-open probe acquisition always converges through success, failure, cancellation, or local release
 - Cooldown timers are monotonic
 - `AccountHealth` fields: `consecutive_failures`, `disabled_models`, `disabled_until`, `disabled_reason`, `cooldown_until`

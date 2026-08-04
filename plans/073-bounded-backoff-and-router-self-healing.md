@@ -1,7 +1,7 @@
 # Plan 073 — Bounded Backoff and Router Self-Healing
 
 Date: 2026-08-04
-Status: ready for implementation
+Status: completed
 Parent roadmap: `plans/070-failure-resilience-router-recovery-and-sbc-simplification-roadmap.md`
 Depends on:
 
@@ -367,20 +367,20 @@ Run the normal repository gate afterward. Do not add a periodic integration test
 
 ## Plan acceptance criteria
 
-- [ ] Every nonterminal backoff is at most 1,800 seconds.
-- [ ] Retry-After and jitter cannot exceed the cap.
-- [ ] Authentication and authoritative withdrawal remain explicit terminal states.
-- [ ] Runtime model absence is bounded and account/model scoped.
-- [ ] Matching success clears only matching transient state.
-- [ ] Expiry restores temporary eligibility without restart.
-- [ ] Expired, malformed, unknown, or absurd durable rows have no unbounded routing effect.
-- [ ] Existing 24-hour nonterminal rows are bounded during upgraded hydration.
-- [ ] Persistence failure does not fail client traffic.
-- [ ] Every acquired probe converges on every terminal path.
-- [ ] Half-open failure/success changes the circuit once.
-- [ ] Operator and authoritative exits are explicit and idempotent.
-- [ ] Focused regressions and smoke pass.
-- [ ] No active probe fleet, queue, schema expansion, notification system, live-provider suite, or CI expansion is added.
+- [x] Every nonterminal backoff is at most 1,800 seconds.
+- [x] Retry-After and jitter cannot exceed the cap.
+- [x] Authentication and authoritative withdrawal remain explicit terminal states.
+- [x] Runtime model absence is bounded and account/model scoped.
+- [x] Matching success clears only matching transient state.
+- [x] Expiry restores temporary eligibility without restart.
+- [x] Expired, malformed, unknown, or absurd durable rows have no unbounded routing effect.
+- [x] Existing 24-hour nonterminal rows are bounded during upgraded hydration.
+- [x] Persistence failure does not fail client traffic.
+- [x] Every acquired probe converges on every terminal path.
+- [x] Half-open failure/success changes the circuit once.
+- [x] Operator and authoritative exits are explicit and idempotent.
+- [x] Focused regressions and smoke pass.
+- [x] No active probe fleet, queue, schema expansion, notification system, live-provider suite, or CI expansion is added.
 
 ## Rejection conditions
 

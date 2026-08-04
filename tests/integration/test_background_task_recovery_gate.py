@@ -52,6 +52,17 @@ async def test_db(tmp_path: Path) -> Database:
     db = Database(path=db_path)
     await db.connect()
     await MigrationRunner(db).run()
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT INTO accounts "
+            "(name, api_key_env, enabled, weight, provider_id) "
+            "VALUES (?, ?, 1, 1.0, ?)",
+            ("test-account", "TEST_ACCOUNT_KEY", "test-provider"),
+        )
+        await db.execute_write(
+            "INSERT INTO models (model_id, display_name, protocol) VALUES (?, ?, ?)",
+            ("test-model", "Test Model", "openai"),
+        )
     return db
 
 

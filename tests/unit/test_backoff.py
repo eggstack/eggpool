@@ -47,11 +47,11 @@ class TestBackoffPolicyMapping:
         assert policy.base_delay == 0.0
         assert policy.cap == 0.0
 
-    def test_quota_exhausted_caps_at_24h(self) -> None:
+    def test_quota_exhausted_caps_at_30min(self) -> None:
         policy = get_backoff_policy(BackoffReason.QUOTA_EXHAUSTED.value)
         assert policy is not None
         assert policy.base_delay == 300.0
-        assert policy.cap == 86400.0
+        assert policy.cap == 1800.0
         assert policy.multiplier == 2.0
         assert 0.0 < policy.jitter <= 0.2
 
@@ -59,7 +59,7 @@ class TestBackoffPolicyMapping:
         policy = get_backoff_policy(BackoffReason.RATE_LIMITED.value)
         assert policy is not None
         assert policy.base_delay == 60.0
-        assert policy.cap == 86400.0
+        assert policy.cap == 1800.0
 
     def test_upstream_server_error_caps_at_30min(self) -> None:
         policy = get_backoff_policy(BackoffReason.UPSTREAM_SERVER_ERROR.value)
@@ -123,16 +123,14 @@ class TestComputeBackoffSeconds:
         assert delay_3 == 1200.0
 
     def test_caps_at_policy_max(self) -> None:
-        # With ``max_consecutive=6`` doublings, quota_exhausted
-        # saturates at ``300 * 2**6 == 19200`` seconds. The 24h cap
-        # is a hard ceiling that would only kick in if the doublings
-        # count were extended.
+        # Quota backoff reaches the 30-minute policy cap after three
+        # doublings; larger counters must remain bounded.
         delay = compute_backoff_seconds(
             BackoffReason.QUOTA_EXHAUSTED.value,
             consecutive_failures=20,
             jitter=False,
         )
-        assert delay == 19200.0
+        assert delay == 1800.0
 
     def test_cap_enforced_when_doublings_exceed_max(self) -> None:
         # ``max_consecutive`` caps the doublings exponent, so
@@ -155,22 +153,20 @@ class TestComputeBackoffSeconds:
         # by reusing ``compute_backoff_seconds`` semantics: the cap
         # in the schedule is applied after the doublings clamp, so
         # the only way to reach the cap is when ``base * mult**N >
-        # cap``.  For quota_exhausted (base=300, mult=2) this needs
-        # N >= 9 (300 * 512 = 153600 > 86400).
-        # We approximate by setting the doublings to 10.
+        # cap``. The configured policy reaches the cap before a
+        # pathological counter can grow the value further.
         delay = compute_backoff_seconds(
             BackoffReason.QUOTA_EXHAUSTED.value,
             consecutive_failures=20,
             jitter=False,
         )
-        # With max_consecutive=6 the doublings saturate below cap.
-        assert delay <= 86400.0
+        assert delay <= 1800.0
 
         # Direct cap exercise using a synthesized policy path is
         # covered via ``get_backoff_policy``:
         policy = get_backoff_policy(BackoffReason.QUOTA_EXHAUSTED.value)
         assert policy is not None
-        assert policy.cap == 86400.0  # type: ignore[union-attr]
+        assert policy.cap == 1800.0  # type: ignore[union-attr]
         assert isinstance(policy, BackoffPolicy)
 
     def test_retry_after_overrides_for_rate_limited(self) -> None:
@@ -189,7 +185,30 @@ class TestComputeBackoffSeconds:
             retry_after=999999.0,
             jitter=False,
         )
-        assert delay == 86400.0
+        assert delay == 1800.0
+
+    def test_retry_after_jitter_cannot_exceed_cap(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "eggpool.health.backoff.random.uniform",
+            lambda _low, _high: 1.15,
+        )
+        delay = compute_backoff_seconds(
+            BackoffReason.RATE_LIMITED.value,
+            consecutive_failures=1,
+            retry_after=1800.0,
+            jitter=True,
+        )
+        assert delay == 1800.0
+
+    @pytest.mark.parametrize("retry_after", [float("nan"), float("inf"), -1.0])
+    def test_invalid_retry_after_uses_local_fallback(self, retry_after: float) -> None:
+        delay = compute_backoff_seconds(
+            BackoffReason.RATE_LIMITED.value,
+            consecutive_failures=1,
+            retry_after=retry_after,
+            jitter=False,
+        )
+        assert delay == 60.0
 
     def test_retry_after_for_quota_exhausted(self) -> None:
         delay = compute_backoff_seconds(

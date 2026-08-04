@@ -129,7 +129,7 @@ async def test_duplicate_finalization_no_duplicate_event() -> None:
             error_class="InternalServerError",
         ),
     )
-    assert transitioned1 is True
+    assert transitioned1.request_transitioned is True
 
     # Second finalization (duplicate)
     transitioned2 = await finalizer.finalize(
@@ -140,7 +140,7 @@ async def test_duplicate_finalization_no_duplicate_event() -> None:
             error_class="InternalServerError",
         ),
     )
-    assert transitioned2 is False
+    assert transitioned2.request_transitioned is False
 
     # Only one account event should exist
     events = await db.fetch_all(

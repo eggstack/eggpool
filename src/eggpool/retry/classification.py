@@ -188,7 +188,7 @@ class RetryClassifier:
         # Try numeric seconds first
         try:
             seconds = float(value)
-            return max(0.0, seconds) if math.isfinite(seconds) else None
+            return seconds if math.isfinite(seconds) and seconds >= 0.0 else None
         except ValueError:
             pass
         # Try HTTP-date (e.g. "Wed, 18 Jun 2026 21:00:00 GMT")
@@ -197,6 +197,6 @@ class RetryClassifier:
             if parsed.tzinfo is None:
                 parsed = parsed.replace(tzinfo=dt.UTC)
             seconds = parsed.timestamp() - time.time()
-            return max(0.0, seconds) if math.isfinite(seconds) else None
+            return seconds if math.isfinite(seconds) and seconds >= 0.0 else None
         except (OverflowError, OSError, TypeError, ValueError):
             return None
