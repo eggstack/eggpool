@@ -312,6 +312,48 @@ async def test_failover_connect_error_to_success(
 
 
 @pytest.mark.asyncio
+async def test_local_request_preparation_error_is_not_retried_or_penalized(
+    coordinator: RequestCoordinator,
+    two_account_db: Database,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A local header fault is terminal local work, never provider retry."""
+
+    def _fail_headers(
+        _self: RequestCoordinator,
+        _context: ProxyRequestContext,
+        _selected: object,
+    ) -> dict[str, str]:
+        raise RuntimeError("injected local header defect")
+
+    monkeypatch.setattr(RequestCoordinator, "_build_upstream_headers", _fail_headers)
+
+    context = ProxyRequestContext(
+        request_id="local-preparation-failure",
+        protocol="openai",
+        model_id="gpt-4",
+        streaming=False,
+        original_body=_success_body,
+        incoming_headers={"content-type": "application/json"},
+    )
+    response = await coordinator.execute(context)
+
+    assert response.status_code == 500
+    assert response.body is not None
+    assert b"injected local header defect" not in response.body
+    assert response.headers[0][0] == "content-type"
+
+    attempts = await two_account_db.fetch_all("SELECT * FROM request_attempts")
+    assert len(attempts) == 1
+    account_name = str(attempts[0]["account_id"])
+    assert account_name
+    for name in ("acct-a", "acct-b"):
+        state = coordinator._registry.get_state(name)
+        assert state is not None
+        assert state.health_state == "healthy"
+
+
+@pytest.mark.asyncio
 async def test_failover_500_to_success(
     coordinator: RequestCoordinator,
     two_account_db: Database,

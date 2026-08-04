@@ -21,6 +21,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Thinking/reasoning capability-aware routing with configurable budget mapping
 - High-concurrency stream stability: bounded terminal-finalization supervision, lock-contention diagnostics, and an OpenCode-specific operator playbook for sustained coding-agent streaming loads
 - Protocol-aware stream completion: clean EOF is classified from upstream `[DONE]`/`message_stop` evidence; truncated streams are never recorded as successful
+- Isolated upstream dispatch: only typed HTTPX transport failures retry across distinct accounts before response handoff; local preparation and response-adaptation faults terminate safely without provider penalties
 - Dispatch timing: distinct `local_pre_upstream` (full EggPool-side) and `dispatch_overhead` (coordinator-internal) metrics with cadence drift diagnostics for background tasks
 - Selection hot path: generation-hydrated account identities keep SQLite outside the claim lock, while routing plans carry quarantine exclusions directly into sampled diagnostic traces
 - Durable dispatch write pipeline: process-owned microbatching writer for dispatch intents with bounded queue, adaptive batching, binary success/exception persistence semantics, durable-identity validation, and diagnostics
@@ -163,6 +164,11 @@ Terminal finalization carries this response-lifecycle handoff fact explicitly;
 status or headers can still change. Retained runtime leases independently
 converge usage, health, and account-runtime outcomes, including when durable
 finalization observes an already-terminal request.
+
+Non-streaming responses are adapted before a request can be durably marked
+`COMPLETED`. Native protocol responses retain bounded pass-through behavior,
+including non-JSON bodies where usage extraction is optional; required
+transcoded responses that cannot be adapted become truthful local errors.
 
 ## Request shaping
 

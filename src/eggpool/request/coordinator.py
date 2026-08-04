@@ -22,6 +22,7 @@ from eggpool.catalog.capabilities import (
     ThinkingCapability,
     ThinkingRequestRequirement,
 )
+from eggpool.catalog.protocols import ProtocolMismatchError
 from eggpool.constants import DEFAULT_PROVIDER_ID
 from eggpool.db.repositories import (
     AccountBackoffRepository,
@@ -167,6 +168,7 @@ from eggpool.runtime_dispatch import (
 )
 from eggpool.security.redaction import redact_error_detail
 from eggpool.transcoder.context import TranscodeContext
+from eggpool.transcoder.errors import TranscodeLossError
 from eggpool.transcoder.protocol import BodyTranscoder, select_transcoder
 from eggpool.transcoder.streaming import select_streaming_transcoder
 
@@ -1336,6 +1338,53 @@ class RequestCoordinator:
             )
 
     async def execute(self, context: ProxyRequestContext) -> PreparedProxyResponse:
+        """Execute a request behind one ordinary-exception safety boundary.
+
+        Stage-specific dispatch code handles expected transport and protocol
+        outcomes.  This outer boundary contains an unexpected local defect so
+        it cannot escape as an unhandled ASGI exception or strand a selected
+        attempt.  Cancellation and the established public error hierarchy
+        remain transparent to callers.
+        """
+        try:
+            return await self._execute_impl(context)
+        except asyncio.CancelledError:
+            raise
+        except AggregatorError:
+            raise
+        except (ProtocolMismatchError, TranscodeLossError):
+            raise
+        except Exception as err:
+            logger.exception(
+                "Unexpected local proxy exception: request_id=%s protocol=%s "
+                "model=%s exception=%s",
+                context.request_id,
+                context.protocol,
+                context.model_id,
+                type(err).__name__,
+            )
+            selected = context.client_metadata.get("_post_commit_selected")
+            if isinstance(selected, SelectedAttempt):
+                try:
+                    await self._finalize_unexpected_local_error(
+                        context=context,
+                        selected=selected,
+                        error=err,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception(
+                        "Unexpected local exception cleanup failed: "
+                        "request_id=%s attempt_id=%s",
+                        context.request_id,
+                        selected.attempt_id,
+                    )
+            return self._build_local_error_response(context, status_code=500)
+
+    async def _execute_impl(
+        self, context: ProxyRequestContext
+    ) -> PreparedProxyResponse:
         """Execute a request through the full lifecycle.
 
         Returns a PreparedProxyResponse with either body (non-streaming)
@@ -1650,6 +1699,16 @@ class RequestCoordinator:
                 # updated by finalizer or selection. Retry with another
                 # account if available.
                 continue
+            except _LocalDispatchError as err:
+                last_error = err
+                last_upstream_response = None
+                logger.exception(
+                    "Local dispatch stage failed: request_id=%s stage=%s",
+                    context.request_id,
+                    err.stage,
+                    exc_info=err.__cause__,
+                )
+                break
             except Exception as err:
                 last_error = err
                 logger.warning(
@@ -1712,6 +1771,8 @@ class RequestCoordinator:
                 for key in _ATTEMPT_SELECTION_METADATA_KEYS:
                     context.client_metadata.pop(key, None)
                 health_applied = True
+                if err.failure_effects is not None and not err.failure_effects.retry:
+                    break
                 # If no other accounts are eligible, don't retry — pass
                 # the error directly to the client.
                 remaining = self._router.get_eligible_account_names(
@@ -1730,6 +1791,15 @@ class RequestCoordinator:
                 if not remaining:
                     break
                 if attempt_num >= self._max_retry_attempts:
+                    if remaining:
+                        context.client_metadata["attempt_ceiling_reached"] = True
+                        logger.info(
+                            "Request retry ceiling reached: request_id=%s "
+                            "attempt=%d remaining_accounts=%d",
+                            context.request_id,
+                            attempt_num,
+                            len(remaining),
+                        )
                     break
                 continue
             except _NonRetryableUpstreamError as err:
@@ -3110,21 +3180,11 @@ class RequestCoordinator:
         transcoder: BodyTranscoder | None = None,
     ) -> PreparedProxyResponse:
         """Execute a non-streaming request."""
-        headers = self._build_upstream_headers(context, selected)
-        upstream_url = self._get_upstream_url(
-            context.upstream_protocol, selected.provider_id
-        )
-
-        # Phase C: re-resolve ``thinking.budget_tokens`` for the
-        # selected provider. Strict rejections propagate as
-        # :class:`CapabilityError`; the cleanup branch finalizes the
-        # attempt, releases the reservation, decrements the active
-        # request count, and frees the health slot before re-raising so
-        # the proxy layer renders an HTTP 400 with no leaked state.
-        #
-        # Plan 028 Workstream B: both streaming and non-streaming paths
-        # share one ordered provider transform pipeline.
         try:
+            headers = self._build_upstream_headers(context, selected)
+            upstream_url = self._get_upstream_url(
+                context.upstream_protocol, selected.provider_id
+            )
             from eggpool.request.transform_pipeline import (
                 run_provider_transforms,
             )
@@ -3137,11 +3197,25 @@ class RequestCoordinator:
                 err=err,
             )
             raise
+        except Exception as err:
+            raise self._local_dispatch_error(
+                context=context,
+                selected=selected,
+                stage="request_preparation",
+                error=err,
+            ) from err
 
         # Freeze the exact provider generation that will be dispatched.
-        self._serialize_provider_request(context)
+        try:
+            self._serialize_provider_request(context)
+        except Exception as err:
+            raise self._local_dispatch_error(
+                context=context,
+                selected=selected,
+                stage="request_serialization",
+                error=err,
+            ) from err
 
-        response: httpx.Response | None = None
         try:
             client = self._get_client(selected.provider_id, selected.account_name)
             upstream_request = client.build_request(
@@ -3150,6 +3224,16 @@ class RequestCoordinator:
                 headers=headers,
                 content=context.body_for_upstream,
             )
+        except Exception as err:
+            raise self._local_dispatch_error(
+                context=context,
+                selected=selected,
+                stage="request_construction",
+                error=err,
+            ) from err
+
+        response: httpx.Response | None = None
+        try:
             # Phase 4 (latency): record how long the connect+send round
             # took.  ``client.send`` returns once the response headers
             # are available, so this window includes DNS, TCP, TLS,
@@ -3162,81 +3246,26 @@ class RequestCoordinator:
             # first-byte time before reading the body.
             first_byte_ms = self._elapsed_ms(context)
             await response.aread()
-        except httpx.ConnectError as err:
-            if response is not None:
-                await response.aclose()
+        except httpx.TransportError as err:
+            await self._close_response(response)
+            status_code = 504 if isinstance(err, httpx.TimeoutException) else None
+            if isinstance(err, httpx.RemoteProtocolError):
+                status_code = 502
             raise _RetryableUpstreamError(
-                f"Connection failed: {err}",
-                status_code=None,
-                error_class="ConnectError",
-            ) from err
-        except httpx.PoolTimeout as err:
-            if response is not None:
-                await response.aclose()
-            raise _RetryableUpstreamError(
-                f"HTTPX pool exhausted: {err}",
-                status_code=None,
-                error_class="PoolTimeout",
-            ) from err
-        except httpx.ReadTimeout as err:
-            if response is not None:
-                await response.aclose()
-            raise _RetryableUpstreamError(
-                f"Read timeout: {err}",
-                status_code=504,
-                error_class="ReadTimeout",
-            ) from err
-        except httpx.ConnectTimeout as err:
-            if response is not None:
-                await response.aclose()
-            raise _RetryableUpstreamError(
-                f"Connect timeout: {err}",
-                status_code=504,
-                error_class="ConnectTimeout",
-            ) from err
-        except httpx.WriteTimeout as err:
-            if response is not None:
-                await response.aclose()
-            raise _RetryableUpstreamError(
-                f"Write timeout: {err}",
-                status_code=504,
-                error_class="WriteTimeout",
-            ) from err
-        except httpx.RemoteProtocolError as err:
-            if response is not None:
-                await response.aclose()
-            raise _RetryableUpstreamError(
-                f"Upstream protocol error: {err}",
-                status_code=502,
-                error_class="RemoteProtocolError",
-            ) from err
-        except (httpx.ReadError, httpx.WriteError) as err:
-            if response is not None:
-                await response.aclose()
-            raise _RetryableUpstreamError(
-                f"HTTP transport error: {err}",
-                status_code=None,
+                f"Upstream transport failed ({type(err).__name__})",
+                status_code=status_code,
                 error_class=type(err).__name__,
             ) from err
-        except httpx.TimeoutException as err:
-            if response is not None:
-                await response.aclose()
-            raise _RetryableUpstreamError(
-                f"Timeout: {err}",
-                status_code=504,
-                error_class="TimeoutException",
-            ) from err
-        except AggregatorError:
-            if response is not None:
-                await response.aclose()
+        except asyncio.CancelledError:
+            await self._close_response(response)
             raise
         except Exception as err:
-            if response is not None:
-                await response.aclose()
-            raise _RetryableUpstreamError(
-                f"Upstream error: {err}",
-                status_code=None,
-                error_class=type(err).__name__,
+            await self._close_response(response)
+            raise self._local_dispatch_error(
+                context=context,
+                selected=selected,
+                stage="response_read",
+                error=err,
             ) from err
 
         # Plan 028: single-decode lifecycle via ParsedUpstreamResponse.
@@ -3286,6 +3315,27 @@ class RequestCoordinator:
                     ) from error
 
                 # Non-retryable client error (400, 404) - finalize and pass through
+                # Phase 2: re-render upstream error in client protocol.
+                # Plan 028: reuse the already-parsed response instead of
+                # re-parsing raw bytes via jsonx_loads().
+                if transcoder is not None and context.transcode_context is not None:
+                    err_payload = parsed_response.parsed_dict
+                    if isinstance(err_payload, dict) or err_payload is None:
+                        try:
+                            _status, err_body, err_warnings = transcoder.reencode_error(
+                                response.status_code,
+                                err_payload,
+                                context.transcode_context,
+                            )
+                            resp_body = encode_json_body(err_body)
+                            context.transcode_context.loss_warnings.extend(err_warnings)
+                        except Exception:
+                            logger.warning(
+                                "Error response adaptation failed; preserving "
+                                "filtered upstream body: request_id=%s",
+                                context.request_id,
+                                exc_info=True,
+                            )
                 await self._finalize_non_retryable(
                     context,
                     selected,
@@ -3295,19 +3345,6 @@ class RequestCoordinator:
                     failure_observation=failure_observation,
                     failure_effects=failure_effects,
                 )
-                # Phase 2: re-render upstream error in client protocol.
-                # Plan 028: reuse the already-parsed response instead of
-                # re-parsing raw bytes via jsonx_loads().
-                if transcoder is not None and context.transcode_context is not None:
-                    err_payload = parsed_response.parsed_dict
-                    if isinstance(err_payload, dict) or err_payload is None:
-                        _status, err_body, err_warnings = transcoder.reencode_error(
-                            response.status_code,
-                            err_payload,
-                            context.transcode_context,
-                        )
-                        resp_body = encode_json_body(err_body)
-                        context.transcode_context.loss_warnings.extend(err_warnings)
                 elapsed_ms = self._elapsed_ms(context)
                 resp_headers.append(("x-proxy-request-id", context.request_id))
                 resp_headers.append(("x-proxy-attempt-count", str(attempt_num)))
@@ -3351,6 +3388,48 @@ class RequestCoordinator:
                 read_ms=upstream_read_ms,
             )
             # Finalize via RequestFinalizer
+            if transcoder is not None and context.transcode_context is not None:
+                upstream_payload = parsed_response.parsed_dict
+                if not isinstance(upstream_payload, dict):
+                    raise self._local_dispatch_error(
+                        context=context,
+                        selected=selected,
+                        stage="response_adaptation",
+                        error=ValueError(
+                            "transcoded success response is not a JSON object"
+                        ),
+                    )
+                try:
+                    _features = (
+                        self._transcoder_policy.features
+                        if self._transcoder_policy is not None
+                        else None
+                    )
+                    translated, decode_warnings = transcoder.decode_response(
+                        upstream_payload,
+                        context.transcode_context,
+                        features=_features,
+                        reasoning_field_names=(
+                            self._transcoder_policy.openai_reasoning_fields.non_stream
+                            if self._transcoder_policy is not None
+                            else None
+                        ),
+                        emit_compat_aliases=(
+                            self._transcoder_policy.openai_reasoning_fields.emit_compat_aliases
+                            if self._transcoder_policy is not None
+                            else False
+                        ),
+                    )
+                    body = encode_json_body(translated)
+                    context.transcode_context.loss_warnings.extend(decode_warnings)
+                except Exception as err:
+                    raise self._local_dispatch_error(
+                        context=context,
+                        selected=selected,
+                        stage="response_adaptation",
+                        error=err,
+                    ) from err
+
             await self._finalize_terminal(
                 context,
                 selected,
@@ -3403,35 +3482,6 @@ class RequestCoordinator:
                 reasons=list(_TRANSIENT_BACKOFF_REASONS),
             )
 
-            # Phase 2: decode upstream success response to client protocol.
-            # Plan 028: reuse the already-parsed response instead of
-            # re-parsing body bytes.
-            if transcoder is not None and context.transcode_context is not None:
-                upstream_payload = parsed_response.parsed_dict
-                if isinstance(upstream_payload, dict):
-                    _features = (
-                        self._transcoder_policy.features
-                        if self._transcoder_policy is not None
-                        else None
-                    )
-                    translated, decode_warnings = transcoder.decode_response(
-                        upstream_payload,
-                        context.transcode_context,
-                        features=_features,
-                        reasoning_field_names=(
-                            self._transcoder_policy.openai_reasoning_fields.non_stream
-                            if self._transcoder_policy is not None
-                            else None
-                        ),
-                        emit_compat_aliases=(
-                            self._transcoder_policy.openai_reasoning_fields.emit_compat_aliases
-                            if self._transcoder_policy is not None
-                            else False
-                        ),
-                    )
-                    body = encode_json_body(translated)
-                    context.transcode_context.loss_warnings.extend(decode_warnings)
-
             resp_headers.append(("x-proxy-request-id", context.request_id))
             resp_headers.append(("x-proxy-attempt-count", str(attempt_num)))
             return PreparedProxyResponse(
@@ -3446,10 +3496,7 @@ class RequestCoordinator:
             )
         finally:
             if response is not None:  # type: ignore[unnecessary-comparison]
-                try:
-                    await response.aclose()
-                except Exception:
-                    logger.debug("Error closing upstream response", exc_info=True)
+                await self._close_response(response)
 
     async def _execute_streaming(
         self,
@@ -3460,21 +3507,11 @@ class RequestCoordinator:
         transcoder: BodyTranscoder | None = None,
     ) -> PreparedProxyResponse:
         """Execute a streaming request."""
-        headers = self._build_upstream_headers(context, selected)
-        upstream_url = self._get_upstream_url(
-            context.upstream_protocol, selected.provider_id
-        )
-
-        # Phase C: re-resolve ``thinking.budget_tokens`` for the
-        # selected provider. Strict rejections propagate as
-        # :class:`CapabilityError`; the cleanup branch finalizes the
-        # attempt, releases the reservation, decrements the active
-        # request count, and frees the health slot before re-raising so
-        # the proxy layer renders an HTTP 400 with no leaked state.
-        #
-        # Plan 028 Workstream B: both streaming and non-streaming paths
-        # share one ordered provider transform pipeline.
         try:
+            headers = self._build_upstream_headers(context, selected)
+            upstream_url = self._get_upstream_url(
+                context.upstream_protocol, selected.provider_id
+            )
             from eggpool.request.transform_pipeline import (
                 run_provider_transforms,
             )
@@ -3487,87 +3524,75 @@ class RequestCoordinator:
                 err=err,
             )
             raise
-        self._serialize_provider_request(context)
+        except Exception as err:
+            raise self._local_dispatch_error(
+                context=context,
+                selected=selected,
+                stage="request_preparation",
+                error=err,
+            ) from err
+        try:
+            self._serialize_provider_request(context)
+        except Exception as err:
+            raise self._local_dispatch_error(
+                context=context,
+                selected=selected,
+                stage="request_serialization",
+                error=err,
+            ) from err
         body_to_send = context.body_for_upstream
         upstream_include_usage = context.client_metadata.get("upstream_include_usage")
 
-        client = self._get_client(selected.provider_id, selected.account_name)
-        request = client.build_request(
-            "POST",
-            upstream_url,
-            headers=headers,
-            content=body_to_send,
-        )
+        try:
+            client = self._get_client(selected.provider_id, selected.account_name)
+            request = client.build_request(
+                "POST",
+                upstream_url,
+                headers=headers,
+                content=body_to_send,
+            )
+        except Exception as err:
+            raise self._local_dispatch_error(
+                context=context,
+                selected=selected,
+                stage="request_construction",
+                error=err,
+            ) from err
 
         response = None
         generator_created = False
         try:
             try:
                 response = await self._send_upstream_request(client, request, context)
-            except httpx.ConnectError as err:
+            except httpx.TransportError as err:
+                if isinstance(err, httpx.ReadTimeout):
+                    self._stream_diagnostics.record_outcome(
+                        STREAM_OUTCOME_RESPONSE_HEADER_TIMEOUT,
+                        proxy_request_id=context.request_id,
+                        provider_id=selected.provider_id,
+                        account_name=selected.account_name,
+                        model_id=selected.model_id,
+                        protocol=context.upstream_protocol,
+                        elapsed_ms=self._elapsed_ms(context),
+                        attempt=selected.attempt_number,
+                        exception_class=type(err).__name__,
+                    )
+                status_code = 504 if isinstance(err, httpx.TimeoutException) else None
+                if isinstance(err, httpx.RemoteProtocolError):
+                    status_code = 502
                 raise _RetryableUpstreamError(
-                    f"Connection failed: {err}",
-                    status_code=None,
-                    error_class="ConnectError",
-                ) from err
-            except httpx.PoolTimeout as err:
-                raise _RetryableUpstreamError(
-                    f"HTTPX pool exhausted: {err}",
-                    status_code=None,
-                    error_class="PoolTimeout",
-                ) from err
-            except httpx.ReadTimeout as err:
-                self._stream_diagnostics.record_outcome(
-                    STREAM_OUTCOME_RESPONSE_HEADER_TIMEOUT,
-                    proxy_request_id=context.request_id,
-                    provider_id=selected.provider_id,
-                    account_name=selected.account_name,
-                    model_id=selected.model_id,
-                    protocol=context.upstream_protocol,
-                    elapsed_ms=self._elapsed_ms(context),
-                    attempt=selected.attempt_number,
-                    exception_class=type(err).__name__,
-                )
-                raise _RetryableUpstreamError(
-                    f"Read timeout: {err}",
-                    status_code=504,
-                    error_class="ReadTimeout",
-                ) from err
-            except httpx.ConnectTimeout as err:
-                raise _RetryableUpstreamError(
-                    f"Connect timeout: {err}",
-                    status_code=504,
-                    error_class="ConnectTimeout",
-                ) from err
-            except httpx.WriteTimeout as err:
-                raise _RetryableUpstreamError(
-                    f"Write timeout: {err}",
-                    status_code=504,
-                    error_class="WriteTimeout",
-                ) from err
-            except httpx.RemoteProtocolError as err:
-                raise _RetryableUpstreamError(
-                    f"Upstream protocol error: {err}",
-                    status_code=502,
-                    error_class="RemoteProtocolError",
-                ) from err
-            except (httpx.ReadError, httpx.WriteError) as err:
-                raise _RetryableUpstreamError(
-                    f"HTTP transport error: {err}",
-                    status_code=None,
+                    f"Upstream transport failed ({type(err).__name__})",
+                    status_code=status_code,
                     error_class=type(err).__name__,
                 ) from err
-            except httpx.TimeoutException as err:
-                raise _RetryableUpstreamError(
-                    f"Timeout: {err}",
-                    status_code=504,
-                    error_class="TimeoutException",
-                ) from err
+            except asyncio.CancelledError:
+                raise
             except Exception as err:
-                raise _RetryableUpstreamError(
-                    f"Upstream error: {err}",
-                    status_code=None,
-                    error_class=type(err).__name__,
+                raise self._local_dispatch_error(
+                    context=context,
+                    selected=selected,
+                    stage="response_headers",
+                    error=err,
                 ) from err
 
             if response is None:  # type: ignore[reportUnnecessaryComparison]
@@ -3575,8 +3600,35 @@ class RequestCoordinator:
 
             # Check upstream status before creating downstream response
             if response.status_code >= 400:
-                await response.aread()
-                resp_headers = filter_response_headers(response.headers)
+                try:
+                    await response.aread()
+                except httpx.TransportError as err:
+                    status_code = (
+                        504 if isinstance(err, httpx.TimeoutException) else None
+                    )
+                    raise _RetryableUpstreamError(
+                        f"Upstream error-body transport failed ({type(err).__name__})",
+                        status_code=status_code,
+                        error_class=type(err).__name__,
+                    ) from err
+                except asyncio.CancelledError:
+                    raise
+                except Exception as err:
+                    raise self._local_dispatch_error(
+                        context=context,
+                        selected=selected,
+                        stage="error_response_read",
+                        error=err,
+                    ) from err
+                try:
+                    resp_headers = filter_response_headers(response.headers)
+                except Exception as err:
+                    raise self._local_dispatch_error(
+                        context=context,
+                        selected=selected,
+                        stage="error_response_headers",
+                        error=err,
+                    ) from err
                 resp_body = response.content
 
                 error, failure_observation, failure_effects = (
@@ -3629,7 +3681,15 @@ class RequestCoordinator:
                 stream_timeouts, "first_byte_timeout_s", None
             )
             idle_timeout_s = getattr(stream_timeouts, "idle_timeout_s", None)
-            upstream_iterator = response.aiter_bytes()
+            try:
+                upstream_iterator = response.aiter_bytes()
+            except Exception as err:
+                raise self._local_dispatch_error(
+                    context=context,
+                    selected=selected,
+                    stage="stream_iterator",
+                    error=err,
+                ) from err
             prefetched_chunk: bytes | None = None
             if first_byte_timeout_s is not None:
                 first_byte_started = time.monotonic()
@@ -3643,6 +3703,15 @@ class RequestCoordinator:
                             break
                 except StopAsyncIteration:
                     pass
+                except httpx.TransportError as exc:
+                    status_code = (
+                        504 if isinstance(exc, httpx.TimeoutException) else None
+                    )
+                    raise _RetryableUpstreamError(
+                        f"Upstream first-byte transport failed ({type(exc).__name__})",
+                        status_code=status_code,
+                        error_class=type(exc).__name__,
+                    ) from exc
                 except TimeoutError as exc:
                     timeout = ProviderStreamTimeoutError(
                         STREAM_OUTCOME_FIRST_BYTE_TIMEOUT,
@@ -3664,9 +3733,26 @@ class RequestCoordinator:
                         configured_max_lifetime_s=None,
                     )
                     raise timeout from exc
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    raise self._local_dispatch_error(
+                        context=context,
+                        selected=selected,
+                        stage="first_byte_prefetch",
+                        error=exc,
+                    ) from exc
 
             # Build the response headers
-            resp_headers = filter_response_headers(response.headers)
+            try:
+                resp_headers = filter_response_headers(response.headers)
+            except Exception as err:
+                raise self._local_dispatch_error(
+                    context=context,
+                    selected=selected,
+                    stage="response_headers",
+                    error=err,
+                ) from err
             resp_headers.append(("x-proxy-request-id", context.request_id))
             resp_headers.append(("x-proxy-attempt-count", str(attempt_num)))
 
@@ -3840,15 +3926,20 @@ class RequestCoordinator:
                     if streaming_transcoder is not None:
                         out_chunks: list[bytes] = []
                         for frame in frames:
-                            out_chunks.extend(
-                                streaming_transcoder.translate_frame(frame)
-                            )
+                            try:
+                                out_chunks.extend(
+                                    streaming_transcoder.translate_frame(frame)
+                                )
+                            except Exception as err:
+                                raise _LocalStreamTranslationError from err
                         if out_chunks:
                             output = b"".join(out_chunks)
                             downstream_bytes_emitted += len(output)
+                            context.client_metadata["downstream_started"] = True
                             yield output
                     else:
                         downstream_bytes_emitted += len(chunk)
+                        context.client_metadata["downstream_started"] = True
                         yield chunk
 
                 # Transport EOF is not protocol completion. Drain the parser,
@@ -3914,7 +4005,7 @@ class RequestCoordinator:
                         selected,
                         FinalizationData(
                             outcome=FinalizationOutcome.MIDSTREAM_ERROR,
-                            downstream_started=True,
+                            downstream_started=eof_decision.downstream_started,
                             first_byte_ms=(
                                 int(first_byte_ms) if first_byte_ms > 0 else None
                             ),
@@ -3961,10 +4052,14 @@ class RequestCoordinator:
                         eof_decision.classification, request_id=context.request_id
                     )
                 if streaming_transcoder is not None:
-                    out_chunks = streaming_transcoder.finish(eof_result)
+                    try:
+                        out_chunks = streaming_transcoder.finish(eof_result)
+                    except Exception as err:
+                        raise _LocalStreamTranslationError from err
                     if out_chunks:
                         output = b"".join(out_chunks)
                         downstream_bytes_emitted += len(output)
+                        context.client_metadata["downstream_started"] = True
                         yield output
                 usage_result = observer.usage
 
@@ -4014,7 +4109,9 @@ class RequestCoordinator:
                     selected,
                     FinalizationData(
                         outcome=FinalizationOutcome.COMPLETED,
-                        downstream_started=True,
+                        downstream_started=bool(
+                            context.client_metadata.get("downstream_started")
+                        ),
                         status_code=upstream_response.status_code,
                         input_tokens=usage_result.input_tokens,
                         output_tokens=usage_result.output_tokens,
@@ -4108,7 +4205,9 @@ class RequestCoordinator:
                     )
                     fin_data = FinalizationData(
                         outcome=FinalizationOutcome.CLIENT_CANCELLED,
-                        downstream_started=True,
+                        downstream_started=bool(
+                            context.client_metadata.get("downstream_started")
+                        ),
                         first_byte_ms=(
                             int(first_byte_ms) if first_byte_ms > 0 else None
                         ),
@@ -4183,12 +4282,41 @@ class RequestCoordinator:
                     connect_ms=mid_connect_ms_value,
                     read_ms=mid_read_ms_value,
                 )
+                downstream_started = bool(
+                    context.client_metadata.get("downstream_started")
+                )
+                failure_source = (
+                    "transcoding"
+                    if isinstance(exc, _LocalStreamTranslationError)
+                    else "stream"
+                )
+                failure_observation = self._build_failure_observation(
+                    context=context,
+                    selected=selected,
+                    status_code=(
+                        504 if isinstance(exc, ProviderStreamTimeoutError) else None
+                    ),
+                    error_class=type(exc).__name__,
+                    source=failure_source,
+                    response_started=True,
+                    downstream_started=downstream_started,
+                )
+                if isinstance(exc, ProviderStreamTimeoutError):
+                    from eggpool.failure.signal import FailureSignal
+
+                    failure_observation = replace(
+                        failure_observation,
+                        response_signal=FailureSignal.TRANSPORT_FAILURE,
+                    )
+                failure_effects = classify_failure_effects(failure_observation)
                 await self._finalize_terminal(
                     context,
                     selected,
                     FinalizationData(
                         outcome=FinalizationOutcome.MIDSTREAM_ERROR,
-                        downstream_started=True,
+                        downstream_started=bool(
+                            context.client_metadata.get("downstream_started")
+                        ),
                         first_byte_ms=int(first_byte_ms) if first_byte_ms > 0 else None,
                         upstream_latency_ms=mid_latency_total,
                         bytes_emitted=bytes_emitted,
@@ -4220,6 +4348,8 @@ class RequestCoordinator:
                             model_id=selected.model_id,
                             is_streaming=True,
                         ),
+                        failure_observation=failure_observation,
+                        failure_effects=failure_effects,
                         transcoded=context.transcode_context is not None,
                         segmentation=context.segmentation,
                         segmentation_not_collected=context.segmentation_not_collected,
@@ -4364,15 +4494,10 @@ class RequestCoordinator:
         """
         data_dict = parsed.parsed_dict
         if data_dict is None:
-            if parsed.parse_status == "parsed":
-                return None
-            # Parsing not yet attempted or failed — fall back to the
-            # byte-based extractor so behaviour is identical.
-            return self._extract_non_stream_usage(
-                protocol,
-                parsed.raw_body,
-                provider_id=provider_id,
-            )
+            # ``parsed_dict`` has already attempted the one permitted JSON
+            # decode.  Invalid/non-object bodies are valid native pass-through
+            # responses, but they do not contain extractable usage.
+            return None
 
         if protocol == "anthropic":
             return extract_anthropic_response_usage(
@@ -4460,6 +4585,111 @@ class RequestCoordinator:
         context.upstream_connect_ms = int((time.monotonic() - connect_start) * 1000)
         context.upstream_headers_ms = self._elapsed_ms(context)
         return response
+
+    @staticmethod
+    async def _close_response(response: httpx.Response | None) -> None:
+        """Close an upstream response without masking the original failure."""
+        if response is None:
+            return
+        try:
+            await response.aclose()
+        except Exception:
+            logger.debug("Error closing upstream response", exc_info=True)
+
+    def _local_dispatch_error(
+        self,
+        *,
+        context: ProxyRequestContext,
+        selected: SelectedAttempt,
+        stage: str,
+        error: Exception,
+    ) -> _LocalDispatchError:
+        """Build a request-local error with zero provider effects."""
+        observation = self._build_failure_observation(
+            context=context,
+            selected=selected,
+            status_code=500,
+            error_class=type(error).__name__,
+            source="local_preparation",
+            response_started=False,
+            downstream_started=False,
+        )
+        return _LocalDispatchError(
+            stage=stage,
+            error_class=type(error).__name__,
+            failure_observation=observation,
+            failure_effects=classify_failure_effects(observation),
+        )
+
+    async def _finalize_unexpected_local_error(
+        self,
+        *,
+        context: ProxyRequestContext,
+        selected: SelectedAttempt,
+        error: Exception,
+    ) -> None:
+        """Submit terminal cleanup for an exception outside a stage helper."""
+        local_error = self._local_dispatch_error(
+            context=context,
+            selected=selected,
+            stage="request_boundary",
+            error=error,
+        )
+        await self._finalize_terminal(
+            context,
+            selected,
+            FinalizationData(
+                outcome=FinalizationOutcome.UPSTREAM_ERROR,
+                status_code=500,
+                error_class=local_error.error_class,
+                error_detail="local request failure",
+                upstream_latency_ms=self._elapsed_ms(context),
+                upstream_protocol=context.upstream_protocol,
+                failure_observation=local_error.failure_observation,
+                failure_effects=local_error.failure_effects,
+                thinking_trace_json=_serialize_thinking_trace(context.thinking_trace),
+            ),
+        )
+
+    @staticmethod
+    def _build_local_error_response(
+        context: ProxyRequestContext,
+        *,
+        status_code: int,
+    ) -> PreparedProxyResponse:
+        """Build a bounded protocol-shaped local error without exception text."""
+        if context.protocol == "anthropic":
+            body = encode_json_body(
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "api_error",
+                        "message": "Internal proxy error",
+                    },
+                }
+            )
+        else:
+            body = encode_json_body(
+                {
+                    "error": {
+                        "message": "Internal proxy error",
+                        "type": "server_error",
+                        "code": status_code,
+                    }
+                }
+            )
+        return PreparedProxyResponse(
+            status_code=status_code,
+            headers=[
+                ("content-type", "application/json"),
+                ("x-proxy-request-id", context.request_id),
+            ],
+            body=body,
+            request_id=context.request_id,
+            account_name=str(context.client_metadata.get("account_name", "")),
+            latency_ms=0,
+            attempt_count=0,
+        )
 
     @staticmethod
     def _upstream_read_ms(
@@ -5600,7 +5830,7 @@ class RequestCoordinator:
                 if (
                     isinstance(last_error, _RetryableUpstreamError)
                     and last_error.error_class is not None
-                ):
+                ) or isinstance(last_error, _LocalDispatchError):
                     error_class = last_error.error_class
                 else:
                     error_class = type(last_error).__name__
@@ -5729,6 +5959,8 @@ class RequestCoordinator:
                 ("x-proxy-request-id", context.request_id),
                 ("x-proxy-attempt-count", str(attempt_num)),
             ]
+            if context.client_metadata.get("attempt_ceiling_reached"):
+                resp_headers.append(("x-proxy-retry-reason", "attempt_ceiling_reached"))
             # Phase 2: re-render upstream error in client protocol when
             # transcoding is active. The streaming pre-stream 4xx path
             # raises ``_NonRetryableUpstreamError`` with the raw upstream
@@ -5756,11 +5988,19 @@ class RequestCoordinator:
                         client_protocol=context.protocol,
                         upstream_protocol=context.upstream_protocol,
                     )
-                    _status, err_body, err_warnings = transcoder.reencode_error(
-                        status, err_payload, transcode_ctx
-                    )
-                    body = encode_json_body(err_body)
-                    transcode_ctx.loss_warnings.extend(err_warnings)
+                    try:
+                        _status, err_body, err_warnings = transcoder.reencode_error(
+                            status, err_payload, transcode_ctx
+                        )
+                        body = encode_json_body(err_body)
+                        transcode_ctx.loss_warnings.extend(err_warnings)
+                    except Exception:
+                        logger.warning(
+                            "Exhausted error response adaptation failed; preserving "
+                            "filtered upstream body: request_id=%s",
+                            context.request_id,
+                            exc_info=True,
+                        )
             return PreparedProxyResponse(
                 status_code=status,
                 headers=resp_headers,
@@ -6236,6 +6476,8 @@ class RequestCoordinator:
             if err.status_code is not None:
                 return err.status_code
             return 502
+        if isinstance(err, _LocalDispatchError):
+            return 500
         return 502
 
 
@@ -6264,6 +6506,28 @@ class _RetryableUpstreamError(Exception):
         self.failure_observation = failure_observation
         self.failure_effects = failure_effects
         self.source = source
+
+
+class _LocalDispatchError(Exception):
+    """A bounded local failure that must never be retried as provider fault."""
+
+    def __init__(
+        self,
+        *,
+        stage: str,
+        error_class: str,
+        failure_observation: FailureObservation,
+        failure_effects: FailureEffects,
+    ) -> None:
+        super().__init__(f"local dispatch failure in {stage}")
+        self.stage = stage
+        self.error_class = error_class
+        self.failure_observation = failure_observation
+        self.failure_effects = failure_effects
+
+
+class _LocalStreamTranslationError(Exception):
+    """A response-frame adaptation failure owned by EggPool."""
 
 
 class _NonRetryableUpstreamError(Exception):

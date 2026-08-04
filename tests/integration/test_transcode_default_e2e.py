@@ -314,6 +314,91 @@ async def test_openai_chat_completions_to_anthropic_minimax_default(
 
 
 @pytest.mark.asyncio
+async def test_malformed_transcoded_success_is_not_marked_completed(
+    client: httpx.AsyncClient,
+    app: FastAPI,
+) -> None:
+    """A required transcoded 2xx body becomes a bounded terminal error."""
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}{ANTHROPIC_PATH}").mock(
+            return_value=httpx.Response(
+                200,
+                content=b"not-json",
+                headers={"content-type": "application/json"},
+            )
+        )
+        response = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "MiniMax-M3",
+                "messages": [{"role": "user", "content": "malformed"}],
+                "max_tokens": 16,
+            },
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 500, response.text
+    proxy_request_id = response.headers.get("x-proxy-request-id")
+    assert proxy_request_id
+    row = await app.state.db.fetch_one(
+        "SELECT status FROM requests WHERE proxy_request_id = ?",
+        (proxy_request_id,),
+    )
+    assert row is not None
+    assert row["status"] != "completed"
+
+
+@pytest.mark.asyncio
+async def test_response_adaptation_failure_is_not_marked_completed(
+    client: httpx.AsyncClient,
+    app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A response transcoder defect is terminal local work, not success."""
+    from eggpool.transcoder.openai_to_anthropic import OpenAIToAnthropic
+
+    def _fail_decode(*_args: Any, **_kwargs: Any) -> tuple[dict[str, Any], list[Any]]:
+        raise RuntimeError("injected response adaptation defect")
+
+    monkeypatch.setattr(OpenAIToAnthropic, "decode_response", _fail_decode)
+
+    with respx.mock:
+        respx.post(f"{UPSTREAM_BASE}{ANTHROPIC_PATH}").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "msg-adapter-failure",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "MiniMax-M3",
+                    "content": [{"type": "text", "text": "hello"}],
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                },
+            )
+        )
+        response = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "MiniMax-M3",
+                "messages": [{"role": "user", "content": "adapter"}],
+                "max_tokens": 16,
+            },
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 500, response.text
+    proxy_request_id = response.headers.get("x-proxy-request-id")
+    assert proxy_request_id
+    row = await app.state.db.fetch_one(
+        "SELECT status FROM requests WHERE proxy_request_id = ?",
+        (proxy_request_id,),
+    )
+    assert row is not None
+    assert row["status"] != "completed"
+
+
+@pytest.mark.asyncio
 async def test_default_policy_does_not_raise_protocol_mismatch(
     client: httpx.AsyncClient,
 ) -> None:

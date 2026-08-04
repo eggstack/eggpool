@@ -112,9 +112,28 @@ The orchestrator. Wires together all lifecycle stages:
 
 **Key invariants**:
 - Request persisted before upstream dispatch
-- Pre-body failures can retry; no retry after first downstream byte
+- Dispatch stages have narrow exception ownership: local preparation, request construction/serialization, and client-facing adaptation faults are local terminal errors; only typed HTTPX transport faults are retry candidates.
+- Retry uses distinct accounts only, converges failed-attempt cleanup before reselection, and stops at `min(distinct eligible accounts, 1 + max_retries_before_stream)` without sleeping. A ceiling-truncated traversal records `attempt_ceiling_reached`.
+- Response handoff is an explicit `downstream_started` fact set immediately before stream delivery; no retry occurs after handoff, even when zero payload bytes have been emitted.
+- Non-streaming response adaptation completes before durable `COMPLETED`; native pass-through may retain invalid JSON, but required transcoded response adaptation must succeed first.
 - Every retryable failed attempt reaches terminal state before next attempt
 - Same URL composition rules for catalog fetch and chat dispatch
+
+### Dispatch exception boundaries
+
+The coordinator treats request preparation, transport, response handling, and
+client-facing adaptation as separate stages. Generic exceptions retain their
+stage and become bounded local errors after selected ownership is finalized;
+they do not become provider health evidence. HTTPX transport exceptions are
+classified from their type and can fail over only before handoff;
+`asyncio.CancelledError` propagates normally.
+
+For non-streaming responses, `ParsedUpstreamResponse` is built once after the
+body read. Usage extraction is best effort, native protocol bodies can remain
+pass-through, and required response transcoding happens before durable success
+finalization. For streams, the upstream response is closed on success,
+cancellation, premature EOF, transport failure, or local frame translation
+failure.
 
 ### `request/finalizer.py` — RequestFinalizer
 

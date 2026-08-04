@@ -31,7 +31,10 @@ All data-plane requests flow through `RequestCoordinator`:
 
 - Requests must be persisted before upstream dispatch
 - Dispatch persistence is binary: a batch returns fully valid durable identities or raises; rollback never creates placeholder success results. The process-owned writer is bound to the canonical single event loop and rejects foreign-loop submissions.
-- Pre-body failures can retry; no retry after first downstream byte emitted
+- Dispatch exception boundaries are stage-local. Provider/client preparation, request construction or serialization, and client-facing response adaptation faults are local terminal errors with no provider retry or penalty. Only typed HTTPX transport failures are retry candidates.
+- Retries use distinct accounts only, converge failed-attempt cleanup before reselection, and stop at `min(distinct eligible accounts, 1 + max_retries_before_stream)`. The request records `attempt_ceiling_reached` when the configured ceiling leaves eligible accounts unattempted.
+- Pre-handoff failures can retry; once `downstream_started` is set immediately before stream delivery, no retry is possible. `asyncio.CancelledError` propagates.
+- Non-streaming response adaptation completes before durable `COMPLETED`; native invalid JSON may pass through when usage is optional, while required transcoded responses must adapt successfully.
 - Every retryable failed attempt must reach terminal state through retained attempt cleanup before the next attempt
 - Each attempt reservation is released exactly once via `AttemptFinalizer`
 - Streaming success requires upstream protocol terminal evidence: OpenAI `[DONE]` or Anthropic `message_stop`. Use `StreamCompletionSnapshot` and `classify_stream_eof()`

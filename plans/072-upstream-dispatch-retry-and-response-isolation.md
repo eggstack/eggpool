@@ -1,7 +1,7 @@
 # Plan 072 — Upstream Dispatch, Retry, and Response Isolation
 
 Date: 2026-08-04
-Status: ready for implementation
+Status: completed
 Parent roadmap: `plans/070-failure-resilience-router-recovery-and-sbc-simplification-roadmap.md`
 Depends on: `plans/071-attempt-scoped-failure-classification-and-effects.md`
 Planning baseline: `e73db213e7e381043cda3cfb8a3dd8109f3f39ca`
@@ -227,7 +227,6 @@ actual_total = min(configured_total, distinct eligible accounts reachable for th
 6. If adaptation fails because the upstream response is malformed or violates the provider protocol:
    - create a provider-attributable protocol/malformed-response decision only when the malformed upstream evidence is clear;
    - otherwise classify as local adapter failure;
-   - finalize the selected attempt/request with the truthful error outcome;
    - do not report durable completion.
 7. Preserve upstream response pass-through for native protocol paths where invalid JSON is allowed by the current API contract. Do not force JSON validation merely for usage extraction.
 8. Do not parse the body twice.
@@ -345,30 +344,30 @@ Then run the normal repository formatting/lint/type gate. Do not add a CI job or
 
 1. Introduce stage-local helpers without changing behavior.
 2. Narrow catches and attach Plan 071 decisions.
-3. make distinct-account/attempt-budget behavior explicit and test it.
-4. move non-stream response adaptation before terminal success.
-5. prove streaming pre/post-handoff behavior.
-6. add the final request-level ordinary-exception renderer.
-7. consolidate focused regressions.
-8. delete obsolete broad catches and comments.
-9. run focused checks and smoke.
+3. Make distinct-account/attempt-budget behavior explicit and test it.
+4. Move non-stream response adaptation before terminal success.
+5. Prove streaming pre/post-handoff behavior.
+6. Add the final request-level ordinary-exception renderer.
+7. Consolidate focused regressions.
+8. Delete obsolete broad catches and comments.
+9. Run focused checks and smoke.
 
 ## Plan acceptance criteria
 
-- [ ] Local preparation failures cannot be labeled as provider transport failures.
-- [ ] Retry uses the Plan 071 decision and occurs only before handoff.
-- [ ] One request attempts each account at most once.
-- [ ] Total attempts respect both distinct candidates and the existing configured ceiling.
-- [ ] Failed-attempt cleanup converges before another account is selected.
-- [ ] No in-request retry sleep is added.
-- [ ] Non-stream response adaptation completes before durable success.
-- [ ] Malformed/transcoder failure produces truthful terminal state.
-- [ ] Streaming pre-handoff failures can reroute and post-handoff failures cannot.
-- [ ] Upstream responses close on every terminal path.
-- [ ] An unexpected ordinary request exception cannot terminate proxy service.
-- [ ] Local errors do not mutate provider health.
-- [ ] Focused regressions and smoke pass.
-- [ ] No hedge, replay queue, full-stream buffer, framework replacement, chaos harness, or CI expansion is introduced.
+- [x] Local preparation failures cannot be labeled as provider transport failures.
+- [x] Retry uses the Plan 071 decision and occurs only before handoff.
+- [x] One request attempts each account at most once.
+- [x] Total attempts respect both distinct candidates and the existing configured ceiling.
+- [x] Failed-attempt cleanup converges before another account is selected.
+- [x] No in-request retry sleep is added.
+- [x] Non-stream response adaptation completes before durable success.
+- [x] Malformed/transcoder failure produces truthful terminal state.
+- [x] Streaming pre-handoff failures can reroute and post-handoff failures cannot.
+- [x] Upstream responses close on every terminal path.
+- [x] An unexpected ordinary request exception cannot terminate proxy service.
+- [x] Local errors do not mutate provider health.
+- [x] Focused regressions and smoke pass.
+- [x] No hedge, replay queue, full-stream buffer, framework replacement, chaos harness, or CI expansion is introduced.
 
 ## Rejection conditions
 

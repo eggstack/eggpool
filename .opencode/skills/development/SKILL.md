@@ -122,6 +122,13 @@ and the real response path. Verify that canonical `[DONE]`/`message_stop` stream
 complete, markerless payload streams record incomplete EOF, and transcoded streams
 do not receive a synthetic terminal marker after premature EOF.
 
+Dispatch-boundary regressions should cover distinct-account failover, the
+configured attempt ceiling, cleanup-before-reselection, local request
+construction failures without provider health changes, response adaptation
+before durable success, native invalid-JSON pass-through, and cancellation
+propagation. Run the focused coordinator/proxy/transcoder suites before the
+repository-wide CI gate.
+
 ## Code Style
 
 - Python 3.11+ with `from __future__ import annotations` in all files

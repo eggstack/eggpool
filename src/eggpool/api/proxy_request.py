@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import sys
@@ -12,6 +13,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from starlette.exceptions import HTTPException
 
 from eggpool.api.errors import (
     anthropic_capability_error_response,
@@ -367,6 +369,29 @@ async def handle_proxy_request(
             ),
             proxy_request_id=proxy_request_id,
         )
+    except asyncio.CancelledError:
+        raise
+    except HTTPException:
+        raise
+    except Exception:
+        # Final request-level containment for faults outside the coordinator
+        # stages (including parsing/admission defects).  The request ID is
+        # safe to expose; request bodies, provider bodies, credentials, and
+        # traceback text stay server-side.
+        logger.exception(
+            "Unhandled ordinary proxy request exception: request_id=%s "
+            "protocol=%s exception=%s",
+            proxy_request_id,
+            endpoint.protocol,
+            "ordinary_exception",
+        )
+        response = endpoint.error_response(
+            status_code=500,
+            message="Internal proxy error",
+            error_type=endpoint.service_error_type,
+        )
+        response.headers["x-proxy-request-id"] = proxy_request_id
+        return response
     finally:
         # For non-streaming error paths the lease is still held here.
         # Streaming success transfers the lease to wrap_stream_with_lease.

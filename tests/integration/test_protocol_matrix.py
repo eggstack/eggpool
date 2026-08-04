@@ -217,6 +217,26 @@ class TestProtocolMatrixNativeNonStream:
         body = json.loads(resp.body)
         assert "error" in body
 
+    @pytest.mark.asyncio
+    async def test_invalid_json_usage_is_nonfatal_for_native_passthrough(
+        self, coordinator: RequestCoordinator
+    ) -> None:
+        """Native success bodies remain pass-through when usage is absent."""
+        raw_body = b"provider-native-text"
+        with respx.mock:
+            respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+                return_value=httpx.Response(
+                    200,
+                    content=raw_body,
+                    headers={"content-type": "text/plain"},
+                )
+            )
+            resp = await coordinator.execute(_make_context(model="gpt-4"))
+
+        assert resp.status_code == 200
+        assert resp.body == raw_body
+        assert resp.usage is None
+
 
 class TestProtocolMatrixNativeStream:
     """Native OpenAI stream requests through the full pipeline."""

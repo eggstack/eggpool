@@ -76,7 +76,10 @@ All outbound dispatch paths (non-streaming chat, streaming chat, catalog refresh
 
 Key invariants:
 - Requests must be persisted before upstream dispatch
-- Pre-body failures can retry; no retry after first downstream byte emitted
+- Local preparation, request construction/serialization, and client-facing response adaptation failures are local terminal errors; they do not retry or penalize a provider. Only typed HTTPX transport failures can retry across distinct accounts before the explicit `downstream_started` handoff fact.
+- Retry cleanup converges before reselection, and total attempts are bounded by both distinct eligible accounts and `1 + max_retries_before_stream`; a truncated traversal records `attempt_ceiling_reached`.
+- Non-streaming response adaptation completes before durable `COMPLETED`. Native invalid JSON may pass through when usage is optional; required transcoded response failures are not recorded as success.
+- Pre-body failures can retry; no retry after response handoff
 - **Protocol-aware streaming EOF**: `SSEDecoder` (`proxy/sse.py`) owns bounded UTF-8/SSE framing and emits shared `DecodedSSEFrame` objects. `IncrementalSSEObserver` retains bounded completion evidence (`[DONE]` for OpenAI, `message_stop` for Anthropic), and `classify_stream_eof()` maps clean exhaustion to canonical completion, provider-policy compatibility, empty, premature, or malformed EOF. The coordinator drains the shared decoder and classifies before `StreamingTranscoder.finish()`. A premature/malformed stream is finalized through the canonical `MIDSTREAM_ERROR` owner; it cannot clear success backoff or emit a synthetic downstream terminal marker. Provider policy is explicit on `ProviderConfig.stream_completion_policy` and defaults to `strict`.
 - Every retryable failed attempt must reach terminal state, confirm its reservation is terminal, and release all owned runtime components before the next attempt
 - Each attempt reservation is released exactly once via `AttemptFinalizer`
