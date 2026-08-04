@@ -1,7 +1,7 @@
 # Plan 068 — Partial Runtime Result Truthfulness Polish
 
 Date: 2026-08-03
-Status: ready for implementation
+Status: completed
 Parent roadmap: `plans/058-durable-convergence-exact-update-sbc-hotpath-roadmap.md`
 Corrective predecessor: `plans/067-explicit-handoff-and-already-terminal-runtime-closure.md`
 Planning baseline: `9e53ecd125f69cf822cd9376662279c1ad7a5036`
@@ -226,17 +226,17 @@ This should be one runtime/test commit plus one optional documentation closure c
 
 ## Plan acceptance criteria
 
-- [ ] `FinalizationResult` is refreshed from lease component markers after every runtime-convergence attempt.
-- [ ] Successful early components remain visible when a later runtime component raises.
-- [ ] `runtime_cleanup_complete` remains false until the lease is actually released.
-- [ ] Durable result fields are preserved while runtime result fields advance.
-- [ ] A real middle-component failure leaves the job at `RUNTIME_RELEASE_PENDING`.
-- [ ] Retry does not rerun durable finalization or completed active/quota/usage components.
-- [ ] Retry completes only the outstanding runtime components and produces truthful final state.
-- [ ] Focused tests prove partial and final result truthfulness.
-- [ ] Plans 058, 066, 067, and 068 have coherent closure metadata.
-- [ ] Focused checks and the existing smoke gate pass.
-- [ ] No queue, migration, dependency, result hierarchy, lifecycle framework, CI expansion, fault matrix, soak gate, benchmark gate, or evidence system is introduced.
+- [x] `FinalizationResult` is refreshed from lease component markers after every runtime-convergence attempt.
+- [x] Successful early components remain visible when a later runtime component raises.
+- [x] `runtime_cleanup_complete` remains false until the lease is actually released.
+- [x] Durable result fields are preserved while runtime result fields advance.
+- [x] A real middle-component failure leaves the job at `RUNTIME_RELEASE_PENDING`.
+- [x] Retry does not rerun durable finalization or completed active/quota/usage components.
+- [x] Retry completes only the outstanding runtime components and produces truthful final state.
+- [x] Focused tests prove partial and final result truthfulness.
+- [x] Plans 058, 066, 067, and 068 have coherent closure metadata.
+- [x] Focused checks and the existing smoke gate pass.
+- [x] No queue, migration, dependency, result hierarchy, lifecycle framework, CI expansion, fault matrix, soak gate, benchmark gate, or evidence system is introduced.
 
 ## Rejection conditions
 
@@ -254,3 +254,42 @@ Do not close this plan if:
 ## Definition of done
 
 This polish pass is complete when a retry-pending finalization result truthfully exposes every runtime component that has already converged, remains incomplete for outstanding work, resumes the real component loop without replay, becomes complete after the remaining components succeed, passes the two focused regression shapes and existing smoke gate, and closes Plans 058, 066, 067, and 068 without adding infrastructure.
+
+## Implementation closure
+
+Implemented with one lease-to-result projection helper in
+`RequestFinalizationJob` and a real middle-component failure regression using
+`RequestFinalizer.apply_runtime_convergence()`.
+
+Focused verification:
+
+```text
+rtk uv run ruff format src/eggpool/request/finalization_job.py tests/unit/test_request_finalization_state_machine.py tests/unit/test_request_finalizer.py
+3 files left unchanged
+rtk uv run ruff check src/eggpool/request/finalization_job.py tests/unit/test_request_finalization_state_machine.py tests/unit/test_request_finalizer.py
+All checks passed
+rtk uv run pytest tests/unit/test_request_finalization_state_machine.py tests/unit/test_request_finalizer.py -q --tb=short --maxfail=1
+37 passed
+rtk uv run pytest tests/unit/test_request_coordinator_cleanup.py tests/unit/test_request_finalization_state_machine.py tests/unit/test_request_finalizer.py -q --tb=short --maxfail=1
+46 passed
+rtk uv run pyright src/eggpool/request/finalization_job.py src/eggpool/request/finalizer.py
+0 errors, 0 warnings, 0 informations
+```
+
+Repository CI-equivalent verification:
+
+```text
+rtk uv run ruff format --check src/ tests/ scripts/
+734 files already formatted
+rtk uv run ruff check src/ tests/ scripts/
+All checks passed
+rtk uv run pyright src/ scripts/
+0 errors, 0 warnings, 0 informations
+rtk uv run pytest tests/smoke/ -q --tb=short --maxfail=1
+14 passed
+```
+
+An unfiltered `rtk uv run pytest -q --tb=short --maxfail=1` run was also
+started, but was interrupted after several minutes while blocked in the
+unrelated dispatch-writer SQLite test `test_dispatch_writer_waits_for...`;
+the existing CI gate and all affected finalization/coordinator tests passed.

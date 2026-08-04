@@ -430,10 +430,10 @@ open in parallel. When users report drops, timeouts, or
    the bottleneck. The routing-trace guard should be skipping writes
    (`routing_trace_guard.skipped_db_pressure` > 0).
 3. `GET /api/stats/runtime` →
-   `finalization_retry_queue.depth` non-zero means the shielded
-   finalizer timed out. The supervisor-owned drain task clears it on
-   its own cadence; sustained growth means the upstream is the
-   problem, not the local finalizer.
+   `finalization_supervisor.retry_pending_count` shows retained terminal
+   jobs awaiting retry. Inspect the bounded failure/history and saturation
+   counters as well as the configured retry-age limit; sustained growth
+   indicates a local convergence problem, not an upstream request failure.
 4. Apply the high-concurrency profile from `docs/providers.md` §
    High-Concurrency HTTP Client Profiles: raise
    `[providers.<id>].max_connections` to `256` and

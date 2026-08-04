@@ -275,7 +275,7 @@ When implementation and focused verification complete:
 - [x] Partial runtime failure resumes from the unfinished component without replaying durable or completed runtime work.
 - [x] Runtime result fields remain truthful throughout incomplete and completed convergence.
 - [x] Focused regressions cover both defects and the existing smoke gate passes.
-- [x] Plans 058, 066, and 067 have coherent status and acceptance metadata.
+- [x] Plans 058, 066, 067, and 068 have coherent status and acceptance metadata.
 - [x] No migration, new queue, lifecycle framework, runtime dependency, CI expansion, soak gate, benchmark gate, or evidence system is introduced.
 
 ## Rejection conditions
@@ -318,3 +318,12 @@ uv run pytest tests/smoke/ -q --tb=short --maxfail=1
 
 The relevant coordinator integration suite also passed with 59 tests. No new
 CI job, queue, migration, dependency, or evidence format was added.
+
+## Post-implementation review
+
+Plan 068 is the result-truthfulness polish successor. It preserves the
+explicit handoff and already-terminal runtime-obligation semantics closed here,
+while ensuring that retained `FinalizationResult` values expose completed lease
+components immediately when a later runtime component fails. Its focused test
+uses the real convergence loop and verifies completed components are not
+replayed on retry.

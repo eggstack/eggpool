@@ -80,7 +80,7 @@ Key invariants:
 - **Protocol-aware streaming EOF**: `SSEDecoder` (`proxy/sse.py`) owns bounded UTF-8/SSE framing and emits shared `DecodedSSEFrame` objects. `IncrementalSSEObserver` retains bounded completion evidence (`[DONE]` for OpenAI, `message_stop` for Anthropic), and `classify_stream_eof()` maps clean exhaustion to canonical completion, provider-policy compatibility, empty, premature, or malformed EOF. The coordinator drains the shared decoder and classifies before `StreamingTranscoder.finish()`. A premature/malformed stream is finalized through the canonical `MIDSTREAM_ERROR` owner; it cannot clear success backoff or emit a synthetic downstream terminal marker. Provider policy is explicit on `ProviderConfig.stream_completion_policy` and defaults to `strict`.
 - Every retryable failed attempt must reach terminal state, confirm its reservation is terminal, and release all owned runtime components before the next attempt
 - Each attempt reservation is released exactly once via `AttemptFinalizer`
-- **Process-owned request finalization (Plans 026/047/055/056/057)**: every selected request-terminal outcome is owned by one retained, attempt-keyed `RequestFinalizationJob`; streaming work registers no placeholder before its terminal data exists. The retained task completes durable and in-memory cleanup independently of request waiters. Retryable failed attempts and post-commit claim compensation use separate coordinator-retained commands with per-component progress, a hard 128-entry capacity by default, explicit rejoin, and bounded generation-shutdown drain. A retained command may return to its caller only after its progress record proves durable attempt transition, terminal reservation status, and each owned runtime release; a completed child task alone is not a convergence proof. A cancelled waiter submits one canonical `CLIENT_CANCELLED` request terminal only after the selected ownership converges, using an explicit last-converged attempt identity between retries. Duplicate submissions join, conflicting terminal payloads are diagnosed, and the bounded `RequestFinalizationSupervisor` provides diagnostics, startup reconciliation, and shutdown drain. The stale-request finalizer is a recovery safety net rather than a normal terminal path.
+- **Process-owned request finalization (Plans 026/047/055/056/057/066/067/068)**: every selected request-terminal outcome is owned by one retained, attempt-keyed `RequestFinalizationJob`; streaming work registers no placeholder before its terminal data exists. The retained task completes durable and in-memory cleanup independently of request waiters. Retryable failed attempts and post-commit claim compensation use separate coordinator-retained commands with per-component progress, a hard 128-entry capacity by default, explicit rejoin, and bounded generation-shutdown drain. A retained command may return to its caller only after its progress record proves durable attempt transition, terminal reservation status, and each owned runtime release; a completed child task alone is not a convergence proof. A cancelled waiter submits one canonical `CLIENT_CANCELLED` request terminal only after the selected ownership converges, using an explicit last-converged attempt identity between retries. Duplicate submissions join, conflicting terminal payloads are diagnosed, and the bounded `RequestFinalizationSupervisor` provides diagnostics, startup reconciliation, and shutdown drain. `FinalizationResult` projects completed lease markers immediately when later runtime convergence fails, while keeping runtime cleanup incomplete until the lease is released. The stale-request finalizer is a recovery safety net rather than a normal terminal path.
 - **Stale runtime accounting**: the bounded stale sweep reconciles only rows transitioned by that pass, releases one active unit per accepted request with one aggregate router update per account, and removes quota reservations by ownership rather than cost truthiness. Zero-cost request/token reservations are therefore released; bulk active-count underflow is logged and clamped to zero.
 - The same URL composition rules apply to catalog fetch and chat dispatch
 - **Structured observability persistence (migrations 0026-0029)** every `request_attempts` row carries provider/model/protocol/retry_category/latency/bytes/streamed/is_retry_outcome; every routing decision is persisted to `routing_decisions` in the same transaction as the `request_attempts` INSERT; safety-net tasks (`_crash_recovery`, `_finalize_stale_requests_once`, `reconcile_expired_reservations`) record `operational_events` rows inside the same transaction as the durable state mutation; latency is decomposed into `upstream_connect_ms / upstream_read_ms / coordinator_overhead_ms` so the dashboard can distinguish network vs upstream vs eggpool-side bottlenecks
@@ -3122,7 +3122,9 @@ remains as a fallback when no supervisor is available.
 
 - **Structured**. `FinalizationResult` distinguishes durable terminal state,
   whether this invocation transitioned it, reservation convergence, and
-  runtime cleanup completion. Already-terminal durable state is converged,
+  runtime cleanup completion. It projects the current `AttemptRuntimeLease`
+  markers after every runtime-convergence attempt, including partial progress
+  before a later component fails. Already-terminal durable state is converged,
   not a retry failure.
 - **Response lifecycle is explicit**. `FinalizationData.downstream_started`
   is set by the call site that owns the local response boundary: non-streaming
@@ -4006,9 +4008,12 @@ the non-blocking publication path.
 - **Stream diagnostics** (`src/eggpool/request/stream_diagnostics.py`):
   bounded ring histograms for `completed_ms`, `client_cancel_ms`,
   `finalizer_timeout_ms`. Exposed under `/api/stats/runtime`.
-- **Finalization retry queue** (`src/eggpool/request/finalization_queue.py`):
-  drains cancellation finalizations that escaped the 10s shielded
-  path. Supervisor-owned periodic task (active 1.5s, idle 15s).
+- **Finalization supervisor** (`src/eggpool/request/finalization_job.py`):
+  owns bounded terminal retries and exposes active, retry-pending, failure,
+  saturation, capacity, and retry-age diagnostics through
+  `finalization_supervisor` in `/api/stats/runtime`. The historical retry
+  queue remains only as a compatibility adapter and is not production retry
+  ownership.
 - **Routing trace guard** (`src/eggpool/request/routing_trace_guard.py`):
   skips diagnostic routing trace writes when SQLite lock-wait p95
   exceeds threshold (default 200ms).

@@ -188,6 +188,9 @@ backoff and an absolute execution-time maximum retry age. Each selected job
 carries an `AttemptRuntimeLease` made from publication facts, and runtime
 cleanup resumes component-by-component after durable convergence. Capacity
 rejects before ownership transfer; there is no detached terminal task.
+`FinalizationResult` is refreshed from the lease after both successful and
+failed convergence attempts, so completed active-count, quota, health, or
+probe components remain visible while an outstanding component is retried.
 
 `request/finalization_queue.py` remains only as a one-shot compatibility adapter
 for older integrations. It does not own retry counts, backoff, or drop policy.

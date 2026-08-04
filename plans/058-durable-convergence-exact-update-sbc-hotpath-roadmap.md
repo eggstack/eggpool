@@ -142,6 +142,12 @@ Carry explicit runtime publication ownership into the retained job, make post-co
 
 Replace payload-byte handoff inference with one explicit response lifecycle fact, make lease-owned usage/health/account obligations independent of durable request transition, add the missing focused regressions, and close the roadmap metadata.
 
+### Plan 068 — Partial Runtime Result Truthfulness Polish
+
+Project completed runtime lease components into `FinalizationResult` even when
+later convergence fails, prove the real component loop resumes without replay,
+and close the final result-truthfulness metadata gap.
+
 ## Dependency order
 
 ```text
@@ -152,7 +158,7 @@ Replace payload-byte handoff inference with one explicit response lifecycle fact
 064 quota/SQLite hot path -------+--------------------------------------------------------+
 ```
 
-Plan 061 depends on the transaction and recovery semantics from Plan 060. Plan 062 consumes the durable finalization and accounting semantics. Plans 063 and 064 are otherwise independent. Plan 065 closed the bounded durable/recovery regressions. Plan 066 landed the retained lease, retry deadline, and diagnostics. Plan 067 is limited to the final handoff and already-terminal runtime obligation semantics.
+Plan 061 depends on the transaction and recovery semantics from Plan 060. Plan 062 consumes the durable finalization and accounting semantics. Plans 063 and 064 are otherwise independent. Plan 065 closed the bounded durable/recovery regressions. Plan 066 landed the retained lease, retry deadline, and diagnostics. Plan 067 closed the final handoff and already-terminal runtime obligation semantics. Plan 068 is limited to truthful partial runtime result projection and real component-resume coverage.
 
 ## Cross-phase invariants
 
@@ -251,7 +257,7 @@ Do not close this roadmap if:
 
 ## Definition of done
 
-This roadmap is complete when Plans 059–066 remain intact, Plan 067 closes the explicit response-handoff and already-terminal lease-obligation residuals, durable persistence, recovery, finalization, runtime accounting, and stale repair agree on explicit identities and convergence, exact-version and bare latest updates behave as documented, quota and trace hot paths have bounded normal-path cost, the four focused regressions and existing smoke suite pass, and the repository remains simpler to iterate on than a production-grade service with equivalent failure machinery.
+This roadmap is complete when Plans 059–068 remain intact, Plan 068 closes the partial runtime result-truthfulness residual, durable persistence, recovery, finalization, runtime accounting, and stale repair agree on explicit identities and convergence, exact-version and bare latest updates behave as documented, quota and trace hot paths have bounded normal-path cost, the focused handoff, already-terminal, component-resume, and partial-result regressions and existing smoke suite pass, and the repository remains simpler to iterate on than a production-grade service with equivalent failure machinery.
 
 ## Current implementation state
 
@@ -265,5 +271,8 @@ Plan 067 completed final closure: response handoff uses the explicit
 `FinalizationData.downstream_started` fact, lease-owned usage/health/account-
 runtime obligations are independent of `request_transitioned`, and focused
 regressions cover handoff, already-terminal convergence, retry resumption, and
-truthful runtime results. No additional roadmap, queue, migration, CI
-expansion, or verification framework was warranted.
+truthful runtime results. Plan 068 completed the final polish: retained job
+results now project completed lease markers after partial convergence failures,
+and the real runtime component loop proves non-replay on retry. No additional
+roadmap, queue, migration, CI expansion, or verification framework was
+warranted.

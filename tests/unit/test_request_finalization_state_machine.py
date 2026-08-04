@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -24,6 +25,7 @@ from eggpool.request.finalizer import (
     DurableFinalizationResult,
     FinalizationData,
     FinalizationOutcome,
+    RequestFinalizer,
 )
 
 
@@ -182,6 +184,11 @@ class TestRequestFinalizationJob:
     ) -> None:
         lease = AttemptRuntimeLease(
             account_name="acct",
+            estimated_tokens=10,
+            estimated_microdollars=20,
+            active_count_acquired=True,
+            quota_reservation_acquired=True,
+            health_probe_acquired=True,
             usage_outcome_required=True,
             health_outcome_required=True,
             account_runtime_outcome_required=True,
@@ -193,44 +200,121 @@ class TestRequestFinalizationJob:
             attempt_terminal=True,
             reservation_terminal=True,
             reservation_transitioned=True,
+            cost_microdollars=20,
         )
-        calls = {"durable": 0, "runtime": 0}
+        calls = {
+            "durable": 0,
+            "active": 0,
+            "quota_remove": 0,
+            "usage": 0,
+            "health": 0,
+            "account": 0,
+        }
 
-        class FlakyFinalizer:
-            async def finalize(self, selected: object, data: object) -> object:
+        class Router:
+            async def decrement_active_request_count(self, account_name: str) -> None:
+                assert account_name == "acct"
+                calls["active"] += 1
+
+        class Quota:
+            async def remove_reservation(self, *args: object, **kwargs: object) -> None:
+                calls["quota_remove"] += 1
+
+            async def record_usage_and_snapshot(
+                self, *args: object, **kwargs: object
+            ) -> None:
+                calls["usage"] += 1
+
+        class Health:
+            def record_success(self, account_name: str, model_id: str) -> None:
+                assert account_name == "acct"
+                assert model_id == "model"
+                calls["health"] += 1
+                if calls["health"] == 1:
+                    raise RuntimeError("health busy")
+
+        class AccountState:
+            def record_success(self) -> None:
+                calls["account"] += 1
+
+        class Registry:
+            def get_state(self, account_name: str) -> AccountState:
+                assert account_name == "acct"
+                return AccountState()
+
+        class DeterministicFinalizer(RequestFinalizer):
+            async def finalize(
+                self, selected: object, data: object
+            ) -> DurableFinalizationResult:
                 calls["durable"] += 1
                 return durable
 
-            async def apply_runtime_convergence(self, **kwargs: object) -> None:
-                calls["runtime"] += 1
-                if calls["runtime"] == 1:
-                    raise RuntimeError("health busy")
-                runtime_lease = kwargs["runtime_lease"]
-                runtime_lease.mark_component_complete("usage")
-                runtime_lease.mark_component_complete("health")
-                runtime_lease.mark_component_complete("account_runtime")
-                runtime_lease.released = True
+        finalizer = object.__new__(DeterministicFinalizer)
+        finalizer._router = Router()
+        finalizer._quota_estimator = Quota()
+        finalizer._health_manager = Health()
+        finalizer._registry = Registry()
+        finalizer._effects_applier = None
+        finalizer._quarantine = None
 
         job = RequestFinalizationJob(
             identity=_make_identity(),
             outcome=FinalizationOutcome.COMPLETED.value,
             finalization_data=FinalizationData(
                 outcome=FinalizationOutcome.COMPLETED,
+                input_tokens=3,
+                output_tokens=2,
             ),
             runtime_lease=lease,
         )
-        job.set_dependencies(finalizer=FlakyFinalizer(), selected=object())
+        job.set_dependencies(
+            finalizer=finalizer,
+            selected=SimpleNamespace(
+                account_name="acct",
+                model_id="model",
+                provider_id="provider",
+                estimated_tokens=10,
+                estimated_microdollars=20,
+            ),
+        )
 
         with pytest.raises(RuntimeError, match="health busy"):
             await job.run()
         assert job.progress == FinalizationProgress.RUNTIME_RELEASE_PENDING
         assert not job.result.runtime_cleanup_complete
-        assert calls == {"durable": 1, "runtime": 1}
+        assert job.result.active_count_decremented
+        assert job.result.quota_reservation_removed
+        assert not job.result.health_released_or_recorded
+        assert job.result.durable_terminal
+        assert job.result.reservation_converged
+        assert job.result.retryable
+        assert lease.completed_components == frozenset(
+            {"active_count", "quota_reservation", "usage"}
+        )
+        assert calls == {
+            "durable": 1,
+            "active": 1,
+            "quota_remove": 1,
+            "usage": 1,
+            "health": 1,
+            "account": 0,
+        }
 
         await job.run()
         assert job.is_complete
         assert job.result.runtime_cleanup_complete
-        assert calls == {"durable": 1, "runtime": 2}
+        assert job.result.active_count_decremented
+        assert job.result.quota_reservation_removed
+        assert job.result.health_released_or_recorded
+        assert lease.released
+        assert calls == {
+            "durable": 1,
+            "active": 1,
+            "quota_remove": 1,
+            "usage": 1,
+            "health": 2,
+            "account": 1,
+        }
 
 
 # ---------------------------------------------------------------------------

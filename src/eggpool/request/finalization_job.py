@@ -658,6 +658,7 @@ class RequestFinalizationJob:
                     runtime_lease=self.runtime_lease,
                 )
             except Exception:
+                self._refresh_runtime_result_from_lease()
                 self._result = replace(
                     self._result,
                     runtime_cleanup_complete=False,
@@ -665,6 +666,12 @@ class RequestFinalizationJob:
                     detail="runtime cleanup incomplete",
                 )
                 raise
+        self._refresh_runtime_result_from_lease()
+
+    def _refresh_runtime_result_from_lease(self) -> None:
+        """Project current lease progress onto the structured result."""
+        if self.runtime_lease is None:
+            return
         components = self.runtime_lease.completed_components
         self._result = replace(
             self._result,

@@ -334,7 +334,7 @@ Prefer one or two coherent runtime commits plus one documentation closure commit
 - [x] Capacity rejection creates no detached work, second queue, or provider penalty.
 - [x] Runtime metrics expose the existing supervisor's bounded snapshot.
 - [x] Operator documentation matches the emitted runtime field.
-- [x] Plans 058, 065, 066, and 067 have coherent status and checked acceptance metadata.
+- [x] Plans 058, 065, 066, 067, and 068 have coherent status and checked acceptance metadata.
 - [x] The missing handoff, already-terminal, component-resume, and result-truthfulness regressions pass together with the existing smoke suite.
 - [x] No migration, runtime dependency, durable queue, workflow framework, CI job, test matrix, soak gate, benchmark gate, or evidence format is introduced.
 
@@ -375,7 +375,7 @@ Do not close this plan if:
 
 ## Implementation closure
 
-Implementation commit `052b81ed38598c2c07cfa283d0a1968ee2e5519c` completed the principal lease, retry deadline, and diagnostic work. Full closure is deferred to Plan 067 for explicit response handoff and already-terminal runtime obligation semantics.
+Implementation commit `052b81ed38598c2c07cfa283d0a1968ee2e5519c` completed the principal lease, retry deadline, and diagnostic work. Plan 067 then closed explicit response handoff and already-terminal runtime obligation semantics. Plan 068 is the result-truthfulness polish successor: it keeps the lease as the source of truth while projecting partial component progress into retained results.
 
 ## Definition of done
 
