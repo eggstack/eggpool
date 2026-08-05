@@ -77,7 +77,7 @@ class TestDnsCacheKey:
 class TestDnsCacheConfigParsing:
     def test_defaults(self) -> None:
         cfg = DnsCacheConfig()
-        assert cfg.enabled is True
+        assert cfg.enabled is False
         assert cfg.max_entries == 50
         assert cfg.positive_ttl_seconds == 1800
         assert cfg.negative_ttl_seconds == 30
@@ -152,7 +152,7 @@ class TestNetworkConfigDnsCache:
     def test_default_dns_cache(self) -> None:
         cfg = NetworkConfig()
         assert isinstance(cfg.dns_cache, DnsCacheConfig)
-        assert cfg.dns_cache.enabled is True
+        assert cfg.dns_cache.enabled is False
 
     def test_custom_dns_cache(self) -> None:
         dns_cfg = DnsCacheConfig(enabled=False, max_entries=5)

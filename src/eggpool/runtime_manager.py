@@ -544,7 +544,7 @@ class RuntimeGeneration:
     router: Router
     coordinator: RequestCoordinator
     client_pool: ProviderClientPool
-    outbound_manager: OutboundClientManager
+    outbound_manager: OutboundClientManager | None
     dns_backend: DnsNetworkBackend | None
     health_manager: HealthManager
     cost_calculator: CostCalculator
@@ -564,6 +564,9 @@ class RuntimeGeneration:
     effects_applier: Any = None
     model_quarantine: Any = None
     finalization_supervisor: RequestFinalizationSupervisor | None = None
+    model_info: Any = None  # noqa: ANN401 — ModelInfoService when enabled
+    local_pre_upstream_recorder: Any = None  # noqa: ANN401
+    stream_diagnostics: Any = None  # noqa: ANN401
     immutable_request_state: ImmutableRequestState = field(
         default_factory=lambda: ImmutableRequestState(
             provider_ids=frozenset(),
@@ -1916,9 +1919,7 @@ class RuntimeManager:
                     generation.generation_id,
                 )
         # 3. Close the outbound client manager / DNS backend.
-        outbound_manager = cast(
-            "OutboundClientManager | None", generation.outbound_manager
-        )
+        outbound_manager = generation.outbound_manager
         if outbound_manager is not None:
             record_close_attempt("outbound_manager")
             try:
@@ -2407,6 +2408,9 @@ class RuntimeGenerationBuilder:
             effects_applier=services.get("effects_applier"),
             model_quarantine=services.get("model_quarantine"),
             finalization_supervisor=services.get("finalization_supervisor"),
+            model_info=services.get("model_info"),
+            local_pre_upstream_recorder=services.get("local_pre_upstream_recorder"),
+            stream_diagnostics=services.get("stream_diagnostics"),
             created_at_monotonic=services.get("created_at_monotonic", now_mono),
             created_at_epoch=services.get("created_at_epoch", now_epoch),
             immutable_request_state=immutable_request_state,

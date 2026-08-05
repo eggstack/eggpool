@@ -58,6 +58,36 @@ def _prompt_add_another() -> bool:
     return _prompt_yn("Add another provider?")
 
 
+def _prompt_bind_lan() -> bool:
+    """Ask whether the API should listen on all interfaces.
+
+    A non-interactive invocation cannot make a safe network exposure choice,
+    so it keeps the loopback default.
+    """
+    if not sys.stdin.isatty():
+        return False
+    return _prompt_yn("Bind the dashboard/API to the LAN (0.0.0.0)?")
+
+
+def _set_server_host(config_path: str, host: str) -> None:
+    """Update the onboarding-selected server bind address."""
+    from pathlib import Path
+
+    from eggpool.toml_edit import render_toml_string, update_section_value
+
+    path = Path(config_path)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    result = update_section_value(
+        lines,
+        "server",
+        "host",
+        render_toml_string(host),
+        insert_missing_key=True,
+        append_missing_section=True,
+    )
+    path.write_text("\n".join(result.lines) + "\n", encoding="utf-8")
+
+
 def _ensure_config_with_api_key(config_path: str) -> None:
     """Ensure a server API key exists in the config file.
 
@@ -101,6 +131,13 @@ def run_onboarding(config_path: str, providers_path: str | None = None) -> None:
 
     ensure_config(config_path)
     _ensure_config_with_api_key(config_path)
+
+    # Make network exposure an explicit onboarding decision.  The safe
+    # non-interactive fallback is loopback, while LAN users retain the simple
+    # one-prompt path instead of having to discover a low-level setting.
+    bind_host = "0.0.0.0" if _prompt_bind_lan() else "127.0.0.1"
+    _set_server_host(config_path, bind_host)
+    sys.stdout.write(f"  API bind address: {bind_host}\n")
 
     from eggpool.providers.connect import connect as do_connect
 

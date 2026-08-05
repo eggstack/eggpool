@@ -91,6 +91,7 @@ class TaskRegistrationContext:
     update_checker_outbound: OutboundClientManager | None = None
     app_state: Any | None = None
     process_supervisor: TaskSupervisor | None = None
+    include_process_owned: bool = True
 
 
 def register_runtime_tasks(
@@ -131,7 +132,7 @@ def register_runtime_tasks(
                 )
 
                 await prune_health_disabled_models_once(gen)
-                model_info = getattr(process, "model_info", None)
+                model_info = getattr(gen, "model_info", None)
                 if model_info is not None:
                     try:
                         await model_info.reconcile_catalog_refresh(result)
@@ -219,9 +220,10 @@ def register_runtime_tasks(
             results["price_snapshots"] = await cleanup_old_price_snapshots(
                 db, budget=budget
             )
-            results["model_info_obs"] = await cleanup_old_model_info_observations(
-                db, budget=budget
-            )
+            if gen_config.model_info.enabled:
+                results["model_info_obs"] = await cleanup_old_model_info_observations(
+                    db, budget=budget
+                )
             results["expired_reservations"] = await reconcile_expired_reservations(
                 db,
                 quota_estimator=gen.router.quota_estimator,
@@ -278,15 +280,16 @@ def register_runtime_tasks(
         if result.get("checkpointed"):
             logger.info("WAL checkpoint: %s", result)
 
-    _process_target.register_periodic(
-        "checkpoint",
-        _checkpoint_once,
-        interval_s=14400.0,
-        run_immediately=True,
-    )
+    if context.include_process_owned:
+        _process_target.register_periodic(
+            "checkpoint",
+            _checkpoint_once,
+            interval_s=14400.0,
+            run_immediately=True,
+        )
 
     # ----- metrics flush (buffered modes only) ---------------------------
-    if config.metrics.write_mode != "immediate":
+    if context.include_process_owned and config.metrics.write_mode != "immediate":
         metrics_coalescer = process.metrics_coalescer
 
         async def _metrics_flush_once() -> None:
@@ -300,7 +303,11 @@ def register_runtime_tasks(
         )
 
     # ----- update checker (process-owned; only registered at startup) ---
-    if context.update_checker_outbound is not None:
+    if (
+        context.include_process_owned
+        and context.update_checker_outbound is not None
+        and config.update_checker.enabled
+    ):
         _register_update_checker(
             supervisor=_process_target,
             outbound_manager=context.update_checker_outbound,
@@ -308,7 +315,11 @@ def register_runtime_tasks(
         )
 
     # ----- automatic backup ----------------------------------------------
-    if config.backup.enabled and config.backup.interval_s > 0:
+    if (
+        context.include_process_owned
+        and config.backup.enabled
+        and config.backup.interval_s > 0
+    ):
         from eggpool.background.backup import run_backup_once  # noqa: PLC0415
 
         raw_config_path: str | None = getattr(process, "config_path", None)
@@ -399,7 +410,11 @@ def build_task_specs(context: TaskRegistrationContext) -> tuple[RuntimeTaskSpec,
 
     return inventory_for_config(
         context.config,
-        include_update_checker=context.update_checker_outbound is not None,
+        include_update_checker=(
+            context.include_process_owned
+            and context.update_checker_outbound is not None
+            and context.config.update_checker.enabled
+        ),
     )
 
 
@@ -456,7 +471,7 @@ def build_callback_factories_for_specs(
                     )
 
                     await prune_health_disabled_models_once(gen)
-                    model_info = getattr(process, "model_info", None)
+                    model_info = getattr(gen, "model_info", None)
                     if model_info is not None:
                         try:
                             await model_info.reconcile_catalog_refresh(result)
@@ -546,9 +561,10 @@ def build_callback_factories_for_specs(
                     results["price_snapshots"] = await cleanup_old_price_snapshots(
                         db, budget=budget
                     )
-                    results[
-                        "model_info_obs"
-                    ] = await cleanup_old_model_info_observations(db, budget=budget)
+                    if gen_config.model_info.enabled:
+                        results[
+                            "model_info_obs"
+                        ] = await cleanup_old_model_info_observations(db, budget=budget)
                     results[
                         "expired_reservations"
                     ] = await reconcile_expired_reservations(

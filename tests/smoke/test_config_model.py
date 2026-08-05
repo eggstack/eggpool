@@ -17,7 +17,7 @@ def test_minimal_config_parses() -> None:
             "accounts": [{"name": "smoke", "api_key_env": "SMOKE_TEST_KEY"}],
         }
     )
-    assert cfg.server.host == "0.0.0.0"
+    assert cfg.server.host == "127.0.0.1"
     assert cfg.database.path == ":memory:"
 
 

@@ -19,7 +19,7 @@ The `TaskSupervisor` manages periodic and startup tasks for maintenance, cleanup
     │ Process-Owned Tasks │ (survive generation swaps)
     │ • checkpoint        │
     │ • metrics_flush     │
-    │ • update_checker    │
+    │ • update_checker    │ (opt-in)
     │ • automatic_backup  │
     └─────────────────────┘
                │
@@ -58,7 +58,7 @@ Automatic backup task (zip archives).
 Survive generation swaps (live reload):
 - **`checkpoint`** — Database WAL checkpoint
 - **`metrics_flush`** — Metrics buffer flush
-- **`update_checker`** — PyPI update check (conservative, no freshness bypass)
+- **`update_checker`** — optional PyPI update check (conservative, no freshness bypass)
 - **`automatic_backup`** — Scheduled backup
 
 ### Generation-Leased Tasks
@@ -88,7 +88,8 @@ Recorded in `operational_events` table:
 
 - Fixed-delay: next interval begins after previous tick completes
 - `initial_delay_s` consumed exactly once per task lifecycle
-- Process-owned tasks survive generation swaps
+- Process-owned tasks survive generation swaps; the PyPI checker is only
+  registered when `[update_checker].enabled = true`
 - Generation-leased tasks retired with their generation
 - Safety-net tasks record `operational_events` in same transaction as state mutation
 - Update checker CLI never consults `UpdateChecker.snapshot()`

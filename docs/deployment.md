@@ -81,8 +81,9 @@ longevity.
 
 #### Low-wear metrics configuration
 
-The default `balanced` mode buffers analytics writes and flushes every
-30 seconds. For microSD deployments, switch to `low_wear` mode:
+The default `low_wear` mode buffers lossy analytics and flushes every
+120 seconds. Correctness-critical request, reservation, and attempt writes
+remain immediate and durable:
 
 ```toml
 [metrics]
@@ -94,11 +95,9 @@ trace_sample_rate = 0.05
 aggregate_only = true
 ```
 
-This configuration:
-- Flushes analytics every 2 minutes instead of 30 seconds
-- Uses 5-minute time buckets instead of 1-minute
-- Samples only 5% of detailed traces
-- Skips optional detailed analytics rows
+This configuration flushes analytics every 2 minutes, uses 5-minute time
+buckets, aggregates lossy metrics, and leaves detailed spans disabled until
+explicitly sampled.
 
 **Trade-off**: Dashboard data will be less fresh and detailed traces
 will be incomplete, but database write frequency is significantly
@@ -120,11 +119,11 @@ vacuum when you need to reclaim space after large data deletions.
 
 #### Backups
 
-EggPool creates automatic daily backups by default. The `automatic_backup`
-supervised task runs in-process and produces restore-compatible `.zip`
-archives every 24 hours with count-based retention (default 14). Backups
-use `sqlite3.Connection.backup()` for consistent snapshots and atomic
-archive publication.
+Automatic in-process backups are opt-in. Set `[backup].enabled = true` to
+run the `automatic_backup` task, which produces restore-compatible `.zip`
+archives every 24 hours with count-based retention (default 14). Backups use
+`sqlite3.Connection.backup()` for consistent snapshots and atomic archive
+publication.
 
 The default backup directory depends on the installation type:
 
@@ -189,8 +188,9 @@ child and returns promptly. See
 
 ### 6. Backups (automatic + optional cron)
 
-EggPool creates automatic daily backups by default under the
-`automatic_backup` supervised task. No additional setup is required.
+The default installation does not create automatic backups. Enable the
+`automatic_backup` supervised task with `[backup].enabled = true` when the
+server should own backup scheduling.
 
 In production, backups are written to `/var/lib/eggpool/backups` (the
 systemd unit grants write access to this directory). For personal
@@ -350,12 +350,22 @@ production installation is documented below.
 
 ## Performance Profiles
 
-EggPool ships with three documented performance profiles. The default
-install uses the **balanced** profile, which is tuned for Raspberry Pi
-4/5 and similar SBC hardware. All profiles use the supported
+EggPool ships with a lean default and explicit fuller profiles. The default
+install uses one SQLite worker, low-wear analytics, loopback binding, and
+disabled optional enrichment/diagnostics. All profiles use the supported
 single-event-loop default (`threads = 1`).
 
-### Balanced (default)
+`eggpool onboard` asks whether to bind the API/dashboard to the LAN. Answering
+yes writes `server.host = "0.0.0.0"`; noninteractive onboarding writes the safe
+loopback value. Dashboard authentication remains enabled by default through
+the generated server API key (`dashboard.public = false`).
+
+Optional background features are explicit: set `[model_info].enabled = true`
+for metadata enrichment, `[backup].enabled = true` for in-process archives,
+`[network.dns_cache].enabled = true` for DNS caching, or
+`[update_checker].enabled = true` for the periodic PyPI status probe.
+
+### Lean (default)
 
 Recommended for Raspberry Pi and low-power devices. Optimized for
 dashboard responsiveness under request load.
@@ -366,17 +376,17 @@ threads = 1
 access_log = false
 
 [database]
-worker_threads = 2
+worker_threads = 1
 wal = true
 synchronous = "NORMAL"
 
 [metrics]
-write_mode = "balanced"
-flush_interval_s = 30
+write_mode = "low_wear"
+flush_interval_s = 120
 
 [routing.trace]
-mode = "sampled"
-sample_rate = 0.05
+mode = "off"
+sample_rate = 0.0
 include_score_components = false
 ```
 
@@ -421,35 +431,35 @@ The `[routing.trace]` section controls per-request routing decision
 persistence. Full traces write a `routing_decisions` row for every
 attempt, which increases SQLite write volume on low-power hardware.
 
-The balanced and minimum-footprint profiles use conservative defaults:
+The lean default disables routing-decision persistence:
 
 ```toml
 [routing.trace]
-mode = "sampled"
-sample_rate = 0.05
+mode = "off"
+sample_rate = 0.0
 include_score_components = false
 ```
 
 | Mode | Behavior |
 |------|----------|
 | `"off"` | No routing decision rows are written. Lowest write pressure. |
-| `"sampled"` | Rows are written for a fraction of requests (controlled by `sample_rate`). The default 0.05 writes roughly 1 in 20 traces. |
+| `"sampled"` | Rows are written for a fraction of requests (controlled by `sample_rate`). A `sample_rate` of 0.05 writes roughly 1 in 20 traces. |
 | `"all"` | Rows are written for every request. Use for diagnostics or debugging only. |
 
 `include_score_components` adds per-account score breakdown JSON to
 each trace row. Keep it `false` on low-power installs to reduce row
 size.
 
-To temporarily enable full traces for diagnostics, set `mode = "all"`
-and restart. Revert to `"sampled"` or `"off"` when done.
+To temporarily enable traces for diagnostics, set `mode = "sampled"` or
+`"all"` and restart. Revert to `"off"` when done.
 
 ### Symptoms and Knobs
 
 | Symptom | Likely cause | Knob to adjust |
 |---|---|---|
-| Dashboard loads slowly under request load | DB lock contention | Set `database.worker_threads = 2` |
+| Dashboard loads slowly under request load | DB lock contention | Set `database.worker_threads = 2` explicitly |
 | Dashboard still slow | Insufficient concurrency | Check dashboard telemetry; ensure connection pool and maintenance budgets are adequate for your workload |
-| High write volume / microSD wear | Routing trace writes | Set `routing.trace.mode = "sampled"` |
+| High write volume / microSD wear | Routing trace writes | Set `routing.trace.mode = "off"` |
 | Background tasks cluster at minute boundaries | Task scheduling | Default is staggered; check `initial_delay_s` |
 | Stale dashboard data | Cache TTL | Wait 30s or check dashboard cache settings |
 
@@ -781,7 +791,7 @@ sudo journalctl -u eggpool -n 50 --no-pager
 
 ### Cannot connect from LAN
 
-1. Verify `server.host = "0.0.0.0"` in config
+1. Verify that onboarding or the explicit config selected `server.host = "0.0.0.0"`
 2. Check firewall: `ss -tlnp | grep 11300`
 3. See `docs/firewall.md`
 

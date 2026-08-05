@@ -2,13 +2,13 @@
 
 ## Automatic Backups
 
-EggPool creates automatic daily backups by default. The `automatic_backup`
-supervised background task produces restore-compatible `.zip` archives
-every 24 hours (after a 5-minute startup delay) and retains the last 14
-by default.
+EggPool can create automatic daily backups through the opt-in
+`automatic_backup` supervised background task. When enabled, it produces
+restore-compatible `.zip` archives every 24 hours (after a 5-minute startup
+delay) and retains the last 14 by default.
 
 ```toml
-# Optional — automatic backups are enabled by default
+# Optional — automatic backups are disabled by default
 [backup]
 enabled = true
 interval_s = 86400         # every 24 hours

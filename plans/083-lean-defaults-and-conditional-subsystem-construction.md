@@ -1,7 +1,7 @@
 # Plan 083 — Lean Defaults and Conditional Subsystem Construction
 
 Date: 2026-08-05
-Status: ready for implementation
+Status: complete
 Parent roadmap: `plans/077-sbc-lifecycle-simplification-and-runtime-correctness-roadmap.md`
 Depends on:
 
@@ -282,17 +282,17 @@ Adjust `onboard.py` path to the actual onboarding module after inspection.
 
 ## Acceptance criteria
 
-- [ ] Default onboarding creates a lightweight single-loop, low-write configuration.
-- [ ] LAN/public dashboard exposure is an explicit decision rather than an accidental default.
-- [ ] Disabled optional subsystems do not construct clients, queues, writers, callbacks, repositories, or tasks beyond a justified immutable no-op.
-- [ ] Model-info disabled mode performs no external refresh work.
-- [ ] Disabled request-shaping consumers skip segmentation/analysis.
-- [ ] Default lossy analytics write pressure is reduced while correctness persistence remains immediate.
-- [ ] Default connection pools are bounded for SBC use and preserve representative concurrent streaming.
-- [ ] Rehash candidates do not duplicate disabled resources.
-- [ ] Shipped configuration examples remain valid and non-divergent.
-- [ ] Focused tests and smoke pass.
-- [ ] No hardware detector, adaptive tuner, profile inheritance, or new background framework is added.
+- [x] Default onboarding creates a lightweight single-loop, low-write configuration.
+- [x] LAN/public dashboard exposure is an explicit decision rather than an accidental default.
+- [x] Disabled optional subsystems do not construct clients, queues, writers, callbacks, repositories, or tasks beyond a justified immutable no-op.
+- [x] Model-info disabled mode performs no external refresh work.
+- [x] Disabled request-shaping consumers skip segmentation/analysis.
+- [x] Default lossy analytics write pressure is reduced while correctness persistence remains immediate.
+- [x] Default connection pools are bounded for SBC use and preserve representative concurrent streaming.
+- [x] Rehash candidates do not duplicate disabled resources.
+- [x] Shipped configuration examples remain valid and non-divergent.
+- [x] Focused tests and smoke pass.
+- [x] No hardware detector, adaptive tuner, profile inheritance, or new background framework is added.
 
 ## Rejection conditions
 
@@ -317,3 +317,15 @@ Do not close this plan if:
 7. Reconcile examples and documentation.
 8. Run focused checks, config validation, and smoke.
 9. Record before/after task/client counts in plan completion notes.
+
+## Completion notes
+
+- Ordinary and SBC examples now validate with loopback/low-wear lean defaults;
+  LAN binding and optional diagnostics are explicit.
+- Generation construction leaves disabled model-info, pricing, update-checker,
+  tracing, shaping, and related client/recorder resources absent. Candidate
+  task registration excludes process-owned schedules.
+- Local verification: `ruff format --check`, `ruff check`, `pyright`, and the
+  smoke suite pass; focused config/factory/onboarding/reload/startup tests and
+  catalog/model-info tests also pass.
+- No target-device measurements were added; those remain part of Plan 085.

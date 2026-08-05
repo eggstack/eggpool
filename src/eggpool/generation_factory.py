@@ -84,7 +84,7 @@ class PreparedRuntimeGeneration:
     router: Router
     coordinator: RequestCoordinator
     client_pool: ProviderClientPool
-    outbound_manager: OutboundClientManager
+    outbound_manager: OutboundClientManager | None
     dns_backend: DnsNetworkBackend | None
     health_manager: HealthManager
     cost_calculator: CostCalculator
@@ -102,6 +102,7 @@ class PreparedRuntimeGeneration:
     local_pre_upstream_recorder: Any = None
     stream_diagnostics: Any = None
     finalization_supervisor: RequestFinalizationSupervisor | None = None
+    model_info: Any = None
 
 
 # ---------------------------------------------------------------------------
@@ -232,13 +233,30 @@ class RuntimeGenerationFactory:
             _register("client_pool", client_pool.close)
 
         # -- Outbound client manager (generation-owned) --------------------
-        outbound_manager = OutboundClientManager(
-            config=config.network,
-            network_backend=dns_backend,
+        pricing_catalogs = config.pricing.catalogs
+        external_pricing_enabled = any(
+            entry.enabled
+            for entry in (
+                pricing_catalogs.openrouter,
+                pricing_catalogs.opencode_zen,
+            )
         )
-        if _register is not None:
-            _register("outbound_manager", outbound_manager.aclose)
-        outbound_client = await outbound_manager.get_client()
+        needs_outbound_manager = (
+            config.model_info.enabled
+            or external_pricing_enabled
+            or config.update_checker.enabled
+        )
+        outbound_manager = None
+        outbound_client = None
+        if needs_outbound_manager:
+            outbound_manager = OutboundClientManager(
+                config=config.network,
+                network_backend=dns_backend,
+            )
+            if _register is not None:
+                _register("outbound_manager", outbound_manager.aclose)
+            if config.model_info.enabled or external_pricing_enabled:
+                outbound_client = await outbound_manager.get_client()
 
         # -- Account registry (generation-owned) ---------------------------
         registry = AccountRegistry(config)
@@ -246,9 +264,22 @@ class RuntimeGenerationFactory:
 
         # -- Transcoder / compression policy snapshots ---------------------
         transcoder_policy = config.transcoder
-        compression_policy = config.compression
-        cache_config = config.cache
-        compression_tuning_registry = RuntimeCompressionPolicyOverrideRegistry()
+        synthetic_cache_enabled = bool(config.cache.synthetic_cache_controls.enabled)
+        tuning_active = bool(
+            config.compression.tuning.enabled
+            and config.compression.tuning.mode != "off"
+        )
+        shaping_policy_needed = bool(
+            config.compression.enabled
+            or config.compression.policies
+            or synthetic_cache_enabled
+            or tuning_active
+        )
+        compression_policy = config.compression if shaping_policy_needed else None
+        cache_config = config.cache if synthetic_cache_enabled else None
+        compression_tuning_registry = (
+            RuntimeCompressionPolicyOverrideRegistry() if (tuning_active) else None
+        )
 
         # -- Health manager (generation-owned) -----------------------------
         health_manager = HealthManager()
@@ -281,8 +312,22 @@ class RuntimeGenerationFactory:
             ping_repo=ping_repo,
             outbound_client=outbound_client,
         )
-        await catalog.attach_pricing_resolvers()
+        if external_pricing_enabled or pricing_catalogs.aliases:
+            await catalog.attach_pricing_resolvers()
         await catalog._load_cached_models()  # pyright: ignore[reportPrivateUsage]
+
+        # -- Optional model-info service (generation-owned) ---------------
+        model_info = None
+        if config.model_info.enabled:
+            from eggpool.model_info.service import ModelInfoService  # noqa: PLC0415
+
+            model_info = ModelInfoService(
+                config=config.model_info,
+                db=db,
+                catalog=catalog.cache,
+                outbound_client=outbound_client,
+            )
+            await model_info.load_cache()
 
         # -- Cost calculator ------------------------------------------------
         price_repo = PriceRepository(db)
@@ -327,7 +372,9 @@ class RuntimeGenerationFactory:
         )
 
         # -- Local pre-upstream recorder ------------------------------------
-        local_pre_upstream_recorder = LocalPreUpstreamRecorder(window_size=100)
+        local_pre_upstream_recorder = (
+            LocalPreUpstreamRecorder(window_size=100) if span_sample_rate > 0 else None
+        )
 
         # -- Stream diagnostics (process-wide singleton) --------------------
         stream_diagnostics = get_stream_diagnostics()
@@ -518,6 +565,9 @@ class RuntimeGenerationFactory:
             effects_applier=effects_applier,
             model_quarantine=quarantine,
             finalization_supervisor=finalization_supervisor,
+            model_info=model_info,
+            local_pre_upstream_recorder=local_pre_upstream_recorder,
+            stream_diagnostics=stream_diagnostics,
         )
 
         return PreparedRuntimeGeneration(
@@ -545,6 +595,7 @@ class RuntimeGenerationFactory:
             local_pre_upstream_recorder=local_pre_upstream_recorder,
             stream_diagnostics=stream_diagnostics,
             finalization_supervisor=finalization_supervisor,
+            model_info=model_info,
         )
 
     # -- Internal helpers ---------------------------------------------------

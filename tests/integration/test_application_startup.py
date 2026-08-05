@@ -181,6 +181,7 @@ class TestApplicationStartup:
         """The update_checker supervised task is registered at startup."""
         from eggpool.update_checker import UpdateChecker
 
+        config_file_db.update_checker.enabled = True
         app = create_app(config_file_db)
 
         with respx.mock:
@@ -449,6 +450,7 @@ def _backup_config(
                 "interval_s": interval_s,
                 "startup_delay_s": 0,
             },
+            "update_checker": {"enabled": True},
         }
     )
 

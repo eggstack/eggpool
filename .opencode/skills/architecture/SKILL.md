@@ -117,11 +117,17 @@ Plus `RuntimeManagerLeaseExhaustedError` (RuntimeError, mapped to HTTP 503).
 
 - Supervisor + Granian worker (`workers=1`), daemon mode (`--verbose` for foreground)
 - `[server].threads` default `1` (values > 1 emit startup warning)
-- `database_worker_threads=2`
-- Readiness probe is process-owned (survives generation swaps)
-- Optional diagnostics are genuinely dormant when disabled: trace writers,
-  detailed span recorders, readiness probes, and event-loop monitors are not
-  instantiated. The copyable low-wear SBC baseline is `config.sbc.example.toml`.
+- `database_worker_threads=1` by default; `2` explicitly opts into a separate
+  stats connection
+- Readiness probe is process-owned (survives generation swaps) and disabled by
+  default
+- The lean default binds to loopback, uses low-wear analytics, and leaves
+  model-info, routing traces, detailed spans, backups, DNS caching, event-loop
+  lag, the dispatch writer, and the in-process PyPI checker dormant
+- Optional diagnostics are genuinely dormant when disabled: their clients,
+  writers, queues, recorders, and tasks are not instantiated. The canonical
+  shipped template is `config.example.toml`; `config.sbc.example.toml` is an
+  explicit LAN/SBC profile.
 
 ## Runtime Generations
 

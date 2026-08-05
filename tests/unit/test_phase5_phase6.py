@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import httpx
 import pytest
 import pytest_asyncio
 
@@ -239,7 +240,6 @@ async def test_recent_requests_endpoint_via_fastapi(
 ) -> None:
     """End-to-end smoke: /api/stats/recent-requests returns the row."""
     from fastapi import FastAPI
-    from fastapi.testclient import TestClient
 
     from eggpool.api.stats import register_stats_routes
     from eggpool.models.config import AppConfig
@@ -250,8 +250,9 @@ async def test_recent_requests_endpoint_via_fastapi(
     app.state.stats = StatsService(db)
     app.state.config = AppConfig()  # empty api_key → require_auth passes
     register_stats_routes(app, require_auth=True)
-    client = TestClient(app)
-    response = client.get("/api/stats/recent-requests?limit=10")
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/stats/recent-requests?limit=10")
     assert response.status_code == 200
     payload = response.json()
     assert "requests" in payload
@@ -265,7 +266,6 @@ async def test_recent_requests_endpoint_does_not_include_body(
     db: Database,
 ) -> None:
     from fastapi import FastAPI
-    from fastapi.testclient import TestClient
 
     from eggpool.api.stats import register_stats_routes
     from eggpool.models.config import AppConfig
@@ -276,11 +276,12 @@ async def test_recent_requests_endpoint_does_not_include_body(
     app.state.stats = StatsService(db)
     app.state.config = AppConfig()
     register_stats_routes(app, require_auth=False)
-    client = TestClient(app)
-    response = client.get(
-        "/api/stats/recent-requests?limit=10",
-        headers={"Authorization": "Bearer test-key"},
-    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/api/stats/recent-requests?limit=10",
+            headers={"Authorization": "Bearer test-key"},
+        )
     assert response.status_code == 200
     payload = response.json()
     assert "requests" in payload

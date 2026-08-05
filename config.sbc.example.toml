@@ -15,8 +15,8 @@ threads = 1
 
 [upstream]
 base_url = "https://opencode.ai/zen/go/v1"
-max_connections = 32
-max_keepalive = 8
+max_connections = 16
+max_keepalive = 4
 
 [database]
 path = "usage.sqlite3"
@@ -64,7 +64,7 @@ trusted_proxies = []
 
 [dashboard]
 enabled = true
-public = true
+public = false
 
 [backup]
 enabled = true

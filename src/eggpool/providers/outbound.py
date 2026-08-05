@@ -139,8 +139,8 @@ class OutboundClientManager:
             connect_timeout = cfg.connect_timeout_s
             read_timeout = cfg.read_timeout_s
         else:
-            max_connections = 10
-            max_keepalive = 4
+            max_connections = 8
+            max_keepalive = 2
             keepalive_expiry = 90.0
             connect_timeout = 10.0
             read_timeout = 30.0

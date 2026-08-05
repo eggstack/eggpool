@@ -318,6 +318,7 @@ EXPECTED_INVENTORY_SNAPSHOT: tuple[tuple[str, str, bool], ...] = (
     ("server.port", "restart_required", False),
     ("server.threads", "restart_required", False),
     ("transcoder", "live", False),
+    ("update_checker.enabled", "restart_required", False),
     ("upstream.base_url", "restart_required", False),
     ("upstream.connect_timeout_s", "restart_required", False),
     ("upstream.keepalive_timeout_s", "restart_required", False),

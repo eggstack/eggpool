@@ -1,9 +1,9 @@
 [server]
-host = "0.0.0.0"
+host = "127.0.0.1"
 port = 11300
 # api_key = "ep_..." # Auto-generated on first `configsetup`; use `eggpool newkey` to regenerate
 log_level = "INFO"
-access_log = true
+access_log = false
 # Granian runtime threads inside the single worker process. Exactly one
 # event-loop thread is required; high concurrency is handled by asyncio tasks,
 # HTTP connection-pool sizing, and bounded writers.
@@ -14,13 +14,17 @@ base_url = "https://opencode.ai/zen/go/v1"
 connect_timeout_s = 5
 read_timeout_s = 300
 write_timeout_s = 30
-max_connections = 32
-max_keepalive = 8
+max_connections = 16
+max_keepalive = 4
 keepalive_timeout_s = 30
 
-# Optional provider-bound stream timers live under
-# [providers.<id>.stream_timeouts]. Omitting them preserves the HTTPX
-# read_timeout_s behavior.
+# Provider blocks may set stream_completion_policy = "strict" (default),
+# "compatible", or "permissive_observe". The setting is provider-bound;
+# strict requires [DONE] for OpenAI or message_stop for Anthropic.
+# Optional provider stream timers live under each provider's
+# [providers.<id>.stream_timeouts] table. Omitting them preserves the HTTPX
+# read_timeout_s guardrail; explicit timers are provider-bound and the client
+# read guardrail is raised to the largest configured interval.
 
 [database]
 path = "usage.sqlite3"
@@ -32,7 +36,22 @@ synchronous = "NORMAL"
 # for file-backed SQLite. This keeps dashboard analytics from queuing behind
 # request-path writes on Raspberry Pi-class installs. Set to 1 for
 # minimum-footprint mode on extremely constrained devices or in-memory tests.
-worker_threads = 2
+worker_threads = 1
+
+# ─── Maintenance Budgets ────────────────────────────────────────────
+# Bounds for periodic database maintenance tasks (retention cleanup,
+# stale request finalization, reservation reconciliation). These limits
+# prevent any single maintenance pass from monopolising the SQLite writer
+# connection.  Changes require a restart (not live-reloadable).
+# [maintenance]
+# max_rows_per_batch = 500        # max rows per cleanup batch (50–10000)
+# max_batches_per_tick = 4        # max batches per maintenance tick (1–20)
+# max_tick_duration_ms = 500      # wall-clock ceiling per tick in ms (50–10000)
+# contention_defer_above_lock_wait_p95_ms = 200  # defer P1/P2 when p95 exceeds this (0–5000)
+# max_deferral_age_s = 3600       # force execution after this many seconds of deferral (60–86400)
+# p0_max_rows_per_batch = 1000    # P0 (stale finalizer) row budget (100–20000)
+# p0_max_batches_per_tick = 2     # P0 batch budget (1–10)
+# p0_max_tick_duration_ms = 1000  # P0 wall-clock ceiling in ms (100–30000)
 
 [models]
 # How often to refresh the model catalog from upstream providers (seconds).
@@ -45,6 +64,10 @@ stale_after_s = 7200
 allow_stale_catalog = true
 # How many days to retain provider ping data.
 ping_retain_days = 7
+# collapse_models = false  # when true, a base model exposed by multiple
+#                          # providers is collapsed to a single unsuffixed
+#                          # ID and routed across all of them. Default false
+#                          # emits one provider-suffixed entry per provider.
 # Catalog withdrawal policy controls whether a live refresh can remove
 # an account/model support row that the cache previously knew about.
 # Default "preserve_until_health" never de-pools on catalog uncertainty:
@@ -58,6 +81,66 @@ ping_retain_days = 7
 # a healthy subscription account.
 catalog_withdrawal_policy = "preserve_until_health"
 
+# ─── Protocol Transcoding ────────────────────────────────────────────
+# Transcoding is **on by default**. Requests from clients using one
+# protocol (OpenAI or Anthropic) are automatically forwarded to upstream
+# accounts whose provider declares only the other protocol. EggPool
+# translates the request body, the streaming SSE events, and the response
+# body bidirectionally. The `[transcoder]` block is optional and rarely
+# needs to be touched.
+#
+# Use this when you want to mix protocol-native and protocol-transcoded
+# accounts (e.g. opencode-go native plus MiniMax International
+# Anthropic-only, both reachable from OpenCode clients).
+#
+# The `enabled` flag is a DEPRECATED escape hatch for operators who need
+# to disable translation (for example, while diagnosing routing issues).
+# Setting `enabled = false` reverts to legacy protocol-exact routing:
+# cross-protocol requests will fail with HTTP 400. This option will be
+# removed in a future release.
+[transcoder]
+# enabled = false          # DEPRECATED escape hatch; defaults to true
+loss_policy = "warn"      # "warn" or "reject" for loss-of-information
+prefer_native = true      # prefer native-protocol accounts in routing
+
+# Global effort→budget token mapping for thinking/reasoning.
+# Values are used when the model's capability does not carry a
+# per-model effort_to_budget_tokens mapping.
+# [transcoder.thinking_budget_defaults]
+# low = 1024
+# medium = 4096
+# high = 16384
+
+# How to handle budget resolution edge cases.
+# "lenient" (default): use conservative fallback for unknown efforts, allow clamping.
+# "strict": reject unknown efforts and clamped budgets before dispatch.
+# budget_resolution_policy = "lenient"
+
+# Configurable OpenAI-compatible reasoning field names.
+# Controls which JSON field names EggPool uses when exposing
+# upstream thinking/reasoning content in responses.
+# [transcoder.openai_reasoning_fields]
+# non_stream = ["reasoning_content"]    # message field(s) for non-streaming
+# stream_delta = ["reasoning"]          # delta field(s) for streaming
+# emit_compat_aliases = false           # emit extra aliases when true
+
+# ─── Model Capability Overrides ─────────────────────────────────────
+# Operator-controlled overrides for model capabilities. These take
+# precedence over discovered provider/catalog data and persist through
+# refresh cycles.
+#
+# Global overrides apply to all providers:
+# [model_capabilities."minimax-m3".thinking]
+# status = "supported"
+# native_protocols = ["anthropic"]
+# budget_tokens_min = 1024
+# budget_tokens_max = 16384
+#
+# Provider-scoped overrides take precedence over global:
+# [providers.minimax.model_capabilities."minimax-m3".thinking]
+# status = "supported"
+# native_protocols = ["anthropic"]
+
 [routing]
 strategy = "quota_fair"
 near_tie_epsilon = 0.1
@@ -68,67 +151,161 @@ health_penalty = 500000
 randomize_near_ties = true
 # Maximum transient quota cooldown; runtime suppression is capped at 1,800s.
 quota_exhausted_cooldown_seconds = 300
-# "score_only" (default) keeps above-capacity accounts eligible; only
-# upstream-observed failures suppress routing. Switch to "hard_cap"
-# for an opt-in legacy behavior where local quota can hard-suppress.
+# Local quota mode controls whether locally estimated over-capacity
+# usage hard-excludes accounts from routing or only affects rank.
+# "score_only" (default) is safe for subscription aggregation: upstream
+# 429/402/5xx remain the authoritative suppression signal and accounts
+# above local quota still receive requests.
+# "hard_cap" is an opt-in escape hatch that re-enables local quota as a
+# hard eligibility gate (legacy pre-suppression behavior). Subscription
+# aggregators should normally leave this as "score_only".
 local_quota_mode = "score_only"
+# Same-tier fairness for effectively tied accounts. Keeps equal subscription
+# accounts from starving behind stable config order.
+# "round_robin" (default): deterministic rotation across the fairness band.
+# "random": choose randomly within the fairness band.
+# "off": existing behavior; useful for debugging or strict lowest-score routing.
+fairness_mode = "round_robin"
+# Defaults to near_tie_epsilon when omitted.
+# fairness_epsilon = 0.1
+# Fairness scope controls which accounts share a rotation group:
+# "provider_model_protocol" (default): separate rotor per provider, model, protocol, and priority tier.
+# "provider_model": separate rotor per provider, model, and priority tier.
+# "priority_model_protocol": co-balanced across providers sharing a model in the same priority tier.
+fairness_scope = "provider_model_protocol"
 
-# Routing trace write pressure (diagnostic rows, no billing impact).
-# [routing.trace]
-# mode = "sampled"   # sampled (default) | all | off
-# sample_rate = 0.05
-# include_score_components = false
-# Skip trace writes when the rolling SQLite lock-wait p95 exceeds this
-# many milliseconds. Traces are diagnostic and never required for
-# correctness, so dropping them under pressure protects finalizers.
-# Set to 0 to disable the guardrail.
-# skip_above_lock_wait_p95_ms = 200.0
+# Routing trace write pressure.  Routing traces are diagnostic rows
+# written alongside every attempt; they answer "why this account?" on the
+# dashboard but have no effect on billing, retry, or crash-recovery.
+# Reducing write volume here is safe for high-throughput or SBC installs.
+[routing.trace]
+# "sampled" – deterministic request-id sampling (default, low write pressure)
+# "all"     – every attempt (full diagnostics)
+# "off"     – no routing trace rows
+# Sampling is decided before upstream outcome is known, so sampled
+# does not force all errors to be traced.
+mode = "off"
+# Fraction of selection-time traces to persist in sampled mode (0.0–1.0).
+sample_rate = 0.0
+# Include score_components_json in persisted traces (larger rows).
+# Set to false to reduce per-row write size on high-throughput installs.
+include_score_components = false
 
 [limits]
 five_hour_microdollars = 12000000
 weekly_microdollars = 30000000
 monthly_microdollars = 60000000
 
-# ---------------------------------------------------------------------------
-# Pricing resolution
-# ---------------------------------------------------------------------------
-# When upstream metadata doesn't expose pricing for a model, EggPool can
-# consult external pricing catalogs (OpenRouter, OpenCode Zen, ...). The
-# resolver pipeline tries each enabled catalog in priority order and
-# stops at the first match. Ambiguous bare upstream price values fail
-# toward dollars-per-million unless explicit token evidence or a strong
-# field-name hint proves otherwise. ``fallback = "generic_estimate"``
-# (default) fills any remaining missing cache rates with conservative
-# estimates so costs stay positive rather than zero; set ``fallback = "off"``
-# to skip cache fallback entirely (results in zero cost for cache tokens
-# when no rate is known).
+# --- Pricing resolution ----------------------------------------------
+# External pricing catalogs supplement upstream model metadata when
+# providers do not include pricing in /v1/models responses. The per-catalog
+# max_entries cap bounds steady-state RSS on SBC deployments.
 [pricing]
 fallback = "generic_estimate"
 
 [pricing.catalogs]
-# OpenRouter publishes authoritative per-model pricing for many providers
-# via a public /models endpoint. Disable this catalog if you don't want
-# to query openrouter.ai from the EggPool host.
+
 [pricing.catalogs.openrouter]
-enabled = true
+enabled = false
 priority = 100
 ttl_seconds = 86400
-# max_entries = 4096  # bound the in-memory catalog cache; oldest entries evict first (LRU)
+# max_entries = 4096  # bound the in-memory catalog cache; oldest entries evict first
 # base_url = "https://openrouter.ai/api/v1"
-# api_key  = "..."   # Optional: only needed for higher rate limits
-# options  = {}      # Resolver-specific options
+# api_key = "..."     # optional; only needed for higher rate limits
 
-# OpenCode Zen is the upstream the default provider aggregates. Enable
-# if you want Zen's pricing to feed the catalog pipeline as a fallback.
 [pricing.catalogs.opencode_zen]
 enabled = false
 priority = 200
 ttl_seconds = 86400
-# max_entries = 4096  # bound the in-memory catalog cache; oldest entries evict first (LRU)
+# max_entries = 4096  # bound the in-memory catalog cache; oldest entries evict first
+
+# ─── Model Information ────────────────────────────────────────────────
+# The model_info subsystem provides a persistent metadata sidecar for
+# all known models. OpenRouter is the default catalog source; additional
+# enrichment providers (Artificial Analysis, Hugging Face) augment
+# metadata with display names, context limits, benchmarks, and pipeline
+# tags. Manual overrides and alias expansion are also supported.
+# [model_info]
+# enabled = false                  # optional metadata sidecar (default: false)
+# include_in_models_endpoint = true  # compact fields in /v1/models (default: true)
+# refresh_interval_s = 3600        # global refresh cadence (seconds)
+# sparse_refresh_interval_s = 300  # accelerated refresh for sparse models (seconds)
+# sparse_refresh_window_s = 86400  # how long sparse models get accelerated refresh (seconds)
+# default_ttl_s = 604800           # default TTL for fresh models (7 days)
+# partial_ttl_s = 259200           # TTL for partially-known models (3 days)
+# sparse_ttl_s = 86400             # TTL for sparse models (1 day)
+#
+# [model_info.sources.openrouter]
+# enabled = true                   # source used when model_info is enabled
+# priority = 100                   # higher = preferred when multiple sources agree
+# ttl_seconds = 86400              # how long to cache the OpenRouter /models catalog
+# # api_key = "..."                # optional; only needed for higher rate limits
+#
+# [model_info.sources.artificial_analysis]
+# enabled = false                  # Artificial Analysis benchmark source (default: disabled)
+# priority = 200
+# ttl_seconds = 86400
+# api_key = "..."                  # required; use an AA Data API key
+#                                   # (sent as x-api-key)
+#
+# [model_info.sources.huggingface]
+# enabled = false                  # Hugging Face model card metadata (default: disabled)
+# priority = 300
+# ttl_seconds = 86400
+# # api_key = "..."                # optional; unauthenticated has 60 req/min
+#
+# ─── Manual Overrides ─────────────────────────────────────────────────
+# Override canonical fields for specific models. Overrides take
+# precedence over all source-provided values.
+# [model_info.overrides."model-id"]
+# display_name = "Custom Display Name"
+# summary = "A custom summary for this model"
+#
+# ─── Alias Expansion ──────────────────────────────────────────────────
+# Map canonical model IDs to alternative identifiers used by external
+# sources. Source-specific aliases are matched during identity resolution.
+# [model_info.aliases]
+# "canonical-id" = ["alias-1", "alias-2"]
+
+# ─── Network ─────────────────────────────────────────────────────────
+# Outbound client transport tuning and DNS caching. The DNS cache wraps
+# the default httpcore transport to cache resolved DNS entries in memory,
+# reducing latency for repeated connections to the same upstream hosts.
+# [network]
+# connect_timeout_s = 5
+# read_timeout_s = 300
+# max_connections = 8
+# max_keepalive = 2
+# keepalive_expiry_s = 30
+#
+# [network.dns_cache]
+# enabled = false                  # enable in-memory DNS cache (default: false)
+# max_entries = 50                 # max cached host entries (default: 50)
+# positive_ttl_seconds = 1800      # upper cap for positive DNS answers (default: 1800)
+# negative_ttl_seconds = 30        # how long to cache lookup failures (default: 30)
+# stale_if_error_seconds = 3600    # max age for stale records usable on resolver failure (default: 3600)
+# prefer_ipv6 = false              # prefer IPv6 addresses in DNS resolution (default: false)
+# lookup_timeout_seconds = 5       # timeout for DNS lookups in seconds (default: 5)
+
+# Optional subsystems are deliberately explicit in the shipped template.
+[dispatch_writer]
+enabled = false
+
+[readiness_probe]
+enabled = false
+
+[model_info]
+enabled = false
+
+[update_checker]
+enabled = false
+
+[network.dns_cache]
+enabled = false
 
 [dashboard]
 enabled = true
-public = true
+public = false
 # Theme name (without .toml extension). "default" uses GitHub Primer colors.
 # Themes are from Halloy: https://themes.halloy.chat/
 # Bundled themes (50+) ship inside the package — no extra files needed.
@@ -141,6 +318,55 @@ retain_request_stats_days = 30
 store_request_content = false
 refresh_interval_s = 60
 
+[metrics]
+# Controls observability write buffering for reduced microSD wear.
+# - "immediate": existing direct-write behavior (best for debugging).
+# - "balanced": buffer lossy analytics with short flush intervals.
+# - "low_wear": longer flush interval, coarser buckets, optional trace
+#   sampling — designed for microSD / Raspberry Pi deployments.
+#
+# Buffered analytics may lose at most flush_interval_s seconds of data
+# after abrupt power loss. Correctness-critical request state (request
+# rows, reservations, attempts, routing) is never buffered.
+write_mode = "low_wear"
+flush_interval_s = 120
+max_buffered_events = 250
+timeseries_bucket_s = 300
+trace_sample_rate = 0.05
+aggregate_only = true
+rollup_retain_days = 90
+cleanup_interval_s = 86400
+cleanup_max_rows_per_pass = 5000
+
+# ─── Dispatch span instrumentation (Plan 029) ──────────────────────
+# Fine-grained per-span latency instrumentation for the proxy request
+# and coordinator hot path. Coarse dispatch-overhead metrics remain
+# always-on; detailed spans use request-coherent sampling so one
+# sampled request records all spans (coherent trace).
+# [metrics.dispatch_spans]
+# sample_rate = 0.0         # 0.0 = coarse only; opt in to detailed spans
+# window_size = 200         # rolling-window samples per span
+
+# Deprecated: use [metrics.dispatch_spans].sample_rate instead. When this
+# field is explicitly set, it overrides the new setting and emits a warning.
+# detailed_span_sample_rate = 0.05
+# event_loop_lag_enabled = false # opt in to one-second lag diagnostics
+
+# ─── Low-wear profile for microSD / Raspberry Pi ──────────────────
+# Uncomment this block when running from microSD and dashboard traces
+# are not critical. Trades detailed trace fidelity and dashboard
+# freshness for materially fewer writes.
+# [metrics]
+# write_mode = "low_wear"
+# flush_interval_s = 120
+# max_buffered_events = 250
+# timeseries_bucket_s = 300
+# trace_sample_rate = 0.05
+# aggregate_only = true
+# rollup_retain_days = 90
+# cleanup_interval_s = 86400
+# cleanup_max_rows_per_pass = 5000
+
 [security]
 allowed_hosts = []
 cors_origins = []
@@ -149,6 +375,19 @@ cors_origins = []
 trusted_proxies = []
 redact_headers = ["authorization", "x-api-key"]
 persist_redacted_error_detail = false
+
+# ─── Automatic Backups ────────────────────────────────────────────────
+# EggPool can create automatic daily backups. Archives are
+# restore-compatible .zip files stored under $XDG_BACKUP_HOME/eggpool
+# (or ~/backups/eggpool). The eggpool deploy backup-cron path remains
+# available for operators who prefer external scheduling.
+[backup]
+enabled = false
+# interval_s = 86400           # every 24 hours when enabled
+# retain_count = 14            # keep last 14 backups
+# startup_delay_s = 300        # wait 5 min after boot before first backup
+# # directory = "/path/to/backups"  # override default backup location
+# include_env = true           # include .env file (may contain API keys)
 
 # Optional outbound proxies. Omit this section for direct upstream connections.
 # Values use pproxy URI syntax:
@@ -174,6 +413,12 @@ persist_redacted_error_detail = false
 # id = "opencode-go"
 # base_url = "https://opencode.ai/zen/go/v1"
 # protocols = ["openai", "anthropic"]
+# routing_priority = 0  # higher = preferred; default 0 means "load balance
+#                       # within this provider using the existing scorer".
+# [providers.opencode-go.stream_timeouts]
+# first_byte_timeout_s = 300  # headers → first non-empty payload chunk
+# idle_timeout_s = 300        # maximum gap between payload chunks
+# max_lifetime_s = 0          # deprecated compatibility field; parsed but ignored
 #
 # [[providers.opencode-go.accounts]]
 # name = "personal"
@@ -674,12 +919,10 @@ protocol = "anthropic"
 # consumes these metrics. Stable operator knobs are documented below;
 # keep advanced overrides in the playbook until you need them.
 #
-# ----------------------------------------------------------------------
-# Request shaping: cache-preserving compression
-# ----------------------------------------------------------------------
-# Disabled by default. "observe" records opportunities without changing
-# requests. "safe" compresses only volatile suffix content and fails
-# closed if a stable prefix would change.
+# --- Compression (safe suffix only) ---
+# Drives the **Request changes** and **Compression** panels on `/cache`.
+# Observe mode is reporting-only; safe mode actually compresses the
+# volatile suffix while preserving stable prefixes and provider cache.
 # [compression]
 # enabled = false
 # mode = "observe"                 # "observe" or "safe"
@@ -687,7 +930,6 @@ protocol = "anthropic"
 # min_savings_tokens = 1024
 # max_compression_latency_ms = 25.0
 #
-# Optional: disable individual deterministic transforms if one is noisy.
 # [compression.transforms]
 # fold_repeated_lines = true
 # compact_logs = true
@@ -695,24 +937,6 @@ protocol = "anthropic"
 # elide_base64_blobs = true
 # minify_machine_json = true
 # compact_stack_traces = true
-#
-# ----------------------------------------------------------------------
-# Synthetic cache controls
-# ----------------------------------------------------------------------
-# Optional provider-bound cache annotations for supported upstreams.
-# Leave disabled unless you are validating Anthropic-style cache_control
-# behavior; dry-run records candidates without mutating requests.
-# [cache.synthetic_cache_controls]
-# enabled = false
-# dry_run = true
-# min_stable_tokens = 1024
-#
-# ----------------------------------------------------------------------
-# Advanced request-shaping overrides
-# ----------------------------------------------------------------------
-# Use policy overrides for scoped rollouts. Most operators should leave
-# placement, static-prefix, header, and provider-specific knobs at their
-# defaults and manage them from docs-driven playbooks instead.
 #
 # [[compression.policies]]
 # name = "opencode-safe-suffix"
@@ -729,13 +953,20 @@ protocol = "anthropic"
 # synthetic_cache_dry_run = true
 # synthetic_cache_min_stable_tokens = 1024
 # synthetic_cache_max_breakpoints = 4
-#
-# ----------------------------------------------------------------------
-# Advisory threshold tuning
-# ----------------------------------------------------------------------
-# Recommendation-only by default. Keep this in docs-driven rollout space
-# until you need automated threshold suggestions.
-#
+
+# --- EggPool cache annotations (provider-bound, opt-in) ---
+# Drives the **EggPool cache annotations** panel on `/cache`. Disabled
+# by default and dry-run is the safe rollout path. These are annotations
+# added by EggPool — provider-reported cache counters are surfaced
+# separately in Provider cache counters.
+# [cache.synthetic_cache_controls]
+# enabled = false
+# dry_run = true
+# min_stable_tokens = 1024
+
+# --- Tuning suggestions (advisory only) ---
+# Drives the **Tuning suggestions** panel on `/cache`. Recommend-only
+# by default; runtime overrides remain dormant.
 # [compression.tuning]
 # enabled = false
 # mode = "recommend"

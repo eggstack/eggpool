@@ -74,6 +74,7 @@ async def _register(
 
     manager = RuntimeManager()
     config = override_config if override_config is not None else _make_config()
+    config.update_checker.enabled = include_update_checker
     outbound = SimpleNamespace() if include_update_checker else None
     supervisor = TaskSupervisor()
     proc_super = TaskSupervisor() if process_supervisor else None
@@ -111,6 +112,7 @@ async def _register_with_process_supervisor(
 
     manager = RuntimeManager()
     config = override_config if override_config is not None else _make_config()
+    config.update_checker.enabled = include_update_checker
     outbound = SimpleNamespace() if include_update_checker else None
     gen_supervisor = TaskSupervisor()
     proc_supervisor = TaskSupervisor()
@@ -325,6 +327,7 @@ class TestProcessSupervisorSurvival:
 
         manager = RuntimeManager()
         config = _make_config()
+        config.update_checker.enabled = True
 
         # Create both supervisors.
         gen_supervisor = TaskSupervisor()

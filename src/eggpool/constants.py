@@ -5,7 +5,9 @@ import os
 from pathlib import Path
 from typing import Any, cast
 
-DEFAULT_HOST = "0.0.0.0"
+# Loopback is the safe default for a newly installed service.  LAN exposure is
+# an explicit onboarding choice or an explicit ``[server].host`` setting.
+DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 11300
 DEFAULT_PROVIDER_ID = "opencode-go"
 

@@ -363,6 +363,7 @@ class TestSeedConfiguredAliases:
                 )
             ]
             config = _make_config(aliases=aliases)
+            config.enabled = True
             cache = _make_cache("test-model")
             service = ModelInfoService(config=config, db=db, catalog=cache)
 

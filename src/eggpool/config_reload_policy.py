@@ -318,6 +318,7 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     # tasks; the process supervisor reconfigures the tasks with the
     # candidate config on reload.
     "model_info.enabled": ReloadDisposition.LIVE,
+    "update_checker.enabled": ReloadDisposition.RESTART_REQUIRED,
     "model_info.startup_refresh": ReloadDisposition.RESTART_REQUIRED,
     "model_info.refresh_interval_s": ReloadDisposition.LIVE,
     "model_info.known_ttl_s": ReloadDisposition.RESTART_REQUIRED,

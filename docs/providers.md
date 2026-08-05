@@ -439,8 +439,8 @@ These require adapter support that EggPool does not currently implement.
 
 ## High-Concurrency HTTP Client Profiles
 
-The default provider HTTPX limits (`max_connections=32`,
-`max_keepalive=8`, `read_timeout_s=300`, `pool_timeout_s=30`) are
+The ordinary provider HTTPX limits (`max_connections=16`,
+`max_keepalive=4`, `read_timeout_s=300`, `pool_timeout_s=30`) are
 calibrated for low-power SBC/Raspberry Pi deployments. The runtime
 settings split into three independent axes that are easy to confuse:
 

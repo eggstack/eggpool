@@ -176,6 +176,7 @@ class TestInventoryForConfig:
 
     def test_update_checker_included_when_flag_true(self) -> None:
         config = _make_config()
+        config.update_checker.enabled = True  # type: ignore[union-attr]
         specs = inventory_for_config(config, include_update_checker=True)
         by_name = {s.name: s for s in specs}
         assert by_name["update_checker"].enabled is True

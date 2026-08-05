@@ -75,7 +75,7 @@ class ServerConfig(BaseModel):
     api_key: str | None = None
     api_key_env: str = "SERVER_API_KEY"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
-    access_log: bool = True
+    access_log: bool = False
     # Granian's single worker owns loop-bound asyncio primitives throughout
     # the process. Multiple runtime threads are not a supported topology.
     threads: int = Field(default=1, ge=1, le=1)
@@ -96,8 +96,8 @@ class UpstreamConfig(BaseModel):
     read_timeout_s: float = Field(default=300, gt=0)
     write_timeout_s: float = Field(default=30, gt=0)
     pool_timeout_s: float = Field(default=30, gt=0)
-    max_connections: int = Field(default=32, gt=0)
-    max_keepalive: int = Field(default=8, gt=0)
+    max_connections: int = Field(default=16, gt=0)
+    max_keepalive: int = Field(default=4, gt=0)
     keepalive_timeout_s: float = Field(default=30, ge=0)
 
     @model_validator(mode="after")
@@ -217,11 +217,10 @@ class DatabaseConfig(BaseModel):
     busy_timeout_ms: int = Field(default=5000, gt=0)
     wal: bool = True
     synchronous: Literal["OFF", "NORMAL", "FULL", "EXTRA"] = "NORMAL"
-    # aiosqlite uses one Python worker thread per connection. The default of 2
-    # opens a separate read-only stats connection so dashboard analytics do
-    # not share the data-plane connection lock. Set to 1 for minimum-footprint
-    # mode on extremely constrained devices or in-memory test databases.
-    worker_threads: int = Field(default=2, ge=1, le=2)
+    # aiosqlite uses one Python worker thread per connection. The lean default
+    # uses one connection; set to 2 to open a separate read-only stats
+    # connection when dashboard reads should avoid the data-plane lock.
+    worker_threads: int = Field(default=1, ge=1, le=2)
     recovery: DatabaseRecoveryConfig = Field(
         default_factory=DatabaseRecoveryConfig,
     )
@@ -241,7 +240,7 @@ class ReadinessProbeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = Field(
-        default=True,
+        default=False,
         description="Enable the background database writable probe.",
     )
     interval_s: float = Field(
@@ -308,16 +307,16 @@ class RoutingTraceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mode: Literal["all", "sampled", "off"] = Field(
-        default="sampled",
+        default="off",
         description=(
             '"sampled" = deterministic request-id sampling '
-            "(default, low write pressure). "
+            "(opt-in, low write pressure). "
             '"all" = every attempt (full diagnostics). '
             '"off" = no routing trace rows.'
         ),
     )
     sample_rate: float = Field(
-        default=0.05,
+        default=0.0,
         ge=0.0,
         le=1.0,
         description=("Fraction of selection-time traces to persist in sampled mode."),
@@ -440,7 +439,9 @@ class PricingCatalogEntry(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    enabled: bool = True
+    # External pricing is analytics enrichment, not request correctness.
+    # Keep it dormant until an operator explicitly opts in.
+    enabled: bool = False
     priority: int = Field(default=100, ge=0)
     ttl_seconds: int = Field(default=86_400, gt=0)
     max_entries: int = Field(default=4096, gt=0)
@@ -496,15 +497,15 @@ class DispatchSpansConfig(BaseModel):
     so that one sampled request records all relevant spans,
     preserving a coherent trace.
 
-    Coarse metrics (``DispatchOverheadRecorder``,
-    ``LocalPreUpstreamRecorder``) remain always-on and bounded
-    regardless of this setting.
+    Coarse dispatch overhead metrics remain always-on and bounded. The
+    more detailed local pre-upstream and span windows are only constructed
+    when detailed sampling is enabled.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     sample_rate: float = Field(
-        default=0.05,
+        default=0.0,
         ge=0.0,
         le=1.0,
         description=(
@@ -538,17 +539,17 @@ class MetricsConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    write_mode: Literal["immediate", "balanced", "low_wear"] = "balanced"
-    flush_interval_s: int = Field(default=30, ge=1, le=600)
-    max_buffered_events: int = Field(default=500, ge=1, le=100_000)
-    timeseries_bucket_s: int = Field(default=60, ge=10, le=3600)
-    trace_sample_rate: float = Field(default=1.0, ge=0.0, le=1.0)
-    aggregate_only: bool = False
+    write_mode: Literal["immediate", "balanced", "low_wear"] = "low_wear"
+    flush_interval_s: int = Field(default=120, ge=1, le=600)
+    max_buffered_events: int = Field(default=250, ge=1, le=100_000)
+    timeseries_bucket_s: int = Field(default=300, ge=10, le=3600)
+    trace_sample_rate: float = Field(default=0.05, ge=0.0, le=1.0)
+    aggregate_only: bool = True
     rollup_retain_days: int = Field(default=90, gt=0)
     cleanup_interval_s: int = Field(default=86_400, gt=0)
     cleanup_max_rows_per_pass: int = Field(default=5000, gt=0)
     event_loop_lag_enabled: bool = Field(
-        default=True,
+        default=False,
         description="Enable the one-second event-loop lag diagnostic monitor.",
     )
     dispatch_spans: DispatchSpansConfig = Field(
@@ -587,7 +588,7 @@ class DashboardConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
-    public: bool = True
+    public: bool = False
     theme: str = "Cyber Red"
     themes_dir: str | None = None
     retain_request_stats_days: int = Field(default=30, gt=0)
@@ -1188,7 +1189,7 @@ class DnsCacheConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    enabled: bool = True
+    enabled: bool = False
     max_entries: int = Field(default=50, ge=1)
     positive_ttl_seconds: int = Field(default=1800, gt=0)
     negative_ttl_seconds: int = Field(default=30, gt=0)
@@ -1200,8 +1201,8 @@ class DnsCacheConfig(BaseModel):
 class NetworkConfig(BaseModel):
     """Outbound HTTP client transport settings for background/CLI paths.
 
-    Controls the shared ``OutboundClientManager`` client used by update
-    checks, external catalog fetches, and CLI diagnostic commands.
+    Controls the optional shared ``OutboundClientManager`` client used by
+    external pricing/model-info fetches and the opt-in update checker.
     Provider-specific clients (LLM forwarding) use per-provider
     ``[providers.<id>]`` transport settings instead.
     """
@@ -1210,8 +1211,8 @@ class NetworkConfig(BaseModel):
 
     connect_timeout_s: float = Field(default=10.0, gt=0)
     read_timeout_s: float = Field(default=30.0, gt=0)
-    max_connections: int = Field(default=10, gt=0)
-    max_keepalive: int = Field(default=4, gt=0)
+    max_connections: int = Field(default=8, gt=0)
+    max_keepalive: int = Field(default=2, gt=0)
     keepalive_expiry_s: float = Field(default=90.0, ge=0)
     dns_cache: DnsCacheConfig = Field(default_factory=DnsCacheConfig)
 
@@ -1266,12 +1267,20 @@ class BackupConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    enabled: bool = True
+    enabled: bool = False
     interval_s: int = Field(default=86_400, ge=0)
     retain_count: int = Field(default=14, ge=1)
     startup_delay_s: int = Field(default=300, ge=0)
     directory: str | None = None
     include_env: bool = True
+
+
+class UpdateCheckerConfig(BaseModel):
+    """Optional in-process PyPI release check for dashboard status."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
 
 
 class ModelInfoSourceConfig(BaseModel):
@@ -1347,7 +1356,7 @@ class ModelInfoConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    enabled: bool = True
+    enabled: bool = False
     startup_refresh: bool = True
     refresh_interval_s: int = Field(default=21_600, ge=0)
     known_ttl_s: int = Field(default=86_400, gt=0)
@@ -1404,6 +1413,7 @@ class AppConfig(BaseModel):
     compression: CompressionConfig = Field(default_factory=CompressionConfig)
     cache: CacheConfig = Field(default_factory=CacheConfig)
     model_info: ModelInfoConfig = Field(default_factory=ModelInfoConfig)
+    update_checker: UpdateCheckerConfig = Field(default_factory=UpdateCheckerConfig)
     force_segmentation: bool = Field(
         default=False,
         description=(

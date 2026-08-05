@@ -90,7 +90,25 @@ Key invariants:
 - The same URL composition rules apply to catalog fetch and chat dispatch
 - **Structured observability persistence (migrations 0026-0029)** every `request_attempts` row carries provider/model/protocol/retry_category/latency/bytes/streamed/is_retry_outcome; every routing decision is persisted to `routing_decisions` in the same transaction as the `request_attempts` INSERT; startup crash recovery and expired-reservation reconciliation record bounded operational events inside the same transaction as durable state mutation; latency is decomposed into `upstream_connect_ms / upstream_read_ms / coordinator_overhead_ms` so the dashboard can distinguish network vs upstream vs eggpool-side bottlenecks
 - **Runtime metrics are best-effort and process-local** — the `/api/stats/runtime` endpoint and `eggpool runtime-status` CLI command gather process topology, memory, background task state, database health, OS load average (`os.getloadavg` + normalized per-core), and a bounded rolling-window dispatch-overhead distribution via `DispatchOverheadRecorder` (`src/eggpool/runtime_dispatch.py`); failed probes return `null` rather than raising, `probe_errors` is capped to 16 truncated entries, and the endpoint is always auth-gated even with a public dashboard
-- **Dispatch timing boundaries (Milestone A4)** — two distinct timing slices measure EggPool-side latency before upstream dispatch. `DispatchOverheadRecorder` (`src/eggpool/runtime_dispatch.py`) covers the coordinator-internal slice: from `ProxyRequestContext.started_monotonic_ns` (after context_build) to just before `httpx.AsyncClient.send()`. `LocalPreUpstreamRecorder` (`src/eggpool/runtime_dispatch.py`) covers the full EggPool-side window: from `request_received_monotonic_ns` (ASGI handler entry) to just before upstream dispatch. `request_received_monotonic_ns` is captured at the top of `handle_proxy_request` (`src/eggpool/api/proxy_request.py`); `local_pre_upstream_ms` is exposed via `runtime_metrics.local_pre_upstream`. Both use monotonic/performance clocks. The two metrics are additive: `local_pre_upstream` includes context_build, body parsing, validation, segmentation, compression, and coordinator dispatch overhead; `dispatch_overhead` covers only the coordinator-internal selection/persistence/dispatch slice.
+- **Dispatch timing boundaries (Milestone A4)** — two distinct timing slices measure EggPool-side latency before upstream dispatch. `DispatchOverheadRecorder` (`src/eggpool/runtime_dispatch.py`) is the always-on coarse coordinator slice: from `ProxyRequestContext.started_monotonic_ns` (after context_build) to just before `httpx.AsyncClient.send()`. `LocalPreUpstreamRecorder` (`src/eggpool/runtime_dispatch.py`) is allocated only when detailed span sampling is enabled and covers the full EggPool-side window: from `request_received_monotonic_ns` (ASGI handler entry) to just before upstream dispatch. Both use monotonic/performance clocks. The two metrics are additive when detailed sampling is enabled: `local_pre_upstream` includes context_build, body parsing, validation, segmentation, compression, and coordinator dispatch overhead; `dispatch_overhead` covers only the coordinator-internal selection/persistence/dispatch slice.
+
+### Lean default and conditional construction
+
+The ordinary generated configuration is deliberately local and low-wear:
+loopback binding, one SQLite worker, provider pools of 16 connections/4
+keepalives, background outbound pools of 8/2 when needed, low-wear analytics,
+and no routing traces, detailed spans, model-info enrichment, readiness probe,
+DNS cache, automatic backup, dispatch writer, event-loop lag monitor, or
+background PyPI checker. `eggpool onboard` makes LAN binding an explicit
+interactive choice and keeps loopback for noninteractive runs.
+
+`RuntimeGenerationFactory.prepare()` is the single construction boundary for
+startup and rehash candidates. Disabled optional features are represented as
+`None`, so they do not create a client, writer, queue, recorder, callback, or
+task. Model-info construction/cache loading and optional pricing clients live
+in the generation; process-owned tasks are registered only by startup and are
+never duplicated in a candidate. Provider catalog data and correctness
+persistence remain active regardless of optional metadata or analytics flags.
 
 ### Thinking/Reasoning Observability
 
@@ -2873,11 +2891,11 @@ Correctness-preserving performance pass that reduces redundant computation and D
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `mode` | `all` / `sampled` / `off` | `sampled` | When to write routing traces |
-| `sample_rate` | `0.0–1.0` | `0.05` | Deterministic request-id sampling in `sampled` mode |
+| `mode` | `all` / `sampled` / `off` | `off` | When to write routing traces |
+| `sample_rate` | `0.0–1.0` | `0.0` | Deterministic request-id sampling in `sampled` mode |
 | `include_score_components` | `bool` | `False` | Whether to serialize the per-account scoring breakdown |
 
-Default `mode = "sampled"` keeps write pressure low on default installs (Raspberry Pi / SBC) where every microSD write costs latency. `sampled` mode uses a deterministic request-id hash at trace-write time, before upstream outcome is known, so it samples selection attempts rather than forcing all errors. Operators who want full diagnostic visibility for debugging should set `mode = "all"` and `include_score_components = true`. Routing trace rows are purely diagnostic — they have no effect on billing, retry, crash recovery, or routing outcomes.
+Default `mode = "off"` avoids diagnostic writes on ordinary installs (Raspberry Pi / SBC) where every microSD write costs latency. Operators can set `mode = "sampled"` to use a deterministic request-id hash at trace-write time, before upstream outcome is known, or set `mode = "all"` with `include_score_components = true` for full diagnostic visibility. Routing trace rows are purely diagnostic — they have no effect on billing, retry, crash recovery, or routing outcomes.
 
 ### Phase 5 — Hot-Path Cleanup
 
@@ -2920,9 +2938,9 @@ Default installs target Raspberry Pi and other SBC hardware where dashboard resp
 
 #### Stats Connection Isolation
 
-`Database` serializes all SQL operations through a single connection lock. On file-backed SQLite, dashboard analytics that share the primary connection queue behind request-path writes. The fix:
+`Database` serializes all SQL operations through a single connection lock. The lean default keeps one connection and accepts that dashboard analytics share the request-path lock. File-backed deployments that need dashboard isolation can opt into a second connection with `database.worker_threads = 2`.
 
-- `DatabaseConfig.worker_threads` defaults to `2` (was `1`). When `worker_threads > 1` and the database path is not `:memory:`, `app.py:_lifespan_runtime` opens a separate read-only `stats_db` connection. WAL readers see a consistent snapshot, so dashboard queries tolerate sub-second isolation.
+- `DatabaseConfig.worker_threads` defaults to `1`. When `worker_threads = 2` and the database path is not `:memory:`, `app.py:_lifespan_runtime` opens a separate read-only `stats_db` connection. WAL readers see a consistent snapshot, so dashboard queries can avoid queuing behind most request-path writes.
 - `StatsService(db)` is no longer constructed inside dashboard handlers. All cache, request-shaping, compression, transcoding, segmentation, tuning, and runtime routes use the lifespan-wired `app.state.stats` instance, which also owns the long-lived 30s in-memory dashboard cache.
 - The CLI command `eggpool stats transcoding` still constructs a fresh short-lived `StatsService(db)` because it runs out-of-process and is bounded to a single query.
 
@@ -2961,7 +2979,7 @@ Startup crash recovery (`_crash_recovery`) and the initial catalog load are NOT 
 
 #### Routing Trace Write Pressure
 
-`RoutingTraceConfig.mode` defaults to `"sampled"` with `sample_rate = 0.05` and `include_score_components = False`. The default install therefore writes routing decision rows for ~5% of selection attempts instead of every attempt — a ~20x reduction in routing-decision insert volume. The deterministic request-id hash means operators still get a representative sample of traces across all accounts and tiers.
+`RoutingTraceConfig.mode` defaults to `"off"` with `sample_rate = 0.0` and `include_score_components = False`. The lean default does not persist routing decision rows. Operators can opt into `"sampled"` for representative traces or `"all"` for full diagnostics.
 
 The dashboard degrades gracefully when trace data is sampled: `routing_decisions` lookups return bounded results, and `eggpool accounts explain` is unaffected. `routing.trace.mode = "all"` plus `include_score_components = true` is the documented full-diagnostics profile for operators who want every trace.
 
@@ -2980,14 +2998,14 @@ Operators can tell at a glance whether the install is on the recommended profile
 
 #### Performance Profiles
 
-`docs/deployment.md` documents three profiles (balanced, minimum-footprint, full-diagnostics) with a symptom-to-knob troubleshooting table. The balanced profile matches the new defaults and is recommended for Raspberry Pi 4/5.
+`docs/deployment.md` and `docs/config-profiles.md` document the lean default, SBC, full-diagnostics, and high-concurrency profiles with a symptom-to-knob troubleshooting table. The lean profile is recommended for ordinary Raspberry Pi 4/5 installs.
 
 #### Tests
 
 - `tests/integration/test_application_startup.py::test_worker_threads_two_opens_separate_stats_connection` pins the stats connection separation invariant.
 - `tests/unit/test_runtime_metrics.py::test_db_stats_connection_separate` and `test_db_stats_connection_separate_true` pin the runtime-snapshot shape.
 - `tests/unit/test_background.py` pins `initial_delay_s` semantics including `run_immediately` mutual exclusion and the 25%-of-interval overdue grace band.
-- `tests/unit/test_routing_trace_mode.py` pins the new sampled-default and `include_score_components = false` defaults.
+- `tests/unit/test_routing_trace_mode.py` pins the lean `off` default and `include_score_components = false` defaults.
 - `tests/unit/test_config.py::test_database_worker_threads_two_allowed` and `test_database_worker_threads_above_two_rejected` pin the `[1, 2]` range.
 
 See `plans/2026-07-05-dashboard-low-power-performance-optimization-plan.md` for the full design.
@@ -4102,12 +4120,12 @@ every result category, counter, stage, and snapshot field.
   stream instability. Granian runs `workers=1` and `threads=1`; raising
   `threads` does not improve HTTPX concurrency and raising `workers`
   multiplies the SQLite connection budget.
-- Keep `database.worker_threads = 2` (default) so the dashboard
-  analytics connection does not queue behind request-path writes on
-  the shared connection lock.
-- Keep `routing.trace.mode = "sampled"` as the default. Full trace
-  persistence (`mode = "all"`) is diagnostic-only and should never be
-  the steady-state posture on a high-concurrency streaming workload.
+- Keep `database.worker_threads = 1` (default) for the smallest ordinary
+  install. Set `2` explicitly when dashboard isolation is worth the extra
+  SQLite connection.
+- Keep `routing.trace.mode = "off"` (default). Sampled and full trace
+  persistence are opt-in diagnostics and should not be the steady-state
+  posture on a high-concurrency streaming workload.
 - Client cancellation is downstream behavior; it MUST NOT register as
   an upstream error or apply a provider health penalty. The
   coordinator passes `CLIENT_CANCELLED` through the dedicated outcome

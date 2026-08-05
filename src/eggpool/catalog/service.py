@@ -263,6 +263,12 @@ class CatalogService:
         models: list[dict[str, Any]],
     ) -> None:
         """Enrich canonical OpenCode Go rows with models.dev metadata."""
+        # models.dev is optional metadata enrichment. The provider catalog
+        # remains authoritative for routing and must not create an external
+        # fetch path in the lean/default profile.
+        model_info_config = getattr(self._config, "model_info", None)
+        if not bool(getattr(model_info_config, "enabled", False)):
+            return
         if not self._is_canonical_opencode_go_provider(provider_id, provider_cfg):
             return
         provider_models = await self._get_models_dev_provider_models(

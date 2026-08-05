@@ -41,7 +41,10 @@ Provider authentication config parsing. Reads `ProviderAuthConfig` from `config.
 
 ### `providers/outbound.py` — OutboundClientManager
 
-Shared `httpx.AsyncClient` for background/CLI network operations (catalog refresh, update checks, external source fetches).
+Optional shared `httpx.AsyncClient` for background/CLI network operations
+(external pricing, model-info sources, and the opt-in update checker). When
+constructed for background work its lean pool target is 8 connections with 2
+keepalives; the manager is absent when no enabled feature needs it.
 
 ### `providers/dns_cache.py` — DnsNetworkBackend
 

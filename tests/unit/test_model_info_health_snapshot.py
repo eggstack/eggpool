@@ -83,7 +83,7 @@ async def test_health_snapshot_present_with_zero_canonical_returns_zero() -> Non
     try:
         await _run_migrations(db)
         cache = _make_cache()
-        config = ModelInfoConfig()
+        config = ModelInfoConfig(enabled=True)
         service = ModelInfoService(config, db, cache)
 
         snapshot = await service.health_snapshot()
@@ -105,7 +105,7 @@ async def test_health_snapshot_with_canonical_rows() -> None:
         await _seed_model(db, "gpt-4o")
 
         cache = _make_cache()
-        config = ModelInfoConfig()
+        config = ModelInfoConfig(enabled=True)
         service = ModelInfoService(config, db, cache)
         await service.reconcile_catalog_snapshot(reason="test")
 
@@ -126,7 +126,7 @@ async def test_health_snapshot_source_health_present_no_raw_payload() -> None:
         await _seed_model(db, "gpt-4o")
 
         cache = _make_cache()
-        config = ModelInfoConfig()
+        config = ModelInfoConfig(enabled=True)
         service = ModelInfoService(config, db, cache)
 
         # Insert a source_health row via record_source_success
@@ -162,7 +162,7 @@ async def test_health_snapshot_handles_missing_count_call() -> None:
     try:
         await _run_migrations(db)
         cache = _make_cache()
-        config = ModelInfoConfig()
+        config = ModelInfoConfig(enabled=True)
 
         service = ModelInfoService(config, db, cache)
         # Swap in the failing repo
@@ -184,7 +184,7 @@ async def test_health_snapshot_due_count_present() -> None:
     try:
         await _run_migrations(db)
         cache = _make_cache()
-        config = ModelInfoConfig()
+        config = ModelInfoConfig(enabled=True)
         service = ModelInfoService(config, db, cache)
 
         snapshot = await service.health_snapshot()

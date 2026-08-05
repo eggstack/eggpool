@@ -244,6 +244,7 @@ class TestOnboardFreshInstall:
         # Config has required sections
         assert "database" in config
         assert "models" in config
+        assert config["server"]["host"] == "127.0.0.1"
 
     def test_install_script_recommends_onboard(self) -> None:
         """install.sh recommends 'eggpool onboard' not 'init-config'."""
@@ -268,6 +269,25 @@ class TestOnboardPromptFunctions:
         from eggpool.onboard import _prompt_add_another
 
         assert callable(_prompt_add_another)
+
+    def test_noninteractive_bind_prompt_is_loopback(self, monkeypatch) -> None:
+        """Noninteractive onboarding never exposes the service on the LAN."""
+        import eggpool.onboard as onboard_mod
+
+        monkeypatch.setattr(onboard_mod.sys.stdin, "isatty", lambda: False)
+        prompt_bind_lan = onboard_mod._prompt_bind_lan  # noqa: SLF001
+        assert prompt_bind_lan() is False
+
+    def test_set_server_host_updates_existing_server_section(
+        self, tmp_path: Path
+    ) -> None:
+        """The explicit LAN decision is persisted without rewriting the file."""
+        from eggpool.onboard import _set_server_host
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text('[server]\nport = 11300\nhost = "127.0.0.1"\n')
+        _set_server_host(str(config_path), "0.0.0.0")
+        assert 'host = "0.0.0.0"' in config_path.read_text()
 
 
 class TestStopRestartAST:

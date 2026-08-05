@@ -107,6 +107,8 @@ def _service_graph_manifest(
         "configured_values": {
             "detailed_span_sample_rate": (
                 result.dispatch_span_recorder._detailed_span_sample_rate
+                if result.dispatch_span_recorder is not None
+                else None
             ),
             "local_pre_upstream_recorder_present": (
                 result.local_pre_upstream_recorder is not None
@@ -156,22 +158,61 @@ class TestFactoryParity:
             assert result.router is not None
             assert result.coordinator is not None
             assert result.client_pool is not None
-            assert result.outbound_manager is not None
+            assert result.outbound_manager is None
             assert result.health_manager is not None
             assert result.cost_calculator is not None
             assert result.transcoder_policy is not None
-            assert result.compression_policy is not None
-            assert result.cache_config is not None
-            assert result.compression_tuning_registry is not None
+            assert result.compression_policy is None
+            assert result.cache_config is None
+            assert result.compression_tuning_registry is None
             assert result.dispatch_overhead_recorder is not None
-            assert result.dispatch_span_recorder is not None
+            assert result.dispatch_span_recorder is None
             assert result.account_backoff_repo is not None
             assert result.stats_service is not None
             assert result.supervisor is not None
-            assert result.routing_trace_guard is not None
-            assert result.local_pre_upstream_recorder is not None
+            assert result.routing_trace_guard is None
+            assert result.local_pre_upstream_recorder is None
+            assert result.model_info is None
             assert result.stream_diagnostics is not None
         finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio()
+    async def test_explicit_optional_features_construct_their_generation_graph(
+        self,
+    ) -> None:
+        """Opt-ins retain the full feature path without changing defaults."""
+        from eggpool.db.connection import Database
+        from eggpool.db.migrations import MigrationRunner
+
+        db = Database(path=":memory:")
+        await db.connect()
+        result: PreparedRuntimeGeneration | None = None
+        try:
+            await MigrationRunner(db).run()
+            process = _make_process(db=db, stats_db=db)
+            config = _make_config(model_info={"enabled": True})
+            config.compression.enabled = True
+            config.metrics.dispatch_spans.sample_rate = 0.1
+
+            result = await RuntimeGenerationFactory().prepare(
+                config=config,
+                config_digest="test-digest",
+                generation_id=1,
+                process=process,
+            )
+
+            assert result.model_info is not None
+            assert result.outbound_manager is not None
+            assert result.compression_policy is not None
+            assert result.dispatch_span_recorder is not None
+            assert result.local_pre_upstream_recorder is not None
+            assert result.compression_tuning_registry is None
+        finally:
+            if result is not None:
+                await result.client_pool.close()
+            if result is not None and result.outbound_manager is not None:
+                await result.outbound_manager.aclose()
             await db.disconnect()
 
     @pytest.mark.asyncio()
@@ -266,7 +307,7 @@ class TestFactoryParity:
             assert len(candidate._resources) > 0
             resource_names = [r.name for r in candidate._resources]
             assert "client_pool" in resource_names
-            assert "outbound_manager" in resource_names
+            assert "outbound_manager" not in resource_names
             assert "supervisor" in resource_names
         finally:
             await db.disconnect()
@@ -614,11 +655,11 @@ class TestDetailedSpanSampleRateParity:
 
 
 class TestLocalPreUpstreamRecorderParity:
-    """Verify local pre-upstream recorder is present in both paths."""
+    """Verify local pre-upstream recorder construction follows sampling."""
 
     @pytest.mark.asyncio()
-    async def test_recorder_present_in_startup(self) -> None:
-        """Local pre-upstream recorder is constructed in startup path."""
+    async def test_recorder_absent_in_lean_default(self) -> None:
+        """Lean defaults do not allocate the detailed local recorder."""
         from eggpool.db.connection import Database
         from eggpool.db.migrations import MigrationRunner
 
@@ -637,13 +678,13 @@ class TestLocalPreUpstreamRecorderParity:
                 process=process,
             )
 
-            assert result.local_pre_upstream_recorder is not None
+            assert result.local_pre_upstream_recorder is None
         finally:
             await db.disconnect()
 
     @pytest.mark.asyncio()
-    async def test_recorder_present_in_reload(self) -> None:
-        """Local pre-upstream recorder is constructed in reload path."""
+    async def test_recorder_absent_in_reload_default(self) -> None:
+        """Reload candidates preserve the lean recorder decision."""
         from eggpool.db.connection import Database
         from eggpool.db.migrations import MigrationRunner
 
@@ -664,7 +705,7 @@ class TestLocalPreUpstreamRecorderParity:
                 candidate=candidate,
             )
 
-            assert result.local_pre_upstream_recorder is not None
+            assert result.local_pre_upstream_recorder is None
         finally:
             await db.disconnect()
 

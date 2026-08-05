@@ -884,9 +884,9 @@ class TestProcessBoundFieldRejection:
         from eggpool.models.config import AppConfig
 
         old = AppConfig.from_dict({"server": {"api_key": SERVER_API_KEY}})
-        # Default worker_threads is 2; change to 1 to trigger a diff.
+        # Default worker_threads is 1; change to 2 to trigger a diff.
         new = old.model_copy(
-            update={"database": old.database.model_copy(update={"worker_threads": 1})}
+            update={"database": old.database.model_copy(update={"worker_threads": 2})}
         )
         diff = compute_diff(old, new)
         assert any(

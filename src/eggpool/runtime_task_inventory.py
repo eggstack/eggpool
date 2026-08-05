@@ -209,8 +209,8 @@ def inventory_for_config(
     Applies enable/disable rules from the live config:
     - ``backup.enabled`` gates ``automatic_backup``.
     - ``metrics.write_mode == "immediate"`` gates ``metrics_flush``.
-    - ``include_update_checker`` gates ``update_checker`` (only the
-      startup path passes ``True``).
+    - ``update_checker.enabled`` and ``include_update_checker`` gate
+      ``update_checker`` (the latter prevents candidate duplication).
     - ``models.refresh_interval_s == 0`` disables ``catalog_refresh``.
 
     The returned tuple preserves the canonical ordering of
@@ -226,7 +226,9 @@ def inventory_for_config(
         if spec.name == "metrics_flush" and config.metrics.write_mode == "immediate":
             enabled = False
 
-        if spec.name == "update_checker" and not include_update_checker:
+        if spec.name == "update_checker" and (
+            not include_update_checker or not config.update_checker.enabled
+        ):
             enabled = False
 
         if spec.name == "automatic_backup" and (

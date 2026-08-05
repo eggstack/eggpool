@@ -67,7 +67,7 @@ def test_load_valid_config(valid_config: Path) -> None:
         all_accts = config.all_accounts()
         assert len(all_accts) == 2
         assert all_accts[0].name == "test_account"
-        assert config.database.worker_threads == 2
+        assert config.database.worker_threads == 1
     finally:
         del os.environ["TEST_KEY_1"]
         del os.environ["TEST_KEY_2"]
@@ -776,7 +776,7 @@ def test_dashboard_config_defaults() -> None:
 
     dc = DashboardConfig()
     assert dc.enabled is True
-    assert dc.public is True
+    assert dc.public is False
     assert dc.retain_request_stats_days == 30
     assert dc.retain_event_days == 90
     assert dc.store_request_content is False
@@ -1427,7 +1427,7 @@ class TestBackupConfig:
         from eggpool.models.config import BackupConfig
 
         cfg = BackupConfig()
-        assert cfg.enabled is True
+        assert cfg.enabled is False
         assert cfg.interval_s == 86_400
         assert cfg.retain_count == 14
         assert cfg.startup_delay_s == 300
@@ -1482,7 +1482,7 @@ class TestBackupConfig:
 
     def test_appconfig_has_backup_field(self) -> None:
         config = AppConfig()
-        assert config.backup.enabled is True
+        assert config.backup.enabled is False
         assert config.backup.interval_s == 86_400
         assert config.backup.retain_count == 14
 
@@ -1511,7 +1511,7 @@ include_env = false
         config_file = tmp_path / "config.toml"
         config_file.write_text("")  # empty config
         config = AppConfig.from_toml(str(config_file))
-        assert config.backup.enabled is True
+        assert config.backup.enabled is False
         assert config.backup.interval_s == 86_400
 
 
@@ -1522,8 +1522,8 @@ class TestNetworkConfig:
         cfg = NetworkConfig()
         assert cfg.connect_timeout_s == 10.0
         assert cfg.read_timeout_s == 30.0
-        assert cfg.max_connections == 10
-        assert cfg.max_keepalive == 4
+        assert cfg.max_connections == 8
+        assert cfg.max_keepalive == 2
         assert cfg.keepalive_expiry_s == 90.0
 
     def test_custom_values(self) -> None:
@@ -1557,7 +1557,7 @@ class TestNetworkConfig:
     def test_appconfig_has_network_field(self) -> None:
         config = AppConfig()
         assert config.network.connect_timeout_s == 10.0
-        assert config.network.max_connections == 10
+        assert config.network.max_connections == 8
 
     def test_network_config_from_toml(self, tmp_path: Path) -> None:
         config_file = tmp_path / "config.toml"
@@ -1583,4 +1583,4 @@ keepalive_expiry_s = 120.0
         config_file.write_text("")  # empty config
         config = AppConfig.from_toml(str(config_file))
         assert config.network.connect_timeout_s == 10.0
-        assert config.network.max_connections == 10
+        assert config.network.max_connections == 8

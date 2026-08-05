@@ -1,9 +1,9 @@
 [server]
-host = "0.0.0.0"
+host = "127.0.0.1"
 port = 11300
 # api_key = "ep_..." # Auto-generated on first `configsetup`; use `eggpool newkey` to regenerate
 log_level = "INFO"
-access_log = true
+access_log = false
 # Granian runtime threads inside the single worker process. Exactly one
 # event-loop thread is required; high concurrency is handled by asyncio tasks,
 # HTTP connection-pool sizing, and bounded writers.
@@ -14,8 +14,8 @@ base_url = "https://opencode.ai/zen/go/v1"
 connect_timeout_s = 5
 read_timeout_s = 300
 write_timeout_s = 30
-max_connections = 32
-max_keepalive = 8
+max_connections = 16
+max_keepalive = 4
 keepalive_timeout_s = 30
 
 # Provider blocks may set stream_completion_policy = "strict" (default),
@@ -36,7 +36,7 @@ synchronous = "NORMAL"
 # for file-backed SQLite. This keeps dashboard analytics from queuing behind
 # request-path writes on Raspberry Pi-class installs. Set to 1 for
 # minimum-footprint mode on extremely constrained devices or in-memory tests.
-worker_threads = 2
+worker_threads = 1
 
 # ─── Maintenance Budgets ────────────────────────────────────────────
 # Bounds for periodic database maintenance tasks (retention cleanup,
@@ -184,9 +184,9 @@ fairness_scope = "provider_model_protocol"
 # "off"     – no routing trace rows
 # Sampling is decided before upstream outcome is known, so sampled
 # does not force all errors to be traced.
-mode = "sampled"
+mode = "off"
 # Fraction of selection-time traces to persist in sampled mode (0.0–1.0).
-sample_rate = 0.05
+sample_rate = 0.0
 # Include score_components_json in persisted traces (larger rows).
 # Set to false to reduce per-row write size on high-throughput installs.
 include_score_components = false
@@ -206,7 +206,7 @@ fallback = "generic_estimate"
 [pricing.catalogs]
 
 [pricing.catalogs.openrouter]
-enabled = true
+enabled = false
 priority = 100
 ttl_seconds = 86400
 # max_entries = 4096  # bound the in-memory catalog cache; oldest entries evict first
@@ -226,7 +226,7 @@ ttl_seconds = 86400
 # metadata with display names, context limits, benchmarks, and pipeline
 # tags. Manual overrides and alias expansion are also supported.
 # [model_info]
-# enabled = true                   # enable model_info sidecar (default: true)
+# enabled = false                  # optional metadata sidecar (default: false)
 # include_in_models_endpoint = true  # compact fields in /v1/models (default: true)
 # refresh_interval_s = 3600        # global refresh cadence (seconds)
 # sparse_refresh_interval_s = 300  # accelerated refresh for sparse models (seconds)
@@ -236,7 +236,7 @@ ttl_seconds = 86400
 # sparse_ttl_s = 86400             # TTL for sparse models (1 day)
 #
 # [model_info.sources.openrouter]
-# enabled = true                   # enable OpenRouter metadata source (default: true)
+# enabled = true                   # source used when model_info is enabled
 # priority = 100                   # higher = preferred when multiple sources agree
 # ttl_seconds = 86400              # how long to cache the OpenRouter /models catalog
 # # api_key = "..."                # optional; only needed for higher rate limits
@@ -274,12 +274,12 @@ ttl_seconds = 86400
 # [network]
 # connect_timeout_s = 5
 # read_timeout_s = 300
-# max_connections = 32
-# max_keepalive = 8
+# max_connections = 8
+# max_keepalive = 2
 # keepalive_expiry_s = 30
 #
 # [network.dns_cache]
-# enabled = true                   # enable in-memory DNS cache (default: true)
+# enabled = false                  # enable in-memory DNS cache (default: false)
 # max_entries = 50                 # max cached host entries (default: 50)
 # positive_ttl_seconds = 1800      # upper cap for positive DNS answers (default: 1800)
 # negative_ttl_seconds = 30        # how long to cache lookup failures (default: 30)
@@ -287,9 +287,25 @@ ttl_seconds = 86400
 # prefer_ipv6 = false              # prefer IPv6 addresses in DNS resolution (default: false)
 # lookup_timeout_seconds = 5       # timeout for DNS lookups in seconds (default: 5)
 
+# Optional subsystems are deliberately explicit in the shipped template.
+[dispatch_writer]
+enabled = false
+
+[readiness_probe]
+enabled = false
+
+[model_info]
+enabled = false
+
+[update_checker]
+enabled = false
+
+[network.dns_cache]
+enabled = false
+
 [dashboard]
 enabled = true
-public = true
+public = false
 # Theme name (without .toml extension). "default" uses GitHub Primer colors.
 # Themes are from Halloy: https://themes.halloy.chat/
 # Bundled themes (50+) ship inside the package — no extra files needed.
@@ -305,19 +321,19 @@ refresh_interval_s = 60
 [metrics]
 # Controls observability write buffering for reduced microSD wear.
 # - "immediate": existing direct-write behavior (best for debugging).
-# - "balanced" (default): buffer lossy analytics with short flush intervals.
+# - "balanced": buffer lossy analytics with short flush intervals.
 # - "low_wear": longer flush interval, coarser buckets, optional trace
 #   sampling — designed for microSD / Raspberry Pi deployments.
 #
 # Buffered analytics may lose at most flush_interval_s seconds of data
 # after abrupt power loss. Correctness-critical request state (request
 # rows, reservations, attempts, routing) is never buffered.
-write_mode = "balanced"
-flush_interval_s = 30
-max_buffered_events = 500
-timeseries_bucket_s = 60
-trace_sample_rate = 1.0
-aggregate_only = false
+write_mode = "low_wear"
+flush_interval_s = 120
+max_buffered_events = 250
+timeseries_bucket_s = 300
+trace_sample_rate = 0.05
+aggregate_only = true
 rollup_retain_days = 90
 cleanup_interval_s = 86400
 cleanup_max_rows_per_pass = 5000
@@ -328,13 +344,13 @@ cleanup_max_rows_per_pass = 5000
 # always-on; detailed spans use request-coherent sampling so one
 # sampled request records all spans (coherent trace).
 # [metrics.dispatch_spans]
-# sample_rate = 0.05        # 5% of requests; 0.0 = coarse only, 1.0 = all
+# sample_rate = 0.0         # 0.0 = coarse only; opt in to detailed spans
 # window_size = 200         # rolling-window samples per span
 
 # Deprecated: use [metrics.dispatch_spans].sample_rate instead. When this
 # field is explicitly set, it overrides the new setting and emits a warning.
 # detailed_span_sample_rate = 0.05
-# event_loop_lag_enabled = true  # set false on constrained SBCs
+# event_loop_lag_enabled = false # opt in to one-second lag diagnostics
 
 # ─── Low-wear profile for microSD / Raspberry Pi ──────────────────
 # Uncomment this block when running from microSD and dashboard traces
@@ -361,13 +377,13 @@ redact_headers = ["authorization", "x-api-key"]
 persist_redacted_error_detail = false
 
 # ─── Automatic Backups ────────────────────────────────────────────────
-# EggPool creates automatic daily backups by default. Archives are
+# EggPool can create automatic daily backups. Archives are
 # restore-compatible .zip files stored under $XDG_BACKUP_HOME/eggpool
 # (or ~/backups/eggpool). The eggpool deploy backup-cron path remains
 # available for operators who prefer external scheduling.
-# [backup]
-# enabled = true
-# interval_s = 86400           # every 24 hours
+[backup]
+enabled = false
+# interval_s = 86400           # every 24 hours when enabled
 # retain_count = 14            # keep last 14 backups
 # startup_delay_s = 300        # wait 5 min after boot before first backup
 # # directory = "/path/to/backups"  # override default backup location

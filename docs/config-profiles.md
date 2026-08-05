@@ -7,11 +7,11 @@ connection-pool sizing, and bounded writers — not by multiplying event
 loops. The `[server].threads` field is `RESTART_REQUIRED` for live
 rehash.
 
-## Balanced Default
+## Lean Default
 
-Recommended for Raspberry Pi 4/5, general-purpose hosts, and similar
-hardware. Tuned for dashboard responsiveness under request load with
-moderate write pressure.
+Recommended for ordinary installs, Raspberry Pi 4/5, and similar
+hardware. It keeps the request path small and durable while making
+analytics, diagnostics, backups, and external metadata probes opt-in.
 
 ```toml
 [server]
@@ -19,7 +19,7 @@ threads = 1
 access_log = false
 
 [database]
-worker_threads = 2
+worker_threads = 1
 wal = true
 synchronous = "NORMAL"
 busy_timeout_ms = 5000
@@ -27,18 +27,19 @@ busy_timeout_ms = 5000
 [upstream]
 connect_timeout_s = 5
 read_timeout_s = 300
-max_connections = 32
+max_connections = 16
+max_keepalive = 4
 
 [metrics]
-write_mode = "balanced"
-flush_interval_s = 30
+write_mode = "low_wear"
+flush_interval_s = 120
 
 [routing]
 strategy = "quota_fair"
 
 [routing.trace]
-mode = "sampled"
-sample_rate = 0.05
+mode = "off"
+sample_rate = 0.0
 include_score_components = false
 
 [transcoder]
@@ -56,19 +57,18 @@ max_batches_per_tick = 4
 max_tick_duration_ms = 500
 
 [backup]
-enabled = true
+enabled = false
 interval_s = 86400
 retain_count = 14
 ```
 
 **Characteristics:**
 - Single Granian event-loop thread (supported default)
-- Two database connections (primary + read-only stats)
+- One serialized SQLite connection; set `worker_threads = 2` for a separate stats connection
 - WAL mode with NORMAL synchronous
-- Sampled routing traces (5% sample rate)
-- Balanced metrics flush (30s interval)
-- Conservative maintenance budgets
-- Automatic daily backups
+- No routing trace persistence
+- Low-wear metrics flush (120s interval)
+- Optional model info, readiness, DNS, backup, and PyPI update probes
 
 ## Minimum-Footprint SBC
 
@@ -179,11 +179,11 @@ max_tick_duration_ms = 1000
 
 | Scenario | Recommended Profile |
 |----------|-------------------|
-| Raspberry Pi 4/5, personal use | Balanced Default |
+| Raspberry Pi 4/5, personal use | Lean Default |
 | Raspberry Pi, minimal resources | [copyable SBC config](../config.sbc.example.toml) |
 | Development/debugging | Full Diagnostics |
 | High-concurrency coding agent | High-Concurrency General |
-| Production, low traffic | Balanced Default |
+| Production, low traffic | Lean Default |
 | Production, high traffic | High-Concurrency General |
 
 ## Runtime Thread Guidance
@@ -206,8 +206,8 @@ the number of event-loop threads in the worker process.
 
 - **1 connection**: Minimal footprint. Dashboard queries contend with
   the dispatch write path. Acceptable for low-traffic deployments.
-- **2 connections** (default): Separate read-only stats connection.
-  Dashboard queries do not block dispatch persistence.
+- **2 connections** (opt-in): Separate read-only stats connection.
+  Dashboard queries can avoid queuing behind most dispatch persistence.
 
 ## Maintenance Budgets
 

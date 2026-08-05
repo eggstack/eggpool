@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import httpx
 import pytest
 import pytest_asyncio
 
@@ -176,7 +177,6 @@ async def test_latency_phase_endpoint_via_fastapi(
 ) -> None:
     """End-to-end smoke: /api/stats/latency must include 'phases' key."""
     from fastapi import FastAPI
-    from fastapi.testclient import TestClient
 
     from eggpool.api.stats import register_stats_routes
 
@@ -185,8 +185,9 @@ async def test_latency_phase_endpoint_via_fastapi(
     app.state.stats_db = db
     app.state.stats = StatsService(db)
     register_stats_routes(app, require_auth=False)
-    client = TestClient(app)
-    response = client.get("/api/stats/latency?period=7d")
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/stats/latency?period=7d")
     assert response.status_code == 200, response.text
     payload = response.json()
     assert "phases" in payload

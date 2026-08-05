@@ -400,7 +400,7 @@ eggpool runtime-status          # compact runtime health from running server
 
 ### Cannot connect from other machines
 
-1. Verify `server.host = "0.0.0.0"` in config
+1. Verify that onboarding or the explicit config selected `server.host = "0.0.0.0"`
 2. Check firewall rules (see `docs/firewall.md`)
 3. Verify the port is listening: `ss -tlnp | grep 11300`
 
@@ -412,12 +412,12 @@ eggpool runtime-status          # compact runtime health from running server
 
 ### Dashboard slow under request load
 
-- Confirm `database.worker_threads = 2` (default). When `> 1` on a file-backed SQLite database, `app.py:_lifespan_runtime` opens a separate read-only `stats_db` connection so dashboard analytics do not queue behind request-path writes on the primary connection lock.
+- Confirm `database.worker_threads = 1` (default). Set `2` explicitly when a file-backed SQLite deployment needs a separate read-only `stats_db` connection so dashboard analytics do not queue behind request-path writes on the primary connection lock.
 - Confirm `server.threads = 1` (default) — single event-loop thread is canonical. Values > 1 emit a startup warning and require operator verification of asyncio primitive safety.
-- `routing.trace.mode = "sampled"` (default) keeps routing-decision inserts off the hot path. Set `mode = "all"` only when actively debugging routing.
+- `routing.trace.mode = "off"` (default) avoids routing-decision inserts. Set `mode = "sampled"` or `"all"` only when actively debugging routing.
 - `/api/stats/runtime` → `dashboard_telemetry.recent_render_ms_p95` and `dashboard_telemetry.slowest_recent_route` are the operator-facing render duration signals; `dashboard_telemetry.separate_stats_db` confirms the stats connection is wired.
 - Startup logs `Granian profile: workers=1 runtime_threads=N database_worker_threads=M access_log=...` so the effective profile is visible at every `eggpool serve` start.
-- See `docs/deployment.md` Performance Profiles for the balanced / minimum-footprint / full-diagnostics profile set.
+- See `docs/deployment.md` Performance Profiles for the lean default and full-diagnostics profile.
 
 ### High-concurrency / OpenCode streaming
 

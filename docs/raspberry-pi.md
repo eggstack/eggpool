@@ -57,8 +57,8 @@ SD card storage:
 busy_timeout_ms = 10000
 
 [upstream]
-max_connections = 32
-max_keepalive = 8
+max_connections = 16
+max_keepalive = 4
 
 [models]
 refresh_interval_s = 7200
@@ -77,15 +77,15 @@ threads = 1          # supported single-loop default
 access_log = false   # optional: reduce I/O noise after initial setup
 
 [database]
-worker_threads = 2   # separate read-only stats connection (default)
+worker_threads = 1   # lean default; use 2 for a separate stats connection
 
 [metrics]
-write_mode = "balanced"
-flush_interval_s = 30
+write_mode = "low_wear"
+flush_interval_s = 120
 
 [routing.trace]
-mode = "sampled"
-sample_rate = 0.05
+mode = "off"
+sample_rate = 0.0
 include_score_components = false
 ```
 
@@ -100,8 +100,8 @@ access_log = false
 worker_threads = 1
 
 [routing.trace]
-mode = "sampled"
-sample_rate = 0.05
+mode = "off"
+sample_rate = 0.0
 include_score_components = false
 ```
 

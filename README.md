@@ -26,7 +26,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Selection hot path: generation-hydrated account identities keep SQLite outside the claim lock, while routing plans carry quarantine exclusions directly into sampled diagnostic traces
 - Durable dispatch write pipeline: process-owned microbatching writer for dispatch intents with bounded queue, adaptive batching, binary success/exception persistence semantics, durable-identity validation, and diagnostics
 - Amortized quota-window maintenance: ordered observations expire incrementally, while rare out-of-order timestamps remain correct through a bounded slow path
-- Bounded observability: request-coherent span sampling (5% default), bounded rolling-window metrics, and constant-bounded snapshot cost regardless of uptime
+- Bounded observability: coarse metrics by default, opt-in request-coherent spans, bounded rolling-window metrics, and constant-bounded snapshot cost regardless of uptime
 - Error isolation: provider-specific validation errors (e.g. unsupported MiniMax-M3 thinking through OpenCode Go) are contained to a single request — no account/model/circuit/quarantine penalties, no restart or database deletion required
 - Attempt-scoped failure decisions: one bounded canonical decision carries retry, provider evidence, health/quarantine, circuit, backoff, and probe-convergence effects; retained attempt ownership prevents identical failures from colliding or replaying
 - Generation-owned terminal ownership: selected request finalization, failed-attempt cleanup, and post-commit claim compensation are reconciled by one bounded supervisor with kind-qualified identities, typed progress, one global capacity, one retry timer, and one drain; the owning generation retains one terminal reference per accepted command until durable and required runtime convergence
@@ -37,10 +37,15 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Self-healing provider health: every nonterminal account/model suppression is capped at 30 minutes, durable hints are bounded during hydration, and half-open probes always converge
 - Designed for lightweight deployments (Raspberry Pi, SBCs)
 
-For a copyable, low-wear SBC configuration, start with
-[config.sbc.example.toml](config.sbc.example.toml). It uses one SQLite worker,
-disables optional diagnostics, and trades dashboard freshness and diagnostic
-detail for lower memory and storage pressure.
+The ordinary install is already a lightweight local profile: it binds to
+loopback, uses one SQLite worker, low-wear analytics buffering, 16 provider
+connections with 4 keepalives, and no model-info, routing-trace, readiness,
+backup, DNS-cache, or background PyPI task. `eggpool onboard` asks whether to
+bind to the LAN; noninteractive onboarding keeps loopback. Optional features
+remain explicit configuration choices.
+
+For a copyable SBC profile with an explicit LAN bind and provider discovery
+cadence, see [config.sbc.example.toml](config.sbc.example.toml).
 
 ## Quick Start
 
@@ -125,6 +130,7 @@ Use `eggpool connect` for interactive provider setup. See [docs/providers.md](do
 | `[providers.*]` | Provider configs with accounts and routing priority |
 | `[network]` | Outbound transport, DNS cache |
 | `[model_info]` | Optional model metadata refresh, aliases, overrides, and external source settings |
+| `[update_checker]` | Optional in-process PyPI release probe for dashboard status |
 | `[transcoder]` | Protocol transcoding between OpenAI and Anthropic formats |
 
 Legacy `[database.recovery]` settings remain parseable for one compatibility

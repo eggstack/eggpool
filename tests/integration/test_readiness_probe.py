@@ -463,7 +463,7 @@ def test_readiness_probe_config_defaults() -> None:
     from eggpool.models.config import ReadinessProbeConfig
 
     cfg = ReadinessProbeConfig()
-    assert cfg.enabled is True
+    assert cfg.enabled is False
     assert cfg.interval_s == 10.0
     assert cfg.freshness_s == 30.0
     assert cfg.timeout_s == 5.0

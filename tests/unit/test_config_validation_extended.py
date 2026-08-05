@@ -141,8 +141,8 @@ class TestOldConfigCompatibility:
                 "dashboard": {"enabled": False},
             }
         )
-        # Span sampling should default to 5%
-        assert config.metrics.dispatch_spans.sample_rate == 0.05
+        # Detailed span sampling is disabled in the lean default.
+        assert config.metrics.dispatch_spans.sample_rate == 0.0
         assert config.metrics.detailed_span_sample_rate is None
 
     def test_deprecated_span_rate_is_explicit_override(self) -> None:
@@ -327,7 +327,7 @@ class TestInstrumentationSamplingSettings:
     def test_span_sampling_defaults(self) -> None:
         """Span sampling config has correct defaults."""
         spans = DispatchSpansConfig()
-        assert spans.sample_rate == 0.05
+        assert spans.sample_rate == 0.0
         assert spans.window_size > 0
 
     def test_span_sampling_custom(self) -> None:

@@ -588,6 +588,7 @@ def mirror_generation_on_app_state(
     mirrors: dict[str, object] = {
         "registry": generation.registry,
         "catalog": generation.catalog,
+        "model_info": getattr(generation, "model_info", None),
         "router": generation.router,
         "coordinator": generation.coordinator,
         "client_pool": generation.client_pool,
@@ -615,6 +616,8 @@ def mirror_generation_on_app_state(
         if name in process_owned:
             continue
         if value is None:
+            if hasattr(app.state, name):
+                delattr(app.state, name)
             continue
         setattr(app.state, name, value)
 
@@ -775,6 +778,7 @@ def register_candidate_tasks(
     *,
     effective_model_info: Any = None,  # noqa: ARG001 -- legacy arg, ignored
     process_supervisor: TaskSupervisor | None = None,
+    include_process_owned: bool = False,
 ) -> None:
     """Backward-compatible wrapper for the unified task registration.
 
@@ -790,7 +794,8 @@ def register_candidate_tasks(
     When ``process_supervisor`` is provided, process-owned tasks
     (checkpoint, metrics_flush, update_checker, automatic_backup)
     register there; otherwise they register on the gen supervisor
-    for backward compatibility.
+    for backward compatibility. Candidate preparation leaves those
+    process-owned tasks out of the candidate supervisor.
     """
     from eggpool.runtime_tasks import (  # noqa: PLC0415
         TaskRegistrationContext,
@@ -805,6 +810,7 @@ def register_candidate_tasks(
             config=config,
             update_checker_outbound=None,
             process_supervisor=process_supervisor,
+            include_process_owned=include_process_owned,
         ),
     )
 
@@ -1049,58 +1055,32 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             config.models.stale_after_s,
         )
 
-    # 15. Model info service
-    model_info = None
-    if config.model_info.enabled:
-        from eggpool.model_info.service import ModelInfoService
-
+    # 15. Optional model-info startup work.  Construction and cache loading
+    # happen in the generation factory so reload candidates have the same
+    # graph as startup.  External reconciliation remains a startup-only
+    # operation and is skipped entirely while the feature is disabled.
+    model_info = gen_result.model_info
+    app.state.model_info = model_info
+    if model_info is not None and config.model_info.startup_refresh:
         try:
-            model_info = ModelInfoService(
-                config=config.model_info,
-                db=db,
-                catalog=catalog.cache,
-                outbound_client=await gen_result.outbound_manager.get_client(),
+            reconcile_result = await model_info.reconcile_catalog_snapshot(
+                reason="startup"
             )
-            app.state.model_info = model_info
-            await model_info.load_cache()
-            if config.model_info.startup_refresh:
-                try:
-                    reconcile_result = await model_info.reconcile_catalog_snapshot(
-                        reason="startup"
-                    )
-                    logger.info(
-                        "Model info startup reconciliation: %s",
-                        reconcile_result,
-                    )
-                except Exception:
-                    logger.exception("Model info startup reconciliation failed")
-                # Backfill canonical rows for any models table rows
-                # that reconcile_catalog_snapshot missed (e.g. models
-                # withdrawn and later reappeared).
-                try:
-                    backfill = await model_info.backfill_missing_canonical()
-                    if backfill["backfilled"] > 0:
-                        logger.info("Model info startup backfill: %s", backfill)
-                except Exception:
-                    logger.exception("Model info startup backfill failed")
-                # Phase F: upgrade pre-Phase-B canonical rows whose
-                # ``detail`` lacks the nested ``limits`` block.  This
-                # is a one-shot repair that runs alongside the
-                # regular startup backfill so legacy rows participate
-                # in the normalized detail schema on the next reload.
-                try:
-                    legacy_repair = await model_info.backfill_legacy_detail_blocks()
-                    if legacy_repair["upgraded"] > 0:
-                        logger.info(
-                            "Model info legacy detail backfill: %s",
-                            legacy_repair,
-                        )
-                except Exception:
-                    logger.exception("Model info legacy detail backfill failed")
+            logger.info("Model info startup reconciliation: %s", reconcile_result)
         except Exception:
-            logger.exception("Failed to initialize model info service")
-            model_info = None
-    process.model_info = model_info
+            logger.exception("Model info startup reconciliation failed")
+        try:
+            backfill = await model_info.backfill_missing_canonical()
+            if backfill["backfilled"] > 0:
+                logger.info("Model info startup backfill: %s", backfill)
+        except Exception:
+            logger.exception("Model info startup backfill failed")
+        try:
+            legacy_repair = await model_info.backfill_legacy_detail_blocks()
+            if legacy_repair["upgraded"] > 0:
+                logger.info("Model info legacy detail backfill: %s", legacy_repair)
+        except Exception:
+            logger.exception("Model info legacy detail backfill failed")
 
     # 16. Event-loop lag monitor (process-owned, Milestone F6).
     # Measures event-loop starvation via periodic callback drift.
@@ -1174,12 +1154,14 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         started_monotonic=app.state.started_monotonic,
         started_epoch=app.state.started_epoch,
         metrics_coalescer=metrics_coalescer,
-        outbound_manager=app.state.outbound_manager,
+        outbound_manager=outbound_manager,
         dns_backend=getattr(app.state, "dns_backend", None),
         provider_client_pool=app.state.client_pool,
         dispatch_overhead_recorder=app.state.dispatch_overhead_recorder,
-        local_pre_upstream_recorder=app.state.local_pre_upstream_recorder,
-        dispatch_span_recorder=app.state.dispatch_span_recorder,
+        local_pre_upstream_recorder=getattr(
+            app.state, "local_pre_upstream_recorder", None
+        ),
+        dispatch_span_recorder=getattr(app.state, "dispatch_span_recorder", None),
         model_info=model_info,
         dashboard_telemetry=app.state.dashboard_telemetry,
         stream_diagnostics=app.state.stream_diagnostics,
@@ -1227,7 +1209,9 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             process=process,
             runtime_manager=runtime_manager,
             config=config,
-            update_checker_outbound=outbound_manager,
+            update_checker_outbound=(
+                outbound_manager if config.update_checker.enabled else None
+            ),
             app_state=app.state,
             process_supervisor=process_supervisor,
         ),

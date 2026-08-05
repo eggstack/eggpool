@@ -16,10 +16,10 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, Any
 
+import httpx
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
 from eggpool.dashboard.routes import register_dashboard_routes
 from eggpool.db.connection import Database
@@ -80,6 +80,17 @@ def _make_runtime_metrics(db: Database, config: AppConfig) -> RuntimeMetricsServ
         started_monotonic=time.monotonic() - 60.0,
         started_epoch=time.time() - 60.0,
     )
+
+
+async def _get(app: FastAPI, path: str, *, authenticate: bool = True) -> httpx.Response:
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.get(
+            path,
+            headers=(
+                {"Authorization": "Bearer test-key-12345678"} if authenticate else None
+            ),
+        )
 
 
 @pytest_asyncio.fixture()
@@ -324,24 +335,18 @@ class _FakeRequestShapingStatsService:
 class TestCacheObservabilityEndpoint:
     """GET /api/stats/cache-observability returns JSON."""
 
-    def test_returns_200_with_auth(self, app_with_key: FastAPI) -> None:
-        client = TestClient(app_with_key)
-        response = client.get(
-            "/api/stats/cache-observability",
-            headers={"Authorization": "Bearer test-key-12345678"},
-        )
+    @pytest.mark.asyncio()
+    async def test_returns_200_with_auth(self, app_with_key: FastAPI) -> None:
+        response = await _get(app_with_key, "/api/stats/cache-observability")
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("application/json")
         data = response.json()
         assert "by_status" in data
         assert "total_requests" in data
 
-    def test_empty_db_has_stable_shape(self, app_with_key: FastAPI) -> None:
-        client = TestClient(app_with_key)
-        response = client.get(
-            "/api/stats/cache-observability",
-            headers={"Authorization": "Bearer test-key-12345678"},
-        )
+    @pytest.mark.asyncio()
+    async def test_empty_db_has_stable_shape(self, app_with_key: FastAPI) -> None:
+        response = await _get(app_with_key, "/api/stats/cache-observability")
         data = response.json()
         assert data["total_requests"] == 0
         assert "by_status" in data
@@ -350,23 +355,17 @@ class TestCacheObservabilityEndpoint:
 class TestCanonicalRequestSegmentationEndpoint:
     """GET /api/stats/canonical-request-segmentation returns JSON."""
 
-    def test_returns_200_with_auth(self, app_with_key: FastAPI) -> None:
-        client = TestClient(app_with_key)
-        response = client.get(
-            "/api/stats/canonical-request-segmentation",
-            headers={"Authorization": "Bearer test-key-12345678"},
-        )
+    @pytest.mark.asyncio()
+    async def test_returns_200_with_auth(self, app_with_key: FastAPI) -> None:
+        response = await _get(app_with_key, "/api/stats/canonical-request-segmentation")
         assert response.status_code == 200
         data = response.json()
         assert "by_status" in data
         assert "token_totals" in data
 
-    def test_empty_db_has_stable_shape(self, app_with_key: FastAPI) -> None:
-        client = TestClient(app_with_key)
-        response = client.get(
-            "/api/stats/canonical-request-segmentation",
-            headers={"Authorization": "Bearer test-key-12345678"},
-        )
+    @pytest.mark.asyncio()
+    async def test_empty_db_has_stable_shape(self, app_with_key: FastAPI) -> None:
+        response = await _get(app_with_key, "/api/stats/canonical-request-segmentation")
         data = response.json()
         assert data["by_status"] == {
             "segmented": 0,
@@ -395,7 +394,8 @@ class TestCanonicalRequestSegmentationEndpoint:
         assert data["per_provider_status"][("prov-a", "openai")]["not_collected"] == 2
         assert data["per_model_status"]["gpt-4o"]["not_collected"] == 2
 
-    def test_json_serializes_provider_status_keys(
+    @pytest.mark.asyncio()
+    async def test_json_serializes_provider_status_keys(
         self, app_with_key: FastAPI, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # Replace the stats service on the app state with a mock
@@ -403,11 +403,7 @@ class TestCanonicalRequestSegmentationEndpoint:
             app_with_key.state.db
         )
         app_with_key.state.runtime_metrics = _FakeRequestShapingRuntimeMetrics()
-        client = TestClient(app_with_key)
-        response = client.get(
-            "/api/stats/canonical-request-segmentation",
-            headers={"Authorization": "Bearer test-key-12345678"},
-        )
+        response = await _get(app_with_key, "/api/stats/canonical-request-segmentation")
         data = response.json()
         assert data["by_status"]["not_collected"] == 2
         assert data["per_provider_status"]["prov-a->openai"]["not_collected"] == 2
@@ -416,12 +412,9 @@ class TestCanonicalRequestSegmentationEndpoint:
 class TestCompressionObservabilityEndpoint:
     """GET /api/stats/compression-observability returns JSON."""
 
-    def test_returns_200_with_auth(self, app_with_key: FastAPI) -> None:
-        client = TestClient(app_with_key)
-        response = client.get(
-            "/api/stats/compression-observability",
-            headers={"Authorization": "Bearer test-key-12345678"},
-        )
+    @pytest.mark.asyncio()
+    async def test_returns_200_with_auth(self, app_with_key: FastAPI) -> None:
+        response = await _get(app_with_key, "/api/stats/compression-observability")
         assert response.status_code == 200
         data = response.json()
         assert "by_status" in data
@@ -432,12 +425,9 @@ class TestCompressionObservabilityEndpoint:
 class TestCompressionRuntimeEndpoint:
     """GET /api/stats/compression-runtime returns JSON."""
 
-    def test_returns_200_with_auth(self, app_with_key: FastAPI) -> None:
-        client = TestClient(app_with_key)
-        response = client.get(
-            "/api/stats/compression-runtime",
-            headers={"Authorization": "Bearer test-key-12345678"},
-        )
+    @pytest.mark.asyncio()
+    async def test_returns_200_with_auth(self, app_with_key: FastAPI) -> None:
+        response = await _get(app_with_key, "/api/stats/compression-runtime")
         assert response.status_code == 200
         data = response.json()
         assert "window" in data
@@ -448,12 +438,9 @@ class TestCompressionRuntimeEndpoint:
         assert "warnings" in data
         assert "cache_safety" in data
 
-    def test_empty_db_returns_stable_shape(self, app_with_key: FastAPI) -> None:
-        client = TestClient(app_with_key)
-        response = client.get(
-            "/api/stats/compression-runtime",
-            headers={"Authorization": "Bearer test-key-12345678"},
-        )
+    @pytest.mark.asyncio()
+    async def test_empty_db_returns_stable_shape(self, app_with_key: FastAPI) -> None:
+        response = await _get(app_with_key, "/api/stats/compression-runtime")
         data = response.json()
         assert data["window"]["request_count"] == 0
         assert data["applied_count"] == 0
@@ -473,12 +460,9 @@ class TestCompressionRuntimeEndpoint:
 class TestCompressionPolicyStatsEndpoint:
     """GET /api/stats/compression-policies returns JSON."""
 
-    def test_returns_200_with_auth(self, app_with_key: FastAPI) -> None:
-        client = TestClient(app_with_key)
-        response = client.get(
-            "/api/stats/compression-policies",
-            headers={"Authorization": "Bearer test-key-12345678"},
-        )
+    @pytest.mark.asyncio()
+    async def test_returns_200_with_auth(self, app_with_key: FastAPI) -> None:
+        response = await _get(app_with_key, "/api/stats/compression-policies")
         assert response.status_code == 200
         data = response.json()
         assert "policy_counts" in data
@@ -489,23 +473,17 @@ class TestCompressionPolicyStatsEndpoint:
 class TestCacheStabilityEndpoint:
     """GET /api/stats/cache-stability returns JSON."""
 
-    def test_returns_200_with_auth(self, app_with_key: FastAPI) -> None:
-        client = TestClient(app_with_key)
-        response = client.get(
-            "/api/stats/cache-stability",
-            headers={"Authorization": "Bearer test-key-12345678"},
-        )
+    @pytest.mark.asyncio()
+    async def test_returns_200_with_auth(self, app_with_key: FastAPI) -> None:
+        response = await _get(app_with_key, "/api/stats/cache-stability")
         assert response.status_code == 200
         data = response.json()
         assert "transcoded_request_count" in data
         assert "notes" in data
 
-    def test_empty_db_returns_zero(self, app_with_key: FastAPI) -> None:
-        client = TestClient(app_with_key)
-        response = client.get(
-            "/api/stats/cache-stability",
-            headers={"Authorization": "Bearer test-key-12345678"},
-        )
+    @pytest.mark.asyncio()
+    async def test_empty_db_returns_zero(self, app_with_key: FastAPI) -> None:
+        response = await _get(app_with_key, "/api/stats/cache-stability")
         data = response.json()
         assert data["transcoded_request_count"] == 0
 
@@ -513,12 +491,9 @@ class TestCacheStabilityEndpoint:
 class TestRequestShapingEndpoint:
     """GET /api/stats/request-shaping returns the aggregated summary JSON."""
 
-    def test_returns_200_with_auth(self, app_with_key: FastAPI) -> None:
-        client = TestClient(app_with_key)
-        response = client.get(
-            "/api/stats/request-shaping",
-            headers={"Authorization": "Bearer test-key-12345678"},
-        )
+    @pytest.mark.asyncio()
+    async def test_returns_200_with_auth(self, app_with_key: FastAPI) -> None:
+        response = await _get(app_with_key, "/api/stats/request-shaping")
         assert response.status_code == 200
         data = response.json()
         assert data["period"] == "24h"
@@ -528,7 +503,8 @@ class TestRequestShapingEndpoint:
         assert "synthetic_cache" in data
         assert "guardrails" in data
 
-    def test_summary_exposes_not_collected(
+    @pytest.mark.asyncio()
+    async def test_summary_exposes_not_collected(
         self, app_with_key: FastAPI, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # Replace the stats service on the app state with a mock
@@ -536,11 +512,7 @@ class TestRequestShapingEndpoint:
             app_with_key.state.db
         )
         app_with_key.state.runtime_metrics = _FakeRequestShapingRuntimeMetrics()
-        client = TestClient(app_with_key)
-        response = client.get(
-            "/api/stats/request-shaping",
-            headers={"Authorization": "Bearer test-key-12345678"},
-        )
+        response = await _get(app_with_key, "/api/stats/request-shaping")
         data = response.json()
         assert data["segmentation"] == {
             "requests_segmented": 3,
@@ -572,9 +544,11 @@ class TestAuthGating:
             "/api/stats/request-shaping",
         ],
     )
-    def test_endpoint_requires_auth(self, app_with_key: FastAPI, endpoint: str) -> None:
-        client = TestClient(app_with_key)
-        response = client.get(endpoint)
+    @pytest.mark.asyncio()
+    async def test_endpoint_requires_auth(
+        self, app_with_key: FastAPI, endpoint: str
+    ) -> None:
+        response = await _get(app_with_key, endpoint, authenticate=False)
         assert response.status_code == 401
 
     @pytest.mark.parametrize(
@@ -587,12 +561,11 @@ class TestAuthGating:
             "/api/stats/request-shaping",
         ],
     )
-    def test_endpoint_accepts_auth(self, app_with_key: FastAPI, endpoint: str) -> None:
-        client = TestClient(app_with_key)
-        response = client.get(
-            endpoint,
-            headers={"Authorization": "Bearer test-key-12345678"},
-        )
+    @pytest.mark.asyncio()
+    async def test_endpoint_accepts_auth(
+        self, app_with_key: FastAPI, endpoint: str
+    ) -> None:
+        response = await _get(app_with_key, endpoint)
         assert response.status_code == 200
 
 
@@ -609,11 +582,11 @@ class TestPublicDashboard:
             "/api/stats/request-shaping",
         ],
     )
-    def test_endpoint_accepts_no_auth_when_public(
+    @pytest.mark.asyncio()
+    async def test_endpoint_accepts_no_auth_when_public(
         self, app_public: FastAPI, endpoint: str
     ) -> None:
-        client = TestClient(app_public)
-        response = client.get(endpoint)
+        response = await _get(app_public, endpoint, authenticate=False)
         assert response.status_code == 200
 
 
@@ -637,12 +610,11 @@ class TestJsonSafety:
             "/api/stats/request-shaping",
         ],
     )
-    def test_no_raw_prompt_leakage(self, app_with_key: FastAPI, endpoint: str) -> None:
-        client = TestClient(app_with_key)
-        response = client.get(
-            endpoint,
-            headers={"Authorization": "Bearer test-key-12345678"},
-        )
+    @pytest.mark.asyncio()
+    async def test_no_raw_prompt_leakage(
+        self, app_with_key: FastAPI, endpoint: str
+    ) -> None:
+        response = await _get(app_with_key, endpoint)
         body = response.text
         forbidden = ["sk-", "Bearer ", "<tool_use", "<tool_result"]
         for needle in forbidden:
@@ -663,24 +635,22 @@ class TestPeriodParameter:
         "period",
         ["1h", "24h", "7d", "30d"],
     )
-    def test_compression_runtime_accepts_preset(
+    @pytest.mark.asyncio()
+    async def test_compression_runtime_accepts_preset(
         self, app_with_key: FastAPI, period: str
     ) -> None:
-        client = TestClient(app_with_key)
-        response = client.get(
-            f"/api/stats/compression-runtime?period={period}",
-            headers={"Authorization": "Bearer test-key-12345678"},
+        response = await _get(
+            app_with_key, f"/api/stats/compression-runtime?period={period}"
         )
         assert response.status_code == 200
 
-    def test_compression_runtime_handles_unknown_period(
+    @pytest.mark.asyncio()
+    async def test_compression_runtime_handles_unknown_period(
         self, app_with_key: FastAPI
     ) -> None:
         """Unknown period strings return 200 with empty data, not 500."""
-        client = TestClient(app_with_key)
-        response = client.get(
-            "/api/stats/compression-runtime?period=garbage",
-            headers={"Authorization": "Bearer test-key-12345678"},
+        response = await _get(
+            app_with_key, "/api/stats/compression-runtime?period=garbage"
         )
         # 200 with empty/stable data; we don't 500 on bad input.
         assert response.status_code == 200
