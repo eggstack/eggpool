@@ -225,7 +225,7 @@ class FinalizationRetryQueue:
                 self._dropped_age += 1
                 logger.exception(
                     "Legacy finalization adapter failed for request %s; "
-                    "the process-owned supervisor must own any retry",
+                    "the generation-owned supervisor must own any retry",
                     entry.request_id,
                 )
 

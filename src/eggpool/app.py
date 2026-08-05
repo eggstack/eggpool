@@ -976,7 +976,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
 
     # 10. RuntimeManager — must exist before factory call so we can
     #     reserve a generation_id for the initial generation.
-    runtime_manager = RuntimeManager()
+    runtime_manager = RuntimeManager(fatal_handler=_exit_for_database_failure)
 
     # 11. Build the complete generation-owned service graph via the
     #     shared factory.  This replaces the inline construction of

@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from eggpool.providers.dns_cache import DnsNetworkBackend
     from eggpool.providers.outbound import OutboundClientManager
     from eggpool.request.coordinator import RequestCoordinator
+    from eggpool.request.finalization_job import RequestFinalizationSupervisor
     from eggpool.request.routing_trace_guard import RoutingTraceGuard
     from eggpool.routing.router import Router
     from eggpool.runtime_dispatch import (
@@ -100,7 +101,7 @@ class PreparedRuntimeGeneration:
     routing_trace_writer: Any
     local_pre_upstream_recorder: Any = None
     stream_diagnostics: Any = None
-    finalization_supervisor: Any = None
+    finalization_supervisor: RequestFinalizationSupervisor | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -362,6 +363,20 @@ class RuntimeGenerationFactory:
 
         catalog.set_model_reappearance_callback(_clear_model_reappearance)
 
+        # -- Generation-owned finalization supervisor ----------------------
+        # Retained jobs hold a retirement reference on this generation
+        # until durable and runtime convergence completes.
+        from eggpool.request.finalization_job import (  # noqa: PLC0415
+            RequestFinalizationSupervisor,
+        )
+
+        finalization_supervisor = RequestFinalizationSupervisor(
+            db=db,
+            effects_applier=effects_applier,
+        )
+        if _register is not None:
+            _register("finalization_supervisor", finalization_supervisor.shutdown)
+
         # -- Request coordinator --------------------------------------------
         coordinator = RequestCoordinator(
             registry=registry,
@@ -406,21 +421,7 @@ class RuntimeGenerationFactory:
             effects_applier=effects_applier,
             quarantine=quarantine,
             account_identities=account_identities,
-        )
-
-        # -- Finalization supervisor (Plan 026) ------------------------------
-        # Process-owned supervisor for request finalization jobs.  Provides
-        # retained-task finalization, bounded retry, and diagnostics.
-        from eggpool.request.finalization_job import (  # noqa: PLC0415
-            RequestFinalizationSupervisor,
-        )
-
-        finalization_supervisor = RequestFinalizationSupervisor(
-            db=db,
-            effects_applier=effects_applier,
-        )
-        coordinator._finalization_supervisor = (  # pyright: ignore[reportPrivateUsage]
-            finalization_supervisor
+            finalization_supervisor=finalization_supervisor,
         )
 
         # -- Routing trace guard (NOT configured during preparation) ---------

@@ -677,7 +677,7 @@ RetainedTerminalKind = Literal[
 
 @dataclass(slots=True)
 class RetainedTerminalCommand:
-    """One tagged, process-owned terminal command and its resumable state."""
+    """One tagged, generation-owned terminal command and its resumable state."""
 
     kind: RetainedTerminalKind
     progress: AttemptCleanupProgress | ClaimCompensationProgress
@@ -746,6 +746,7 @@ class RequestCoordinator:
         compression_policy: Any | None = None,  # noqa: ANN401
         stream_diagnostics: StreamDiagnostics | None = None,
         finalization_retry_queue: Any | None = None,  # noqa: ANN401
+        finalization_supervisor: Any | None = None,  # noqa: ANN401
         routing_trace_guard: Any | None = None,  # noqa: ANN401
         routing_trace_enabled: bool = True,
         routing_trace_writer: Any | None = None,  # noqa: ANN401
@@ -781,7 +782,7 @@ class RequestCoordinator:
         self._classifier = RetryClassifier()
         self._select_lock = asyncio.Lock()
         self._selection_claim_lock = asyncio.Lock()
-        # One retained process-owned terminal registry covers retry cleanup
+        # One retained generation-owned terminal registry covers retry cleanup
         # and post-commit compensation. Each entry carries its command kind,
         # progress, and active task together so mixed drains are type-safe.
         self._retained_terminal_commands: dict[
@@ -821,7 +822,7 @@ class RequestCoordinator:
         self._compression_tuning_registry = compression_tuning_registry
         self._compression_policy = compression_policy
         self._stream_diagnostics = stream_diagnostics or get_stream_diagnostics()
-        self._finalization_supervisor: Any = None
+        self._finalization_supervisor = finalization_supervisor
         if routing_trace_guard is None and routing_trace_enabled:
             from eggpool.request.routing_trace_guard import (
                 get_routing_trace_guard,
@@ -871,6 +872,12 @@ class RequestCoordinator:
             effects_applier=self._effects_applier,
             quarantine=self._quarantine,
         )
+
+    def bind_finalization_supervisor(self, supervisor: Any) -> None:  # noqa: ANN401
+        """Bind the generation-owned finalization supervisor explicitly."""
+        if self._finalization_supervisor is not None:
+            raise RuntimeError("finalization supervisor is already bound")
+        self._finalization_supervisor = supervisor
 
     def _get_client(
         self,
@@ -4300,7 +4307,8 @@ class RequestCoordinator:
                 # Skip if _execute_upstream already finalized (the CancelledError
                 # propagates here after the outer handler runs).
                 #
-                # Plan 026: when a process-owned finalization supervisor is
+                # Plan 026/080: when the generation-owned finalization
+                # supervisor is
                 # available, the retained finalization job owns cleanup even
                 # when every request waiter is cancelled.  The job was
                 # registered before the inner generator, so it exists in the

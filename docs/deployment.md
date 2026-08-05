@@ -693,6 +693,13 @@ The output covers:
   counters, and configured capacity/retry-age limits. `null` means the server
   has no active production generation supervisor (for example during partial
   startup).
+- **Generation retirement ownership** — `runtime_manager.finalization_ownership`
+  reports the active generation, retiring-generation count, total terminal
+  references, oldest retiring age, and bounded blocked/failure facts. A live
+  retiring generation is never closed while terminal references remain; an
+  unresolved deadline invokes the worker fatal handler so startup repair can
+  establish the next authoritative boundary. Process shutdown may abandon
+  references because startup crash repair follows process death.
 
 For a focused view of active upstream-derived suppression, call
 `GET /api/backoffs`. The endpoint returns persisted `account_backoffs`

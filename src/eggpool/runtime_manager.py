@@ -28,7 +28,7 @@ Design principles
   entire lifetime.
 - Streaming responses retain their generation lease until stream
   completion or disconnect cleanup.
-- Configuration-derived clients, routing, quota, health, and task
+- Configuration-derived clients, routing, quota, health, finalization, and task
   scheduling are generation-owned unless documented otherwise.
 - Generation teardown is idempotent and closes each owned resource
   exactly once.
@@ -137,6 +137,7 @@ if TYPE_CHECKING:
     from eggpool.providers.dns_cache import DnsNetworkBackend
     from eggpool.providers.outbound import OutboundClientManager
     from eggpool.request.coordinator import RequestCoordinator
+    from eggpool.request.finalization_job import RequestFinalizationSupervisor
     from eggpool.routing.router import Router
     from eggpool.runtime_dispatch import (
         DispatchOverheadRecorder,
@@ -562,7 +563,7 @@ class RuntimeGeneration:
     created_at_epoch: float
     effects_applier: Any = None
     model_quarantine: Any = None
-    finalization_supervisor: Any = None
+    finalization_supervisor: RequestFinalizationSupervisor | None = None
     immutable_request_state: ImmutableRequestState = field(
         default_factory=lambda: ImmutableRequestState(
             provider_ids=frozenset(),
@@ -603,6 +604,7 @@ class _GenerationSlot:
     generation: RuntimeGeneration
     state: SlotState = SlotState.ACTIVE
     active_leases: int = 0
+    terminal_references: int = 0
     accepting_leases: bool = True  # kept for backward compat; derived from state
     retirement_started: bool = False  # kept for backward compat; derived from state
     retirement_complete: asyncio.Event = field(default_factory=asyncio.Event)
@@ -614,6 +616,12 @@ class _GenerationSlot:
     close_start_time: float | None = None
     close_complete_time: float | None = None
     drain_deadline_s: float | None = None
+    blocked_on_terminal_convergence: bool = False
+    last_failure_class: str | None = None
+    last_failure_stage: str | None = None
+
+    def __post_init__(self) -> None:
+        self.drain_event.set()
 
 
 # ---------------------------------------------------------------------------
@@ -735,6 +743,7 @@ class PendingGenerationSwap:
                 generation=self._candidate_generation,
                 accepting_leases=False,  # gated until commit
             )
+            rm._bind_finalization_supervisor(self._new_slot)  # pyright: ignore[reportPrivateUsage]
             rm._next_generation_id = max(  # pyright: ignore[reportPrivateUsage]
                 rm._next_generation_id,  # pyright: ignore[reportPrivateUsage]
                 self._candidate_generation.generation_id + 1,
@@ -1022,7 +1031,7 @@ class GenerationLease:
                 return
             self.released = True
             self.slot.active_leases -= 1
-            if self.slot.active_leases <= 0:
+            if self.slot.active_leases <= 0 and self.slot.terminal_references <= 0:
                 self.slot.active_leases = 0
                 self.slot.drain_event.set()
             logger.debug(
@@ -1058,6 +1067,7 @@ class GenerationDiagnostics:
     created_at_epoch: float
     age_seconds: float
     active_leases: int
+    terminal_references: int
     accepting_leases: bool
     retirement_started: bool
     retirement_complete: bool
@@ -1068,6 +1078,9 @@ class GenerationDiagnostics:
     drain_deadline_s: float | None = None
     close_start_time: float | None = None
     close_complete_time: float | None = None
+    blocked_on_terminal_convergence: bool = False
+    last_failure_class: str | None = None
+    last_failure_stage: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1231,9 +1244,10 @@ class RuntimeManager:
 
     The manager owns a single :class:`_GenerationSlot` at a time (the
     "active" slot) plus zero or more "retiring" slots that still hold
-    active leases.  New requests acquire the active slot; once a new
-    generation is published, the previous slot transitions to retiring
-    and drains its leases before closing its owned resources.
+    request leases or retained finalization references. New requests
+    acquire the active slot; once a new generation is published, the
+    previous slot transitions to retiring and drains both forms of
+    ownership before closing its resources.
 
     The manager's lock protects slot publication and the active-slot
     pointer.  Lease acquisition is lock-free once a slot is accepting;
@@ -1241,7 +1255,11 @@ class RuntimeManager:
     slow background task cannot serialize unrelated request paths.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        fatal_handler: Callable[[str], Any] | None = None,
+    ) -> None:
         self._lock = asyncio.Lock()
         self._active: _GenerationSlot | None = None
         self._retiring: list[_GenerationSlot] = []
@@ -1269,6 +1287,7 @@ class RuntimeManager:
         # entry and decremented on gate exit (success, timeout, or
         # cancellation).
         self._lease_gate_waiters: int = 0
+        self._fatal_handler = fatal_handler
 
     # -- publication --------------------------------------------------------
 
@@ -1292,6 +1311,7 @@ class RuntimeManager:
                     "use the publication API for swaps"
                 )
             slot = _GenerationSlot(generation=generation)
+            self._bind_finalization_supervisor(slot)
             self._active = slot
             self._next_generation_id = max(
                 self._next_generation_id,
@@ -1348,6 +1368,7 @@ class RuntimeManager:
                     f"found {old_slot.generation.generation_id}"
                 )
             new_slot = _GenerationSlot(generation=generation)
+            self._bind_finalization_supervisor(new_slot)
             self._active = new_slot
             if old_slot is not None:
                 old_slot.accepting_leases = False
@@ -1509,6 +1530,8 @@ class RuntimeManager:
                     )
                 slot = self._active
                 assert slot is not None and slot.accepting_leases
+                if slot.active_leases == 0 and slot.terminal_references == 0:
+                    slot.drain_event.clear()
                 slot.active_leases += 1
                 self._acquire_id += 1
                 return GenerationLease(
@@ -1630,10 +1653,69 @@ class RuntimeManager:
             raise ValueError(f"No retiring generation with id {generation_id!r}")
         return tuple(_slot_diagnostics(slot, now) for slot in self._retiring)
 
+    def _bind_finalization_supervisor(self, slot: _GenerationSlot) -> None:
+        """Bind a generation supervisor to this slot's retirement counter."""
+        supervisor = slot.generation.finalization_supervisor
+        if supervisor is None:
+            return
+        bind = getattr(supervisor, "bind_generation_reference_callbacks", None)
+        if not callable(bind):
+            return
+        bind(
+            retain_generation=lambda: self._retain_terminal_reference(slot),
+            release_generation=lambda: self._release_terminal_reference(slot),
+        )
+
+    @staticmethod
+    def _retain_terminal_reference(slot: _GenerationSlot) -> None:
+        """Retain one accepted finalization job synchronously."""
+        if slot.state in (SlotState.CLOSING, SlotState.CLOSED, SlotState.FAILED_CLOSE):
+            raise RuntimeError(
+                f"generation {slot.generation.generation_id} is already closing"
+            )
+        if slot.terminal_references == 0:
+            slot.drain_event.clear()
+        slot.terminal_references += 1
+
+    def _release_terminal_reference(self, slot: _GenerationSlot) -> None:
+        """Release one accepted finalization job idempotently at the slot edge."""
+        if slot.terminal_references <= 0:
+            return
+        slot.terminal_references -= 1
+        if slot.terminal_references == 0 and slot.active_leases == 0:
+            slot.drain_event.set()
+            if (
+                slot.state is SlotState.RETIRING
+                and not slot.retirement_complete.is_set()
+                and slot.generation.generation_id not in self._retirement_tasks
+            ):
+                self._schedule_retirement_resume(slot)
+
+    def _schedule_retirement_resume(self, slot: _GenerationSlot) -> None:
+        """Resume a retirement that previously failed closed on a live ref."""
+        gen_id = slot.generation.generation_id
+
+        async def _resume() -> None:
+            try:
+                await self._drain_and_close(
+                    slot,
+                    drain_timeout_s=slot.drain_deadline_s or 5.0,
+                )
+            finally:
+                self._retirement_tasks.pop(gen_id, None)
+
+        self._retirement_tasks[gen_id] = asyncio.create_task(
+            _resume(), name=f"resume-retire-gen-{gen_id}"
+        )
+
     # -- retirement ---------------------------------------------------------
 
     async def _spawn_retirement_task(
-        self, slot: _GenerationSlot, drain_timeout_s: float
+        self,
+        slot: _GenerationSlot,
+        drain_timeout_s: float,
+        *,
+        abandon_terminal_references: bool = False,
     ) -> None:
         """Create and register a background retirement task for *slot*.
 
@@ -1646,7 +1728,11 @@ class RuntimeManager:
 
         async def _retire() -> None:
             try:
-                await self.begin_retirement(slot, drain_timeout_s=drain_timeout_s)
+                await self.begin_retirement(
+                    slot,
+                    drain_timeout_s=drain_timeout_s,
+                    abandon_terminal_references=abandon_terminal_references,
+                )
             finally:
                 self._retirement_tasks.pop(gen_id, None)
 
@@ -1668,7 +1754,11 @@ class RuntimeManager:
         await asyncio.wait_for(asyncio.shield(task), timeout=timeout_s)
 
     async def begin_retirement(
-        self, slot: _GenerationSlot, *, drain_timeout_s: float = 5.0
+        self,
+        slot: _GenerationSlot,
+        *,
+        drain_timeout_s: float = 5.0,
+        abandon_terminal_references: bool = False,
     ) -> None:
         """Drive the deterministic teardown for one slot.
 
@@ -1704,34 +1794,46 @@ class RuntimeManager:
                 self._active = None
             if slot not in self._retiring:
                 self._retiring.append(slot)
-        await self._drain_and_close(slot, drain_timeout_s=drain_timeout_s)
+        await self._drain_and_close(
+            slot,
+            drain_timeout_s=drain_timeout_s,
+            abandon_terminal_references=abandon_terminal_references,
+        )
 
     async def _drain_and_close(
-        self, slot: _GenerationSlot, *, drain_timeout_s: float = 5.0
+        self,
+        slot: _GenerationSlot,
+        *,
+        drain_timeout_s: float = 5.0,
+        abandon_terminal_references: bool = False,
     ) -> None:
-        """Wait for active leases to reach zero, then close owned resources."""
-        deadline = time.monotonic() + drain_timeout_s
-        # Event-based drain: wait for drain_event or deadline, whichever
-        # comes first.  The drain_event is set by GenerationLease.release()
-        # when the lease count reaches zero.
-        while slot.active_leases > 0:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+        """Wait for leases and terminal references, then close resources."""
+        if slot.active_leases > 0 or slot.terminal_references > 0:
+            try:
+                await asyncio.wait_for(slot.drain_event.wait(), timeout=drain_timeout_s)
+            except TimeoutError:
+                if slot.terminal_references > 0 and not abandon_terminal_references:
+                    slot.blocked_on_terminal_convergence = True
+                    slot.last_failure_class = "TerminalReferenceDrainTimeout"
+                    slot.last_failure_stage = "generation_retirement"
+                    reason = (
+                        f"generation {slot.generation.generation_id} has "
+                        f"{slot.terminal_references} unresolved finalization "
+                        "reference(s) during retirement"
+                    )
+                    logger.critical("Runtime retirement fail-closed: %s", reason)
+                    if self._fatal_handler is not None:
+                        self._fatal_handler(reason)
+                    return
                 slot.forced_close = True
                 logger.warning(
                     "Runtime generation %d retirement drain timed out with "
-                    "%d active leases; forcing close",
+                    "%d active leases and %d terminal references; "
+                    "forcing process shutdown close",
                     slot.generation.generation_id,
                     slot.active_leases,
+                    slot.terminal_references,
                 )
-                break
-            try:
-                await asyncio.wait_for(
-                    slot.drain_event.wait(), timeout=min(0.5, remaining)
-                )
-                break  # drain_event set — leases reached zero
-            except TimeoutError:
-                continue  # re-check deadline
         # Close generation-owned resources in the documented order.
         slot.state = SlotState.CLOSING
         slot.close_start_time = time.monotonic()
@@ -1804,6 +1906,23 @@ class RuntimeManager:
                 slot.last_close_error = f"retained_cleanup: {exc!r}"
                 logger.exception(
                     "Runtime generation %d retained cleanup drain failed",
+                    generation.generation_id,
+                )
+        # 2. Stop the generation-owned finalization scheduler only after
+        #    every accepted job has released its terminal reference. The
+        #    supervisor's scalar history is diagnostic and does not retain
+        #    generation resources.
+        finalization_supervisor = generation.finalization_supervisor
+        if finalization_supervisor is not None:
+            record_close_attempt("finalization_supervisor")
+            try:
+                await finalization_supervisor.shutdown(
+                    timeout_s=min(drain_timeout_s, 10.0)
+                )
+            except Exception as exc:  # noqa: BLE001 -- close path continues
+                slot.last_close_error = f"finalization_supervisor.shutdown: {exc!r}"
+                logger.exception(
+                    "Runtime generation %d finalization supervisor shutdown failed",
                     generation.generation_id,
                 )
         # 2. Close the provider client pool.  This must happen before
@@ -1883,14 +2002,22 @@ class RuntimeManager:
             ):
                 old_slot_from_swap = pending_swap._old_slot  # pyright: ignore[reportPrivateUsage]
         if active is not None:
-            await self._spawn_retirement_task(active, drain_timeout_s=5.0)
+            await self._spawn_retirement_task(
+                active,
+                drain_timeout_s=5.0,
+                abandon_terminal_references=True,
+            )
         if old_slot_from_swap is not None:
             logger.info(
                 "Shutdown adopting old slot from unresolved pending swap "
                 "(generation %d)",
                 old_slot_from_swap.generation.generation_id,
             )
-            await self._spawn_retirement_task(old_slot_from_swap, drain_timeout_s=5.0)
+            await self._spawn_retirement_task(
+                old_slot_from_swap,
+                drain_timeout_s=5.0,
+                abandon_terminal_references=True,
+            )
         # Join all tracked retirement tasks within a bounded deadline.
         # Force-cancel any tasks that do not complete in time.
         if self._retirement_tasks:
@@ -2005,6 +2132,41 @@ class RuntimeManager:
             publication_epoch=self._publication_epoch,
         )
 
+    def finalization_ownership_snapshot(self) -> dict[str, Any]:
+        """Return bounded generation-aware finalization ownership facts."""
+        now = time.monotonic()
+        active = self._active
+        active_supervisor = (
+            _finalization_supervisor_counts(active.generation.finalization_supervisor)
+            if active is not None
+            else None
+        )
+        retiring = tuple(self._retiring)
+        blocked = next(
+            (slot for slot in retiring if slot.blocked_on_terminal_convergence),
+            None,
+        )
+        oldest_age = max(
+            (max(0.0, now - slot.generation.created_at_monotonic) for slot in retiring),
+            default=None,
+        )
+        return {
+            "active_generation_id": (
+                active.generation.generation_id if active is not None else None
+            ),
+            "active_supervisor": active_supervisor,
+            "retiring_generations": len(retiring),
+            "retiring_terminal_references": sum(
+                slot.terminal_references for slot in retiring
+            ),
+            "oldest_retiring_generation_age_s": (
+                round(oldest_age, 3) if oldest_age is not None else None
+            ),
+            "blocked_on_terminal_convergence": blocked is not None,
+            "last_failure_class": blocked.last_failure_class if blocked else None,
+            "last_failure_stage": blocked.last_failure_stage if blocked else None,
+        }
+
     # -- internals ----------------------------------------------------------
 
     @property
@@ -2053,6 +2215,41 @@ def _digest_prefix(digest: str) -> str:
     return digest[:12] if digest else "<empty>"
 
 
+def _finalization_supervisor_counts(supervisor: Any) -> dict[str, Any] | None:
+    """Extract bounded scalar counts from a generation-owned supervisor."""
+    if supervisor is None:
+        return None
+    snapshot = getattr(supervisor, "snapshot", None)
+    if not callable(snapshot):
+        return None
+    try:
+        value = snapshot()
+    except Exception:
+        return None
+    if not isinstance(value, dict):
+        return None
+    snapshot_values = cast("dict[str, Any]", value)
+    counters_value = snapshot_values.get("counters")
+    counters: dict[str, Any] | None = (
+        cast("dict[str, Any]", counters_value)
+        if isinstance(counters_value, dict)
+        else None
+    )
+    return {
+        key: snapshot_values.get(key)
+        for key in (
+            "active_count",
+            "retry_pending_count",
+            "failed_count",
+            "history_count",
+            "oldest_active_age_s",
+        )
+    } | {
+        "registered": counters.get("registered") if counters is not None else None,
+        "completed": counters.get("completed") if counters is not None else None,
+    }
+
+
 def _slot_diagnostics(
     slot: _GenerationSlot, now_monotonic: float
 ) -> GenerationDiagnostics:
@@ -2066,6 +2263,7 @@ def _slot_diagnostics(
         created_at_epoch=generation.created_at_epoch,
         age_seconds=max(0.0, now_monotonic - created_at_monotonic),
         active_leases=slot.active_leases,
+        terminal_references=slot.terminal_references,
         accepting_leases=slot.accepting_leases,
         retirement_started=slot.retirement_started,
         retirement_complete=slot.retirement_complete.is_set(),
@@ -2076,6 +2274,9 @@ def _slot_diagnostics(
         drain_deadline_s=slot.drain_deadline_s,
         close_start_time=slot.close_start_time,
         close_complete_time=slot.close_complete_time,
+        blocked_on_terminal_convergence=slot.blocked_on_terminal_convergence,
+        last_failure_class=slot.last_failure_class,
+        last_failure_stage=slot.last_failure_stage,
     )
 
 

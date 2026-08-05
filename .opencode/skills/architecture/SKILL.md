@@ -126,6 +126,16 @@ Plus `RuntimeManagerLeaseExhaustedError` (RuntimeError, mapped to HTTP 503).
 
 `RuntimeManager` owns active/retiring generation slots. Lease acquisition is fail-closed: `RuntimeManagerLeaseExhaustedError` → HTTP 503.
 
+`RequestFinalizationSupervisor` is generation-owned. It is constructed in the
+generation factory and retained jobs acquire one synchronous terminal
+reference on their owning slot before registration returns. Duplicate
+registration and retries do not multiply references; completion releases one
+reference only after durable and required runtime convergence. Generation
+close waits for both request leases and terminal references. A live retirement
+deadline with unresolved terminal references invokes the existing fatal worker
+handler and leaves the generation resident; process shutdown may abandon
+references for startup repair after process death.
+
 - Staged reload swap: `stage()` → `commit()`/`rollback()` → `finalize_retirement()`
 - `RuntimeGenerationCandidate` owns reload-created resources; `candidate.abort()` closes in reverse order
 - `RuntimeGenerationFactory` eliminates behavior drift between startup and reload
@@ -201,6 +211,9 @@ bounded state machine with corroboration before terminal withdrawal.
 - `RuntimeMetricsService.snapshot()["finalization_supervisor"]` — the active
   generation's bounded terminal-job supervisor snapshot, or `None` during
   lightweight/partial startup.
+- `RuntimeMetricsService.snapshot()["finalization_ownership"]` — bounded
+  generation-aware counts for active and retiring supervisors, terminal
+  references, retirement age, and redacted blocked/failure facts.
 
 ## Database Recovery
 

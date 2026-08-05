@@ -1,7 +1,7 @@
 # Plan 080 — Generation Finalization Ownership Alignment
 
 Date: 2026-08-05
-Status: ready for implementation
+Status: complete
 Parent roadmap: `plans/077-sbc-lifecycle-simplification-and-runtime-correctness-roadmap.md`
 Depends on:
 
@@ -216,18 +216,30 @@ uv run pytest tests/smoke/ -q --tb=short --maxfail=1
 
 ## Acceptance criteria
 
-- [ ] `RequestFinalizationSupervisor` is explicitly generation-owned in code and documentation.
-- [ ] The supervisor is a typed field on the generation/factory output.
-- [ ] Accepted retained correctness work acquires one generation retirement reference.
-- [ ] Duplicate registration/retry does not multiply references.
-- [ ] A generation cannot close dependencies while terminal references remain.
-- [ ] Rehash can publish a new generation while the old one safely retires.
-- [ ] Terminal references release only after durable and required runtime convergence.
-- [ ] Unrecoverable unresolved work uses an explicit fail-closed policy.
-- [ ] Runtime metrics report bounded generation-aware ownership facts.
-- [ ] Private supervisor assignment is removed or reduced to a typed binding.
-- [ ] Focused tests and the smoke gate pass.
-- [ ] No second runtime manager, polling service, or generic reference framework is introduced.
+- [x] `RequestFinalizationSupervisor` is explicitly generation-owned in code and documentation.
+- [x] The supervisor is a typed field on the generation/factory output.
+- [x] Accepted retained correctness work acquires one generation retirement reference.
+- [x] Duplicate registration/retry does not multiply references.
+- [x] A generation cannot close dependencies while terminal references remain.
+- [x] Rehash can publish a new generation while the old one safely retires.
+- [x] Terminal references release only after durable and required runtime convergence.
+- [x] Unrecoverable unresolved work uses an explicit fail-closed policy.
+- [x] Runtime metrics report bounded generation-aware ownership facts.
+- [x] Private supervisor assignment is removed or reduced to a typed binding.
+- [x] Focused tests and the smoke gate pass.
+- [x] No second runtime manager, polling service, or generic reference framework is introduced.
+
+## Implementation notes
+
+The generation slot now combines request leases and terminal references behind
+one event-based drain contract. Live retirement leaves unresolved terminal
+references resident and invokes the existing fatal worker handler; the final
+reference release resumes normal close. Bounded process shutdown explicitly
+allows reference abandonment so startup crash repair remains authoritative.
+
+Regression coverage is in capability-based runtime/finalization suites,
+including `tests/unit/test_generation_finalization_ownership.py`; no
+plan-numbered test suite or CI job was added.
 
 ## Rejection conditions
 

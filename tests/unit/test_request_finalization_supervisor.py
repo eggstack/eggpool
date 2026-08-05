@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import MagicMock
 
+import pytest
+
 from eggpool.request.finalization_job import (
+    FinalizationCapacityError,
     FinalizationIdentity,
     RequestFinalizationSupervisor,
 )
@@ -131,3 +134,56 @@ class TestDiagnostics:
         snap = sup.snapshot()
         assert snap["active_count"] == 0
         assert snap["oldest_active_age_s"] is None
+
+
+class TestGenerationOwnership:
+    """Accepted jobs retain and release exactly one generation reference."""
+
+    def test_duplicate_registration_retains_once_and_releases_once(self) -> None:
+        db = MagicMock()
+        retained = 0
+        released = 0
+
+        def retain() -> None:
+            nonlocal retained
+            retained += 1
+
+        def release() -> None:
+            nonlocal released
+            released += 1
+
+        sup = RequestFinalizationSupervisor(
+            db=db,
+            retain_generation=retain,
+            release_generation=release,
+        )
+        job = sup.register_or_get(_make_identity(), "client_cancelled")
+        assert sup.register_or_get(_make_identity(), "client_cancelled") is job
+        assert retained == 1
+        assert released == 0
+
+        sup._reconcile_completed_jobs()
+        assert released == 0
+
+        asyncio.run(job.run())
+        sup._reconcile_completed_jobs()
+        assert released == 1
+        sup._reconcile_completed_jobs()
+        assert released == 1
+
+    def test_capacity_rejection_does_not_retain(self) -> None:
+        retained = 0
+
+        def retain() -> None:
+            nonlocal retained
+            retained += 1
+
+        sup = RequestFinalizationSupervisor(
+            db=MagicMock(),
+            max_active_jobs=0,
+            retain_generation=retain,
+            release_generation=lambda: None,
+        )
+        with pytest.raises(FinalizationCapacityError):
+            sup.register_or_get(_make_identity(), "client_cancelled")
+        assert retained == 0

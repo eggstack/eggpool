@@ -162,5 +162,7 @@ The `/api/stats/runtime` endpoint exposes these stream-stability sections:
 
 - `stream_diagnostics` — outcome counters and histograms
 - `finalization_supervisor` — active jobs, retry-pending work, bounded failures, saturation, and retry limits
+- `runtime_manager.finalization_ownership` — active/retiring generation IDs,
+  terminal references, retirement age, and bounded blocked/failure facts
 - `routing_trace_guard` — skip rate and lock-pressure threshold
 - `db.contention` — lock-wait p50/p95/p99/max and sample count

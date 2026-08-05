@@ -439,6 +439,10 @@ open in parallel. When users report drops, timeouts, or
    jobs awaiting retry. Inspect the bounded failure/history and saturation
    counters as well as the configured retry-age limit; sustained growth
    indicates a local convergence problem, not an upstream request failure.
+   `runtime_manager.finalization_ownership.retiring_terminal_references`
+   shows whether those jobs are keeping an old generation resident during
+   rehash; a blocked live retirement is fail-closed and must not be repaired
+   by deleting or aging out the reference.
 4. Apply the high-concurrency profile from `docs/providers.md` §
    High-Concurrency HTTP Client Profiles: raise
    `[providers.<id>].max_connections` to `256` and

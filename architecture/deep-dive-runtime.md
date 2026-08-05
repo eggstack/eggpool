@@ -73,6 +73,10 @@ Both use monotonic/performance clocks. Metrics additive: `local_pre_upstream` in
   job snapshot, including active/retry-pending/failed counts, saturation and
   registration counters, and retry capacity/age limits. It is `null` during
   lightweight or partial startup when no supervisor is available.
+- `finalization_ownership`: bounded ownership facts from `RuntimeManager`,
+  including the active generation ID and supervisor counts, retiring
+  generation count, total terminal references, oldest retiring age, blocked
+  status, and redacted last failure class/stage.
 
 ### `runtime_paths.py` — Path Resolution (stdlib-only)
 
@@ -105,7 +109,17 @@ Generations are immutable snapshots of application state:
 - **Retiring generation**: drains in-flight requests
 - **Candidate generation**: built during live reload
 
-Live reload (`eggpool rehash`) builds a candidate generation, validates it, and atomically publishes it. In-flight requests on the retiring generation complete normally.
+Live reload (`eggpool rehash`) builds a candidate generation, validates it, and atomically publishes it. In-flight requests and accepted retained finalization jobs on the retiring generation complete using the old dependencies; publication does not wait for the old generation to close.
+
+`RequestFinalizationSupervisor` is generation-owned. Its first accepted job
+acquires one synchronous terminal reference on the generation slot; duplicate
+registration and retries reuse that reference. The slot closes only after
+both request leases and terminal references are zero. A live retirement
+deadline with an unresolved terminal reference invokes the existing fatal
+worker handler and leaves the slot resident rather than closing its router,
+quota, health, or client dependencies. When the final reference releases,
+normal close resumes. Process shutdown may abandon references because startup
+repair owns unresolved durable work after process death.
 
 Quarantine hydration is part of candidate preparation, before publication.
 `RuntimeGenerationFactory.prepare()` never catches a quarantine read or row
@@ -125,6 +139,7 @@ failed durable clear leaves the current in-memory suppression intact.
 | Model catalog | `RuntimeGeneration` | No (rebuilt) |
 | Health manager | `RuntimeGeneration` | No (rebuilt) |
 | Quota estimator | `RuntimeGeneration` | No (rebuilt) |
+| Finalization supervisor and accepted terminal jobs | `RuntimeGeneration` | No (retained until convergence) |
 
 ## Key Invariants
 
@@ -133,5 +148,5 @@ failed durable clear leaves the current in-memory suppression intact.
 - `MetricsWriteCoalescer` is the only component using `threading.Lock`
 - `fastcli` and `runtime_paths` are stdlib-only
 - PID file owned by supervisor
-- Generation swap never interrupts in-flight requests
+- Generation swap never interrupts in-flight requests or accepted retained terminal jobs
 - Process-owned containers outlive any generation

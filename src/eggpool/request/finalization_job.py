@@ -1,8 +1,8 @@
-"""Process-owned request finalization (Plan 026).
+"""Generation-owned request finalization (Plan 026/080).
 
 Makes selected-attempt cleanup independent of the client request task.
 Once EggPool has durably created a request, attempt, or reservation and
-claimed runtime ownership, one retained process-owned finalization job
+claimed runtime ownership, one retained generation-owned finalization job
 must own terminal reconciliation until every durable and in-memory
 obligation has either completed or entered a bounded, observable retry
 state.
@@ -12,7 +12,7 @@ Key design principles:
 * ``asyncio.shield()`` alone is not ownership.  A shielded coroutine
   may continue after the outer task is cancelled, while the outer task
   skips subsequent cleanup.  Eggpool must retain the finalization task
-  in process-owned state, observe its completion independently of
+  in generation-owned state, observe its completion independently of
   request waiters, reconcile completion exactly once, and keep bounded
   retry ownership when durable finalization cannot complete immediately.
 * Job registration precedes cancellation-sensitive awaits.
@@ -20,6 +20,11 @@ Key design principles:
 * Concurrent callers share the same retained task.
 * Completion reconciliation occurs without request waiter participation.
 * No raw task is left unreferenced.
+
+The supervisor is owned by the runtime generation that constructed it. A
+registered job retains that generation until durable state and all required
+generation-local runtime obligations converge. Diagnostic history is scalar
+only and never retains a generation.
 """
 
 from __future__ import annotations
@@ -38,6 +43,8 @@ from typing import TYPE_CHECKING, Any
 from eggpool.security.redaction import safe_exception_detail
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from eggpool.db.connection import Database
     from eggpool.failure import EffectsApplier, FailureEffects
     from eggpool.request.finalizer import RequestFinalizer
@@ -538,7 +545,7 @@ def _terminal_semantic_key(
 
 @dataclass
 class RequestFinalizationJob:
-    """Process-owned finalization job for one selected attempt.
+    """Generation-owned finalization job for one selected attempt.
 
     Retains a single ``asyncio.Task`` that owns durable finalization,
     runtime release, and analytics.  Concurrent callers share the
@@ -732,7 +739,7 @@ class RequestFinalizationJob:
         self._stream_diagnostics = stream_diagnostics
 
     async def run(self) -> None:
-        """Run finalization, retaining the task for process-owned completion.
+        """Run finalization, retaining the task for generation-owned completion.
 
         Concurrent callers share the same retained task via
         ``asyncio.shield``.  Cancellation of the caller does not
@@ -1058,10 +1065,12 @@ DEFAULT_RETRY_BACKOFF_CAP_S = 30.0
 
 
 class RequestFinalizationSupervisor:
-    """Process-owned supervisor for request finalization jobs.
+    """Generation-owned supervisor for request finalization jobs.
 
     Manages a bounded, deduplicated registry of active finalization
-    jobs with process-owned completion reconciliation.  Provides:
+    jobs with retained completion reconciliation. Each accepted job holds
+    one retirement reference on the owning generation until convergence.
+    Provides:
 
     * Bounded active job capacity with overflow rejection.
     * Deduplication by request ID.
@@ -1080,6 +1089,8 @@ class RequestFinalizationSupervisor:
         max_retry_age_s: float = DEFAULT_MAX_RETRY_AGE_S,
         retry_backoff_base_s: float = DEFAULT_RETRY_BACKOFF_BASE_S,
         retry_backoff_cap_s: float = DEFAULT_RETRY_BACKOFF_CAP_S,
+        retain_generation: Callable[[], None] | None = None,
+        release_generation: Callable[[], None] | None = None,
     ) -> None:
         self._db = db
         self._effects_applier = effects_applier
@@ -1087,6 +1098,8 @@ class RequestFinalizationSupervisor:
         self._max_retry_age_s = max_retry_age_s
         self._retry_backoff_base_s = retry_backoff_base_s
         self._retry_backoff_cap_s = retry_backoff_cap_s
+        self._retain_generation = retain_generation
+        self._release_generation = release_generation
 
         self._active_jobs: dict[str, RequestFinalizationJob] = {}
         self._history: collections.deque[FinalizationRecord] = collections.deque(
@@ -1102,6 +1115,19 @@ class RequestFinalizationSupervisor:
         self._failed_jobs: collections.deque[FinalizationRecord] = collections.deque(
             maxlen=FINALIZATION_HISTORY_MAX
         )
+        self._generation_reference_keys: set[str] = set()
+
+    def bind_generation_reference_callbacks(
+        self,
+        *,
+        retain_generation: Callable[[], None],
+        release_generation: Callable[[], None],
+    ) -> None:
+        """Bind the owning generation's synchronous retirement callbacks."""
+        if self._generation_reference_keys:
+            raise RuntimeError("cannot rebind finalization ownership with active jobs")
+        self._retain_generation = retain_generation
+        self._release_generation = release_generation
 
     @property
     def active_count(self) -> int:
@@ -1152,21 +1178,32 @@ class RequestFinalizationSupervisor:
                 f"finalization supervisor capacity exhausted for {request_id}"
             )
 
-        job = RequestFinalizationJob(
-            identity=identity,
-            outcome=outcome,
-            finalization_data=finalization_data,
-            runtime_lease=runtime_lease,
-            failure_effects=failure_effects,
-            on_completion=self._on_job_completion,
-        )
-        self._active_jobs[job_key] = job
-        self._counters.registered += 1
-        self._ensure_retry_scheduler()
-        return job
+        retain_generation = self._retain_generation
+        if retain_generation is not None:
+            retain_generation()
+            self._generation_reference_keys.add(job_key)
+        try:
+            job = RequestFinalizationJob(
+                identity=identity,
+                outcome=outcome,
+                finalization_data=finalization_data,
+                runtime_lease=runtime_lease,
+                failure_effects=failure_effects,
+                on_completion=self._on_job_completion,
+            )
+            self._active_jobs[job_key] = job
+            self._counters.registered += 1
+            self._ensure_retry_scheduler()
+            return job
+        except BaseException:
+            if job_key in self._generation_reference_keys:
+                self._generation_reference_keys.remove(job_key)
+                if self._release_generation is not None:
+                    self._release_generation()
+            raise
 
     def _ensure_retry_scheduler(self) -> None:
-        """Start the one process-owned retry timer when a loop is running."""
+        """Start the one generation-owned retry timer when a loop is running."""
 
         if self._retry_scheduler_task is not None:
             return
@@ -1241,10 +1278,11 @@ class RequestFinalizationSupervisor:
             return
         self._active_jobs.pop(key, None)
         self._failed_jobs.append(job.to_record())
+        self._release_generation_reference(key)
         job.release_references()
 
     def _on_job_completion(self, job: RequestFinalizationJob) -> None:
-        """Process-owned completion callback and retry handoff."""
+        """Generation-owned completion callback and retry handoff."""
         if job.is_complete:
             self._reconcile_job(job, source="callback")
         elif job.health == "retry_pending":
@@ -1268,6 +1306,7 @@ class RequestFinalizationSupervisor:
         job_key = f"{job.identity.proxy_request_id}:{job.identity.attempt_id}"
         if job_key in self._active_jobs:
             del self._active_jobs[job_key]
+        self._release_generation_reference(job_key)
         job.release_references()
         self._history.append(job.to_record())
         self._counters.completed += 1
@@ -1329,6 +1368,7 @@ class RequestFinalizationSupervisor:
         ]
         for req_id in completed_ids:
             job = self._active_jobs.pop(req_id)
+            self._release_generation_reference(req_id)
             job.release_references()
             self._history.append(job.to_record())
             self._counters.completed += 1
@@ -1409,6 +1449,14 @@ class RequestFinalizationSupervisor:
                 "history_max": FINALIZATION_HISTORY_MAX,
             },
         }
+
+    def _release_generation_reference(self, job_key: str) -> None:
+        """Release one accepted job's generation reference exactly once."""
+        if job_key not in self._generation_reference_keys:
+            return
+        self._generation_reference_keys.remove(job_key)
+        if self._release_generation is not None:
+            self._release_generation()
 
 
 @dataclass

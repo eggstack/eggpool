@@ -959,6 +959,18 @@ class RuntimeMetricsService:
             _append_probe_error(probe_errors, f"Runtime manager snapshot failed: {exc}")
             return {"error": str(exc)}
         result = _runtime_manager_to_dict(diag)
+        ownership_snapshot = getattr(manager, "finalization_ownership_snapshot", None)
+        if callable(ownership_snapshot):
+            try:
+                result["finalization_ownership"] = ownership_snapshot()
+            except Exception as exc:
+                _append_probe_error(
+                    probe_errors,
+                    f"Finalization ownership probe failed: {type(exc).__name__}",
+                )
+                result["finalization_ownership"] = None
+        else:
+            result["finalization_ownership"] = None
         # Attach D2 task-reload diagnostics from the process container.
         process = self._process
         if process is not None:
@@ -1400,6 +1412,7 @@ def _runtime_manager_to_dict(diag: Any) -> dict[str, Any]:
         "shutdown_in_progress": diag.shutdown_in_progress,
         "next_generation_id": diag.next_generation_id,
         "retirement_task_count": diag.retirement_task_count,
+        "finalization_ownership": None,
     }
 
 
@@ -1414,12 +1427,16 @@ def _generation_diag_to_dict(diag: Any) -> dict[str, Any] | None:
         "created_at_epoch": diag.created_at_epoch,
         "age_seconds": round(diag.age_seconds, 3),
         "active_leases": diag.active_leases,
+        "terminal_references": diag.terminal_references,
         "accepting_leases": diag.accepting_leases,
         "retirement_started": diag.retirement_started,
         "retirement_complete": diag.retirement_complete,
         "last_close_error": diag.last_close_error,
         "state": diag.state,
         "forced_close": diag.forced_close,
+        "blocked_on_terminal_convergence": diag.blocked_on_terminal_convergence,
+        "last_failure_class": diag.last_failure_class,
+        "last_failure_stage": diag.last_failure_stage,
     }
     if diag.retirement_start_time is not None:
         result["retirement_start_time"] = diag.retirement_start_time

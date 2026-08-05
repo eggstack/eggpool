@@ -198,7 +198,7 @@ from another loop fail immediately.
 
 ### `request/finalization_job.py` — RequestFinalizationSupervisor
 
-The supervisor is the single process-owned terminal retry owner. It retains
+The supervisor is the single generation-owned terminal retry owner. It retains
 jobs by `(proxy_request_id, attempt_id)`, reports structured convergence facts,
 and schedules bounded retryable failures through one timer using configured
 backoff and an absolute execution-time maximum retry age. Each selected job
