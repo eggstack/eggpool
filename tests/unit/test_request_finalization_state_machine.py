@@ -595,7 +595,7 @@ class TestRequestFinalizationSupervisor:
             side_effect=AssertionError("expired retry must not execute")
         )
         object.__setattr__(job, "_created_at", time.monotonic() - 2.0)
-        key = "req-1:1"
+        key = "req-1:1:selected_request_finalization"
         sup._retry_heap.append((time.monotonic(), 1, key))
         task = asyncio.create_task(sup._retry_scheduler())
         await asyncio.sleep(0)

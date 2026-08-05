@@ -1569,7 +1569,6 @@ class TestMemoryDbGracefulDegradation:
             model_info=MagicMock(),
             dashboard_telemetry=MagicMock(),
             stream_diagnostics=MagicMock(),
-            finalization_retry_queue=None,
             routing_trace_guard=None,
             runtime_manager=None,
             process=MagicMock(),

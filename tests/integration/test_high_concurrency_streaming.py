@@ -296,11 +296,6 @@ async def _run_concurrent_burst(
                     task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    retry_queue = getattr(coordinator, "_finalization_retry_queue", None)
-    if retry_queue is not None:
-        for _ in range(5):
-            await retry_queue.drain_once()
-
     completed_count = 0
     cancelled_count = 0
     failure_count = 0
@@ -376,8 +371,6 @@ async def _post_burst_assertions(
     active_requests_total = 0
     for state in coordinator._router._registry.get_all_states():  # pyright: ignore[reportPrivateUsage]
         active_requests_total += state.active_request_count
-    retry_queue = getattr(coordinator, "_finalization_retry_queue", None)
-    queue_size = retry_queue.size if retry_queue is not None else 0
     quota_estimator = coordinator._router.quota_estimator  # pyright: ignore[reportPrivateUsage]
     quota_reserved_cost_total = sum(
         quota_estimator._account_reserved_cost.values()  # pyright: ignore[reportPrivateUsage]
@@ -405,7 +398,6 @@ async def _post_burst_assertions(
         "pending_count": pending_count,
         "active_reservations_count": active_reservations_count,
         "active_requests_total": active_requests_total,
-        "finalization_retry_queue_size": queue_size,
         "quota_reserved_cost_total": quota_reserved_cost_total,
         "quota_reserved_cost_delta": (
             quota_reserved_cost_total - baseline_quota_reserved_cost
@@ -477,10 +469,6 @@ async def test_fifty_concurrent_streams_no_leak(
     assert state["active_requests_total"] == 0, (
         f"router active counts not zero: {state['active_requests_total']}"
     )
-    assert state["finalization_retry_queue_size"] == 0, (
-        f"finalization retry queue not drained: "
-        f"{state['finalization_retry_queue_size']}"
-    )
     assert state["finalization_active_count"] == 0, state
     assert state["quota_reserved_cost_delta"] == 0, (
         f"quota estimator reserved cost not zero: {state['quota_reserved_cost_delta']}"
@@ -531,10 +519,6 @@ async def test_cancellations_finalize_without_provider_penalty(
     )
     assert state["pending_count"] == 0, state
     assert state["active_reservations_count"] == 0, state
-    assert state["finalization_retry_queue_size"] == 0, (
-        f"finalization retry queue not drained: "
-        f"{state['finalization_retry_queue_size']}"
-    )
     assert state["quota_reserved_cost_delta"] == 0, state
     assert summary["completed_count"] + summary["cancelled_count"] >= 1
     assert state["upstream_error_class_counts"] == {}, state[
@@ -605,7 +589,6 @@ async def test_scenario_matrix_no_leak(
     assert state["pending_count"] == 0, (scenario, state)
     assert state["active_reservations_count"] == 0, (scenario, state)
     assert state["active_requests_total"] == 0, (scenario, state)
-    assert state["finalization_retry_queue_size"] == 0, (scenario, state)
     assert state["quota_reserved_cost_delta"] == 0, (scenario, state)
     if scenario in {SCENARIO_ABRUPT_CLOSE, SCENARIO_CONNECTION_RESET}:
         assert summary["failure_count"] >= 1, (scenario, summary)
@@ -663,7 +646,6 @@ async def test_cancellation_offset_matrix(
     )
     assert state["pending_count"] == 0, (cancel_offset, state)
     assert state["active_reservations_count"] == 0, (cancel_offset, state)
-    assert state["finalization_retry_queue_size"] == 0, (cancel_offset, state)
     assert state["quota_reserved_cost_delta"] == 0, (cancel_offset, state)
     assert state["upstream_error_class_counts"] == {}, (cancel_offset, state)
     cancel_delta = summary["outcomes_delta"].get(STREAM_OUTCOME_CLIENT_CANCELLED, 0)
@@ -722,11 +704,6 @@ async def test_read_timeout_scenario_classifies_as_httpx_timeout(
         # valid terminal states for a stalled upstream.
         await asyncio.wait_for(_drive(), timeout=5.0)
 
-    retry_queue = getattr(coordinator, "_finalization_retry_queue", None)
-    if retry_queue is not None:
-        for _ in range(5):
-            await retry_queue.drain_once()
-
     final_snap = diagnostics.snapshot()
     final_httpx = dict(final_snap.get("httpx_exception_counts", {}))
     final_upstream = dict(final_snap.get("upstream_error_class_counts", {}))
@@ -740,7 +717,6 @@ async def test_read_timeout_scenario_classifies_as_httpx_timeout(
     )
     assert state["pending_count"] == 0, state
     assert state["active_reservations_count"] == 0, state
-    assert state["finalization_retry_queue_size"] == 0, state
     # ReadTimeout is now classified into both httpx_exception_counts
     # (via the existing exception-class tracking) and the first-class
     # upstream_read_timeout outcome label added in Phase 5.
@@ -781,7 +757,6 @@ async def test_abrupt_close_scenario_classifies_as_midstream_error(
     )
     assert state["pending_count"] == 0, state
     assert state["active_reservations_count"] == 0, state
-    assert state["finalization_retry_queue_size"] == 0, state
     assert state["quota_reserved_cost_delta"] == 0, state
     cancel_delta = summary["outcomes_delta"].get(STREAM_OUTCOME_CLIENT_CANCELLED, 0)
     assert cancel_delta == 0, summary["outcomes_delta"]

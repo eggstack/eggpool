@@ -110,7 +110,7 @@ class EffectsApplier:
         self._persist_backoff = persist_backoff
         # Compatibility callers that do not retain a lifecycle owner get a
         # bounded cache. Production callers pass FailureEffectProgress owned
-        # by AttemptCleanupProgress or RequestFinalizationJob and never use
+        # by FailedAttemptCleanupProgress or RequestFinalizationJob and never use
         # this cache as their idempotency boundary.
         self._compat_progress: OrderedDict[str, FailureEffectProgress] = OrderedDict()
         self._compat_capacity = 128

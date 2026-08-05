@@ -87,7 +87,7 @@ async def test_d3_soak_25_reloads_resource_identity(tmp_path: Any) -> None:
 
     Process-owned resources (process_supervisor) retain the SAME identity
     across all reloads.  Generation-leased resources (client_pool,
-    outbound_manager, supervisor, finalization_retry_queue,
+    outbound_manager, supervisor,
     routing_trace_guard, tuning_registry, transcoder/compression/cache
     policy, config) get fresh identity on each reload.
 

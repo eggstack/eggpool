@@ -463,7 +463,6 @@ def _capture_generation(
         "stats_service": id(active.stats_service),
         "cost_calculator": id(active.cost_calculator),
         "supervisor": id(active.supervisor),
-        "finalization_retry_queue": id(active.finalization_retry_queue),
         "routing_trace_guard": id(active.routing_trace_guard),
         "dispatch_overhead_recorder": id(active.dispatch_overhead_recorder),
         "dispatch_span_recorder": id(active.dispatch_span_recorder),

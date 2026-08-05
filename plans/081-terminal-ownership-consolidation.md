@@ -1,7 +1,7 @@
 # Plan 081 — Terminal Ownership Consolidation
 
 Date: 2026-08-05
-Status: ready for implementation
+Status: complete
 Parent roadmap: `plans/077-sbc-lifecycle-simplification-and-runtime-correctness-roadmap.md`
 Depends on:
 
@@ -245,19 +245,19 @@ uv run pytest tests/smoke/ -q --tb=short --maxfail=1
 
 ## Acceptance criteria
 
-- [ ] One generation-owned supervisor is authoritative for all three live terminal command kinds.
-- [ ] Every command has an explicit typed identity, submission, and progress record.
-- [ ] Failed-attempt cleanup converges before reselection.
-- [ ] Claim compensation releases only actually acquired/allocated components.
-- [ ] Duplicate submissions join and conflicting submissions fail closed.
-- [ ] One bounded capacity and retry scheduler covers all command kinds.
-- [ ] Generation references are acquired/released exactly once per accepted command.
-- [ ] The coordinator no longer owns retained terminal tasks or progress.
-- [ ] Obsolete finalization compatibility queue/fallback paths are removed when unsupported.
-- [ ] Startup repair remains limited to prior-process durable leftovers.
-- [ ] Focused tests and smoke pass.
-- [ ] Source/test line count for terminal ownership decreases or any increase is explicitly temporary and justified by subsequent deletion in the same plan.
-- [ ] No generic workflow, command bus, persistence table, or CI expansion is introduced.
+- [x] One generation-owned supervisor is authoritative for all three live terminal command kinds.
+- [x] Every command has an explicit typed identity, submission, and progress record.
+- [x] Failed-attempt cleanup converges before reselection.
+- [x] Claim compensation releases only actually acquired/allocated components.
+- [x] Duplicate submissions join and conflicting submissions fail closed.
+- [x] One bounded capacity and retry scheduler covers all command kinds.
+- [x] Generation references are acquired/released exactly once per accepted command.
+- [x] The coordinator no longer owns retained terminal tasks or progress.
+- [x] Obsolete finalization compatibility queue/fallback paths are removed when unsupported.
+- [x] Startup repair remains limited to prior-process durable leftovers.
+- [x] Focused tests and smoke pass.
+- [x] Source/test line count for terminal ownership decreases or any increase is explicitly temporary and justified by subsequent deletion in the same plan.
+- [x] No generic workflow, command bus, persistence table, or CI expansion is introduced.
 
 ## Rejection conditions
 

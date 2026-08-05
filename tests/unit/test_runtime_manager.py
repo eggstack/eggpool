@@ -68,7 +68,6 @@ def _fake_generation(
         account_backoff_repo=MagicMock(),
         stats_service=MagicMock(),
         supervisor=MagicMock(),
-        finalization_retry_queue=MagicMock(),
         routing_trace_guard=MagicMock(),
         routing_trace_writer=MagicMock(),
         created_at_monotonic=time.monotonic(),

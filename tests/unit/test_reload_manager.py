@@ -759,7 +759,6 @@ def _make_real_generation(
         account_backoff_repo=MagicMock(),
         stats_service=MagicMock(),
         supervisor=MagicMock(),
-        finalization_retry_queue=MagicMock(),
         routing_trace_guard=MagicMock(),
         routing_trace_writer=MagicMock(),
         created_at_monotonic=time.monotonic(),
@@ -1320,7 +1319,6 @@ class TestMilestoneD1CandidateBuild:
                 account_backoff_repo=gen.account_backoff_repo,
                 stats_service=gen.stats_service,
                 supervisor=gen.supervisor,
-                finalization_retry_queue=gen.finalization_retry_queue,
                 routing_trace_guard=gen.routing_trace_guard,
                 routing_trace_writer=gen.routing_trace_writer,
                 created_at_monotonic=gen.created_at_monotonic,
@@ -1638,7 +1636,6 @@ class TestMilestoneD1CandidateBuild:
             account_backoff_repo=baseline_gen.account_backoff_repo,
             stats_service=baseline_gen.stats_service,
             supervisor=baseline_gen.supervisor,
-            finalization_retry_queue=baseline_gen.finalization_retry_queue,
             routing_trace_guard=baseline_gen.routing_trace_guard,
             routing_trace_writer=baseline_gen.routing_trace_writer,
             created_at_monotonic=baseline_gen.created_at_monotonic,
@@ -1745,7 +1742,6 @@ class TestMilestoneD1RepeatedReloadSoak:
             client_pool = MagicMock()
             outbound_manager = MagicMock()
             supervisor = MagicMock()
-            finalization_queue = MagicMock()
             routing_trace_guard = MagicMock()
             gen = RuntimeGeneration(
                 generation_id=gen_id,
@@ -1775,7 +1771,6 @@ class TestMilestoneD1RepeatedReloadSoak:
                 account_backoff_repo=MagicMock(),
                 stats_service=MagicMock(),
                 supervisor=supervisor,
-                finalization_retry_queue=finalization_queue,
                 routing_trace_guard=routing_trace_guard,
                 routing_trace_writer=MagicMock(),
                 created_at_monotonic=time.monotonic(),
@@ -1783,7 +1778,7 @@ class TestMilestoneD1RepeatedReloadSoak:
             )
             # Track per-resource identity so the test can prove every
             # candidate generation gets a fresh pool, supervisor,
-            # finalization queue, routing trace guard, and tuning
+            # routing trace guard, and tuning
             # registry.  Phase 5 acceptance requires "no leak" across
             # 20+ reloads; the simplest signal is that no resource
             # is ever reused.
@@ -1798,9 +1793,6 @@ class TestMilestoneD1RepeatedReloadSoak:
             captured.setdefault("client_pool_ids", set()).add(id(client_pool))
             captured.setdefault("outbound_manager_ids", set()).add(id(outbound_manager))
             captured.setdefault("supervisor_ids", set()).add(id(supervisor))
-            captured.setdefault("finalization_queue_ids", set()).add(
-                id(finalization_queue)
-            )
             captured.setdefault("routing_trace_guard_ids", set()).add(
                 id(routing_trace_guard)
             )
@@ -1850,7 +1842,7 @@ class TestMilestoneD1RepeatedReloadSoak:
         # must also be fresh per candidate so the previous generation's
         # resources can be retired without aliasing the new pool.
         # This is the "no leak" signal: if any pool / supervisor /
-        # queue is reused, the retired generation's reference would
+        # a resource is reused, the retired generation's reference would
         # collide with the active generation's during the drain window.
         for resource_name, ids_seen in (
             ("compression_ids", captured["compression_ids"]),
@@ -1858,7 +1850,6 @@ class TestMilestoneD1RepeatedReloadSoak:
             ("client_pool_ids", captured["client_pool_ids"]),
             ("outbound_manager_ids", captured["outbound_manager_ids"]),
             ("supervisor_ids", captured["supervisor_ids"]),
-            ("finalization_queue_ids", captured["finalization_queue_ids"]),
             ("routing_trace_guard_ids", captured["routing_trace_guard_ids"]),
             ("config_ids", captured["config_ids"]),
         ):

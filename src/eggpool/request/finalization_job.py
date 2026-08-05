@@ -38,7 +38,7 @@ import logging
 import time
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from eggpool.security.redaction import safe_exception_detail
 
@@ -67,16 +67,101 @@ class FinalizationIdentity:
     """
 
     proxy_request_id: str
-    db_request_id: str
-    attempt_id: int
-    reservation_id: str
-    account_id: int
+    db_request_id: str | None
+    attempt_id: int | None
+    reservation_id: str | None
+    account_id: int | None
     account_name: str
     provider_id: str
     model_id: str
     client_protocol: str
     upstream_protocol: str
-    attempt_number: int
+    attempt_number: int | None
+
+
+TerminalIdentity = FinalizationIdentity
+
+
+@dataclass(slots=True)
+class RuntimePublicationReceipt:
+    """Runtime components acquired while publishing a durable claim."""
+
+    active_count_added: bool = False
+    quota_reservation_added: bool = False
+    health_probe_acquired: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class FailedAttemptCleanupSubmission:
+    """Immutable facts for a retryable failed-attempt cleanup command."""
+
+    identity: FinalizationIdentity
+    status_code: int | None
+    error_class: str | None
+    retry_category: str | None
+    bytes_received: int
+    latency_ms: int
+    failure_effects: FailureEffects | None = None
+
+
+@dataclass(slots=True)
+class FailedAttemptCleanupProgress:
+    """Resumable progress for failed-attempt cleanup."""
+
+    durable_transition_checked: bool = False
+    durable_attempt_transitioned: bool = False
+    durable_reservation_converged: bool = False
+    runtime_cleanup_required: bool = False
+    quota_released: bool = False
+    active_count_released: bool = False
+    health_effect_applied: bool = False
+    probe_released: bool = False
+    effect_progress: FailureEffectProgress | None = field(default=None, repr=False)
+    completed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimCompensationSubmission:
+    """Immutable facts for post-commit selection-claim compensation."""
+
+    identity: FinalizationIdentity
+    account_name: str
+    estimated_tokens: int
+    estimated_microdollars: int
+    bytes_received: int
+    latency_ms: int
+    receipt: RuntimePublicationReceipt
+
+
+@dataclass(slots=True)
+class ClaimCompensationProgress:
+    """Resumable progress for post-commit claim compensation."""
+
+    active_count_released: bool = False
+    quota_reservation_released: bool = False
+    durable_attempt_finalized: bool = False
+    durable_reservation_converged: bool = False
+    probe_released: bool = False
+    completed: bool = False
+
+
+TerminalCommandKind = Literal[
+    "selected_request_finalization",
+    "failed_attempt_cleanup",
+    "claim_compensation",
+]
+TerminalCommandSubmission = FailedAttemptCleanupSubmission | ClaimCompensationSubmission
+TerminalCommandProgress = FailedAttemptCleanupProgress | ClaimCompensationProgress
+
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+    from eggpool.failure import FailureEffectProgress
+
+    TerminalCommandRunner = Callable[
+        [TerminalCommandSubmission, TerminalCommandProgress], Awaitable[None]
+    ]
 
 
 class FinalizationProgress(StrEnum):
@@ -983,6 +1068,12 @@ class RequestFinalizationJob:
 
     def to_record(self) -> FinalizationRecord:
         """Create an immutable scalar-only diagnostic record."""
+        if self.identity.db_request_id is None or self.identity.attempt_id is None:
+            raise FinalizationInvariantError(
+                "selected finalization identity is incomplete",
+                step="finalization_record",
+                request_id=self.request_id,
+            )
         return FinalizationRecord(
             proxy_request_id=self.identity.proxy_request_id,
             db_request_id=self.identity.db_request_id,
@@ -1053,6 +1144,124 @@ class FinalizationRecord:
     release_outcomes: list[dict[str, Any]]
 
 
+@dataclass(frozen=True, slots=True)
+class TerminalCommandRecord:
+    """Scalar-only diagnostic record for a completed terminal command."""
+
+    command_kind: TerminalCommandKind
+    proxy_request_id: str
+    attempt_id: int | None
+    progress: str
+    attempt_count: int
+    failure_count: int
+    retry_count: int
+    last_error_class: str | None
+    last_error_message: str | None
+    created_at: float
+    updated_at: float
+
+
+@dataclass(slots=True)
+class TerminalCommand:
+    """One retained command owned by the generation supervisor."""
+
+    kind: TerminalCommandKind
+    identity: FinalizationIdentity
+    submission: TerminalCommandSubmission
+    progress: TerminalCommandProgress
+    runner: TerminalCommandRunner
+    _health: str = "ready"
+    _attempt_count: int = 0
+    _failure_count: int = 0
+    _retry_count: int = 0
+    _last_error_class: str | None = None
+    _last_error_message: str | None = None
+    _created_at: float = field(default_factory=time.monotonic)
+    _updated_at: float = field(default_factory=time.monotonic)
+    _task: asyncio.Task[None] | None = field(default=None, repr=False)
+
+    @property
+    def key(self) -> str:
+        """Return the stable kind-qualified command key."""
+        attempt = (
+            "unallocated"
+            if self.identity.attempt_id is None
+            else str(self.identity.attempt_id)
+        )
+        return f"{self.identity.proxy_request_id}:{attempt}:{self.kind}"
+
+    @property
+    def request_id(self) -> str:
+        return self.identity.proxy_request_id
+
+    @property
+    def is_complete(self) -> bool:
+        return self.progress.completed
+
+    @property
+    def health(self) -> str:
+        return self._health
+
+    @property
+    def failure_count(self) -> int:
+        return self._failure_count
+
+    @property
+    def retry_count(self) -> int:
+        return self._retry_count
+
+    @property
+    def created_at(self) -> float:
+        return self._created_at
+
+    @property
+    def attempt_count(self) -> int:
+        return self._attempt_count
+
+    def mark_retry_exhausted(self) -> None:
+        self._health = "failed"
+
+    def increment_retry_count(self) -> None:
+        self._retry_count += 1
+
+    def get_task(self) -> asyncio.Task[None] | None:
+        return self._task
+
+    def set_task(self, task: asyncio.Task[None]) -> None:
+        self._task = task
+
+    def begin_attempt(self) -> None:
+        self._attempt_count += 1
+        self._health = "running"
+        self._updated_at = time.monotonic()
+
+    def record_failure(self, exc: Exception) -> None:
+        self._health = "retry_pending"
+        self._failure_count += 1
+        self._last_error_class = type(exc).__name__
+        self._last_error_message = str(exc)[:200]
+        self._updated_at = time.monotonic()
+
+    def mark_completed(self) -> None:
+        self._health = "completed"
+        self._updated_at = time.monotonic()
+
+    def to_record(self) -> TerminalCommandRecord:
+        return TerminalCommandRecord(
+            command_kind=self.kind,
+            proxy_request_id=self.identity.proxy_request_id,
+            attempt_id=self.identity.attempt_id,
+            progress="completed" if self.is_complete else "incomplete",
+            attempt_count=self._attempt_count,
+            failure_count=self._failure_count,
+            retry_count=self._retry_count,
+            last_error_class=self._last_error_class,
+            last_error_message=self._last_error_message,
+            created_at=self._created_at,
+            updated_at=self._updated_at,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Workstream F + J — Supervisor, retry queue, diagnostics
 # ---------------------------------------------------------------------------
@@ -1065,19 +1274,13 @@ DEFAULT_RETRY_BACKOFF_CAP_S = 30.0
 
 
 class RequestFinalizationSupervisor:
-    """Generation-owned supervisor for request finalization jobs.
+    """Generation-owned supervisor for all live terminal work.
 
-    Manages a bounded, deduplicated registry of active finalization
-    jobs with retained completion reconciliation. Each accepted job holds
-    one retirement reference on the owning generation until convergence.
-    Provides:
-
-    * Bounded active job capacity with overflow rejection.
-    * Deduplication by request ID.
-    * Bounded history deque with scalar-only records.
-    * Startup stale-state reconciliation.
-    * Shutdown drain with bounded timeout.
-    * Diagnostics for operator visibility.
+    The bounded registry covers selected-request finalization,
+    failed-attempt cleanup, and post-commit claim compensation. Every
+    accepted command retains its generation until its typed progress record
+    proves convergence. One retry heap, capacity limit, diagnostics surface,
+    and shutdown drain cover all command kinds.
     """
 
     def __init__(
@@ -1102,10 +1305,14 @@ class RequestFinalizationSupervisor:
         self._release_generation = release_generation
 
         self._active_jobs: dict[str, RequestFinalizationJob] = {}
+        self._active_commands: dict[str, TerminalCommand] = {}
         self._history: collections.deque[FinalizationRecord] = collections.deque(
             maxlen=FINALIZATION_HISTORY_MAX
         )
-        self._shutdown_adopted: dict[str, RequestFinalizationJob] = {}
+        self._command_history: collections.deque[TerminalCommandRecord] = (
+            collections.deque(maxlen=FINALIZATION_HISTORY_MAX)
+        )
+        self._shutdown_adopted: dict[str, RequestFinalizationJob | TerminalCommand] = {}
         self._counters = FinalizationCounters()
         self._terminal_conflicts: int = 0
         self._retry_heap: list[tuple[float, int, str]] = []
@@ -1131,7 +1338,14 @@ class RequestFinalizationSupervisor:
 
     @property
     def active_count(self) -> int:
-        return len(self._active_jobs)
+        return len(self._active_jobs) + len(self._active_commands)
+
+    @staticmethod
+    def _job_key(identity: FinalizationIdentity) -> str:
+        attempt = (
+            "unallocated" if identity.attempt_id is None else str(identity.attempt_id)
+        )
+        return f"{identity.proxy_request_id}:{attempt}:selected_request_finalization"
 
     def register_or_get(
         self,
@@ -1149,7 +1363,7 @@ class RequestFinalizationSupervisor:
         rejection occurs before a job is constructed or returned.
         """
         request_id = identity.proxy_request_id
-        job_key = f"{request_id}:{identity.attempt_id}"
+        job_key = self._job_key(identity)
         existing = self._active_jobs.get(job_key)
         if existing is not None:
             try:
@@ -1166,7 +1380,7 @@ class RequestFinalizationSupervisor:
                 raise
             return existing
 
-        if len(self._active_jobs) >= self._max_active_jobs:
+        if self.active_count >= self._max_active_jobs:
             self._counters.saturation_rejections += 1
             logger.warning(
                 "Finalization supervisor at capacity (%d); "
@@ -1202,6 +1416,196 @@ class RequestFinalizationSupervisor:
                     self._release_generation()
             raise
 
+    def _register_terminal_command(
+        self,
+        *,
+        kind: TerminalCommandKind,
+        identity: FinalizationIdentity,
+        submission: TerminalCommandSubmission,
+        progress: TerminalCommandProgress,
+        runner: TerminalCommandRunner,
+    ) -> TerminalCommand:
+        """Register or join one typed non-request terminal command."""
+        if kind == "selected_request_finalization":
+            raise FinalizationInvariantError(
+                "selected request finalization must use register_or_get",
+                step="register_terminal_command",
+                request_id=identity.proxy_request_id,
+            )
+        key = self._command_key(identity, kind)
+        existing = self._active_commands.get(key)
+        if existing is not None:
+            compatible = self._commands_compatible(existing, kind, submission)
+            if not compatible or type(existing.progress) is not type(progress):
+                self._terminal_conflicts += 1
+                raise TerminalConflictError(
+                    "conflicting terminal command submission",
+                    step="register_terminal_command",
+                    request_id=identity.proxy_request_id,
+                )
+            return existing
+
+        if self.active_count >= self._max_active_jobs:
+            self._counters.saturation_rejections += 1
+            raise FinalizationCapacityError(
+                "finalization supervisor capacity exhausted for "
+                f"{identity.proxy_request_id}"
+            )
+
+        retain_generation = self._retain_generation
+        if retain_generation is not None:
+            retain_generation()
+            self._generation_reference_keys.add(key)
+        try:
+            command = TerminalCommand(
+                kind=kind,
+                identity=identity,
+                submission=submission,
+                progress=progress,
+                runner=runner,
+            )
+            self._active_commands[key] = command
+            self._counters.registered += 1
+            self._ensure_retry_scheduler()
+            return command
+        except BaseException:
+            if key in self._generation_reference_keys:
+                self._generation_reference_keys.remove(key)
+                if self._release_generation is not None:
+                    self._release_generation()
+            raise
+
+    @staticmethod
+    def _commands_compatible(
+        existing: TerminalCommand,
+        kind: TerminalCommandKind,
+        submission: TerminalCommandSubmission,
+    ) -> bool:
+        """Compare ownership facts while ignoring bounded diagnostics."""
+        if existing.kind != kind:
+            return False
+        current = existing.submission
+        if kind == "failed_attempt_cleanup":
+            if not isinstance(
+                current, FailedAttemptCleanupSubmission
+            ) or not isinstance(submission, FailedAttemptCleanupSubmission):
+                return False
+            return (
+                current.identity == submission.identity
+                and current.status_code == submission.status_code
+                and current.error_class == submission.error_class
+                and current.retry_category == submission.retry_category
+                and current.failure_effects == submission.failure_effects
+            )
+        if kind == "claim_compensation":
+            if not isinstance(current, ClaimCompensationSubmission) or not isinstance(
+                submission, ClaimCompensationSubmission
+            ):
+                return False
+            return (
+                current.identity == submission.identity
+                and current.account_name == submission.account_name
+                and current.estimated_tokens == submission.estimated_tokens
+                and current.estimated_microdollars == submission.estimated_microdollars
+                and current.receipt == submission.receipt
+            )
+        return False
+
+    def register_failed_attempt_cleanup(
+        self,
+        submission: FailedAttemptCleanupSubmission,
+        runner: TerminalCommandRunner,
+    ) -> TerminalCommand:
+        """Register or join retryable failed-attempt cleanup."""
+        return self._register_terminal_command(
+            kind="failed_attempt_cleanup",
+            identity=submission.identity,
+            submission=submission,
+            progress=FailedAttemptCleanupProgress(),
+            runner=runner,
+        )
+
+    def register_claim_compensation(
+        self,
+        submission: ClaimCompensationSubmission,
+        runner: TerminalCommandRunner,
+    ) -> TerminalCommand:
+        """Register or join post-commit claim compensation."""
+        return self._register_terminal_command(
+            kind="claim_compensation",
+            identity=submission.identity,
+            submission=submission,
+            progress=ClaimCompensationProgress(),
+            runner=runner,
+        )
+
+    @staticmethod
+    def _command_key(identity: FinalizationIdentity, kind: TerminalCommandKind) -> str:
+        attempt = (
+            "unallocated" if identity.attempt_id is None else str(identity.attempt_id)
+        )
+        return f"{identity.proxy_request_id}:{attempt}:{kind}"
+
+    def get_terminal_command(
+        self,
+        proxy_request_id: str,
+        attempt_id: int | None,
+        kind: TerminalCommandKind,
+    ) -> TerminalCommand | None:
+        """Return an active non-request command for cancellation/rejoin."""
+        identity = FinalizationIdentity(
+            proxy_request_id=proxy_request_id,
+            db_request_id=None,
+            attempt_id=attempt_id,
+            reservation_id=None,
+            account_id=None,
+            account_name="",
+            provider_id="",
+            model_id="",
+            client_protocol="",
+            upstream_protocol="",
+            attempt_number=None,
+        )
+        return self._active_commands.get(self._command_key(identity, kind))
+
+    async def run_terminal_command(self, command: TerminalCommand) -> None:
+        """Run a retained command while shielding it from waiter cancellation."""
+        if command.is_complete:
+            self._reconcile_terminal_command(command)
+            return
+        task = command.get_task()
+        if task is None or task.done():
+            task = asyncio.create_task(self._run_terminal_command(command))
+            command.set_task(task)
+            task.add_done_callback(
+                lambda _: self._on_terminal_command_completion(command)
+            )
+        await asyncio.shield(task)
+        if command.is_complete:
+            self._reconcile_terminal_command(command)
+
+    async def _run_terminal_command(self, command: TerminalCommand) -> None:
+        command.begin_attempt()
+        try:
+            await command.runner(command.submission, command.progress)
+            if not command.progress.completed:
+                raise FinalizationInvariantError(
+                    "terminal command returned before progress converged",
+                    step="terminal_command_completion",
+                    request_id=command.request_id,
+                )
+        except Exception as exc:
+            command.record_failure(exc)
+            raise
+        else:
+            command.mark_completed()
+
+    def _on_terminal_command_completion(self, command: TerminalCommand) -> None:
+        if command.is_complete:
+            self._reconcile_terminal_command(command)
+        elif command.health == "retry_pending":
+            self._schedule_retry(command)
+
     def _ensure_retry_scheduler(self) -> None:
         """Start the one generation-owned retry timer when a loop is running."""
 
@@ -1214,9 +1618,18 @@ class RequestFinalizationSupervisor:
         self._retry_wakeup = asyncio.Event()
         self._retry_scheduler_task = loop.create_task(self._retry_scheduler())
 
-    def _schedule_retry(self, job: RequestFinalizationJob) -> None:
-        key = f"{job.identity.proxy_request_id}:{job.identity.attempt_id}"
-        if self._active_jobs.get(key) is not job or job.health == "failed":
+    def _schedule_retry(self, job: RequestFinalizationJob | TerminalCommand) -> None:
+        key = (
+            self._job_key(job.identity)
+            if isinstance(job, RequestFinalizationJob)
+            else job.key
+        )
+        active = (
+            self._active_jobs.get(key)
+            if isinstance(job, RequestFinalizationJob)
+            else self._active_commands.get(key)
+        )
+        if active is not job or job.health == "failed":
             return
         age = time.monotonic() - job.created_at
         if age >= self._max_retry_age_s:
@@ -1258,7 +1671,11 @@ class RequestFinalizationSupervisor:
                     pass
                 continue
             heapq.heappop(self._retry_heap)
-            job = self._active_jobs.get(key)
+            job: RequestFinalizationJob | TerminalCommand | None = (
+                self._active_jobs.get(key)
+            )
+            if job is None:
+                job = self._active_commands.get(key)
             if job is None or job.is_complete:
                 continue
             if time.monotonic() >= job.created_at + self._max_retry_age_s:
@@ -1267,19 +1684,38 @@ class RequestFinalizationSupervisor:
                 continue
             try:
                 job.increment_retry_count()
-                await job.run()
+                if isinstance(job, RequestFinalizationJob):
+                    await job.run()
+                else:
+                    await self.run_terminal_command(job)
             except Exception:
                 continue
 
-    def _retire_exhausted_job(self, job: RequestFinalizationJob) -> None:
+    def _retire_exhausted_job(
+        self, job: RequestFinalizationJob | TerminalCommand
+    ) -> None:
         """Retire an over-age job and release its operational ownership."""
-        key = f"{job.identity.proxy_request_id}:{job.identity.attempt_id}"
-        if self._active_jobs.get(key) is not job:
+        key = (
+            self._job_key(job.identity)
+            if isinstance(job, RequestFinalizationJob)
+            else job.key
+        )
+        active = (
+            self._active_jobs.get(key)
+            if isinstance(job, RequestFinalizationJob)
+            else self._active_commands.get(key)
+        )
+        if active is not job:
             return
-        self._active_jobs.pop(key, None)
-        self._failed_jobs.append(job.to_record())
+        if isinstance(job, RequestFinalizationJob):
+            self._active_jobs.pop(key, None)
+            self._failed_jobs.append(job.to_record())
+        else:
+            self._active_commands.pop(key, None)
+            self._command_history.append(job.to_record())
         self._release_generation_reference(key)
-        job.release_references()
+        if isinstance(job, RequestFinalizationJob):
+            job.release_references()
 
     def _on_job_completion(self, job: RequestFinalizationJob) -> None:
         """Generation-owned completion callback and retry handoff."""
@@ -1303,7 +1739,7 @@ class RequestFinalizationSupervisor:
         """Reconcile a completed job: move to history, release refs."""
         if not job.is_complete:
             return
-        job_key = f"{job.identity.proxy_request_id}:{job.identity.attempt_id}"
+        job_key = self._job_key(job.identity)
         if job_key in self._active_jobs:
             del self._active_jobs[job_key]
         self._release_generation_reference(job_key)
@@ -1322,7 +1758,15 @@ class RequestFinalizationSupervisor:
         Returns the count of remaining unresolved jobs.
         """
         # Snapshot pending jobs
-        pending = [job for job in self._active_jobs.values() if not job.is_complete]
+        pending_jobs = [
+            job for job in self._active_jobs.values() if not job.is_complete
+        ]
+        pending_commands = [
+            command
+            for command in self._active_commands.values()
+            if not command.is_complete
+        ]
+        pending = [*pending_jobs, *pending_commands]
         if not pending:
             return 0
 
@@ -1332,7 +1776,10 @@ class RequestFinalizationSupervisor:
             if job.is_complete:
                 continue
             try:
-                task = asyncio.create_task(job.run())
+                if isinstance(job, RequestFinalizationJob):
+                    task = asyncio.create_task(job.run())
+                else:
+                    task = asyncio.create_task(self.run_terminal_command(job))
                 try:
                     await asyncio.wait_for(
                         asyncio.shield(task),
@@ -1353,7 +1800,10 @@ class RequestFinalizationSupervisor:
                         job.identity.proxy_request_id,
                     )
                 else:
-                    self._reconcile_job(job, source="drain")
+                    if isinstance(job, RequestFinalizationJob):
+                        self._reconcile_job(job, source="drain")
+                    else:
+                        self._reconcile_terminal_command(job)
             except Exception:
                 remaining += 1
 
@@ -1372,6 +1822,23 @@ class RequestFinalizationSupervisor:
             job.release_references()
             self._history.append(job.to_record())
             self._counters.completed += 1
+        for _key, command in list(self._active_commands.items()):
+            if command.is_complete:
+                self._reconcile_terminal_command(command)
+
+    def _reconcile_terminal_command(self, command: TerminalCommand) -> None:
+        """Move one converged non-request command to scalar history."""
+        if not command.is_complete:
+            return
+        key = command.key
+        if self._active_commands.get(key) is not command:
+            return
+        self._active_commands.pop(key, None)
+        self._release_generation_reference(key)
+        self._command_history.append(command.to_record())
+        self._counters.completed += 1
+        if command.failure_count > 0:
+            self._counters.failures_recovered += 1
 
     def adopt_for_shutdown(self) -> int:
         """Adopt remaining active jobs for startup repair.
@@ -1384,8 +1851,13 @@ class RequestFinalizationSupervisor:
             if not job.is_complete:
                 self._shutdown_adopted[req_id] = job
                 adopted += 1
+        for key, command in list(self._active_commands.items()):
+            if not command.is_complete:
+                self._shutdown_adopted[key] = command
+                adopted += 1
         for req_id in self._shutdown_adopted:
             self._active_jobs.pop(req_id, None)
+            self._active_commands.pop(req_id, None)
         self._counters.shutdown_adopted += adopted
         return adopted
 
@@ -1413,21 +1885,52 @@ class RequestFinalizationSupervisor:
     def snapshot(self) -> dict[str, Any]:
         """Return a diagnostic snapshot of the supervisor."""
         active_by_progress: dict[str, int] = {}
+        active_by_command_kind: dict[str, int] = {
+            "selected_request_finalization": 0,
+            "failed_attempt_cleanup": 0,
+            "claim_compensation": 0,
+        }
+        command_kind_counts: dict[str, dict[str, int]] = {
+            kind: {"active": 0, "retry_pending": 0, "completed_history_count": 0}
+            for kind in active_by_command_kind
+        }
         oldest_age: float | None = None
         now = time.monotonic()
 
         for job in self._active_jobs.values():
+            active_by_command_kind["selected_request_finalization"] += 1
+            command_kind_counts["selected_request_finalization"]["active"] += 1
+            if job.health == "retry_pending":
+                command_kind_counts["selected_request_finalization"][
+                    "retry_pending"
+                ] += 1
             progress = job.progress.value
             active_by_progress[progress] = active_by_progress.get(progress, 0) + 1
             age = now - job.created_at
             if oldest_age is None or age > oldest_age:
                 oldest_age = age
+        for command in self._active_commands.values():
+            active_by_command_kind[command.kind] += 1
+            command_kind_counts[command.kind]["active"] += 1
+            if command.health == "retry_pending":
+                command_kind_counts[command.kind]["retry_pending"] += 1
+            progress = "completed" if command.is_complete else command.health
+            active_by_progress[progress] = active_by_progress.get(progress, 0) + 1
+            age = now - command.created_at
+            if oldest_age is None or age > oldest_age:
+                oldest_age = age
+        for _record in self._history:
+            command_kind_counts["selected_request_finalization"][
+                "completed_history_count"
+            ] += 1
+        for record in self._command_history:
+            command_kind_counts[record.command_kind]["completed_history_count"] += 1
 
         return {
-            "active_count": len(self._active_jobs),
+            "active_count": self.active_count,
             "terminal_conflicts": self._terminal_conflicts,
-            "registry_key": "proxy_request_id:attempt_id",
-            "history_count": len(self._history),
+            "registry_key": "proxy_request_id:attempt_id:command_kind",
+            "history_count": len(self._history) + len(self._command_history),
             "shutdown_adopted_count": len(self._shutdown_adopted),
             "retry_pending_count": len(self._retry_heap),
             "failed_count": len(self._failed_jobs),
@@ -1435,6 +1938,9 @@ class RequestFinalizationSupervisor:
                 round(oldest_age, 3) if oldest_age is not None else None
             ),
             "active_by_progress": active_by_progress,
+            "active_by_command_kind": active_by_command_kind,
+            "command_kind_counts": command_kind_counts,
+            "completed_history_count": len(self._history) + len(self._command_history),
             "counters": {
                 "registered": self._counters.registered,
                 "completed": self._counters.completed,

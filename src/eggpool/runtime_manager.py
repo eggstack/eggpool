@@ -572,9 +572,6 @@ class RuntimeGeneration:
             local_credential_headers=frozenset(),
         ),
     )
-    # Deprecated test/integration compatibility only. Production generations
-    # leave this unset; terminal retry ownership belongs to the supervisor.
-    finalization_retry_queue: Any = None
 
 
 # ---------------------------------------------------------------------------
@@ -1136,8 +1133,6 @@ class ActiveGenerationView:
     stream_diagnostics: Any  # noqa: ANN401
     routing_trace_guard: Any  # noqa: ANN401
     supervisor: Any  # noqa: ANN401
-    # Deprecated compatibility mirror; never populated by production views.
-    finalization_retry_queue: Any = None  # noqa: ANN401
 
 
 @dataclass(frozen=True)
@@ -1889,26 +1884,7 @@ class RuntimeManager:
                     "Runtime generation %d supervisor.stop_all failed",
                     generation.generation_id,
                 )
-        coordinator = generation.coordinator
-        drain = getattr(coordinator, "drain_retained_cleanup", None)
-        if drain is not None:
-            record_close_attempt("retained_cleanup")
-            try:
-                unresolved = await drain(timeout_s=min(drain_timeout_s, 10.0))
-                if unresolved:
-                    logger.warning(
-                        "Runtime generation %d retained cleanup drain left "
-                        "%d unresolved identity(ies)",
-                        generation.generation_id,
-                        unresolved,
-                    )
-            except Exception as exc:  # noqa: BLE001 -- close path continues
-                slot.last_close_error = f"retained_cleanup: {exc!r}"
-                logger.exception(
-                    "Runtime generation %d retained cleanup drain failed",
-                    generation.generation_id,
-                )
-        # 2. Stop the generation-owned finalization scheduler only after
+        # Stop the generation-owned terminal scheduler only after
         #    every accepted job has released its terminal reference. The
         #    supervisor's scalar history is diagnostic and does not retain
         #    generation resources.

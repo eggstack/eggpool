@@ -211,7 +211,6 @@ class ReloadHarness:
             account_backoff_repo=MagicMock(),
             stats_service=MagicMock(),
             supervisor=_NoOpSupervisorMock(),
-            finalization_retry_queue=MagicMock(),
             routing_trace_guard=MagicMock(),
             routing_trace_writer=MagicMock(),
         )

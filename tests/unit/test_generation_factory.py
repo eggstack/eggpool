@@ -168,7 +168,6 @@ class TestFactoryParity:
             assert result.account_backoff_repo is not None
             assert result.stats_service is not None
             assert result.supervisor is not None
-            assert result.generation.finalization_retry_queue is None
             assert result.routing_trace_guard is not None
             assert result.local_pre_upstream_recorder is not None
             assert result.stream_diagnostics is not None

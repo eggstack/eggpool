@@ -111,9 +111,10 @@ Generations are immutable snapshots of application state:
 
 Live reload (`eggpool rehash`) builds a candidate generation, validates it, and atomically publishes it. In-flight requests and accepted retained finalization jobs on the retiring generation complete using the old dependencies; publication does not wait for the old generation to close.
 
-`RequestFinalizationSupervisor` is generation-owned. Its first accepted job
-acquires one synchronous terminal reference on the generation slot; duplicate
-registration and retries reuse that reference. The slot closes only after
+`RequestFinalizationSupervisor` is generation-owned. Its first accepted
+selected-finalization job or terminal command acquires one synchronous
+terminal reference on the generation slot; duplicate registration and retries
+reuse that reference. The slot closes only after
 both request leases and terminal references are zero. A live retirement
 deadline with an unresolved terminal reference invokes the existing fatal
 worker handler and leaves the slot resident rather than closing its router,

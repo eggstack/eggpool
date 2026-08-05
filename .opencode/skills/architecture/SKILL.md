@@ -164,9 +164,17 @@ for `/readyz`.
 
 ## Request Finalization
 
-`RequestFinalizationJob` keyed by `(proxy_request_id, attempt_id)`. `RequestFinalizationSupervisor` is the sole process-owned retry owner and uses one bounded timer with configured retry age/backoff. `FinalizationData.downstream_started` is the explicit response handoff fact; `bytes_emitted` is payload accounting only. `AttemptRuntimeLease` owns usage, health, and account-runtime outcome obligations independently of durable request transition, so already-terminal durable state can still converge them. `FinalizationResult` distinguishes durable terminal state, durable transition, reservation convergence, and runtime cleanup, projects completed lease markers while a later runtime component is retry-pending, and clears transient retry metadata when the lease is released. Retryable attempts use coordinator-retained cleanup with 128-entry capacity.
-
-The coordinator also has one tagged retained-terminal registry for failed-attempt cleanup and post-commit claim compensation. Its bounded shutdown drain dispatches by command kind, validates the progress type, counts unique durable identities, and retains incomplete entries for rejoin or startup repair.
+`RequestFinalizationSupervisor` is the sole generation-owned terminal owner.
+Selected request finalization, failed-attempt cleanup, and claim compensation
+use kind-qualified identities, typed immutable submissions, mutable component
+progress, one bounded capacity, one retry timer, and one shutdown drain.
+`FinalizationData.downstream_started` is the explicit response handoff fact;
+`bytes_emitted` is payload accounting only. `AttemptRuntimeLease` owns usage,
+health, and account-runtime outcome obligations independently of durable request
+transition, so already-terminal durable state can still converge them.
+`FinalizationResult` distinguishes durable terminal state, durable transition,
+reservation convergence, and runtime cleanup. The coordinator submits and
+joins commands; it has no retained terminal registry or parallel capacity.
 
 Request and attempt recovery use explicit durable identities; canonical terminal
 status sets live in `request/terminal_status.py`. Unknown status or identity

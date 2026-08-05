@@ -122,7 +122,6 @@ class RuntimeMetricsService:
         model_info: Any | None = None,  # noqa: ANN401
         dashboard_telemetry: Any | None = None,  # noqa: ANN401
         stream_diagnostics: Any | None = None,  # noqa: ANN401
-        finalization_retry_queue: Any | None = None,  # noqa: ANN401
         finalization_supervisor: Any | None = None,  # noqa: ANN401
         routing_trace_guard: Any | None = None,  # noqa: ANN401
         runtime_manager: Any | None = None,  # noqa: ANN401

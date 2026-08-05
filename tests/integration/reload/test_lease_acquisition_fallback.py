@@ -168,7 +168,6 @@ async def test_lease_exhaustion_during_publication_race() -> None:
             account_backoff_repo=MagicMock(),
             stats_service=MagicMock(),
             supervisor=MagicMock(),
-            finalization_retry_queue=MagicMock(),
             routing_trace_guard=MagicMock(),
             routing_trace_writer=MagicMock(),
         )

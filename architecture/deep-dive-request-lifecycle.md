@@ -143,24 +143,21 @@ Persists usage, releases reservations, updates health state. Reads from `Finaliz
 
 Per-attempt finalization with idempotent reservation release. Each attempt reservation is released exactly once.
 
-### Coordinator-retained cleanup
+### Generation-owned terminal commands
 
 Retryable pre-body attempt cleanup and post-commit claim compensation are
-two tagged command kinds in one coordinator-owned retained registry. Each records durable transition,
+typed commands in the same generation-owned `RequestFinalizationSupervisor`
+as selected-request finalization. Each records durable transition,
 reservation, active-count, quota, health/probe, and completion progress before
 the next await, so a later duplicate caller resumes only unfinished releases.
 The durable attempt transition and reservation terminal state remain separate:
-an attempt update is not evidence that its reservation is released. A caller
-may proceed only after the progress record explicitly reports convergence;
-normal child-task completion alone is insufficient.
-The single registry is capped at 128 entries by default; capacity exhaustion fails
-closed rather than creating detached work. Generation shutdown performs one
-bounded drain and reports unresolved identities for the existing startup
-recovery safety net. If a request waiter is cancelled during either command,
-the coordinator submits the canonical `CLIENT_CANCELLED` request terminal only
-after the retained command converges. Between retries, attempt-scoped
-publication metadata is cleared and cancellation receives the last converged
-attempt explicitly rather than reading stale context flags.
+an attempt update is not evidence that its reservation is released. Reselection
+may proceed only after the supervisor reports convergence; normal child-task
+completion alone is insufficient. One global 128-entry capacity, retry timer,
+diagnostics surface, and shutdown drain cover all three command kinds. If a
+request waiter is cancelled during cleanup, it joins the existing supervisor
+command and submits the canonical `CLIENT_CANCELLED` request terminal only
+after convergence. The coordinator has no parallel retained registry.
 
 There is no age-based runtime stale-request safety net. Startup crash
 reconciliation repairs durable rows left by a prior process, while the
@@ -199,9 +196,10 @@ from another loop fail immediately.
 ### `request/finalization_job.py` — RequestFinalizationSupervisor
 
 The supervisor is the single generation-owned terminal retry owner. It retains
-jobs by `(proxy_request_id, attempt_id)`, reports structured convergence facts,
-and schedules bounded retryable failures through one timer using configured
-backoff and an absolute execution-time maximum retry age. Each selected job
+selected jobs and kind-qualified terminal commands by
+`(proxy_request_id, attempt_id, command_kind)`, reports structured convergence
+facts, and schedules bounded retryable failures through one timer using
+configured backoff and an absolute execution-time maximum retry age. Each selected job
 carries an `AttemptRuntimeLease` made from publication facts, and runtime
 cleanup resumes component-by-component after durable convergence. Capacity
 rejects before ownership transfer; there is no detached terminal task.
@@ -210,9 +208,6 @@ failed convergence attempts, so completed active-count, quota, health, or
 probe components remain visible while an outstanding component is retried.
 When the lease is released, transient runtime-retry metadata is cleared so the
 completed result is non-retryable and has no stale cleanup detail.
-
-`request/finalization_queue.py` remains only as a one-shot compatibility adapter
-for older integrations. It does not own retry counts, backoff, or drop policy.
 
 ### `request/stream_diagnostics.py` — StreamDiagnostics
 

@@ -70,7 +70,6 @@ def _make_service(
     started_epoch: float | None = None,
     dispatch_overhead_recorder: Any | None = None,
     dispatch_span_recorder: Any | None = None,
-    finalization_retry_queue: Any | None = None,
     finalization_supervisor: Any | None = None,
 ) -> RuntimeMetricsService:
     if config is None:
@@ -91,7 +90,6 @@ def _make_service(
         started_epoch=started_epoch,
         dispatch_overhead_recorder=dispatch_overhead_recorder,
         dispatch_span_recorder=dispatch_span_recorder,
-        finalization_retry_queue=finalization_retry_queue,
         finalization_supervisor=finalization_supervisor,
     )
 
@@ -868,11 +866,3 @@ async def test_rollup_freshness_disabled_and_staleness(
     assert freshness["requests_latest_started_at"] == recent_str
     expected_gap = (recent_dt - older_dt).total_seconds()
     assert freshness["staleness_seconds"] == pytest.approx(expected_gap)
-
-
-@pytest.mark.asyncio
-async def test_finalization_retry_queue_snapshot_contract(db: Database) -> None:
-    """Legacy retry queue diagnostics are no longer exposed."""
-    service = _make_service(db)
-    snapshot = await service.snapshot()
-    assert "finalization_retry_queue" not in snapshot

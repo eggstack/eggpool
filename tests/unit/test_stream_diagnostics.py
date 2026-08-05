@@ -49,13 +49,16 @@ def _timeout_stream_coordinator() -> tuple[Any, Any, Any]:
     coordinator = object.__new__(RequestCoordinator)
     coordinator._classifier = RetryClassifier()
     coordinator._transcoder_policy = None
-    coordinator._finalization_supervisor = None
     coordinator._persist_error_detail = False
     coordinator._account_backoff_repo = None
+    coordinator._router = MagicMock()
+    coordinator._health_manager = MagicMock()
+    coordinator._quota_estimator = MagicMock()
     coordinator._stream_diagnostics = StreamDiagnostics()
     coordinator._finalizer = MagicMock()
     coordinator._finalizer.finalize = AsyncMock()
     coordinator._finalizer.apply_runtime_convergence = AsyncMock()
+    coordinator._effects_applier = MagicMock()
     context = SimpleNamespace(
         request_id="timeout-request",
         model_id="model-a",
@@ -90,6 +93,25 @@ def _timeout_stream_coordinator() -> tuple[Any, Any, Any]:
         estimated_microdollars=0,
         attempt_number=1,
     )
+
+    class _TestSupervisor:
+        def register_or_get(
+            self,
+            _identity: Any,
+            _outcome: Any,
+            *,
+            finalization_data: Any,
+            **_kwargs: Any,
+        ) -> Any:
+            async def run() -> None:
+                await coordinator._finalizer.finalize(selected, finalization_data)
+
+            return SimpleNamespace(
+                set_dependencies=lambda **_dependencies: None,
+                run=run,
+            )
+
+    coordinator._finalization_supervisor = _TestSupervisor()
     return coordinator, context, selected
 
 

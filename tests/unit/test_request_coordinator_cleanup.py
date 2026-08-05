@@ -1,441 +1,191 @@
-"""Focused retained coordinator-cleanup convergence tests."""
+"""Focused tests for the consolidated generation-owned terminal owner."""
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
+from unittest.mock import MagicMock
 
 import pytest
 
-from eggpool.request.attempt_finalizer import AttemptFinalizeResult
-from eggpool.request.coordinator import (
-    AttemptCleanupProgress,
+from eggpool.request.finalization_job import (
     ClaimCompensationProgress,
-    ProxyRequestContext,
-    RequestCoordinator,
-    RetainedTerminalCommand,
+    ClaimCompensationSubmission,
+    FailedAttemptCleanupProgress,
+    FailedAttemptCleanupSubmission,
+    FinalizationCapacityError,
+    FinalizationIdentity,
+    RequestFinalizationSupervisor,
     RuntimePublicationReceipt,
-    SelectedAttempt,
-    _RetryableUpstreamError,
+    TerminalConflictError,
 )
-from eggpool.request.finalization_job import FinalizationCapacityError
-from eggpool.request.finalizer import FinalizationData, FinalizationOutcome
 
 
-def _context() -> ProxyRequestContext:
-    return ProxyRequestContext(
-        request_id="req-1",
-        protocol="openai",
-        model_id="model-1",
-        streaming=False,
-        original_body=b"{}",
-        incoming_headers={},
-    )
-
-
-def _selected() -> SelectedAttempt:
-    return SelectedAttempt(
-        proxy_request_id="req-1",
-        db_request_id="db-1",
-        attempt_id=1,
-        reservation_id="reservation-1",
+def _identity(
+    *, request_id: str = "req-1", attempt_id: int | None = 1
+) -> FinalizationIdentity:
+    return FinalizationIdentity(
+        proxy_request_id=request_id,
+        db_request_id="db-1" if attempt_id is not None else None,
+        attempt_id=attempt_id,
+        reservation_id="reservation-1" if attempt_id is not None else None,
         account_id=1,
         account_name="account-1",
-        api_key="key",
+        provider_id="openai",
         model_id="model-1",
-        estimated_tokens=10,
-        estimated_microdollars=2,
-        attempt_number=1,
+        client_protocol="openai",
+        upstream_protocol="openai",
+        attempt_number=1 if attempt_id is not None else None,
     )
 
 
-@pytest.mark.asyncio
-async def test_attempt_cleanup_rejoins_after_quota_failure() -> None:
-    coordinator = object.__new__(RequestCoordinator)
-    calls = {"finalizer": 0, "quota": 0, "active": 0, "health": 0}
-
-    class Finalizer:
-        async def finalize_failed_attempt(
-            self, **kwargs: object
-        ) -> AttemptFinalizeResult:
-            calls["finalizer"] += 1
-            return AttemptFinalizeResult(True, True, True)
-
-    class Quota:
-        async def remove_reservation(self, *args: object, **kwargs: object) -> None:
-            calls["quota"] += 1
-            if calls["quota"] == 1:
-                raise RuntimeError("quota busy")
-
-    class Router:
-        async def decrement_active_request_count(self, account_name: str) -> None:
-            calls["active"] += 1
-
-    coordinator._attempt_finalizer = Finalizer()
-    coordinator._quota_estimator = Quota()
-    coordinator._router = Router()
-    coordinator._health_manager = object()
-    coordinator._apply_health_transition = (  # type: ignore[method-assign]
-        lambda *args, **kwargs: _health_effect(calls)
-    )
-
-    context = _context()
-    selected = _selected()
-    error = _RetryableUpstreamError(
-        "retry",
+def _cleanup_submission(*, request_id: str = "req-1") -> FailedAttemptCleanupSubmission:
+    return FailedAttemptCleanupSubmission(
+        identity=_identity(request_id=request_id),
         status_code=503,
         error_class="TemporaryUpstreamError",
-    )
-    progress = AttemptCleanupProgress(
-        context=context,
-        selected=selected,
-        error=error,
+        retry_category="temporary",
+        bytes_received=10,
+        latency_ms=2,
     )
 
-    with pytest.raises(RuntimeError, match="quota busy"):
-        await coordinator._run_failed_attempt_cleanup(progress)
-    assert progress.durable_transition_checked
-    assert not progress.quota_released
-    assert calls["finalizer"] == 1
 
-    await coordinator._run_failed_attempt_cleanup(progress)
-    assert progress.completed
-    assert calls == {"finalizer": 1, "quota": 2, "active": 1, "health": 1}
-
-
-async def _health_effect(calls: dict[str, int]) -> None:
-    calls["health"] += 1
-
-
-@pytest.mark.asyncio
-async def test_claim_compensation_rejoins_after_publication_release() -> None:
-    coordinator = object.__new__(RequestCoordinator)
-    calls = {"active": 0, "quota": 0, "finalizer": 0, "probe": 0}
-
-    class Router:
-        async def decrement_active_request_count(self, account_name: str) -> None:
-            calls["active"] += 1
-
-    class Quota:
-        async def remove_reservation(self, *args: object, **kwargs: object) -> None:
-            calls["quota"] += 1
-            if calls["quota"] == 1:
-                raise RuntimeError("quota busy")
-
-    class Finalizer:
-        async def finalize_failed_attempt(
-            self, **kwargs: object
-        ) -> AttemptFinalizeResult:
-            calls["finalizer"] += 1
-            return AttemptFinalizeResult(True, True, True)
-
-    class Health:
-        def release_request(self, account_name: str) -> None:
-            calls["probe"] += 1
-
-    coordinator._router = Router()
-    coordinator._quota_estimator = Quota()
-    coordinator._attempt_finalizer = Finalizer()
-    coordinator._health_manager = Health()
-    identity = RequestCoordinator._ClaimIdentity(
+def _claim_submission() -> ClaimCompensationSubmission:
+    return ClaimCompensationSubmission(
+        identity=_identity(attempt_id=None),
         account_name="account-1",
-        account_id=1,
-        resolved_provider_id="openai",
-        api_key="key",
-        estimated_microdollars=2,
-    )
-    progress = ClaimCompensationProgress(
-        context=_context(),
-        claim_identity=identity,
-        attempt_id=1,
-        reservation_id="reservation-1",
         estimated_tokens=10,
+        estimated_microdollars=2,
+        bytes_received=10,
+        latency_ms=2,
         receipt=RuntimePublicationReceipt(
             active_count_added=True,
             quota_reservation_added=True,
+            health_probe_acquired=True,
         ),
     )
 
-    with pytest.raises(RuntimeError, match="quota busy"):
-        await coordinator._run_claim_compensation(progress)
-    assert progress.active_count_released
-    assert not progress.quota_reservation_released
 
-    await coordinator._run_claim_compensation(progress)
-    assert progress.completed
-    assert calls == {"active": 1, "quota": 2, "finalizer": 1, "probe": 1}
+def test_mixed_command_capacity_and_generation_references() -> None:
+    retained = 0
+    released = 0
 
+    def retain() -> None:
+        nonlocal retained
+        retained += 1
 
-@pytest.mark.asyncio
-async def test_cleanup_normal_return_requires_convergence() -> None:
-    coordinator = object.__new__(RequestCoordinator)
-    selected = _selected()
-    key = (selected.proxy_request_id, selected.attempt_id)
-    coordinator._retained_terminal_commands = {
-        key: RetainedTerminalCommand(
-            kind="failed_attempt_cleanup",
-            progress=AttemptCleanupProgress(completed=False),
-        )
-    }
+    def release() -> None:
+        nonlocal released
+        released += 1
 
-    async def retained_work() -> None:
-        return
-
-    coordinator._retained_terminal_commands[key].task = asyncio.create_task(
-        retained_work()
+    supervisor = RequestFinalizationSupervisor(
+        db=MagicMock(),
+        max_active_jobs=3,
+        retain_generation=retain,
+        release_generation=release,
     )
 
-    with pytest.raises(RuntimeError, match="did not converge"):
-        await coordinator._cleanup_failed_attempt(
-            context=_context(),
-            selected=selected,
-            error=_RetryableUpstreamError("retry"),
+    async def complete(submission: object, progress: object) -> None:
+        assert submission is not None
+        assert isinstance(
+            progress, (FailedAttemptCleanupProgress, ClaimCompensationProgress)
         )
-
-
-@pytest.mark.asyncio
-async def test_compensation_rechecks_unconverged_reservation() -> None:
-    coordinator = object.__new__(RequestCoordinator)
-    calls = {"active": 0, "quota": 0, "finalizer": 0, "probe": 0}
-
-    class Router:
-        async def decrement_active_request_count(self, account_name: str) -> None:
-            calls["active"] += 1
-
-    class Quota:
-        async def remove_reservation(self, *args: object, **kwargs: object) -> None:
-            calls["quota"] += 1
-
-    class Finalizer:
-        async def finalize_failed_attempt(
-            self, **kwargs: object
-        ) -> AttemptFinalizeResult:
-            calls["finalizer"] += 1
-            if calls["finalizer"] == 1:
-                return AttemptFinalizeResult(True, False, False)
-            return AttemptFinalizeResult(False, False, True)
-
-    class Health:
-        def release_request(self, account_name: str) -> None:
-            calls["probe"] += 1
-
-    coordinator._router = Router()
-    coordinator._quota_estimator = Quota()
-    coordinator._attempt_finalizer = Finalizer()
-    coordinator._health_manager = Health()
-    identity = RequestCoordinator._ClaimIdentity(
-        account_name="account-1",
-        account_id=1,
-        resolved_provider_id="openai",
-        api_key="key",
-        estimated_microdollars=2,
-    )
-    progress = ClaimCompensationProgress(
-        context=_context(),
-        claim_identity=identity,
-        attempt_id=1,
-        reservation_id="reservation-1",
-        estimated_tokens=10,
-        receipt=RuntimePublicationReceipt(
-            active_count_added=True,
-            quota_reservation_added=True,
-        ),
-    )
-
-    await coordinator._run_claim_compensation(progress)
-    assert not progress.completed
-    assert calls["finalizer"] == 1
-
-    await coordinator._run_claim_compensation(progress)
-    assert progress.completed
-    assert calls == {"active": 1, "quota": 1, "finalizer": 2, "probe": 1}
-
-
-@pytest.mark.parametrize("cleanup_kind", ["attempt", "claim"])
-@pytest.mark.asyncio
-async def test_cancelled_cleanup_submits_one_request_terminal(
-    cleanup_kind: str,
-) -> None:
-    coordinator = object.__new__(RequestCoordinator)
-    coordinator._retained_terminal_commands = {}
-    selected = _selected()
-    context = _context()
-    terminal_outcomes: list[str] = []
-
-    async def finalize_terminal(*args: object) -> None:
-        data = args[2]
-        terminal_outcomes.append(data.outcome.value)
-
-    coordinator._finalize_terminal = finalize_terminal  # type: ignore[method-assign]
-    if cleanup_kind == "attempt":
-        coordinator._retained_terminal_commands[("req-1", 1)] = RetainedTerminalCommand(
-            kind="failed_attempt_cleanup",
-            progress=AttemptCleanupProgress(completed=True),
-        )
-        assert await coordinator._await_cleanup_then_finalize_cancelled(
-            context=context,
-            selected=selected,
-        )
-    else:
-        context.client_metadata["_post_commit_selected"] = selected
-        context.client_metadata["post_commit_interrupted"] = True
-        coordinator._retained_terminal_commands[("req-1", 1)] = RetainedTerminalCommand(
-            kind="claim_compensation",
-            progress=ClaimCompensationProgress(completed=True),
-        )
-        assert await coordinator._handle_selection_cancellation(context)
-    assert terminal_outcomes == ["client_cancelled"]
-    assert context.client_metadata["_cancelled_request_finalized"] is True
-
-
-@pytest.mark.asyncio
-async def test_retained_cleanup_capacity_fails_closed() -> None:
-    coordinator = object.__new__(RequestCoordinator)
-    coordinator._retained_cleanup_capacity = 1
-    coordinator._retained_cleanup_capacity_rejections = 0
-    coordinator._retained_terminal_commands = {
-        ("existing", 1): RetainedTerminalCommand(
-            kind="failed_attempt_cleanup",
-            progress=AttemptCleanupProgress(),
-        )
-    }
-
-    with pytest.raises(RuntimeError, match="capacity exhausted"):
-        await coordinator._cleanup_failed_attempt(
-            context=_context(),
-            selected=_selected(),
-            error=_RetryableUpstreamError("retry"),
-        )
-    assert len(coordinator._retained_terminal_commands) == 1
-    assert coordinator._retained_cleanup_capacity_rejections == 1
-
-
-@pytest.mark.parametrize(
-    ("downstream_started", "bytes_emitted", "raises"),
-    [(False, 128, True), (True, 0, False)],
-)
-@pytest.mark.asyncio
-async def test_finalization_capacity_uses_explicit_handoff(
-    downstream_started: bool,
-    bytes_emitted: int,
-    raises: bool,
-) -> None:
-    coordinator = object.__new__(RequestCoordinator)
-
-    class FullSupervisor:
-        def register_or_get(self, *args: object, **kwargs: object) -> None:
-            raise FinalizationCapacityError("full")
-
-    coordinator._finalization_supervisor = FullSupervisor()
-    coordinator._finalizer = object()
-    data = FinalizationData(
-        outcome=FinalizationOutcome.COMPLETED,
-        bytes_emitted=bytes_emitted,
-        downstream_started=downstream_started,
-    )
-    call = coordinator._finalize_terminal(_context(), _selected(), data)
-    if raises:
-        with pytest.raises(Exception, match="before handoff"):
-            await call
-    else:
-        await call
-
-
-@pytest.mark.asyncio
-async def test_mixed_retained_drain_dispatches_each_kind_once() -> None:
-    coordinator = object.__new__(RequestCoordinator)
-    coordinator._retained_cleanup_drain_timeout_s = 1.0
-    coordinator._retained_terminal_commands = {
-        ("attempt", 1): RetainedTerminalCommand(
-            kind="failed_attempt_cleanup",
-            progress=AttemptCleanupProgress(),
-        ),
-        ("claim", 2): RetainedTerminalCommand(
-            kind="claim_compensation",
-            progress=ClaimCompensationProgress(),
-        ),
-    }
-    calls: list[str] = []
-
-    async def run_attempt(progress: AttemptCleanupProgress) -> None:
-        calls.append("failed_attempt_cleanup")
         progress.completed = True
 
-    async def run_claim(progress: ClaimCompensationProgress) -> None:
-        calls.append("claim_compensation")
-        progress.completed = True
+    selected = supervisor.register_or_get(_identity(), "client_cancelled")
+    cleanup = supervisor.register_failed_attempt_cleanup(
+        _cleanup_submission(), complete
+    )
+    claim = supervisor.register_claim_compensation(_claim_submission(), complete)
+    assert supervisor.active_count == 3
+    assert retained == 3
 
-    coordinator._run_failed_attempt_cleanup = run_attempt  # type: ignore[method-assign]
-    coordinator._run_claim_compensation = run_claim  # type: ignore[method-assign]
-
-    assert await coordinator.drain_retained_cleanup() == 0
-    assert calls == ["failed_attempt_cleanup", "claim_compensation"]
-    assert coordinator._retained_terminal_commands == {}
-
-
-@pytest.mark.asyncio
-async def test_failed_retained_command_stays_registered_for_drain_rejoin() -> None:
-    coordinator = object.__new__(RequestCoordinator)
-    coordinator._retained_terminal_commands = {
-        ("claim", 1): RetainedTerminalCommand(
-            kind="claim_compensation",
-            progress=ClaimCompensationProgress(),
+    with pytest.raises(FinalizationCapacityError):
+        supervisor.register_failed_attempt_cleanup(
+            _cleanup_submission(request_id="req-2"), complete
         )
+
+    async def drain() -> int:
+        await asyncio.gather(selected.run(), supervisor.run_terminal_command(cleanup))
+        await supervisor.run_terminal_command(claim)
+        return await supervisor.shutdown(timeout_s=1.0)
+
+    assert asyncio.run(drain()) == 0
+    assert supervisor.active_count == 0
+    assert retained == released == 3
+    snapshot = supervisor.snapshot()
+    assert snapshot["active_by_command_kind"] == {
+        "selected_request_finalization": 0,
+        "failed_attempt_cleanup": 0,
+        "claim_compensation": 0,
     }
-    coordinator._retained_cleanup_drain_timeout_s = 1.0
-    calls: list[str] = []
 
-    async def fail_once(progress: ClaimCompensationProgress) -> None:
-        calls.append("failed")
-        raise RuntimeError("temporary local failure")
 
-    coordinator._run_claim_compensation = fail_once  # type: ignore[method-assign]
-    command = coordinator._retained_terminal_commands[("claim", 1)]
-    with pytest.raises(RuntimeError, match="temporary local failure"):
-        await coordinator._start_retained_terminal_task(command)
-    await asyncio.sleep(0)
-    assert command.task is None
-    assert ("claim", 1) in coordinator._retained_terminal_commands
+def test_duplicate_commands_join_and_conflicts_fail_before_mutation() -> None:
+    supervisor = RequestFinalizationSupervisor(db=MagicMock())
+    calls = 0
 
-    async def resume(progress: ClaimCompensationProgress) -> None:
-        calls.append("resumed")
+    async def complete(submission: object, progress: object) -> None:
+        nonlocal calls
+        calls += 1
+        assert isinstance(progress, FailedAttemptCleanupProgress)
         progress.completed = True
 
-    coordinator._run_claim_compensation = resume  # type: ignore[method-assign]
-    assert await coordinator.drain_retained_cleanup() == 0
-    assert calls == ["failed", "resumed"]
-
-
-def test_retained_command_kind_conflict_fails_closed() -> None:
-    coordinator = object.__new__(RequestCoordinator)
-    coordinator._retained_terminal_commands = {}
-    coordinator._retained_cleanup_capacity = 4
-    coordinator._retained_cleanup_capacity_rejections = 0
-    key = ("same", 1)
-    coordinator._register_retained_terminal_command(
-        key,
-        "claim_compensation",
-        context=_context(),
-        claim_identity=object(),
-        receipt=RuntimePublicationReceipt(),
+    first = supervisor.register_failed_attempt_cleanup(_cleanup_submission(), complete)
+    duplicate = supervisor.register_failed_attempt_cleanup(
+        FailedAttemptCleanupSubmission(
+            identity=_identity(),
+            status_code=503,
+            error_class="TemporaryUpstreamError",
+            retry_category="temporary",
+            bytes_received=999,
+            latency_ms=999,
+        ),
+        complete,
     )
+    assert duplicate is first
 
-    with pytest.raises(RuntimeError, match="kind conflict"):
-        coordinator._register_retained_terminal_command(
-            key,
-            "failed_attempt_cleanup",
-            context=_context(),
-            selected=_selected(),
-            error=_RetryableUpstreamError("retry"),
+    with pytest.raises(TerminalConflictError):
+        supervisor.register_failed_attempt_cleanup(
+            FailedAttemptCleanupSubmission(
+                identity=_identity(),
+                status_code=429,
+                error_class="RateLimitError",
+                retry_category="temporary",
+                bytes_received=10,
+                latency_ms=2,
+            ),
+            complete,
         )
+    assert supervisor.active_count == 1
+    asyncio.run(supervisor.run_terminal_command(first))
+    assert calls == 1
 
 
 @pytest.mark.asyncio
-async def test_retained_dispatch_rejects_kind_progress_mismatch() -> None:
-    coordinator = object.__new__(RequestCoordinator)
-    command = RetainedTerminalCommand(
-        kind="failed_attempt_cleanup",
-        progress=ClaimCompensationProgress(),
-    )
+async def test_cancellation_keeps_cleanup_owned_and_progress_is_not_replayed() -> None:
+    supervisor = RequestFinalizationSupervisor(db=MagicMock())
+    started = asyncio.Event()
+    unblock = asyncio.Event()
+    calls = {"first": 0, "second": 0}
 
-    with pytest.raises(RuntimeError, match="incompatible progress"):
-        await coordinator._run_retained_terminal_command(command)
+    async def cleanup(submission: object, progress: object) -> None:
+        assert isinstance(progress, FailedAttemptCleanupProgress)
+        calls["first"] += 1
+        started.set()
+        await unblock.wait()
+        progress.active_count_released = True
+        calls["second"] += 1
+        progress.completed = True
+
+    command = supervisor.register_failed_attempt_cleanup(_cleanup_submission(), cleanup)
+    waiter = asyncio.create_task(supervisor.run_terminal_command(command))
+    await started.wait()
+    waiter.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await waiter
+    assert not command.is_complete
+    unblock.set()
+    await supervisor.run_terminal_command(command)
+    assert command.is_complete
+    assert calls == {"first": 1, "second": 1}

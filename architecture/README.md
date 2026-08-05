@@ -85,7 +85,7 @@ Key invariants:
 - **Protocol-aware streaming EOF**: `SSEDecoder` (`proxy/sse.py`) owns bounded UTF-8/SSE framing and emits shared `DecodedSSEFrame` objects. `IncrementalSSEObserver` retains bounded completion evidence (`[DONE]` for OpenAI, `message_stop` for Anthropic), and `classify_stream_eof()` maps clean exhaustion to canonical completion, provider-policy compatibility, empty, premature, or malformed EOF. The coordinator drains the shared decoder and classifies before `StreamingTranscoder.finish()`. A premature/malformed stream is finalized through the canonical `MIDSTREAM_ERROR` owner; it cannot clear success backoff or emit a synthetic downstream terminal marker. Provider policy is explicit on `ProviderConfig.stream_completion_policy` and defaults to `strict`.
 - Every retryable failed attempt must reach terminal state, confirm its reservation is terminal, and release all owned runtime components before the next attempt
 - Each attempt reservation is released exactly once via `AttemptFinalizer`
-- **Generation-owned request finalization (Plans 026/047/055/056/057/066/067/068/069/074/080)**: every selected request-terminal outcome is owned by one retained, attempt-keyed `RequestFinalizationJob`; streaming work registers no placeholder before its terminal data exists. The retained task completes durable and in-memory cleanup independently of request waiters. Retryable failed attempts and request-terminal cleanup share one generation-owned terminal owner with one component-progress record, a hard 128-entry capacity by default, explicit rejoin, and bounded generation-retirement drain. The first accepted job synchronously acquires one terminal reference on its generation; duplicates and retries reuse it, and completion releases it exactly once after durable and required runtime convergence. A retained owner may return only after its progress record proves durable attempt transition, terminal reservation status, and each owned runtime release; a completed child task alone is not a convergence proof. A cancelled waiter submits one canonical `CLIENT_CANCELLED` request terminal only after selected ownership converges. Duplicate submissions join active work, durable attempt identity supplies permanent idempotency after history eviction or restart, and the bounded `RequestFinalizationSupervisor` provides diagnostics and shutdown drain. `FinalizationResult` projects completed lease markers immediately when later runtime convergence fails, keeps runtime cleanup incomplete until the lease is released, and clears transient retry metadata after release. A live retirement timeout with unresolved terminal references fails closed through the worker fatal handler; process shutdown may abandon references because startup crash repair is authoritative after death.
+- **Generation-owned terminal ownership (Plans 026/047/055/056/057/066/067/068/069/074/080/081)**: selected request-terminal outcomes, retryable failed-attempt cleanup, and post-commit claim compensation are commands in one retained, generation-owned `RequestFinalizationSupervisor`. The supervisor uses one kind-qualified identity, typed submission/progress records, one 128-entry capacity, one retry heap/timer, one diagnostics surface, and one bounded drain. The first accepted command synchronously acquires one terminal reference on its generation; compatible duplicates join it, conflicting submissions fail closed, and completion releases the reference exactly once after durable and required runtime convergence. Cleanup converges before reselection and compensation releases only components proven acquired. The coordinator submits and waits; it owns no retained tasks, progress registry, capacity, or drain. Startup crash repair remains the only repair path for durable work left by a prior process.
 - **Startup runtime accounting repair**: startup reconciliation transitions only durable rows left by a previous process, releases one active unit per accepted request with one aggregate router update per account, and removes quota reservations by ownership rather than cost truthiness. Zero-cost request/token reservations are therefore released; bulk active-count underflow is logged and clamped to zero.
 - The same URL composition rules apply to catalog fetch and chat dispatch
 - **Structured observability persistence (migrations 0026-0029)** every `request_attempts` row carries provider/model/protocol/retry_category/latency/bytes/streamed/is_retry_outcome; every routing decision is persisted to `routing_decisions` in the same transaction as the `request_attempts` INSERT; startup crash recovery and expired-reservation reconciliation record bounded operational events inside the same transaction as durable state mutation; latency is decomposed into `upstream_connect_ms / upstream_read_ms / coordinator_overhead_ms` so the dashboard can distinguish network vs upstream vs eggpool-side bottlenecks
@@ -3128,14 +3128,12 @@ cancellation path retains the terminal owner for bounded retry. It does not
 fall back to an age-based sweep. `RequestFinalizationSupervisor`
 (`src/eggpool/request/finalization_job.py`) closes that gap:
 
-**Plan 026/080 update**: when a `RequestFinalizationSupervisor` is
-available (wired through `RuntimeGenerationFactory`), the streaming
-cancellation path uses a generation-owned `RequestFinalizationJob`
-instead of the fragile `asyncio.wait_for(asyncio.shield(...),
-timeout=10)` pattern. The job is registered before the inner stream
-generator; on `CancelledError`, the retained task owns finalization
-even when every request waiter is cancelled. The legacy shielded path
-remains as a fallback when no supervisor is available.
+**Plan 026/080/081 update**: the streaming cancellation path submits a
+generation-owned terminal command instead of relying on a fragile
+`asyncio.wait_for(asyncio.shield(...), timeout=10)` fallback. The command is
+registered before the inner stream generator; on `CancelledError`, the
+supervisor-owned task continues even when every request waiter is cancelled.
+The same supervisor also owns failed-attempt cleanup and claim compensation.
 
 - **Structured**. `FinalizationResult` distinguishes durable terminal state,
   whether this invocation transitioned it, reservation convergence, and
@@ -3161,10 +3159,9 @@ remains as a fallback when no supervisor is available.
   named columns directly and keeps unknown statuses or mismatched tuples
   unresolved.
 
-The historical `FinalizationRetryQueue` is no longer constructed,
-scheduled, or exposed by production generations. Terminal retry ownership
-belongs only to `RequestFinalizationSupervisor`; startup crash recovery is the
-only durable repair path for work that a prior process could still own.
+Terminal retry ownership belongs only to `RequestFinalizationSupervisor`.
+Startup crash recovery is the only durable repair path for work that a prior
+process could still own; no compatibility retry queue remains.
 
 ### Routing-trace pressure guard
 
@@ -4343,7 +4340,7 @@ Makes selected-attempt cleanup independent of the client request task. Once EggP
 - `FinalizationProgress` — progress state machine (`created → durable_finalization_pending → durable_finalized → runtime_release_pending → runtime_released → analytics_pending → completed`); only `completed` is terminal.
 - `AttemptRuntimeLease` — explicit publication receipt and idempotent runtime ownership token tracking active-count, quota-reservation, and health-probe acquisition facts plus resumable usage, health, and account-runtime convergence.
 - `RequestFinalizationJob` — generation-owned job with retained `asyncio.Task`, single-flight `run()` via `asyncio.shield`, concurrent-caller sharing, and completion callback.
-- `RequestFinalizationSupervisor` — bounded, deduplicated registry of active jobs with generation-retirement reference callbacks, retained completion reconciliation, execution-time absolute retry-age enforcement, bounded history deque (scalar-only records), startup stale-state reconciliation, and shutdown drain/adopt. Its existing bounded `snapshot()` is exposed as `finalization_supervisor` by `/api/stats/runtime`; generation-aware ownership facts are exposed as `finalization_ownership`.
+- `RequestFinalizationSupervisor` — bounded, deduplicated registry for the closed command union `selected_request_finalization`, `failed_attempt_cleanup`, and `claim_compensation`. It provides generation-retirement reference callbacks, retained completion reconciliation, execution-time absolute retry-age enforcement, one retry heap/timer, scalar-only history, mixed-kind shutdown drain/adopt, and kind-level diagnostics. Its bounded `snapshot()` is exposed as `finalization_supervisor` by `/api/stats/runtime`; generation-aware ownership facts are exposed as `finalization_ownership`.
 
 ### Streaming cancellation integration
 
