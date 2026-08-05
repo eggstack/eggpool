@@ -143,6 +143,20 @@ class TestOldConfigCompatibility:
         )
         # Span sampling should default to 5%
         assert config.metrics.dispatch_spans.sample_rate == 0.05
+        assert config.metrics.detailed_span_sample_rate is None
+
+    def test_deprecated_span_rate_is_explicit_override(self) -> None:
+        with pytest.warns(DeprecationWarning, match="detailed_span_sample_rate"):
+            config = AppConfig.from_dict(
+                {
+                    "metrics": {
+                        "dispatch_spans": {"sample_rate": 0.0},
+                        "detailed_span_sample_rate": 0.25,
+                    }
+                }
+            )
+        assert config.metrics.detailed_span_sample_rate == 0.25
+        assert config.metrics.dispatch_spans.sample_rate == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -382,10 +396,10 @@ class TestRehashClassification:
             ReloadDisposition.LIVE
         )
 
-    def test_recovery_enabled_live(self) -> None:
-        """Database recovery settings are live."""
+    def test_recovery_enabled_restart_required(self) -> None:
+        """Database recovery settings are process-owned startup policy."""
         assert classify_reload_field("database.recovery.enabled") == (
-            ReloadDisposition.LIVE
+            ReloadDisposition.RESTART_REQUIRED
         )
 
     def test_dispatch_writer_enabled_restart_required(self) -> None:

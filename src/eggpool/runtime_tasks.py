@@ -124,56 +124,27 @@ def register_runtime_tasks(
             from eggpool.runtime_manager import leased_runtime  # noqa: PLC0415
 
             async with leased_runtime(runtime_manager) as gen:
-                await gen.catalog.refresh()
+                result = await gen.catalog.refresh()
+                await _clear_quarantine_on_catalog_reappearance(gen, result)
+                from eggpool.app import (
+                    prune_health_disabled_models_once,  # noqa: PLC0415
+                )
+
+                await prune_health_disabled_models_once(gen)
+                model_info = getattr(process, "model_info", None)
+                if model_info is not None:
+                    try:
+                        await model_info.reconcile_catalog_refresh(result)
+                        backfill = await model_info.backfill_missing_canonical()
+                        if backfill.get("backfilled", 0) > 0:
+                            logger.info("Model info catalog backfill: %s", backfill)
+                    except Exception:
+                        logger.exception("Model info catalog reconciliation failed")
 
         supervisor.register_periodic(
             "catalog_refresh",
             _catalog_refresh_once,
             interval_s=float(config.models.refresh_interval_s),
-        )
-
-    # ----- model info refresh + backfill --------------------------------
-    if config.model_info.enabled:
-        if config.model_info.refresh_interval_s > 0:
-            initial_model_info_refresh = True
-
-            async def _model_info_refresh_once() -> None:
-                nonlocal initial_model_info_refresh
-                from eggpool.runtime_manager import leased_runtime  # noqa: PLC0415
-
-                async with leased_runtime(runtime_manager) as gen:
-                    mi = getattr(gen, "model_info", None)
-                    if mi is None:
-                        return
-                    result = await mi.refresh_due_models(
-                        force=initial_model_info_refresh
-                    )
-                    initial_model_info_refresh = False
-                    mi.log_refresh_result(result)
-
-            supervisor.register_periodic(
-                "model_info_refresh",
-                _model_info_refresh_once,
-                interval_s=float(config.model_info.refresh_interval_s),
-                run_immediately=True,
-            )
-
-        async def _model_info_backfill_once() -> None:
-            from eggpool.runtime_manager import leased_runtime  # noqa: PLC0415
-
-            async with leased_runtime(runtime_manager) as gen:
-                mi = getattr(gen, "model_info", None)
-                if mi is None:
-                    return
-                result = await mi.backfill_missing_canonical()
-                if result.get("backfilled", 0) > 0:
-                    logger.info("Model info canonical backfill: %s", result)
-
-        supervisor.register_periodic(
-            "model_info_canonical_backfill",
-            _model_info_backfill_once,
-            interval_s=60.0,
-            initial_delay_s=10.0,
         )
 
     # ----- retention cleanup ---------------------------------------------
@@ -296,7 +267,7 @@ def register_runtime_tasks(
     supervisor.register_periodic(
         "retention_cleanup",
         _retention_cleanup_once,
-        interval_s=3600.0,
+        interval_s=float(config.metrics.cleanup_interval_s),
     )
 
     # ----- checkpoint -----------------------------------------------------
@@ -312,35 +283,6 @@ def register_runtime_tasks(
         _checkpoint_once,
         interval_s=14400.0,
         run_immediately=True,
-    )
-
-    # ----- usage window refresh ------------------------------------------
-    async def _refresh_usage_windows_once() -> None:
-        from eggpool.runtime_manager import leased_runtime  # noqa: PLC0415
-
-        async with leased_runtime(runtime_manager) as gen:
-            await gen.router.quota_estimator.load_persisted_windows()
-
-    supervisor.register_periodic(
-        "usage_window_refresh",
-        _refresh_usage_windows_once,
-        interval_s=60.0,
-        initial_delay_s=15.0,
-    )
-
-    # ----- health disabled-models prune ----------------------------------
-    async def _health_disabled_models_prune_once() -> None:
-        from eggpool.app import prune_health_disabled_models_once  # noqa: PLC0415
-        from eggpool.runtime_manager import leased_runtime  # noqa: PLC0415
-
-        async with leased_runtime(runtime_manager) as gen:
-            await prune_health_disabled_models_once(gen)
-
-    supervisor.register_periodic(
-        "health_disabled_models_prune",
-        _health_disabled_models_prune_once,
-        interval_s=60.0,
-        initial_delay_s=40.0,
     )
 
     # ----- metrics flush (buffered modes only) ---------------------------
@@ -509,41 +451,22 @@ def build_callback_factories_for_specs(
                 async with leased_runtime(runtime_manager) as gen:
                     result = await gen.catalog.refresh()
                     await _clear_quarantine_on_catalog_reappearance(gen, result)
+                    from eggpool.app import (
+                        prune_health_disabled_models_once,  # noqa: PLC0415
+                    )
+
+                    await prune_health_disabled_models_once(gen)
+                    model_info = getattr(process, "model_info", None)
+                    if model_info is not None:
+                        try:
+                            await model_info.reconcile_catalog_refresh(result)
+                            backfill = await model_info.backfill_missing_canonical()
+                            if backfill.get("backfilled", 0) > 0:
+                                logger.info("Model info catalog backfill: %s", backfill)
+                        except Exception:
+                            logger.exception("Model info catalog reconciliation failed")
 
             factories[name] = _catalog_refresh_factory
-
-        elif name == "model_info_refresh":
-
-            async def _model_info_refresh_factory() -> None:
-                from eggpool.runtime_manager import (  # noqa: PLC0415
-                    leased_runtime,
-                )
-
-                async with leased_runtime(runtime_manager) as gen:
-                    mi = getattr(gen, "model_info", None)
-                    if mi is None:
-                        return
-                    result = await mi.refresh_due_models(force=False)
-                    mi.log_refresh_result(result)
-
-            factories[name] = _model_info_refresh_factory
-
-        elif name == "model_info_canonical_backfill":
-
-            async def _model_info_backfill_factory() -> None:
-                from eggpool.runtime_manager import (  # noqa: PLC0415
-                    leased_runtime,
-                )
-
-                async with leased_runtime(runtime_manager) as gen:
-                    mi = getattr(gen, "model_info", None)
-                    if mi is None:
-                        return
-                    result = await mi.backfill_missing_canonical()
-                    if result.get("backfilled", 0) > 0:
-                        logger.info("Model info canonical backfill: %s", result)
-
-            factories[name] = _model_info_backfill_factory
 
         elif name == "retention_cleanup":
 
@@ -678,33 +601,6 @@ def build_callback_factories_for_specs(
                     logger.info("WAL checkpoint: %s", result)
 
             factories[name] = _checkpoint_factory
-
-        elif name == "usage_window_refresh":
-
-            async def _usage_window_refresh_factory() -> None:
-                from eggpool.runtime_manager import (  # noqa: PLC0415
-                    leased_runtime,
-                )
-
-                async with leased_runtime(runtime_manager) as gen:
-                    await gen.router.quota_estimator.load_persisted_windows()
-
-            factories[name] = _usage_window_refresh_factory
-
-        elif name == "health_disabled_models_prune":
-
-            async def _health_prune_factory() -> None:
-                from eggpool.app import (  # noqa: PLC0415
-                    prune_health_disabled_models_once,
-                )
-                from eggpool.runtime_manager import (  # noqa: PLC0415
-                    leased_runtime,
-                )
-
-                async with leased_runtime(runtime_manager) as gen:
-                    await prune_health_disabled_models_once(gen)
-
-            factories[name] = _health_prune_factory
 
         elif name == "metrics_flush":
             coalescer = process.metrics_coalescer

@@ -27,7 +27,7 @@ The `TaskSupervisor` manages periodic and startup tasks for maintenance, cleanup
     │ Generation-Leased   │ (retired with generation)
     │ Tasks               │
     │ • catalog_refresh   │
-    │ • model_info_refresh│
+    │ • retention_cleanup │
     └─────────────────────┘
 ```
 
@@ -65,7 +65,11 @@ Survive generation swaps (live reload):
 
 Retired when their generation is retired:
 - **`catalog_refresh`** — Upstream model catalog refresh
-- **`model_info_refresh`** — Model info sidecar refresh
+- **`retention_cleanup`** — Bounded daily retention and reservation reconciliation
+
+Catalog refresh is also the event source for model-info reconciliation and
+health/model recovery. Usage windows are hydrated while constructing a
+generation, so neither concern needs a periodic reload task.
 
 ## Safety-Net Tasks
 

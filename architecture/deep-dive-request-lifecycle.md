@@ -162,12 +162,10 @@ after the retained command converges. Between retries, attempt-scoped
 publication metadata is cleared and cancellation receives the last converged
 attempt explicitly rather than reading stale context flags.
 
-The stale-request safety net is not a second finalization state machine. Its
-bounded pass uses the durable rows it actually transitioned, then aggregates
-one outstanding active-count unit per request by account. It removes each
-owned reservation's request, token, and monetary dimensions (including
-zero-cost reservations) and leaves identity conflicts visible for a later
-pass. Router bulk decrements log and clamp underflow rather than permitting a
+There is no age-based runtime stale-request safety net. Startup crash
+reconciliation repairs durable rows left by a prior process, while the
+retained terminal owner converges live requests and reservations. Router bulk
+decrements log and clamp underflow rather than permitting a
 negative count.
 
 ### `request/body.py` — Request Body Reader

@@ -772,6 +772,7 @@ class RequestCoordinator:
         stream_diagnostics: StreamDiagnostics | None = None,
         finalization_retry_queue: Any | None = None,  # noqa: ANN401
         routing_trace_guard: Any | None = None,  # noqa: ANN401
+        routing_trace_enabled: bool = True,
         routing_trace_writer: Any | None = None,  # noqa: ANN401
         selection_claim_diagnostics: SelectionClaimDiagnostics | None = None,
         dispatch_writer: Any | None = None,  # noqa: ANN401
@@ -845,7 +846,7 @@ class RequestCoordinator:
         self._compression_policy = compression_policy
         self._stream_diagnostics = stream_diagnostics or get_stream_diagnostics()
         self._finalization_supervisor: Any = None
-        if routing_trace_guard is None:
+        if routing_trace_guard is None and routing_trace_enabled:
             from eggpool.request.routing_trace_guard import (
                 get_routing_trace_guard,
             )
@@ -3069,10 +3070,13 @@ class RequestCoordinator:
                     if self._routing_trace_writer is not None
                     else None
                 )
-                skip_trace, skip_reason = self._routing_trace_guard.should_skip(
-                    self._db, writer_snap
-                )
-                if skip_trace:
+                skip_trace = False
+                skip_reason = "ok"
+                if self._routing_trace_guard is not None:
+                    skip_trace, skip_reason = self._routing_trace_guard.should_skip(
+                        self._db, writer_snap
+                    )
+                if skip_trace and self._routing_trace_guard is not None:
                     self._routing_trace_guard.record_skip(reason=skip_reason)
                 else:
                     top_score_value: float | None = None
@@ -3148,9 +3152,9 @@ class RequestCoordinator:
         if trace_event is not None and self._routing_trace_writer is not None:
             with _maybe_span(self._dispatch_span_recorder, SPAN_ROUTING_TRACE_WRITE):
                 result = self._routing_trace_writer.submit(trace_event)
-                if result == "accepted":
+                if result == "accepted" and self._routing_trace_guard is not None:
                     self._routing_trace_guard.record_written()
-                else:
+                elif self._routing_trace_guard is not None:
                     self._routing_trace_guard.record_skip(reason=result)
 
         return post_commit_selected
@@ -5387,8 +5391,8 @@ class RequestCoordinator:
         post-selection client-validation failures) happens after the
         attempt row, reservation, active request count, and health slot
         have already been acquired in :meth:`_select_and_persist_attempt`.
-        Without this helper, those side effects would leak until the
-        periodic stale-request sweep reclaimed them.
+        Without this helper, those side effects would remain visible until
+        the retained terminal owner converged them.
 
         The cleanup runs inside a shielded finalizer call so ASGI
         task cancellation cannot strand the durable state in an

@@ -44,15 +44,21 @@ for the full flow.
 
 ## Pi-Specific Config
 
-Increase timeouts for slower SD card storage:
+For a complete copyable low-wear configuration, use
+[`config.sbc.example.toml`](../config.sbc.example.toml). It intentionally uses
+one database worker, disables optional diagnostics, and keeps correctness-
+critical request state durable while allowing buffered analytics to lag.
+
+If you are adapting an existing configuration, increase timeouts for slower
+SD card storage:
 
 ```toml
 [database]
 busy_timeout_ms = 10000
 
 [upstream]
-max_connections = 50
-max_keepalive = 10
+max_connections = 32
+max_keepalive = 8
 
 [models]
 refresh_interval_s = 7200

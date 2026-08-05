@@ -225,6 +225,7 @@ EXPECTED_INVENTORY_SNAPSHOT: tuple[tuple[str, str, bool], ...] = (
     ("metrics.detailed_span_sample_rate", "live", False),
     ("metrics.dispatch_spans.sample_rate", "live", False),
     ("metrics.dispatch_spans.window_size", "restart_required", False),
+    ("metrics.event_loop_lag_enabled", "restart_required", False),
     ("metrics.flush_interval_s", "live", False),
     ("metrics.max_buffered_events", "restart_required", False),
     ("metrics.rollup_retain_days", "restart_required", False),

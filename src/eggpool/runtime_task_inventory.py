@@ -113,36 +113,8 @@ RUNTIME_TASK_INVENTORY: tuple[RuntimeTaskSpec, ...] = (
         callback_kind="catalog_refresh",
     ),
     RuntimeTaskSpec(
-        name="model_info_refresh",
-        interval_s=21_600.0,
-        initial_delay_s=None,
-        run_immediately=True,
-        timeout_s=None,
-        ownership=TaskOwnership.GENERATION_LEASED,
-        enabled=True,
-        description="Periodically refresh model-info from external sources",
-        reloadable_fields=("model_info.enabled", "model_info.refresh_interval_s"),
-        generation_dependencies=("model_info",),
-        process_dependencies=("db",),
-        callback_kind="model_info_refresh",
-    ),
-    RuntimeTaskSpec(
-        name="model_info_canonical_backfill",
-        interval_s=60.0,
-        initial_delay_s=10.0,
-        run_immediately=False,
-        timeout_s=None,
-        ownership=TaskOwnership.GENERATION_LEASED,
-        enabled=True,
-        description="Backfill missing canonical model-info rows",
-        reloadable_fields=("model_info.enabled",),
-        generation_dependencies=("model_info",),
-        process_dependencies=("db",),
-        callback_kind="model_info_canonical_backfill",
-    ),
-    RuntimeTaskSpec(
         name="retention_cleanup",
-        interval_s=3600.0,
+        interval_s=86400.0,
         initial_delay_s=None,
         run_immediately=False,
         timeout_s=None,
@@ -171,34 +143,6 @@ RUNTIME_TASK_INVENTORY: tuple[RuntimeTaskSpec, ...] = (
         generation_dependencies=(),
         process_dependencies=("db",),
         callback_kind="checkpoint",
-    ),
-    RuntimeTaskSpec(
-        name="usage_window_refresh",
-        interval_s=60.0,
-        initial_delay_s=15.0,
-        run_immediately=False,
-        timeout_s=None,
-        ownership=TaskOwnership.GENERATION_LEASED,
-        enabled=True,
-        description="Reload persisted usage windows into the quota estimator",
-        reloadable_fields=(),
-        generation_dependencies=("router",),
-        process_dependencies=(),
-        callback_kind="usage_window_refresh",
-    ),
-    RuntimeTaskSpec(
-        name="health_disabled_models_prune",
-        interval_s=60.0,
-        initial_delay_s=40.0,
-        run_immediately=False,
-        timeout_s=None,
-        ownership=TaskOwnership.GENERATION_LEASED,
-        enabled=True,
-        description="Prune stale disabled-model entries from the health manager",
-        reloadable_fields=(),
-        generation_dependencies=("health_manager",),
-        process_dependencies=(),
-        callback_kind="health_disabled_models_prune",
     ),
     RuntimeTaskSpec(
         name="metrics_flush",
@@ -263,8 +207,6 @@ def inventory_for_config(
     """Return the task inventory with config-driven enabled/disabled flags.
 
     Applies enable/disable rules from the live config:
-    - ``model_info.enabled`` gates ``model_info_refresh`` and
-      ``model_info_canonical_backfill``.
     - ``backup.enabled`` gates ``automatic_backup``.
     - ``metrics.write_mode == "immediate"`` gates ``metrics_flush``.
     - ``include_update_checker`` gates ``update_checker`` (only the
@@ -279,18 +221,6 @@ def inventory_for_config(
         enabled = spec.enabled
 
         if spec.name == "catalog_refresh" and config.models.refresh_interval_s <= 0:
-            enabled = False
-
-        if (
-            spec.name in ("model_info_refresh", "model_info_canonical_backfill")
-            and not config.model_info.enabled
-        ):
-            enabled = False
-
-        if (
-            spec.name == "model_info_refresh"
-            and config.model_info.refresh_interval_s <= 0
-        ):
             enabled = False
 
         if spec.name == "metrics_flush" and config.metrics.write_mode == "immediate":
@@ -309,8 +239,8 @@ def inventory_for_config(
         initial_delay_s = spec.initial_delay_s
         if spec.name == "catalog_refresh":
             interval_s = float(config.models.refresh_interval_s)
-        elif spec.name == "model_info_refresh":
-            interval_s = float(config.model_info.refresh_interval_s)
+        elif spec.name == "retention_cleanup":
+            interval_s = float(config.metrics.cleanup_interval_s)
         elif spec.name == "metrics_flush":
             interval_s = float(config.metrics.flush_interval_s)
         elif spec.name == "automatic_backup":

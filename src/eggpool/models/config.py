@@ -112,8 +112,8 @@ class UpstreamConfig(BaseModel):
     read_timeout_s: float = Field(default=300, gt=0)
     write_timeout_s: float = Field(default=30, gt=0)
     pool_timeout_s: float = Field(default=30, gt=0)
-    max_connections: int = Field(default=100, gt=0)
-    max_keepalive: int = Field(default=20, gt=0)
+    max_connections: int = Field(default=32, gt=0)
+    max_keepalive: int = Field(default=8, gt=0)
     keepalive_timeout_s: float = Field(default=30, ge=0)
 
     @model_validator(mode="after")
@@ -568,12 +568,16 @@ class MetricsConfig(BaseModel):
     rollup_retain_days: int = Field(default=90, gt=0)
     cleanup_interval_s: int = Field(default=86_400, gt=0)
     cleanup_max_rows_per_pass: int = Field(default=5000, gt=0)
+    event_loop_lag_enabled: bool = Field(
+        default=True,
+        description="Enable the one-second event-loop lag diagnostic monitor.",
+    )
     dispatch_spans: DispatchSpansConfig = Field(
         default_factory=DispatchSpansConfig,
         description="Fine-grained dispatch-span instrumentation (Plan 029).",
     )
-    detailed_span_sample_rate: float = Field(
-        default=0.05,
+    detailed_span_sample_rate: float | None = Field(
+        default=None,
         ge=0.0,
         le=1.0,
         description=(
@@ -581,9 +585,23 @@ class MetricsConfig(BaseModel):
             "Fraction of detailed dispatch spans to record (0.0-1.0). "
             "1.0 = full detail; 0.0 = coarse dispatch only. "
             "Deterministic by request ID. Maintained for backward "
-            "compatibility; overrides ``dispatch_spans.sample_rate`` when set."
+            "compatibility; overrides ``dispatch_spans.sample_rate`` only when "
+            "explicitly present."
         ),
     )
+
+    @model_validator(mode="after")
+    def _warn_deprecated_span_rate(self) -> MetricsConfig:
+        if self.detailed_span_sample_rate is not None:
+            import warnings  # noqa: PLC0415
+
+            warnings.warn(
+                "metrics.detailed_span_sample_rate is deprecated; use "
+                "metrics.dispatch_spans.sample_rate",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        return self
 
 
 class DashboardConfig(BaseModel):
@@ -831,8 +849,8 @@ class ProviderConfig(BaseModel):
     stream_timeouts: ProviderStreamTimeoutConfig = Field(
         default_factory=ProviderStreamTimeoutConfig
     )
-    max_connections: int = Field(default=100, gt=0)
-    max_keepalive: int = Field(default=20, gt=0)
+    max_connections: int = Field(default=32, gt=0)
+    max_keepalive: int = Field(default=8, gt=0)
     keepalive_timeout_s: float = Field(default=30, ge=0)
     routing_priority: int = Field(default=0, ge=0)
     accounts: list[AccountConfig] = Field(default_factory=list[AccountConfig])
@@ -1519,6 +1537,27 @@ class AppConfig(BaseModel):
                         f"in {source}; "
                         f"set a real key before starting the service"
                     )
+
+    def validate_optional_dependencies(self) -> None:
+        """Validate optional runtime dependencies required by this config."""
+        proxy_configured = False
+        for provider in self.providers.values():
+            for account in provider.accounts:
+                if self.resolve_account_proxy_url(account) is not None:
+                    proxy_configured = True
+                    break
+            if proxy_configured:
+                break
+        if not proxy_configured:
+            return
+
+        import importlib.util
+
+        if importlib.util.find_spec("pproxy") is None:
+            raise ConfigError(
+                "Configured account proxy support requires the optional pproxy "
+                "dependency; install with `pip install 'eggpool[proxy]'`"
+            )
 
     def resolve_account_proxy_url(self, account: AccountConfig) -> str | None:
         """Resolve the outbound proxy URL for an account, if configured."""

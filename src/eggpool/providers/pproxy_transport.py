@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import importlib
 import select
 import ssl
 from collections.abc import AsyncIterable, AsyncIterator, Generator, Iterable
@@ -11,7 +12,6 @@ from typing import Any, Protocol, cast
 
 import httpcore
 import httpx
-import pproxy
 
 SOCKET_OPTION = httpcore.SOCKET_OPTION
 
@@ -114,7 +114,8 @@ class PProxyNetworkBackend(httpcore.AsyncNetworkBackend):
         socket_options: Iterable[SOCKET_OPTION] | None = None,
     ) -> None:
         self._proxy_uri = proxy_uri
-        pproxy_connection = cast("Any", pproxy).Connection
+        pproxy_module = importlib.import_module("pproxy")
+        pproxy_connection = cast("Any", pproxy_module).Connection
         self._proxy = cast("PProxyConnection", pproxy_connection(proxy_uri))
         self._socket_options = tuple(socket_options or ())
 

@@ -486,6 +486,7 @@ class ProcessRuntime:
     maintenance_state: Any = None  # noqa: ANN401 — MaintenanceState
     event_loop_lag_monitor: Any = None  # noqa: ANN401 — EventLoopLagMonitor
     readiness_probe: Any = None  # noqa: ANN401 — DatabaseWritableProbe
+    model_info: Any = None  # noqa: ANN401 — ModelInfoService
 
 
 # ---------------------------------------------------------------------------
@@ -546,7 +547,7 @@ class RuntimeGeneration:
     cache_config: Any
     compression_tuning_registry: Any
     dispatch_overhead_recorder: DispatchOverheadRecorder
-    dispatch_span_recorder: DispatchSpanRecorder
+    dispatch_span_recorder: DispatchSpanRecorder | None
     account_backoff_repo: Any
     stats_service: StatsService
     supervisor: Any

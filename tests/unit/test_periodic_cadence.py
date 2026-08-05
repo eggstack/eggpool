@@ -420,30 +420,14 @@ class TestInventoryMatchesRegistration:
         assert specs["update_checker"].run_immediately is True
         assert specs["update_checker"].initial_delay_s is None
 
-        # Generation-leased tasks with explicit startup offsets.
-        assert specs["model_info_canonical_backfill"].interval_s == 60.0
-        assert specs["model_info_canonical_backfill"].initial_delay_s == 10.0
-        assert specs["model_info_canonical_backfill"].run_immediately is False
-
-        assert specs["usage_window_refresh"].interval_s == 60.0
-        assert specs["usage_window_refresh"].initial_delay_s == 15.0
-
         assert "finalization_retry_drain" not in specs
-
-        assert specs["health_disabled_models_prune"].interval_s == 60.0
-        assert specs["health_disabled_models_prune"].initial_delay_s == 40.0
-
-        # Generation-leased tasks with run_immediately=True.
-        assert specs["model_info_refresh"].interval_s == 21_600.0
-        assert specs["model_info_refresh"].run_immediately is True
-        assert specs["model_info_refresh"].initial_delay_s is None
 
         # Tasks that follow the legacy sleep-first contract.
         assert specs["catalog_refresh"].interval_s == 300.0
         assert specs["catalog_refresh"].initial_delay_s is None
         assert specs["catalog_refresh"].run_immediately is False
 
-        assert specs["retention_cleanup"].interval_s == 3_600.0
+        assert specs["retention_cleanup"].interval_s == 86_400.0
         assert specs["retention_cleanup"].initial_delay_s is None
 
         # Ownership.
@@ -451,11 +435,7 @@ class TestInventoryMatchesRegistration:
 
         for name in (
             "catalog_refresh",
-            "model_info_refresh",
-            "model_info_canonical_backfill",
             "retention_cleanup",
-            "usage_window_refresh",
-            "health_disabled_models_prune",
         ):
             assert specs[name].ownership is TaskOwnership.GENERATION_LEASED, name
         for name in ("checkpoint", "update_checker"):

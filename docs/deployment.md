@@ -791,9 +791,10 @@ sqlite3 ~/.local/share/eggpool/usage.sqlite3 "SELECT COUNT(*) FROM reservations 
 ```
 
 Non-zero counts that grow over time indicate finalization failures.
-The stale-request finalizer background task (runs every 60s) should
-automatically clean these up.  If it is not keeping up, check the
-logs for `Stale request finalizer` messages.
+Normal runtime does not reclaim requests by age. The retained terminal owner
+must converge the request, reservation, usage, and health obligations. If
+these counts grow, inspect finalization diagnostics and logs. Startup crash
+reconciliation repairs durable work left by a process that exited.
 
 You can also use `eggpool runtime-status` to see the pending count and
 oldest pending request age without querying SQLite directly.
@@ -832,9 +833,9 @@ The following in-memory growth axes are bounded by design; see
   are capped at `MAX_TRACKED_HOSTS = 256` (coldest-total eviction;
   `evictions_total` is exposed in the manager snapshot).
 - `AccountRuntimeState.model_availability` and
-  `HealthManager.AccountHealth.disabled_models` are pruned at every
-  `AccountRegistry.sync_accounts` / `health_disabled_models_prune`
-  sweep against the currently-advertised model set.
+  `HealthManager.AccountHealth.disabled_models` are pruned during account
+  synchronization and successful catalog-refresh reconciliation against the
+  currently advertised model set.
 
 If RSS still grows continuously after the above:
 

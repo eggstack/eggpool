@@ -651,6 +651,13 @@ def validate_config_file(path: str | Path) -> ConfigValidationResult:
             f"{_VALIDATION_ERROR_PREFIX}: account credential check failed: {exc}"
         ) from exc
 
+    try:
+        config.validate_optional_dependencies()
+    except ConfigError as exc:
+        raise ConfigSchemaError(
+            f"{_VALIDATION_ERROR_PREFIX}: optional dependency check failed: {exc}"
+        ) from exc
+
     warnings = _check_stale_contracts_typed(config, config_path)
 
     try:

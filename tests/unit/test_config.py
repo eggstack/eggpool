@@ -574,6 +574,20 @@ def test_packaged_config_example_validates() -> None:
     assert len(config.all_accounts()) == 0
 
 
+def test_sbc_config_examples_validate() -> None:
+    for path in (
+        "config.sbc.example.toml",
+        "src/eggpool/_share/config.sbc.example.toml",
+    ):
+        config = AppConfig.from_toml(path)
+        assert config.server.threads == 1
+        assert config.database.worker_threads == 1
+        assert config.routing.trace.mode == "off"
+        assert config.metrics.dispatch_spans.sample_rate == 0.0
+        assert config.model_info.enabled is False
+        assert config.readiness_probe.enabled is False
+
+
 def test_config_examples_omit_known_bad_tuning_keys() -> None:
     for path in ("config.example.toml", "src/eggpool/_share/config.example.toml"):
         text = Path(path).read_text()
@@ -806,7 +820,7 @@ def test_provider_config_valid_id() -> None:
     assert p.id == "opencode-go"
     assert p.protocols == ["openai"]
     assert p.connect_timeout_s == 5
-    assert p.max_connections == 100
+    assert p.max_connections == 32
     assert p.accounts == []
 
 

@@ -5,17 +5,16 @@ port = 11300
 log_level = "INFO"
 access_log = true
 # Granian runtime threads inside the single worker process. Keep workers=1.
-# 1 is minimum footprint; 4 is the default for installs that serve dashboard
-# traffic during active proxy use. Granian still runs workers=1.
-threads = 4
+# Keep the supported single-event-loop default. Granian still runs workers=1.
+threads = 1
 
 [upstream]
 base_url = "https://opencode.ai/zen/go/v1"
 connect_timeout_s = 5
 read_timeout_s = 300
 write_timeout_s = 30
-max_connections = 100
-max_keepalive = 20
+max_connections = 32
+max_keepalive = 8
 keepalive_timeout_s = 30
 
 # Optional provider-bound stream timers live under

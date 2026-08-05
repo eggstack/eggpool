@@ -27,7 +27,7 @@ busy_timeout_ms = 5000
 [upstream]
 connect_timeout_s = 5
 read_timeout_s = 300
-max_connections = 100
+max_connections = 32
 
 [metrics]
 write_mode = "balanced"
@@ -72,57 +72,14 @@ retain_count = 14
 
 ## Minimum-Footprint SBC
 
-For extremely constrained devices or when memory is at a premium.
-Reduces database connections, metrics write frequency, and routing
-trace overhead.
+Use the repository's [copyable SBC configuration](../config.sbc.example.toml)
+instead of merging a profile fragment into another file. It is a complete,
+validated example with one SQLite worker, low-wear buffered analytics,
+diagnostics disabled, and daily retention/backup cadence.
 
-```toml
-[server]
-threads = 1
-access_log = false
-
-[database]
-worker_threads = 1
-busy_timeout_ms = 10000
-
-[upstream]
-max_connections = 50
-max_keepalive = 10
-
-[metrics]
-write_mode = "low_wear"
-flush_interval_s = 120
-max_buffered_events = 250
-timeseries_bucket_s = 300
-
-[routing.trace]
-mode = "sampled"
-sample_rate = 0.05
-include_score_components = false
-
-[maintenance]
-max_rows_per_batch = 250
-max_batches_per_tick = 2
-max_tick_duration_ms = 1000
-
-[backup]
-enabled = true
-interval_s = 86400
-retain_count = 7
-```
-
-**Characteristics:**
-- Single runtime thread (minimum footprint)
-- Single database connection (accepts dashboard contention)
-- Low-wear metrics mode (120s flush, 5-minute buckets)
-- Conservative maintenance budgets
-- Reduced backup retention
-- Longer busy timeout for slow storage
-
-**Trade-offs:**
-- Dashboard may be slow under request load
-- Metrics are less fresh (2-minute vs 30-second granularity)
-- Fewer maintenance batches per tick
+The trade-off is lower dashboard freshness and less diagnostic detail in
+exchange for lower memory, connection, and microSD write pressure. Add only
+the provider/account sections you need, then run `eggpool check-config`.
 
 ## Full Diagnostics
 
@@ -223,7 +180,7 @@ max_tick_duration_ms = 1000
 | Scenario | Recommended Profile |
 |----------|-------------------|
 | Raspberry Pi 4/5, personal use | Balanced Default |
-| Raspberry Pi, minimal resources | Minimum-Footprint SBC |
+| Raspberry Pi, minimal resources | [copyable SBC config](../config.sbc.example.toml) |
 | Development/debugging | Full Diagnostics |
 | High-concurrency coding agent | High-Concurrency General |
 | Production, low traffic | Balanced Default |

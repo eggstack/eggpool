@@ -134,8 +134,8 @@ class TestPolicyDefaults:
             "backup.interval_s",
             "backup.retain_count",
             "backup.startup_delay_s",
-            # Model-info scheduling fields reconfigured via process
-            # supervisor; toggling enabled adds/removes the task.
+            # Model-info enablement and cadence are applied by the
+            # generation-owned service; catalog refresh is the event source.
             "model_info.enabled",
             "model_info.refresh_interval_s",
         }

@@ -31,13 +31,12 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "fastapi",
-    "granian[pname]",
-    "httpx",
-    "aiosqlite",
-    "pydantic>=2.0",
-    "click",
-    "pproxy>=2.7.9",
+    "fastapi>=0.115,<1",
+    "granian[pname]>=2.0,<3",
+    "httpx>=0.27,<1",
+    "aiosqlite>=0.20,<1",
+    "pydantic>=2.0,<3",
+    "click>=8,<9",
 ]
 
 [project.urls]
@@ -62,7 +61,10 @@ dev = [
 # extra is not installed, so lightweight Raspberry Pi / SBC targets keep
 # working without a Rust-built wheel.  Install with ``uv pip install
 # 'eggpool[fast]'`` to enable it.
-fast = ["orjson>=3.10"]
+# orjson is intentionally bounded to the current major line; stdlib JSON
+# remains the supported fallback for lightweight SBC installs.
+fast = ["orjson>=3.10,<4"]
+proxy = ["pproxy>=2.7.9,<3"]
 
 [project.scripts]
 eggpool = "eggpool.cli:main"

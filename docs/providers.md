@@ -439,8 +439,8 @@ These require adapter support that EggPool does not currently implement.
 
 ## High-Concurrency HTTP Client Profiles
 
-The default provider HTTPX limits (`max_connections=100`,
-`max_keepalive=20`, `read_timeout_s=300`, `pool_timeout_s=30`) are
+The default provider HTTPX limits (`max_connections=32`,
+`max_keepalive=8`, `read_timeout_s=300`, `pool_timeout_s=30`) are
 calibrated for low-power SBC/Raspberry Pi deployments. The runtime
 settings split into three independent axes that are easy to confuse:
 
@@ -468,8 +468,8 @@ threads = 1
 worker_threads = 2
 
 [providers.opencode-go]
-max_connections = 100
-max_keepalive = 20
+max_connections = 32
+max_keepalive = 8
 connect_timeout_s = 5
 read_timeout_s = 300
 write_timeout_s = 30

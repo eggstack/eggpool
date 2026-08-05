@@ -113,9 +113,12 @@ Plus `RuntimeManagerLeaseExhaustedError` (RuntimeError, mapped to HTTP 503).
 ## Process Model
 
 - Supervisor + Granian worker (`workers=1`), daemon mode (`--verbose` for foreground)
-- `[server].threads` default `4` (values > 1 emit startup warning)
+- `[server].threads` default `1` (values > 1 emit startup warning)
 - `database_worker_threads=2`
 - Readiness probe is process-owned (survives generation swaps)
+- Optional diagnostics are genuinely dormant when disabled: trace writers,
+  detailed span recorders, readiness probes, and event-loop monitors are not
+  instantiated. The copyable low-wear SBC baseline is `config.sbc.example.toml`.
 
 ## Runtime Generations
 

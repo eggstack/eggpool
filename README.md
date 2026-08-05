@@ -12,7 +12,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Proxies model requests across multiple providers and accounts behind a single endpoint
 - OpenAI- and Anthropic-compatible upstream request paths, with transparent bidirectional protocol transcoding
 - Dynamically discovers available models; routes by quota utilization (load-based, never cost-based)
-- Per-account outbound proxy support ([pproxy](https://pypi.org/project/pproxy/) — SOCKS5, HTTP, Shadowsocks)
+- Optional per-account outbound proxy support ([pproxy](https://pypi.org/project/pproxy/) — install with `uv sync --extra proxy`; SOCKS5, HTTP, Shadowsocks)
 - Tracks requests, tokens, latency, errors, and cost provenance in SQLite (`provider_reported`, trusted local `derived`/`partial`, bounded `estimated`; reservation is advisory, not a floor)
 - Multi-page dashboard with 50+ themes, reliability, routing, and runtime views
 - Model metadata enrichment from provider catalogs, OpenRouter, Artificial Analysis, and Hugging Face
@@ -30,11 +30,16 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Error isolation: provider-specific validation errors (e.g. unsupported MiniMax-M3 thinking through OpenCode Go) are contained to a single request — no account/model/circuit/quarantine penalties, no restart or database deletion required
 - Attempt-scoped failure decisions: one bounded canonical decision carries retry, provider evidence, health/quarantine, circuit, backoff, and probe-convergence effects; retained attempt ownership prevents identical failures from colliding or replaying
 - Process-owned finalization: every selected request-terminal outcome (completion, cancellation, capability rejection, upstream client error, or stream failure) is reconciled by one bounded, attempt-keyed retained job with explicit runtime ownership; the supervisor owns capped timer-driven retries, enforces an absolute retry-age deadline, and exposes durable-terminal, reservation, and runtime-cleanup convergence separately, including partial runtime progress while a retry is pending and a non-retryable, detail-free result after the lease converges
-- Bounded stale-request recovery: exact per-request active-count ownership is released, including zero-cost reservations that still carry request or token pressure; underflow is visible and clamped safely
+- Restart-safe crash recovery: startup reconciliation repairs durable requests and reservations left by a prior process; normal runtime cleanup remains owned by the selected attempt
 - Database recovery: fail-closed startup integrity and restart-safe crash reconciliation; an indeterminate runtime SQLite state closes admission and lets systemd restart the worker
 - Bounded model quarantine: TTL-based suspected/quarantined state with corroboration thresholds and automatic recovery
 - Self-healing provider health: every nonterminal account/model suppression is capped at 30 minutes, durable hints are bounded during hydration, and half-open probes always converge
 - Designed for lightweight deployments (Raspberry Pi, SBCs)
+
+For a copyable, low-wear SBC configuration, start with
+[config.sbc.example.toml](config.sbc.example.toml). It uses one SQLite worker,
+disables optional diagnostics, and trades dashboard freshness and diagnostic
+detail for lower memory and storage pressure.
 
 ## Quick Start
 
@@ -243,6 +248,7 @@ The dashboard `/models` page shows enriched model metadata from provider catalog
 | Per-account outbound proxy | [docs/proxy.md](docs/proxy.md) |
 | Model context limits | [docs/model-limits.md](docs/model-limits.md) |
 | Raspberry Pi setup | [docs/raspberry-pi.md](docs/raspberry-pi.md) |
+| Copyable SBC configuration | [config.sbc.example.toml](config.sbc.example.toml) |
 | Firewall configuration | [docs/firewall.md](docs/firewall.md) |
 | Filesystem layout | [docs/filesystem-layout.md](docs/filesystem-layout.md) |
 | Network & DNS diagnostics | [docs/network-diagnostics.md](docs/network-diagnostics.md) |

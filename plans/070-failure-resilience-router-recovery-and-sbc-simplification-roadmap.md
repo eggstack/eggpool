@@ -1,7 +1,7 @@
 # Failure Resilience, Router Recovery, and SBC Simplification Roadmap
 
 Date: 2026-08-04
-Status: ready for implementation
+Status: complete
 Plan: 070
 Planning baseline: `e73db213e7e381043cda3cfb8a3dd8109f3f39ca`
 Completed predecessor: `plans/058-durable-convergence-exact-update-sbc-hotpath-roadmap.md`

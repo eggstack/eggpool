@@ -146,12 +146,8 @@ class TestParity:
         supervisor, names = asyncio.run(_register(include_update_checker=False))
         expected_core = {
             "catalog_refresh",
-            "model_info_refresh",
-            "model_info_canonical_backfill",
             "retention_cleanup",
             "checkpoint",
-            "usage_window_refresh",
-            "health_disabled_models_prune",
         }
         assert expected_core.issubset(names)
 
@@ -262,11 +258,7 @@ class TestProcessSupervisorRouting:
         )
         expected_gen_leased = {
             "catalog_refresh",
-            "model_info_refresh",
-            "model_info_canonical_backfill",
             "retention_cleanup",
-            "usage_window_refresh",
-            "health_disabled_models_prune",
         }
         assert expected_gen_leased.issubset(gen_names), (
             f"Missing gen-leased tasks on gen supervisor: "

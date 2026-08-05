@@ -2288,7 +2288,7 @@ AggregatorError (base)
 - **Status classification**: models classified as `sparse_new`, `partial`, `fresh`, etc. based on available metadata (display name, context limit, capabilities)
 - **Deterministic summaries**: generated from fields only (no LLM); sparse models explicitly note metadata sparsity
 - **Lifecycle wiring**: `ModelInfoService` initialized at startup after catalog load; accepts optional `outbound_client` for external sources. `CatalogService.refresh()` returns `CatalogRefreshResult` with diff information (new/withdrawn models, changed provider keys)
-- **Background refresh**: supervised `model_info_refresh` task processes due models via `ModelInfoRefreshScheduler`; reconciliation also runs after successful catalog refreshes. External source catalogs are fetched once per cycle (bulk) and matched to due models via identity resolution
+- **Background refresh**: startup and successful catalog refreshes reconcile model-info state. External source catalogs are fetched in bounded service cycles and matched to due models via identity resolution; there is no independent high-frequency task.
 - **Refresh scheduling**: `ModelInfoRefreshScheduler` computes next refresh time based on status, first-seen age, and config TTLs; sparse-new models receive accelerated refresh within a configurable window
 - **Source health**: per-source health tracking with cooldown backoff; `record_source_success`/`record_source_error` helpers
 - **Write deduplication**: observations deduplicated by `(source, source_model_id, raw_hash)`; canonical rows compared before rewrite
@@ -2341,8 +2341,8 @@ AggregatorError (base)
   `model_info_aliases`. Periodic refresh logs WARNING on no-match cycles.
   The tiered matcher receives `known_provider_namespaces` from the catalog cache
   so aggregator provider IDs (e.g. `opencode-go`) are stripped before matching.
-  The production supervisor refresh (`_model_info_refresh_once` in `app.py`)
-  calls `log_refresh_result()` for consistent INFO/WARNING logging on every
+  Catalog-driven reconciliation calls `log_refresh_result()` for consistent
+  INFO/WARNING logging on every
   cycle, not just cycles with `refreshed > 0`. Match evidence is exposed via
   `GET /api/model-info/{id}/matches` and as a compact `match_evidence` field
   on the detail endpoint.
@@ -2419,7 +2419,11 @@ The plan in `plans/model_info_suffix_benchmarks_startup_tasks_plan.md` extends t
 - **Artificial Analysis source diagnostics (Phase 3)**: `ModelInfoService.source_diagnostics()` enumerates every configured source (`provider_catalog`, `openrouter`, `artificial_analysis`, `huggingface`) with `configured` / `constructed` / `requires_api_key` / `api_key_present` / `reason` fields. The `/api/model-info/sources` handler merges the live `model_info_source_health` snapshot with the diagnostics so operators can see why a source has no `last_success_at` row (e.g. `requires_api_key`, `not_constructed`, `disabled`). The handler tolerates both sync and async health snapshots via `inspect.isawaitable` so legacy test doubles that pass `AsyncMock` keep working. `tests/unit/test_model_info_source_diagnostics.py` pins the contract.
 - **Tiered Artificial Analysis matching (Phase 3)**: `ModelInfoService._resolve_aa_record()` now consumes the shared tiered resolver, sharing the candidate index and `model_info_match_evidence` audit trail with OpenRouter. AA matches surface `match_method`/`discovered_by`/`diagnostics_json` on `model_info_aliases` and contribute to the same `MATCH_EVIDENCE` observability the OpenRouter plan already exposed.
 - **Preserved external IDs in provenance (Phase 4)**: `build_canonical_detail()` now credits `provenance.sources` for any `existing_detail.external_ids[*]` key that wasn't contributed this cycle, populating `provenance.source_states[<src>] = "preserved_external_id"`. The detail cycle therefore distinguishes three source states explicitly: `contributed` (newly fetched this cycle), `preserved_external_id` (carried from the prior canonical row because the external ID persists in `external_ids`), and `absent` (no observation and no external ID). `tests/unit/test_model_info_provenance_consistency.py` pins the new contract; the existing `test_model_info_reconciliation.py` was updated to expect preserved `openrouter` entries with the new `source_states["openrouter"] = "preserved_external_id"` flag.
-- **Background task first-run behavior (Phase 5)**: `update_checker`, `checkpoint`, and `model_info_refresh` in `app.py:_lifespan_runtime` are now registered with `run_immediately=True`, so their first tick fires during startup instead of after the first interval. `_first_run_state()` in `background/__init__.py` returns one of `last_success` / `last_error` / `never_run_not_due` / `never_run_startup_deferred` / `never_run_overdue` based on the supervisor's heartbeat fields, the configured `run_immediately` / `initial_delay_s`, and a 25%-of-interval (capped at 60s, minimum 5s) grace band. `SupervisedTask.snapshot()` exposes the label under `first_run_state` so the runtime API and dashboard can render friendly statuses.
+- **Background task first-run behavior (Phase 5)**: `update_checker` and
+  `checkpoint` are registered with `run_immediately=True`; catalog-driven
+  model-info reconciliation happens as part of the catalog event. `_first_run_state()`
+  still distinguishes `last_success` / `last_error` / `never_run_not_due` /
+  `never_run_startup_deferred` / `never_run_overdue` for supervised tasks.
 - **Source and task diagnostics (Phase 6)**: `RuntimeMetricsService._snapshot_background_task_summary` now counts `never_run_not_due` and `never_run_overdue` separately from `failed`, and `/api/stats/runtime` `background_task_summary` carries both new counters. The runtime dashboard renders a `startup deferred` / `not yet due` / `never ran (overdue)` / `failing` badge from `first_run_state` so a freshly started process never looks unhealthy just because the first 30- or 60-second tick has not yet fired.
 - **Tests**: `tests/unit/test_model_info_deployment_suffix.py`, `tests/unit/test_model_info_source_diagnostics.py`, `tests/unit/test_model_info_provenance_consistency.py`, and `tests/unit/test_background_first_run.py` lock the contracts. The matching-safety and tiered-matching test modules were extended to cover the deployment-suffix guards.
 
@@ -2763,17 +2767,13 @@ All tasks are registered in `app.py` during lifespan setup. Periodic registratio
 | Task | Interval | Mode | First-tick | Description |
 |------|----------|------|------------|-------------|
 | `catalog_refresh` | `refresh_interval_s` | periodic | staggered | Upstream model catalog refresh, model-info reconciliation after refresh |
-| `model_info_refresh` | `config.model_info.refresh_interval_s` | periodic | `run_immediately=True` | Refresh due model-info rows from configured sources |
-| `model_info_canonical_backfill` | 60s | periodic | staggered | Backfill canonical rows for orphaned models |
-| `usage_window_refresh` | 60s | periodic | staggered | Reload persisted quota windows into memory |
-| `health_disabled_models_prune` | 60s | periodic | staggered | Drop stale `model_availability` and `disabled_models` rows |
 | `metrics_flush` | `config.metrics.flush_interval_s` | periodic | staggered | Buffered analytics flush to `usage_rollups` (lifespan shutdown path stops the supervisor first, then issues a final `flush(reason="shutdown")` to drain without race) |
-| `retention_cleanup` | 1h | periodic | staggered | Cleanup of old requests, events, pings, rollups, expired reservations |
+| `retention_cleanup` | `config.metrics.cleanup_interval_s` (24h default) | periodic | staggered | Cleanup of old requests, events, pings, rollups, expired reservations |
 | `checkpoint` | 4h | periodic | `run_immediately=True` | SQLite WAL checkpoint |
 | `update_checker` | 24h | periodic | `run_immediately=True` | PyPI update check; per-tick probe reuses the shared outbound client |
 | `automatic_backup` | `config.backup.interval_s` | periodic | `initial_delay_s = config.backup.startup_delay_s` | In-process SQLite backup with count-based retention (preserves the historical startup wait) |
 
-Tasks that the operator depends on for live health signalling (`update_checker`, `checkpoint`, `model_info_refresh`) use `run_immediately=True` so a freshly started process reports real state on the first dashboard paint rather than appearing as `never_run` for the entire first interval. Tasks that intentionally stagger (`health_disabled_models_prune`, `usage_window_refresh`, `metrics_flush`, `retention_cleanup`, `model_info_canonical_backfill`) keep their deterministic `initial_delay_s` offsets so first ticks never cluster on the same wall-clock second.
+Tasks that the operator depends on for live health signalling (`update_checker`, `checkpoint`) use `run_immediately=True`. Catalog refresh is the generation-leased event source for model-info reconciliation and health/model recovery, while usage windows are hydrated when a generation is built. Retention runs daily by default; metrics flush remains the only short periodic analytics task.
 
 ### Bounded maintenance and SQLite hygiene (Milestone E)
 
@@ -2789,7 +2789,7 @@ Milestone E converts all periodic database maintenance into bounded, resumable b
 - `run_maintenance_pass()` — bounded batch loop with `await asyncio.sleep(0)` yields between transactions
 
 **Task priority classes**:
-- P0 (correctness recovery): expired reservation reconciliation, stale request finalization — runs unconditionally, higher budgets (1000 rows/batch), task-level timeouts via `p0_max_tick_duration_ms`
+- P0 (correctness recovery): expired reservation reconciliation — runs unconditionally, higher budgets (1000 rows/batch), task-level timeouts via `p0_max_tick_duration_ms`; pending request repair is startup-only because a live process still owns its requests
 - P1 (storage safety): request/event/routing-decisions/ping/rollup/price retention — may defer under contention
 - P2 (metadata repair): model-info observation cleanup — may defer under contention
 
@@ -2803,7 +2803,8 @@ Milestone E converts all periodic database maintenance into bounded, resumable b
 - `cleanup_old_price_snapshots()` — chunked DELETE on `model_price_snapshots`
 - `cleanup_old_model_info_observations()` — chunked DELETE on `model_info_observations`
 - `reconcile_expired_reservations()` — bounded UPDATE with `WHERE id IN (SELECT ... LIMIT ?)`
-- `finalize_stale_requests_once()` — bounded by `batch_size` parameter (default 500), task-level timeout
+- Startup crash reconciliation repairs durable pending requests left by a
+  previous process; no age-based runtime request sweep is registered.
 
 All cleanup functions populate `remaining_estimate` (1 when budget exhausted and more rows exist, 0 when fully drained, None when completed within budget) so the dashboard can signal backlog status.
 
@@ -2895,8 +2896,9 @@ decision without each caller passing the flag explicitly.
 
 The field is configurable under `[metrics.dispatch_spans].sample_rate`
 with `[metrics.dispatch_spans].window_size` for the rolling-window size.
-The legacy `[metrics].detailed_span_sample_rate` is deprecated but
-overrides `dispatch_spans.sample_rate` when set to a non-`1.0` value.
+The legacy `[metrics].detailed_span_sample_rate` is deprecated, unset by
+default, and overrides `dispatch_spans.sample_rate` only when explicitly
+present; setting it emits one configuration warning.
 Both are marked `LIVE` so `eggpool rehash` can adjust them without a
 restart. `sampled_count` and `unsampled_count` counters are exposed in
 the snapshot so operators can interpret the sampling distribution.
@@ -2940,7 +2942,11 @@ Granian profile: workers=1 runtime_threads=N database_worker_threads=M access_lo
 
 #### Background Task Staggering
 
-Multiple periodic tasks run at 30s or 60s cadences (`metrics_flush`, `usage_window_refresh`, `health_disabled_models_prune`, `model_info_canonical_backfill`). Each registration in `app.py:_lifespan_runtime` supplies an explicit `initial_delay_s` so first ticks do not cluster on the same wall-clock second. `background/periodic_initial_offset(name, interval_s, *, max_fraction=0.5)` is the deterministic-from-name helper for future additions; tests remain stable because the offset is `sha256(name)`-derived, not random.
+Only metrics flushing runs on a short periodic cadence in the default
+inventory. Catalog refresh drives model-info and health/model reconciliation,
+usage windows are hydrated at generation construction, and retention runs
+daily by default. This keeps reload registration and steady-state wakeups
+small on SBCs.
 
 Startup crash recovery (`_crash_recovery`) and the initial catalog load are NOT staggered — those run unconditionally before periodic registration, and safety-critical recovery must not be delayed.
 
@@ -3016,7 +3022,7 @@ Long-running deployments — especially Raspberry Pi / SBC nodes — must keep s
 | `ModelCatalogCache._account_support` | `src/eggpool/catalog/cache.py:114` | `frozenset[str]` (no per-call `.copy()`); bounded by registered account × model cardinality | — |
 | `OutboundClientManager._per_host_*` | `src/eggpool/providers/outbound.py:85` | `MAX_TRACKED_HOSTS = 256` (hardcoded) | Coldest-total eviction; `evictions_total` surfaced in `snapshot()` and the `outbound_client` runtime metric |
 | `AccountRuntimeState.model_availability` | `src/eggpool/accounts/state.py` | Pruned at every `AccountRegistry.sync_accounts` against advertised model set | — |
-| `HealthManager.AccountHealth.disabled_models` | `src/eggpool/health/health_manager.py:111` | Pruned by `health_disabled_models_prune` supervisor task (60s cycle) | — |
+| `HealthManager.AccountHealth.disabled_models` | `src/eggpool/health/health_manager.py:111` | Pruned during successful catalog-refresh reconciliation | — |
 
 The `frozenset` switch on `_account_support` (`src/eggpool/catalog/cache.py:639`) eliminates one O(n) `set.copy()` per routing decision. Every caller of `get_supporting_accounts(...)` / `get_supporting_accounts_for_model(...)` is read-only (membership, intersection, iteration), so the immutability is a strict superset of caller needs.
 
@@ -3148,8 +3154,8 @@ remains as a fallback when no supervisor is available.
 
 The historical `FinalizationRetryQueue` is no longer constructed,
 scheduled, or exposed by production generations. Terminal retry ownership
-belongs only to `RequestFinalizationSupervisor`; stale-request and startup
-recovery remain separate durable safety nets.
+belongs only to `RequestFinalizationSupervisor`; startup crash recovery is the
+only durable repair path for work that a prior process could still own.
 
 ### Routing-trace pressure guard
 
@@ -3471,10 +3477,8 @@ model via `TaskOwnership` (`src/eggpool/runtime_task_inventory.py`):
   `process.process_supervisor` and survive generation swaps.
   Only one instance exists; reconfiguration mutates the schedule
   in place via `apply_spec_diff()`.
-- **Generation-leased** tasks (`catalog_refresh`,
-  `model_info_refresh`, `model_info_canonical_backfill`,
-  `retention_cleanup`, `usage_window_refresh`,
-  `health_disabled_models_prune`) acquire a generation lease on
+- **Generation-leased** tasks (`catalog_refresh`, `retention_cleanup`)
+  acquire a generation lease on
   every tick and are retired when their generation is retired;
   a new generation gets a fresh registration.
 
@@ -3499,10 +3503,9 @@ D2 LIVE families and their consumers:
   `backup.retain_count`, `backup.startup_delay_s` — mutates the
   process-owned `automatic_backup` schedule in place.  Toggling
   `enabled` adds/removes the task.
-- **Model-info scheduling**: `model_info.enabled`,
-  `model_info.refresh_interval_s` — mutates the generation-leased
-  `model_info_refresh` and `model_info_canonical_backfill` tasks.
-  Toggling `enabled` adds/removes the tasks; changing
+- **Model-info scheduling**: model-info reconciliation is driven by
+  successful `catalog_refresh` events and startup initialization; there is
+  no independent periodic model-info task to mutate.
   `refresh_interval_s` replaces the schedule with the new cadence.
 
 The `_run_periodic_loop` in `src/eggpool/background/__init__.py`
@@ -3927,7 +3930,7 @@ wire protocol or the LIVE field inventory:
 
 `src/eggpool/background/` manages `SupervisedTask` lifecycle. Tasks
 with `run_immediately=True` fire their first tick without delay (used
-by `update_checker`, `checkpoint`, `model_info_refresh`). Tasks with
+by `update_checker` and `checkpoint`). Tasks with
 `initial_delay_s` override the first-tick delay. `never_run_not_due`
 and `never_run_overdue` labels distinguish freshly started tasks from
 missed-deadline tasks. The `/api/stats/runtime` endpoint and

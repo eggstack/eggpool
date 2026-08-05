@@ -261,6 +261,7 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "metrics.timeseries_bucket_s": ReloadDisposition.RESTART_REQUIRED,
     "metrics.trace_sample_rate": ReloadDisposition.RESTART_REQUIRED,
     "metrics.aggregate_only": ReloadDisposition.RESTART_REQUIRED,
+    "metrics.event_loop_lag_enabled": ReloadDisposition.RESTART_REQUIRED,
     "metrics.rollup_retain_days": ReloadDisposition.RESTART_REQUIRED,
     "metrics.cleanup_interval_s": ReloadDisposition.RESTART_REQUIRED,
     "metrics.cleanup_max_rows_per_pass": ReloadDisposition.RESTART_REQUIRED,

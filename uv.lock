@@ -186,7 +186,6 @@ dependencies = [
     { name = "fastapi" },
     { name = "granian", extra = ["pname"] },
     { name = "httpx" },
-    { name = "pproxy" },
     { name = "pydantic" },
 ]
 
@@ -203,18 +202,21 @@ dev = [
 fast = [
     { name = "orjson" },
 ]
+proxy = [
+    { name = "pproxy" },
+]
 
 [package.metadata]
 requires-dist = [
-    { name = "aiosqlite" },
-    { name = "click" },
+    { name = "aiosqlite", specifier = ">=0.20,<1" },
+    { name = "click", specifier = ">=8,<9" },
     { name = "coverage", extras = ["toml"], marker = "extra == 'dev'" },
-    { name = "fastapi" },
-    { name = "granian", extras = ["pname"] },
-    { name = "httpx" },
-    { name = "orjson", marker = "extra == 'fast'", specifier = ">=3.10" },
-    { name = "pproxy", specifier = ">=2.7.9" },
-    { name = "pydantic", specifier = ">=2.0" },
+    { name = "fastapi", specifier = ">=0.115,<1" },
+    { name = "granian", extras = ["pname"], specifier = ">=2.0,<3" },
+    { name = "httpx", specifier = ">=0.27,<1" },
+    { name = "orjson", marker = "extra == 'fast'", specifier = ">=3.10,<4" },
+    { name = "pproxy", marker = "extra == 'proxy'", specifier = ">=2.7.9,<3" },
+    { name = "pydantic", specifier = ">=2.0,<3" },
     { name = "pyright", marker = "extra == 'dev'" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-asyncio", marker = "extra == 'dev'" },
@@ -222,7 +224,7 @@ requires-dist = [
     { name = "respx", marker = "extra == 'dev'" },
     { name = "ruff", marker = "extra == 'dev'" },
 ]
-provides-extras = ["dev", "fast"]
+provides-extras = ["dev", "fast", "proxy"]
 
 [[package]]
 name = "fastapi"

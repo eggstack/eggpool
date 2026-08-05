@@ -17,8 +17,8 @@ base_url = "https://opencode.ai/zen/go/v1"
 connect_timeout_s = 5
 read_timeout_s = 300
 write_timeout_s = 30
-max_connections = 100
-max_keepalive = 20
+max_connections = 32
+max_keepalive = 8
 keepalive_timeout_s = 30
 
 # Provider blocks may set stream_completion_policy = "strict" (default),
@@ -277,8 +277,8 @@ ttl_seconds = 86400
 # [network]
 # connect_timeout_s = 5
 # read_timeout_s = 300
-# max_connections = 100
-# max_keepalive = 20
+# max_connections = 32
+# max_keepalive = 8
 # keepalive_expiry_s = 30
 #
 # [network.dns_cache]
@@ -334,9 +334,10 @@ cleanup_max_rows_per_pass = 5000
 # sample_rate = 0.05        # 5% of requests; 0.0 = coarse only, 1.0 = all
 # window_size = 200         # rolling-window samples per span
 
-# Deprecated: use [metrics.dispatch_spans].sample_rate instead.
-# When set to a non-1.0 value, overrides dispatch_spans.sample_rate.
+# Deprecated: use [metrics.dispatch_spans].sample_rate instead. When this
+# field is explicitly set, it overrides the new setting and emits a warning.
 # detailed_span_sample_rate = 0.05
+# event_loop_lag_enabled = true  # set false on constrained SBCs
 
 # ─── Low-wear profile for microSD / Raspberry Pi ──────────────────
 # Uncomment this block when running from microSD and dashboard traces

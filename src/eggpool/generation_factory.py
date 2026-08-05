@@ -88,7 +88,7 @@ class PreparedRuntimeGeneration:
     cache_config: Any
     compression_tuning_registry: Any
     dispatch_overhead_recorder: DispatchOverheadRecorder
-    dispatch_span_recorder: DispatchSpanRecorder
+    dispatch_span_recorder: DispatchSpanRecorder | None
     account_backoff_repo: Any
     stats_service: StatsService
     supervisor: TaskSupervisor
@@ -203,6 +203,7 @@ class RuntimeGenerationFactory:
         )
 
         db = process.db
+        config.validate_optional_dependencies()
         _register = candidate.register_resource if candidate is not None else None
 
         # -- DNS backend (generation-owned) --------------------------------
@@ -311,15 +312,18 @@ class RuntimeGenerationFactory:
 
         # -- Dispatch recorders ---------------------------------------------
         dispatch_overhead_recorder = DispatchOverheadRecorder(window_size=100)
-        # Plan 029, Workstream H: request-coherent span sampling.
-        # ``detailed_span_sample_rate`` is deprecated but overrides
-        # ``dispatch_spans.sample_rate`` for backward compatibility.
-        span_sample_rate = config.metrics.detailed_span_sample_rate
-        if span_sample_rate == 1.0:
-            span_sample_rate = config.metrics.dispatch_spans.sample_rate
-        dispatch_span_recorder = DispatchSpanRecorder(
-            window_size=config.metrics.dispatch_spans.window_size,
-            detailed_span_sample_rate=span_sample_rate,
+        # The deprecated field is an override only when explicitly present.
+        # Zero sampling avoids constructing the detailed recorder entirely.
+        span_sample_rate = config.metrics.dispatch_spans.sample_rate
+        if config.metrics.detailed_span_sample_rate is not None:
+            span_sample_rate = config.metrics.detailed_span_sample_rate
+        dispatch_span_recorder = (
+            DispatchSpanRecorder(
+                window_size=config.metrics.dispatch_spans.window_size,
+                detailed_span_sample_rate=span_sample_rate,
+            )
+            if span_sample_rate > 0
+            else None
         )
 
         # -- Local pre-upstream recorder ------------------------------------
@@ -423,6 +427,13 @@ class RuntimeGenerationFactory:
             compression_tuning_registry=compression_tuning_registry,
             compression_policy=compression_policy,
             stream_diagnostics=stream_diagnostics,
+            routing_trace_enabled=(
+                config.routing.trace.mode != "off"
+                and (
+                    config.routing.trace.mode == "all"
+                    or config.routing.trace.sample_rate > 0
+                )
+            ),
             dispatch_writer=process.dispatch_writer,
             use_dispatch_writer=(
                 process.dispatch_writer is not None and config.dispatch_writer.enabled
@@ -454,7 +465,15 @@ class RuntimeGenerationFactory:
             get_routing_trace_guard,
         )
 
-        routing_trace_guard = get_routing_trace_guard()
+        routing_trace_guard = (
+            get_routing_trace_guard()
+            if config.routing.trace.mode != "off"
+            and (
+                config.routing.trace.mode == "all"
+                or config.routing.trace.sample_rate > 0
+            )
+            else None
+        )
         coordinator._routing_trace_guard = (  # pyright: ignore[reportPrivateUsage]
             routing_trace_guard
         )

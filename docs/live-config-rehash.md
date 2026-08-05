@@ -71,9 +71,7 @@ via ``TaskOwnership`` (``src/eggpool/runtime_task_inventory.py``):
   Only one instance exists; reconfiguration mutates the schedule
   in place.
 - **Generation-leased** tasks (``catalog_refresh``,
-  ``model_info_refresh``, ``model_info_canonical_backfill``,
-  ``retention_cleanup``, ``usage_window_refresh``,
-  ``health_disabled_models_prune``) acquire a generation lease on
+  ``retention_cleanup``) acquire a generation lease on
   every tick and are retired when their generation is retired.
 
 D2 LIVE families:

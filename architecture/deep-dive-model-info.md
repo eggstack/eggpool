@@ -125,7 +125,9 @@ Non-exact matches persist evidence rows in `model_info_match_evidence`.
 ## Refresh Lifecycle
 
 1. Startup: `seed_configured_aliases()` inserts `[model_info.aliases]` entries
-2. Background: `model_info_refresh` task processes due models
+2. Background: successful catalog refreshes reconcile model-info state; due
+   external-source work is handled by the model-info service without a
+   separate high-frequency scheduler
 3. Catalog refresh: reconciliation runs after successful catalog refreshes
 4. External sources: fetched once per cycle, matched via identity resolution
 5. Single-model: `POST /api/model-info/refresh?model_id=<id>` for immediate refresh

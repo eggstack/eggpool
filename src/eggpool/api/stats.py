@@ -415,8 +415,8 @@ async def handle_operational_health(
 ) -> Response:
     """GET /api/stats/operational.
 
-    Aggregated safety-net activity (crash recovery, stale-request
-    finalizer, reservation reconciliation) plus the most recent raw
+    Aggregated safety-net activity (crash recovery and reservation
+    reconciliation) plus the most recent raw
     events.  Mirrors the structure of ``/api/stats/pings`` (summary +
     recent) for consistency.
     """

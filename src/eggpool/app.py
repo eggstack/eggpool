@@ -316,12 +316,14 @@ async def finalize_stale_requests_once(
     max_pending_seconds: float,
     batch_size: int = 500,
 ) -> int:
-    """Run a single sweep of the stale-request finalizer.
+    """Legacy one-shot stale sweep retained only for migration-era callers.
 
-    Returns the number of leaked requests that were transitioned.
-    Split out from :func:`_finalize_stale_requests` so tests and
-    one-off operators can invoke the sweep directly without waiting
-    for the periodic loop.
+    It is not registered by the runtime; live request ownership is converged
+    by retained finalization jobs and startup crash recovery handles only
+    work left by a previous process.
+
+    Returns the number of leaked requests that were transitioned for a
+    migration-era one-off caller.
     """
     threshold = f"-{int(max_pending_seconds)} seconds"
     async with db.transaction():
@@ -468,32 +470,6 @@ async def finalize_stale_requests_once(
                 bucket["microdollars"],
             )
     return len(transitioned)
-
-
-async def _prune_health_disabled_models_loop(  # pyright: ignore[reportUnusedFunction]
-    app_state: Any,
-    cycle_interval_s: float = 60.0,
-) -> None:
-    """Legacy ``while True`` wrapper kept for backward compatibility.
-
-    The supervisor now drives the periodic cadence via
-    :func:`prune_health_disabled_models_once` directly.  This
-    wrapper is retained so external callers and tests that expect a
-    loop entry point can still drive the prune with a custom cadence.
-    """
-    while True:
-        await asyncio.sleep(cycle_interval_s)
-        try:
-            pruned = await prune_health_disabled_models_once(app_state)
-            if pruned > 0:
-                logger.info(
-                    "health_disabled_models_prune: removed %d stale rows",
-                    pruned,
-                )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("health_disabled_models_prune failed")
 
 
 async def prune_health_disabled_models_once(app_state: Any) -> int:
@@ -849,6 +825,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
 
     # 1b. Validate account credentials
     config.validate_account_credentials()
+    config.validate_optional_dependencies()
 
     # 2. Database
     db = Database(
@@ -935,15 +912,14 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         )
 
     # 7. Process-owned MetricsWriteCoalescer for buffered analytics.
-    # Created before the factory so process.metrics_coalescer is
-    # available for the coordinator's metrics wiring.
-    rollup_repo = UsageRollupRepository(db)
-
-    metrics_coalescer = MetricsWriteCoalescer(
-        config=config.metrics,
-        db=db,
-        rollup_repo=rollup_repo,
-    )
+    # Immediate mode has no buffer, queue, or periodic flush task.
+    metrics_coalescer = None
+    if config.metrics.write_mode != "immediate":
+        metrics_coalescer = MetricsWriteCoalescer(
+            config=config.metrics,
+            db=db,
+            rollup_repo=UsageRollupRepository(db),
+        )
     app.state.metrics_coalescer = metrics_coalescer
     process.metrics_coalescer = metrics_coalescer
 
@@ -971,27 +947,30 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     process.dispatch_writer = dispatch_writer
     app.state.dispatch_writer = dispatch_writer
 
-    # 9. Process-owned RoutingTraceWriter (Milestone D).
-    # Created before the factory so process.routing_trace_writer is
-    # available for the coordinator's trace wiring.
-    from eggpool.db.repositories import RoutingDecisionRepository  # noqa: PLC0415
-    from eggpool.observability.routing_trace_writer import (  # noqa: PLC0415
-        RoutingTraceWriter,
-    )
+    # 9. Process-owned RoutingTraceWriter (Milestone D).  Diagnostic trace
+    # infrastructure is absent when the effective trace policy is disabled.
+    routing_trace_writer = None
+    if config.routing.trace.mode != "off" and (
+        config.routing.trace.mode == "all" or config.routing.trace.sample_rate > 0
+    ):
+        from eggpool.db.repositories import RoutingDecisionRepository  # noqa: PLC0415
+        from eggpool.observability.routing_trace_writer import (  # noqa: PLC0415
+            RoutingTraceWriter,
+        )
 
-    routing_trace_writer = RoutingTraceWriter(
-        db=db,
-        routing_decision_repo=RoutingDecisionRepository(db),
-        queue_capacity=config.routing.trace.queue_capacity,
-        flush_interval_s=config.routing.trace.flush_interval_s,
-        max_batch_size=config.routing.trace.max_batch_size,
-        shutdown_flush_timeout_s=config.routing.trace.shutdown_flush_timeout_s,
-    )
-    routing_trace_writer.configure(
-        mode=config.routing.trace.mode,
-        sample_rate=config.routing.trace.sample_rate,
-    )
-    routing_trace_writer.start()
+        routing_trace_writer = RoutingTraceWriter(
+            db=db,
+            routing_decision_repo=RoutingDecisionRepository(db),
+            queue_capacity=config.routing.trace.queue_capacity,
+            flush_interval_s=config.routing.trace.flush_interval_s,
+            max_batch_size=config.routing.trace.max_batch_size,
+            shutdown_flush_timeout_s=config.routing.trace.shutdown_flush_timeout_s,
+        )
+        routing_trace_writer.configure(
+            mode=config.routing.trace.mode,
+            sample_rate=config.routing.trace.sample_rate,
+        )
+        routing_trace_writer.start()
     process.routing_trace_writer = routing_trace_writer
     app.state.routing_trace_writer = routing_trace_writer
 
@@ -1121,13 +1100,14 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         except Exception:
             logger.exception("Failed to initialize model info service")
             model_info = None
+    process.model_info = model_info
 
     # 16. Event-loop lag monitor (process-owned, Milestone F6).
     # Measures event-loop starvation via periodic callback drift.
-    event_loop_lag_monitor = EventLoopLagMonitor(
-        cadence_s=1.0,
-        window_size=200,
-    )
+    event_loop_lag_monitor = None
+    if config.metrics.event_loop_lag_enabled:
+        event_loop_lag_monitor = EventLoopLagMonitor(cadence_s=1.0, window_size=200)
+    process.event_loop_lag_monitor = event_loop_lag_monitor
     app.state.event_loop_lag_monitor = event_loop_lag_monitor
 
     # 17. Reconcile expired reservations at startup so dashboard counts
@@ -1216,14 +1196,15 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # readiness. /readyz only reads this cached result.
     from eggpool.health.writable_probe import DatabaseWritableProbe  # noqa: PLC0415
 
-    readiness_probe = DatabaseWritableProbe(
-        db=db,
-        interval_s=config.readiness_probe.interval_s,
-        freshness_s=config.readiness_probe.freshness_s,
-        timeout_s=config.readiness_probe.timeout_s,
-        initial_probe=config.readiness_probe.initial_probe,
-    )
+    readiness_probe = None
     if config.readiness_probe.enabled:
+        readiness_probe = DatabaseWritableProbe(
+            db=db,
+            interval_s=config.readiness_probe.interval_s,
+            freshness_s=config.readiness_probe.freshness_s,
+            timeout_s=config.readiness_probe.timeout_s,
+            initial_probe=config.readiness_probe.initial_probe,
+        )
         probe_snapshot = await readiness_probe.force_probe()
         if probe_snapshot.status.value != "healthy":
             raise DatabaseError("initial database writable probe failed")
@@ -1258,9 +1239,10 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     await process_supervisor.start_all()
 
     # 21b. Start the event-loop lag monitor (process-owned, F6).
-    event_loop_lag_monitor.start()
+    if event_loop_lag_monitor is not None:
+        event_loop_lag_monitor.start()
 
-    if config.readiness_probe.enabled:
+    if readiness_probe is not None:
         await readiness_probe.start()
 
     # No same-process recovery controller is wired here. A fatal database

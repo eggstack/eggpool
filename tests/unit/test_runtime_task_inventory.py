@@ -82,12 +82,8 @@ class TestInventoryConsistency:
     def test_inventory_names_match_expected_tasks(self) -> None:
         expected = {
             "catalog_refresh",
-            "model_info_refresh",
-            "model_info_canonical_backfill",
             "retention_cleanup",
             "checkpoint",
-            "usage_window_refresh",
-            "health_disabled_models_prune",
             "metrics_flush",
             "update_checker",
             "automatic_backup",
@@ -137,30 +133,26 @@ class TestOwnershipClassification:
         }
         expected = {
             "catalog_refresh",
-            "model_info_refresh",
-            "model_info_canonical_backfill",
             "retention_cleanup",
-            "usage_window_refresh",
-            "health_disabled_models_prune",
         }
         assert gen_tasks == expected
 
 
 class TestInventoryForConfig:
-    def test_model_info_disabled_disables_two_tasks(self) -> None:
+    def test_model_info_disabled_does_not_add_periodic_tasks(self) -> None:
         config = _make_config()
         config.model_info.enabled = False  # type: ignore[union-attr]
         specs = inventory_for_config(config, include_update_checker=False)
         by_name = {s.name: s for s in specs}
-        assert by_name["model_info_refresh"].enabled is False
-        assert by_name["model_info_canonical_backfill"].enabled is False
+        assert "model_info_refresh" not in by_name
+        assert "model_info_canonical_backfill" not in by_name
 
-    def test_model_info_refresh_interval_zero_disables_refresh(self) -> None:
+    def test_model_info_refresh_interval_does_not_add_periodic_task(self) -> None:
         config = _make_config()
         config.model_info.refresh_interval_s = 0  # type: ignore[union-attr]
         specs = inventory_for_config(config, include_update_checker=False)
         by_name = {s.name: s for s in specs}
-        assert by_name["model_info_refresh"].enabled is False
+        assert "model_info_refresh" not in by_name
 
     def test_metrics_immediate_disables_flush(self) -> None:
         config = _make_config()

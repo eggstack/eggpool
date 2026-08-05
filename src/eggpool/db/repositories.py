@@ -933,7 +933,7 @@ class OperationalEventRepository:
     """CRUD operations for operational_events.
 
     Records rows emitted by safety-net and periodic cleanup tasks
-    (crash recovery, stale-request finalizer, reservation reconcile,
+    (crash recovery, reservation reconcile,
     streaming cancel-timeout fallback).  Each row carries an
     ``event_type`` and a JSON ``details`` blob so the dashboard can
     chart "how often is the safety net firing?" without instrumenting

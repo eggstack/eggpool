@@ -1,0 +1,67 @@
+# Copy this file to config.toml for a low-wear, minimum-footprint SBC install.
+# It is a complete, valid configuration. Add providers/accounts with
+# `eggpool connect` or the provider sections from config.example.toml.
+#
+# Trade-offs: one SQLite worker connection accepts more dashboard contention;
+# diagnostics are disabled or sampled; buffered analytics may lose up to 120s
+# after abrupt power loss. Correctness-critical request state remains durable.
+
+[server]
+host = "0.0.0.0"
+port = 11300
+log_level = "INFO"
+access_log = false
+threads = 1
+
+[upstream]
+base_url = "https://opencode.ai/zen/go/v1"
+max_connections = 32
+max_keepalive = 8
+
+[database]
+path = "usage.sqlite3"
+busy_timeout_ms = 10000
+wal = true
+synchronous = "NORMAL"
+worker_threads = 1
+
+[models]
+refresh_interval_s = 300
+startup_refresh = true
+
+[routing]
+strategy = "quota_fair"
+
+[routing.trace]
+mode = "off"
+sample_rate = 0.0
+
+[dispatch_writer]
+enabled = false
+
+[readiness_probe]
+enabled = false
+
+[model_info]
+enabled = false
+
+[metrics]
+write_mode = "low_wear"
+flush_interval_s = 120
+max_buffered_events = 250
+timeseries_bucket_s = 300
+aggregate_only = true
+event_loop_lag_enabled = false
+cleanup_interval_s = 86400
+
+[metrics.dispatch_spans]
+sample_rate = 0.0
+
+[dashboard]
+enabled = true
+public = true
+
+[backup]
+enabled = true
+interval_s = 86400
+retain_count = 7

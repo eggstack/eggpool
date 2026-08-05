@@ -11,7 +11,6 @@ import httpx
 from eggpool.constants import DEFAULT_PROVIDER_ID
 from eggpool.errors import UpstreamError
 from eggpool.providers.outbound import HttpcoreTransport
-from eggpool.providers.pproxy_transport import AsyncPProxyTransport
 
 if TYPE_CHECKING:
     from eggpool.models.config import AppConfig, ProviderConfig
@@ -157,9 +156,7 @@ def _build_client(
         keepalive_expiry=cfg.keepalive_timeout_s,
     )
     transport = (
-        AsyncPProxyTransport(proxy_url, limits=limits)
-        if proxy_url is not None
-        else None
+        _build_proxy_transport(proxy_url, limits) if proxy_url is not None else None
     )
     if transport is None and network_backend is not None:
         pool = httpcore.AsyncConnectionPool(
@@ -180,3 +177,13 @@ def _build_client(
         limits=limits,
         transport=transport,
     )
+
+
+def _build_proxy_transport(
+    proxy_url: str,
+    limits: httpx.Limits,
+) -> httpx.AsyncBaseTransport:
+    """Load the optional pproxy transport only for proxied accounts."""
+    from eggpool.providers.pproxy_transport import AsyncPProxyTransport
+
+    return AsyncPProxyTransport(proxy_url, limits=limits)

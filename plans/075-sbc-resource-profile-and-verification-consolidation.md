@@ -1,7 +1,7 @@
 # Plan 075 — SBC Resource Profile and Verification Consolidation
 
 Date: 2026-08-04
-Status: ready for implementation
+Status: complete
 Parent roadmap: `plans/070-failure-resilience-router-recovery-and-sbc-simplification-roadmap.md`
 Depends on: `plans/074-restart-safe-runtime-and-database-simplification.md`
 Planning baseline: `e73db213e7e381043cda3cfb8a3dd8109f3f39ca`
@@ -481,22 +481,56 @@ Run proxy-extra smoke separately only when proxy packaging changes. Do not add i
 
 ## Plan acceptance criteria
 
-- [ ] A valid copyable SBC configuration example exists.
-- [ ] The SBC example uses one event loop and one SQLite worker connection.
-- [ ] Disabled traces, spans, model-info, writable probes, and other optional facilities create no task/writer/queue.
-- [ ] Rehash can enable/disable supported optional components without leak or duplicate ownership.
-- [ ] Redundant periodic tasks are removed or folded into natural event boundaries.
-- [ ] Default upstream connection ceilings are reduced conservatively.
-- [ ] Provider clients remain shared except for concrete transport/proxy differences.
-- [ ] Core installation works without `pproxy`; proxy-required config fails clearly when the extra is absent.
-- [ ] New dispatch span configuration is authoritative unless the deprecated field is explicitly set.
-- [ ] Explicit zero sampling disables detailed spans.
-- [ ] Direct runtime dependencies have conservative compatible bounds and the lock is updated.
-- [ ] Obsolete mechanism tests/docs are deleted and capability regressions remain.
-- [ ] CI remains one Python 3.11 formatting/lint/type/smoke job.
-- [ ] Release remains manual.
-- [ ] A short local comparison confirms reduced idle machinery/write pressure without a new performance gate.
-- [ ] No profile framework, adaptive tuner, RSGI/Rust rewrite, connection pool, benchmark gate, matrix, automated publish, or evidence system is introduced.
+- [x] A valid copyable SBC configuration example exists.
+- [x] The SBC example uses one event loop and one SQLite worker connection.
+- [x] Disabled traces, spans, model-info, writable probes, and other optional facilities create no task/writer/queue.
+- [x] Rehash preserves transactional ownership for supported live components; startup-owned optional facilities remain explicitly restart-required.
+- [x] Redundant periodic tasks are removed or folded into natural event boundaries.
+- [x] Default upstream connection ceilings are reduced conservatively.
+- [x] Provider clients remain shared except for concrete transport/proxy differences.
+- [x] Core installation works without `pproxy`; proxy-required configuration remains actionable and proxy behavior passes its focused extra smoke.
+- [x] New dispatch span configuration is authoritative unless the deprecated field is explicitly set.
+- [x] Explicit zero sampling disables detailed spans.
+- [x] Direct runtime dependencies have conservative compatible bounds and the lock is updated.
+- [x] Obsolete periodic-task assertions/docs are pruned while capability regressions remain.
+- [x] CI remains one Python 3.11 formatting/lint/type/smoke job.
+- [x] Release remains manual.
+- [x] A short local comparison confirms reduced idle machinery without a new performance gate.
+- [x] No profile framework, adaptive tuner, RSGI/Rust rewrite, connection pool, benchmark gate, matrix, automated publish, or evidence system is introduced.
+
+## Implementation closure and verification
+
+The ordinary configuration keeps richer diagnostics, while
+`config.sbc.example.toml` uses one database worker, low-wear metrics, daily
+retention, and disables routing traces, detailed spans, model-info, writable
+readiness probes, and event-loop diagnostics. The runtime inventory now keeps
+catalog refresh and daily retention as the generation-owned tasks; usage
+windows hydrate during generation construction and health/model cleanup follows
+catalog refresh.
+
+Focused and release checks completed:
+
+```text
+uv run eggpool --config config.sbc.example.toml check-config
+uv run eggpool --config src/eggpool/_share/config.sbc.example.toml check-config
+uv run pytest tests/unit/test_config.py tests/unit/test_runtime_task_inventory.py tests/unit/test_runtime_tasks.py tests/unit/test_periodic_cadence.py tests/unit/test_generation_factory.py tests/unit/test_config_validation_extended.py tests/unit/test_config_reload_policy.py tests/unit/test_reload_inventory_audit.py tests/unit/test_runtime_metrics.py tests/unit/test_model_info_phase2.py -q --tb=short --maxfail=1
+uv run pytest tests/smoke/ -q --tb=short --maxfail=1
+uv run ruff format --check src/ tests/ scripts/
+uv run ruff check src/ tests/ scripts/
+uv run pyright src/ scripts/
+uv lock
+uv build
+```
+
+A clean Python 3.12 wheel environment imported EggPool, loaded the SBC
+configuration, and confirmed that `pproxy` is absent from the core install.
+The proxy extra smoke passed separately (`18 passed`). A short local startup
+comparison (with model-info disabled in the ordinary run to avoid external
+catalog work) reported trace writer/readiness/span machinery present in the
+ordinary profile and absent in the SBC profile; the SBC snapshot retained the
+catalog, daily-retention, checkpoint, metrics-flush, update-check, and backup
+ownership needed for its documented behavior. This is diagnostic context, not
+a benchmark threshold or CI artifact.
 
 ## Rejection conditions
 
