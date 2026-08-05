@@ -3,7 +3,7 @@
 Workstream A of Plan 028.  A ``ProviderBoundRequest`` owns the decoded
 payload lifecycle for one proxy request from the moment account selection
 completes through to upstream dispatch.  It replaces ad-hoc re-decoding
-of ``context.upstream_body`` across the coordinator, compression,
+of duplicated provider-body state across the coordinator, compression,
 synthetic-cache, and transcoder subsystems with a single authoritative
 decoded representation.
 
@@ -116,8 +116,8 @@ class ProviderBoundRequest:
     Created after account selection, the ``ProviderBoundRequest`` carries
     both the original client payload and the (potentially mutated)
     provider-bound payload through the rest of the request lifecycle.
-    Callers that previously called ``jsonx_loads(context.upstream_body)``
-    now read from ``provider_payload`` or ``provider_bytes`` instead.
+    Callers read from ``provider_payload`` or ``provider_bytes`` instead of
+    maintaining a second request-body mirror.
 
     ``client_payload`` is treated as **immutable**.  ``provider_payload``
     initially aliases ``client_payload`` when no mutation has occurred;

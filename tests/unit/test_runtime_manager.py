@@ -288,7 +288,6 @@ class TestAppStateAudit:
     def test_router_is_runtime_owned(self) -> None:
         assert is_runtime_owned_attr("router")
         assert is_runtime_owned_attr("catalog")
-        assert is_runtime_owned_attr("coordinator")
         assert is_runtime_owned_attr("health_manager")
         assert is_runtime_owned_attr("registry")
 
@@ -434,10 +433,9 @@ class TestMirrorGenerationOnAppState:
         app = MagicMock()
         gen = _fake_generation(0)
         mirror_generation_on_app_state(app, gen)
-        # Should have set router, catalog, coordinator, etc.
+        # Should have set router, catalog, and other operational mirrors.
         assert app.state.router is gen.router
         assert app.state.catalog is gen.catalog
-        assert app.state.coordinator is gen.coordinator
         assert app.state.health_manager is gen.health_manager
 
     def test_mirror_does_not_overwrite_process_owned(self) -> None:
@@ -463,7 +461,6 @@ class TestMirrorGenerationOnAppState:
 # a generation lease, never directly via app.state in request handlers.
 _GENERATION_OWNED_ATTRS_TO_AUDIT = frozenset(
     {
-        "coordinator",
         "catalog",
         "health_manager",
         "router",
@@ -511,46 +508,6 @@ def _expr_targets_app_state(expr: ast.expr) -> bool:
 def _attr_targets_app_state(node: ast.Attribute) -> bool:
     """Return True if ``node`` reads from ``<X>.app.state.<attr>``."""
     return _expr_targets_app_state(node.value)
-
-
-def _collect_legacy_fallback_lines(
-    func: ast.FunctionDef | ast.AsyncFunctionDef,
-) -> set[int]:
-    """Return source lines inside ``if <ident> is not None: ... else:`` blocks.
-
-    Used to scope the audit allowlist for the lease-acquired fallback
-    branches that are kept for backwards compatibility with tests
-    that build a FastAPI app without a runtime manager.
-    """
-    lines: set[int] = set()
-    for stmt in ast.walk(func):
-        if not isinstance(stmt, ast.If):
-            continue
-        test = stmt.test
-        if not isinstance(test, ast.Compare):
-            continue
-        left = test.left
-        comparators = test.comparators
-        ops = test.ops
-        if len(ops) != 1 or not isinstance(ops[0], ast.IsNot):
-            continue
-        if len(comparators) != 1:
-            continue
-        right = comparators[0]
-        if (
-            not isinstance(right, ast.Constant)
-            or right.value is not None
-            or not isinstance(left, ast.Name)
-        ):
-            continue
-        if left.id != "lease":
-            continue
-        if stmt.orelse:
-            for sub in stmt.orelse:
-                for sub_node in ast.walk(sub):
-                    if hasattr(sub_node, "lineno"):
-                        lines.add(sub_node.lineno)
-    return lines
 
 
 def _collect_inner_app_state_violations() -> list[tuple[int, str]]:
@@ -616,8 +573,7 @@ class TestAppStateAuditEnforcement:
 
         The inner handler used to read ``request.app.state.config.providers``
         which bypasses the lease.  After D2 the handler must read
-        ``lease.runtime.immutable_request_state.provider_ids`` (or the
-        legacy fallback only when no lease is held).
+        ``lease.runtime.immutable_request_state.provider_ids``.
         """
         proxy_path = (
             Path(__file__).resolve().parent.parent.parent
@@ -657,21 +613,12 @@ class TestAppStateAuditEnforcement:
         Production request handlers read generation-owned services
         from the leased ``coordinator``/``catalog``/etc. parameters,
         never directly via ``getattr(request.app.state, "router",
-        None)``-style fallback reads.  The audit forbids both direct
+        None)``-style reads. The audit forbids both direct
         attribute chains (``request.app.state.<attr>``) and
         ``getattr()`` calls that target ``request.app.state``.
 
-        The lone exception is the ``if lease is None`` legacy fallback
-        branch, which is reachable only by contract tests that build
-        a FastAPI app without a runtime manager.  The audit allow-lists
-        that branch via a narrowing guard that requires:
-
-        1. The ``getattr`` call is the immediate ``else`` clause of an
-           ``if lease is not None:`` test.
-        2. The comment immediately preceding the call names it as a
-           "legacy fallback" for tests.
-
-        Anything else fails the audit.
+        Any ``getattr`` call targeting ``request.app.state`` is forbidden;
+        the request path must use the leased generation instead.
         """
         proxy_path = (
             Path(__file__).resolve().parent.parent.parent
@@ -684,12 +631,6 @@ class TestAppStateAuditEnforcement:
         tree = ast.parse(source)
         inner_func = _find_inner_function(tree)
         assert inner_func is not None
-
-        # First, collect lines that are inside an ``else:`` of an
-        # ``if <ident> is not None:`` test for ``ident in
-        # ("lease",)``.  Anything in such an ``else`` block is part of
-        # the legacy fallback path.
-        legacy_fallback_lines = _collect_legacy_fallback_lines(inner_func)
 
         violations: list[tuple[int, str]] = []
         for node in ast.walk(inner_func):
@@ -729,13 +670,11 @@ class TestAppStateAuditEnforcement:
                     else None
                 )
             line = getattr_call.lineno
-            if line in legacy_fallback_lines:
-                continue
             violations.append((line, f"getattr(...app.state, '{attr_name}')"))
 
         assert violations == [], (
             "_handle_proxy_request_inner must not use getattr() to read "
-            f"app.state outside the legacy test fallback (must use "
+            f"app.state (must use "
             f"injected services): {violations}"
         )
 

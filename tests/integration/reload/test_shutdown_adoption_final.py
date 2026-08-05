@@ -58,8 +58,6 @@ async def test_shutdown_adopts_persistent_retirement_failure(
         close_counts = rtm.close_counts()
         assert close_counts[old_generation_id]["client_pool"] == 1
         assert close_counts[active_generation_id]["client_pool"] == 1
-        assert close_counts[old_generation_id]["outbound_manager"] == 1
-        assert close_counts[active_generation_id]["outbound_manager"] == 1
 
         history = [
             record
@@ -111,4 +109,3 @@ async def test_shutdown_timeout_cancels_preacceptance_and_restores_ownership(
     await rtm.shutdown()
     close_counts = rtm.close_counts()
     assert close_counts[old_generation_id]["client_pool"] == 1
-    assert close_counts[old_generation_id]["outbound_manager"] == 1

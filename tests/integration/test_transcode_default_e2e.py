@@ -41,6 +41,7 @@ from eggpool.models.config import AppConfig
 from eggpool.request.coordinator import RequestCoordinator
 from eggpool.routing.router import Router
 from eggpool.transcoder.policy import TranscoderPolicy
+from tests.helpers.real_runtime import install_test_runtime_manager
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -156,7 +157,6 @@ async def app() -> AsyncGenerator[FastAPI, None]:
 
     catalog = CatalogService(config, registry, db, httpx_client)
     application.state.catalog = catalog
-    application.state.transcoder_policy = config.transcoder
 
     router = Router(registry, catalog, health_manager=HealthManager())
     application.state.router = router
@@ -181,7 +181,16 @@ async def app() -> AsyncGenerator[FastAPI, None]:
         config=config,
         transcoder_policy=config.transcoder,
     )
-    application.state.coordinator = coordinator
+    runtime_manager = await install_test_runtime_manager(
+        application,
+        config=config,
+        db=db,
+        registry=registry,
+        catalog=catalog,
+        router=router,
+        coordinator=coordinator,
+        client_pool=httpx_client,
+    )
 
     # Seed the catalog: MiniMax-M3 is an Anthropic-protocol model served
     # only by the mm-acct account under the minimax provider.
@@ -197,6 +206,7 @@ async def app() -> AsyncGenerator[FastAPI, None]:
 
     yield application
 
+    await runtime_manager.shutdown()
     await httpx_client.aclose()
     await db.disconnect()
 
@@ -556,13 +566,14 @@ async def test_explicit_disabled_escape_hatch_blocks_translation(
     fails with HTTP 400 ProtocolMismatchError, and the upstream is NOT
     contacted.
     """
-    app.state.transcoder_policy = TranscoderPolicy(
+    policy = TranscoderPolicy(
         enabled=False,
         loss_policy="warn",
         prefer_native=True,
     )
-    # Re-bind the coordinator's policy reference to the new policy.
-    app.state.coordinator._transcoder_policy = app.state.transcoder_policy  # type: ignore[attr-defined]
+    generation = app.state.runtime_manager.active_snapshot()
+    object.__setattr__(generation, "transcoder_policy", policy)
+    generation.coordinator._transcoder_policy = policy
 
     request_body = {
         "model": "MiniMax-M3",

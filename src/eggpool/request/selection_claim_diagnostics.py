@@ -1,22 +1,20 @@
 """Process-local selection-claim diagnostics.
 
-Milestone B instruments the new ``SelectionClaimTracker`` state machine
-with bounded, lock-free counters that surface under
+The coordinator's split selection/persistence/publication path exposes
+bounded, lock-free counters that surface under
 ``/api/stats/runtime`` so operators can prove the selection critical
 section no longer wraps database I/O.
 
 Counters (all in-memory, reset on process restart):
 
-* ``claims_created`` -- number of ``SelectionClaim`` objects the
-  coordinator has minted.
-* ``claims_persisted`` -- claims that entered the ``PERSIST`` state.
-* ``claims_committed`` -- claims whose durable rows successfully
-  committed.
-* ``claims_published`` -- claims whose runtime state (active count,
-  quota reservation) was successfully published.
-* ``claims_rolled_back_before_persistence`` -- claims that were rolled
-  back without ever entering the ``PERSIST`` state (circuit exhausted
-  mid-claim, cancellation, persistence failure).
+* ``claims_created`` -- selection claims started by the coordinator.
+* ``claims_persisted`` -- claims that entered durable persistence.
+* ``claims_committed`` -- claims whose durable rows successfully committed.
+* ``claims_published`` -- claims whose runtime state was successfully
+  published.
+* ``claims_rolled_back_before_persistence`` -- claims rolled back before
+  durable persistence (circuit exhaustion, cancellation, or persistence
+  failure).
 * ``ambiguous_commit_reconciliations`` -- claims whose commit outcome
   was ambiguous (exception after the SQL ``COMMIT`` boundary but
   before the row was known durable); the coordinator falls back to a

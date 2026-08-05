@@ -21,7 +21,7 @@ def _default_backend(
     config: DnsCacheConfig | None = None,
 ) -> DnsNetworkBackend:
     if config is None:
-        config = DnsCacheConfig()
+        config = DnsCacheConfig(enabled=True)
     wrapped = MagicMock(spec=httpcore.AsyncNetworkBackend)
     return DnsNetworkBackend(config, wrapped)
 
@@ -29,7 +29,7 @@ def _default_backend(
 class TestRepeatedRequestsShareCache:
     @pytest.mark.asyncio
     async def test_repeated_connect_tcp_one_resolver_call(self) -> None:
-        cfg = DnsCacheConfig(positive_ttl_seconds=300)
+        cfg = DnsCacheConfig(enabled=True, positive_ttl_seconds=300)
         backend = _default_backend(cfg)
         mock_stream = MagicMock(spec=httpcore.AsyncNetworkStream)
         captured_hosts: list[str] = []
@@ -62,7 +62,9 @@ class TestRepeatedRequestsShareCache:
 class TestCacheExpiryCausesReResolution:
     @pytest.mark.asyncio
     async def test_expired_entry_triggers_new_lookup(self) -> None:
-        cfg = DnsCacheConfig(positive_ttl_seconds=10, stale_if_error_seconds=0)
+        cfg = DnsCacheConfig(
+            enabled=True, positive_ttl_seconds=10, stale_if_error_seconds=0
+        )
         backend = _default_backend(cfg)
         mock_stream = MagicMock(spec=httpcore.AsyncNetworkStream)
         fake_time = [1000.0]
@@ -105,7 +107,7 @@ class TestCacheExpiryCausesReResolution:
 class TestDnsFailurePreservesErrorClass:
     @pytest.mark.asyncio
     async def test_gaierror_raises_connect_error_through_backend(self) -> None:
-        cfg = DnsCacheConfig()
+        cfg = DnsCacheConfig(enabled=True)
         backend = _default_backend(cfg)
 
         async def _fake_connect_tcp(*args: object, **kwargs: object) -> MagicMock:
@@ -123,7 +125,7 @@ class TestDnsFailurePreservesErrorClass:
 
     @pytest.mark.asyncio
     async def test_timeout_raises_connect_timeout_through_backend(self) -> None:
-        cfg = DnsCacheConfig()
+        cfg = DnsCacheConfig(enabled=True)
         backend = _default_backend(cfg)
 
         async def _fake_connect_tcp(*args: object, **kwargs: object) -> MagicMock:
@@ -143,7 +145,7 @@ class TestDnsFailurePreservesErrorClass:
 class TestTlsHostnamePreserved:
     @pytest.mark.asyncio
     async def test_original_hostname_used_for_tls_not_resolved_ip(self) -> None:
-        cfg = DnsCacheConfig(positive_ttl_seconds=300)
+        cfg = DnsCacheConfig(enabled=True, positive_ttl_seconds=300)
         backend = _default_backend(cfg)
         mock_stream = MagicMock(spec=httpcore.AsyncNetworkStream)
         resolved_hosts: list[str] = []
@@ -168,7 +170,7 @@ class TestTlsHostnamePreserved:
 class TestIpBypassThroughBackend:
     @pytest.mark.asyncio
     async def test_ip_address_bypasses_dns_cache(self) -> None:
-        cfg = DnsCacheConfig(positive_ttl_seconds=300)
+        cfg = DnsCacheConfig(enabled=True, positive_ttl_seconds=300)
         backend = _default_backend(cfg)
         mock_stream = MagicMock(spec=httpcore.AsyncNetworkStream)
         resolved_hosts: list[str] = []
@@ -221,7 +223,7 @@ class TestDisabledBackendBypassesCache:
 class TestDifferentHostsIndependentCaches:
     @pytest.mark.asyncio
     async def test_different_hosts_get_separate_cache_entries(self) -> None:
-        cfg = DnsCacheConfig(positive_ttl_seconds=300)
+        cfg = DnsCacheConfig(enabled=True, positive_ttl_seconds=300)
         backend = _default_backend(cfg)
         mock_stream = MagicMock(spec=httpcore.AsyncNetworkStream)
 
@@ -245,7 +247,7 @@ class TestConcurrentRequestsShareResolution:
     async def test_concurrent_connect_tcp_one_resolve(self) -> None:
         import asyncio
 
-        cfg = DnsCacheConfig(positive_ttl_seconds=300)
+        cfg = DnsCacheConfig(enabled=True, positive_ttl_seconds=300)
         backend = _default_backend(cfg)
         mock_stream = MagicMock(spec=httpcore.AsyncNetworkStream)
 

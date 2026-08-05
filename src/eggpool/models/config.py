@@ -153,63 +153,6 @@ class DispatchWriterConfig(BaseModel):
         return self
 
 
-class DatabaseRecoveryConfig(BaseModel):
-    """Deprecated compatibility shape for the removed runtime recovery loop.
-
-    Existing configuration files remain parseable for one release. The values
-    are ignored; runtime SQLite uncertainty always fails closed and relies on
-    supervisor restart plus startup reconciliation. ``validate_config_file``
-    emits the operator-facing deprecation warning.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: bool = Field(
-        default=True,
-        description="Deprecated and ignored; restart is the recovery policy.",
-    )
-    max_attempts: int = Field(
-        default=5,
-        ge=1,
-        le=20,
-        description="Deprecated and ignored.",
-    )
-    initial_backoff_ms: int = Field(
-        default=100,
-        ge=0,
-        le=10_000,
-        description="Deprecated and ignored.",
-    )
-    max_backoff_ms: int = Field(
-        default=5000,
-        ge=0,
-        le=60_000,
-        description="Deprecated and ignored.",
-    )
-    reconciliation_timeout_s: float = Field(
-        default=30.0,
-        gt=0.0,
-        le=600.0,
-        description="Deprecated and ignored.",
-    )
-    fail_process_on_exhaustion: bool = Field(
-        default=False,
-        description=(
-            "Deprecated and ignored; all fatal database uncertainty exits "
-            "the worker for supervisor restart."
-        ),
-    )
-
-    @model_validator(mode="after")
-    def _validate_backoff(self) -> DatabaseRecoveryConfig:
-        if self.max_backoff_ms < self.initial_backoff_ms:
-            raise ConfigError(
-                f"database.recovery.max_backoff_ms ({self.max_backoff_ms}) "
-                f"must be >= initial_backoff_ms ({self.initial_backoff_ms})"
-            )
-        return self
-
-
 class DatabaseConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -221,9 +164,6 @@ class DatabaseConfig(BaseModel):
     # uses one connection; set to 2 to open a separate read-only stats
     # connection when dashboard reads should avoid the data-plane lock.
     worker_threads: int = Field(default=1, ge=1, le=2)
-    recovery: DatabaseRecoveryConfig = Field(
-        default_factory=DatabaseRecoveryConfig,
-    )
 
 
 class ReadinessProbeConfig(BaseModel):

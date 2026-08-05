@@ -637,7 +637,7 @@ This final cleanup pass closes two semantic gaps left after Phase C:
 
 The post-selection recompute previously forwarded the **already-translated** Anthropic `thinking.budget_tokens` value as both `requested_effort` and `requested_budget_tokens` to `resolve_thinking_budget()`. Because the resolver prioritises `requested_budget_tokens` over `requested_effort`, the selected provider's `effort_to_budget_tokens` mapping was silently bypassed for OpenAI `reasoning_effort` clients.
 
-The new `_extract_original_thinking_budget_inputs()` helper parses `context.original_body` (not `context.upstream_body`) and returns either `(effort, None)` for OpenAI clients or `(None, budget)` for Anthropic clients. The recompute now passes **only** the original client intent, so:
+The new `_extract_original_thinking_budget_inputs()` helper parses `context.original_body` (not the provider-bound payload) and returns either `(effort, None)` for OpenAI clients or `(None, budget)` for Anthropic clients. The recompute now passes **only** the original client intent, so:
 
 - OpenAI `reasoning_effort = "high"` against a provider whose `effort_to_budget_tokens.high = 32768` produces an Anthropic body with `thinking.budget_tokens = 32768` even when global defaults are `16384`.
 - Anthropic `thinking.budget_tokens = 50000` against a provider whose `budget_tokens_max = 8192` is still clamped/validated against the **selected** provider's min/max.

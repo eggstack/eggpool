@@ -5,8 +5,8 @@ thinking/reasoning implementation:
 
 - The selected provider's ``effort_to_budget_tokens`` mapping wins for
   OpenAI ``reasoning_effort`` requests, even when the preflight
-  translation already wrote an intermediate Anthropic budget into
-  ``upstream_body``.
+  translation already wrote an intermediate Anthropic budget into the
+  provider-bound payload.
 - Selected-provider recompute leaves ``thinking_trace.upstream_fields``
   accurate (``["thinking"]`` when it wrote the field, preserved verbatim
   when an earlier path already populated the list).
@@ -36,6 +36,7 @@ from eggpool.catalog.capabilities import (
     model_capabilities_to_dict,
 )
 from eggpool.errors import CapabilityError
+from eggpool.request.provider_bound_request import ProviderBoundRequest
 from eggpool.transcoder.budget_resolver import BudgetResolutionError
 from eggpool.transcoder.context import TranscodeContext
 from eggpool.transcoder.policy import (
@@ -90,9 +91,19 @@ def _make_context(
     model_id: str,
     streaming: bool = False,
 ) -> Any:
-    """Build a ``ProxyRequestContext`` with explicit transcoded state."""
+    """Build a context with explicit provider-bound transcoded state."""
     from eggpool.request.coordinator import ProxyRequestContext
 
+    payload = json.loads(upstream_body)
+    assert isinstance(payload, dict)
+    provider_bound = ProviderBoundRequest(
+        client_bytes=original_body,
+        client_payload=payload,
+        client_protocol="openai",
+        model_id=model_id,
+        upstream_protocol="anthropic",
+    )
+    provider_bound.set_provider_bytes(upstream_body)
     return ProxyRequestContext(
         request_id="req-budget-cleanup",
         protocol="openai",
@@ -100,7 +111,7 @@ def _make_context(
         streaming=streaming,
         original_body=original_body,
         incoming_headers={},
-        upstream_body=upstream_body,
+        provider_bound=provider_bound,
         upstream_protocol="anthropic",
         transcode_required=True,
         transcode_context=TranscodeContext(
@@ -272,7 +283,7 @@ def _build_coordinator(
     )
 
     router = Router(registry, _MockCatalog(cache))  # type: ignore[arg-type]
-    return RequestCoordinator(
+    coordinator = RequestCoordinator(
         registry=registry,
         catalog=_MockCatalog(cache),  # type: ignore[arg-type]
         router=router,
@@ -286,6 +297,13 @@ def _build_coordinator(
         transcoder_policy=policy,
         quota_estimator=quota_estimator,
     )
+    from eggpool.request.finalization_job import RequestFinalizationSupervisor
+
+    coordinator._finalization_supervisor = RequestFinalizationSupervisor(  # pyright: ignore[reportPrivateUsage]
+        db=db,
+        effects_applier=coordinator._effects_applier,  # pyright: ignore[reportPrivateUsage]
+    )
+    return coordinator
 
 
 # ---------------------------------------------------------------------------
@@ -373,8 +391,8 @@ class TestSelectedProviderEffortMappingWins:
                 selected=selected,
             )
 
-            assert ctx.upstream_body is not None
-            payload = json.loads(ctx.upstream_body)
+            assert ctx.provider_bound is not None
+            payload = json.loads(ctx.provider_bound.serialize_provider_payload())
             assert payload["thinking"]["budget_tokens"] == 32768
             assert ctx.thinking_trace is not None
             assert ctx.thinking_trace["resolved_budget_tokens"] == 32768
@@ -550,8 +568,8 @@ class TestExplicitAnthropicBudgetClamped:
                 selected=selected,
             )
 
-            assert ctx.upstream_body is not None
-            payload = json.loads(ctx.upstream_body)
+            assert ctx.provider_bound is not None
+            payload = json.loads(ctx.provider_bound.serialize_provider_payload())
             assert payload["thinking"]["budget_tokens"] == 16384
             assert ctx.thinking_trace is not None
             # The trace records the resolved value even when clamping
@@ -1124,7 +1142,7 @@ def _build_coordinator_sync(
             raise NotImplementedError
 
     router = Router(registry, _MockCatalog(cache))  # type: ignore[arg-type]
-    return RequestCoordinator(
+    coordinator = RequestCoordinator(
         registry=registry,
         catalog=_MockCatalog(cache),  # type: ignore[arg-type]
         router=router,
@@ -1136,3 +1154,10 @@ def _build_coordinator_sync(
         routing_decision_repo=RoutingDecisionRepository(_StubDb()),  # type: ignore[arg-type]
         transcoder_policy=policy,
     )
+    from eggpool.request.finalization_job import RequestFinalizationSupervisor
+
+    coordinator._finalization_supervisor = RequestFinalizationSupervisor(  # pyright: ignore[reportPrivateUsage]
+        db=_StubDb(),
+        effects_applier=coordinator._effects_applier,  # pyright: ignore[reportPrivateUsage]
+    )
+    return coordinator

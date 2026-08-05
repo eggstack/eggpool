@@ -9,6 +9,7 @@ factory.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -28,8 +29,16 @@ from eggpool.db.repositories import (
 )
 from eggpool.health.health_manager import HealthManager
 from eggpool.models.config import AppConfig
+from eggpool.proxy.client import HOP_BY_HOP_HEADERS, LOCAL_CREDENTIAL_HEADERS
 from eggpool.request.coordinator import RequestCoordinator
+from eggpool.request.finalization_job import RequestFinalizationSupervisor
 from eggpool.routing.router import Router
+from eggpool.runtime_manager import (
+    ImmutableRequestState,
+    RuntimeGeneration,
+    RuntimeManager,
+    attach_runtime_manager,
+)
 from eggpool.stats import StatsService
 
 if TYPE_CHECKING:
@@ -151,6 +160,84 @@ class RuntimeAppResult:
     router: Router
     health_manager: HealthManager
     coordinator: RequestCoordinator
+    runtime_manager: RuntimeManager
+
+
+class _TestGenerationSupervisor:
+    """Minimal generation task owner for manually wired request tests."""
+
+    def all_healthy(self) -> bool:
+        return True
+
+    async def stop_all(self) -> None:
+        return
+
+
+async def install_test_runtime_manager(
+    application: FastAPI,
+    *,
+    config: AppConfig,
+    db: Database,
+    registry: AccountRegistry,
+    catalog: CatalogService,
+    router: Router,
+    coordinator: RequestCoordinator,
+    client_pool: Any,
+) -> RuntimeManager:
+    """Install the canonical runtime boundary around a test coordinator.
+
+    Hand-built integration fixtures use real request-path services but do
+    not run the production lifespan. This helper gives those tests the same
+    runtime-manager and terminal-supervisor contract as production.
+    """
+    finalization_supervisor = RequestFinalizationSupervisor(
+        db=db,
+        effects_applier=coordinator._effects_applier,  # pyright: ignore[reportPrivateUsage]
+    )
+    coordinator._finalization_supervisor = finalization_supervisor  # pyright: ignore[reportPrivateUsage]
+    generation = RuntimeGeneration(
+        generation_id=0,
+        config=config,
+        config_digest="test",
+        registry=registry,
+        catalog=catalog,
+        router=router,
+        coordinator=coordinator,
+        client_pool=client_pool,
+        outbound_manager=None,
+        dns_backend=None,
+        health_manager=coordinator._health_manager,  # pyright: ignore[reportPrivateUsage]
+        cost_calculator=coordinator._cost_calculator,  # pyright: ignore[reportPrivateUsage]
+        transcoder_policy=coordinator._transcoder_policy,  # pyright: ignore[reportPrivateUsage]
+        compression_policy=coordinator._compression_policy,  # pyright: ignore[reportPrivateUsage]
+        cache_config=coordinator._cache_config,  # pyright: ignore[reportPrivateUsage]
+        compression_tuning_registry=coordinator._compression_tuning_registry,  # pyright: ignore[reportPrivateUsage]
+        dispatch_overhead_recorder=coordinator._dispatch_overhead_recorder,  # pyright: ignore[reportPrivateUsage]
+        dispatch_span_recorder=coordinator._dispatch_span_recorder,  # pyright: ignore[reportPrivateUsage]
+        account_backoff_repo=coordinator._account_backoff_repo,  # pyright: ignore[reportPrivateUsage]
+        stats_service=getattr(application.state, "stats", None),
+        supervisor=_TestGenerationSupervisor(),
+        routing_trace_guard=coordinator._routing_trace_guard,  # pyright: ignore[reportPrivateUsage]
+        routing_trace_writer=coordinator._routing_trace_writer,  # pyright: ignore[reportPrivateUsage]
+        effects_applier=coordinator._effects_applier,  # pyright: ignore[reportPrivateUsage]
+        finalization_supervisor=finalization_supervisor,
+        local_pre_upstream_recorder=coordinator._local_pre_upstream_recorder,  # pyright: ignore[reportPrivateUsage]
+        stream_diagnostics=coordinator._stream_diagnostics,  # pyright: ignore[reportPrivateUsage]
+        created_at_monotonic=time.monotonic(),
+        created_at_epoch=time.time(),
+        immutable_request_state=ImmutableRequestState(
+            provider_ids=frozenset(registry.get_provider_ids()),
+            account_names=frozenset(
+                state.name for state in registry.get_enabled_states()
+            ),
+            hop_by_hop_headers=HOP_BY_HOP_HEADERS,
+            local_credential_headers=LOCAL_CREDENTIAL_HEADERS,
+        ),
+    )
+    manager = RuntimeManager()
+    await manager.install_initial(generation)
+    attach_runtime_manager(application, manager)
+    return manager
 
 
 async def build_runtime_app(
@@ -238,7 +325,16 @@ async def build_runtime_app(
         health_manager=health_manager,
         transcoder_policy=config.transcoder,
     )
-    application.state.coordinator = coordinator
+    runtime_manager = await install_test_runtime_manager(
+        application,
+        config=config,
+        db=db,
+        registry=registry,
+        catalog=catalog,
+        router=router,
+        coordinator=coordinator,
+        client_pool=httpx_client,
+    )
 
     # Seed catalog with models
     for model in spec.models:
@@ -281,6 +377,7 @@ async def build_runtime_app(
         router=router,
         health_manager=health_manager,
         coordinator=coordinator,
+        runtime_manager=runtime_manager,
     )
 
 
@@ -298,5 +395,6 @@ async def real_runtime_app(
     monkeypatch.setenv("REAL_RUNTIME_KEY", "rt-test-key")
     result = await build_runtime_app(tmp_path=tmp_path)
     yield result.application
+    await result.runtime_manager.shutdown()
     await result.db.disconnect()
     await result.httpx_client.aclose()

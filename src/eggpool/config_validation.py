@@ -3,12 +3,12 @@
 This module is the single implementation of the validation contract used by
 both the ``check-config`` CLI command and the ``rehash`` preflight.  It is
 deliberately Click-free and never raises ``SystemExit`` so server-side code
-(milestone C's control-plane handler) can call it from any context.
+can call it from any context.
 
 Safety contract
 ---------------
 
-The shape of this module is constrained by the Milestone A safety contract:
+The shape of this module is constrained by the validation safety contract:
 
 - local validation runs before any control-plane call;
 - a validation failure reports a typed error and performs no state mutation;
@@ -417,18 +417,6 @@ def _check_stale_contracts_typed(
     """
     warnings: list[ConfigValidationWarning] = []
     raw = load_raw_config(str(config_path))
-    raw_database = get_section(raw, "database")
-    if "recovery" in raw_database:
-        warnings.append(
-            ConfigValidationWarning(
-                code="database.recovery_deprecated",
-                section="database.recovery",
-                message=(
-                    "database.recovery is deprecated and ignored; runtime SQLite "
-                    "failures close the worker and rely on supervisor restart"
-                ),
-            )
-        )
     raw_providers_section = get_section(raw, "providers")
     raw_providers: dict[str, object] = raw_providers_section
 

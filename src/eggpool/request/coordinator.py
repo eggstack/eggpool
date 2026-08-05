@@ -112,16 +112,9 @@ from eggpool.request.limits import estimate_reservation_tokens
 from eggpool.request.parsed_payload import ParsedRequestPayload  # noqa: TC001
 from eggpool.request.provider_bound_request import ProviderBoundRequest
 from eggpool.request.response_handoff import ResponseHandoffState
-from eggpool.request.selection_claim import (  # noqa: F401  (Milestone B scaffolding)
-    SelectionClaim,  # type: ignore[reportUnusedImport]
-    SelectionClaimError,  # type: ignore[reportUnusedImport]
-    SelectionClaimState,  # type: ignore[reportUnusedImport]
-    SelectionClaimTracker,  # type: ignore[reportUnusedImport]
-)
-from eggpool.request.selection_claim_diagnostics import (  # noqa: F401  (Milestone B scaffolding)
+from eggpool.request.selection_claim_diagnostics import (
     SelectionClaimDiagnostics,
     get_selection_claim_diagnostics,
-    set_selection_claim_diagnostics,  # type: ignore[reportUnusedImport]
 )
 from eggpool.request.stream_completion import (
     CompletionPolicy,
@@ -151,7 +144,7 @@ from eggpool.routing.router import RoutingDecisionTrace, RoutingExclusion
 from eggpool.runtime_dispatch import (
     SPAN_ACCOUNT_LOOKUP,
     SPAN_CIRCUIT_PROBE,
-    SPAN_CLAIM_ROLLBACK,  # type: ignore[reportUnusedImport]  # noqa: F401  (Milestone B scaffolding)
+    SPAN_CLAIM_ROLLBACK,
     SPAN_DB_WRITE_ATTEMPT,
     SPAN_DB_WRITE_REQUEST,
     SPAN_DB_WRITE_RESERVATION,
@@ -331,7 +324,7 @@ def _extract_original_thinking_budget_inputs(
     Anthropic-style explicit ``thinking.budget_tokens`` request.
 
     The post-selection budget recompute must resolve against the original
-    client intent rather than the already-translated ``upstream_body``,
+    client intent rather than the already-translated provider payload,
     because the resolver prioritises an explicit ``requested_budget_tokens``
     value over the capability's ``effort_to_budget_tokens`` mapping. If we
     forwarded the translated Anthropic budget here, the provider's effort
@@ -515,7 +508,7 @@ class ProxyRequestContext:
     started_at: float = field(default_factory=time.time)
     started_monotonic: float = field(default_factory=time.monotonic)
     started_monotonic_ns: int = field(default_factory=time.perf_counter_ns)
-    # Milestone A4: earliest ASGI handler entry after auth / body-limit
+    # Earliest ASGI handler entry after auth / body-limit.
     # middleware.  Set by ``handle_proxy_request`` to a monotonic ns
     # timestamp so the total local pre-upstream latency (this field to
     # ``_send_upstream_request``) can be computed.  ``started_monotonic_ns``
@@ -533,7 +526,6 @@ class ProxyRequestContext:
     attempted_accounts: set[str] = field(default_factory=set[str])
     provider_id: str | None = None
     client_ip: str = ""
-    upstream_body: bytes | None = None
     upstream_connect_ms: int | None = None
     upstream_headers_ms: int | None = None
     upstream_protocol: str = ""
@@ -573,11 +565,12 @@ class ProxyRequestContext:
         ``provider_bytes`` (serialized exactly once after the transform
         pipeline) is the authoritative dispatch body.
         """
-        if self.provider_bound is not None:
-            pb_bytes = self.provider_bound.provider_bytes
-            if pb_bytes is not None:
-                return pb_bytes
-        return self.original_body if self.upstream_body is None else self.upstream_body
+        if self.provider_bound is None:
+            raise RuntimeError("provider-bound request is required before dispatch")
+        pb_bytes = self.provider_bound.provider_bytes
+        if pb_bytes is None:
+            raise RuntimeError("provider-bound request is not serialized")
+        return pb_bytes
 
 
 @dataclass(frozen=True, slots=True)
@@ -637,13 +630,11 @@ class RequestCoordinator:
 
     @staticmethod
     def _serialize_provider_request(context: ProxyRequestContext) -> bytes:
-        """Serialize the final provider generation and mirror it for compatibility."""
+        """Serialize the final provider generation exactly once."""
         request = context.provider_bound
         if request is None:
             raise RuntimeError("provider-bound request is required for serialization")
-        body = request.serialize_provider_payload()
-        context.upstream_body = body
-        return body
+        return request.serialize_provider_payload()
 
     def __init__(
         self,
@@ -735,15 +726,6 @@ class RequestCoordinator:
         self._compression_tuning_registry = compression_tuning_registry
         self._compression_policy = compression_policy
         self._stream_diagnostics = stream_diagnostics or get_stream_diagnostics()
-        if finalization_supervisor is None:
-            # Unit/integration coordinators that bypass the generation factory
-            # still get the same terminal owner. Production construction
-            # injects the generation-owned instance explicitly.
-            from eggpool.request.finalization_job import (
-                RequestFinalizationSupervisor,
-            )
-
-            finalization_supervisor = RequestFinalizationSupervisor(db=db)
         self._finalization_supervisor = finalization_supervisor
         if routing_trace_guard is None and routing_trace_enabled:
             from eggpool.request.routing_trace_guard import (
@@ -825,6 +807,12 @@ class RequestCoordinator:
         cannot accidentally take different cleanup paths.
         """
         supervisor = self._finalization_supervisor
+        if supervisor is None:
+            raise AcceptedFinalizationInvariantError(
+                "terminal finalization requires the generation supervisor",
+                step="finalization_owner",
+                request_id=context.request_id,
+            )
         if data.failure_effects is not None and data.effect_progress is None:
             data.effect_progress = FailureEffectProgress(
                 attempt_key=f"{selected.proxy_request_id}:{selected.attempt_id}"
@@ -1048,7 +1036,11 @@ class RequestCoordinator:
         """Join supervisor-owned attempt cleanup and report convergence."""
         supervisor = self._finalization_supervisor
         if supervisor is None:
-            return True
+            raise AcceptedFinalizationInvariantError(
+                "attempt cleanup requires the generation supervisor",
+                step="attempt_cleanup_owner",
+                request_id=key[0],
+            )
         command = supervisor.get_terminal_command(
             key[0], key[1], "failed_attempt_cleanup"
         )
@@ -4314,7 +4306,7 @@ class RequestCoordinator:
     ) -> httpx.Response:
         """Send an upstream request and capture shared dispatch timing.
 
-        Timing boundaries (Milestone A4):
+        Timing boundaries:
 
         - ``context.request_received_monotonic_ns``: earliest ASGI
           handler entry after auth / body-limit middleware.  Set by
@@ -4717,11 +4709,11 @@ class RequestCoordinator:
         thinking budgets for provider-specific overrides. This helper
         runs :func:`resolve_thinking_budget` against the selected
         provider's capability and overwrites the ``thinking`` block in
-        ``context.upstream_body`` with the resolved budget.
+        the provider-bound payload with the resolved budget.
 
         Resolution uses the **original** client thinking controls
         (``reasoning_effort`` for OpenAI, explicit ``thinking.budget_tokens``
-        for Anthropic), not the already-translated ``upstream_body``
+        for Anthropic), not the already-translated provider payload
         budget. Forwarding the translated value would short-circuit the
         resolver's effort mapping because ``requested_budget_tokens``
         is consulted before ``requested_effort``; for OpenAI clients
@@ -4808,7 +4800,9 @@ class RequestCoordinator:
         """
         if not selected.provider_id:
             return False
-        legacy_request = request is None
+        legacy_request = request is None and context.provider_bound is None
+        if request is None:
+            request = context.provider_bound
         if request is None:
             request = self._legacy_provider_request(context)
         generation_before = request.payload_generation
@@ -4834,7 +4828,7 @@ class RequestCoordinator:
         )
         changed = request.payload_generation != generation_before
         if legacy_request:
-            context.upstream_body = request.serialize_provider_payload()
+            request.serialize_provider_payload()
         return changed
 
     @staticmethod
@@ -4845,7 +4839,7 @@ class RequestCoordinator:
         narrow adapter keeps older unit-level helper callers working while
         preventing the pipeline itself from creating a competing request.
         """
-        body = context.upstream_body or context.original_body
+        body = context.original_body
         payload = jsonx_loads(body)
         if not isinstance(payload, dict):
             raise ValueError("provider request payload must be an object")
@@ -4996,7 +4990,9 @@ class RequestCoordinator:
             return False
         if not getattr(self._cache_config, "synthetic_cache_controls", None):
             return False
-        legacy_request = request is None
+        legacy_request = request is None and context.provider_bound is None
+        if request is None:
+            request = context.provider_bound
         if request is None:
             request = self._legacy_provider_request(context)
         payload: dict[str, Any] = request.provider_payload_copy()
@@ -5095,7 +5091,7 @@ class RequestCoordinator:
                 )
                 context.synthetic_cache_result = result
                 if legacy_request:
-                    context.upstream_body = request.serialize_provider_payload()
+                    request.serialize_provider_payload()
                 return changed
 
         context.synthetic_cache_result = result

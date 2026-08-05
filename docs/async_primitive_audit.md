@@ -32,7 +32,7 @@ are safe across any thread.
 | `db._connection_lock` | `connection.py:109` | event loop | event loop | process | `asyncio.Lock` (loop-bound) | cleared on shutdown |
 | `outbound_manager._lock` | `outbound.py:103` | event loop | event loop | generation | `asyncio.Lock` (loop-bound) | cleared on generation swap |
 | `thinking_counter._lock` | `thinking.py:85` | event loop | event loop | process | `asyncio.Lock` (loop-bound) | cleared on shutdown |
-| `finalization_queue._lock` | `finalization_queue.py:135` | event loop | event loop | generation | `asyncio.Lock` (loop-bound) | cleared on generation swap |
+| `finalization_supervisor._lock` | `request/finalization_job.py:1276` | event loop | event loop | generation | `asyncio.Lock` (loop-bound) | cleared on generation swap |
 | `fair_scorer._lock` | `fairness.py:82` | event loop | event loop | generation | `asyncio.Lock` (loop-bound) | cleared on generation swap |
 | `catalog_resolvers._lock` | `catalog_resolvers.py:186` | event loop | event loop | generation | `asyncio.Lock` (loop-bound) | cleared on generation swap |
 | `model_info_base._lock` | `base.py:38` | event loop | event loop | generation | `asyncio.Lock` (loop-bound) | cleared on generation swap |

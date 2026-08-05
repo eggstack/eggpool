@@ -3,10 +3,7 @@
 The reload policy classifies every :class:`AppConfig` field as one of:
 
 - :attr:`ReloadDisposition.LIVE` -- the field can be applied without
-  restarting the supervisor process.  No field is currently classified
-  this way in milestone A; milestone B/C will introduce generation-owned
-  services that consume live-reloadable state.  Marking a field ``LIVE``
-  before milestone C lands is a regression.
+  restarting the supervisor process through the staged generation swap.
 - :attr:`ReloadDisposition.RESTART_REQUIRED` -- the field is consumed by
   constructor-owned state (Granian construction, database connection,
   middleware, ASGI app) and cannot change without a process restart.
@@ -20,10 +17,8 @@ Add the field to ``AppConfig`` first, then add an entry to
 :data:`_FIELD_DISPOSITION`.  The default is
 :attr:`ReloadDisposition.RESTART_REQUIRED` so any field not explicitly
 classified is fail-closed against partial live reloads.  This module is
-the single reviewable map of which fields each milestone is expected to
-be able to swap live -- when milestone B/C adds a live replacement path,
-move the corresponding entry to ``LIVE`` in the same diff that
-introduces the swap path.
+the single reviewable map of fields that the staged generation swap can
+apply live.
 """
 
 from __future__ import annotations
@@ -340,15 +335,6 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "readiness_probe.initial_probe": ReloadDisposition.RESTART_REQUIRED,
     "readiness_probe.interval_s": ReloadDisposition.RESTART_REQUIRED,
     "readiness_probe.timeout_s": ReloadDisposition.RESTART_REQUIRED,
-    # Legacy database recovery settings remain restart-required for one
-    # compatibility release, but have no runtime recovery semantics.
-    "database.recovery": ReloadDisposition.RESTART_REQUIRED,
-    "database.recovery.enabled": ReloadDisposition.RESTART_REQUIRED,
-    "database.recovery.max_attempts": ReloadDisposition.RESTART_REQUIRED,
-    "database.recovery.initial_backoff_ms": ReloadDisposition.RESTART_REQUIRED,
-    "database.recovery.max_backoff_ms": ReloadDisposition.RESTART_REQUIRED,
-    "database.recovery.reconciliation_timeout_s": ReloadDisposition.RESTART_REQUIRED,
-    "database.recovery.fail_process_on_exhaustion": ReloadDisposition.RESTART_REQUIRED,
 }
 
 
@@ -747,15 +733,14 @@ _MISSING = _MissingType()
 
 
 # ----------------------------------------------------------------------
-# Reload result types (Workstream A5)
+# Reload result types
 # ----------------------------------------------------------------------
 
 
 class ReloadStage(Enum):
     """Stages of a reload transaction.
 
-    Values correspond to the milestones in the reload plan; the control
-    socket that milestone C introduces speaks this enum directly.
+    Values are used by the control socket and reload diagnostics.
     """
 
     VALIDATION = "validation"

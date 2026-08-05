@@ -152,7 +152,7 @@ The closing pass (`plans/thinking_reasoning_closing_pass.md`) hardens the thinki
 - **Phase E — Top-level `reasoning_content` detection.** `classify_thinking_request()` now detects top-level `reasoning_content` strings/lists on assistant messages.
 - **Phase F — `supports_tools` removed.** Tool support is owned by transcoder features, not `ModelCapabilities`.
 - **Phase G — Explicit Anthropic top-level thinking drop kind.** `anthropic_top_level_thinking_dropped` is now an explicit warning kind rather than the generic `dropped_field` bucket.
-- **Phase H — Final provider budget cleanup.** The selected-provider recompute now parses `context.original_body` (not the already-translated `context.upstream_body`) so the resolver sees the original `reasoning_effort` / `thinking.budget_tokens` intent. The helper `_extract_original_thinking_budget_inputs()` returns `(effort, None)` for OpenAI clients and `(None, budget)` for Anthropic clients; for OpenAI this is what lets the selected provider's `effort_to_budget_tokens` mapping win over global/default mappings when collapsed model ids route to that provider. Post-selection strict rejections (e.g. provider-specific clamp) now flow through `_finalize_selected_capability_rejection()` which finalizes the attempt row (`release_reason = "capability_rejected"`), releases the reservation durably and in-memory, decrements the active request count, releases the health-manager probe slot, and stamps `thinking_trace.decision = "rejected"` — without recording an upstream health penalty. Streaming and non-streaming dispatch paths share the same cleanup via `_apply_selected_provider_transcode_adjustments()`.
+- **Phase H — Final provider budget cleanup.** The selected-provider recompute parses `context.original_body` rather than the provider-bound payload so the resolver sees the original `reasoning_effort` / `thinking.budget_tokens` intent. The helper `_extract_original_thinking_budget_inputs()` returns `(effort, None)` for OpenAI clients and `(None, budget)` for Anthropic clients; for OpenAI this is what lets the selected provider's `effort_to_budget_tokens` mapping win over global/default mappings when collapsed model ids route to that provider. Post-selection strict rejections (e.g. provider-specific clamp) now flow through `_finalize_selected_capability_rejection()` which finalizes the attempt row (`release_reason = "capability_rejected"`), releases the reservation durably and in-memory, decrements the active request count, releases the health-manager probe slot, and stamps `thinking_trace.decision = "rejected"` — without recording an upstream health penalty. Streaming and non-streaming dispatch paths share the same cleanup via `_apply_selected_provider_transcode_adjustments()`.
 - **Phase I — Final polish (`plans/thinking_reasoning_final_polish.md`).** `_recompute_thinking_budget_for_selected_provider()` populates `thinking_trace.upstream_fields = ["thinking"]` whenever the recompute actually writes/validates Anthropic `thinking.budget_tokens` and the trace carries an empty list (the default shape). A pre-populated non-empty list is preserved verbatim so future paths can stack additional upstream fields without being clobbered. The strict-rejection cleanup tests additionally pin `HealthManager.is_account_healthy()` and the underlying `AccountHealth` dataclass fields (`consecutive_failures`, `disabled_models`, `disabled_until`, `disabled_reason`, `cooldown_until`) so a capability rejection cannot silently record an upstream health penalty.
 
 ## Multi-Provider Architecture
@@ -308,7 +308,7 @@ introduced this layer is `plans/transcoded-json-backend-orjson.md`.
 
 **Phase 7 — Budget resolution**: `resolve_thinking_budget()` in `src/eggpool/transcoder/budget_resolver.py` is the single source of truth for effort-to-budget translation. Resolution order: explicit `thinking.budget_tokens` (Anthropic style) → `reasoning_effort` (OpenAI style) via `ThinkingCapability.effort_to_budget_tokens` → `[transcoder.thinking_budget_defaults]` → hard-coded fallback (low=1024, medium=4096, high=16384). Budgets are clamped to `budget_tokens_min`/`budget_tokens_max` when known. `budget_resolution_policy = "strict"` rejects unknown efforts and clamped budgets before dispatch. New loss-warning kinds: `budget_clamped`, `unknown_effort`, `budget_rejected`, `budget_resolution_no_input`. The `BodyTranscoder.encode_request` protocol accepts optional `thinking_capability`, `budget_defaults`, and `budget_resolution_policy` kwargs.
 
-**Provider-bound payload lifecycle (Plan 050)**: `ProviderBoundRequest` is created from the single client parse and remains authoritative through provider selection and dispatch. A valid `PreparedTranscode` supplies its immutable decoded provider payload and matching bytes; invalid preparation is recomputed into the same object. Thinking normalization, post-route synthetic cache synthesis, and OpenAI streaming `stream_options.include_usage` are ordered transforms over that object. Each structural mutation advances a generation and invalidates bytes; the final serializer caches one encode for the dispatched generation and freezes later mutation. `ProxyRequestContext.upstream_body` is a compatibility mirror only. See `src/eggpool/request/provider_bound_request.py`, `src/eggpool/request/transform_pipeline.py`, and `tests/unit/test_provider_bound_request.py`.
+**Provider-bound payload lifecycle (Plan 050)**: `ProviderBoundRequest` is created from the single client parse and remains authoritative through provider selection and dispatch. A valid `PreparedTranscode` supplies its immutable decoded provider payload and matching bytes; invalid preparation is recomputed into the same object. Thinking normalization, post-route synthetic cache synthesis, and OpenAI streaming `stream_options.include_usage` are ordered transforms over that object. Each structural mutation advances a generation and invalidates bytes; the final serializer caches one encode for the dispatched generation and freezes later mutation. `ProxyRequestContext` retains original client bytes separately and carries the provider-bound object without a second body mirror. See `src/eggpool/request/provider_bound_request.py`, `src/eggpool/request/transform_pipeline.py`, and `tests/unit/test_provider_bound_request.py`.
 
 **Phase 8 — Response-field compatibility**: configurable OpenAI-compatible reasoning field names for both streaming and non-streaming responses. `[transcoder.openai_reasoning_fields]` controls `non_stream` (default `["reasoning_content"]`) and `stream_delta` (default `["reasoning"]`) field names. `emit_compat_aliases = false` (default) emits only the primary field; when true, additional aliases are emitted. Streaming thinking deltas are now feature-gated consistently with non-streaming paths — when `[transcoder.features].thinking = false`, streaming thinking deltas are dropped. The `build_reasoning_fields()` helper in `src/eggpool/transcoder/policy.py` builds the field dict from config. `AnthropicToOpenAIStreaming` and `OpenAIToAnthropic.decode_response` accept optional `reasoning_field_names` and `emit_compat_aliases` parameters forwarded from the coordinator via `TranscoderPolicy.openai_reasoning_fields`.
 
@@ -1931,13 +1931,13 @@ Interpretation:
 
 ### Lock scope and publish ordering
 
-#### Milestone B: selection-claim lock deconvoying
+#### Selection-claim lock scope
 
 `RequestCoordinator._select_and_persist_attempt()` is split into three
 phases so database I/O can never convoy other selectors through the
 selection critical section. The narrow
-`RequestCoordinator._selection_claim_lock` (added in dispatch-stability
-milestone B) replaces the previous broad `_select_lock` with two
+`RequestCoordinator._selection_claim_lock` provides the narrow critical
+section alongside the broader `_select_lock`, with two
 acquisitions per attempt:
 
 1. **Phase A** — first acquisition of `_selection_claim_lock`. The
@@ -3649,10 +3649,10 @@ Account and provider order is normalized before diffing so reordering
 configs; `diff_from_validation(result)` produces one from a validation
 result when only one config is available.
 
-### Wire types for milestone C
+### Reload wire types
 
-`ReloadStage` and `ReloadResult` are the protocol-neutral types that
-milestone C's control socket speaks directly:
+`ReloadStage` and `ReloadResult` are the protocol-neutral types spoken by
+the control socket:
 
 ```python
 class ReloadStage(Enum):
@@ -4442,8 +4442,9 @@ predicates at startup.
   authoritative for operations whose previous process may have died.
 - `DatabaseRollbackError` — typed error when ROLLBACK itself fails after a body exception, distinct from `DatabaseCommitError`.
 - `_safe_rollback()` helper with bounded diagnostics.
-- Legacy `[database.recovery]` settings remain parseable for one compatibility
-  release, are ignored, and produce a validation warning.
+- The removed `[database.recovery]` compatibility surface is rejected by
+  strict configuration validation; SQLite uncertainty is handled by the
+  fail-closed startup/restart boundary above.
 - Startup `PRAGMA quick_check` and the initial writable probe run before
   background task startup or request admission.
 

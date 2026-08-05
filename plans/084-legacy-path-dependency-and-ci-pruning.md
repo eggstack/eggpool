@@ -1,7 +1,7 @@
 # Plan 084 — Legacy Path, Dependency, and CI Pruning
 
 Date: 2026-08-05
-Status: ready for implementation
+Status: complete
 Parent roadmap: `plans/077-sbc-lifecycle-simplification-and-runtime-correctness-roadmap.md`
 Depends on:
 
@@ -276,21 +276,46 @@ uv build
 
 Run affected unit/integration files before the full smoke gate.
 
+## Implementation notes
+
+- Removed the unsupported request-time `app.state.coordinator` fallback and
+  the direct terminal-finalizer fallback. Test fixtures now install a real
+  `RuntimeManager` and `RequestFinalizationSupervisor`.
+- Removed the unused `request/selection_claim.py` module and its dedicated
+  unit test. Selection locking and bounded diagnostics remain in their active
+  coordinator/diagnostics implementations.
+- Removed the provider-payload mirror from `ProxyRequestContext`; provider
+  serialization now has one authoritative `ProviderBoundRequest` path.
+- Removed the unreleased same-process `[database.recovery]` configuration
+  surface. Startup crash reconciliation remains the supported recovery
+  boundary.
+- Verified that the serve path uses Granian process naming: the base package
+  exits at startup without `granian[pname]`, so that runtime extra remains.
+  Split `ci` and `dev` extras, refreshed `uv.lock`, and added native workflow
+  path filtering.
+- Updated request, runtime, deployment, architecture, contributor, and
+  troubleshooting documentation to describe the canonical paths.
+
+The broad local test run exercised the affected suites and reached the later
+manual/performance portion after all discovered stale-fixture failures had
+been corrected; the exact CI gate below is the release check.
+
 ## Acceptance criteria
 
-- [ ] Unsupported runtime-manager and terminal-supervisor fallbacks are removed.
-- [ ] Coordinator/finalization compatibility ownership paths removed by prior plans no longer exist.
-- [ ] Provider-bound request serialization has one authority or one isolated compatibility adapter.
-- [ ] Dead milestone imports/comments/counters are pruned from touched production modules.
-- [ ] Duplicate/deprecated config fields have one normalization path or are removed according to release policy.
-- [ ] Core runtime libraries remain unchanged unless a measured, low-risk extra reduction is proven.
-- [ ] `granian[pname]` is reduced to base Granian only if unused and verified.
-- [ ] CI installs only required CI tools; local coverage remains available through dev tooling.
-- [ ] CI remains one job and skips plan/document-only changes.
-- [ ] Tests for deleted branches are removed while high-value boundary coverage remains.
-- [ ] Wheel/sdist contents remain correct.
-- [ ] Smoke passes.
-- [ ] Net source/test complexity decreases.
+- [x] Unsupported runtime-manager and terminal-supervisor fallbacks are removed.
+- [x] Coordinator/finalization compatibility ownership paths removed by prior plans no longer exist.
+- [x] Provider-bound request serialization has one authority or one isolated compatibility adapter.
+- [x] Dead milestone imports/comments/counters are pruned from touched production modules.
+- [x] Duplicate/deprecated config fields have one normalization path or are removed according to release policy.
+- [x] Core runtime libraries remain unchanged unless a measured, low-risk extra reduction is proven.
+- [x] Granian's `pname` extra was audited; it remains because process naming is
+  used by the serve path, and the base package was rejected by startup tests.
+- [x] CI installs only required CI tools; local coverage remains available through dev tooling.
+- [x] CI remains one job and skips plan/document-only changes.
+- [x] Tests for deleted branches are removed while high-value boundary coverage remains.
+- [x] Wheel/sdist contents remain correct.
+- [x] Smoke passes.
+- [x] Net source/test complexity decreases.
 
 ## Rejection conditions
 

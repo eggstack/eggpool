@@ -180,7 +180,11 @@ class TestDigestMismatchInjection:
         gen_before = rm.active_snapshot().generation_id
 
         validation = _make_validation(content_digest="a" * 64)
-        monkeypatch.setattr(mgr, "_record_event", AsyncMock())
+
+        async def _ignore_event(*args: object, **kwargs: object) -> None:
+            return None
+
+        monkeypatch.setattr(mgr, "_record_event", _ignore_event)
 
         with patch.object(rm, "install_candidate", new_callable=AsyncMock) as ic_mock:
             result = await mgr.reload(validation, expected_digest="f" * 64)
@@ -281,11 +285,9 @@ class TestCandidateBuildFailure:
             patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
             patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
             patch.object(rm, "install_candidate", new_callable=AsyncMock) as ic_mock,
-            patch("eggpool.runtime_manager.RuntimeGenerationBuilder") as builder_cls,
+            patch("eggpool.runtime_manager.RuntimeGenerationBuilder"),
         ):
             build_mock.side_effect = ReloadPreparationError("build failed")
-            cleanup_spy = AsyncMock()
-            builder_cls.return_value.cleanup_partial = cleanup_spy
             result = await mgr.reload(validation)
 
             assert rm.active_snapshot().generation_id == gen_before

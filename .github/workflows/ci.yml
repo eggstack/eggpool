@@ -9,8 +9,22 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "plans/**"
+      - "docs/**"
+      - "architecture/**"
+      - ".opencode/skills/**"
+      - "AGENTS.md"
+      - "CHANGELOG.md"
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "plans/**"
+      - "docs/**"
+      - "architecture/**"
+      - ".opencode/skills/**"
+      - "AGENTS.md"
+      - "CHANGELOG.md"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -29,7 +43,7 @@ jobs:
       - uses: astral-sh/setup-uv@v4
         with:
           python-version: "3.11"
-      - run: uv sync --frozen --extra dev
+      - run: uv sync --frozen --extra ci
       - run: uv run ruff format --check src/ tests/ scripts/
       - run: uv run ruff check src/ tests/ scripts/
       - run: uv run pyright src/ scripts/

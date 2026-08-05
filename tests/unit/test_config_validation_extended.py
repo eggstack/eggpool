@@ -5,7 +5,6 @@ Tests:
 - Old configuration with no new fields.
 - New provider-control policy fields.
 - Model capability overrides.
-- Database recovery settings.
 - Dispatch writer metric/batching settings.
 - Instrumentation sampling settings.
 - Invalid values and contradictory combinations.
@@ -30,7 +29,6 @@ from eggpool.config_reload_policy import (
 from eggpool.errors import ConfigError
 from eggpool.models.config import (
     AppConfig,
-    DatabaseRecoveryConfig,
     DispatchSpansConfig,
     DispatchWriterConfig,
 )
@@ -83,26 +81,6 @@ class TestOldConfigCompatibility:
         )
         # Provider control policy should have defaults
         assert config.transcoder.provider_control_policy is not None
-
-    def test_config_without_recovery_settings(self) -> None:
-        """Config without database recovery settings must validate with
-        defaults."""
-        config = AppConfig.from_dict(
-            {
-                "server": {
-                    "api_key_env": "TEST_KEY",
-                    "host": "127.0.0.1",
-                    "port": 0,
-                },
-                "database": {"path": ":memory:"},
-                "upstream": {"base_url": "https://test.example.com"},
-                "models": {"startup_refresh": False, "refresh_interval_s": 0},
-                "accounts": [{"name": "test", "api_key_env": "TEST_KEY"}],
-                "dashboard": {"enabled": False},
-            }
-        )
-        # Recovery should have defaults
-        assert config.database.recovery.enabled is True
 
     def test_config_without_dispatch_writer(self) -> None:
         """Config without dispatch writer settings must validate with
@@ -201,76 +179,6 @@ class TestProviderControlPolicyFields:
         assert policy.unsupported_control == "reject"
         assert policy.unknown_contract == "reject"
         assert policy.allow_compatibility_retry is False
-
-
-# ---------------------------------------------------------------------------
-# Database recovery settings
-# ---------------------------------------------------------------------------
-
-
-class TestDatabaseRecoverySettings:
-    """Database recovery settings must validate."""
-
-    def test_recovery_defaults(self) -> None:
-        """Recovery config has correct defaults."""
-        recovery = DatabaseRecoveryConfig()
-        assert recovery.enabled is True
-        assert recovery.max_attempts >= 1
-        assert recovery.initial_backoff_ms > 0
-        assert recovery.max_backoff_ms > recovery.initial_backoff_ms
-
-    def test_recovery_custom(self) -> None:
-        """Recovery config can be customized."""
-        config = AppConfig.from_dict(
-            {
-                "server": {
-                    "api_key_env": "TEST_KEY",
-                    "host": "127.0.0.1",
-                    "port": 0,
-                },
-                "database": {
-                    "path": ":memory:",
-                    "recovery": {
-                        "enabled": True,
-                        "max_attempts": 5,
-                        "initial_backoff_ms": 200,
-                        "max_backoff_ms": 10000,
-                    },
-                },
-                "upstream": {"base_url": "https://test.example.com"},
-                "models": {"startup_refresh": False, "refresh_interval_s": 0},
-                "accounts": [{"name": "test", "api_key_env": "TEST_KEY"}],
-                "dashboard": {"enabled": False},
-            }
-        )
-        recovery = config.database.recovery
-        assert recovery.max_attempts == 5
-        assert recovery.initial_backoff_ms == 200
-        assert recovery.max_backoff_ms == 10000
-
-    def test_recovery_invalid_max_attempts(self) -> None:
-        """Invalid max_attempts raises validation error."""
-        with pytest.raises(ConfigError):
-            AppConfig.from_dict(
-                {
-                    "server": {
-                        "api_key_env": "TEST_KEY",
-                        "host": "127.0.0.1",
-                        "port": 0,
-                    },
-                    "database": {
-                        "path": ":memory:",
-                        "recovery": {
-                            "enabled": True,
-                            "max_attempts": 0,
-                        },
-                    },
-                    "upstream": {"base_url": "https://test.example.com"},
-                    "models": {"startup_refresh": False, "refresh_interval_s": 0},
-                    "accounts": [{"name": "test", "api_key_env": "TEST_KEY"}],
-                    "dashboard": {"enabled": False},
-                }
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -392,12 +300,6 @@ class TestRehashClassification:
         """Provider control policy changes are live."""
         assert classify_reload_field("transcoder.provider_control_policy") == (
             ReloadDisposition.LIVE
-        )
-
-    def test_recovery_enabled_restart_required(self) -> None:
-        """Database recovery settings are process-owned startup policy."""
-        assert classify_reload_field("database.recovery.enabled") == (
-            ReloadDisposition.RESTART_REQUIRED
         )
 
     def test_dispatch_writer_enabled_restart_required(self) -> None:

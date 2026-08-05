@@ -126,10 +126,10 @@ After deploying the stream-stability changes, run these commands to
 verify the runtime diagnostics and harness are working correctly:
 
 ```bash
-# Unit tests for stream diagnostics, finalization queue, and runtime metrics
+# Unit tests for stream diagnostics, finalization supervision, and runtime metrics
 uv run pytest tests/unit/test_runtime_metrics.py -q
 uv run pytest tests/unit/test_stream_diagnostics.py -q
-uv run pytest tests/unit/test_stream_finalization_queue.py -q
+uv run pytest tests/unit/test_request_finalization_supervisor.py -q
 
 # Integration test: 50 concurrent streams, no cancellations
 uv run pytest tests/integration/test_high_concurrency_streaming.py -q

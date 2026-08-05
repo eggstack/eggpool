@@ -17,7 +17,13 @@ uv run pytest <affected test paths> -q --tb=short --maxfail=1
 
 ## Before-Push Check
 
-Run the same checks as the CI job:
+Install the CI-only tool set and run the same checks as the CI job:
+
+```bash
+uv sync --frozen --extra ci
+```
+
+Then run:
 
 ```bash
 uv run ruff format --check src/ tests/ scripts/
@@ -35,6 +41,9 @@ One GitHub Actions job on every PR:
 | `check` | 3.11 | ruff format + ruff check + pyright + `pytest tests/smoke/` |
 
 CI sets `PYTHONHASHSEED=0` and `TZ=UTC`; reproduce locally for deterministic results.
+The workflow skips changes limited to plans, non-packaged documentation, and
+agent guidance; package, configuration, script, deployment, lockfile, and
+workflow changes still run the gate.
 
 ## Focused Verification
 

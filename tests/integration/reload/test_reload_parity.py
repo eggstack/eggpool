@@ -33,20 +33,17 @@ async def test_candidate_generation_has_required_services(
     assert active.router is not None
     assert active.coordinator is not None
     assert active.client_pool is not None
-    assert active.outbound_manager is not None
+    # Outbound transport is optional in the lean default generation.
     assert active.health_manager is not None
     assert active.cost_calculator is not None
     assert active.transcoder_policy is not None
-    assert active.compression_policy is not None
-    assert active.cache_config is not None
-    assert active.compression_tuning_registry is not None
     assert active.dispatch_overhead_recorder is not None
-    assert active.dispatch_span_recorder is not None
     assert active.account_backoff_repo is not None
     assert active.stats_service is not None
     assert active.supervisor is not None
     assert active.finalization_supervisor is not None
-    assert active.routing_trace_guard is not None
+    # Compression, detailed spans, routing traces, and outbound access are
+    # opt-in generation resources under the lean defaults.
 
 
 @pytest.mark.asyncio()

@@ -516,9 +516,9 @@ async def prune_health_disabled_models_once(app_state: Any) -> int:
 def _default_client(generation: RuntimeGeneration) -> Any:
     """Return the provider client pool's default client for ``app.state``.
 
-    Mirrors the pre-milestone-B behaviour of stashing the default
-    client on ``app.state.httpx_client`` so legacy consumers that
-    bypass the pool still find a usable client.
+    Mirrors the active generation's default client on
+    ``app.state.httpx_client`` for operational consumers that need a
+    process-level snapshot.
     """
     pool = generation.client_pool
     if pool is None:  # pyright: ignore[reportUnnecessaryComparison]
@@ -556,15 +556,13 @@ def mirror_generation_on_app_state(
     .. deprecated::
         Prefer :meth:`RuntimeManager.acquire` or
         :meth:`RuntimeManager.snapshot_active_values` for accessing
-        generation-owned services.  The ``app.state`` mirrors exist
-        only for backward compatibility with dashboard routes, readyz
-        probes, and request handlers that have not yet migrated.
-        New code must not read generation-owned services from
-        ``app.state`` directly.
+    generation-owned services. The ``app.state`` mirrors exist for
+    dashboard routes and readiness/operational probes only. Request
+    handlers acquire the generation lease directly and do not read them.
 
-    The mirrors exist so existing dashboard routes, readyz probes,
-    and request handlers can keep reading ``app.state.router``,
-    ``app.state.catalog``, etc. without immediate refactors.
+    The mirrors exist for dashboard routes and operational probes that have
+    not yet migrated to generation snapshots. Request handlers acquire the
+    generation lease directly and do not read these mirrors.
     Publication replaces these mirrors whenever a new generation is
     published so the pointers always reflect the currently active slot.
 
@@ -590,7 +588,6 @@ def mirror_generation_on_app_state(
         "catalog": generation.catalog,
         "model_info": getattr(generation, "model_info", None),
         "router": generation.router,
-        "coordinator": generation.coordinator,
         "client_pool": generation.client_pool,
         "outbound_manager": generation.outbound_manager,
         "dns_backend": generation.dns_backend,
@@ -622,36 +619,6 @@ def mirror_generation_on_app_state(
         setattr(app.state, name, value)
 
 
-async def cleanup_partial_generation(process: ProcessRuntime) -> None:
-    """Best-effort cleanup for a partially constructed generation.
-
-    .. deprecated::
-        Superseded by :class:`RuntimeGenerationCandidate.abort` (Phase 4).
-        The candidate container now tracks and closes resources in reverse
-        registration order.  This function is retained for backward
-        compatibility with code that still calls
-        :meth:`RuntimeGenerationBuilder.cleanup_partial` directly.
-
-    Called by :class:`RuntimeGenerationBuilder.cleanup_partial` when a
-    build raises before completion.  Mirrors the deterministic
-    retirement order documented for :meth:`RuntimeManager.shutdown`
-    (supervisor, then network clients) and never touches
-    process-owned resources (database connections, metrics coalescer,
-    runtime metrics service) because those live across generations.
-
-    The helper is idempotent; calling it twice is a no-op.  Module-level
-    (not underscore-prefixed) because
-    :class:`eggpool.runtime_manager.RuntimeGenerationBuilder` calls it
-    from a sibling module.
-    """
-    logger.warning(
-        "Partial runtime generation cleanup: "
-        "cleanup_partial_generation is a no-op; "
-        "use RuntimeGenerationCandidate.abort for explicit cleanup"
-    )
-    return None
-
-
 def _log_operational_profile(
     *,
     config: AppConfig,
@@ -662,7 +629,7 @@ def _log_operational_profile(
     process_supervisor: TaskSupervisor | None,
     model_info_enabled: bool,
 ) -> None:
-    """Emit a single structured startup profile log (Milestone A6).
+    """Emit a single structured startup profile log.
 
     Captures the runtime knobs that influence timing / database /
     observability measurements so the operator can interpret any
@@ -717,7 +684,7 @@ def _log_operational_profile(
     compression_mode = str(getattr(config.compression, "mode", "off"))
     cache_enabled = bool(getattr(config.cache, "enabled", False))
 
-    # Runtime topology (Milestone F): process identity and asyncio
+    # Runtime topology: process identity and asyncio
     # loop identity so operators can verify the single-loop model.
     try:
         loop = asyncio.get_running_loop()
@@ -886,7 +853,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     app.state.stats_db = stats_db
 
     # 6b. ProcessRuntime — process-owned dependency container for
-    # resources that outlive any single generation (milestone B/C).
+    # resources that outlive any single generation.
     raw_config_path: str | None = getattr(app.state, "config_path", None)
     process = ProcessRuntime(
         db=db,
@@ -929,7 +896,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     app.state.metrics_coalescer = metrics_coalescer
     process.metrics_coalescer = metrics_coalescer
 
-    # 8. Process-owned DispatchPersistenceWriter (Milestone C).
+    # 8. Process-owned DispatchPersistenceWriter.
     # Created before the factory so process.dispatch_writer is
     # available for the coordinator's dispatch wiring.
     dispatch_writer = None
@@ -953,7 +920,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     process.dispatch_writer = dispatch_writer
     app.state.dispatch_writer = dispatch_writer
 
-    # 9. Process-owned RoutingTraceWriter (Milestone D).  Diagnostic trace
+    # 9. Process-owned RoutingTraceWriter. Diagnostic trace
     # infrastructure is absent when the effective trace policy is disabled.
     routing_trace_writer = None
     if config.routing.trace.mode != "off" and (
@@ -1004,7 +971,6 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     app.state.registry = gen_result.registry
     app.state.catalog = gen_result.catalog
     app.state.router = gen_result.router
-    app.state.coordinator = gen_result.coordinator
     app.state.client_pool = gen_result.client_pool
     app.state.outbound_manager = gen_result.outbound_manager
     if gen_result.dns_backend is not None:
@@ -1016,7 +982,6 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     app.state.health_manager = gen_result.health_manager
     app.state.account_backoff_repo = gen_result.account_backoff_repo
     app.state.cost_calculator = gen_result.cost_calculator
-    app.state.transcoder_policy = gen_result.transcoder_policy
     app.state.compression_policy = gen_result.compression_policy
     app.state.cache_config = gen_result.cache_config
     app.state.compression_tuning_registry = gen_result.compression_tuning_registry
@@ -1082,7 +1047,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         except Exception:
             logger.exception("Model info legacy detail backfill failed")
 
-    # 16. Event-loop lag monitor (process-owned, Milestone F6).
+    # 16. Event-loop lag monitor (process-owned).
     # Measures event-loop starvation via periodic callback drift.
     event_loop_lag_monitor = None
     if config.metrics.event_loop_lag_enabled:
@@ -1258,7 +1223,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         catalog.cache.model_count,
     )
 
-    # 23a. Operational profile (Milestone A6).  Single structured log
+    # 23a. Operational profile. Single structured log
     # line summarizing the runtime knobs that influence timing /
     # database / observability measurements so operators can interpret
     # any captured baseline (see tests/perf/test_dispatch_baseline.py).
@@ -1287,7 +1252,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # reference is patched via attach_supervisor_to_active once the
     # supervisor is constructed (step 20).
 
-    # 25. Start the control server for live config rehash (milestone C)
+    # 25. Start the control server for live config rehash.
     reload_manager = ReloadManager(
         runtime_manager=runtime_manager,
         process=process,
@@ -1620,9 +1585,9 @@ def create_app(
     app.state.config = config
     app.state.config_path = config_path
     # Best-effort content digest for diagnostics.  ``None`` until
-    # milestone C's reload handler runs validation against the file;
-    # the milestone-B lifespan records an empty digest so the active
-    # generation always carries a (possibly empty) digest string.
+    # The reload handler updates this after validating the config file;
+    # startup records an empty digest so the active generation always
+    # carries a (possibly empty) digest string.
     app.state.config_digest = ""
 
     # Security middleware

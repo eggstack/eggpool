@@ -31,6 +31,7 @@ from eggpool.providers.client_pool import ProviderClientPool
 from eggpool.request.coordinator import RequestCoordinator
 from eggpool.routing.router import Router
 from eggpool.stats import StatsService
+from tests.helpers.real_runtime import install_test_runtime_manager
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -164,7 +165,16 @@ async def app() -> AsyncGenerator[FastAPI]:
         health_manager=health_manager,
         config=config,
     )
-    application.state.coordinator = coordinator
+    runtime_manager = await install_test_runtime_manager(
+        application,
+        config=config,
+        db=db,
+        registry=registry,
+        catalog=catalog,
+        router=router,
+        coordinator=coordinator,
+        client_pool=client_pool,
+    )
 
     # Load models into catalog with provider tracking
     catalog.cache.load_model(
@@ -191,6 +201,7 @@ async def app() -> AsyncGenerator[FastAPI]:
 
     yield application
 
+    await runtime_manager.shutdown()
     await client_pool.close()
     await db.disconnect()
 

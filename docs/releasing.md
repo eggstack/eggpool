@@ -13,10 +13,16 @@ EggPool uses manual release publication. There is no automated release workflow.
 ## Before-Push Check
 
 ```bash
+uv lock --check
+uv sync --frozen --extra ci
 uv run ruff format --check src/ tests/ scripts/
 uv run ruff check src/ tests/ scripts/
 uv run pyright src/ scripts/
 uv run pytest tests/smoke/ -q --tb=short --maxfail=1
+
+# Keep the richer local developer environment healthy too.
+uv sync --frozen --extra dev
+uv build
 ```
 
 ## Build

@@ -1,9 +1,7 @@
 """Stale ``app.state`` compatibility mirror tests (Plan §Required failing tests).
 
-After a successful reload, the active runtime generation is new.  Some
-code paths still read ``app.state`` compatibility mirrors that were
-set during startup or a previous reload.  The future invariant is:
-the mirror must point at the active generation's services.
+After a successful reload, the active runtime generation is new. The
+operational router mirror must point at the active generation.
 
 These tests use a fake ``app.state``-shaped namespace to simulate
 the compatibility mirror and verify that after a reload the mirrors
@@ -35,7 +33,6 @@ class FakeAppState:
 
     config_digest: str = ""
     router: Any = None
-    coordinator: Any = None
     catalog: Any = None
     generation_id: int | None = None
 
@@ -50,13 +47,11 @@ class _Stash:
 def _read_diagnostic(app_state: FakeAppState) -> dict[str, Any]:
     """A simulated diagnostic consumer that reads the mirror, not the manager.
 
-    This is the kind of code path that, in production, would call
-    ``app.state.router``, ``app.state.coordinator``, etc. — possibly
-    capturing the previous generation's services.
+    This is the kind of operational code path that can accidentally
+    capture the previous generation's router.
     """
     return {
         "router_id": id(app_state.router) if app_state.router else None,
-        "coordinator_id": id(app_state.coordinator) if app_state.coordinator else None,
         "config_digest": app_state.config_digest,
         "generation_id": app_state.generation_id,
     }
@@ -70,13 +65,12 @@ async def test_mirror_updated_after_reload(
 
     The test sets up a fake app.state and synchronizes it with the
     initial generation, runs a reload, and asserts that the mirror's
-    router/coordinator/digest now match the active generation.
+    router/digest now match the active generation.
     """
     initial_active = reload_harness.runtime_manager.active_snapshot()
     app_state = FakeAppState(
         config_digest=initial_active.config_digest,
         router=initial_active.router,
-        coordinator=initial_active.coordinator,
         catalog=initial_active.catalog,
         generation_id=initial_active.generation_id,
     )
@@ -84,13 +78,12 @@ async def test_mirror_updated_after_reload(
     result = await reload_harness.reload()
     assert result.ok is True
 
-    # After reload, the active generation has new router/coordinator/digest.
+    # After reload, the active generation has a new router and digest.
     # The hypothetical production code would have re-pointed app.state
     # at these.  We simulate that here:
     post = reload_harness.runtime_manager.active_snapshot()
     app_state.config_digest = post.config_digest
     app_state.router = post.router
-    app_state.coordinator = post.coordinator
     app_state.catalog = post.catalog
     app_state.generation_id = post.generation_id
 
@@ -103,7 +96,6 @@ async def test_mirror_updated_after_reload(
 
     # Mirror identity must match the active generation.
     assert post_snap.app_state_router_id == id(post.router)
-    assert post_snap.app_state_coordinator_id == id(post.coordinator)
     assert post_snap.effective_config_digest == post.config_digest
     assert post_snap.active_generation_id == post.generation_id
 
@@ -127,7 +119,6 @@ async def test_stale_mirror_detected_by_diagnostic_consumer(
     app_state = FakeAppState(
         config_digest=pre.config_digest,
         router=reload_harness.runtime_manager.active_snapshot().router,
-        coordinator=reload_harness.runtime_manager.active_snapshot().coordinator,
         catalog=reload_harness.runtime_manager.active_snapshot().catalog,
         generation_id=pre.active_generation_id,
     )
@@ -185,7 +176,6 @@ async def test_diagnostic_consumer_sees_active_after_mirror_sync(
     app_state = FakeAppState(
         config_digest=pre.config_digest,
         router=reload_harness.runtime_manager.active_snapshot().router,
-        coordinator=reload_harness.runtime_manager.active_snapshot().coordinator,
         catalog=reload_harness.runtime_manager.active_snapshot().catalog,
         generation_id=pre.active_generation_id,
     )
@@ -197,7 +187,6 @@ async def test_diagnostic_consumer_sees_active_after_mirror_sync(
     post = reload_harness.runtime_manager.active_snapshot()
     app_state.config_digest = post.config_digest
     app_state.router = post.router
-    app_state.coordinator = post.coordinator
     app_state.catalog = post.catalog
     app_state.generation_id = post.generation_id
 
@@ -227,7 +216,6 @@ async def test_multiple_reloads_keep_mirror_consistent(
     app_state = FakeAppState(
         config_digest=initial_active.config_digest,
         router=initial_active.router,
-        coordinator=initial_active.coordinator,
         catalog=initial_active.catalog,
         generation_id=initial_active.generation_id,
     )
@@ -240,7 +228,6 @@ async def test_multiple_reloads_keep_mirror_consistent(
         post = reload_harness.runtime_manager.active_snapshot()
         app_state.config_digest = post.config_digest
         app_state.router = post.router
-        app_state.coordinator = post.coordinator
         app_state.catalog = post.catalog
         app_state.generation_id = post.generation_id
 
@@ -255,5 +242,4 @@ async def test_multiple_reloads_keep_mirror_consistent(
             f"Mirror router_id {snap.app_state_router_id} != active "
             f"{id(post.router)} after reload {i}"
         )
-        assert snap.app_state_coordinator_id == id(post.coordinator)
         assert snap.effective_config_digest == post.config_digest

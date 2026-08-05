@@ -28,6 +28,7 @@ from eggpool.models.config import AppConfig
 from eggpool.request.coordinator import RequestCoordinator
 from eggpool.routing.router import Router
 from eggpool.stats import StatsService
+from tests.helpers.real_runtime import install_test_runtime_manager
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -133,7 +134,16 @@ async def app(config: AppConfig) -> AsyncGenerator[FastAPI]:
         attempt_repo=attempt_repo,
         health_manager=health_manager,
     )
-    application.state.coordinator = coordinator
+    runtime_manager = await install_test_runtime_manager(
+        application,
+        config=config,
+        db=db,
+        registry=registry,
+        catalog=catalog,
+        router=router,
+        coordinator=coordinator,
+        client_pool=httpx_client,
+    )
 
     catalog.cache.load_model(
         model_id="gpt-4",
@@ -155,6 +165,7 @@ async def app(config: AppConfig) -> AsyncGenerator[FastAPI]:
 
     yield application
 
+    await runtime_manager.shutdown()
     await httpx_client.aclose()
     await db.disconnect()
 
@@ -808,7 +819,16 @@ async def test_multiple_accounts_routing() -> None:
         attempt_repo=attempt_repo,
         health_manager=health_manager,
     )
-    application.state.coordinator = coordinator
+    runtime_manager = await install_test_runtime_manager(
+        application,
+        config=config,
+        db=db,
+        registry=registry,
+        catalog=catalog,
+        router=router,
+        coordinator=coordinator,
+        client_pool=httpx_client,
+    )
 
     catalog.cache.load_model(
         model_id="gpt-4",
@@ -881,6 +901,7 @@ async def test_multiple_accounts_routing() -> None:
         os.environ.pop("GO_AGG_ACCT1_KEY", None)
         os.environ.pop("GO_AGG_ACCT2_KEY", None)
         await test_client.aclose()
+        await runtime_manager.shutdown()
         await httpx_client.aclose()
         await db.disconnect()
 

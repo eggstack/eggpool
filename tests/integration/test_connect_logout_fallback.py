@@ -173,7 +173,19 @@ class TestRehashDoesNotRestartHealthyServer:
                     pass
                 time.sleep(0.5)
             else:
-                pytest.fail("Server did not become healthy within 30s")
+                if proc.poll() is None:
+                    proc.terminate()
+                try:
+                    stdout, stderr = proc.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    stdout, stderr = proc.communicate()
+                pytest.fail(
+                    "Server did not become healthy within 30s. "
+                    f"exit={proc.returncode}, "
+                    f"stdout={stdout.decode(errors='replace')!r}, "
+                    f"stderr={stderr.decode(errors='replace')!r}"
+                )
 
             # Read the PID file to confirm the server is alive
             from eggpool.runtime import read_pid

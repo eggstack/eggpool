@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Plan 084 legacy-path and CI pruning.** Requests now require a published
+  runtime generation and the canonical finalization supervisor. The provider
+  bound request is the sole provider-payload authority; the unreleased
+  database recovery compatibility surface and selection-claim state-machine
+  module were removed. The Granian `pname` extra remains because the serve
+  path uses process naming; the base package was tested and rejected. CI and
+  development dependencies are split, and documentation-only workflow
+  changes are filtered from CI.
+
 ### Added
 
 - **PendingGenerationSwap staged-swap protocol for atomic reload publication.** `PendingGenerationSwap` (`src/eggpool/runtime_manager.py`) splits the coarse `install_candidate()` into explicit `stage()` → `commit()`/`rollback()` → `finalize_retirement()` boundaries. The staged swap gates lease admission so no request can acquire the candidate generation until the SQLite commit and required process transitions succeed. On rollback, the old generation is restored and lease admission reopens atomically. Diagnostics expose `staged`, `candidate_generation_id`, `old_generation_id`, and `stage_started_at`. Tests: `tests/unit/test_control_server.py`, `tests/unit/test_reload_security.py`.

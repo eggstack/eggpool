@@ -34,6 +34,7 @@ from eggpool.request.coordinator import RequestCoordinator
 from eggpool.routing.router import Router
 from eggpool.stats import StatsService
 from eggpool.transcoder.policy import TranscoderFeatures, TranscoderPolicy
+from tests.helpers.real_runtime import install_test_runtime_manager
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -43,6 +44,13 @@ if TYPE_CHECKING:
 UPSTREAM_BASE = "https://contract-upstream.example.com"
 OPENAI_PATH = "/chat/completions"
 ANTHROPIC_PATH = "/messages"
+
+
+def _set_transcoder_policy(app: FastAPI, policy: TranscoderPolicy) -> None:
+    """Update both canonical policy references in the test generation."""
+    generation = app.state.runtime_manager.active_snapshot()
+    object.__setattr__(generation, "transcoder_policy", policy)
+    generation.coordinator._transcoder_policy = policy
 
 
 # ---------------------------------------------------------------------------
@@ -296,7 +304,6 @@ async def app(config: AppConfig) -> AsyncGenerator[FastAPI]:
 
     catalog = CatalogService(config, registry, db, httpx_client)
     application.state.catalog = catalog
-    application.state.transcoder_policy = config.transcoder
 
     router = Router(registry, catalog)
     application.state.router = router
@@ -323,7 +330,16 @@ async def app(config: AppConfig) -> AsyncGenerator[FastAPI]:
         config=config,
         transcoder_policy=TranscoderPolicy(enabled=True, prefer_native=True),
     )
-    application.state.coordinator = coordinator
+    runtime_manager = await install_test_runtime_manager(
+        application,
+        config=config,
+        db=db,
+        registry=registry,
+        catalog=catalog,
+        router=router,
+        coordinator=coordinator,
+        client_pool=httpx_client,
+    )
 
     # Register claude-3 (anthropic) with both accounts.
     # Per the closing pass (Phase A) we annotate ``thinking.status =
@@ -392,6 +408,7 @@ async def app(config: AppConfig) -> AsyncGenerator[FastAPI]:
 
     yield application
 
+    await runtime_manager.shutdown()
     await httpx_client.aclose()
     await db.disconnect()
 
@@ -486,10 +503,13 @@ async def test_loss_policy_reject_blocks_lossy_request_before_dispatch(
     auth_headers: dict[str, str],
 ) -> None:
     """Reject mode returns 400 before upstream dispatch when fields are dropped."""
-    app.state.transcoder_policy = TranscoderPolicy(
-        enabled=True,
-        loss_policy="reject",
-        prefer_native=True,
+    _set_transcoder_policy(
+        app,
+        TranscoderPolicy(
+            enabled=True,
+            loss_policy="reject",
+            prefer_native=True,
+        ),
     )
     request_body = {
         "model": "claude-3",
@@ -892,10 +912,13 @@ async def test_reasoning_effort_translated_when_thinking_enabled(
     app: FastAPI,
 ) -> None:
     """OpenAI reasoning_effort is translated to Anthropic thinking when enabled."""
-    app.state.coordinator._transcoder_policy = TranscoderPolicy(
-        enabled=True,
-        prefer_native=True,
-        features=TranscoderFeatures(thinking=True),
+    _set_transcoder_policy(
+        app,
+        TranscoderPolicy(
+            enabled=True,
+            prefer_native=True,
+            features=TranscoderFeatures(thinking=True),
+        ),
     )
 
     request_body = {
@@ -944,10 +967,13 @@ async def test_reasoning_effort_dropped_when_thinking_disabled(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """OpenAI reasoning_effort is dropped when thinking transcoding is disabled."""
-    app.state.coordinator._transcoder_policy = TranscoderPolicy(
-        enabled=True,
-        prefer_native=True,
-        features=TranscoderFeatures(thinking=False),
+    _set_transcoder_policy(
+        app,
+        TranscoderPolicy(
+            enabled=True,
+            prefer_native=True,
+            features=TranscoderFeatures(thinking=False),
+        ),
     )
 
     request_body = {
@@ -1005,10 +1031,13 @@ async def test_assistant_reasoning_content_survives_when_enabled(
     app: FastAPI,
 ) -> None:
     """Assistant reasoning_content becomes Anthropic thinking block when enabled."""
-    app.state.coordinator._transcoder_policy = TranscoderPolicy(
-        enabled=True,
-        prefer_native=True,
-        features=TranscoderFeatures(thinking=True),
+    _set_transcoder_policy(
+        app,
+        TranscoderPolicy(
+            enabled=True,
+            prefer_native=True,
+            features=TranscoderFeatures(thinking=True),
+        ),
     )
 
     request_body = {
@@ -1077,10 +1106,11 @@ async def test_coordinator_policy_not_default(
         prefer_native=True,
         features=TranscoderFeatures(thinking=True),
     )
-    app.state.coordinator._transcoder_policy = policy
+    _set_transcoder_policy(app, policy)
 
-    assert app.state.coordinator._transcoder_policy is policy
-    assert app.state.coordinator._transcoder_policy.features.thinking is True
+    coordinator = app.state.runtime_manager.active_snapshot().coordinator
+    assert coordinator._transcoder_policy is policy
+    assert coordinator._transcoder_policy.features.thinking is True
 
     request_body = {
         "model": "claude-3",

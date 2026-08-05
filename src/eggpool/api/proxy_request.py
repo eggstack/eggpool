@@ -342,8 +342,8 @@ async def handle_proxy_request(
     endpoint: ProxyEndpointConfig,
 ) -> Response:
     """Validate and dispatch one OpenAI- or Anthropic-compatible request."""
-    # Milestone A4 timing boundary: capture the earliest ASGI handler
-    # entry after auth / body-limit middleware.  Stored on the request
+    # Capture the earliest ASGI handler entry after auth / body-limit
+    # middleware.  Stored on the request
     # state so ``_handle_proxy_request_inner`` can propagate it onto
     # the ``ProxyRequestContext`` and ``_send_upstream_request`` can
     # compute ``local_pre_upstream_ms`` from this anchor.
@@ -364,41 +364,40 @@ async def handle_proxy_request(
     # releases it after the last chunk or on client disconnect.
     lease: GenerationLease | None = None
     runtime_manager = getattr(request.app.state, "runtime_manager", None)
-    if runtime_manager is not None:
-        try:
-            lease = await runtime_manager.acquire()
-        except Exception as exc:
-            request_state = getattr(request, "state", None)
-            request_id_or_none = (
-                getattr(request_state, "request_id", None)
-                if request_state is not None
-                else None
-            )
-            logger.warning(
-                "Runtime lease acquisition failed; returning 503",
-                extra={
-                    "proxy_request_id": request_id_or_none,
-                    "error": repr(exc),
-                },
-            )
-            return endpoint.error_response(
-                status_code=503,
-                message="Runtime generation unavailable",
-                error_type=endpoint.service_error_type,
-            )
-        assert lease is not None  # always acquired or returned 503
-        coordinator = lease.runtime.coordinator
-        span_recorder = getattr(lease.runtime, "dispatch_span_recorder", None)
-    else:
-        # Legacy path: no runtime manager installed.  Used only by
-        # minimal test applications that construct a request without a
-        # runtime manager.  Once the runtime manager is wired during
-        # normal startup, this path is NEVER reached.
-        coordinator = cast("RequestCoordinator", request.app.state.coordinator)
-        span_recorder = cast(
-            "DispatchSpanRecorder | None",
-            getattr(request.app.state, "dispatch_span_recorder", None),
+    if runtime_manager is None:
+        logger.error(
+            "Proxy request rejected because RuntimeManager is not installed",
+            extra={"proxy_request_id": proxy_request_id},
         )
+        return endpoint.error_response(
+            status_code=503,
+            message="Runtime generation unavailable",
+            error_type=endpoint.service_error_type,
+        )
+    try:
+        lease = await runtime_manager.acquire()
+    except Exception as exc:
+        request_state = getattr(request, "state", None)
+        request_id_or_none = (
+            getattr(request_state, "request_id", None)
+            if request_state is not None
+            else None
+        )
+        logger.warning(
+            "Runtime lease acquisition failed; returning 503",
+            extra={
+                "proxy_request_id": request_id_or_none,
+                "error": repr(exc),
+            },
+        )
+        return endpoint.error_response(
+            status_code=503,
+            message="Runtime generation unavailable",
+            error_type=endpoint.service_error_type,
+        )
+    assert lease is not None  # always acquired or returned 503
+    coordinator = lease.runtime.coordinator
+    span_recorder = getattr(lease.runtime, "dispatch_span_recorder", None)
 
     # Plan 029, Workstream H: request-coherent span sampling.
     # The sampling decision is deterministic and stable per request ID
@@ -453,7 +452,7 @@ async def handle_proxy_request(
     finally:
         # For non-streaming error paths the lease is still held here.
         # Streaming success transfers the lease to wrap_stream_with_lease.
-        if lease is not None and not lease.released:
+        if not lease.released:
             await lease.release()
 
 
@@ -462,7 +461,7 @@ async def _handle_proxy_request_inner(
     endpoint: ProxyEndpointConfig,
     coordinator: RequestCoordinator,
     span_recorder: DispatchSpanRecorder | None,
-    lease: GenerationLease | None,
+    lease: GenerationLease,
     *,
     request_received_monotonic_ns: int | None = None,
     proxy_request_id: str | None = None,
@@ -516,47 +515,74 @@ async def _handle_proxy_request_inner(
     # provider set (built from the registry when the generation was
     # constructed).  Reading through ``request.app.state.config`` would
     # bypass the lease and use a generation that may already be retired.
-    # The legacy fallback below is unreachable once a runtime manager is
-    # installed (the outer handler always acquires a lease or returns 503).
-    config: AppConfig | None
-    known_providers: set[str] | None
-    if lease is not None:
-        config = lease.runtime.config
-        known_providers = set(lease.runtime.immutable_request_state.provider_ids)
-    else:
-        legacy_config = cast(
-            "AppConfig | None",
-            getattr(request.app.state, "config", None),
-        )
-        config = legacy_config
-        known_providers = (
-            set(legacy_config.providers) if legacy_config is not None else None
-        )
+    config: AppConfig = lease.runtime.config
+    known_providers = set(lease.runtime.immutable_request_state.provider_ids)
     with _span(span_recorder, SPAN_MODEL_PARSE):
         model_id, provider_id = parse_model_provider(model_value, known_providers)
 
     # Preflight context limit check (guardrail, not primary enforcement).
-    if lease is not None:
-        catalog = lease.runtime.catalog
-        transcoder_policy = lease.runtime.transcoder_policy
-    else:
-        # Legacy fallback path used by tests that construct an app
-        # without a runtime manager.  In production the outer handler
-        # always acquires a lease or returns 503, so this branch is
-        # unreachable at runtime.
-        catalog = getattr(request.app.state, "catalog", None)
-        transcoder_policy = getattr(request.app.state, "transcoder_policy", None)
+    catalog = lease.runtime.catalog
+    transcoder_policy = lease.runtime.transcoder_policy
     preflight: TranscodePreflightResult | None = None
     prepared_transcode: PreparedTranscode | None = None
-    if catalog is not None:
-        with _span(span_recorder, SPAN_CONTEXT_LIMIT):
+    with _span(span_recorder, SPAN_CONTEXT_LIMIT):
+        try:
+            _check_context_limits(
+                model_id=model_id,
+                provider_id=provider_id,
+                body=body,
+                payload=payload,
+                protocol=endpoint.protocol,
+                catalog_cache=catalog.cache,
+            )
+        except ContextLimitExceededError as exc:
+            return endpoint.error_response(
+                status_code=400,
+                message=str(exc),
+                error_type="invalid_request_error",
+            )
+
+    # Second pass: when transcoding is active, also validate the translated
+    # payload against upstream limits.
+    with _span(span_recorder, SPAN_TRANSCODE_PREFLIGHT):
+        preflight = _prepare_transcode_preflight(
+            catalog=catalog,
+            model_id=model_id,
+            provider_id=provider_id,
+            client_protocol=endpoint.protocol,
+            payload=payload,
+            transcoder_policy=transcoder_policy,
+        )
+        if preflight is not None:
+            if (
+                getattr(transcoder_policy, "loss_policy", "warn") == "reject"
+                and preflight.warnings
+            ):
+                return endpoint.error_response(
+                    status_code=400,
+                    message=_format_loss_policy_rejection(preflight.warnings),
+                    error_type="invalid_request_error",
+                )
             try:
+                encoded_translated_body = encode_json_body(
+                    preflight.translated_payload,
+                )
+                limit_check_body = encoded_translated_body
+                if preflight.tool_token_padding > 0:
+                    padded_len = estimate_padded_size(
+                        len(encoded_translated_body),
+                        preflight.tool_token_padding
+                        * ESTIMATED_CONTEXT_BYTES_PER_TOKEN_FLOOR,
+                    )
+                    limit_check_body = encoded_translated_body + (
+                        b"\x00" * (padded_len - len(encoded_translated_body))
+                    )
                 _check_context_limits(
                     model_id=model_id,
                     provider_id=provider_id,
-                    body=body,
-                    payload=payload,
-                    protocol=endpoint.protocol,
+                    body=limit_check_body,
+                    payload=preflight.translated_payload,
+                    protocol=preflight.upstream_protocol,
                     catalog_cache=catalog.cache,
                 )
             except ContextLimitExceededError as exc:
@@ -565,65 +591,15 @@ async def _handle_proxy_request_inner(
                     message=str(exc),
                     error_type="invalid_request_error",
                 )
-
-        # Second pass: when transcoding is active, also validate
-        # the translated payload against upstream limits.
-        with _span(span_recorder, SPAN_TRANSCODE_PREFLIGHT):
-            preflight = _prepare_transcode_preflight(
-                catalog=catalog,
-                model_id=model_id,
-                provider_id=provider_id,
+            _loss_policy = getattr(transcoder_policy, "loss_policy", "warn")
+            _features = getattr(transcoder_policy, "features", None)
+            prepared_transcode = PreparedTranscode.from_preflight_result(
+                result=preflight,
                 client_protocol=endpoint.protocol,
-                payload=payload,
-                transcoder_policy=transcoder_policy,
+                loss_policy=_loss_policy,
+                encoded_body=encoded_translated_body,
+                features=_features,
             )
-            if preflight is not None:
-                if (
-                    getattr(transcoder_policy, "loss_policy", "warn") == "reject"
-                    and preflight.warnings
-                ):
-                    return endpoint.error_response(
-                        status_code=400,
-                        message=_format_loss_policy_rejection(preflight.warnings),
-                        error_type="invalid_request_error",
-                    )
-                try:
-                    encoded_translated_body = encode_json_body(
-                        preflight.translated_payload,
-                    )
-                    limit_check_body = encoded_translated_body
-                    if preflight.tool_token_padding > 0:
-                        padded_len = estimate_padded_size(
-                            len(encoded_translated_body),
-                            preflight.tool_token_padding
-                            * ESTIMATED_CONTEXT_BYTES_PER_TOKEN_FLOOR,
-                        )
-                        limit_check_body = encoded_translated_body + (
-                            b"\x00" * (padded_len - len(encoded_translated_body))
-                        )
-                    _check_context_limits(
-                        model_id=model_id,
-                        provider_id=provider_id,
-                        body=limit_check_body,
-                        payload=preflight.translated_payload,
-                        protocol=preflight.upstream_protocol,
-                        catalog_cache=catalog.cache,
-                    )
-                except ContextLimitExceededError as exc:
-                    return endpoint.error_response(
-                        status_code=400,
-                        message=str(exc),
-                        error_type="invalid_request_error",
-                    )
-                _loss_policy = getattr(transcoder_policy, "loss_policy", "warn")
-                _features = getattr(transcoder_policy, "features", None)
-                prepared_transcode = PreparedTranscode.from_preflight_result(
-                    result=preflight,
-                    client_protocol=endpoint.protocol,
-                    loss_policy=_loss_policy,
-                    encoded_body=encoded_translated_body,
-                    features=_features,
-                )
 
     stream_value = payload.get("stream", False)
     if stream_value is not None and not isinstance(stream_value, bool):
@@ -659,20 +635,8 @@ async def _handle_proxy_request_inner(
     # This runs BEFORE the segmentation guard so the guard reads the
     # effective (possibly policy-overridden) compression enabled/mode
     # instead of the raw global config.
-    if lease is not None:
-        compression_policy = lease.runtime.compression_policy
-        runtime_override_registry: Any = lease.runtime.compression_tuning_registry
-    else:
-        # Legacy fallback path used by tests that construct an app
-        # without a runtime manager.  In production the outer handler
-        # always acquires a lease or returns 503, so this branch is
-        # unreachable at runtime.
-        compression_policy = getattr(request.app.state, "compression_policy", None)
-        runtime_override_registry = getattr(
-            request.app.state,
-            "compression_tuning_registry",
-            None,
-        )
+    compression_policy = lease.runtime.compression_policy
+    runtime_override_registry: Any = lease.runtime.compression_tuning_registry
     with _span(span_recorder, SPAN_COMPRESSION_POLICY):
         resolved_compression_policy: Any = None
         if compression_policy is not None:
@@ -722,16 +686,8 @@ async def _handle_proxy_request_inner(
     # effective compression policy resolved above rather than the
     # raw global config, so a scoped ``[[compression.policies]]``
     # override that enables observe/safe is correctly detected.
-    _cache_cfg = getattr(config, "cache", None) if config is not None else None
-    _synthetic_enabled = (
-        getattr(
-            getattr(_cache_cfg, "synthetic_cache_controls", None),
-            "enabled",
-            False,
-        )
-        if _cache_cfg is not None
-        else False
-    )
+    _cache_cfg = config.cache
+    _synthetic_enabled = _cache_cfg.synthetic_cache_controls.enabled
     _seg_compression_enabled = (
         getattr(effective_compression_policy, "enabled", False)
         if effective_compression_policy is not None
@@ -748,9 +704,7 @@ async def _handle_proxy_request_inner(
         compression_mode=_seg_compression_mode,
         synthetic_cache_enabled=_synthetic_enabled,
         cache_observability_enabled=False,
-        force_segmentation=getattr(config, "force_segmentation", False)
-        if config is not None
-        else False,
+        force_segmentation=config.force_segmentation,
     )
 
     segmentation_result: Any = None
@@ -921,17 +875,14 @@ async def _handle_proxy_request_inner(
             original_body=body,
             incoming_headers=dict(request.headers),
             started_at=time.time(),
-            # Milestone A4: propagate the ASGI handler-entry anchor so
+            # Propagate the ASGI handler-entry anchor so
             # ``_send_upstream_request`` can compute ``local_pre_upstream_ms``.
             request_received_monotonic_ns=request_received_monotonic_ns,
             provider_id=provider_id,
             client_ip=get_client_ip(
                 request,
-                trusted_proxies=tuple(config.security.trusted_proxies)
-                if config is not None
-                else (),
+                trusted_proxies=tuple(config.security.trusted_proxies),
             ),
-            upstream_body=_rewrite_upstream_model(payload_for_rewrite, model_id),
             upstream_protocol=endpoint.protocol,
             transcode_required=False,
             transcode_context=transcode_ctx,
@@ -1052,10 +1003,8 @@ async def _handle_proxy_request_inner(
     # stream wrapper so it outlives the handler return.  The wrapper
     # releases the lease on stream completion, client disconnect, or
     # error — whichever happens first.
-    if (
-        lease is not None
-        and result.stream_iterator is not None
-        and isinstance(response, ProxyStreamingResponse)
+    if result.stream_iterator is not None and isinstance(
+        response, ProxyStreamingResponse
     ):
         response = ProxyStreamingResponse(
             wrap_stream_with_lease(result.stream_iterator, lease),
@@ -1064,7 +1013,7 @@ async def _handle_proxy_request_inner(
             headers=response.headers,
             response_handoff=response.response_handoff,
         )
-    elif lease is not None:
+    else:
         # Non-streaming: release immediately since finalization is done.
         await lease.release()
 
@@ -1094,18 +1043,3 @@ def _span(
         timer.__exit__(*sys.exc_info())
         raise
     timer.__exit__(None, None, None)
-
-
-def _rewrite_upstream_model(
-    payload: dict[str, Any],
-    model_id: str,
-) -> bytes | None:
-    """Forward the normalized, provider-free model ID upstream.
-
-    ``None`` means the original request body can be forwarded byte-for-byte.
-    """
-    if payload.get("model") == model_id:
-        return None
-    upstream_payload = dict(payload)
-    upstream_payload["model"] = model_id
-    return encode_json_body(upstream_payload)

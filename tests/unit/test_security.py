@@ -24,12 +24,22 @@ from eggpool.auth import require_auth
 from eggpool.catalog.cache import ModelCatalogCache
 from eggpool.dashboard.escape import escape
 from eggpool.models.config import AppConfig
-from eggpool.proxy.client import filter_request_headers
+from eggpool.proxy.client import (
+    HOP_BY_HOP_HEADERS,
+    LOCAL_CREDENTIAL_HEADERS,
+    filter_request_headers,
+)
 from eggpool.proxy.usage import (
     AnthropicStreamUsageExtractor,
     OpenAIStreamUsageExtractor,
 )
 from eggpool.request.coordinator import PreparedProxyResponse
+from eggpool.runtime_manager import (
+    ImmutableRequestState,
+    RuntimeGeneration,
+    RuntimeManager,
+    attach_runtime_manager,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -353,7 +363,7 @@ def _make_real_chat_app() -> FastAPI:
     config.server.api_key_env = ""  # disable auth
     config.security.trusted_proxies = ["127.0.0.1"]
     app.state.config = config
-    app.state.coordinator = MagicMock()
+    app.state.test_coordinator = MagicMock()
 
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request) -> JSONResponse:  # pyright: ignore[reportUnusedFunction]
@@ -369,13 +379,70 @@ def _make_real_messages_app() -> FastAPI:
     config.server.api_key_env = ""  # disable auth
     config.security.trusted_proxies = ["127.0.0.1"]
     app.state.config = config
-    app.state.coordinator = MagicMock()
+    app.state.test_coordinator = MagicMock()
 
     @app.post("/v1/messages")
     async def messages(request: Request) -> JSONResponse:  # pyright: ignore[reportUnusedFunction]
         return await handle_messages(request)  # type: ignore[return-value]
 
     return app
+
+
+class _TestGenerationSupervisor:
+    def all_healthy(self) -> bool:
+        return True
+
+    async def stop_all(self) -> None:
+        return
+
+
+async def _install_test_runtime(app: FastAPI) -> MagicMock:
+    """Install a real manager/generation around the mocked coordinator."""
+    config = app.state.config
+    coordinator = app.state.test_coordinator
+    registry = MagicMock()
+    registry.get_provider_ids.return_value = tuple(config.providers)
+    registry.get_enabled_states.return_value = ()
+    catalog = MagicMock()
+    catalog.cache.get_model_protocols.return_value = set()
+    catalog.cache.get_transcodable_protocols.return_value = ()
+    generation = RuntimeGeneration(
+        generation_id=0,
+        config=config,
+        config_digest="test",
+        registry=registry,
+        catalog=catalog,
+        router=MagicMock(),
+        coordinator=coordinator,
+        client_pool=MagicMock(),
+        outbound_manager=None,
+        dns_backend=None,
+        health_manager=MagicMock(),
+        cost_calculator=MagicMock(),
+        transcoder_policy=MagicMock(enabled=False),
+        compression_policy=None,
+        cache_config=config.cache,
+        compression_tuning_registry=None,
+        dispatch_overhead_recorder=MagicMock(),
+        dispatch_span_recorder=None,
+        account_backoff_repo=None,
+        stats_service=MagicMock(),
+        supervisor=_TestGenerationSupervisor(),
+        routing_trace_guard=None,
+        routing_trace_writer=None,
+        created_at_monotonic=0.0,
+        created_at_epoch=0.0,
+        immutable_request_state=ImmutableRequestState(
+            provider_ids=frozenset(config.providers),
+            account_names=frozenset(),
+            hop_by_hop_headers=HOP_BY_HOP_HEADERS,
+            local_credential_headers=LOCAL_CREDENTIAL_HEADERS,
+        ),
+    )
+    manager = RuntimeManager()
+    await manager.install_initial(generation)
+    attach_runtime_manager(app, manager)
+    return coordinator
 
 
 @pytest.mark.parametrize(
@@ -403,7 +470,8 @@ async def test_proxy_endpoints_build_protocol_specific_context(
         }
     )
     app.state.config.security.trusted_proxies = ["127.0.0.1"]
-    app.state.coordinator.execute = AsyncMock(
+    coordinator = await _install_test_runtime(app)
+    coordinator.execute = AsyncMock(
         return_value=PreparedProxyResponse(
             status_code=200,
             headers=[("content-type", "application/json")],
@@ -420,12 +488,13 @@ async def test_proxy_endpoints_build_protocol_specific_context(
         )
 
     assert response.status_code == 200
-    context = app.state.coordinator.execute.await_args.args[0]
+    context = coordinator.execute.await_args.args[0]
     assert context.protocol == protocol
     assert context.model_id == base_model
     assert context.provider_id == "opencode-go"
     assert context.client_ip == "203.0.113.7"
-    assert json.loads(context.upstream_body)["model"] == base_model
+    assert context.provider_bound is not None
+    assert context.provider_bound.provider_payload["model"] == base_model
 
 
 @pytest.mark.parametrize(
@@ -442,7 +511,8 @@ async def test_proxy_endpoints_forward_normalized_model_id(
 ) -> None:
     """Routing normalization and the forwarded payload must not diverge."""
     app = app_factory()
-    app.state.coordinator.execute = AsyncMock(
+    coordinator = await _install_test_runtime(app)
+    coordinator.execute = AsyncMock(
         return_value=PreparedProxyResponse(
             status_code=200,
             headers=[("content-type", "application/json")],
@@ -458,15 +528,17 @@ async def test_proxy_endpoints_forward_normalized_model_id(
         )
 
     assert response.status_code == 200
-    context = app.state.coordinator.execute.await_args.args[0]
+    context = coordinator.execute.await_args.args[0]
     assert context.model_id == "gpt-4"
-    assert json.loads(context.upstream_body)["model"] == "gpt-4"
+    assert context.provider_bound is not None
+    assert context.provider_bound.provider_payload["model"] == "gpt-4"
 
 
 @pytest.mark.asyncio
 async def test_chat_completions_invalid_utf8_returns_400() -> None:
     """Invalid UTF-8 bytes in request body must return 400, not 500."""
     app = _make_real_chat_app()
+    await _install_test_runtime(app)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
@@ -484,6 +556,7 @@ async def test_chat_completions_invalid_utf8_returns_400() -> None:
 async def test_messages_invalid_utf8_returns_400() -> None:
     """Invalid UTF-8 bytes in request body must return 400, not 500."""
     app = _make_real_messages_app()
+    await _install_test_runtime(app)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
@@ -501,6 +574,7 @@ async def test_messages_invalid_utf8_returns_400() -> None:
 async def test_chat_completions_stream_string_false_returns_400() -> None:
     """'stream: \"false\"' (string) must return 400, not silently coerce to True."""
     app = _make_real_chat_app()
+    await _install_test_runtime(app)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
@@ -515,6 +589,7 @@ async def test_chat_completions_stream_string_false_returns_400() -> None:
 async def test_chat_completions_stream_int_returns_400() -> None:
     """'stream: 1' (int) must return 400, not silently coerce to True."""
     app = _make_real_chat_app()
+    await _install_test_runtime(app)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
@@ -529,6 +604,7 @@ async def test_chat_completions_stream_int_returns_400() -> None:
 async def test_messages_stream_string_false_returns_400() -> None:
     """'stream: \"false\"' (string) must return 400 for Anthropic endpoint."""
     app = _make_real_messages_app()
+    await _install_test_runtime(app)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
@@ -543,6 +619,7 @@ async def test_messages_stream_string_false_returns_400() -> None:
 async def test_messages_stream_int_returns_400() -> None:
     """'stream: 1' (int) must return 400 for Anthropic endpoint."""
     app = _make_real_messages_app()
+    await _install_test_runtime(app)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
@@ -557,6 +634,7 @@ async def test_messages_stream_int_returns_400() -> None:
 async def test_chat_completions_stream_true_proceeds() -> None:
     """Valid boolean 'stream: true' should proceed to coordinator."""
     app = _make_real_chat_app()
+    coordinator = await _install_test_runtime(app)
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.body = b'{"ok": true}'
@@ -564,7 +642,7 @@ async def test_chat_completions_stream_true_proceeds() -> None:
     mock_response.stream_iterator = None
     mock_response.account_name = "test"
     mock_response.usage = None
-    app.state.coordinator.execute = AsyncMock(return_value=mock_response)
+    coordinator.execute = AsyncMock(return_value=mock_response)
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -573,13 +651,14 @@ async def test_chat_completions_stream_true_proceeds() -> None:
             json={"model": "gpt-4", "messages": [], "stream": True},
         )
     assert resp.status_code == 200
-    app.state.coordinator.execute.assert_called_once()
+    coordinator.execute.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_chat_completions_missing_model_returns_400() -> None:
     """Missing 'model' field must return 400."""
     app = _make_real_chat_app()
+    await _install_test_runtime(app)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
@@ -593,6 +672,7 @@ async def test_chat_completions_missing_model_returns_400() -> None:
 @pytest.mark.asyncio
 async def test_chat_completions_whitespace_model_returns_400() -> None:
     app = _make_real_chat_app()
+    await _install_test_runtime(app)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
@@ -608,6 +688,7 @@ async def test_chat_completions_whitespace_model_returns_400() -> None:
 async def test_messages_missing_model_returns_400() -> None:
     """Missing 'model' field must return 400 for Anthropic endpoint."""
     app = _make_real_messages_app()
+    await _install_test_runtime(app)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
@@ -622,6 +703,7 @@ async def test_messages_missing_model_returns_400() -> None:
 async def test_chat_completions_empty_body_returns_400() -> None:
     """Empty request body must return 400."""
     app = _make_real_chat_app()
+    await _install_test_runtime(app)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
@@ -636,6 +718,7 @@ async def test_chat_completions_empty_body_returns_400() -> None:
 async def test_messages_empty_body_returns_400() -> None:
     """Empty request body must return 400 for Anthropic endpoint."""
     app = _make_real_messages_app()
+    await _install_test_runtime(app)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
@@ -747,7 +830,8 @@ async def test_capability_error_handler_routes_to_openai_renderer() -> None:
     from eggpool.errors import CapabilityError
 
     app = _make_real_chat_app()
-    app.state.coordinator.execute = AsyncMock(
+    coordinator = await _install_test_runtime(app)
+    coordinator.execute = AsyncMock(
         side_effect=CapabilityError(
             model_id="gpt-4o",
             capability="thinking",
@@ -783,7 +867,8 @@ async def test_capability_error_handler_routes_to_anthropic_renderer() -> None:
     from eggpool.errors import CapabilityError
 
     app = _make_real_messages_app()
-    app.state.coordinator.execute = AsyncMock(
+    coordinator = await _install_test_runtime(app)
+    coordinator.execute = AsyncMock(
         side_effect=CapabilityError(
             model_id="claude-3-opus",
             capability="thinking",

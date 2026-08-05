@@ -342,7 +342,7 @@ async def test_overlap_routing_policy_change_preserves_old_policy(
     candidate_dict = candidate.model_dump()
     routing_dict = candidate_dict.setdefault("routing", {})
     trace_dict = routing_dict.setdefault("trace", {})
-    trace_dict["mode"] = "off" if initial_trace_mode != "off" else "full"
+    trace_dict["mode"] = "off" if initial_trace_mode != "off" else "sampled"
     new_candidate = AppConfig(**candidate_dict)
     candidate_trace_mode = new_candidate.routing.trace.mode
     assert candidate_trace_mode != initial_trace_mode

@@ -1,7 +1,7 @@
 """Runtime generation ownership and lease infrastructure.
 
-This module implements the runtime-manager primitive introduced in
-milestone B of the live-configuration-rehash plan.  It owns:
+This module implements the runtime-generation ownership boundary used by
+startup and live configuration rehash.  It owns:
 
 - :class:`RuntimeGeneration` -- an immutable snapshot of every
   configuration-derived service that can be swapped coherently.
@@ -38,11 +38,10 @@ Design principles
 - Successful publication must transfer ownership exactly once to the
   runtime manager (Phase 4 transfer contract).
 
-The runtime manager never assumes that milestone C has landed; it
-ships a fully working ``install_initial()``/``acquire()``/``shutdown()``
-contract that the existing ``_lifespan_runtime`` flow uses, and
-milestone C will add a narrow ``install_candidate()`` transactional
-publication API on top of this primitive without bypassing it.
+The runtime manager is the sole authority for active and retiring
+generations. Startup publishes the initial generation through
+``install_initial()``; rehash uses the staged publication API without
+bypassing lease or retirement accounting.
 
 Ownership inventory
 -------------------
@@ -104,8 +103,8 @@ Forward references
 ------------------
 
 The typed reload-result types live in :mod:`eggpool.config_reload_policy`
-(milestone A) and are imported lazily here to keep this module
-lightweight.  Diagnostics never include secret material.
+and are imported lazily here to keep this module lightweight.  Diagnostics
+never include secret material.
 """
 
 from __future__ import annotations
@@ -475,9 +474,8 @@ class ProcessRuntime:
     - ``stats_db``: read-only stats connection (may be ``db`` itself
       when ``database.worker_threads == 1`` or the DB is in-memory).
     - ``config_path``: resolved path the server is using for this
-      process (used by milestone C's reload control-plane handler).
-    - ``metrics_store``: placeholder for the buffered metrics coalescer;
-      populated by milestone B wiring rather than by this module.
+      process (used by the reload control-plane handler).
+    - ``metrics_coalescer``: the buffered metrics coalescer, when enabled.
     """
 
     db: Database
@@ -1198,9 +1196,8 @@ GENERATION_LEASE_TIMEOUT_S: Final[float] = 30.0
 
 Used by :meth:`RuntimeManager.acquire` when no active slot is currently
 accepting leases (race between publication and the first acquire).
-Generous by default because the publication path is short; milestone C
-will revisit once transactional reloads need to coordinate with client
-disconnects.
+Generous by default because the publication path is short and transactional
+rehash coordinates admission with client disconnects.
 """
 
 
@@ -1296,7 +1293,7 @@ class RuntimeManager:
         on repeat invocations: a second call raises
         :class:`RuntimeManagerShutdownError` because the manager does
         not allow replacing the active slot outside the publication
-        path milestone C will introduce.
+        staged publication path.
         """
         async with self._lock:
             if self._shutdown_in_progress:
@@ -1443,24 +1440,6 @@ class RuntimeManager:
             )
             self._pending_swap = swap
         return swap
-
-    async def install_candidate_legacy(
-        self,
-        generation: RuntimeGeneration,
-        *,
-        drain_timeout_s: float = 300.0,
-        expected_active_generation_id: int | None = None,
-    ) -> None:
-        """Legacy path: atomically swap and retire.
-
-        Used when the pending swap is not available.  Preserves the
-        original install_candidate() behavior for backward compatibility.
-        """
-        await self.install_candidate(
-            generation,
-            drain_timeout_s=drain_timeout_s,
-            expected_active_generation_id=expected_active_generation_id,
-        )
 
     def _lease_claim_available_locked(self) -> bool:
         """Evaluate whether a lease can be claimed (must hold self._lock).
@@ -1764,8 +1743,8 @@ class RuntimeManager:
         leases to drain (with a bounded wait so a runaway stream cannot
         keep resources alive forever), and then closes each owned
         resource exactly once.  Process shutdown uses a tight bound;
-        future live reload (milestone C) will pass a generous bound
-        because it cannot afford to interrupt in-flight streams.
+        live rehash uses a generous bound because it cannot afford to
+        interrupt in-flight streams.
 
         Idempotent: a slot whose retirement has already started is left
         alone.  Errors during resource close are captured in
@@ -2306,11 +2285,9 @@ class GenerationBuildResult:
 class RuntimeGenerationBuilder:
     """Constructs a :class:`RuntimeGeneration` from process-owned resources.
 
-    The builder owns the single construction site that both startup
-    and future reload (milestone C) will use.  It wraps the services
-    already constructed by ``_lifespan_runtime`` into an immutable
-    generation snapshot; milestone C will extend this to construct
-    services from a candidate config.
+    The builder owns the single construction site shared by startup and
+    live rehash.  It wraps the services constructed for a candidate config
+    into an immutable generation snapshot.
 
     Tests inject a thinner subclass to avoid pulling in the full
     service graph; production code uses the default ``build_initial``
@@ -2334,8 +2311,7 @@ class RuntimeGenerationBuilder:
         immutable ``RuntimeGeneration``, and returns the result.
 
         When a required service is missing the builder raises
-        ``RuntimeError`` so the caller can invoke
-        :meth:`cleanup_partial`.
+        ``RuntimeError`` before publication.
         """
         required = (
             "registry",
@@ -2420,24 +2396,6 @@ class RuntimeGenerationBuilder:
             process=process,
         )
 
-    async def cleanup_partial(self, process: ProcessRuntime) -> None:
-        """Best-effort cleanup after a partial build failure.
-
-        .. deprecated::
-            Superseded by :class:`RuntimeGenerationCandidate.abort` (Phase 4).
-            The candidate container now tracks and closes resources in reverse
-            registration order.  This method is retained for backward
-            compatibility.
-
-        Delegates to :func:`eggpool.app.cleanup_partial_generation`
-        which closes any generation-owned resources that were
-        constructed before the failure.  Tolerates partially
-        constructed state and repeated calls.
-        """
-        from eggpool.app import cleanup_partial_generation  # noqa: PLC0415
-
-        await cleanup_partial_generation(process)
-
 
 # ---------------------------------------------------------------------------
 # Generation build helper (used by app.py)
@@ -2452,12 +2410,7 @@ async def build_generation_from_config(
     config_digest: str,
     builder: RuntimeGenerationBuilder,
 ) -> GenerationBuildResult:
-    """Convenience wrapper used by the lifespan and milestone C reload path.
-
-    Milestone B only calls this once per process (initial install);
-    milestone C will reuse it from the reload transaction path so
-    startup and reload exercise the same construction site.
-    """
+    """Convenience wrapper used by startup and the live rehash path."""
     return await builder.build_initial(
         config,
         process,
@@ -2488,10 +2441,9 @@ def attach_runtime_manager(app: Any, manager: RuntimeManager) -> None:
     """Store the manager on ``app.state`` so request handlers can find it.
 
     The manager is the single source of truth for active and retiring
-    generations.  Direct reads of generation-owned fields on
-    ``app.state`` are retained during the milestone-B transition but
-    will be removed in milestone C; see the milestone plan for the
-    removal roadmap.
+    generations. Generation-owned services mirrored on ``app.state`` are
+    operational snapshots only; request handlers acquire a generation
+    lease from this manager.
     """
     app.state.runtime_manager = manager
 
@@ -2521,7 +2473,6 @@ _RUNTIME_OWNED_APP_STATE_ATTRS: frozenset[str] = frozenset(
         "metrics_coalescer",
         "dispatch_overhead_recorder",
         "dispatch_span_recorder",
-        "coordinator",
         "routing_trace_guard",
         "supervisor",
         "task_monitor",

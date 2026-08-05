@@ -213,12 +213,11 @@ completed result is non-retryable and has no stale cleanup detail.
 
 Stream outcome tracking with bounded histograms.
 
-### `request/selection_claim.py` / `selection_claim_diagnostics.py`
+### `RequestCoordinator` selection claim and diagnostics
 
-Milestone B selection-claim lock deconvoying. Split into three phases:
-1. Phase A: circuit breaker probe + identity resolution (under lock)
-2. Phase B: durable commit (outside lock)
-3. Phase C: runtime state publication (under lock)
+The coordinator owns the selection-claim lock and keeps database I/O outside
+the lock. Selection diagnostics are process-wide bounded counters exposed in
+the runtime snapshot; there is no separate claim state-machine module.
 
 ### `request/routing_trace_guard.py` — RoutingTraceGuard
 

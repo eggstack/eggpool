@@ -79,7 +79,6 @@ class RuntimeSnapshot:
     # Config / app.state mirrors (new fields per plan §4)
     effective_config_digest: str
     app_state_router_id: int | None
-    app_state_coordinator_id: int | None
 
     # SQLite persistence state
     persisted_provider_ids: tuple[str, ...]
@@ -184,11 +183,9 @@ class RuntimeSnapshot:
         asyncio_task_count = _capture_asyncio_task_count()
         fd_count = _capture_fd_count()
         rm_diags = _capture_rm_diags(runtime_manager)
-        (
-            effective_digest,
-            app_router_id,
-            app_coord_id,
-        ) = _capture_app_state_mirrors(app_state, runtime_manager)
+        effective_digest, app_router_id = _capture_app_state_mirrors(
+            app_state, runtime_manager
+        )
         (
             persisted_providers,
             persisted_accounts,
@@ -222,7 +219,6 @@ class RuntimeSnapshot:
             runtime_manager_diags=rm_diags,
             effective_config_digest=effective_digest,
             app_state_router_id=app_router_id,
-            app_state_coordinator_id=app_coord_id,
             persisted_provider_ids=persisted_providers,
             persisted_account_names=persisted_accounts,
             active_account_backoffs=active_backoffs,
@@ -345,12 +341,6 @@ class RuntimeSnapshot:
             diffs.append(
                 f"app.state.router identity: {self.app_state_router_id} != "
                 f"{other.app_state_router_id}"
-            )
-        if self.app_state_coordinator_id != other.app_state_coordinator_id:
-            diffs.append(
-                f"app.state.coordinator identity: "
-                f"{self.app_state_coordinator_id} != "
-                f"{other.app_state_coordinator_id}"
             )
         if self.effective_config_digest != other.effective_config_digest:
             diffs.append(
@@ -535,11 +525,10 @@ def _capture_rm_diags(runtime_manager: Any) -> dict[str, Any]:
 def _capture_app_state_mirrors(
     app_state: Any,
     runtime_manager: Any,
-) -> tuple[str, int | None, int | None]:
-    """Capture ``app.state`` mirror identities (router, coordinator, digest)."""
+) -> tuple[str, int | None]:
+    """Capture the operational ``app.state`` router mirror and digest."""
     effective_digest = ""
     router_id: int | None = None
-    coord_id: int | None = None
 
     if app_state is not None:
         with contextlib.suppress(Exception):
@@ -548,16 +537,12 @@ def _capture_app_state_mirrors(
             router = getattr(app_state, "router", None)
             if router is not None:
                 router_id = id(router)
-        with contextlib.suppress(Exception):
-            coord = getattr(app_state, "coordinator", None)
-            if coord is not None:
-                coord_id = id(coord)
 
     if not effective_digest:
         with contextlib.suppress(Exception):
             effective_digest = runtime_manager.active_snapshot().config_digest
 
-    return effective_digest, router_id, coord_id
+    return effective_digest, router_id
 
 
 def _safe_db(process: Any) -> Any:

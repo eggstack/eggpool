@@ -18,7 +18,7 @@ class ParsedRequestPayload:
     - original_bytes is always the raw client bytes (never mutated)
     - parsed_dict is the parsed JSON (lazy, computed once)
     - derived values are computed on demand and cached
-    - upstream_body mutations create a separate dict/bytes
+    - provider-bound mutations live in ProviderBoundRequest, not here
     """
 
     original_bytes: bytes
@@ -57,7 +57,7 @@ class ParsedRequestPayload:
     def invalidate_transformed(self) -> None:
         """Invalidate cached state after body transformation (transcode/compress).
 
-        Call this when upstream_body is set to a different value.
+        Call this when a provider-bound transform changes the request shape.
         Does NOT invalidate original_bytes or parsed_dict.
         """
         self._model_id = None

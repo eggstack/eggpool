@@ -11,7 +11,7 @@ Project-specific skills are in `.opencode/skills/`:
 ## Quick Start
 
 - Package manager: **uv** (not pip). Install deps: `uv sync --extra dev`
-- CI installs with `uv sync --frozen --extra dev` (locks match `uv.lock` exactly)
+- CI installs with `uv sync --frozen --extra ci` (locks match `uv.lock` exactly)
 - Entry point: `src/eggpool/cli.py` → `eggpool` console script
 - Config: `config.toml` + `.env` for API keys
 - Optional `orjson` backend: `uv pip install 'eggpool[fast]'` (or `uv sync --extra fast`)
@@ -137,7 +137,7 @@ stream-specific regressions.
 - **Streaming completion**: `classify_stream_eof()` uses provider-bound `stream_completion_policy` (`strict`/`compatible`/`permissive_observe`). Only canonical OpenAI `[DONE]` or Anthropic `message_stop` is strict. Incomplete EOF → `MIDSTREAM_ERROR`, never retried after handoff.
 - **Response isolation**: non-streaming response adaptation completes before durable `COMPLETED`; native invalid JSON remains pass-through when usage is optional, while malformed required transcoding is a truthful terminal error. Streaming sets the authoritative `downstream_started` fact immediately before forwarding ASGI `http.response.start`, closes upstream responses on every terminal path, and never catches cancellation as an ordinary failure. An empty stream after response start is post-handoff with `bytes_emitted=0`.
 - **Thinking control normalization**: Provider-bound `ThinkingControlContract` validates/normalizes thinking controls. `ControlFieldAdaptation` provides per-field dispositions. Built-in contract resolution: specificity before priority.
-- **Provider payload lifecycle**: `ProviderBoundRequest` is the sole provider-payload authority after client parsing. Copy-on-write generation-aware mutations, one final serialization cache, frozen before dispatch. `ProxyRequestContext.upstream_body` is a compatibility mirror only.
+- **Provider payload lifecycle**: `ProviderBoundRequest` is the sole provider-payload authority after client parsing. Copy-on-write generation-aware mutations, one final serialization cache, frozen before dispatch. Original client bytes remain separate from the provider-bound payload.
 - **Dispatch persistence contract**: `persist_dispatch_bundles()` is binary: a validated result list or an exception; rollback never returns placeholder identities. `PersistedDispatchResult` requires non-empty request/reservation IDs and a positive attempt ID. `DispatchPersistenceWriter` fans batch failures to every waiter, keeps failed work out of persisted counters, and accepts submissions only from its owner event loop.
 - **Background tasks**: `src/eggpool/background/` — `TaskSupervisor`, fixed-delay scheduler. Process-owned tasks survive generation swaps; generation-leased tasks retire with their generation. Default process tasks are checkpoint and low-wear metrics flush; update checker and automatic backup are opt-in. Catalog refresh and retention cleanup are generation-leased, and model-info reconciliation runs only through a generation that has model-info enabled.
 - **Database recovery**: startup integrity is fail-closed. An indeterminate commit, rollback, invalidated connection, corruption, or disk failure closes admission and exits the worker; systemd restarts it, then startup integrity and crash reconciliation run before readiness. Ordinary busy/locked errors remain bounded local database failures and never create provider backoff.

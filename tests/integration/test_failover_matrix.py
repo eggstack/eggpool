@@ -33,6 +33,7 @@ from eggpool.request.coordinator import (
     ProxyRequestContext,
     RequestCoordinator,
 )
+from eggpool.request.finalization_job import RequestFinalizationSupervisor
 from eggpool.routing.router import Router
 
 if TYPE_CHECKING:
@@ -163,7 +164,13 @@ async def coordinator(
         health_manager=health_manager,
         max_retry_attempts=2,
     )
+    finalization_supervisor = RequestFinalizationSupervisor(
+        db=two_account_db,
+        effects_applier=coord._effects_applier,  # pyright: ignore[reportPrivateUsage]
+    )
+    coord._finalization_supervisor = finalization_supervisor  # pyright: ignore[reportPrivateUsage]
     yield coord
+    await finalization_supervisor.shutdown()
     await httpx_client.aclose()
 
 

@@ -33,6 +33,7 @@ from typing import Any, cast
 
 import pytest
 
+from eggpool.request.provider_bound_request import ProviderBoundRequest
 from eggpool.transcoder.cache_stability import CACHE_BOUNDARY_KIND_SYNTHESIZED
 from eggpool.transcoder.cache_synthesis import (
     WARN_BELOW_MIN_TOKENS,
@@ -89,6 +90,23 @@ def _anthropic_payload(
     if tools is not None:
         payload["tools"] = tools
     return payload
+
+
+def _provider_bound(
+    body: bytes, *, client_protocol: str = "anthropic"
+) -> ProviderBoundRequest:
+    """Build an already-serialized provider payload for coordinator tests."""
+    payload = json.loads(body)
+    assert isinstance(payload, dict)
+    request = ProviderBoundRequest(
+        client_bytes=body,
+        client_payload=payload,
+        client_protocol=client_protocol,
+        model_id=str(payload["model"]),
+        upstream_protocol="anthropic",
+    )
+    request.set_provider_bytes(body)
+    return request
 
 
 def _resolved_policy(
@@ -1898,7 +1916,7 @@ class TestSyntheticCachePostRoute:
             original_body=json.dumps(payload).encode(),
             incoming_headers={},
             upstream_protocol="anthropic",
-            upstream_body=json.dumps(payload).encode(),
+            provider_bound=_provider_bound(json.dumps(payload).encode()),
         )
         selected = SelectedAttempt(
             proxy_request_id="test-req",
@@ -1957,7 +1975,9 @@ class TestSyntheticCachePostRoute:
             original_body=json.dumps(payload).encode(),
             incoming_headers={},
             upstream_protocol="anthropic",
-            upstream_body=json.dumps(payload).encode(),
+            provider_bound=_provider_bound(
+                json.dumps(payload).encode(), client_protocol="openai"
+            ),
         )
         selected = SelectedAttempt(
             proxy_request_id="test-req",
@@ -2021,7 +2041,9 @@ class TestSyntheticCachePostRoute:
             original_body=json.dumps(payload).encode(),
             incoming_headers={},
             upstream_protocol="openai",
-            upstream_body=json.dumps(payload).encode(),
+            provider_bound=_provider_bound(
+                json.dumps(payload).encode(), client_protocol="openai"
+            ),
         )
         selected = SelectedAttempt(
             proxy_request_id="test-req",
@@ -2067,7 +2089,9 @@ class TestSyntheticCachePostRoute:
             original_body=json.dumps(payload).encode(),
             incoming_headers={},
             upstream_protocol="anthropic",
-            upstream_body=json.dumps(payload).encode(),
+            provider_bound=_provider_bound(
+                json.dumps(payload).encode(), client_protocol="openai"
+            ),
         )
         selected = SelectedAttempt(
             proxy_request_id="test-req",
@@ -2219,7 +2243,9 @@ class TestSyntheticCachePostRoute:
             original_body=json.dumps(payload).encode(),
             incoming_headers={},
             upstream_protocol="anthropic",
-            upstream_body=json.dumps(payload).encode(),
+            provider_bound=_provider_bound(
+                json.dumps(payload).encode(), client_protocol="openai"
+            ),
         )
         selected = SelectedAttempt(
             proxy_request_id="test-req",
@@ -2274,7 +2300,7 @@ class TestSyntheticCachePostRoute:
             original_body=json.dumps(payload).encode(),
             incoming_headers={},
             upstream_protocol="anthropic",
-            upstream_body=json.dumps(payload).encode(),
+            provider_bound=_provider_bound(json.dumps(payload).encode()),
         )
         selected = SelectedAttempt(
             proxy_request_id="test-req",
@@ -2301,7 +2327,7 @@ class TestSyntheticCachePostRoute:
         coordinator._apply_synthetic_cache_controls(context=ctx, selected=selected)
         assert ctx.synthetic_cache_segmentation is not None
 
-    def test_upstream_body_not_mutated_when_safety_diff_fails(self) -> None:
+    def test_provider_bound_body_not_mutated_when_safety_diff_fails(self) -> None:
         from eggpool.request.coordinator import (
             ProxyRequestContext,
             RequestCoordinator,
@@ -2328,7 +2354,7 @@ class TestSyntheticCachePostRoute:
             original_body=original_body,
             incoming_headers={},
             upstream_protocol="anthropic",
-            upstream_body=original_body,
+            provider_bound=_provider_bound(original_body),
         )
         selected = SelectedAttempt(
             proxy_request_id="test-req",
@@ -2353,13 +2379,13 @@ class TestSyntheticCachePostRoute:
         coordinator._config = None
 
         coordinator._apply_synthetic_cache_controls(context=ctx, selected=selected)
-        # Apply mode with valid payload: upstream_body should be updated
+        # Apply mode with valid payload updates the provider-bound body.
         # (safety diff passes when mutator only adds cache_control)
         if (
             ctx.synthetic_cache_result is not None
             and ctx.synthetic_cache_result.plan.status == "applied"
         ):
-            assert ctx.upstream_body is not None
+            assert ctx.provider_bound is not None
 
     # ------------------------------------------------------------------
     # Streaming-path exercises
@@ -2389,7 +2415,7 @@ class TestSyntheticCachePostRoute:
             original_body=json.dumps(payload).encode(),
             incoming_headers={},
             upstream_protocol="anthropic",
-            upstream_body=json.dumps(payload).encode(),
+            provider_bound=_provider_bound(json.dumps(payload).encode()),
         )
         selected = SelectedAttempt(
             proxy_request_id="test-req",
@@ -2448,7 +2474,7 @@ class TestSyntheticCachePostRoute:
             original_body=original_body,
             incoming_headers={},
             upstream_protocol="anthropic",
-            upstream_body=original_body,
+            provider_bound=_provider_bound(original_body),
         )
         selected = SelectedAttempt(
             proxy_request_id="test-req",
@@ -2475,9 +2501,10 @@ class TestSyntheticCachePostRoute:
         coordinator._apply_synthetic_cache_controls(context=ctx, selected=selected)
         assert ctx.synthetic_cache_result is not None
         if ctx.synthetic_cache_result.plan.status == "applied":
-            assert ctx.upstream_body is not None
-            assert ctx.upstream_body != original_body
-            new_payload = json.loads(ctx.upstream_body)
+            assert ctx.provider_bound is not None
+            new_body = ctx.provider_bound.serialize_provider_payload()
+            assert new_body != original_body
+            new_payload = json.loads(new_body)
             system = new_payload["system"]
             assert isinstance(system, list)
             assert system[0]["cache_control"] == {"type": "ephemeral"}
@@ -2506,7 +2533,7 @@ class TestSyntheticCachePostRoute:
             original_body=json.dumps(payload).encode(),
             incoming_headers={},
             upstream_protocol="anthropic",
-            upstream_body=json.dumps(payload).encode(),
+            provider_bound=_provider_bound(json.dumps(payload).encode()),
         )
         selected = SelectedAttempt(
             proxy_request_id="test-req",
