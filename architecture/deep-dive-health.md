@@ -90,6 +90,18 @@ resolved credentials; a changed credential/provider/key binding re-enables the
 candidate account and clears that account's terminal authentication hint in the
 same SQLite transaction. Unchanged accounts retain their authentication state.
 
+Model-quarantine hydration is a generation-publication prerequisite. The
+repository distinguishes a successful empty result from a failed read, and
+strict row conversion rejects malformed identities, timestamps, states, or
+provenance. Startup fails closed and a rehash candidate is rejected; the active
+generation is not replaced by an empty or partial quarantine. When an
+authoritative catalog reports a model again, the exact durable quarantine row
+is marked healthy first. Only after durable convergence does the callback clear
+the matching in-memory entry and transient model backoff. A database failure
+therefore preserves routing suppression and is not recorded as provider
+health evidence. Recovery is deterministic per identity; a later identity may
+fail without undoing earlier durable-first convergence.
+
 ## Attempt-Scoped Failure Decisions
 
 `classify_failure_effects()` consumes one immutable `FailureObservation` and

@@ -85,7 +85,9 @@ AggregatorError (base)
 ├── DatabaseError
 │   ├── DatabaseCommitError
 │   ├── DatabaseConnectionInvalidatedError
-│   └── DatabaseRollbackError
+│   ├── DatabaseRollbackError
+│   ├── ModelQuarantineHydrationError
+│   └── ModelQuarantineRecoveryError
 ├── UpstreamError (status_code attribute)
 │   ├── TemporaryUpstreamError
 │   ├── TransientUpstreamError
@@ -128,6 +130,10 @@ Plus `RuntimeManagerLeaseExhaustedError` (RuntimeError, mapped to HTTP 503).
 - `RuntimeGenerationCandidate` owns reload-created resources; `candidate.abort()` closes in reverse order
 - `RuntimeGenerationFactory` eliminates behavior drift between startup and reload
 - `ReloadTransaction` state machine executes process transitions inside SQLite transaction
+- Model-quarantine hydration is a publication prerequisite: successful zero-row
+  reads are valid, while read or strict row-conversion failures reject startup
+  or abort a reload candidate. Authoritative catalog reappearance clears the
+  exact durable identity before in-memory suppression and matching backoff.
 
 ## Live Rehash
 

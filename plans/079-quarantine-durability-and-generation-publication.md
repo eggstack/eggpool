@@ -1,7 +1,7 @@
 # Plan 079 — Quarantine Durability and Generation Publication
 
 Date: 2026-08-05
-Status: ready for implementation
+Status: complete
 Parent roadmap: `plans/077-sbc-lifecycle-simplification-and-runtime-correctness-roadmap.md`
 Planning baseline: `cd8967799e6613f3a5965af8cd15ce3c5269aaa8`
 
@@ -197,17 +197,29 @@ uv run pytest tests/smoke/ -q --tb=short --maxfail=1
 
 ## Acceptance criteria
 
-- [ ] Quarantine hydration failure aborts candidate preparation.
-- [ ] Successful zero-row hydration remains distinguishable from failure.
-- [ ] Startup never admits readiness with unknown quarantine state.
-- [ ] Failed rehash hydration leaves the active generation untouched.
-- [ ] Candidate resources are closed through the existing abort contract.
-- [ ] Authoritative reappearance clears durable quarantine before in-memory quarantine.
-- [ ] Durable clear failure preserves in-memory quarantine and matching backoff.
-- [ ] Exact provider/account/model/protocol scope is preserved.
-- [ ] Diagnostics are bounded and secret-free.
-- [ ] Focused tests and the existing smoke gate pass.
-- [ ] No hydration retry service, durable queue, or generalized cache framework is introduced.
+- [x] Quarantine hydration failure aborts candidate preparation.
+- [x] Successful zero-row hydration remains distinguishable from failure.
+- [x] Startup never admits readiness with unknown quarantine state.
+- [x] Failed rehash hydration leaves the active generation untouched.
+- [x] Candidate resources are closed through the existing abort contract.
+- [x] Authoritative reappearance clears durable quarantine before in-memory quarantine.
+- [x] Durable clear failure preserves in-memory quarantine and matching backoff.
+- [x] Exact provider/account/model/protocol scope is preserved.
+- [x] Diagnostics are bounded and secret-free.
+- [x] Focused tests and the existing smoke gate pass.
+- [x] No hydration retry service, durable queue, or generalized cache framework is introduced.
+
+## Verification results
+
+- `uv run ruff format --check src/ tests/ scripts/` — 729 files already formatted.
+- `uv run ruff check src/ tests/ scripts/` — passed.
+- `uv run pyright src/ scripts/` — 0 errors, 0 warnings, 0 informations.
+- Focused quarantine/generation/catalog suites — 79 passed.
+- `uv run pytest tests/unit/test_reload_failure_injection.py -k
+  "candidate_build_failure_preserves_active or candidate_close_after_build_failure"`
+  — 1 passed, 11 deselected.
+- `uv run pytest tests/unit/test_candidate_resource_ownership.py` — 43 passed.
+- `uv run pytest tests/smoke/ -q --tb=short --maxfail=1` — 14 passed.
 
 ## Rejection conditions
 

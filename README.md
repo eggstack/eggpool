@@ -189,6 +189,13 @@ Rehash clears only the changed account's auth state. `/api/backoffs` exposes
 the active provider-derived hints; malformed or stale durable rows have no
 routing effect.
 
+Model-quarantine hydration is fail-closed. A successful empty durable read is
+distinct from a read or row-conversion failure: startup remains unready and a
+failed rehash candidate is rejected rather than publishing unknown quarantine
+state. Authoritative catalog reappearance clears the exact durable
+provider/account/model/upstream/protocol identity before in-memory suppression
+and matching backoff; a durable failure preserves the current suppression.
+
 ## Request shaping
 
 EggPool includes an opt-in, cache-preserving request-shaping stack. With shipped defaults the entire stack is **reporting-only**: no request body, header, or route is altered. Routing remains load-based — cache, compression, synthetic-cache, and tuning fields never enter `QuotaFairScorer`.

@@ -957,13 +957,6 @@ class CatalogService:
                 models=models,
                 provider_cfg=provider_cfg,
             )
-            update = self._cache.update_from_account(
-                account_name,
-                provider_id,
-                models,
-                authoritative=authoritative,
-                allow_withdrawals=allow_withdrawals,
-            )
             if outcome is AccountCatalogOutcome.SUCCESS_PARTIAL:
                 logger.warning(
                     "Catalog refresh for account %r on provider %r returned a "
@@ -973,21 +966,22 @@ class CatalogService:
                     provider_id,
                 )
             elif self._model_reappearance_callback is not None:
-                try:
-                    await self._model_reappearance_callback(
-                        account_name,
-                        provider_id,
-                        models,
-                    )
-                except Exception:
-                    # Quarantine recovery is best-effort and must not turn a
-                    # valid catalog refresh into a failed refresh.
-                    logger.exception(
-                        "Failed to clear model quarantine after catalog "
-                        "reappearance for account=%r provider=%r",
-                        account_name,
-                        provider_id,
-                    )
+                # The callback publishes authoritative model reappearance.
+                # It must converge durable quarantine before this cache update
+                # so a local database failure preserves the prior catalog and
+                # in-memory suppression for this account.
+                await self._model_reappearance_callback(
+                    account_name,
+                    provider_id,
+                    models,
+                )
+            update = self._cache.update_from_account(
+                account_name,
+                provider_id,
+                models,
+                authoritative=authoritative,
+                allow_withdrawals=allow_withdrawals,
+            )
             logger.debug(
                 "Account %r: %s found %d models (added=%d, updated=%d, "
                 "preserved=%d, withdrawn=%d)",

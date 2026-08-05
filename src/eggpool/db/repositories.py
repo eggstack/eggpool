@@ -20,6 +20,7 @@ from eggpool.constants import (
     clamp_sqlite_aggregate,
     clamp_sqlite_integer,
 )
+from eggpool.errors import ModelQuarantineHydrationError
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -2298,28 +2299,47 @@ class ModelQuarantineRepository:
         state machine's :meth:`is_model_quarantined` performs its own
         expiry check at access time.
         """
-        rows = await self._db.fetch_all(
-            """
-            SELECT id, provider_id, account_id, canonical_model_id,
-                   upstream_model_id, upstream_protocol, state,
-                   evidence_provenance, reason, first_observed,
-                   last_observed, observation_count, expiry, cleared_at,
-                   clear_reason, last_status_code, last_error_class
-            FROM model_quarantine
-            ORDER BY last_observed DESC
-            LIMIT ?
-            """,
-            (limit,),
-        )
-        results: list[dict[str, Any]] = []
-        for row in rows:
-            entry = dict(row)
-            entry["first_observed_epoch"] = _iso_to_epoch(entry.get("first_observed"))
-            entry["last_observed_epoch"] = _iso_to_epoch(entry.get("last_observed"))
-            entry["expiry_epoch"] = _iso_to_epoch(entry.get("expiry"))
-            entry["cleared_at_epoch"] = _iso_to_epoch(entry.get("cleared_at"))
-            results.append(entry)
-        return results
+        try:
+            if limit < 1:
+                raise ValueError("invalid model quarantine hydration limit")
+            rows = await self._db.fetch_all(
+                """
+                SELECT id, provider_id, account_id, canonical_model_id,
+                       upstream_model_id, upstream_protocol, state,
+                       evidence_provenance, reason, first_observed,
+                       last_observed, observation_count, expiry, cleared_at,
+                       clear_reason, last_status_code, last_error_class
+                FROM model_quarantine
+                ORDER BY last_observed DESC
+                LIMIT ?
+                """,
+                (limit + 1,),
+            )
+            if len(rows) > limit:
+                raise ValueError("model quarantine hydration limit exceeded")
+            results: list[dict[str, Any]] = []
+            for row in rows:
+                entry = dict(row)
+                for field_name in ("first_observed", "last_observed"):
+                    raw_value = entry.get(field_name)
+                    parsed_value = _iso_to_epoch(raw_value)
+                    if raw_value is None or parsed_value is None:
+                        raise ValueError(f"invalid quarantine {field_name}")
+                    entry[f"{field_name}_epoch"] = parsed_value
+                for field_name in ("expiry", "cleared_at"):
+                    raw_value = entry.get(field_name)
+                    parsed_value = _iso_to_epoch(raw_value)
+                    if raw_value is not None and parsed_value is None:
+                        raise ValueError(f"invalid quarantine {field_name}")
+                    entry[f"{field_name}_epoch"] = parsed_value
+                results.append(entry)
+            return results
+        except ModelQuarantineHydrationError:
+            raise
+        except Exception as exc:
+            raise ModelQuarantineHydrationError(
+                "Model quarantine hydration read failed"
+            ) from exc
 
     async def expire_old(self, *, now: float | None = None) -> int:
         """Delete expired bounded quarantine rows; returns count removed.

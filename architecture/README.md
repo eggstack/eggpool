@@ -2261,6 +2261,8 @@ skips the guard so operator-initiated withdrawals remain effective.
 AggregatorError (base)
 ├── ConfigError
 ├── DatabaseError
+│   ├── ModelQuarantineHydrationError
+│   └── ModelQuarantineRecoveryError
 ├── UpstreamError (status_code attribute)
 │   ├── TemporaryUpstreamError
 │   ├── TransientUpstreamError
@@ -4300,6 +4302,20 @@ hint, in the same transaction as the account sync. Circuit probes are leased per
 converge exactly once through provider success, provider failure, cancellation,
 local rejection, or retained cleanup; a half-open failure reopens once and a
 successful default probe closes the circuit.
+
+Model-quarantine state has a stricter publication contract than advisory
+backoff hints. Migrations run before `RuntimeGenerationFactory.prepare()`
+hydrates the complete `model_quarantine` row set. A successful zero-row query
+publishes an empty `ModelQuarantine`; a database, schema, timestamp, enum, or
+identity conversion failure raises `ModelQuarantineHydrationError`, rejects
+the startup/candidate generation, and leaves the active generation unchanged.
+During authoritative catalog reappearance, each exact provider/account/
+canonical-model/upstream-model/upstream-protocol identity is cleared in the
+database before its in-memory entry and matching transient backoff. A
+durable-clear failure leaves that identity suppressed and does not create
+provider-health evidence. Reappearance publication is per identity in sorted
+order, so earlier converged identities remain converged if a later clear
+fails.
 
 ## Process-Owned Request Finalization (Plan 026)
 

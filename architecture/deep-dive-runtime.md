@@ -107,6 +107,14 @@ Generations are immutable snapshots of application state:
 
 Live reload (`eggpool rehash`) builds a candidate generation, validates it, and atomically publishes it. In-flight requests on the retiring generation complete normally.
 
+Quarantine hydration is part of candidate preparation, before publication.
+`RuntimeGenerationFactory.prepare()` never catches a quarantine read or row
+conversion failure to start with an empty state. Startup consequently remains
+closed until complete durable quarantine state is known, while a failed rehash
+candidate is aborted and the active generation retains its existing quarantine.
+Authoritative catalog reappearance uses durable-first, exact-key recovery; a
+failed durable clear leaves the current in-memory suppression intact.
+
 ## Process-Owned vs Generation-Leased
 
 | Component | Ownership | Survives Generation Swap |

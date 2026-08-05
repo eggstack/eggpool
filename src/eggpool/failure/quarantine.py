@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import time
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -535,66 +536,89 @@ def entry_from_row(row: dict[str, object]) -> QuarantineEntry:
     plain dicts with epoch floats (no SQLite timestamp parsing).  This
     helper centralises the conversion so callers do not need to know
     about :class:`EvidenceProvenance` or :class:`QuarantineState` enum
-    parsing.  Unknown enum values default to the safest choice
-    (``HEALTHY``/``RUNTIME_HTTP``) so a future schema migration that
-    adds a state cannot crash startup hydration.
+    parsing. Invalid rows are rejected because hydration is a
+    generation-publication prerequisite; silently converting an unknown
+    state or malformed identity into a healthy entry would be fail-open.
     """
-    state_str = str(row.get("state", "healthy"))
+
+    def _required_text(field_name: str) -> str:
+        value = row.get(field_name)
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"invalid quarantine {field_name}")
+        return value
+
+    state_str = _required_text("state")
     try:
         state = QuarantineState(state_str)
     except ValueError:
-        state = QuarantineState.HEALTHY
-    provenance_str = str(row.get("evidence_provenance", "runtime_http"))
+        raise ValueError("invalid quarantine state") from None
+    provenance_str = _required_text("evidence_provenance")
     try:
         provenance = EvidenceProvenance(provenance_str)
     except ValueError:
-        provenance = EvidenceProvenance.RUNTIME_HTTP
+        raise ValueError("invalid quarantine evidence provenance") from None
 
-    def _epoch(value: object) -> float | None:
+    def _epoch(field_name: str, *, required: bool = False) -> float | None:
+        value = row.get(field_name)
         if value is None:
+            if required:
+                raise ValueError(f"missing quarantine {field_name}")
             return None
         try:
-            return float(value)  # type: ignore[arg-type]
+            result = float(value)  # type: ignore[arg-type]
         except (TypeError, ValueError):
-            return None
+            raise ValueError(f"invalid quarantine {field_name}") from None
+        if not math.isfinite(result):
+            raise ValueError(f"invalid quarantine {field_name}")
+        return result
 
-    def _int(value: object) -> int | None:
+    def _int(field_name: str, *, required: bool = False) -> int | None:
+        value = row.get(field_name)
         if value is None:
+            if required:
+                raise ValueError(f"missing quarantine {field_name}")
             return None
         try:
-            return int(value)  # type: ignore[arg-type]
+            result = int(value)  # type: ignore[arg-type]
         except (TypeError, ValueError):
-            return None
+            raise ValueError(f"invalid quarantine {field_name}") from None
+        if isinstance(value, bool) or result < 1:
+            raise ValueError(f"invalid quarantine {field_name}")
+        return result
 
     upstream_model_id = row.get("upstream_model_id")
     if upstream_model_id is not None and not isinstance(upstream_model_id, str):
-        upstream_model_id = str(upstream_model_id)
+        raise ValueError("invalid quarantine upstream_model_id")
 
-    upstream_protocol = str(row.get("upstream_protocol", "openai"))
-    if not upstream_protocol:
-        upstream_protocol = "openai"
+    upstream_protocol = _required_text("upstream_protocol")
+    provider_id = _required_text("provider_id")
+    account_id = _required_text("account_id")
+    canonical_model_id = _required_text("canonical_model_id")
+    reason = row.get("reason")
+    if not isinstance(reason, str):
+        raise ValueError("invalid quarantine reason")
+    clear_reason = row.get("clear_reason")
+    if clear_reason is not None and not isinstance(clear_reason, str):
+        raise ValueError("invalid quarantine clear reason")
+    last_error_class = row.get("last_error_class")
+    if last_error_class is not None and not isinstance(last_error_class, str):
+        raise ValueError("invalid quarantine error class")
 
     return QuarantineEntry(
         state=state,
-        provider_id=str(row.get("provider_id", "")),
-        account_id=str(row.get("account_id", "")),
-        canonical_model_id=str(row.get("canonical_model_id", "")),
+        provider_id=provider_id,
+        account_id=account_id,
+        canonical_model_id=canonical_model_id,
         upstream_model_id=upstream_model_id,
         upstream_protocol=upstream_protocol,
         evidence_provenance=provenance,
-        reason=str(row.get("reason", "")),
-        first_observed=_epoch(row.get("first_observed_epoch")) or 0.0,
-        last_observed=_epoch(row.get("last_observed_epoch")) or 0.0,
-        observation_count=_int(row.get("observation_count")) or 0,
-        expiry=_epoch(row.get("expiry_epoch")),
-        cleared_at=_epoch(row.get("cleared_at_epoch")),
-        clear_reason=(
-            str(row["clear_reason"]) if row.get("clear_reason") is not None else None
-        ),
-        last_status_code=_int(row.get("last_status_code")),
-        last_error_class=(
-            str(row["last_error_class"])
-            if row.get("last_error_class") is not None
-            else None
-        ),
+        reason=reason,
+        first_observed=_epoch("first_observed_epoch", required=True) or 0.0,
+        last_observed=_epoch("last_observed_epoch", required=True) or 0.0,
+        observation_count=_int("observation_count", required=True) or 1,
+        expiry=_epoch("expiry_epoch"),
+        cleared_at=_epoch("cleared_at_epoch"),
+        clear_reason=clear_reason,
+        last_status_code=_int("last_status_code"),
+        last_error_class=last_error_class,
     )

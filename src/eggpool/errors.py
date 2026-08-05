@@ -40,6 +40,14 @@ class DatabaseError(AggregatorError):
     """Raised for database-related failures."""
 
 
+class ModelQuarantineHydrationError(DatabaseError):
+    """Raised when durable model-quarantine state cannot be hydrated."""
+
+
+class ModelQuarantineRecoveryError(DatabaseError):
+    """Raised when durable model-quarantine recovery cannot converge."""
+
+
 class DatabaseTransactionOwnershipError(DatabaseError):
     """Raised when a task other than the transaction owner touches SQLite."""
 

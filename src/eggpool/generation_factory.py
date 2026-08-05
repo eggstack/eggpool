@@ -30,6 +30,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from eggpool.constants import DEFAULT_PROVIDER_ID
+from eggpool.errors import (
+    ModelQuarantineHydrationError,
+    ModelQuarantineRecoveryError,
+)
 
 if TYPE_CHECKING:
     from eggpool.accounts.registry import AccountRegistry
@@ -264,12 +268,7 @@ class RuntimeGenerationFactory:
 
         model_quarantine_repo = ModelQuarantineRepository(db)
         quarantine = ModelQuarantine()
-        try:
-            for row in await model_quarantine_repo.list_all():
-                entry = _quarantine_entry_from_row(row)
-                quarantine.hydrate_entry(entry)
-        except Exception:
-            logger.exception("model_quarantine: hydration failed; starting empty")
+        await _hydrate_model_quarantine(model_quarantine_repo, quarantine)
 
         # -- Catalog service -----------------------------------------------
         ping_repo = PingRepository(db)
@@ -351,49 +350,15 @@ class RuntimeGenerationFactory:
             models: list[dict[str, Any]],
         ) -> None:
             """Clear exact model quarantine after authoritative reappearance."""
-            account_id = await AccountRepository(db).get_id_by_name(account_name)
-            for model in models:
-                model_id = str(model.get("model_id") or "")
-                protocol = str(model.get("protocol") or "")
-                if not model_id or not protocol:
-                    continue
-                effects_applier.clear_authoritative_reappearance(
-                    provider_id=provider_id,
-                    account_id=account_name,
-                    canonical_model_id=model_id,
-                    upstream_model_id=model_id,
-                    upstream_protocol=protocol,
-                )
-                try:
-                    await model_quarantine_repo.mark_cleared(
-                        provider_id=provider_id,
-                        account_id=account_name,
-                        canonical_model_id=model_id,
-                        upstream_model_id=model_id,
-                        upstream_protocol=protocol,
-                        clear_reason="catalog_reappearance",
-                        cleared_epoch=time.time(),
-                    )
-                except Exception:
-                    logger.exception(
-                        "Failed to clear durable model quarantine for %s/%s",
-                        account_name,
-                        model_id,
-                    )
-                if account_id is not None:
-                    try:
-                        await account_backoff_repo.clear_success(
-                            account_id=account_id,
-                            model_id=model_id,
-                            reasons=["model_unavailable"],
-                        )
-                    except Exception:
-                        logger.exception(
-                            "Failed to clear model backoff after catalog "
-                            "reappearance for account=%s model=%s",
-                            account_name,
-                            model_id,
-                        )
+            await _clear_model_reappearance_durable_first(
+                account_name=account_name,
+                provider_id=provider_id,
+                models=models,
+                model_quarantine_repo=model_quarantine_repo,
+                effects_applier=effects_applier,
+                account_backoff_repo=account_backoff_repo,
+                account_repo=AccountRepository(db),
+            )
 
         catalog.set_model_reappearance_callback(_clear_model_reappearance)
 
@@ -905,3 +870,100 @@ def _quarantine_entry_from_row(row: dict[str, object]) -> Any:
     from eggpool.failure import entry_from_row  # noqa: PLC0415
 
     return entry_from_row(row)
+
+
+async def _hydrate_model_quarantine(repo: Any, quarantine: Any) -> None:
+    """Hydrate quarantine state as a prerequisite for generation publication."""
+    try:
+        rows = await repo.list_all()
+        entries = [_quarantine_entry_from_row(row) for row in rows]
+        for entry in entries:
+            quarantine.hydrate_entry(entry)
+    except ModelQuarantineHydrationError:
+        logger.error("model_quarantine: hydration failed; generation rejected")
+        raise
+    except Exception as exc:
+        logger.error("model_quarantine: hydration failed; generation rejected")
+        raise ModelQuarantineHydrationError(
+            "Model quarantine hydration failed"
+        ) from exc
+    logger.info("model_quarantine: hydration succeeded rows=%d", len(entries))
+
+
+async def _clear_model_reappearance_durable_first(
+    *,
+    account_name: str,
+    provider_id: str,
+    models: list[dict[str, Any]],
+    model_quarantine_repo: Any,
+    effects_applier: Any,
+    account_backoff_repo: Any,
+    account_repo: Any,
+) -> None:
+    """Publish authoritative reappearance only after durable clear success.
+
+    Clear operations are intentionally per identity.  A failure leaves the
+    current identity's in-memory suppression untouched; identities already
+    converged earlier in this deterministic order remain converged.
+    """
+    identities: list[tuple[str, str, str]] = []
+    for model in models:
+        canonical_model_id = str(
+            model.get("canonical_model_id") or model.get("model_id") or ""
+        )
+        protocol = str(model.get("protocol") or "")
+        upstream_model_id = str(
+            model.get("upstream_model_id")
+            if model.get("upstream_model_id") is not None
+            else canonical_model_id
+        )
+        if canonical_model_id and protocol:
+            identities.append((canonical_model_id, upstream_model_id, protocol))
+
+    for canonical_model_id, upstream_model_id, protocol in sorted(identities):
+        try:
+            rowcount = await model_quarantine_repo.mark_cleared(
+                provider_id=provider_id,
+                account_id=account_name,
+                canonical_model_id=canonical_model_id,
+                upstream_model_id=upstream_model_id,
+                upstream_protocol=protocol,
+                clear_reason="catalog_reappearance",
+                cleared_epoch=time.time(),
+            )
+        except Exception as exc:
+            logger.warning(
+                "model_quarantine: durable reappearance clear failed; "
+                "in-memory suppression preserved",
+            )
+            raise ModelQuarantineRecoveryError(
+                "Model quarantine durable reappearance clear failed"
+            ) from exc
+
+        logger.info(
+            "model_quarantine: durable reappearance clear converged rows=%d",
+            rowcount,
+        )
+        effects_applier.clear_authoritative_reappearance(
+            provider_id=provider_id,
+            account_id=account_name,
+            canonical_model_id=canonical_model_id,
+            upstream_model_id=upstream_model_id,
+            upstream_protocol=protocol,
+        )
+
+        try:
+            account_id = await account_repo.get_id_by_name(account_name)
+            if account_id is not None:
+                await account_backoff_repo.clear_success(
+                    account_id=account_id,
+                    model_id=canonical_model_id,
+                    reasons=["model_unavailable"],
+                )
+        except Exception:
+            logger.warning(
+                "model_quarantine: reappearance backoff clear failed after "
+                "durable and in-memory convergence",
+            )
+
+        logger.info("model_quarantine: durable_and_memory_clear_converged")
