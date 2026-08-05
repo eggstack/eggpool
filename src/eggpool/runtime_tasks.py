@@ -328,32 +328,6 @@ def register_runtime_tasks(
         initial_delay_s=15.0,
     )
 
-    # ----- stale request finalizer ---------------------------------------
-    # Reads upstream.read_timeout_s from the current generation's config
-    # on each tick so the timeout threshold takes effect without restart.
-    async def _stale_request_finalizer_once() -> None:
-        from eggpool.app import finalize_stale_requests_once  # noqa: PLC0415
-        from eggpool.runtime_manager import leased_runtime  # noqa: PLC0415
-
-        async with leased_runtime(runtime_manager) as gen:
-            timeout_s = gen.config.maintenance.p0_max_tick_duration_ms / 1000.0
-            await asyncio.wait_for(
-                finalize_stale_requests_once(
-                    db=db,
-                    router=gen.router,
-                    quota_estimator=gen.router.quota_estimator,
-                    max_pending_seconds=gen.config.upstream.read_timeout_s,
-                ),
-                timeout=timeout_s,
-            )
-
-    supervisor.register_periodic(
-        "stale_request_finalizer",
-        _stale_request_finalizer_once,
-        interval_s=60.0,
-        initial_delay_s=25.0,
-    )
-
     # ----- health disabled-models prune ----------------------------------
     async def _health_disabled_models_prune_once() -> None:
         from eggpool.app import prune_health_disabled_models_once  # noqa: PLC0415
@@ -716,32 +690,6 @@ def build_callback_factories_for_specs(
                     await gen.router.quota_estimator.load_persisted_windows()
 
             factories[name] = _usage_window_refresh_factory
-
-        elif name == "stale_request_finalizer":
-
-            async def _stale_request_factory() -> None:
-                from eggpool.app import (  # noqa: PLC0415
-                    finalize_stale_requests_once,
-                )
-                from eggpool.runtime_manager import (  # noqa: PLC0415
-                    leased_runtime,
-                )
-
-                async with leased_runtime(runtime_manager) as gen:
-                    # Task-level timeout: p0 budget converted to seconds,
-                    # with margin for the single-batch call.
-                    timeout_s = gen.config.maintenance.p0_max_tick_duration_ms / 1000.0
-                    await asyncio.wait_for(
-                        finalize_stale_requests_once(
-                            db=db,
-                            router=gen.router,
-                            quota_estimator=gen.router.quota_estimator,
-                            max_pending_seconds=gen.config.upstream.read_timeout_s,
-                        ),
-                        timeout=timeout_s,
-                    )
-
-            factories[name] = _stale_request_factory
 
         elif name == "health_disabled_models_prune":
 

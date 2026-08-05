@@ -93,7 +93,6 @@ table and ``_RUNTIME_OWNED_APP_STATE_ATTRS``.
 - ``_catalog_refresh_once`` captures ``catalog``, ``effective_model_info``.
 - ``_retention_cleanup_once`` captures ``db``, ``config``, ``router``.
 - ``_refresh_usage_windows_once`` captures ``router``.
-- ``_stale_request_finalizer_once`` captures ``db``, ``router``, ``config``.
 - ``_health_disabled_models_prune_once`` captures ``app`` (reads ``app.state``).
 - ``_metrics_flush_once`` captures ``metrics_coalescer``.
 - ``_automatic_backup_once`` captures ``config``, ``db``, paths.
@@ -487,7 +486,6 @@ class ProcessRuntime:
     maintenance_state: Any = None  # noqa: ANN401 — MaintenanceState
     event_loop_lag_monitor: Any = None  # noqa: ANN401 — EventLoopLagMonitor
     readiness_probe: Any = None  # noqa: ANN401 — DatabaseWritableProbe
-    recovery_controller: Any = None  # noqa: ANN401 — DatabaseRecoveryController (Plan 027)
 
 
 # ---------------------------------------------------------------------------

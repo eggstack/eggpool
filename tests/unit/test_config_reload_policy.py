@@ -67,8 +67,8 @@ class TestPolicyDefaults:
         request-path-visible ``models`` + ``security`` subset whose
         consumers are generation-owned rebuilders in
         :mod:`eggpool.control.reload_manager`.  Milestone D2 adds
-        background-policy fields (retention, metrics flush, backup
-        scheduling, upstream read timeout) whose consumers read from
+        background-policy fields (retention, metrics flush, and backup
+        scheduling) whose consumers read from
         the current generation's config on each tick or are
         reconfigured via the process supervisor on reload.
         Every other field stays fail-closed.  This guard prevents
@@ -123,22 +123,11 @@ class TestPolicyDefaults:
             "models.ping_retain_days",
             "dashboard.retain_request_stats_days",
             "dashboard.retain_event_days",
-            # Upstream read timeout read from generation config per tick.
-            "upstream.read_timeout_s",
             # Metrics flush interval reconfigured via process supervisor.
             "metrics.flush_interval_s",
             # Detailed span sample rate reconfigured via generation rebuild.
             "metrics.detailed_span_sample_rate",
             "metrics.dispatch_spans.sample_rate",
-            # Database recovery is process-owned and survives
-            # generation swaps; all recovery fields are LIVE.
-            "database.recovery",
-            "database.recovery.enabled",
-            "database.recovery.max_attempts",
-            "database.recovery.initial_backoff_ms",
-            "database.recovery.max_backoff_ms",
-            "database.recovery.reconciliation_timeout_s",
-            "database.recovery.fail_process_on_exhaustion",
             # Backup enabled state and scheduling fields reconfigured
             # via process supervisor.
             "backup.enabled",
@@ -1206,25 +1195,12 @@ LIVE_FIELD_CONSUMERS: dict[str, tuple[str, ...]] = {
     "models.ping_retain_days": ("retention_cleanup (gen config per tick)",),
     "dashboard.retain_request_stats_days": ("retention_cleanup (gen config per tick)",),
     "dashboard.retain_event_days": ("retention_cleanup (gen config per tick)",),
-    # Upstream read timeout consumed by ``stale_request_finalizer``
-    # which reads it from the current generation's config per tick.
-    "upstream.read_timeout_s": ("stale_request_finalizer (gen config per tick)",),
     # Metrics flush interval reconfigured via the process supervisor.
     "metrics.flush_interval_s": ("metrics_flush (process supervisor reconfigure)",),
     # Detailed span sample rate consumed by the generation-owned
     # ``DispatchSpanRecorder`` rebuilt on config change.
     "metrics.detailed_span_sample_rate": ("DispatchSpanRecorder",),
     "metrics.dispatch_spans.sample_rate": ("DispatchSpanRecorder",),
-    # Database recovery is process-owned; all recovery
-    # fields are consumed by the ``DatabaseRecoveryController`` which
-    # reads them from the candidate config on rehash.
-    "database.recovery": ("DatabaseRecoveryController",),
-    "database.recovery.enabled": ("DatabaseRecoveryController",),
-    "database.recovery.max_attempts": ("DatabaseRecoveryController",),
-    "database.recovery.initial_backoff_ms": ("DatabaseRecoveryController",),
-    "database.recovery.max_backoff_ms": ("DatabaseRecoveryController",),
-    "database.recovery.reconciliation_timeout_s": ("DatabaseRecoveryController",),
-    "database.recovery.fail_process_on_exhaustion": ("DatabaseRecoveryController",),
     # Milestone D2: model-info scheduling fields reconfigured via the
     # process supervisor; toggling ``enabled`` adds/removes the task,
     # changing ``refresh_interval_s`` replaces it with the new cadence.

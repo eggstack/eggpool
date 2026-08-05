@@ -40,6 +40,10 @@ class DatabaseError(AggregatorError):
     """Raised for database-related failures."""
 
 
+class DatabaseTransactionOwnershipError(DatabaseError):
+    """Raised when a task other than the transaction owner touches SQLite."""
+
+
 class DatabaseCommitError(DatabaseError):
     """Raised when the SQLite COMMIT call itself fails.
 

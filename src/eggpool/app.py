@@ -10,7 +10,7 @@ import time
 from contextlib import asynccontextmanager
 from importlib.metadata import version as _get_version
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -50,6 +50,7 @@ from eggpool.db.rollup_repository import UsageRollupRepository
 from eggpool.errors import (
     AggregatorError,
     CatalogUnavailableError,
+    DatabaseError,
     ModelNotFoundError,
     NoEligibleAccountError,
     RequestTooLargeError,
@@ -79,6 +80,28 @@ if TYPE_CHECKING:
     from eggpool.routing.router import Router
 
 logger = logging.getLogger(__name__)
+
+
+def _exit_for_database_failure(reason: str) -> NoReturn:
+    """Terminate the worker after admission has been closed.
+
+    SQLite commit/rollback ambiguity cannot be made safe by reopening a
+    connection in this process. The supervisor (normally systemd) owns the
+    restart, while startup crash reconciliation repairs durable leftovers.
+    """
+    logger.critical("Fatal database state; exiting worker for restart: %s", reason)
+    os._exit(1)
+
+
+async def _verify_startup_integrity(db: Database) -> None:
+    """Fail startup closed when SQLite cannot prove database integrity."""
+    try:
+        rows = await db.execute_pragma("PRAGMA quick_check")
+    except Exception as exc:
+        raise DatabaseError("startup SQLite integrity check failed") from exc
+    result = str(rows[0][0]) if rows else "unknown"
+    if result.lower() != "ok":
+        raise DatabaseError(f"startup SQLite integrity check failed: {result[:120]}")
 
 
 class _BodyLimitMiddleware:
@@ -835,11 +858,17 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         synchronous=config.database.synchronous,
     )
     await db.connect()
+    db.set_fatal_handler(_exit_for_database_failure)
     app.state.db = db
 
     # 3. Migrations
     runner = MigrationRunner(db)
     await runner.run()
+
+    # Integrity is checked before configuration sync, crash repair, or any
+    # request-path resource is admitted. A suspect database is an operator
+    # action, not an in-process repair opportunity.
+    await _verify_startup_integrity(db)
 
     # 4. Sync providers from config to SQLite
     provider_repo = ProviderRepository(db)
@@ -856,24 +885,6 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
 
     # 6. Crash recovery
     await _crash_recovery(db)
-
-    # 6a. Plan 027 Workstream J — Bounded startup integrity check.
-    # A lightweight PRAGMA quick_check catches obvious corruption
-    # before request admission.  The check is bounded to avoid
-    # blocking startup on a large database.
-    if config.database.path != ":memory:":
-        try:
-            integrity_rows = await db.execute_pragma("PRAGMA quick_check")
-            integrity_result = (
-                str(integrity_rows[0][0]) if integrity_rows else "unknown"
-            )
-            if integrity_result != "ok":
-                logger.error(
-                    "startup_integrity_check_failed result=%s",
-                    integrity_result,
-                )
-        except Exception:
-            logger.exception("startup_integrity_check_error")
 
     # aiosqlite uses one worker thread per connection. The default of 2 opens
     # a separate read-only stats connection for file-backed databases so
@@ -902,21 +913,9 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     )
     app.state.process = process
 
-    # 6c. DatabaseRecoveryController (Plan 027).  Bound to the
-    # primary database now, before the readiness probe is started,
-    # so the controller can notify the probe on recovery cycle
-    # completion.  The controller survives generation swaps because
-    # it is process-owned.
-    if config.database.recovery.enabled:
-        from eggpool.db.recovery import DatabaseRecoveryController  # noqa: PLC0415
-
-        recovery_controller = DatabaseRecoveryController(
-            db=db,
-            config=config.database.recovery,
-            readiness_probe=None,  # patched in after step 21c
-        )
-        process.recovery_controller = recovery_controller
-        app.state.recovery_controller = recovery_controller
+    # Indeterminate runtime SQLite state is terminal for this worker. The
+    # process-owned handler above closes admission and exits; systemd starts
+    # a fresh worker, whose startup path performs integrity and crash repair.
 
     # Operator warning: when dashboard reads must share the primary
     # connection, they queue behind the request path and amplify lock
@@ -1213,6 +1212,24 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         event_loop_lag_monitor=event_loop_lag_monitor,
     )
 
+    # Run the required initial writable probe before background tasks and
+    # readiness. /readyz only reads this cached result.
+    from eggpool.health.writable_probe import DatabaseWritableProbe  # noqa: PLC0415
+
+    readiness_probe = DatabaseWritableProbe(
+        db=db,
+        interval_s=config.readiness_probe.interval_s,
+        freshness_s=config.readiness_probe.freshness_s,
+        timeout_s=config.readiness_probe.timeout_s,
+        initial_probe=config.readiness_probe.initial_probe,
+    )
+    if config.readiness_probe.enabled:
+        probe_snapshot = await readiness_probe.force_probe()
+        if probe_snapshot.status.value != "healthy":
+            raise DatabaseError("initial database writable probe failed")
+    process.readiness_probe = readiness_probe
+    app.state.readiness_probe = readiness_probe
+
     # Use the unified register_runtime_tasks helper so the startup and
     # reload paths share one registration table.  Pass the
     # update_checker_outbound manager so the process-owned PyPI
@@ -1234,7 +1251,8 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             process_supervisor=process_supervisor,
         ),
     )
-    # 21. Start background tasks
+    # 21. Start background tasks only after startup integrity, durable crash
+    # repair, and the initial writable probe have succeeded.
     await supervisor.start_all()
     # Start process-owned tasks on the process supervisor.
     await process_supervisor.start_all()
@@ -1242,28 +1260,11 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # 21b. Start the event-loop lag monitor (process-owned, F6).
     event_loop_lag_monitor.start()
 
-    # 21c. Start the process-owned database writable probe (Phase 9).
-    # Removes SQLite write activity from the /readyz request path.
-    from eggpool.health.writable_probe import DatabaseWritableProbe  # noqa: PLC0415
-
-    readiness_probe = DatabaseWritableProbe(
-        db=db,
-        interval_s=config.readiness_probe.interval_s,
-        freshness_s=config.readiness_probe.freshness_s,
-        timeout_s=config.readiness_probe.timeout_s,
-        initial_probe=config.readiness_probe.initial_probe,
-    )
     if config.readiness_probe.enabled:
         await readiness_probe.start()
-    process.readiness_probe = readiness_probe
-    app.state.readiness_probe = readiness_probe
 
-    # 21c.1. Wire the recovery controller to the readiness probe so
-    # the controller can refresh the cached snapshot after a
-    # successful recovery cycle.  No-op when recovery is disabled.
-    recovery_controller: Any = getattr(process, "recovery_controller", None)
-    if recovery_controller is not None:
-        recovery_controller.readiness_probe = readiness_probe
+    # No same-process recovery controller is wired here. A fatal database
+    # state remains failed closed until the worker is restarted.
 
     # 22. Transcoding status
     if config.transcoder.enabled is False:
@@ -1566,17 +1567,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             except Exception:
                 logger.exception("Error stopping readiness probe during shutdown")
 
-        # Plan 027 — stop the recovery controller before closing the
-        # database so no recovery attempt races with the disconnect.
-        recovery_controller: Any = getattr(app.state, "recovery_controller", None)
-        if recovery_controller is not None:
-            try:
-                await recovery_controller.shutdown()
-            except Exception:
-                logger.exception(
-                    "Error stopping database recovery controller during shutdown"
-                )
-
         # Drain the dispatch writer before closing the database so
         # committed intents are not lost.
         dispatch_writer: Any = getattr(app.state, "dispatch_writer", None)
@@ -1829,25 +1819,6 @@ def create_app(
         if db is None or db._conn is None:  # pyright: ignore[reportPrivateUsage]
             return Response(
                 content='{"status":"degraded","reason":"database not connected"}',
-                status_code=503,
-                media_type="application/json",
-            )
-
-        # Plan 027 — surface database recovery state in the readiness
-        # response.  When the recovery controller is mid-recovery or
-        # has failed closed, readiness reports degraded so the
-        # orchestrator does not route traffic to a poisoned process.
-        recovery_controller: Any = getattr(app.state, "recovery_controller", None)
-        if (
-            recovery_controller is not None
-            and not recovery_controller.admission_admitted
-        ):
-            state_value = recovery_controller.state.value
-            return Response(
-                content=(
-                    f'{{"status":"degraded",'
-                    f'"reason":"database recovery {state_value}"}}'
-                ),
                 status_code=503,
                 media_type="application/json",
             )

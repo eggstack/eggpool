@@ -72,7 +72,7 @@ via ``TaskOwnership`` (``src/eggpool/runtime_task_inventory.py``):
   in place.
 - **Generation-leased** tasks (``catalog_refresh``,
   ``model_info_refresh``, ``model_info_canonical_backfill``,
-  ``retention_cleanup``, ``usage_window_refresh``, ``stale_request_finalizer``,
+  ``retention_cleanup``, ``usage_window_refresh``,
   ``health_disabled_models_prune``) acquire a generation lease on
   every tick and are retired when their generation is retired.
 
@@ -81,9 +81,8 @@ D2 LIVE families:
 - **Retention durations**: ``dashboard.retain_request_stats_days``,
   ``dashboard.retain_event_days``, ``models.ping_retain_days``.
 - **Upstream timeout**: ``upstream.read_timeout_s`` and provider-bound
-  ``providers.<id>.stream_timeouts`` are applied by the candidate generation;
-  existing streams retain the generation they acquired, while new streams use
-  the swapped provider policy.
+  ``providers.<id>.stream_timeouts`` are restart-required transport idle
+  bounds. They never define a maximum stream lifetime or drive stale cleanup.
 - **Metrics flush cadence**: ``metrics.flush_interval_s``.
 - **Backup scheduling**: ``backup.enabled``, ``backup.interval_s``,
   ``backup.retain_count``, ``backup.startup_delay_s``.  Toggling

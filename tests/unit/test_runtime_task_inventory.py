@@ -87,7 +87,6 @@ class TestInventoryConsistency:
             "retention_cleanup",
             "checkpoint",
             "usage_window_refresh",
-            "stale_request_finalizer",
             "health_disabled_models_prune",
             "metrics_flush",
             "update_checker",
@@ -142,7 +141,6 @@ class TestOwnershipClassification:
             "model_info_canonical_backfill",
             "retention_cleanup",
             "usage_window_refresh",
-            "stale_request_finalizer",
             "health_disabled_models_prune",
         }
         assert gen_tasks == expected

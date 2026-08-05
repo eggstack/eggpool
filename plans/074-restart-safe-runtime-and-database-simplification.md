@@ -1,7 +1,7 @@
 # Plan 074 — Restart-Safe Runtime and Database Simplification
 
 Date: 2026-08-04
-Status: ready for implementation
+Status: complete
 Parent roadmap: `plans/070-failure-resilience-router-recovery-and-sbc-simplification-roadmap.md`
 Depends on:
 
@@ -382,21 +382,21 @@ Run the normal repository gate after focused tests. No privileged environment, r
 
 ## Plan acceptance criteria
 
-- [ ] Healthy active streams cannot be reclaimed by row age/read-timeout threshold.
-- [ ] Previous-process pending work is repaired at startup.
-- [ ] Database integrity failure prevents readiness and background task startup.
-- [ ] Transactions are owned by one asyncio task.
-- [ ] SQLite lock/corruption/indeterminate errors are classified correctly.
-- [ ] Runtime indeterminate DB state closes admission and exits for restart.
-- [ ] Same-process recovery machinery is materially reduced.
-- [ ] Durable attempt identity remains idempotent without diagnostic history.
-- [ ] Synthetic completed-history finalization results are removed.
-- [ ] One authoritative retained terminal registry owns selected attempts.
-- [ ] Component progress is represented once and resumes without replay.
-- [ ] Capacity remains bounded and fail closed.
-- [ ] Startup repair and normal systemd restart restore service on a healthy database.
-- [ ] Focused tests and smoke pass.
-- [ ] No auto-repair, external queue, workflow engine, distributed transaction, new database, generalized multi-loop layer, or CI expansion is introduced.
+- [x] Healthy active streams cannot be reclaimed by row age/read-timeout threshold.
+- [x] Previous-process pending work is repaired at startup.
+- [x] Database integrity failure prevents readiness and background task startup.
+- [x] Transactions are owned by one asyncio task.
+- [x] SQLite lock/corruption/indeterminate errors are classified correctly.
+- [x] Runtime indeterminate DB state closes admission and exits for restart.
+- [x] Same-process recovery machinery is materially reduced.
+- [x] Durable attempt identity remains idempotent without diagnostic history.
+- [x] Synthetic completed-history finalization results are removed.
+- [x] One authoritative retained terminal registry owns selected attempts.
+- [x] Component progress is represented once and resumes without replay.
+- [x] Capacity remains bounded and fail closed.
+- [x] Startup repair and normal systemd restart restore service on a healthy database.
+- [x] Focused tests and smoke pass.
+- [x] No auto-repair, external queue, workflow engine, distributed transaction, new database, generalized multi-loop layer, or CI expansion is introduced.
 
 ## Rejection conditions
 

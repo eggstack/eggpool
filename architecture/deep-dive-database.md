@@ -4,7 +4,9 @@ Back to [Overview](overview.md)
 
 ## Purpose
 
-SQLite via aiosqlite with WAL mode provides the durable storage layer. Single-connection serialization via a lock + ContextVar ensures correctness. 50+ schema migrations track evolution.
+SQLite via aiosqlite with WAL mode provides the durable storage layer. A single
+connection is serialized by one lock, and each transaction has exactly one
+asyncio-task owner. 50+ schema migrations track evolution.
 
 ## Architecture
 
@@ -18,7 +20,7 @@ SQLite via aiosqlite with WAL mode provides the durable storage layer. Single-co
     │   Database (aiosqlite)│
     │   WAL mode           │
     │   Single-conn serial  │
-    │   Lock + ContextVar   │
+    │   Lock + task owner   │
     └──────────┬──────────┘
                │
     ┌──────────▼──────────┐
@@ -33,8 +35,8 @@ SQLite via aiosqlite with WAL mode provides the durable storage layer. Single-co
 
 aiosqlite wrapper with:
 - WAL mode enabled
-- Single-connection serialization via lock + ContextVar
-- Transaction management: `async with db.transaction(ambiguous_operation=...):`; ambiguity metadata belongs to the lock-owning transaction
+- Single-connection serialization via a lock and explicit asyncio-task ownership
+- Transaction management: `async with db.transaction():`; same-task nesting is allowed, while inherited child tasks fail before SQL
 - Readiness probes: `probe_writable()` with owned transactions
 - `Database.vacuum()` — only sanctioned path for VACUUM
 - Plan 027: `DatabaseLifecycleState` enum with explicit states
@@ -44,31 +46,21 @@ aiosqlite wrapper with:
   for epoch-tracking in long-lived components
 - Plan 027: `writes_admitted` / `reads_admitted` cached admission facts
 - Plan 027: `_safe_rollback()` helper with bounded diagnostics
-- Plan 027: `AmbiguousDatabaseOperation` frozen dataclass for
-  indeterminate commit outcomes
-- Plan 060: connection opening and public admission are separate; recovery
-  candidates remain closed to public reads/writes until schema verification,
-  a private writable probe, and reconciliation complete
-- Plan 060: ambiguity buffers acknowledge operations individually only after
-  convergence; unresolved results remain queued and capacity overflow fails
-  closed rather than evicting older work
+- Connection invalidation closes read/write admission and invokes the
+  process-fatal worker boundary; it does not publish a replacement connection
+  into a live request process.
+- SQLite failures are classified from SQLite error codes first, then bounded
+  message evidence. Busy/locked remains bounded local contention; corruption,
+  disk failures, and indeterminate connection state fail closed for restart.
 
-### `db/recovery.py` — DatabaseRecoveryController
+### `db/recovery.py` — startup/restart boundary
 
-Plan 027: Process-owned single-flight recovery controller.
-
-- Receives invalidation notifications from `Database`
-- Stops admission of new correctness-critical writes
-- Marks readiness false for the duration of recovery
-- Detaches and closes the suspect connection with bounded timeout
-- Opens an unadmitted fresh connection and re-runs migrations (in-memory DBs)
-  or verifies schema compatibility (file-backed DBs)
-- Runs a private writable probe to confirm the replacement connection is usable
-- Reconciles ambiguous operations via built-in reconcilers; only durable
-  convergence is acknowledged and unresolved operations remain queued
-- Retries with bounded exponential backoff (`[database.recovery]` config)
-- Single-flight: concurrent callers join the same recovery attempt
-- `RecoverySnapshot` for diagnostics (state, attempts, waiters, reasons)
+Runtime database invalidation closes admission and leaves the worker for
+systemd to restart. Startup owns the only durable repair path: migrations,
+`PRAGMA quick_check`, pending-request/attempt/reservation reconciliation, and
+the initial writable probe must all succeed before readiness. The compatibility
+diagnostic surface records the failure reason but never reopens admission or
+replaces a suspect connection in process.
 
 ### `db/repositories.py`
 

@@ -114,12 +114,11 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "server.access_log": ReloadDisposition.RESTART_REQUIRED,
     "server.threads": ReloadDisposition.RESTART_REQUIRED,
     # ---- upstream provider transport (consumed at client-pool build) ----
-    # Milestone D2: ``upstream.read_timeout_s`` is consumed by the
-    # ``stale_request_finalizer`` task which reads it from the current
-    # generation's config on each tick.
+    # Transport timeouts are generation construction inputs. They are not
+    # request lifetime limits and do not drive an active-process stale sweep.
     "upstream.base_url": ReloadDisposition.RESTART_REQUIRED,
     "upstream.connect_timeout_s": ReloadDisposition.RESTART_REQUIRED,
-    "upstream.read_timeout_s": ReloadDisposition.LIVE,
+    "upstream.read_timeout_s": ReloadDisposition.RESTART_REQUIRED,
     "upstream.write_timeout_s": ReloadDisposition.RESTART_REQUIRED,
     "upstream.pool_timeout_s": ReloadDisposition.RESTART_REQUIRED,
     "upstream.max_connections": ReloadDisposition.RESTART_REQUIRED,
@@ -354,16 +353,15 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "readiness_probe.initial_probe": ReloadDisposition.RESTART_REQUIRED,
     "readiness_probe.interval_s": ReloadDisposition.RESTART_REQUIRED,
     "readiness_probe.timeout_s": ReloadDisposition.RESTART_REQUIRED,
-    # Plan 027 — database recovery is process-owned and survives
-    # generation swaps.  Recovery controls are LIVE so operators can
-    # tune retry counts and timeouts without restart.
-    "database.recovery": ReloadDisposition.LIVE,
-    "database.recovery.enabled": ReloadDisposition.LIVE,
-    "database.recovery.max_attempts": ReloadDisposition.LIVE,
-    "database.recovery.initial_backoff_ms": ReloadDisposition.LIVE,
-    "database.recovery.max_backoff_ms": ReloadDisposition.LIVE,
-    "database.recovery.reconciliation_timeout_s": ReloadDisposition.LIVE,
-    "database.recovery.fail_process_on_exhaustion": ReloadDisposition.LIVE,
+    # Runtime database recovery is intentionally not live-reloadable: an
+    # indeterminate state closes the worker and systemd starts a new one.
+    "database.recovery": ReloadDisposition.RESTART_REQUIRED,
+    "database.recovery.enabled": ReloadDisposition.RESTART_REQUIRED,
+    "database.recovery.max_attempts": ReloadDisposition.RESTART_REQUIRED,
+    "database.recovery.initial_backoff_ms": ReloadDisposition.RESTART_REQUIRED,
+    "database.recovery.max_backoff_ms": ReloadDisposition.RESTART_REQUIRED,
+    "database.recovery.reconciliation_timeout_s": ReloadDisposition.RESTART_REQUIRED,
+    "database.recovery.fail_process_on_exhaustion": ReloadDisposition.RESTART_REQUIRED,
 }
 
 

@@ -80,57 +80,6 @@ class TestShutdownDrain:
         assert adopted2 == 0
 
 
-class TestStartupReconciliation:
-    """Startup stale-state reconciliation."""
-
-    def test_reconcile_startup_state_empty(self) -> None:
-        db = MagicMock()
-
-        async def _fetch_empty() -> list[object]:
-            return []
-
-        db.fetch_all = MagicMock(return_value=_fetch_empty())
-        sup = RequestFinalizationSupervisor(db=db)
-
-        async def _reconcile() -> int:
-            return await sup.reconcile_startup_state()
-
-        result = asyncio.run(_reconcile())
-        assert result == 0
-
-    def test_reconcile_startup_state_with_stale_requests(self) -> None:
-        db = MagicMock()
-        rows: list[object] = [
-            {"proxy_request_id": "req-1", "status": "pending"},
-            {"proxy_request_id": "req-2", "status": "pending"},
-        ]
-
-        async def _fetch_rows() -> list[object]:
-            return rows
-
-        db.fetch_all = MagicMock(return_value=_fetch_rows())
-        sup = RequestFinalizationSupervisor(db=db)
-
-        async def _reconcile() -> int:
-            return await sup.reconcile_startup_state()
-
-        result = asyncio.run(_reconcile())
-        assert result == 2
-        snap = sup.snapshot()
-        assert snap["counters"]["startup_reconciled"] == 2
-
-    def test_reconcile_startup_state_query_failure(self) -> None:
-        db = MagicMock()
-        db.fetch_all = MagicMock(side_effect=RuntimeError("db error"))
-        sup = RequestFinalizationSupervisor(db=db)
-
-        async def _reconcile() -> int:
-            return await sup.reconcile_startup_state()
-
-        result = asyncio.run(_reconcile())
-        assert result == 0
-
-
 class TestDiagnostics:
     """Diagnostics and snapshot contract."""
 

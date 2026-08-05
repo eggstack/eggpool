@@ -151,7 +151,6 @@ class TestParity:
             "retention_cleanup",
             "checkpoint",
             "usage_window_refresh",
-            "stale_request_finalizer",
             "health_disabled_models_prune",
         }
         assert expected_core.issubset(names)
@@ -267,7 +266,6 @@ class TestProcessSupervisorRouting:
             "model_info_canonical_backfill",
             "retention_cleanup",
             "usage_window_refresh",
-            "stale_request_finalizer",
             "health_disabled_models_prune",
         }
         assert expected_gen_leased.issubset(gen_names), (

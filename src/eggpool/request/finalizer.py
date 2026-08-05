@@ -268,6 +268,10 @@ class DurableFinalizationResult:
         )
 
 
+class DurableTerminalConflictError(RuntimeError):
+    """The durable request already has a different terminal outcome."""
+
+
 class RequestFinalizer:
     """Finalizes requests exactly once, handling all terminal outcomes.
 
@@ -313,6 +317,27 @@ class RequestFinalizer:
         # no-op so the finalizer never double-penalizes health.
         self._effects_applier = effects_applier
         self._quarantine = quarantine
+
+    async def validate_terminal_identity(
+        self, selected: Any, data: FinalizationData
+    ) -> None:
+        """Reject a duplicate whose outcome conflicts with durable state."""
+        if not hasattr(self, "_request_repo"):
+            return
+        request_id = str(
+            getattr(selected, "db_request_id", getattr(selected, "request_id", ""))
+        )
+        row = await self._request_repo.get_by_id(request_id)
+        if row is None:
+            return
+        durable_status = row.get("status")
+        if durable_status in REQUEST_TERMINAL_STATUSES:
+            expected_status = self._outcome_to_status(data.outcome)
+            if durable_status != expected_status:
+                raise DurableTerminalConflictError(
+                    f"durable request {request_id!r} is already "
+                    f"{durable_status!r}, not {expected_status!r}"
+                )
 
     async def finalize(
         self,

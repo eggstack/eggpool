@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import collections
 import threading
-from contextlib import suppress
 from contextvars import ContextVar
 
 import aiosqlite
@@ -16,7 +15,7 @@ from eggpool.constants import SQLITE_INTEGER_MAX
 from eggpool.db.connection import Database, DatabaseLifecycleState
 from eggpool.db.migrations import MigrationRunner
 from eggpool.db.repositories import PriceSnapshotRepository
-from eggpool.errors import DatabaseError
+from eggpool.errors import DatabaseError, DatabaseTransactionOwnershipError
 
 
 async def _run_migrations(db: Database) -> None:
@@ -324,7 +323,7 @@ async def test_concurrent_readers_during_write() -> None:
 
 
 def test_idle_connection_lock_rebinds_across_event_loops(tmp_path: object) -> None:
-    """A contended DB lock from one loop must not poison later app reuse."""
+    """A rejected child operation must not poison later loop reuse."""
     import pathlib
 
     db_path = str(pathlib.Path(str(tmp_path)) / "loop_reuse.sqlite3")
@@ -334,10 +333,7 @@ def test_idle_connection_lock_rebinds_across_event_loops(tmp_path: object) -> No
         await database.connect()
         async with database.transaction():
             waiter = asyncio.create_task(database.fetch_one("SELECT 1"))
-            await asyncio.sleep(0)
-            assert not waiter.done()
-            waiter.cancel()
-            with suppress(asyncio.CancelledError):
+            with pytest.raises(DatabaseTransactionOwnershipError):
                 await waiter
 
     async def reuse_from_second_loop() -> None:
@@ -764,32 +760,13 @@ async def test_cascade_delete_account_removes_account_models() -> None:
 
 
 class TestTransactionNestingAcrossTaskBoundaries:
-    """Regression tests for `cannot start a transaction within a transaction`.
-
-    Prior to the SQLite-truth nesting fix, ``db.transaction()`` used
-    ``asyncio.current_task()`` identity to detect nesting. That
-    failed across ``asyncio.shield()`` and ``asyncio.create_task()``
-    boundaries: a shielded child entering ``db.transaction()`` while
-    the parent already held ``BEGIN IMMEDIATE`` would fall through
-    to acquire ``_connection_lock`` and issue a second ``BEGIN``,
-    either deadlocking (parent awaits child, child awaits lock) or
-    raising ``OperationalError: cannot start a transaction within
-    a transaction``.
-
-    These tests pin the fixed behavior: nesting is detected via
-    SQLite's per-connection ``in_transaction`` state, so shielded
-    and child tasks piggyback on the outer transaction without
-    re-entering the lock or re-issuing ``BEGIN``.
-    """
+    """Transactions are owned by one task and never inherited by children."""
 
     @pytest.mark.asyncio
-    async def test_shielded_task_inside_active_parent_tx_does_not_deadlock(
+    async def test_shielded_child_fails_before_sql_inside_parent_tx(
         self,
     ) -> None:
-        """``asyncio.shield()`` while parent holds a transaction must
-        complete without deadlocking on ``_connection_lock`` and without
-        raising ``cannot start a transaction within a transaction``.
-        """
+        """A shielded child cannot piggyback on the parent's commit boundary."""
         db = Database(path=":memory:")
         await db.connect()
         await _run_migrations(db)
@@ -811,29 +788,23 @@ class TestTransactionNestingAcrossTaskBoundaries:
                             ("shielded-child", "CHILD_KEY"),
                         )
 
-                # Regression: this used to deadlock. The shield means
-                # cancellation of the outer await cannot kill the child;
-                # the child used to block forever waiting for
-                # ``_connection_lock`` (held by the parent) while the
-                # parent awaited ``wait_for``.
-                await asyncio.wait_for(
-                    asyncio.shield(shielded_child()),
-                    timeout=5.0,
-                )
+                with pytest.raises(DatabaseTransactionOwnershipError):
+                    await asyncio.wait_for(
+                        asyncio.shield(shielded_child()),
+                        timeout=5.0,
+                    )
 
             rows = await db.fetch_all("SELECT name FROM accounts ORDER BY id")
-            assert [r["name"] for r in rows] == ["parent", "shielded-child"]
-            assert db.contention_snapshot()["total_nested_transactions"] >= 1
+            assert [r["name"] for r in rows] == ["parent"]
+            assert db.contention_snapshot()["total_nested_transactions"] == 0
         finally:
             await db.disconnect()
 
     @pytest.mark.asyncio
-    async def test_child_task_via_create_task_can_write_inside_parent_tx(
+    async def test_child_task_via_create_task_cannot_write_inside_parent_tx(
         self,
     ) -> None:
-        """``asyncio.create_task`` spawned inside a parent transaction
-        can open its own ``db.transaction()`` and write without raising.
-        """
+        """Inherited context does not grant transaction ownership."""
         db = Database(path=":memory:")
         await db.connect()
         await _run_migrations(db)
@@ -854,29 +825,21 @@ class TestTransactionNestingAcrossTaskBoundaries:
                         )
 
                 child = asyncio.create_task(child_writer())
-                await child
+                with pytest.raises(DatabaseTransactionOwnershipError):
+                    await child
 
             rows = await db.fetch_all("SELECT name FROM accounts ORDER BY id")
-            assert [r["name"] for r in rows] == [
-                "parent",
-                "create-task-child",
-            ]
+            assert [r["name"] for r in rows] == ["parent"]
         finally:
             await db.disconnect()
 
     @pytest.mark.asyncio
     async def test_exception_in_shielded_child_rolls_back_outer(self) -> None:
-        """An exception raised inside a shielded child transaction must
-        propagate and roll back the entire outer transaction, including
-        any sibling writes the shielded child performed.
-        """
+        """Cross-task ownership errors roll back the outer transaction."""
         db = Database(path=":memory:")
         await db.connect()
         await _run_migrations(db)
         try:
-
-            class ChildBoomError(Exception):
-                pass
 
             async def shielded_boomer() -> None:
                 async with db.transaction():
@@ -885,10 +848,9 @@ class TestTransactionNestingAcrossTaskBoundaries:
                         "enabled, weight) VALUES (?, ?, 1, 1.0)",
                         ("will-rollback", "ROLLBACK_KEY"),
                     )
-                    raise ChildBoomError
+                    raise AssertionError("unreachable")
 
-            outer_caught: list[BaseException] = []
-            with suppress(ChildBoomError):
+            with pytest.raises(DatabaseTransactionOwnershipError):
                 async with db.transaction():
                     await db.execute_write(
                         "INSERT INTO accounts (name, api_key_env, "
@@ -899,8 +861,6 @@ class TestTransactionNestingAcrossTaskBoundaries:
                         asyncio.shield(shielded_boomer()),
                         timeout=5.0,
                     )
-            outer_caught.append(ChildBoomError())
-
             rows = await db.fetch_all("SELECT name FROM accounts")
             assert rows == []
         finally:

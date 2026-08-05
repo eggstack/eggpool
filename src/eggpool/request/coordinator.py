@@ -684,6 +684,53 @@ class RequestCoordinator:
     - Pre-body failures retry on another account (excluding failed accounts)
     """
 
+    def _retained_registry(self, name: str) -> dict[tuple[str, int], Any]:
+        registry = getattr(self, name, None)
+        if registry is None:
+            registry = {}
+            setattr(self, name, registry)
+        return cast("dict[tuple[str, int], Any]", registry)
+
+    @property
+    def _attempt_cleanup_tasks(self) -> dict[tuple[str, int], asyncio.Task[None]]:
+        """Compatibility view of the single retained terminal task registry."""
+        return self._retained_registry("_retained_terminal_tasks")
+
+    @_attempt_cleanup_tasks.setter
+    def _attempt_cleanup_tasks(
+        self, value: dict[tuple[str, int], asyncio.Task[None]]
+    ) -> None:
+        self._retained_registry("_retained_terminal_tasks").update(value)
+
+    @property
+    def _claim_compensation_tasks(self) -> dict[tuple[str, int], asyncio.Task[None]]:
+        """Compatibility view of the single retained terminal task registry."""
+        return self._attempt_cleanup_tasks
+
+    @_claim_compensation_tasks.setter
+    def _claim_compensation_tasks(
+        self, value: dict[tuple[str, int], asyncio.Task[None]]
+    ) -> None:
+        self._attempt_cleanup_tasks = value
+
+    @property
+    def _attempt_cleanup_progress(self) -> dict[tuple[str, int], Any]:
+        """Compatibility view of the single retained progress registry."""
+        return self._retained_registry("_retained_terminal_progress")
+
+    @_attempt_cleanup_progress.setter
+    def _attempt_cleanup_progress(self, value: dict[tuple[str, int], Any]) -> None:
+        self._retained_registry("_retained_terminal_progress").update(value)
+
+    @property
+    def _claim_compensation_progress(self) -> dict[tuple[str, int], Any]:
+        """Compatibility view of the single retained progress registry."""
+        return self._attempt_cleanup_progress
+
+    @_claim_compensation_progress.setter
+    def _claim_compensation_progress(self, value: dict[tuple[str, int], Any]) -> None:
+        self._attempt_cleanup_progress = value
+
     @staticmethod
     def _serialize_provider_request(context: ProxyRequestContext) -> bytes:
         """Serialize the final provider generation and mirror it for compatibility."""
@@ -758,14 +805,11 @@ class RequestCoordinator:
         self._classifier = RetryClassifier()
         self._select_lock = asyncio.Lock()
         self._selection_claim_lock = asyncio.Lock()
-        self._attempt_cleanup_tasks: dict[tuple[str, int], asyncio.Task[None]] = {}
-        self._claim_compensation_tasks: dict[tuple[str, int], asyncio.Task[None]] = {}
-        self._attempt_cleanup_progress: dict[
-            tuple[str, int], AttemptCleanupProgress
-        ] = {}
-        self._claim_compensation_progress: dict[
-            tuple[str, int], ClaimCompensationProgress
-        ] = {}
+        # One retained process-owned terminal registry covers retry cleanup
+        # and post-commit compensation. The compatibility properties above
+        # expose the historical names without creating competing ownership.
+        self._retained_terminal_tasks: dict[tuple[str, int], asyncio.Task[None]] = {}
+        self._retained_terminal_progress: dict[tuple[str, int], Any] = {}
         self._retained_cleanup_capacity = max(1, retained_cleanup_capacity)
         self._retained_cleanup_drain_timeout_s = max(
             0.1, retained_cleanup_drain_timeout_s
@@ -1291,14 +1335,16 @@ class RequestCoordinator:
         return max(len(unresolved), len(pending))
 
     def retained_cleanup_snapshot(self) -> dict[str, int]:
-        """Return compact process-local retained-cleanup diagnostics."""
+        """Return compact diagnostics for the one retained terminal registry."""
+        retained_tasks = len(self._attempt_cleanup_tasks)
+        retained_progress = len(self._attempt_cleanup_progress)
         return {
-            "active_attempt_cleanup_tasks": len(self._attempt_cleanup_tasks),
-            "resumable_attempt_cleanup_entries": len(self._attempt_cleanup_progress),
-            "active_claim_compensation_tasks": len(self._claim_compensation_tasks),
-            "resumable_claim_compensation_entries": len(
-                self._claim_compensation_progress
-            ),
+            "active_attempt_cleanup_tasks": retained_tasks,
+            "resumable_attempt_cleanup_entries": retained_progress,
+            "active_claim_compensation_tasks": 0,
+            "resumable_claim_compensation_entries": 0,
+            "active_retained_terminal_tasks": retained_tasks,
+            "resumable_retained_terminal_entries": retained_progress,
             "capacity_rejections": self._retained_cleanup_capacity_rejections,
         }
 

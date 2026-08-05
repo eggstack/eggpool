@@ -430,9 +430,6 @@ class TestInventoryMatchesRegistration:
 
         assert "finalization_retry_drain" not in specs
 
-        assert specs["stale_request_finalizer"].interval_s == 60.0
-        assert specs["stale_request_finalizer"].initial_delay_s == 25.0
-
         assert specs["health_disabled_models_prune"].interval_s == 60.0
         assert specs["health_disabled_models_prune"].initial_delay_s == 40.0
 
@@ -458,7 +455,6 @@ class TestInventoryMatchesRegistration:
             "model_info_canonical_backfill",
             "retention_cleanup",
             "usage_window_refresh",
-            "stale_request_finalizer",
             "health_disabled_models_prune",
         ):
             assert specs[name].ownership is TaskOwnership.GENERATION_LEASED, name

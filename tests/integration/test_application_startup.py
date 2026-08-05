@@ -14,7 +14,7 @@ import httpx
 import pytest
 import respx
 
-from eggpool.app import create_app
+from eggpool.app import _verify_startup_integrity, create_app
 from eggpool.db.connection import Database
 from eggpool.errors import DatabaseError
 from eggpool.models.config import AppConfig
@@ -59,6 +59,36 @@ def config_file_db(
 
 class TestApplicationStartup:
     """Verify a complete fresh startup lifecycle."""
+
+    @pytest.mark.asyncio
+    async def test_non_ok_quick_check_is_startup_fatal(self) -> None:
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+
+            async def bad_quick_check(_pragma: str) -> list[dict[str, str]]:
+                return [("*** in database main ***",)]
+
+            db.execute_pragma = bad_quick_check  # type: ignore[method-assign]
+            with pytest.raises(DatabaseError, match="integrity check failed"):
+                await _verify_startup_integrity(db)
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_quick_check_exception_is_startup_fatal(self) -> None:
+        db = Database(path=":memory:")
+        await db.connect()
+        try:
+
+            async def failed_quick_check(_pragma: str) -> list[dict[str, str]]:
+                raise RuntimeError("sqlite unavailable")
+
+            db.execute_pragma = failed_quick_check  # type: ignore[method-assign]
+            with pytest.raises(DatabaseError, match="integrity check failed"):
+                await _verify_startup_integrity(db)
+        finally:
+            await db.disconnect()
 
     @pytest.mark.asyncio
     async def test_full_lifespan_with_file_backed_db(

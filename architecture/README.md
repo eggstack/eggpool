@@ -83,10 +83,10 @@ Key invariants:
 - **Protocol-aware streaming EOF**: `SSEDecoder` (`proxy/sse.py`) owns bounded UTF-8/SSE framing and emits shared `DecodedSSEFrame` objects. `IncrementalSSEObserver` retains bounded completion evidence (`[DONE]` for OpenAI, `message_stop` for Anthropic), and `classify_stream_eof()` maps clean exhaustion to canonical completion, provider-policy compatibility, empty, premature, or malformed EOF. The coordinator drains the shared decoder and classifies before `StreamingTranscoder.finish()`. A premature/malformed stream is finalized through the canonical `MIDSTREAM_ERROR` owner; it cannot clear success backoff or emit a synthetic downstream terminal marker. Provider policy is explicit on `ProviderConfig.stream_completion_policy` and defaults to `strict`.
 - Every retryable failed attempt must reach terminal state, confirm its reservation is terminal, and release all owned runtime components before the next attempt
 - Each attempt reservation is released exactly once via `AttemptFinalizer`
-- **Process-owned request finalization (Plans 026/047/055/056/057/066/067/068/069)**: every selected request-terminal outcome is owned by one retained, attempt-keyed `RequestFinalizationJob`; streaming work registers no placeholder before its terminal data exists. The retained task completes durable and in-memory cleanup independently of request waiters. Retryable failed attempts and post-commit claim compensation use separate coordinator-retained commands with per-component progress, a hard 128-entry capacity by default, explicit rejoin, and bounded generation-shutdown drain. A retained command may return to its caller only after its progress record proves durable attempt transition, terminal reservation status, and each owned runtime release; a completed child task alone is not a convergence proof. A cancelled waiter submits one canonical `CLIENT_CANCELLED` request terminal only after the selected ownership converges, using an explicit last-converged attempt identity between retries. Duplicate submissions join, conflicting terminal payloads are diagnosed, and the bounded `RequestFinalizationSupervisor` provides diagnostics, startup reconciliation, and shutdown drain. `FinalizationResult` projects completed lease markers immediately when later runtime convergence fails, keeps runtime cleanup incomplete until the lease is released, and clears transient retry metadata after release. The stale-request finalizer is a recovery safety net rather than a normal terminal path.
-- **Stale runtime accounting**: the bounded stale sweep reconciles only rows transitioned by that pass, releases one active unit per accepted request with one aggregate router update per account, and removes quota reservations by ownership rather than cost truthiness. Zero-cost request/token reservations are therefore released; bulk active-count underflow is logged and clamped to zero.
+- **Process-owned request finalization (Plans 026/047/055/056/057/066/067/068/069/074)**: every selected request-terminal outcome is owned by one retained, attempt-keyed `RequestFinalizationJob`; streaming work registers no placeholder before its terminal data exists. The retained task completes durable and in-memory cleanup independently of request waiters. Retryable failed attempts and request-terminal cleanup share one coordinator-retained terminal owner with one component-progress record, a hard 128-entry capacity by default, explicit rejoin, and bounded generation-shutdown drain. A retained owner may return only after its progress record proves durable attempt transition, terminal reservation status, and each owned runtime release; a completed child task alone is not a convergence proof. A cancelled waiter submits one canonical `CLIENT_CANCELLED` request terminal only after selected ownership converges. Duplicate submissions join active work, durable attempt identity supplies permanent idempotency after history eviction or restart, and the bounded `RequestFinalizationSupervisor` provides diagnostics and shutdown drain. `FinalizationResult` projects completed lease markers immediately when later runtime convergence fails, keeps runtime cleanup incomplete until the lease is released, and clears transient retry metadata after release. Startup crash repair is the only pending-row recovery path.
+- **Startup runtime accounting repair**: startup reconciliation transitions only durable rows left by a previous process, releases one active unit per accepted request with one aggregate router update per account, and removes quota reservations by ownership rather than cost truthiness. Zero-cost request/token reservations are therefore released; bulk active-count underflow is logged and clamped to zero.
 - The same URL composition rules apply to catalog fetch and chat dispatch
-- **Structured observability persistence (migrations 0026-0029)** every `request_attempts` row carries provider/model/protocol/retry_category/latency/bytes/streamed/is_retry_outcome; every routing decision is persisted to `routing_decisions` in the same transaction as the `request_attempts` INSERT; safety-net tasks (`_crash_recovery`, `_finalize_stale_requests_once`, `reconcile_expired_reservations`) record `operational_events` rows inside the same transaction as the durable state mutation; latency is decomposed into `upstream_connect_ms / upstream_read_ms / coordinator_overhead_ms` so the dashboard can distinguish network vs upstream vs eggpool-side bottlenecks
+- **Structured observability persistence (migrations 0026-0029)** every `request_attempts` row carries provider/model/protocol/retry_category/latency/bytes/streamed/is_retry_outcome; every routing decision is persisted to `routing_decisions` in the same transaction as the `request_attempts` INSERT; startup crash recovery and expired-reservation reconciliation record bounded operational events inside the same transaction as durable state mutation; latency is decomposed into `upstream_connect_ms / upstream_read_ms / coordinator_overhead_ms` so the dashboard can distinguish network vs upstream vs eggpool-side bottlenecks
 - **Runtime metrics are best-effort and process-local** — the `/api/stats/runtime` endpoint and `eggpool runtime-status` CLI command gather process topology, memory, background task state, database health, OS load average (`os.getloadavg` + normalized per-core), and a bounded rolling-window dispatch-overhead distribution via `DispatchOverheadRecorder` (`src/eggpool/runtime_dispatch.py`); failed probes return `null` rather than raising, `probe_errors` is capped to 16 truncated entries, and the endpoint is always auth-gated even with a public dashboard
 - **Dispatch timing boundaries (Milestone A4)** — two distinct timing slices measure EggPool-side latency before upstream dispatch. `DispatchOverheadRecorder` (`src/eggpool/runtime_dispatch.py`) covers the coordinator-internal slice: from `ProxyRequestContext.started_monotonic_ns` (after context_build) to just before `httpx.AsyncClient.send()`. `LocalPreUpstreamRecorder` (`src/eggpool/runtime_dispatch.py`) covers the full EggPool-side window: from `request_received_monotonic_ns` (ASGI handler entry) to just before upstream dispatch. `request_received_monotonic_ns` is captured at the top of `handle_proxy_request` (`src/eggpool/api/proxy_request.py`); `local_pre_upstream_ms` is exposed via `runtime_metrics.local_pre_upstream`. Both use monotonic/performance clocks. The two metrics are additive: `local_pre_upstream` includes context_build, body parsing, validation, segmentation, compression, and coordinator dispatch overhead; `dispatch_overhead` covers only the coordinator-internal selection/persistence/dispatch slice.
 
@@ -2766,7 +2766,6 @@ All tasks are registered in `app.py` during lifespan setup. Periodic registratio
 | `model_info_refresh` | `config.model_info.refresh_interval_s` | periodic | `run_immediately=True` | Refresh due model-info rows from configured sources |
 | `model_info_canonical_backfill` | 60s | periodic | staggered | Backfill canonical rows for orphaned models |
 | `usage_window_refresh` | 60s | periodic | staggered | Reload persisted quota windows into memory |
-| `stale_request_finalizer` | 60s | periodic | staggered | Safety net for leaked streaming requests |
 | `health_disabled_models_prune` | 60s | periodic | staggered | Drop stale `model_availability` and `disabled_models` rows |
 | `metrics_flush` | `config.metrics.flush_interval_s` | periodic | staggered | Buffered analytics flush to `usage_rollups` (lifespan shutdown path stops the supervisor first, then issues a final `flush(reason="shutdown")` to drain without race) |
 | `retention_cleanup` | 1h | periodic | staggered | Cleanup of old requests, events, pings, rollups, expired reservations |
@@ -2774,11 +2773,11 @@ All tasks are registered in `app.py` during lifespan setup. Periodic registratio
 | `update_checker` | 24h | periodic | `run_immediately=True` | PyPI update check; per-tick probe reuses the shared outbound client |
 | `automatic_backup` | `config.backup.interval_s` | periodic | `initial_delay_s = config.backup.startup_delay_s` | In-process SQLite backup with count-based retention (preserves the historical startup wait) |
 
-Tasks that the operator depends on for live health signalling (`update_checker`, `checkpoint`, `model_info_refresh`) use `run_immediately=True` so a freshly started process reports real state on the first dashboard paint rather than appearing as `never_run` for the entire first interval. Tasks that intentionally stagger (`stale_request_finalizer`, `health_disabled_models_prune`, `usage_window_refresh`, `metrics_flush`, `retention_cleanup`, `model_info_canonical_backfill`) keep their deterministic `initial_delay_s` offsets so first ticks never cluster on the same wall-clock second.
+Tasks that the operator depends on for live health signalling (`update_checker`, `checkpoint`, `model_info_refresh`) use `run_immediately=True` so a freshly started process reports real state on the first dashboard paint rather than appearing as `never_run` for the entire first interval. Tasks that intentionally stagger (`health_disabled_models_prune`, `usage_window_refresh`, `metrics_flush`, `retention_cleanup`, `model_info_canonical_backfill`) keep their deterministic `initial_delay_s` offsets so first ticks never cluster on the same wall-clock second.
 
 ### Bounded maintenance and SQLite hygiene (Milestone E)
 
-EggPool uses one process-owned primary SQLite connection with `BEGIN IMMEDIATE` transactions for predictable write serialization. Several periodic maintenance tasks (retention cleanup, stale request finalization, expired reservation reconciliation, WAL checkpoint) previously operated on unbounded row sets in single transactions, which could monopolize the writer and block dispatch persistence under sustained load.
+EggPool uses one process-owned primary SQLite connection with `BEGIN IMMEDIATE` transactions for predictable write serialization. Periodic maintenance tasks (retention cleanup, expired reservation reconciliation, and WAL checkpoint) operate on bounded row sets in single transactions, which avoids monopolizing the writer under sustained load. Active requests are never reclaimed by row age.
 
 Milestone E converts all periodic database maintenance into bounded, resumable batches:
 
@@ -2941,7 +2940,7 @@ Granian profile: workers=1 runtime_threads=N database_worker_threads=M access_lo
 
 #### Background Task Staggering
 
-Multiple periodic tasks run at 30s or 60s cadences (`metrics_flush`, `usage_window_refresh`, `stale_request_finalizer`, `health_disabled_models_prune`, `model_info_canonical_backfill`). Each registration in `app.py:_lifespan_runtime` supplies an explicit `initial_delay_s` (5s, 10s, 15s, 25s, 40s) so first ticks do not cluster on the same wall-clock second. `background/periodic_initial_offset(name, interval_s, *, max_fraction=0.5)` is the deterministic-from-name helper for future additions; tests remain stable because the offset is `sha256(name)`-derived, not random.
+Multiple periodic tasks run at 30s or 60s cadences (`metrics_flush`, `usage_window_refresh`, `health_disabled_models_prune`, `model_info_canonical_backfill`). Each registration in `app.py:_lifespan_runtime` supplies an explicit `initial_delay_s` so first ticks do not cluster on the same wall-clock second. `background/periodic_initial_offset(name, interval_s, *, max_fraction=0.5)` is the deterministic-from-name helper for future additions; tests remain stable because the offset is `sha256(name)`-derived, not random.
 
 Startup crash recovery (`_crash_recovery`) and the initial catalog load are NOT staggered — those run unconditionally before periodic registration, and safety-critical recovery must not be delayed.
 
@@ -3110,8 +3109,8 @@ writes — see below.
 The shielded immediate finalizer inside
 `_build_stream_generator` is capped at 10 seconds. When SQLite lock
 contention delays the immediate finalization past that ceiling, the
-cancellation path used to fall back to the broad 60-second
-`_finalize_stale_requests_once` sweep. `RequestFinalizationSupervisor`
+cancellation path retains the terminal owner for bounded retry. It does not
+fall back to an age-based sweep. `RequestFinalizationSupervisor`
 (`src/eggpool/request/finalization_job.py`) closes that gap:
 
 **Plan 026 update**: when a `RequestFinalizationSupervisor` is
@@ -3474,7 +3473,7 @@ model via `TaskOwnership` (`src/eggpool/runtime_task_inventory.py`):
   in place via `apply_spec_diff()`.
 - **Generation-leased** tasks (`catalog_refresh`,
   `model_info_refresh`, `model_info_canonical_backfill`,
-  `retention_cleanup`, `usage_window_refresh`, `stale_request_finalizer`,
+  `retention_cleanup`, `usage_window_refresh`,
   `health_disabled_models_prune`) acquire a generation lease on
   every tick and are retired when their generation is retired;
   a new generation gets a fresh registration.
@@ -3490,10 +3489,10 @@ D2 LIVE families and their consumers:
 
 - **Retention durations**: `dashboard.retain_request_stats_days`,
   `dashboard.retain_event_days`, `models.ping_retain_days` — read
-  by `retention_cleanup` and `stale_request_finalizer` closures
-  that re-read `gen.config` per tick.
-- **Upstream timeout**: `upstream.read_timeout_s` — applied to
-  outbound HTTPX clients via `OutboundClientManager`.
+  by the `retention_cleanup` closure that re-reads `gen.config` per tick.
+- **Upstream timeout**: `upstream.read_timeout_s` — an HTTP client idle bound,
+  applied when the worker builds outbound clients; it is restart-required and
+  never acts as a maximum stream lifetime.
 - **Metrics flush cadence**: `metrics.flush_interval_s` — mutates
   the process-owned `metrics_flush` schedule in place.
 - **Backup scheduling**: `backup.enabled`, `backup.interval_s`,
@@ -4366,43 +4365,47 @@ adopting unresolved work for recovery.
 - request-path tests cover streaming/non-streaming 4xx parity and capability
   rejection cleanup through the coordinator's canonical terminal helper
 
-## Database Connection Recovery (Plan 027)
+## Database Connection Recovery (Plan 027, superseded by restart-safe boundary)
 
-Allows EggPool to recover safely from an invalidated or indeterminate SQLite connection without requiring a process restart. The process detaches a suspect connection, opens an unadmitted replacement, verifies it, reconciles ambiguous operations, and restores readiness only after every correctness check succeeds.
+An invalidated or indeterminate SQLite connection closes admission and exits
+the worker. systemd restarts it; startup integrity checks and crash
+reconciliation then establish a known-good boundary before readiness.
 
 ### Design principle
 
-Fail closed on uncertain transaction outcome, but recover the process automatically. Never reuse an indeterminate connection. Never blindly replay a transaction whose commit may have succeeded. Reconcile using durable identities and state predicates.
+Fail closed on uncertain transaction outcome and let the supervisor restart the
+worker. Never reuse an indeterminate connection or blindly replay a transaction
+whose commit may have succeeded. Reconcile using durable identities and state
+predicates at startup.
 
 ### Key components
 
 - `DatabaseLifecycleState` enum (`src/eggpool/db/connection.py`) — explicit state machine (`disconnected → connecting → ready → invalidating → invalidated → recovering → reconciling → ready / failed_closed → shutting_down`).
 - `connection_epoch` property — incremented on every successful `connect()` so long-lived components detect replacement.
-- `DatabaseRecoveryController` (`src/eggpool/db/recovery.py`) — single-flight recovery with bounded retry/escalation, reason-class tracking, and `RecoverySnapshot` diagnostics.
-- `AmbiguousDatabaseOperation` — frozen dataclass capturing indeterminate commit metadata for dispatch/finalization reconciliation.
-- `Database.transaction(ambiguous_operation=...)` — transaction-owned ambiguity metadata installed after lock acquisition; waiting tasks cannot overwrite it.
-- Ambiguity retention is bounded but lossless: convergence acknowledges one operation at a time, while unresolved results remain queued and overflow fails closed.
+- `Database._invalidate_connection()` — closes admission and records one bounded
+  local failure category before the worker exits.
+- Durable request/attempt/reservation identities — startup reconciliation is
+  authoritative for operations whose previous process may have died.
 - `DatabaseRollbackError` — typed error when ROLLBACK itself fails after a body exception, distinct from `DatabaseCommitError`.
 - `_safe_rollback()` helper with bounded diagnostics.
 - `[database.recovery]` config section with `max_attempts`, `initial_backoff_ms`, `max_backoff_ms`, `reconciliation_timeout_s`, `fail_process_on_exhaustion`.
-- Wired into `ProcessRuntime.recovery_controller`, app.py startup/shutdown, `/readyz` recovery-state degradation.
-- `WritableProbe.force_probe_nowait()` for recovery-cycle refresh.
+- Startup `PRAGMA quick_check` and the initial writable probe run before
+  background task startup or request admission.
 
 ### Recovery flow
 
-1. `Database._invalidate_connection()` transitions through `INVALIDATING → INVALIDATED` and notifies the recovery controller.
-2. The controller starts a single-flight recovery task; concurrent callers join the same attempt.
-3. The suspect connection is closed and an unadmitted replacement opened.
-4. For in-memory DBs, migrations are re-run privately; for file-backed DBs, schema compatibility is verified privately.
-5. A private writable probe confirms the replacement connection is usable while public transactions remain rejected.
-6. Ambiguous operations are reconciled via built-in reconcilers (`dispatch`, `finalization`); unresolved operations remain queued.
-7. On success, `writes_admitted` and `reads_admitted` are restored; readiness recovers.
-8. On any failed attempt, the candidate is closed and discarded. On exhaustion, the database enters `failed_closed` state with precise diagnostics.
+1. `Database._invalidate_connection()` closes read/write admission and marks
+   readiness degraded.
+2. Retained terminal owners may finish only while the connection remains
+   trustworthy; no replacement connection is published into live requests.
+3. The worker closes database/writer resources and exits nonzero.
+4. systemd restarts the worker. Startup runs migrations, `quick_check`, crash
+   reconciliation, and the initial writable probe before reopening readiness.
 
 ### Tests
 
-- `tests/unit/test_plan_027_database_lifecycle.py` — state machine, epoch tracking, ambiguous ops, diagnostics
-- `tests/unit/test_plan_027_recovery_singleflight.py` — concurrent waiters, retry, shutdown, snapshot
+- Database lifecycle and startup recovery capability tests cover admission,
+  integrity failure, durable repair, and the restart boundary.
 
 ## Provider Payload Lifecycle and Hot-Path Consolidation (Plan 028)
 

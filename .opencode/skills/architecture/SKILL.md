@@ -38,7 +38,7 @@ All data-plane requests flow through `RequestCoordinator`:
 - Every retryable failed attempt must reach terminal state through retained attempt cleanup before the next attempt
 - Each attempt reservation is released exactly once via `AttemptFinalizer`
 - Streaming success requires upstream protocol terminal evidence: OpenAI `[DONE]` or Anthropic `message_stop`. Use `StreamCompletionSnapshot` and `classify_stream_eof()`
-- `_crash_recovery` runs at every startup and recovers ALL pending requests and active reservations
+- `_crash_recovery` runs at every startup and repairs pending requests and active reservations left by a previous process. Normal request handling has no age-only stale sweep.
 
 ## Protocol Transcoding
 
@@ -59,6 +59,8 @@ Transparent request/response format conversion between OpenAI and Anthropic prot
 ## Database Invariants
 
 - SQLite WAL, single-connection serialization, `async with db.transaction():` for all DML
+- A transaction is owned by exactly one asyncio task. Same-task nesting is allowed; inherited child tasks fail with a typed local database invariant before SQL.
+- Busy/locked SQLite errors are classified as bounded local contention. Disk, corruption, and indeterminate connection errors close admission and terminate the worker for supervisor restart.
 - `Database.vacuum()` is the only sanctioned path for `VACUUM`
 - Readiness probes use `probe_writable()` with owned transactions
 - Schema migrations in `src/eggpool/db/schema/` (numbered SQL files)
@@ -145,16 +147,12 @@ for `/readyz`.
 
 `RequestFinalizationJob` keyed by `(proxy_request_id, attempt_id)`. `RequestFinalizationSupervisor` is the sole process-owned retry owner and uses one bounded timer with configured retry age/backoff. `FinalizationData.downstream_started` is the explicit response handoff fact; `bytes_emitted` is payload accounting only. `AttemptRuntimeLease` owns usage, health, and account-runtime outcome obligations independently of durable request transition, so already-terminal durable state can still converge them. `FinalizationResult` distinguishes durable terminal state, durable transition, reservation convergence, and runtime cleanup, projects completed lease markers while a later runtime component is retry-pending, and clears transient retry metadata when the lease is released. Retryable attempts use coordinator-retained cleanup with 128-entry capacity.
 
-Request and attempt recovery descriptors use distinct strategies and explicit
-identities; canonical terminal status sets live in
-`request/terminal_status.py`. Unknown status or identity mismatch remains
-unresolved and keeps recovery fail-closed.
-
-The stale-request safety net remains bounded and accounting-focused after its
-durable transition: it preserves one active-count unit per transitioned
-request, aggregates decrements by account, and releases every owned quota
-dimension even when reserved monetary cost is zero. The router bulk decrement
-API clamps underflow to zero while logging the invariant violation.
+Request and attempt recovery use explicit durable identities; canonical terminal
+status sets live in `request/terminal_status.py`. Unknown status or identity
+mismatch remains unresolved and keeps startup repair fail-closed. A selected
+attempt has one retained terminal owner and one component-progress record; the
+bounded supervisor is the only in-process retry owner. Bounded history is
+diagnostic only and never supplies finalization correctness.
 
 ## Streaming Completion
 
@@ -195,7 +193,12 @@ bounded state machine with corroboration before terminal withdrawal.
 
 ## Database Recovery
 
-`DatabaseRecoveryController` — single-flight recovery, bounded retry, transaction reconciliation.
+Startup runs migrations, SQLite integrity checks, crash reconciliation, and the
+required writable probe before admission. A non-`ok` integrity result, an
+integrity exception, or an indeterminate runtime database state closes
+readiness and exits the worker; systemd restarts it and startup repair is the
+final recovery boundary. There is no same-process replacement-connection
+recovery path.
 
 ## Gotchas
 

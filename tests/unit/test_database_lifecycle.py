@@ -13,6 +13,7 @@ from eggpool.db.connection import (
     AmbiguousDatabaseOperation,
     Database,
     DatabaseLifecycleState,
+    _classify_error_kind,
 )
 from eggpool.db.migrations import EXPECTED_SCHEMA_VERSION, MigrationRunner
 from eggpool.errors import DatabaseConnectionInvalidatedError
@@ -101,6 +102,22 @@ async def test_invalidated_reason_class_is_classified(test_db: Database) -> None
     assert diags["invalidated_reason_class"] == "rollback_failure"
     assert diags["invalidated_reason"] is not None
     assert "rollback" in diags["invalidated_reason"]
+
+
+async def test_sqlite_error_classification_uses_code_and_message() -> None:
+    class SQLiteFaultError(RuntimeError):
+        def __init__(self, message: str, code: int) -> None:
+            super().__init__(message)
+            self.sqlite_errorcode = code
+
+    locked = SQLiteFaultError("database is locked", 5)
+    assert _classify_error_kind(locked) == "busy"
+
+    corrupt = SQLiteFaultError("file is not a database", 26)
+    assert _classify_error_kind(corrupt) == "corruption"
+
+    disk = SQLiteFaultError("disk I/O error", 10)
+    assert _classify_error_kind(disk) == "disk"
 
 
 async def test_diagnostics_expose_lifecycle_state(test_db: Database) -> None:

@@ -429,6 +429,18 @@ class TestRequestFinalizationSupervisor:
         sup._reconcile_completed_jobs()
         assert len(sup._history) <= 64  # FINALIZATION_HISTORY_MAX
 
+    def test_history_eviction_does_not_return_synthetic_completion(self) -> None:
+        sup = self._make_supervisor()
+        first = sup.register_or_get(_make_identity(), "client_cancelled")
+        asyncio.run(first.run())
+        sup._reconcile_completed_jobs()
+        sup._history.clear()
+
+        duplicate = sup.register_or_get(_make_identity(), "client_cancelled")
+        assert duplicate is not first
+        assert duplicate.is_complete is False
+        assert sup.active_count == 1
+
     def test_counters_track_registration(self) -> None:
         sup = self._make_supervisor()
         sup.register_or_get(

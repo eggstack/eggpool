@@ -18,7 +18,7 @@ import pytest
 
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
-from eggpool.errors import DatabaseError
+from eggpool.errors import DatabaseError, DatabaseTransactionOwnershipError
 
 
 async def _run_migrations(db: Database) -> None:
@@ -169,21 +169,10 @@ class TestWriteHelperContract:
             await db.disconnect()
 
     @pytest.mark.asyncio
-    async def test_child_task_inherits_transaction_context_for_writes(
+    async def test_child_task_cannot_inherit_transaction_context_for_writes(
         self,
     ) -> None:
-        """A child task spawned inside an active transaction inherits the
-        transaction context (via ContextVar snapshot) and can perform
-        writes that piggyback on the parent's transaction.
-
-        This is the deliberate semantic change behind the SQLite-truth
-        nesting fix: shielded or ``create_task`` children no longer
-        have to open their own ``db.transaction()`` (which would
-        deadlock waiting for the parent's lock) -- they can simply
-        do writes that commit atomically with the parent. The
-        connection lock still serializes all SQL through aiosqlite's
-        worker thread, so concurrent writes remain atomic.
-        """
+        """ContextVar inheritance does not grant transaction ownership."""
         db = Database(path=":memory:")
         await db.connect()
         await _run_migrations(db)
@@ -205,16 +194,19 @@ class TestWriteHelperContract:
                     ("parent", "X"),
                 )
                 child = asyncio.create_task(child_writer())
-                await child
+                with pytest.raises(DatabaseTransactionOwnershipError):
+                    await child
 
             rows = await db.fetch_all("SELECT name FROM accounts ORDER BY id")
-            assert [r["name"] for r in rows] == ["parent", "child"]
+            assert [r["name"] for r in rows] == ["parent"]
         finally:
             await db.disconnect()
 
     @pytest.mark.asyncio
-    async def test_child_task_inherited_transaction_context_allows_reads(self) -> None:
-        """Child reads must piggyback instead of waiting on the parent lock."""
+    async def test_child_task_inherited_transaction_context_rejects_reads(
+        self,
+    ) -> None:
+        """Child reads fail before touching the parent's transaction."""
         db = Database(path=":memory:")
         await db.connect()
         await _run_migrations(db)
@@ -236,16 +228,17 @@ class TestWriteHelperContract:
                     "VALUES (?, ?, 1, 1.0)",
                     ("parent-read", "X"),
                 )
-                await asyncio.wait_for(
-                    asyncio.create_task(child_reader()),
-                    timeout=1.0,
-                )
+                with pytest.raises(DatabaseTransactionOwnershipError):
+                    await asyncio.wait_for(
+                        asyncio.create_task(child_reader()),
+                        timeout=1.0,
+                    )
         finally:
             await db.disconnect()
 
     @pytest.mark.asyncio
     async def test_delayed_child_does_not_reuse_completed_transaction(self) -> None:
-        """An inherited context expires when its parent transaction commits."""
+        """A delayed child retains no permission from a completed parent."""
         db = Database(path=":memory:")
         await db.connect()
         await _run_migrations(db)
@@ -255,14 +248,16 @@ class TestWriteHelperContract:
 
             async def child_writer() -> None:
                 await child_started.wait()
-                async with db.transaction():
-                    await db.execute_write(
-                        "INSERT INTO accounts "
-                        "(name, api_key_env, enabled, weight) "
-                        "VALUES (?, ?, 1, 1.0)",
-                        ("delayed-child", "X"),
-                    )
-                release_child.set()
+                try:
+                    async with db.transaction():
+                        await db.execute_write(
+                            "INSERT INTO accounts "
+                            "(name, api_key_env, enabled, weight) "
+                            "VALUES (?, ?, 1, 1.0)",
+                            ("delayed-child", "X"),
+                        )
+                finally:
+                    release_child.set()
 
             async with db.transaction():
                 child = asyncio.create_task(child_writer())
@@ -270,12 +265,13 @@ class TestWriteHelperContract:
 
             child_started.set()
             await asyncio.wait_for(release_child.wait(), timeout=1.0)
-            await child
+            with pytest.raises(DatabaseTransactionOwnershipError):
+                await child
             row = await db.fetch_one(
                 "SELECT name FROM accounts WHERE name = ?",
                 ("delayed-child",),
             )
-            assert row is not None
+            assert row is None
         finally:
             await db.disconnect()
 
@@ -346,14 +342,10 @@ class TestRawCursorContract:
             await db.disconnect()
 
     @pytest.mark.asyncio
-    async def test_execute_cursor_in_child_task_inside_parent_tx_works(
+    async def test_execute_cursor_in_child_task_inside_parent_tx_rejects(
         self,
     ) -> None:
-        """A child task spawned inside an active parent transaction can
-        use ``_execute_cursor`` (the raw cursor helper). The child
-        inherits the transaction context via ContextVar snapshot,
-        so it piggybacks on the parent's transaction.
-        """
+        """Raw cursor access also enforces task ownership."""
         db = Database(path=":memory:")
         await db.connect()
         await _run_migrations(db)
@@ -369,7 +361,8 @@ class TestRawCursorContract:
 
             async with db.transaction():
                 child = asyncio.create_task(child_cursor())
-                await child
+                with pytest.raises(DatabaseTransactionOwnershipError):
+                    await child
         finally:
             await db.disconnect()
 

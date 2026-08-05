@@ -28,7 +28,6 @@ The `TaskSupervisor` manages periodic and startup tasks for maintenance, cleanup
     │ Tasks               │
     │ • catalog_refresh   │
     │ • model_info_refresh│
-    │ • stale_finalization│
     └─────────────────────┘
 ```
 
@@ -44,7 +43,9 @@ Fixed-delay scheduler:
 
 ### `background/cleanup.py`
 
-Retention cleanup, stale request finalization, reservation reconciliation.
+Retention cleanup and reservation reconciliation. Active requests are not
+reclaimed by age; crash repair runs once during startup after a previous
+process has exited.
 
 ### `background/backup.py`
 
@@ -65,14 +66,11 @@ Survive generation swaps (live reload):
 Retired when their generation is retired:
 - **`catalog_refresh`** — Upstream model catalog refresh
 - **`model_info_refresh`** — Model info sidecar refresh
-- **`stale_finalization`** — Finalize escaped requests
 
 ## Safety-Net Tasks
 
 Recorded in `operational_events` table:
 - **`_crash_recovery`** — Recover from unclean shutdown
-- **`_finalize_stale_requests_once`** — Finalize requests stuck in pending and
-  reconcile exact per-request runtime ownership in a bounded pass
 - **`reconcile_expired_reservations`** — Release expired quota reservations
 
 ## Update Checker

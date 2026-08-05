@@ -34,6 +34,8 @@ Manages the EggPool process lifecycle, runtime generations, and the supervisor +
 - `--verbose` for foreground mode
 - Health probes for supervisor
 - `runtime_threads=1` (single event-loop thread is canonical; >1 emits startup warning)
+- Runtime database integrity/indeterminate-state failures close admission and
+  exit the worker; systemd restart runs startup integrity and crash repair.
 
 ### `runtime_manager.py` — RuntimeManager
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import enum
+import sqlite3
 import threading
 import time
 from contextlib import asynccontextmanager, suppress
@@ -22,6 +23,7 @@ from eggpool.errors import (
     DatabaseConnectionInvalidatedError,
     DatabaseError,
     DatabaseRollbackError,
+    DatabaseTransactionOwnershipError,
 )
 
 
@@ -65,11 +67,10 @@ class DatabaseLifecycleState(enum.Enum):
 class AmbiguousDatabaseOperation:
     """Immutable record of an indeterminate transaction outcome.
 
-    Captured when COMMIT raised before the caller could observe whether
-    the durable rows were persisted.  Carried by the recovery controller
-    through :meth:`DatabaseRecoveryController.recover` so the reconciler
-    has every fact it needs to inspect the replacement connection
-    without consulting mutable request context.
+    Retained for compatibility with durable identity callers. Runtime
+    indeterminate outcomes close admission and terminate the worker; startup
+    reconciliation queries durable request/attempt/reservation identities
+    instead of reopening a replacement connection in process.
 
     Fields:
 
@@ -158,9 +159,36 @@ def _classify_error_kind(exc: BaseException) -> str:
     so operators can see whether the most recent failure was a lock
     conflict, schema error, integrity violation, or other class.
     """
+    code = getattr(exc, "sqlite_errorcode", None)
+    primary_code = code & 0xFF if isinstance(code, int) else None
+    if primary_code in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
+        return "busy"
+    if primary_code in {
+        sqlite3.SQLITE_FULL,
+        sqlite3.SQLITE_IOERR,
+        sqlite3.SQLITE_READONLY,
+        sqlite3.SQLITE_NOMEM,
+    }:
+        return "disk"
+    if primary_code in {sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB}:
+        return "corruption"
+    if primary_code in {sqlite3.SQLITE_INTERRUPT, sqlite3.SQLITE_ABORT}:
+        return "interrupted"
+
+    message = str(exc).lower()[:200]
+    if "database is locked" in message or "database table is locked" in message:
+        return "busy"
+    if any(token in message for token in ("disk i/o error", "disk full", "readonly")):
+        return "disk"
+    if any(
+        token in message
+        for token in ("database disk image is malformed", "not a database")
+    ):
+        return "corruption"
+    if "interrupted" in message or "cancelled" in message:
+        return "interrupted"
+
     cls_name = type(exc).__qualname__.lower()
-    if "lock" in cls_name or "busy" in cls_name:
-        return "lock"
     if "integrity" in cls_name:
         return "integrity"
     if "operational" in cls_name:
@@ -174,16 +202,10 @@ class Database:
     """Async wrapper around aiosqlite with pragma configuration.
 
     All SQL operations are serialized through a single connection lock.
-    Nesting is detected via the per-task ``_in_transaction_context``
-    ContextVar, not via SQLite's connection-wide ``in_transaction``
-    state. ContextVars are inherited at task creation, so calls
-    inside ``asyncio.shield()`` or ``asyncio.create_task()`` from a
-    parent already inside ``transaction()`` correctly piggyback on
-    the outer transaction without issuing a second ``BEGIN`` against
-    the single SQLite connection. Unrelated concurrent tasks (probe
-    workers, healthcheck tasks, sibling requests) do not inherit
-    that flag and therefore acquire the lock directly so they
-    cannot piggyback on each other's transactions.
+    A transaction is owned by the one asyncio task that issued ``BEGIN``.
+    ContextVar inheritance is deliberately not treated as transaction
+    permission: a child task created inside a transaction fails before SQL
+    execution instead of piggybacking on the parent's commit boundary.
     """
 
     #: Test-only fault injection seam for the pre-commit boundary.
@@ -231,15 +253,8 @@ class Database:
         self._lock_wait_samples_s: collections.deque[float] = collections.deque(
             maxlen=512
         )
-        # Tracks whether the current asyncio.Task is currently
-        # executing inside a ``db.transaction()`` block (outermost
-        # OR nested/piggyback). Used by ``_require_transaction_owner``
-        # and ``vacuum()`` to gate writes and special operations.
-        # ContextVars are inherited at task creation, so shielded
-        # and ``create_task`` children see ``True`` while their
-        # parent is still inside a transaction -- this is what lets
-        # a shielded child do writes that piggyback on the parent's
-        # transaction without re-issuing ``BEGIN``.
+        # Compatibility marker for same-task nesting. The explicit owner
+        # task below is authoritative; inherited child contexts are rejected.
         self._in_transaction_context: ContextVar[bool] = ContextVar(
             "database_in_transaction_context",
             default=False,
@@ -258,6 +273,7 @@ class Database:
             "database_transaction_owner",
             default=None,
         )
+        self._fatal_handler: Any = None  # noqa: ANN401
         # Instance-scoped test-only injection hooks.  These override
         # the class-level seam for a single Database instance so tests
         # can target a specific connection without affecting others.
@@ -413,6 +429,10 @@ class Database:
         attempts.  ``None`` clears the binding (used by tests).
         """
         self._recovery_controller = controller
+
+    def set_fatal_handler(self, handler: Any) -> None:  # noqa: ANN401
+        """Install the process-owned callback for an indeterminate DB state."""
+        self._fatal_handler = handler
 
     def admit_recovered_connection(self) -> None:
         """Atomically publish a verified replacement connection as ready."""
@@ -682,9 +702,9 @@ class Database:
         Atomically removes the connection from ``_conn`` while the
         connection lock is held (the caller must already hold the lock),
         sets the invalidated flag, and closes the detached connection
-        with bounded best-effort.  Future ``transaction()`` calls fail
-        with ``DatabaseConnectionInvalidatedError`` until ``connect()``
-        is called again.
+        with bounded best-effort. Future ``transaction()`` calls fail
+        with ``DatabaseConnectionInvalidatedError``; the deployment
+        contract is a worker restart, not same-process reconnection.
 
         In addition to the original flag, the method transitions
         through ``INVALIDATING`` → ``INVALIDATED`` so that operators
@@ -708,19 +728,18 @@ class Database:
         with suppress(Exception):
             await asyncio.wait_for(conn_to_close.close(), timeout=5.0)
         self._transition_state(DatabaseLifecycleState.INVALIDATED)
-        # Notify the recovery controller (if any).  The controller
-        # owns the single-flight recovery attempt; callers awaiting
-        # admission will join it via the controller's waiter queue.
+        # Notify the recovery controller (if any) for bounded diagnostics.
+        # It must not reopen admission in this process.
         controller = self._recovery_controller
         if controller is not None:
-            # Controller notification must never mask the original
-            # invalidation.  Recovery will be retried on the next
-            # transaction() caller.
             with suppress(Exception):
                 await controller.handle_invalidation(
                     reason=reason,
                     reason_class=self._invalidated_reason_class or "other",
                 )
+        if self._fatal_handler is not None:
+            with suppress(Exception):
+                self._fatal_handler(reason)
 
     def diagnostics(self) -> dict[str, Any]:
         """Return operational database diagnostics.
@@ -790,33 +809,27 @@ class Database:
 
         Every write through :meth:`execute_write`, :meth:`execute_insert`,
         :meth:`execute_returning`, or :meth:`_execute_cursor` MUST be
-        performed inside a ``db.transaction()`` boundary. The check is
-        per-task-context (``_in_transaction_context`` ContextVar),
-        which is inherited across ``asyncio.shield()`` and
-        ``asyncio.create_task()`` so shielded/child tasks can do
-        writes that piggyback on the parent's transaction without
-        raising. Unrelated tasks that have not entered a transaction
-        block will raise.
+        performed inside a ``db.transaction()`` boundary owned by the
+        current task. ContextVar inheritance does not grant a child task
+        permission to execute SQL.
         """
         if self._read_only:
             raise DatabaseError(
                 "Database is opened read-only; writes are not permitted"
             )
-        if not self._has_active_transaction_context():
+        if not self._current_task_owns_transaction():
+            if self._transaction_owner.get() is not None:
+                raise DatabaseTransactionOwnershipError(
+                    "database transaction is owned by another asyncio task"
+                )
             raise DatabaseError(
                 "Database writes require an active transaction; "
                 "use 'async with db.transaction():'"
             )
 
     def _has_active_transaction_context(self) -> bool:
-        """Return whether this task inherited a still-active transaction."""
-        state_context = getattr(self, "_transaction_state", None)
-        if state_context is None:
-            # Keep lightweight test doubles and legacy manually constructed
-            # Database instances compatible with the pre-state marker.
-            return self._in_transaction_context.get()
-        state = state_context.get()
-        return state is not None and state.active
+        """Return whether the current task owns the active transaction."""
+        return self._current_task_owns_transaction()
 
     def _refresh_idle_connection_lock(self) -> None:
         """Recreate an idle connection lock if it was bound to another loop.
@@ -849,12 +862,9 @@ class Database:
     async def _connection_access(self) -> AsyncGenerator[None]:
         """Acquire the connection lock for a SQL operation.
 
-        If a transaction is already open on this connection, the
-        outermost ``transaction()`` caller holds ``_connection_lock``
-        and SQL is serialized through aiosqlite's worker thread; this
-        is a no-op so piggybacked reads/writes do not deadlock.
-        Otherwise the lock is acquired for the duration of the
-        ``yield``.
+        The transaction owner may use the already-held lock. A different
+        task fails before waiting or issuing SQL; otherwise the lock is
+        acquired for the duration of the operation.
 
         Lock wait time is tracked in contention counters for
         runtime diagnostics.
@@ -869,11 +879,11 @@ class Database:
             recovery_context is not None and recovery_context.get()
         ):
             raise DatabaseError("Database reads are not admitted")
-        # ContextVar inheritance is the transaction's intentional
-        # piggyback signal.  A child task created inside the transaction
-        # inherits ``_in_transaction_context`` but not the identity of the
-        # task that issued BEGIN.  Checking only the owner task here would
-        # make child reads/PRAGMAs wait on the lock held by their parent.
+        owner = self._transaction_owner.get()
+        if owner is not None and owner is not asyncio.current_task():
+            raise DatabaseTransactionOwnershipError(
+                "database transaction is owned by another asyncio task"
+            )
         if self._has_active_transaction_context():
             yield
             return
@@ -1177,27 +1187,10 @@ class Database:
         Repository methods must NOT call commit inside this context;
         the caller owns commit boundaries.
 
-        Nesting semantics are gated on the per-task
-        ``_in_transaction_context`` ContextVar, NOT on SQLite's
-        per-connection ``conn.in_transaction``. ContextVars are
-        inherited at task creation, so ``asyncio.shield()`` and
-        ``asyncio.create_task()`` children of an outer caller that
-        already entered ``transaction()`` see ``True`` and piggyback
-        on the outer's commit boundary -- which avoids
-        ``OperationalError: cannot start a transaction within
-        a transaction`` and ``_connection_lock`` deadlocks.
-
-        Tasks that did not inherit ``_in_transaction_context=True``
-        (probe workers, healthcheck tasks, unrelated concurrent
-        requests) fall through to acquire ``_connection_lock``
-        directly. This keeps separate operations from piggybacking
-        on each other's transactions.
-
-        The outermost ``transaction()`` caller is the only one
-        that acquires ``_connection_lock`` and issues
-        ``BEGIN IMMEDIATE`` / ``COMMIT`` / ``ROLLBACK``. Nested
-        callers -- including task-spawned piggybackers -- simply
-        yield and inherit the outer's commit boundary.
+        Nesting is permitted only for the same asyncio task. A child task
+        with inherited context fails before acquiring the lock or issuing SQL.
+        The outermost task alone issues ``BEGIN IMMEDIATE`` / ``COMMIT`` /
+        ``ROLLBACK``.
         """
         if self._invalidated:
             raise DatabaseConnectionInvalidatedError(
@@ -1221,13 +1214,12 @@ class Database:
         ):
             raise DatabaseError("Database writes are not admitted")
 
-        # Fast path: piggyback on an existing transaction only when
-        # the current task inherited the transaction context (via
-        # ``asyncio.shield()`` / ``asyncio.create_task()`` from a
-        # parent already inside ``transaction()``) or is the same
-        # task that opened it. Unrelated tasks that lack that
-        # inheritance must acquire the lock instead, so two
-        # concurrent requests cannot piggyback on each other.
+        # Fast path: reuse an existing transaction only in its owning task.
+        owner = self._transaction_owner.get()
+        if owner is not None and owner is not asyncio.current_task():
+            raise DatabaseTransactionOwnershipError(
+                "database transaction is owned by another asyncio task"
+            )
         if self._has_active_transaction_context():
             self._total_nested_transactions += 1
             ctx_token = self._in_transaction_context.set(True)
@@ -1339,17 +1331,6 @@ class Database:
                         f"connection epoch changed during transaction "
                         f"(begin={begin_epoch}, current={self._connection_epoch})"
                     )
-                    # Plan 027: record the pending ambiguous operation
-                    # before raising so the recovery controller can
-                    # reconcile it after a replacement connection is opened.
-                    if ambiguous_operation is not None:
-                        try:
-                            self.record_ambiguous_operation(ambiguous_operation)
-                        except DatabaseError:
-                            await self._invalidate_connection(
-                                "ambiguous operation buffer overflow"
-                            )
-                            raise
                     raise DatabaseCommitError(
                         "Connection was replaced while transaction was open",
                         rollback_attempted=False,
@@ -1437,18 +1418,9 @@ class Database:
 
                     outcome = "rolled_back" if rollback_succeeded else "indeterminate"
                     self._last_commit_outcome = outcome
-                    # Plan 027 Workstream E/F/G: record the pending
-                    # ambiguous operation so the recovery controller
-                    # can reconcile it after a replacement connection
-                    # is opened.
-                    if outcome == "indeterminate" and ambiguous_operation is not None:
-                        try:
-                            self.record_ambiguous_operation(ambiguous_operation)
-                        except DatabaseError:
-                            await self._invalidate_connection(
-                                "ambiguous operation buffer overflow"
-                            )
-                            raise
+                    # Durable request/attempt/reservation identities are
+                    # reconciled at the next process start. Do not retain
+                    # an in-process ambiguity queue after admission closes.
                     self._last_rollback_attempted = rollback_attempted
                     self._last_rollback_succeeded = rollback_succeeded
                     self._last_in_transaction_before_rollback = (

@@ -608,6 +608,19 @@ class RequestFinalizationJob:
         if self.finalization_data is None:
             return
 
+        validate_identity = getattr(self._finalizer, "validate_terminal_identity", None)
+        if validate_identity is not None:
+            try:
+                await validate_identity(self._selected, self.finalization_data)
+            except Exception as exc:
+                if type(exc).__name__ == "DurableTerminalConflictError":
+                    raise TerminalConflictError(
+                        str(exc),
+                        step="durable_terminal_identity",
+                        request_id=self.request_id,
+                    ) from exc
+                raise
+
         durable = await self._finalizer.finalize(self._selected, self.finalization_data)
         self._durable_result = durable
         if not durable.durable_converged:
@@ -866,27 +879,6 @@ class RequestFinalizationSupervisor:
                 raise
             return existing
 
-        # Completed entries are removed from the active registry, but the
-        # bounded scalar history still makes a repeated submission join the
-        # original terminal result instead of starting a second lifecycle.
-        for record in reversed(self._history):
-            if (
-                record.proxy_request_id == request_id
-                and record.attempt_id == identity.attempt_id
-            ):
-                if record.outcome != outcome:
-                    self._terminal_conflicts += 1
-                    raise TerminalConflictError(
-                        "conflicting terminal outcome for completed attempt",
-                        step="register_or_get",
-                        request_id=request_id,
-                    )
-                return RequestFinalizationJob(
-                    identity=identity,
-                    outcome=record.outcome,
-                    _progress=FinalizationProgress.COMPLETED,
-                )
-
         if len(self._active_jobs) >= self._max_active_jobs:
             self._counters.saturation_rejections += 1
             logger.warning(
@@ -1116,51 +1108,6 @@ class RequestFinalizationSupervisor:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._retry_scheduler_task
         return remaining
-
-    async def reconcile_startup_state(self) -> int:
-        """Reconcile stale durable state at startup.
-
-        After migrations and before readiness:
-
-        * Find stale pending requests, incomplete attempts, and active
-          reservations.
-        * Reconstruct bounded reconciliation jobs using durable
-          identity.
-        * Do not fabricate runtime ownership that cannot survive
-          process restart; reconcile durable state and reset
-          process-local counters.
-        * Clear or repair orphaned active facts.
-        * Record startup reconciliation counts.
-        """
-        try:
-            rows = await self._db.fetch_all(
-                "SELECT id, proxy_request_id, account_id, model_id, "
-                "protocol, status "
-                "FROM requests "
-                "WHERE status = 'pending' "
-                "AND started_at < datetime('now', '-5 minutes') "
-                "LIMIT 100"
-            )
-        except Exception:
-            logger.exception("Startup reconciliation query failed")
-            return 0
-
-        reconciled = 0
-        for _row in rows:
-            try:
-                self._counters.startup_reconciled += 1
-                reconciled += 1
-            except Exception:
-                logger.exception(
-                    "Startup reconciliation failed for a stale request",
-                )
-
-        if reconciled > 0:
-            logger.info(
-                "Startup reconciliation: %d stale requests found",
-                reconciled,
-            )
-        return reconciled
 
     def snapshot(self) -> dict[str, Any]:
         """Return a diagnostic snapshot of the supervisor."""

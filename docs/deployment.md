@@ -859,29 +859,26 @@ keeping up:
 4. If WAL growth is persistent, consider increasing
    `server.threads` to reduce write contention.
 
-### Tuning the stale-request finalizer
+### Upstream read timeout
 
-The finalizer uses the upstream `read_timeout_s` (default 300s) as the
-pending-request threshold.  You can override this in `config.toml`:
-
-```toml
-[upstream]
-read_timeout_s = 300  # seconds; also used as stale-request threshold
-```
-
-Lowering this value makes the finalizer more aggressive but increases
-the risk of interrupting legitimate slow requests.  The default matches
-the upstream timeout so no request that is still making progress
-should be touched.
+`upstream.read_timeout_s` is an HTTP client idle/operation bound. It is not a
+maximum stream lifetime and is never used by an active-process stale sweep.
+Long healthy streams retain their request and runtime ownership until their
+explicit terminal owner completes.
 
 ### Startup crash recovery
 
 A process restart is a definitive boundary: any request that was still
-`pending` in the previous process is marked `interrupted` and its
-active reservations are released, regardless of how recently they were
-created.  Check the startup log for `Crash recovery: marked N stale
-requests` to confirm a clean recovery after a crash or forced
-restart.
+`pending` in the previous process is repaired by startup crash reconciliation,
+and its active reservations are released, regardless of how recently it was
+created. Check the startup log for the crash-recovery summary after a crash or
+forced restart.
+
+The shipped systemd unit uses `Restart=on-failure`, so a worker that exits
+after an indeterminate SQLite state is restarted automatically. The restart
+boundary is intentional: the new worker must pass migrations, integrity
+checks, crash reconciliation, and the writable probe before it accepts
+traffic.
 
 ---
 
