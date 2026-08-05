@@ -87,7 +87,7 @@ async def test_connection_invalidated_state_persists(
             await db.execute_returning("SELECT 1")
 
     # If connection was invalidated, check the db state.
-    if db._invalidated:
+    if db.lifecycle_state.value == "failed_closed":
         with pytest.raises(DatabaseConnectionInvalidatedError):
             async with db.transaction():
                 await db.execute_returning("SELECT 1")

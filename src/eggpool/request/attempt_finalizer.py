@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -98,30 +97,9 @@ class AttemptFinalizer:
         transitioned = False
         reservation_released = False
         retry_flag = 1 if data.is_retry_outcome else 0
-        # Plan 027: attach an ambiguous-operation descriptor so that
-        # an indeterminate commit outcome is recorded for post-recovery
-        # reconciliation.
-        from eggpool.db.connection import (  # noqa: PLC0415
-            AmbiguousDatabaseOperation,
-        )
-
-        ambiguous_operation = AmbiguousDatabaseOperation(
-            operation_id=str(attempt_id),
-            operation_kind="attempt_finalization",
-            connection_epoch=self._db.connection_epoch,
-            idempotency_keys=(
-                ("request_id", str(data.request_id or "")),
-                ("attempt_id", str(attempt_id)),
-                ("reservation_id", reservation_id),
-            ),
-            intended_status="completed",
-            precondition_facts=(),
-            created_at_monotonic=time.monotonic(),
-            reconciliation_strategy="attempt_finalization",
-        )
         reservation_converged = False
         attempt_terminal = False
-        async with self._db.transaction(ambiguous_operation=ambiguous_operation):
+        async with self._db.transaction():
             # 1. Mark attempt completed only if not already terminal
             transitioned = bool(
                 await self._db.execute_write(

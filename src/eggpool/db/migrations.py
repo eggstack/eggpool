@@ -21,10 +21,8 @@ def _expected_schema_version(schemas_dir: Path) -> int:
     """Compute the highest migration version expected on disk.
 
     The value is the highest numeric prefix among ``*.sql`` files in
-    the schema directory.  Used by the database recovery controller
-    to verify that a replacement connection sees the same schema as
-    the suspect connection; a mismatch indicates the database file
-    changed under us.
+    the schema directory. It documents the schema expected by startup
+    migration and integrity validation.
     """
     if not schemas_dir.exists():
         return 0
@@ -82,7 +80,7 @@ class MigrationRunner:
     def __init__(self, db: Database) -> None:
         self._db = db
 
-    async def run(self, *, internal_recovery: bool = False) -> None:
+    async def run(self) -> None:
         """Apply all pending migrations in order.
 
         Each migration file is applied in a single ``db.transaction()``
@@ -90,8 +88,8 @@ class MigrationRunner:
         statement failure the entire migration is rolled back and the
         database is left untouched.
         """
-        await self._ensure_migrations_table(internal_recovery=internal_recovery)
-        applied = await self._applied_versions(internal_recovery=internal_recovery)
+        await self._ensure_migrations_table()
+        applied = await self._applied_versions()
         pending = self._pending_migrations(applied)
 
         if not pending:
@@ -103,7 +101,7 @@ class MigrationRunner:
             statements = _split_statements(sql)
             logger.info("Applying migration %04d: %s", version, path.name)
             try:
-                async with self._db.transaction(_internal_recovery=internal_recovery):
+                async with self._db.transaction():
                     for stmt in statements:
                         await self._db._execute_cursor(stmt)  # pyright: ignore[reportPrivateUsage] -- DDL requires raw cursor, safe inside transaction
                     await self._db._execute_cursor(  # pyright: ignore[reportPrivateUsage] -- DDL requires raw cursor, safe inside transaction
@@ -115,11 +113,9 @@ class MigrationRunner:
 
         logger.info("Applied %d migration(s)", len(pending))
 
-    async def _ensure_migrations_table(
-        self, *, internal_recovery: bool = False
-    ) -> None:
+    async def _ensure_migrations_table(self) -> None:
         """Create the _migrations tracking table if it doesn't exist."""
-        async with self._db.transaction(_internal_recovery=internal_recovery):
+        async with self._db.transaction():
             await self._db._execute_cursor(  # pyright: ignore[reportPrivateUsage] -- DDL requires raw cursor, safe inside transaction
                 """
                 CREATE TABLE IF NOT EXISTS _migrations (
@@ -130,9 +126,9 @@ class MigrationRunner:
                 """
             )
 
-    async def _applied_versions(self, *, internal_recovery: bool = False) -> set[int]:
+    async def _applied_versions(self) -> set[int]:
         """Return set of already-applied migration versions."""
-        async with self._db.transaction(_internal_recovery=internal_recovery):
+        async with self._db.transaction():
             rows = await self._db.fetch_all("SELECT version FROM _migrations")
         return {row["version"] for row in rows}
 

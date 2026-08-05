@@ -127,6 +127,11 @@ direct ASGI send collector. `downstream_started` is marked at
 `http.response.start`, before the first body iteration; an empty started stream
 therefore remains post-handoff with zero emitted bytes.
 
+Database fixtures are bound to the canonical asyncio event loop. Tests that
+exercise an ASGI app with a migrated database should use an async ASGI client
+on that loop; do not reuse the database through synchronous `TestClient` or
+rebind its lock for convenience.
+
 Dispatch-boundary regressions should cover distinct-account failover, the
 configured attempt ceiling, cleanup-before-reselection, local request
 construction failures without provider health changes, response adaptation

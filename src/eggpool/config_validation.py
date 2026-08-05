@@ -417,6 +417,18 @@ def _check_stale_contracts_typed(
     """
     warnings: list[ConfigValidationWarning] = []
     raw = load_raw_config(str(config_path))
+    raw_database = get_section(raw, "database")
+    if "recovery" in raw_database:
+        warnings.append(
+            ConfigValidationWarning(
+                code="database.recovery_deprecated",
+                section="database.recovery",
+                message=(
+                    "database.recovery is deprecated and ignored; runtime SQLite "
+                    "failures close the worker and rely on supervisor restart"
+                ),
+            )
+        )
     raw_providers_section = get_section(raw, "providers")
     raw_providers: dict[str, object] = raw_providers_section
 

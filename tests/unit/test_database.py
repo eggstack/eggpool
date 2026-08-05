@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import collections
-import threading
 from contextvars import ContextVar
 
 import aiosqlite
@@ -207,6 +206,7 @@ async def test_concurrent_readers_during_write() -> None:
         db1._path = db_uri  # type: ignore[reportPrivateUsage]
         db1._read_only = False  # type: ignore[reportPrivateUsage]
         db1._connection_lock = asyncio.Lock()
+        db1._canonical_loop = asyncio.get_running_loop()  # type: ignore[reportPrivateUsage]
         db1._transaction_depth = ContextVar("database_transaction_depth", default=0)
         db1._transaction_owner = ContextVar("database_transaction_owner", default=None)
         db1._in_transaction_context = ContextVar(
@@ -223,13 +223,11 @@ async def test_concurrent_readers_during_write() -> None:
         db1._max_lock_wait_s = 0.0  # type: ignore[reportPrivateUsage]
         db1._lock_wait_count = 0  # type: ignore[reportPrivateUsage]
         db1._lock_wait_samples_s = collections.deque(maxlen=512)  # type: ignore[reportPrivateUsage]
-        db1._connection_lock_guard = threading.Lock()  # type: ignore[reportPrivateUsage]
         db1._transaction_state = ContextVar(  # type: ignore[reportPrivateUsage]
             "database_transaction_state1", default=None
         )
         db1._test_inject_before_commit = None  # type: ignore[reportPrivateUsage]
         db1._test_inject_commit_call = None  # type: ignore[reportPrivateUsage]
-        db1._invalidated = False  # type: ignore[reportPrivateUsage]
         db1._invalidated_reason = None  # type: ignore[reportPrivateUsage]
         db1._invalidated_at = None  # type: ignore[reportPrivateUsage]
         db1._last_commit_outcome = None  # type: ignore[reportPrivateUsage]
@@ -237,26 +235,18 @@ async def test_concurrent_readers_during_write() -> None:
         db1._last_rollback_succeeded = False  # type: ignore[reportPrivateUsage]
         db1._last_in_transaction_before_rollback = None  # type: ignore[reportPrivateUsage]
         db1._last_in_transaction_after_rollback = None  # type: ignore[reportPrivateUsage]
-        db1._connection_epoch = 1  # type: ignore[reportPrivateUsage]
         db1._lifecycle_state = DatabaseLifecycleState.READY  # type: ignore[reportPrivateUsage]
         db1._invalidated_reason_class = None  # type: ignore[reportPrivateUsage]
-        db1._recovering_lock = asyncio.Lock()  # type: ignore[reportPrivateUsage]
-        db1._ambiguous_operations = collections.deque(maxlen=128)  # type: ignore[reportPrivateUsage]
-        db1._recovery_controller = None  # type: ignore[reportPrivateUsage]
         db1._writes_admitted = True  # type: ignore[reportPrivateUsage]
         db1._reads_admitted = True  # type: ignore[reportPrivateUsage]
-        db1._generation_replaced_at = None  # type: ignore[reportPrivateUsage]
-        db1._recovery_count = 0  # type: ignore[reportPrivateUsage]
         db1._rollback_failure_count = 0  # type: ignore[reportPrivateUsage]
         db1._rollback_success_count = 0  # type: ignore[reportPrivateUsage]
-        db1._refresh_idle_connection_lock = (
-            Database._refresh_idle_connection_lock.__get__(db1, Database)
-        )  # type: ignore[reportPrivateUsage]
         db2 = Database.__new__(Database)
         db2._conn = conn2  # type: ignore[reportPrivateUsage]
         db2._path = db_uri  # type: ignore[reportPrivateUsage]
         db2._read_only = False  # type: ignore[reportPrivateUsage]
         db2._connection_lock = asyncio.Lock()
+        db2._canonical_loop = asyncio.get_running_loop()  # type: ignore[reportPrivateUsage]
         db2._transaction_depth = ContextVar("database_transaction_depth2", default=0)
         db2._transaction_owner = ContextVar("database_transaction_owner2", default=None)
         db2._in_transaction_context = ContextVar(
@@ -273,13 +263,11 @@ async def test_concurrent_readers_during_write() -> None:
         db2._max_lock_wait_s = 0.0  # type: ignore[reportPrivateUsage]
         db2._lock_wait_count = 0  # type: ignore[reportPrivateUsage]
         db2._lock_wait_samples_s = collections.deque(maxlen=512)  # type: ignore[reportPrivateUsage]
-        db2._connection_lock_guard = threading.Lock()  # type: ignore[reportPrivateUsage]
         db2._transaction_state = ContextVar(  # type: ignore[reportPrivateUsage]
             "database_transaction_state2", default=None
         )
         db2._test_inject_before_commit = None  # type: ignore[reportPrivateUsage]
         db2._test_inject_commit_call = None  # type: ignore[reportPrivateUsage]
-        db2._invalidated = False  # type: ignore[reportPrivateUsage]
         db2._invalidated_reason = None  # type: ignore[reportPrivateUsage]
         db2._invalidated_at = None  # type: ignore[reportPrivateUsage]
         db2._last_commit_outcome = None  # type: ignore[reportPrivateUsage]
@@ -287,21 +275,12 @@ async def test_concurrent_readers_during_write() -> None:
         db2._last_rollback_succeeded = False  # type: ignore[reportPrivateUsage]
         db2._last_in_transaction_before_rollback = None  # type: ignore[reportPrivateUsage]
         db2._last_in_transaction_after_rollback = None  # type: ignore[reportPrivateUsage]
-        db2._connection_epoch = 1  # type: ignore[reportPrivateUsage]
         db2._lifecycle_state = DatabaseLifecycleState.READY  # type: ignore[reportPrivateUsage]
         db2._invalidated_reason_class = None  # type: ignore[reportPrivateUsage]
-        db2._recovering_lock = asyncio.Lock()  # type: ignore[reportPrivateUsage]
-        db2._ambiguous_operations = collections.deque(maxlen=128)  # type: ignore[reportPrivateUsage]
-        db2._recovery_controller = None  # type: ignore[reportPrivateUsage]
         db2._writes_admitted = True  # type: ignore[reportPrivateUsage]
         db2._reads_admitted = True  # type: ignore[reportPrivateUsage]
-        db2._generation_replaced_at = None  # type: ignore[reportPrivateUsage]
-        db2._recovery_count = 0  # type: ignore[reportPrivateUsage]
         db2._rollback_failure_count = 0  # type: ignore[reportPrivateUsage]
         db2._rollback_success_count = 0  # type: ignore[reportPrivateUsage]
-        db2._refresh_idle_connection_lock = (
-            Database._refresh_idle_connection_lock.__get__(db2, Database)
-        )  # type: ignore[reportPrivateUsage]
 
         await _run_migrations(db1)
 
@@ -322,8 +301,8 @@ async def test_concurrent_readers_during_write() -> None:
         await conn2.close()
 
 
-def test_idle_connection_lock_rebinds_across_event_loops(tmp_path: object) -> None:
-    """A rejected child operation must not poison later loop reuse."""
+def test_database_reuse_across_event_loops_is_rejected(tmp_path: object) -> None:
+    """A database instance cannot be reused by another event loop."""
     import pathlib
 
     db_path = str(pathlib.Path(str(tmp_path)) / "loop_reuse.sqlite3")
@@ -335,17 +314,11 @@ def test_idle_connection_lock_rebinds_across_event_loops(tmp_path: object) -> No
             waiter = asyncio.create_task(database.fetch_one("SELECT 1"))
             with pytest.raises(DatabaseTransactionOwnershipError):
                 await waiter
+        await database.disconnect()
 
     async def reuse_from_second_loop() -> None:
-        first, second = await asyncio.gather(
-            database.fetch_one("SELECT 1 AS value"),
-            database.fetch_one("SELECT 2 AS value"),
-        )
-        assert first is not None
-        assert second is not None
-        assert first["value"] == 1
-        assert second["value"] == 2
-        await database.disconnect()
+        with pytest.raises(DatabaseError, match="foreign event loop"):
+            await database.fetch_one("SELECT 1 AS value")
 
     asyncio.run(bind_lock_to_first_loop())
     asyncio.run(reuse_from_second_loop())

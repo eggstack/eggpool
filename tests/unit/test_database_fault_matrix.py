@@ -69,7 +69,7 @@ class TestDatabaseFaultMatrix:
                 async with test_db.transaction():
                     await test_db.execute_write(_TEST_INSERT)
             # Rollback succeeded — connection is still usable
-            assert not test_db._invalidated
+            assert test_db.lifecycle_state.value == "ready"
         finally:
             test_db.set_test_inject_commit_call(None)
 
@@ -83,7 +83,7 @@ class TestDatabaseFaultMatrix:
             with pytest.raises(DatabaseCommitError):
                 async with test_db.transaction():
                     await test_db.execute_write(_TEST_INSERT)
-            assert test_db._invalidated
+            assert test_db.lifecycle_state.value == "failed_closed"
             assert test_db._invalidated_reason is not None
         finally:
             test_db.set_test_inject_commit_call(None)
@@ -119,7 +119,7 @@ class TestDatabaseFaultMatrix:
             test_db.set_test_inject_commit_call(None)
             test_db.set_test_inject_in_transaction_before_rollback(None)
 
-        assert test_db._invalidated
+        assert test_db.lifecycle_state.value == "failed_closed"
         with pytest.raises(DatabaseConnectionInvalidatedError):
             async with test_db.transaction():
                 pass
@@ -138,7 +138,7 @@ class TestDatabaseFaultMatrix:
             test_db.set_test_inject_commit_call(None)
             test_db.set_test_inject_in_transaction_before_rollback(None)
 
-        assert test_db._invalidated
+        assert test_db.lifecycle_state.value == "failed_closed"
         with pytest.raises(DatabaseConnectionInvalidatedError):
             async with test_db.transaction():
                 pass
@@ -159,6 +159,6 @@ class TestDatabaseFaultMatrix:
             test_db.set_test_inject_in_transaction_before_rollback(None)
 
         diags = test_db.diagnostics()
-        assert diags["connection_state"] == "invalidated"
+        assert diags["connection_state"] == "failed_closed"
         assert diags["reconnect_required"] is True
         assert "diagnostics test" in diags["invalidated_reason"]

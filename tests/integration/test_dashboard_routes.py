@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import httpx
 import pytest
 import pytest_asyncio
 
@@ -57,6 +58,21 @@ def _build_config(tmp_path) -> AppConfig:
             },
         }
     )
+
+
+class _AsyncDashboardClient:
+    """ASGI client that stays on the test's canonical event loop."""
+
+    def __init__(self, app: FastAPI) -> None:
+        self._app = app
+
+    async def get(self, path: str) -> httpx.Response:
+        transport = httpx.ASGITransport(app=self._app)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            return await client.get(path)
 
 
 @pytest.fixture()
@@ -189,10 +205,9 @@ async def test_overview_loads_chart_js_with_defer(
     migrated_app: FastAPI,
 ) -> None:
     """The overview page requests Chart.js with the defer attribute."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    response = client.get("/")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/")
     assert response.status_code == 200
     assert '<script defer src="/static/chart.js"></script>' in response.text
     # The overview also preloads the stylesheet so paint is not blocked
@@ -205,10 +220,8 @@ async def test_reliability_route_loads(migrated_app: FastAPI) -> None:
     """The Reliability page returns 200 and pulls in Chart.js."""
     import re
 
-    from fastapi.testclient import TestClient
-
-    client = TestClient(migrated_app)
-    response = client.get("/reliability")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/reliability")
     assert response.status_code == 200
     assert '<script defer src="/static/chart.js"></script>' in response.text
     assert "reliability-attempts-by-provider" in response.text
@@ -231,10 +244,8 @@ async def test_routing_route_loads(migrated_app: FastAPI) -> None:
     """The Routing page returns 200 and pulls in Chart.js."""
     import re
 
-    from fastapi.testclient import TestClient
-
-    client = TestClient(migrated_app)
-    response = client.get("/routing")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/routing")
     assert response.status_code == 200
     assert '<script defer src="/static/chart.js"></script>' in response.text
     # The migrated fixture database has no routing decisions, so the
@@ -258,10 +269,9 @@ async def test_routing_route_loads(migrated_app: FastAPI) -> None:
 @pytest.mark.asyncio()
 async def test_traces_route_loads(migrated_app: FastAPI) -> None:
     """The Traces page returns 200 and does not pull in Chart.js."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    response = client.get("/traces")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/traces")
     assert response.status_code == 200
     assert "/static/chart.js" not in response.text
     assert "Auth-gated" in response.text
@@ -270,10 +280,9 @@ async def test_traces_route_loads(migrated_app: FastAPI) -> None:
 @pytest.mark.asyncio()
 async def test_pending_health_endpoint(migrated_app: FastAPI) -> None:
     """``/api/stats/pending-health`` returns the expected JSON shape."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    response = client.get("/api/stats/pending-health")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/api/stats/pending-health")
     assert response.status_code == 200
     payload = response.json()
     for key in (
@@ -300,11 +309,10 @@ async def test_non_overview_pages_skip_chart_js(
     migrated_app: FastAPI,
 ) -> None:
     """Pages that do not render a chart must not load Chart.js."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
+    client = _AsyncDashboardClient(migrated_app)
     for path in ("/accounts", "/models", "/events", "/bandwidth", "/pings", "/latency"):
-        response = client.get(path)
+        response = await client.get(path)
         assert response.status_code == 200, path
         assert "/static/chart.js" not in response.text, path
 
@@ -314,10 +322,9 @@ async def test_accounts_page_hides_disabled_by_default(
     migrated_app: FastAPI,
 ) -> None:
     """The accounts page renders the show-disabled filter and defaults to hiding."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    response = client.get("/accounts")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/accounts")
     assert response.status_code == 200
     body = response.text
     assert 'name="show_disabled"' in body
@@ -333,10 +340,9 @@ async def test_accounts_page_show_disabled_query(
     migrated_app: FastAPI,
 ) -> None:
     """``?show_disabled=1`` flips the toggle and renders tombstones."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    response = client.get("/accounts?show_disabled=1")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/accounts?show_disabled=1")
     assert response.status_code == 200
     body = response.text
     assert (
@@ -351,10 +357,9 @@ async def test_overview_page_hides_disabled_by_default(
     migrated_app: FastAPI,
 ) -> None:
     """The overview Account breakdown exposes the show-disabled toggle anchor."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    response = client.get("/")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/")
     assert response.status_code == 200
     body = response.text
     # Anchor-style toggle, default unpressed.
@@ -370,10 +375,9 @@ async def test_overview_page_show_disabled_query(
     migrated_app: FastAPI,
 ) -> None:
     """``?show_disabled=1`` flips the overview toggle to pressed."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    response = client.get("/?show_disabled=1")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/?show_disabled=1")
     assert response.status_code == 200
     body = response.text
     assert 'class="show-disabled-toggle"' in body
@@ -387,16 +391,15 @@ async def test_accounts_api_supports_include_disabled(
     migrated_app: FastAPI,
 ) -> None:
     """``/api/stats/accounts`` honours ``?include_disabled=0``."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    response = client.get("/api/stats/accounts?include_disabled=0")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/api/stats/accounts?include_disabled=0")
     assert response.status_code == 200
     payload = response.json()
     assert payload["include_disabled"] is False
     assert payload["accounts"] == []
 
-    response_all = client.get("/api/stats/accounts")
+    response_all = await client.get("/api/stats/accounts")
     assert response_all.status_code == 200
     payload_all = response_all.json()
     assert payload_all["include_disabled"] is True
@@ -407,10 +410,9 @@ async def test_overview_inlines_timeseries_data(
     migrated_app: FastAPI,
 ) -> None:
     """The overview chart seeds itself from inlined JSON data."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    response = client.get("/")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/")
     assert response.status_code == 200
     body = response.text
     assert "Request timeseries" in body
@@ -426,10 +428,9 @@ async def test_overview_html_includes_no_store_for_refresh(
     migrated_app: FastAPI,
 ) -> None:
     """The in-page refresher uses ``cache: no-store`` on subsequent polls."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    response = client.get("/")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/")
     assert response.status_code == 200
     assert 'cache: "no-store"' in response.text
 
@@ -439,15 +440,14 @@ async def test_overview_ignores_broken_update_checker(
     migrated_app: FastAPI,
 ) -> None:
     """A bad update-checker snapshot must not break dashboard rendering."""
-    from fastapi.testclient import TestClient
 
     class _BrokenUpdateChecker:
         def snapshot(self) -> object:
             raise RuntimeError("snapshot unavailable")
 
     migrated_app.state.update_checker = _BrokenUpdateChecker()
-    client = TestClient(migrated_app)
-    response = client.get("/")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/")
 
     assert response.status_code == 200
     assert 'id="dashboard-content"' in response.text
@@ -458,10 +458,9 @@ async def test_theme_is_cached_across_requests(
     migrated_app: FastAPI,
 ) -> None:
     """Repeated dashboard requests reuse the parsed theme."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    assert client.get("/").status_code == 200
+    client = _AsyncDashboardClient(migrated_app)
+    assert (await client.get("/")).status_code == 200
     cached = list(render_module._THEME_CACHE.values())
     assert cached, "expected the default theme to populate the cache"
 
@@ -471,10 +470,9 @@ async def test_available_themes_is_cached_across_requests(
     migrated_app: FastAPI,
 ) -> None:
     """Repeated dashboard requests reuse the available-themes list."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    assert client.get("/").status_code == 200
+    client = _AsyncDashboardClient(migrated_app)
+    assert (await client.get("/")).status_code == 200
     assert render_module._THEMES_LIST_CACHE, (
         "expected the available-themes list to populate the cache"
     )
@@ -485,10 +483,9 @@ async def test_grouped_timeseries_json_returns_stable_shape(
     migrated_app: FastAPI,
 ) -> None:
     """``GET /api/timeseries/grouped`` returns the documented contract."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    response = client.get("/api/timeseries/grouped")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/api/timeseries/grouped")
     assert response.status_code == 200
     payload = response.json()
     expected_keys = {
@@ -518,10 +515,9 @@ async def test_grouped_timeseries_json_accepts_bucket_query(
     migrated_app: FastAPI,
 ) -> None:
     """``bucket=day`` is reflected in the payload."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    response = client.get("/api/timeseries/grouped?bucket=day")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/api/timeseries/grouped?bucket=day")
     assert response.status_code == 200
     assert response.json()["bucket"] == "day"
 
@@ -531,10 +527,9 @@ async def test_grouped_timeseries_json_accepts_group_by_query(
     migrated_app: FastAPI,
 ) -> None:
     """``group_by=provider`` is reflected in the payload."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    response = client.get("/api/timeseries/grouped?group_by=provider")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/api/timeseries/grouped?group_by=provider")
     assert response.status_code == 200
     assert response.json()["group_by"] == "provider"
 
@@ -544,14 +539,13 @@ async def test_grouped_timeseries_json_accepts_limit_query(
     migrated_app: FastAPI,
 ) -> None:
     """``limit`` is clamped and reflected in the payload."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    response = client.get("/api/timeseries/grouped?limit=5")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/api/timeseries/grouped?limit=5")
     assert response.status_code == 200
     assert response.json()["limit"] == 5
     # Out-of-range limit clamps to 25
-    response = client.get("/api/timeseries/grouped?limit=999")
+    response = await client.get("/api/timeseries/grouped?limit=999")
     assert response.status_code == 200
     assert response.json()["limit"] == 25
 
@@ -561,10 +555,9 @@ async def test_grouped_timeseries_json_unknown_account_returns_empty(
     migrated_app: FastAPI,
 ) -> None:
     """Unknown ``account`` filter yields a stable empty payload."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    response = client.get("/api/timeseries/grouped?account=does-not-exist")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/api/timeseries/grouped?account=does-not-exist")
     assert response.status_code == 200
     payload = response.json()
     assert payload["series"] == []
@@ -578,10 +571,9 @@ async def test_grouped_timeseries_json_invalid_group_by_falls_back(
     migrated_app: FastAPI,
 ) -> None:
     """Invalid ``group_by`` falls back to ``provider_model``."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    response = client.get("/api/timeseries/grouped?group_by=garbage")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/api/timeseries/grouped?group_by=garbage")
     assert response.status_code == 200
     assert response.json()["group_by"] == "provider_model"
 
@@ -597,18 +589,17 @@ async def test_grouped_timeseries_json_auto_bucket_period_aware(
     resolves to the period-aware default rather than always defaulting
     to ``"hour"``.
     """
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    response = client.get("/api/timeseries/grouped?period=30d&bucket=auto")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/api/timeseries/grouped?period=30d&bucket=auto")
     assert response.status_code == 200
     assert response.json()["bucket"] == "day"
 
-    response = client.get("/api/timeseries/grouped?period=24h")
+    response = await client.get("/api/timeseries/grouped?period=24h")
     assert response.status_code == 200
     assert response.json()["bucket"] == "hour"
 
-    response = client.get("/api/timeseries/grouped?period=24h&bucket=hour")
+    response = await client.get("/api/timeseries/grouped?period=24h&bucket=hour")
     assert response.status_code == 200
     assert response.json()["bucket"] == "hour"
 
@@ -618,13 +609,12 @@ async def test_timeseries_json_auto_bucket_period_aware(
     migrated_app: FastAPI,
 ) -> None:
     """``/api/timeseries`` honors the same period-aware bucket default."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    response = client.get("/api/timeseries?period=30d&bucket=auto")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/api/timeseries?period=30d&bucket=auto")
     assert response.status_code == 200
 
-    response = client.get("/api/timeseries?period=24h")
+    response = await client.get("/api/timeseries?period=24h")
     assert response.status_code == 200
 
 
@@ -633,10 +623,9 @@ async def test_timeseries_page_loads_with_grouped_chart(
     migrated_app: FastAPI,
 ) -> None:
     """``/timeseries`` renders the controls form and either the chart or empty state."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    response = client.get("/timeseries")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/timeseries")
     assert response.status_code == 200
     body = response.text
     # New controls form with bucket / group_by / metric / limit fields
@@ -660,10 +649,9 @@ async def test_timeseries_page_default_metric_is_tokens(
     migrated_app: FastAPI,
 ) -> None:
     """``/timeseries`` opens on the tokens view so the chart reads as usage."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    response = client.get("/timeseries")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/timeseries")
     assert response.status_code == 200
     body = response.text
     assert 'value="tokens" selected' in body
@@ -675,10 +663,9 @@ async def test_timeseries_page_has_no_duplicate_period_dropdown(
     migrated_app: FastAPI,
 ) -> None:
     """The period selector lives outside the filter form so there is only one."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    response = client.get("/timeseries")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/timeseries")
     assert response.status_code == 200
     body = response.text
     # Canonical period selector remains.
@@ -695,10 +682,9 @@ async def test_timeseries_page_account_and_model_are_dropdowns(
     migrated_app: FastAPI,
 ) -> None:
     """Accounts and models are <select> dropdowns, not free-text inputs."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    response = client.get("/timeseries")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/timeseries")
     assert response.status_code == 200
     body = response.text
     controls_start = body.index('class="filter-form timeseries-controls"')
@@ -719,10 +705,9 @@ async def test_timeseries_page_with_group_by_query(
     migrated_app: FastAPI,
 ) -> None:
     """``/timeseries?group_by=provider&limit=8`` renders with those controls."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    response = client.get("/timeseries?group_by=provider&limit=8")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/timeseries?group_by=provider&limit=8")
     assert response.status_code == 200
     body = response.text
     assert 'value="provider" selected' in body
@@ -734,10 +719,9 @@ async def test_overview_loads_dashboard_js_with_defer(
     migrated_app: FastAPI,
 ) -> None:
     """The overview page now also loads dashboard.js for chart reinit."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    response = client.get("/")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/")
     assert response.status_code == 200
     body = response.text
     assert '<script defer src="/static/chart.js"></script>' in body
@@ -756,10 +740,9 @@ async def test_overview_auto_refresh_reinitializes_charts(
     every ``#dashboard-content`` innerHTML replacement — not just the
     grouped timeseries charts.
     """
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    response = client.get("/")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/")
     assert response.status_code == 200
     body = response.text
     # The auto-refresh hook should call into dashboard.js for reinit.
@@ -773,10 +756,9 @@ async def test_model_detail_page_returns_200_for_unknown_model(
     migrated_app: FastAPI,
 ) -> None:
     """The model detail page returns 200 and lazy-creates a sparse row."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    response = client.get("/models/nonexistent-model")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/models/nonexistent-model")
     assert response.status_code == 200
     body = response.text
     # The lazy backfill path runs ensure_canonical, which creates a
@@ -792,10 +774,9 @@ async def test_model_detail_page_renders_sections(
     migrated_app: FastAPI,
 ) -> None:
     """The model detail page renders the expected section headings."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
-    response = client.get("/models/test-model")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/models/test-model")
     assert response.status_code == 200
     body = response.text
     # Should have the model ID in the heading
@@ -818,11 +799,10 @@ async def test_model_detail_page_links_from_models(
     migrated_app: FastAPI,
 ) -> None:
     """The Models page links model IDs to the detail page."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
+    client = _AsyncDashboardClient(migrated_app)
     # Even with no models, the page should render without error
-    response = client.get("/models")
+    response = await client.get("/models")
     assert response.status_code == 200
 
 
@@ -831,11 +811,10 @@ async def test_model_detail_page_with_provider_suffix(
     migrated_app: FastAPI,
 ) -> None:
     """The model detail page handles provider-suffixed model IDs."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
+    client = _AsyncDashboardClient(migrated_app)
     # Provider-suffixed IDs contain / which needs URL encoding
-    response = client.get("/models/gpt-4o/openai")
+    response = await client.get("/models/gpt-4o/openai")
     assert response.status_code == 200
     # The page heading uses the original decoded ID for display,
     # but the lookup resolves to the unsuffixed model.
@@ -847,7 +826,6 @@ async def test_model_detail_page_provider_suffix_resolves_to_base_model(
     migrated_app: FastAPI,
 ) -> None:
     """Provider-suffixed IDs should resolve to the unsuffixed model."""
-    from fastapi.testclient import TestClient
 
     # Seed a model in the models table and give it a canonical row
     db = migrated_app.state.db
@@ -859,10 +837,10 @@ async def test_model_detail_page_provider_suffix_resolves_to_base_model(
     mi = migrated_app.state.model_info
     await mi.ensure_canonical("base-model")
 
-    client = TestClient(migrated_app)
+    client = _AsyncDashboardClient(migrated_app)
     # Provider-suffixed: should resolve to "base-model", not create
     # a separate "base-model/someprovider" row.
-    response = client.get("/models/base-model/someprovider")
+    response = await client.get("/models/base-model/someprovider")
     assert response.status_code == 200
     body = response.text
     # The heading displays the original decoded ID
@@ -877,7 +855,6 @@ async def test_model_detail_page_case_insensitive_lookup(
     migrated_app: FastAPI,
 ) -> None:
     """Case variations in the model ID should resolve to the same row."""
-    from fastapi.testclient import TestClient
 
     db = migrated_app.state.db
     async with db.transaction():
@@ -888,9 +865,9 @@ async def test_model_detail_page_case_insensitive_lookup(
     mi = migrated_app.state.model_info
     await mi.ensure_canonical("my-model")
 
-    client = TestClient(migrated_app)
+    client = _AsyncDashboardClient(migrated_app)
     # Uppercase variant should still find the lowercase row
-    response = client.get("/models/My-Model")
+    response = await client.get("/models/My-Model")
     assert response.status_code == 200
     body = response.text
     # The page should render sections (not "Model info not available")
@@ -905,7 +882,6 @@ async def test_model_detail_page_special_characters_escaped(
     migrated_app: FastAPI,
 ) -> None:
     """Model IDs with HTML-significant characters are escaped, not injected."""
-    from fastapi.testclient import TestClient
 
     db = migrated_app.state.db
     evil_id = '<script>alert("xss")</script>'
@@ -917,8 +893,8 @@ async def test_model_detail_page_special_characters_escaped(
     mi = migrated_app.state.model_info
     await mi.ensure_canonical(evil_id)
 
-    client = TestClient(migrated_app)
-    response = client.get("/models/%3Cscript%3Ealert(%22xss%22)%3C%2Fscript%3E")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/models/%3Cscript%3Ealert(%22xss%22)%3C%2Fscript%3E")
     assert response.status_code == 200
     body = response.text
     # The raw <script> tag must not appear — it should be entity-escaped.
@@ -932,7 +908,6 @@ async def test_model_detail_page_ampersand_in_model_id(
     migrated_app: FastAPI,
 ) -> None:
     """Model IDs containing & are properly escaped in HTML."""
-    from fastapi.testclient import TestClient
 
     db = migrated_app.state.db
     model_id = "model&v2"
@@ -944,8 +919,8 @@ async def test_model_detail_page_ampersand_in_model_id(
     mi = migrated_app.state.model_info
     await mi.ensure_canonical(model_id)
 
-    client = TestClient(migrated_app)
-    response = client.get("/models/model%26v2")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get("/models/model%26v2")
     assert response.status_code == 200
     body = response.text
     # The & must be entity-escaped in the heading.
@@ -959,11 +934,10 @@ async def test_model_detail_page_empty_model_id(
     migrated_app: FastAPI,
 ) -> None:
     """A trailing-slash URL that resolves to empty model_id renders."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
+    client = _AsyncDashboardClient(migrated_app)
     # /models/ → model_id = "" after path capture
-    response = client.get("/models/")
+    response = await client.get("/models/")
     # FastAPI may redirect /models/ → /models (307) or route with ""
     assert response.status_code in (200, 307)
 
@@ -973,7 +947,6 @@ async def test_model_detail_page_long_model_id(
     migrated_app: FastAPI,
 ) -> None:
     """Very long model IDs are handled without crashing."""
-    from fastapi.testclient import TestClient
 
     long_id = "m" * 500
     db = migrated_app.state.db
@@ -985,8 +958,8 @@ async def test_model_detail_page_long_model_id(
     mi = migrated_app.state.model_info
     await mi.ensure_canonical(long_id)
 
-    client = TestClient(migrated_app)
-    response = client.get(f"/models/{long_id}")
+    client = _AsyncDashboardClient(migrated_app)
+    response = await client.get(f"/models/{long_id}")
     assert response.status_code == 200
     body = response.text
     # The heading should contain the long ID (escaped).
@@ -999,11 +972,10 @@ async def test_model_detail_page_url_encoded_slash(
     migrated_app: FastAPI,
 ) -> None:
     """%2F in the URL is decoded to / and handled like a raw slash."""
-    from fastapi.testclient import TestClient
 
-    client = TestClient(migrated_app)
+    client = _AsyncDashboardClient(migrated_app)
     # %2F → / after unquote, same as /models/gpt-4o/openai
-    response = client.get("/models/gpt-4o%2Fopenai")
+    response = await client.get("/models/gpt-4o%2Fopenai")
     assert response.status_code == 200
     assert "gpt-4o/openai" in response.text
 

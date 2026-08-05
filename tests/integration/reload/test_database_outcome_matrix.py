@@ -87,7 +87,7 @@ async def test_commit_failure_indeterminate_state(
     if isinstance(err, DatabaseCommitError):
         assert err.outcome == "indeterminate"
     assert err.connection_invalidated is True
-    assert db._invalidated is True
+    assert db.lifecycle_state.value == "failed_closed"
     # Subsequent transaction raises DatabaseConnectionInvalidatedError.
     with pytest.raises(DatabaseConnectionInvalidatedError):
         async with db.transaction():
@@ -146,6 +146,6 @@ async def test_connection_state_after_invalidation(
     assert "connection_state" in state
     assert "reconnect_required" in state
 
-    assert db._invalidated is True
+    assert db.lifecycle_state.value == "failed_closed"
     assert state["reconnect_required"] is True
-    assert state["connection_state"] == "invalidated"
+    assert state["connection_state"] == "failed_closed"

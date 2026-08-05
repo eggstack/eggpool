@@ -339,8 +339,8 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "readiness_probe.initial_probe": ReloadDisposition.RESTART_REQUIRED,
     "readiness_probe.interval_s": ReloadDisposition.RESTART_REQUIRED,
     "readiness_probe.timeout_s": ReloadDisposition.RESTART_REQUIRED,
-    # Runtime database recovery is intentionally not live-reloadable: an
-    # indeterminate state closes the worker and systemd starts a new one.
+    # Legacy database recovery settings remain restart-required for one
+    # compatibility release, but have no runtime recovery semantics.
     "database.recovery": ReloadDisposition.RESTART_REQUIRED,
     "database.recovery.enabled": ReloadDisposition.RESTART_REQUIRED,
     "database.recovery.max_attempts": ReloadDisposition.RESTART_REQUIRED,

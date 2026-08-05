@@ -1,7 +1,7 @@
 # Plan 082 — Database Fail-Closed Simplification
 
 Date: 2026-08-05
-Status: ready for implementation
+Status: complete
 Parent roadmap: `plans/077-sbc-lifecycle-simplification-and-runtime-correctness-roadmap.md`
 Depends on:
 
@@ -227,29 +227,44 @@ Use existing fault-injection seams only where they remain relevant. Delete tests
 Suggested commands:
 
 ```bash
-uv run ruff format src/eggpool/db src/eggpool/database_recovery.py src/eggpool/app.py src/eggpool/background tests/unit tests/integration
-uv run ruff check src/eggpool/db src/eggpool/database_recovery.py src/eggpool/app.py src/eggpool/background tests/unit tests/integration
-uv run pyright src/eggpool/db src/eggpool/database_recovery.py src/eggpool/app.py src/eggpool/background
+uv run ruff format src/eggpool/db src/eggpool/app.py src/eggpool/background tests/unit tests/integration
+uv run ruff check src/eggpool/db src/eggpool/app.py src/eggpool/background tests/unit tests/integration
+uv run pyright src/eggpool/db src/eggpool/app.py src/eggpool/background
 uv run pytest <affected database/recovery/startup/background tests> -q --tb=short --maxfail=1
 uv run pytest tests/smoke/ -q --tb=short --maxfail=1
 ```
 
 Adjust paths if the recovery controller has a different module name. Delete the module only after all imports are removed.
 
+## Implementation notes
+
+The implementation removed the live recovery controller/module, ambiguity
+descriptor queue, recovery-only transaction mode, recovery admission event,
+connection epochs, and cross-loop lock rebinding. `Database` now has terminal
+`failed_closed` state and invokes the worker-fatal handler once after detaching
+the connection. Durable request, attempt, and reservation identities remain
+the startup reconciliation boundary. Legacy `[database.recovery]` settings are
+still accepted for one compatibility release, ignored at runtime, and produce
+a bounded config-validation warning.
+
+The inventory classified the removed machinery as same-process recovery
+residue. Required ordinary transaction ownership, bounded lock diagnostics,
+startup reconciliation, readiness caching, and fatal-handler wiring remain.
+
 ## Acceptance criteria
 
-- [ ] Ordinary lock/busy failures remain bounded and local.
-- [ ] Indeterminate commit/rollback state transitions the worker to fail closed.
-- [ ] No production path reopens database admission in the same process after fatal uncertainty.
-- [ ] System supervisor restart plus startup reconciliation is the documented recovery path.
-- [ ] Same-process recovery controller/backoff/wait machinery is removed or reduced to compatibility parsing only.
-- [ ] Transaction ownership remains task-explicit.
-- [ ] Cross-loop lock recreation and private `_loop` inspection are removed from production behavior.
-- [ ] Background writers stop cleanly on failed-closed state and do not spin/wait indefinitely.
-- [ ] Startup reconciliation remains idempotent and fail closed on contradiction.
-- [ ] Tests for removed states are deleted, while focused fail-closed/startup tests pass.
-- [ ] Smoke passes.
-- [ ] No new database, journal, ORM, worker, or CI job is introduced.
+- [x] Ordinary lock/busy failures remain bounded and local.
+- [x] Indeterminate commit/rollback state transitions the worker to fail closed.
+- [x] No production path reopens database admission in the same process after fatal uncertainty.
+- [x] System supervisor restart plus startup reconciliation is the documented recovery path.
+- [x] Same-process recovery controller/backoff/wait machinery is removed or reduced to compatibility parsing only.
+- [x] Transaction ownership remains task-explicit.
+- [x] Cross-loop lock recreation and private `_loop` inspection are removed from production behavior.
+- [x] Background writers stop cleanly on failed-closed state and do not spin/wait indefinitely.
+- [x] Startup reconciliation remains idempotent and fail closed on contradiction.
+- [x] Tests for removed states are deleted, while focused fail-closed/startup tests pass.
+- [x] Smoke passes.
+- [x] No new database, journal, ORM, worker, or CI job is introduced.
 
 ## Rejection conditions
 
@@ -275,3 +290,7 @@ Do not close this plan if:
 8. Verify startup reconciliation.
 9. Update configuration/docs and delete obsolete tests/modules.
 10. Run focused checks, then smoke, and record exact outcomes.
+
+Local verification completed: focused database, startup, background-writer,
+request-finalization, dashboard, and model-info tests passed; the smoke suite
+passed 14 tests; ruff format/check and pyright passed for the CI paths.

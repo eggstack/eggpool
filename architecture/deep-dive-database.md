@@ -39,13 +39,13 @@ aiosqlite wrapper with:
 - Transaction management: `async with db.transaction():`; same-task nesting is allowed, while inherited child tasks fail before SQL
 - Readiness probes: `probe_writable()` with owned transactions
 - `Database.vacuum()` — only sanctioned path for VACUUM
-- Plan 027: `DatabaseLifecycleState` enum with explicit states
-  (`disconnected → connecting → ready → invalidating → invalidated →
-  recovering → reconciling → ready / failed_closed → shutting_down`)
-- Plan 027: `connection_epoch` incremented on every successful `connect()`
-  for epoch-tracking in long-lived components
-- Plan 027: `writes_admitted` / `reads_admitted` cached admission facts
-- Plan 027: `_safe_rollback()` helper with bounded diagnostics
+- `DatabaseLifecycleState` uses `disconnected`, `connecting`, `ready`,
+  `failed_closed`, and `shutting_down`; `failed_closed` is terminal until a
+  supervisor restart creates a fresh worker
+- `writes_admitted` / `reads_admitted` are cached admission facts used by
+  readiness and background writers
+- `_safe_rollback()` provides bounded diagnostics for confirmed rollback and
+  fail-closed rollback failure handling
 - Connection invalidation closes read/write admission and invokes the
   process-fatal worker boundary; it does not publish a replacement connection
   into a live request process.
@@ -53,14 +53,11 @@ aiosqlite wrapper with:
   message evidence. Busy/locked remains bounded local contention; corruption,
   disk failures, and indeterminate connection state fail closed for restart.
 
-### `db/recovery.py` — startup/restart boundary
-
-Runtime database invalidation closes admission and leaves the worker for
-systemd to restart. Startup owns the only durable repair path: migrations,
-`PRAGMA quick_check`, pending-request/attempt/reservation reconciliation, and
-the initial writable probe must all succeed before readiness. The compatibility
-diagnostic surface records the failure reason but never reopens admission or
-replaces a suspect connection in process.
+Startup owns the only durable repair path: migrations, `PRAGMA quick_check`,
+pending-request/attempt/reservation reconciliation, and the initial writable
+probe must all succeed before readiness. Runtime invalidation closes admission,
+detaches the connection, invokes the fatal worker handler once, and never
+reopens or replaces the connection in process.
 
 ### `db/repositories.py`
 

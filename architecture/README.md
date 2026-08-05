@@ -4400,7 +4400,7 @@ adopting unresolved work for recovery.
 - request-path tests cover streaming/non-streaming 4xx parity and capability
   rejection cleanup through the coordinator's canonical terminal helper
 
-## Database Connection Recovery (Plan 027, superseded by restart-safe boundary)
+## Database Failure Boundary (Plan 082)
 
 An invalidated or indeterminate SQLite connection closes admission and exits
 the worker. systemd restarts it; startup integrity checks and crash
@@ -4415,15 +4415,17 @@ predicates at startup.
 
 ### Key components
 
-- `DatabaseLifecycleState` enum (`src/eggpool/db/connection.py`) — explicit state machine (`disconnected → connecting → ready → invalidating → invalidated → recovering → reconciling → ready / failed_closed → shutting_down`).
-- `connection_epoch` property — incremented on every successful `connect()` so long-lived components detect replacement.
-- `Database._invalidate_connection()` — closes admission and records one bounded
-  local failure category before the worker exits.
+- `DatabaseLifecycleState` enum (`src/eggpool/db/connection.py`) —
+  `disconnected → connecting → ready → failed_closed → shutting_down`.
+- `Database._invalidate_connection()` — detaches the suspect connection,
+  closes admission, records one bounded failure category, and invokes the
+  worker-fatal handler once.
 - Durable request/attempt/reservation identities — startup reconciliation is
   authoritative for operations whose previous process may have died.
 - `DatabaseRollbackError` — typed error when ROLLBACK itself fails after a body exception, distinct from `DatabaseCommitError`.
 - `_safe_rollback()` helper with bounded diagnostics.
-- `[database.recovery]` config section with `max_attempts`, `initial_backoff_ms`, `max_backoff_ms`, `reconciliation_timeout_s`, `fail_process_on_exhaustion`.
+- Legacy `[database.recovery]` settings remain parseable for one compatibility
+  release, are ignored, and produce a validation warning.
 - Startup `PRAGMA quick_check` and the initial writable probe run before
   background task startup or request admission.
 
@@ -4433,7 +4435,8 @@ predicates at startup.
    readiness degraded.
 2. Retained terminal owners may finish only while the connection remains
    trustworthy; no replacement connection is published into live requests.
-3. The worker closes database/writer resources and exits nonzero.
+3. The worker invokes the fatal handler once, closes database/writer resources,
+   and exits nonzero.
 4. systemd restarts the worker. Startup runs migrations, `quick_check`, crash
    reconciliation, and the initial writable probe before reopening readiness.
 

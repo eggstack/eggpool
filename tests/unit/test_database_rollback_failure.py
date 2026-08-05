@@ -42,7 +42,7 @@ async def test_rollback_failure_invalidates_connection(
     assert err.connection_invalidated is True
     assert isinstance(err.original_exception, RuntimeError)
 
-    assert test_db.lifecycle_state is DatabaseLifecycleState.INVALIDATED
+    assert test_db.lifecycle_state is DatabaseLifecycleState.FAILED_CLOSED
     assert test_db.writes_admitted is False
 
     test_db.set_test_inject_rollback_call(None)
@@ -86,7 +86,7 @@ async def test_indeterminate_when_in_transaction_false(
     err = exc_info.value
     assert err.outcome == "indeterminate"
     assert err.connection_invalidated is True
-    assert test_db.lifecycle_state is DatabaseLifecycleState.INVALIDATED
+    assert test_db.lifecycle_state is DatabaseLifecycleState.FAILED_CLOSED
     assert test_db.writes_admitted is False
 
     test_db.set_test_inject_commit_call(None)
@@ -119,7 +119,7 @@ async def test_diagnostics_after_rollback_failure(test_db: Database) -> None:
             raise RuntimeError("body failure")
 
     diags = test_db.diagnostics()
-    assert diags["lifecycle_state"] == "invalidated"
+    assert diags["lifecycle_state"] == "failed_closed"
     assert diags["invalidated_reason_class"] == "rollback_failure"
     assert diags["invalidated_reason"] is not None
     assert "rollback" in diags["invalidated_reason"]

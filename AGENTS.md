@@ -163,7 +163,7 @@ stream-specific regressions.
 - **`/readyz` never performs a write**: reads a cached probe snapshot.
 - **Readiness probe is process-owned**: survives generation swaps.
 - **Process transitions execute inside `db.transaction()`**: atomic rollback on any failure.
-- **Ambiguous-operation ownership**: pass `ambiguous_operation=` directly to `db.transaction()`; never use a shared pending descriptor. The descriptor is installed only after lock acquisition and is acknowledged only after durable convergence.
+- **Database ambiguity ownership**: durable request, attempt, and reservation identities are created before the commit boundary; an indeterminate outcome fails the worker closed and startup reconciliation is the only repair boundary.
 - **Terminal lifecycle**: streaming 4xx paths defer terminal work to `_handle_exhausted()`; they must not finalize and then raise into a second finalizer. Capability rejection is a client error with no provider penalty and uses the same retained terminal job as normal completion and cancellation.
 - **Finalization saturation**: supervisor capacity rejection is a local overload invariant. Before downstream handoff it raises a typed local terminal-invariant error; after handoff it records a bounded diagnostic and leaves durable pending state for startup repair. It never spawns detached cleanup or penalizes a provider.
 - **SSE diagnostics**: `stream_diagnostics` exposes canonical/compatibility completion, premature EOF, HTTPX transport, and provider-bound first-byte/idle timeout outcomes. Historical lifetime fields remain bounded compatibility metadata but no lifetime timer runs. Each last-event record carries configured limits and bounded timing evidence; stream content and credentials are never persisted.

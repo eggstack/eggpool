@@ -269,11 +269,9 @@ class DatabaseWritableProbe:
     def force_probe_nowait(self) -> None:
         """Schedule an immediate probe without awaiting its result.
 
-        Used by the database recovery controller to refresh the
-        readiness snapshot after a successful recovery cycle.  The
-        probe runs on the worker task and updates the cached
-        snapshot asynchronously.  No-op when the probe is not
-        running.
+        The probe runs on the worker task and updates the cached snapshot
+        asynchronously. No-op when the probe is not running; it never
+        attempts to reopen a failed database connection.
         """
         if not self._running:
             return

@@ -385,13 +385,11 @@ class RoutingTraceWriter:
         """Persist a batch of events via ``RoutingDecisionRepository``."""
         if not batch:
             return
-        # Plan 027 Workstream H: wait for writes to be admitted
-        # before attempting persistence.
+        # Traces are diagnostic and must be dropped immediately when the
+        # worker has failed closed.
         if not self._db.writes_admitted:
-            admitted = await self._db.wait_for_writes_admitted(timeout_s=10.0)
-            if not admitted:
-                self._dropped_flush_error += len(batch)
-                return
+            self._dropped_flush_error += len(batch)
+            return
         rows: list[tuple[Any, ...]] = []
         for event in batch:
             try:

@@ -6,11 +6,10 @@ import asyncio
 import collections
 import enum
 import sqlite3
-import threading
 import time
 from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import aiosqlite
@@ -30,88 +29,16 @@ from eggpool.errors import (
 class DatabaseLifecycleState(enum.Enum):
     """Explicit lifecycle state for a :class:`Database` instance.
 
-    Transitions::
-
-        disconnected
-          -> connecting
-          -> ready
-          -> invalidating
-          -> invalidated
-          -> recovering
-          -> reconciling
-          -> ready
-          -> failed_closed
-          -> shutting_down
-
     The state machine is the single authoritative source for whether
-    new writes are admitted, whether read-only stats remain safe, and
-    which recovery step is in progress.  All transitions occur under
-    the connection lock so concurrent callers observe a coherent
-    state.
-
-    Plan 027 — Database Connection Recovery and Transaction Reconciliation.
+    database operations remain admitted. ``FAILED_CLOSED`` is terminal for
+    the worker; a supervisor restart creates a fresh :class:`Database`.
     """
 
     DISCONNECTED = "disconnected"
     CONNECTING = "connecting"
     READY = "ready"
-    INVALIDATING = "invalidating"
-    INVALIDATED = "invalidated"
-    RECOVERING = "recovering"
-    RECONCILING = "reconciling"
     FAILED_CLOSED = "failed_closed"
     SHUTTING_DOWN = "shutting_down"
-
-
-@dataclass(frozen=True, slots=True)
-class AmbiguousDatabaseOperation:
-    """Immutable record of an indeterminate transaction outcome.
-
-    Retained for compatibility with durable identity callers. Runtime
-    indeterminate outcomes close admission and terminate the worker; startup
-    reconciliation queries durable request/attempt/reservation identities
-    instead of reopening a replacement connection in process.
-
-    Fields:
-
-    - ``operation_kind``: classification of the operation
-      (``"dispatch_selection"``, ``"attempt_finalization"``,
-      ``"request_finalization"``, ``"backoff_transition"``,
-      ``"maintenance"``, ``"other"``).
-    - ``connection_epoch``: the epoch that owned the transaction.  The
-      reconciler verifies the replacement connection's epoch has
-      changed before querying durable state.
-    - ``operation_id``: a stable identifier for the operation.  For
-      dispatch this is the proxy_request_id; for finalization this is
-      the ``db_request_id``; for other operations this is application-
-      defined.
-    - ``idempotency_keys``: tuple of (column, value) pairs that
-      uniquely identify the durable rows that the operation was
-      supposed to create.  The reconciler uses these to scan the
-      replacement connection.
-    - ``intended_status``: the terminal status the operation was
-      transitioning to (e.g. ``"committed"`` or ``"completed"``).
-    - ``precondition_facts``: tuple of (name, value) strings describing
-      caller-side predicates that should hold if the commit succeeded
-      (e.g. ``"selected_account_id": "42"``).
-    - ``created_at_monotonic``: monotonic timestamp of capture.
-    - ``reconciliation_strategy``: identifier for the reconciler
-      function to invoke (currently ``"dispatch"`` or
-      ``"finalization"``).
-    - ``metadata``: tuple of (key, value) strings for application-
-      specific facts.  Never contains SQL parameters, secrets, or
-      prompt data.
-    """
-
-    operation_kind: str
-    connection_epoch: int
-    operation_id: str
-    idempotency_keys: tuple[tuple[str, Any], ...]
-    intended_status: str
-    precondition_facts: tuple[tuple[str, str], ...]
-    created_at_monotonic: float
-    reconciliation_strategy: str
-    metadata: tuple[tuple[str, str], ...] = field(default_factory=tuple)
 
 
 class _RollbackProbeError(Exception):
@@ -198,6 +125,18 @@ def _classify_error_kind(exc: BaseException) -> str:
     return "other"
 
 
+def _is_fatal_database_error(exc: BaseException) -> bool:
+    """Return whether a database failure makes correctness unprovable."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if _classify_error_kind(current) in {"corruption", "disk"}:
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 class Database:
     """Async wrapper around aiosqlite with pragma configuration.
 
@@ -234,7 +173,7 @@ class Database:
         self._read_only = read_only
         self._conn: aiosqlite.Connection | None = None
         self._connection_lock = asyncio.Lock()
-        self._connection_lock_guard = threading.Lock()
+        self._canonical_loop: asyncio.AbstractEventLoop | None = None
         self._transaction_depth: ContextVar[int] = ContextVar(
             "database_transaction_depth",
             default=0,
@@ -281,80 +220,28 @@ class Database:
         self._test_inject_commit_call: Exception | None = None
         self._test_inject_rollback_call: Exception | None = None
         self._test_inject_in_transaction_before_rollback: bool | None = None
-        # Connection-invalidation state (Plan 018 Workstream E).
-        # Set when a commit failure leaves the connection in an
-        # indeterminate state; subsequent transaction() calls raise
-        # DatabaseConnectionInvalidatedError until connect() is called.
-        self._invalidated: bool = False
+        # Fail-closed diagnostics. These facts are retained after the
+        # connection is detached so operators can distinguish a terminal
+        # database failure from an orderly shutdown.
         self._invalidated_reason: str | None = None
         self._invalidated_at: float | None = None
+        self._fatal_notified = False
         self._last_commit_outcome: str | None = None
         self._last_rollback_attempted: bool = False
         self._last_rollback_succeeded: bool = False
         self._last_in_transaction_before_rollback: bool | None = None
         self._last_in_transaction_after_rollback: bool | None = None
 
-        # -- Plan 027 — Recovery lifecycle state ----------------------------
-        # Explicit lifecycle state replaces the implicit
-        # _conn / _invalidated pair.  ``_connection_epoch`` increments on
-        # every successful connect() so long-lived components that
-        # captured an epoch at BEGIN can detect the replacement
-        # connection and re-validate.  ``_recovering_lock`` is the
-        # single-flight boundary for the process-owned recovery
-        # controller; ordinary callers do not acquire it directly.
+        # -- Process lifecycle state -----------------------------------------
         self._lifecycle_state: DatabaseLifecycleState = (
             DatabaseLifecycleState.DISCONNECTED
         )
-        self._connection_epoch: int = 0
         self._invalidated_reason_class: str | None = None
-        self._recovering_lock: asyncio.Lock = asyncio.Lock()
-        # Bounded deque of ambiguous operations awaiting reconciliation.
-        # Captured by ``transaction()`` whenever a commit raises, then
-        # drained by the recovery controller after a successful
-        # replacement connection is opened.
-        self._ambiguous_operations: collections.deque[AmbiguousDatabaseOperation] = (
-            collections.deque()
-        )
-        self._ambiguous_operation_capacity = 128
-        # Optional recovery controller -- wired in by ``ProcessRuntime``
-        # after both the database and the controller are constructed.
-        # ``None`` means the process is running without automated
-        # recovery (tests, one-off scripts).
-        self._recovery_controller: Any = None  # noqa: ANN401
-        # Cached fact: whether new correctness-critical writes should
-        # be admitted.  Mirrors ``_lifecycle_state`` for call-site
-        # convenience (snapshots, hot-path checks).
+        # Cached facts make the readiness path a pure read and let background
+        # writers drop work immediately after the fatal transition.
         self._writes_admitted: bool = False
-        # Plan 027 Workstream H: async event that background writers
-        # can await before attempting writes.  Set when writes are
-        # admitted, cleared on invalidation, and re-set after
-        # successful recovery.
-        self._writes_admitted_event: asyncio.Event = asyncio.Event()
-        # Cached fact: whether read-only stats queries remain safe.
-        # During recovery, the replacement connection is being probed
-        # and reads must not run through it until the probe completes.
         self._reads_admitted: bool = False
-        # Set under the connection lock when keepalive references
-        # (cursors, raw connections held by request code) must be
-        # dropped on the next generation.  The flag is purely
-        # diagnostic for now; long-lived component cleanup is the
-        # repository owner's responsibility.
-        self._generation_replaced_at: float | None = None
-        # Counter incremented on every successful recovery.  Provided
-        # for diagnostics; distinct from ``_connection_epoch`` which
-        # increments on every ``connect()``.
-        self._recovery_count: int = 0
-        # Counter incremented on every rollback failure that caused
-        # connection invalidation.  Surfaced via ``diagnostics()`` so
-        # operators can correlate anomalies.
         self._rollback_failure_count: int = 0
-        # Recovery-only transactions may inspect and probe a candidate
-        # connection before public admission.  This ContextVar is set
-        # only by the private transaction API and cannot be inherited
-        # by unrelated tasks waiting for admission.
-        self._recovery_transaction: ContextVar[bool] = ContextVar(
-            "database_recovery_transaction", default=False
-        )
         # Counter incremented on every successful rollback.  Bounded
         # by the lifetime of the connection.
         self._rollback_success_count: int = 0
@@ -369,17 +256,6 @@ class Database:
         return self._lifecycle_state
 
     @property
-    def connection_epoch(self) -> int:
-        """Return the current connection epoch.
-
-        Increments on every successful ``connect()`` (including
-        recovery replacements).  Long-lived components can capture the
-        epoch at ``BEGIN`` and verify it has not changed before commit
-        handling.
-        """
-        return self._connection_epoch
-
-    @property
     def writes_admitted(self) -> bool:
         """Return whether new correctness-critical writes are admitted."""
         return self._writes_admitted
@@ -388,11 +264,6 @@ class Database:
     def reads_admitted(self) -> bool:
         """Return whether read-only stats queries remain safe."""
         return self._reads_admitted
-
-    @property
-    def recovery_count(self) -> int:
-        """Return the number of successful recovery cycles."""
-        return self._recovery_count
 
     @property
     def rollback_failure_count(self) -> int:
@@ -404,74 +275,9 @@ class Database:
         """Return the number of successful rollbacks."""
         return self._rollback_success_count
 
-    async def wait_for_writes_admitted(self, timeout_s: float = 30.0) -> bool:
-        """Wait until writes are admitted after recovery.
-
-        Background writers call this before attempting writes to
-        avoid hitting an invalidated connection.  Returns ``True``
-        if writes are now admitted, ``False`` on timeout.
-        """
-        if self._writes_admitted:
-            return True
-        try:
-            await asyncio.wait_for(
-                self._writes_admitted_event.wait(),
-                timeout=timeout_s,
-            )
-            return True
-        except TimeoutError:
-            return False
-
-    def attach_recovery_controller(self, controller: Any) -> None:
-        """Attach the process-owned :class:`DatabaseRecoveryController`.
-
-        The controller is the single-flight owner of all recovery
-        attempts.  ``None`` clears the binding (used by tests).
-        """
-        self._recovery_controller = controller
-
     def set_fatal_handler(self, handler: Any) -> None:  # noqa: ANN401
         """Install the process-owned callback for an indeterminate DB state."""
         self._fatal_handler = handler
-
-    def admit_recovered_connection(self) -> None:
-        """Atomically publish a verified replacement connection as ready."""
-        if self._conn is None:
-            raise DatabaseError("Cannot admit a disconnected recovery candidate")
-        self._writes_admitted = True
-        self._reads_admitted = True
-        self._writes_admitted_event.set()
-        self._generation_replaced_at = time.monotonic()
-        self._recovery_count += 1
-        self._transition_state(DatabaseLifecycleState.READY)
-
-    def pending_ambiguous_operations(self) -> tuple[AmbiguousDatabaseOperation, ...]:
-        """Return a snapshot of ambiguous operations awaiting reconciliation.
-
-        The buffer is bounded; overflow is failed closed rather than
-        silently discarding an older correctness-critical operation.
-        """
-        return tuple(self._ambiguous_operations)
-
-    def record_ambiguous_operation(self, op: AmbiguousDatabaseOperation) -> None:
-        """Record an ambiguous operation for later reconciliation.
-
-        Called by ``transaction()`` when the commit raises before the
-        outcome is observable.  Overflow fails closed and preserves
-        every already-recorded operation.
-        """
-        if len(self._ambiguous_operations) >= self._ambiguous_operation_capacity:
-            self._writes_admitted = False
-            self._reads_admitted = False
-            self._writes_admitted_event.clear()
-            self._transition_state(DatabaseLifecycleState.FAILED_CLOSED)
-            raise DatabaseError("Ambiguous database operation buffer capacity exceeded")
-        self._ambiguous_operations.append(op)
-
-    def acknowledge_ambiguous_operation(self, op: AmbiguousDatabaseOperation) -> None:
-        """Remove one operation after its durable convergence is proven."""
-        with suppress(ValueError):
-            self._ambiguous_operations.remove(op)
 
     def _transition_state(self, new_state: DatabaseLifecycleState) -> None:
         """Transition the lifecycle state, validating the move.
@@ -484,7 +290,7 @@ class Database:
         # The transitions are loosely ordered; the only invariants
         # enforced here are:
         # - SHUTTING_DOWN is terminal-ish (no return to READY).
-        # - FAILED_CLOSED can only be entered from a non-READY state.
+        # - FAILED_CLOSED is terminal for this instance.
         # - DISCONNECTED is the bottom state.
         self._lifecycle_state = new_state
 
@@ -492,7 +298,7 @@ class Database:
         """Return a coarse category for the invalidation reason.
 
         Operators do not need the full repr; only the kind so
-        ``recovery_invalidation_reasons`` diagnostics can be
+            invalidation-reason diagnostics can be
         filtered.  Unknown kinds collapse to ``"other"``.
         """
         if not reason:
@@ -510,20 +316,20 @@ class Database:
             return "operational_error"
         return "other"
 
-    async def connect(self, *, admit: bool = True) -> None:
-        """Open the connection and set pragmas.
-
-        Lifecycle state transitions are routed through
-        :meth:`_transition_state` so external observers (recovery
-        controller, diagnostics, snapshots) see a coherent sequence.
-        ``_connection_epoch`` is incremented on every successful
-        connect so long-lived components that captured an epoch at
-        ``BEGIN`` can detect the replacement connection.
-        """
+    async def connect(self) -> None:
+        """Open the connection and set pragmas on the canonical event loop."""
         if self._conn is not None:
             raise DatabaseError("Database already connected")
+        self._ensure_canonical_loop()
+        if self._lifecycle_state in {
+            DatabaseLifecycleState.FAILED_CLOSED,
+            DatabaseLifecycleState.SHUTTING_DOWN,
+        }:
+            raise DatabaseConnectionInvalidatedError(
+                "Database lifecycle is terminal; create a fresh connection"
+            )
+        self._connection_lock = asyncio.Lock()
         self._transition_state(DatabaseLifecycleState.CONNECTING)
-        self._invalidated = False
         self._invalidated_reason = None
         self._invalidated_reason_class = None
         self._invalidated_at = None
@@ -537,14 +343,9 @@ class Database:
                 await self._conn.execute(
                     f"PRAGMA busy_timeout = {self._busy_timeout_ms}"
                 )
-                self._connection_epoch += 1
                 self._writes_admitted = False
-                self._reads_admitted = admit
-                if admit:
-                    self._transition_state(DatabaseLifecycleState.READY)
-                else:
-                    self._writes_admitted_event.clear()
-                    self._transition_state(DatabaseLifecycleState.RECOVERING)
+                self._reads_admitted = True
+                self._transition_state(DatabaseLifecycleState.READY)
                 return
             self._conn = await aiosqlite.connect(self._path)
             self._conn.row_factory = aiosqlite.Row
@@ -554,15 +355,9 @@ class Database:
                 await self._conn.execute("PRAGMA journal_mode = WAL")
             await self._conn.execute(f"PRAGMA synchronous = {self._synchronous}")
             await self._conn.commit()
-            self._connection_epoch += 1
-            self._writes_admitted = admit
-            self._reads_admitted = admit
-            if admit:
-                self._writes_admitted_event.set()
-                self._transition_state(DatabaseLifecycleState.READY)
-            else:
-                self._writes_admitted_event.clear()
-                self._transition_state(DatabaseLifecycleState.RECOVERING)
+            self._writes_admitted = True
+            self._reads_admitted = True
+            self._transition_state(DatabaseLifecycleState.READY)
         except asyncio.CancelledError:
             await self._close_failed_connection()
             self._transition_state(DatabaseLifecycleState.DISCONNECTED)
@@ -571,9 +366,19 @@ class Database:
             await self._close_failed_connection()
             self._writes_admitted = False
             self._reads_admitted = False
-            self._writes_admitted_event.clear()
             self._transition_state(DatabaseLifecycleState.FAILED_CLOSED)
             raise DatabaseError(f"Failed to connect to database: {exc}") from exc
+
+    def _ensure_canonical_loop(self) -> None:
+        """Reject use from an event loop other than the one that connected."""
+        current_loop = asyncio.get_running_loop()
+        if self._canonical_loop is None:
+            self._canonical_loop = current_loop
+        elif self._canonical_loop is not current_loop:
+            raise DatabaseError(
+                "Database accessed from a foreign event loop; create a fresh "
+                "Database instance for each loop"
+            )
 
     async def _close_failed_connection(self) -> None:
         """Close and forget a partially initialized connection."""
@@ -668,7 +473,7 @@ class Database:
         self,
         value: bool | None,
     ) -> None:
-        """Override the observed transaction state for commit recovery tests."""
+        """Override transaction-state observation for commit outcome tests."""
         self._test_inject_in_transaction_before_rollback = value
 
     @staticmethod
@@ -688,56 +493,45 @@ class Database:
 
     async def disconnect(self) -> None:
         """Close the connection."""
+        self._ensure_canonical_loop()
         self._transition_state(DatabaseLifecycleState.SHUTTING_DOWN)
         if self._conn is not None:
             await self._conn.close()
             self._conn = None
         self._writes_admitted = False
         self._reads_admitted = False
-        self._writes_admitted_event.clear()
 
     async def _invalidate_connection(self, reason: str) -> None:
         """Detach and close the connection after indeterminate state.
 
         Atomically removes the connection from ``_conn`` while the
         connection lock is held (the caller must already hold the lock),
-        sets the invalidated flag, and closes the detached connection
+        records the failure and closes the detached connection
         with bounded best-effort. Future ``transaction()`` calls fail
         with ``DatabaseConnectionInvalidatedError``; the deployment
         contract is a worker restart, not same-process reconnection.
 
         In addition to the original flag, the method transitions
-        through ``INVALIDATING`` → ``INVALIDATED`` so that operators
-        can distinguish "in the process of being closed" from
-        "ready for recovery".  When a recovery controller is attached,
-        the controller is notified so it can begin a single-flight
-        recovery attempt.
+        through ``FAILED_CLOSED`` so operators can distinguish a terminal
+        database failure from an orderly shutdown.
         """
-        if self._conn is None:
+        if self._lifecycle_state is DatabaseLifecycleState.FAILED_CLOSED:
             return
-        self._transition_state(DatabaseLifecycleState.INVALIDATING)
+        if self._conn is None:
+            self._transition_state(DatabaseLifecycleState.FAILED_CLOSED)
+            return
         conn_to_close = self._conn
         self._conn = None
-        self._invalidated = True
         self._invalidated_reason = reason
         self._invalidated_reason_class = self._classify_invalidation_reason(reason)
         self._invalidated_at = time.monotonic()
         self._writes_admitted = False
         self._reads_admitted = False
-        self._writes_admitted_event.clear()
         with suppress(Exception):
             await asyncio.wait_for(conn_to_close.close(), timeout=5.0)
-        self._transition_state(DatabaseLifecycleState.INVALIDATED)
-        # Notify the recovery controller (if any) for bounded diagnostics.
-        # It must not reopen admission in this process.
-        controller = self._recovery_controller
-        if controller is not None:
-            with suppress(Exception):
-                await controller.handle_invalidation(
-                    reason=reason,
-                    reason_class=self._invalidated_reason_class or "other",
-                )
-        if self._fatal_handler is not None:
+        self._transition_state(DatabaseLifecycleState.FAILED_CLOSED)
+        if self._fatal_handler is not None and not self._fatal_notified:
+            self._fatal_notified = True
             with suppress(Exception):
                 self._fatal_handler(reason)
 
@@ -748,8 +542,8 @@ class Database:
         commit/rollback outcome without SQL values, credentials, or
         file contents.
         """
-        if self._invalidated:
-            state = "invalidated"
+        if self._lifecycle_state is DatabaseLifecycleState.FAILED_CLOSED:
+            state = "failed_closed"
         elif self._conn is None:
             state = "disconnected"
         else:
@@ -757,13 +551,13 @@ class Database:
         return {
             "connection_state": state,
             "lifecycle_state": self._lifecycle_state.value,
-            "connection_epoch": self._connection_epoch,
             "writes_admitted": self._writes_admitted,
             "reads_admitted": self._reads_admitted,
             "invalidated_reason": self._invalidated_reason,
             "invalidated_reason_class": self._invalidated_reason_class,
             "invalidated_at": self._invalidated_at,
-            "reconnect_required": self._invalidated,
+            "reconnect_required": self._lifecycle_state
+            is DatabaseLifecycleState.FAILED_CLOSED,
             "last_commit_outcome": self._last_commit_outcome,
             "last_rollback_attempted": self._last_rollback_attempted,
             "last_rollback_succeeded": self._last_rollback_succeeded,
@@ -773,10 +567,8 @@ class Database:
             "last_in_transaction_after_rollback": (
                 self._last_in_transaction_after_rollback
             ),
-            "recovery_count": self._recovery_count,
             "rollback_failure_count": self._rollback_failure_count,
             "rollback_success_count": self._rollback_success_count,
-            "pending_ambiguous_operations": len(self._ambiguous_operations),
         }
 
     @property
@@ -831,33 +623,6 @@ class Database:
         """Return whether the current task owns the active transaction."""
         return self._current_task_owns_transaction()
 
-    def _refresh_idle_connection_lock(self) -> None:
-        """Recreate an idle connection lock if it was bound to another loop.
-
-        ``asyncio.Lock`` binds itself to the first event loop that has
-        to wait for it. TestClient and multi-loop hosts can reuse the
-        same Database instance across event loops, so an idle lock from
-        an old loop must not poison the next request.  Held locks are
-        never replaced; serialization remains intact.
-        """
-        if self._connection_lock.locked():
-            return
-        current_loop = asyncio.get_running_loop()
-        lock_loop = getattr(self._connection_lock, "_loop", None)
-        if lock_loop is None or lock_loop is current_loop:
-            return
-
-        guard = getattr(self, "_connection_lock_guard", None)
-        if guard is None:
-            guard = threading.Lock()
-            self._connection_lock_guard = guard
-        with guard:
-            if self._connection_lock.locked():
-                return
-            lock_loop = getattr(self._connection_lock, "_loop", None)
-            if lock_loop is not None and lock_loop is not current_loop:
-                self._connection_lock = asyncio.Lock()
-
     @asynccontextmanager
     async def _connection_access(self) -> AsyncGenerator[None]:
         """Acquire the connection lock for a SQL operation.
@@ -869,15 +634,13 @@ class Database:
         Lock wait time is tracked in contention counters for
         runtime diagnostics.
         """
-        if self._invalidated:
+        self._ensure_canonical_loop()
+        if self._lifecycle_state is DatabaseLifecycleState.FAILED_CLOSED:
             raise DatabaseConnectionInvalidatedError(
                 self._invalidated_reason
                 or "Connection invalidated by indeterminate commit outcome"
             )
-        recovery_context = getattr(self, "_recovery_transaction", None)
-        if not self._reads_admitted and not (
-            recovery_context is not None and recovery_context.get()
-        ):
+        if not self._reads_admitted:
             raise DatabaseError("Database reads are not admitted")
         owner = self._transaction_owner.get()
         if owner is not None and owner is not asyncio.current_task():
@@ -889,7 +652,6 @@ class Database:
             return
 
         t0 = time.monotonic()
-        self._refresh_idle_connection_lock()
         async with self._connection_lock:
             elapsed = time.monotonic() - t0
             self._cumulative_lock_wait_s += elapsed
@@ -906,7 +668,7 @@ class Database:
         insert succeeded, False otherwise.
         """
         try:
-            async with self.transaction(_internal_recovery=True):
+            async with self.transaction():
                 await self._execute_cursor(
                     "INSERT INTO health_probe (probe_at) VALUES (CURRENT_TIMESTAMP)"
                 )
@@ -1066,7 +828,6 @@ class Database:
             raise DatabaseError("VACUUM cannot run on a read-only database")
         if self._in_transaction_context.get():
             raise DatabaseError("VACUUM cannot run while a transaction is active")
-        self._refresh_idle_connection_lock()
         async with self._connection_lock:
             try:
                 cursor = await self.connection.execute("VACUUM")
@@ -1175,12 +936,7 @@ class Database:
                 raise DatabaseError(f"Fetch one failed: {exc}") from exc
 
     @asynccontextmanager
-    async def transaction(
-        self,
-        *,
-        ambiguous_operation: AmbiguousDatabaseOperation | None = None,
-        _internal_recovery: bool = False,
-    ) -> AsyncGenerator[None]:
+    async def transaction(self) -> AsyncGenerator[None]:
         """Execute a serialized write transaction.
 
         Uses ``BEGIN IMMEDIATE`` to serialize writers predictably.
@@ -1192,7 +948,8 @@ class Database:
         The outermost task alone issues ``BEGIN IMMEDIATE`` / ``COMMIT`` /
         ``ROLLBACK``.
         """
-        if self._invalidated:
+        self._ensure_canonical_loop()
+        if self._lifecycle_state is DatabaseLifecycleState.FAILED_CLOSED:
             raise DatabaseConnectionInvalidatedError(
                 self._invalidated_reason
                 or "Connection invalidated by indeterminate commit outcome"
@@ -1201,17 +958,7 @@ class Database:
             raise DatabaseError("Database not connected")
         if self._read_only:
             raise DatabaseError("Database is read-only")
-        recovery_context = getattr(self, "_recovery_transaction", None)
-        if recovery_context is None:
-            recovery_context = ContextVar(
-                "database_recovery_transaction_compat", default=False
-            )
-            self._recovery_transaction = recovery_context
-        if (
-            not self._writes_admitted
-            and not _internal_recovery
-            and not recovery_context.get()
-        ):
+        if not self._writes_admitted:
             raise DatabaseError("Database writes are not admitted")
 
         # Fast path: reuse an existing transaction only in its owning task.
@@ -1237,15 +984,10 @@ class Database:
 
         # Outermost: serialize via the connection lock and own the
         # BEGIN / COMMIT boundaries.
-        self._refresh_idle_connection_lock()
         async with self._connection_lock:
-            if self._invalidated:
-                raise DatabaseConnectionInvalidatedError(
-                    self._invalidated_reason
-                    or "Connection invalidated by indeterminate commit outcome"
-                )
-            # Re-check under the lock. Another task may have raced
-            # between our initial check and acquiring the lock.
+            # Fatal transitions happen while this lock is held, so no other
+            # task can change lifecycle state between the admission check and
+            # this point.
             if self._has_active_transaction_context():
                 self._total_nested_transactions += 1
                 ctx_token = self._in_transaction_context.set(True)
@@ -1260,7 +1002,6 @@ class Database:
             self._total_transactions += 1
             owner = asyncio.current_task()
             owner_token = self._transaction_owner.set(owner)
-            recovery_token = self._recovery_transaction.set(_internal_recovery)
             state = _TransactionState()
             state_context = getattr(self, "_transaction_state", None)
             if state_context is None:
@@ -1271,13 +1012,6 @@ class Database:
                 self._transaction_state = state_context
             state_token = state_context.set(state)
             ctx_token = self._in_transaction_context.set(True)
-            # Plan 027 — capture the connection epoch at BEGIN so
-            # recovery that opened a replacement connection while we
-            # were inside the transaction body can be detected before
-            # commit handling.  ``_begin_epoch`` is recorded here and
-            # asserted below; if a swap occurred, the caller must
-            # treat the outcome as indeterminate.
-            begin_epoch = self._connection_epoch
             try:
                 await self._conn.execute("BEGIN IMMEDIATE")
             except Exception as exc:
@@ -1285,10 +1019,12 @@ class Database:
                 state_context.reset(state_token)
                 self._in_transaction_context.reset(ctx_token)
                 self._transaction_owner.reset(owner_token)
+                if _is_fatal_database_error(exc):
+                    await self._invalidate_connection(f"begin failure: {exc!r}")
                 raise DatabaseError(f"Begin transaction failed: {exc}") from exc
             try:
                 yield
-            except BaseException:
+            except BaseException as exc:
                 # Body raised: attempt rollback.  Distinguish a
                 # successful rollback from a rollback failure so
                 # callers see the right typed error.
@@ -1300,10 +1036,13 @@ class Database:
                 ) = await self._safe_rollback()
                 if body_rollback_succeeded:
                     self._rollback_success_count += 1
+                    if _is_fatal_database_error(exc):
+                        await self._invalidate_connection(
+                            f"transaction failure: {exc!r}"
+                        )
                 if not body_rollback_succeeded and body_rollback_attempted:
                     # Rollback itself failed — the transaction state
-                    # is unknown.  Plan 027 Workstream D: invalidate
-                    # the connection and raise a typed
+                    # is unknown. Invalidate the connection and raise a typed
                     # ``DatabaseRollbackError`` so callers cannot
                     # continue to issue SQL on a poisoned connection.
                     self._rollback_failure_count += 1
@@ -1320,26 +1059,6 @@ class Database:
                     ) from body_rollback_exc
                 raise
             else:
-                # Sanity check: if the connection epoch changed while
-                # the body was running, the original connection has
-                # been replaced and the commit would target the wrong
-                # file.  Treat as indeterminate.
-                if self._connection_epoch != begin_epoch:
-                    # The replacement connection is in place; the
-                    # caller should re-issue under a new transaction.
-                    await self._invalidate_connection(
-                        f"connection epoch changed during transaction "
-                        f"(begin={begin_epoch}, current={self._connection_epoch})"
-                    )
-                    raise DatabaseCommitError(
-                        "Connection was replaced while transaction was open",
-                        rollback_attempted=False,
-                        rollback_succeeded=False,
-                        transaction_still_active=True,
-                        connection_invalidated=True,
-                        outcome="indeterminate",
-                    )
-
                 # Plan 016 Workstream F / Plan 017 Workstream E:
                 # test-only fault-injection seam to simulate a process
                 # crash *after* the inner work completed but *before*
@@ -1360,8 +1079,8 @@ class Database:
                     await self._conn.rollback()
                     raise injected
 
-                # Plan 017 Workstream E: catch exceptions from the
-                # actual ``commit()`` call and attempt recovery.
+                # Catch exceptions from the actual ``commit()`` call and
+                # determine whether rollback proved the connection clean.
                 commit_exc: Exception | None = None
                 try:
                     commit_injected = self._test_inject_commit_call
@@ -1416,6 +1135,9 @@ class Database:
                         connection_invalidated = True
                         self._rollback_failure_count += 1
 
+                    if _is_fatal_database_error(commit_exc):
+                        connection_invalidated = True
+
                     outcome = "rolled_back" if rollback_succeeded else "indeterminate"
                     self._last_commit_outcome = outcome
                     # Durable request/attempt/reservation identities are
@@ -1469,5 +1191,4 @@ class Database:
                 state.active = False
                 state_context.reset(state_token)
                 self._in_transaction_context.reset(ctx_token)
-                self._recovery_transaction.reset(recovery_token)
                 self._transaction_owner.reset(owner_token)

@@ -89,18 +89,17 @@ class DatabaseConnectionInvalidatedError(DatabaseError):
     """Raised when the database connection has been invalidated.
 
     The connection was detached and closed after an indeterminate
-    commit failure.  A new ``connect()`` call is required before
-    future database access.
+    commit failure. The worker must restart and construct a fresh database
+    instance before future database access.
     """
 
 
 class DatabaseRollbackError(DatabaseError):
     """Raised when the SQLite ROLLBACK call itself fails.
 
-    Plan 027 Workstream D — ``transaction()`` distinguishes a
-    rollback failure from a commit failure so callers see the
-    original cause of the orphaned-transaction problem.  The
-    connection is detached and closed before this error is raised;
+    ``transaction()`` distinguishes a rollback failure from a commit
+    failure so callers see the original cause of the orphaned-transaction
+    problem. The connection is detached and closed before this error is raised;
     subsequent ``transaction()`` calls raise
     :class:`DatabaseConnectionInvalidatedError`.
 

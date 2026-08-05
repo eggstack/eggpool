@@ -154,51 +154,49 @@ class DispatchWriterConfig(BaseModel):
 
 
 class DatabaseRecoveryConfig(BaseModel):
-    """Configuration for the database recovery controller.
+    """Deprecated compatibility shape for the removed runtime recovery loop.
 
-    Plan 027 — distinguishes ``enabled`` (master switch) from the
-    bounded retry controls.  Production default is enabled with
-    bounded retries so recoverable invalidation cycles do not
-    require restart.  ``fail_process_on_exhaustion`` is honoured by
-    the controller; it is documented as an operator escape hatch
-    and is not used by the default ``eggpool`` systemd unit.
+    Existing configuration files remain parseable for one release. The values
+    are ignored; runtime SQLite uncertainty always fails closed and relies on
+    supervisor restart plus startup reconciliation. ``validate_config_file``
+    emits the operator-facing deprecation warning.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = Field(
         default=True,
-        description="Enable automatic database recovery after invalidation.",
+        description="Deprecated and ignored; restart is the recovery policy.",
     )
     max_attempts: int = Field(
         default=5,
         ge=1,
         le=20,
-        description="Maximum number of recovery attempts before giving up.",
+        description="Deprecated and ignored.",
     )
     initial_backoff_ms: int = Field(
         default=100,
         ge=0,
         le=10_000,
-        description="Initial backoff between recovery attempts (ms).",
+        description="Deprecated and ignored.",
     )
     max_backoff_ms: int = Field(
         default=5000,
         ge=0,
         le=60_000,
-        description="Maximum backoff between recovery attempts (ms).",
+        description="Deprecated and ignored.",
     )
     reconciliation_timeout_s: float = Field(
         default=30.0,
         gt=0.0,
         le=600.0,
-        description="Maximum time (s) for the reconciliation phase.",
+        description="Deprecated and ignored.",
     )
     fail_process_on_exhaustion: bool = Field(
         default=False,
         description=(
-            "Exit the process after recovery attempts are exhausted. "
-            "Restart is an operator policy; do not enable casually."
+            "Deprecated and ignored; all fatal database uncertainty exits "
+            "the worker for supervisor restart."
         ),
     )
 

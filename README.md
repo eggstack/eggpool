@@ -126,6 +126,10 @@ Use `eggpool connect` for interactive provider setup. See [docs/providers.md](do
 | `[network]` | Outbound transport, DNS cache |
 | `[model_info]` | Optional model metadata refresh, aliases, overrides, and external source settings |
 | `[transcoder]` | Protocol transcoding between OpenAI and Anthropic formats |
+
+Legacy `[database.recovery]` settings remain parseable for one compatibility
+release, but are ignored. Fatal SQLite uncertainty closes the worker; the
+supervisor restarts it and startup reconciliation repairs durable leftovers.
 | `[compression]` | Request shaping: `observe`/`safe`, stable thresholds, transform toggles, advanced policy overrides |
 | `[cache]` | Synthetic cache controls (post-route, disabled by default, dry-run first) |
 | `[maintenance]` | Bounded maintenance budget, SQLite hygiene, contention guard |

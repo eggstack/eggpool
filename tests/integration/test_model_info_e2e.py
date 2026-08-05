@@ -32,7 +32,6 @@ from urllib.parse import quote
 import httpx
 import pytest
 import pytest_asyncio
-from fastapi.testclient import TestClient
 
 from eggpool.app import create_app
 from eggpool.catalog.cache import ModelCatalogCache
@@ -155,6 +154,20 @@ async def _seed_models(db: Database, model_ids: list[str]) -> None:
             )
 
 
+class _AsyncAppClient:
+    """Keep ASGI requests on the database fixture's event loop."""
+
+    def __init__(self, app: FastAPI) -> None:
+        self._app = app
+
+    async def get(self, path: str) -> httpx.Response:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=self._app),
+            base_url="http://testserver",
+        ) as client:
+            return await client.get(path)
+
+
 class _StaticHttpClient:
     """Mock HTTP client returning the captured live OpenRouter payload."""
 
@@ -236,7 +249,7 @@ async def test_every_model_detail_populates(
     by ``<vendor>/<model>`` -> ``<model>`` alias translation.
     """
     application, base_ids = app_with_real_models_async
-    client = TestClient(application)
+    client = _AsyncAppClient(application)
 
     fixture = _load_real_openrouter_fixture()
     or_index = {entry["id"]: entry for entry in fixture}
@@ -298,7 +311,7 @@ async def test_every_model_detail_populates(
 
         from urllib.parse import quote
 
-        response = client.get(f"/models/{quote(base_id, safe='')}")
+        response = await client.get(f"/models/{quote(base_id, safe='')}")
         assert response.status_code == 200, (base_id, response.status_code)
         body = response.text
         if "Model info not available" in body:
@@ -344,14 +357,14 @@ async def test_detail_page_renders_provider_and_openrouter_context(
     """The rendered detail page must surface both provider catalog
     limits and OpenRouter external context."""
     application, _ = app_with_real_models_async
-    client = TestClient(application)
+    client = _AsyncAppClient(application)
     from urllib.parse import quote
 
     fixture = _load_real_openrouter_fixture()
     first_or_id = fixture[0]["id"]
     first_base_id = _base_model_id_from_or(first_or_id)
     assert isinstance(first_or_id, str)
-    response = client.get(f"/models/{quote(first_base_id, safe='')}")
+    response = await client.get(f"/models/{quote(first_base_id, safe='')}")
     assert response.status_code == 200
     body = response.text
     assert "Model info not available" not in body
@@ -360,7 +373,7 @@ async def test_detail_page_renders_provider_and_openrouter_context(
 
     benchmarked_entry = next(entry for entry in fixture if entry.get("benchmarks"))
     benchmarked_id = _base_model_id_from_or(benchmarked_entry["id"])
-    benchmarked_response = client.get(f"/models/{quote(benchmarked_id, safe='')}")
+    benchmarked_response = await client.get(f"/models/{quote(benchmarked_id, safe='')}")
     assert benchmarked_response.status_code == 200
     assert "Benchmarks" in benchmarked_response.text
 
@@ -377,7 +390,7 @@ async def test_real_fixture_benchmarks_reach_canonical_detail_and_page(
     """
     application, base_ids = app_with_real_models_async
     service = application.state.model_info
-    client = TestClient(application)
+    client = _AsyncAppClient(application)
     fixture = _load_real_openrouter_fixture()
     by_base_id = {_base_model_id_from_or(str(entry["id"])): entry for entry in fixture}
 
@@ -401,7 +414,7 @@ async def test_real_fixture_benchmarks_reach_canonical_detail_and_page(
             fresh_benchmark_models += 1
         assert "Public benchmark metadata unavailable." not in (info.summary or "")
 
-        response = client.get(f"/models/{quote(base_id, safe='')}")
+        response = await client.get(f"/models/{quote(base_id, safe='')}")
         assert response.status_code == 200
         assert "<h3>Benchmarks</h3>" in response.text
 

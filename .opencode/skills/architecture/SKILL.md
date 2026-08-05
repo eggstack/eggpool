@@ -74,7 +74,8 @@ Transparent request/response format conversion between OpenAI and Anthropic prot
 - `QuotaFairScorer` does NOT consume cache/compression fields
 
 Routing trace batches use one `executemany` call inside the transaction owner’s
-transaction. Unexpected database errors propagate to the writer/recovery path.
+transaction. Unexpected database errors propagate to the writer or fatal
+worker boundary.
 
 ## Error Hierarchy
 
@@ -230,7 +231,7 @@ required writable probe before admission. A non-`ok` integrity result, an
 integrity exception, or an indeterminate runtime database state closes
 readiness and exits the worker; systemd restarts it and startup repair is the
 final recovery boundary. There is no same-process replacement-connection
-recovery path.
+recovery path, recovery wait gate, or cross-loop lock rebinding.
 
 ## Gotchas
 
