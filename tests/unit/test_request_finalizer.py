@@ -111,7 +111,7 @@ async def test_already_terminal_durable_state_converges_owned_runtime_outcomes()
     )
 
     assert lease.released
-    assert calls == {"usage": 1, "health_release": 0, "health": 1, "account": 1}
+    assert calls == {"usage": 1, "health_release": 1, "health": 1, "account": 1}
 
 
 async def _fresh_finalizer_db() -> tuple[

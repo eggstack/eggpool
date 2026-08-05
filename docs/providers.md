@@ -446,7 +446,7 @@ settings split into three independent axes that are easy to confuse:
 
 | Setting | Scope | Effect |
 |---------|-------|--------|
-| `server.threads` | Granian worker threads inside one process | CPU-bound request handling parallelism |
+| `server.threads` | Granian worker threads inside one process | Required to remain `1`; request concurrency uses asyncio tasks |
 | `database.worker_threads` | Read-only stats DB connections | Dashboard / metrics concurrency |
 | `<provider>.max_connections` | HTTPX connection pool per provider | Outbound HTTP connection parallelism |
 

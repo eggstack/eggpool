@@ -29,7 +29,7 @@ def _build_multi_provider_toml(db_path: str) -> str:
 [server]
 api_key_env = "TEST_GLOBAL_KEY"
 host = "127.0.0.1"
-port = 0
+port = 11300
 log_level = "INFO"
 
 [database]
@@ -101,7 +101,7 @@ def _build_single_provider_toml(db_path: str) -> str:
 [server]
 api_key_env = "TEST_GLOBAL_KEY"
 host = "127.0.0.1"
-port = 0
+port = 11300
 log_level = "INFO"
 
 [database]

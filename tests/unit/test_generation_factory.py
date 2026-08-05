@@ -52,7 +52,7 @@ def _make_config(**overrides: Any) -> AppConfig:
     )
 
     defaults = dict(
-        server=ServerConfig(host="127.0.0.1", port=0),
+        server=ServerConfig(host="127.0.0.1", port=11300),
         providers={
             "test-provider": ProviderConfig(
                 id="test-provider",

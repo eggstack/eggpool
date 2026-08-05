@@ -75,12 +75,34 @@ class TestAttemptRuntimeLease:
             active_count_acquired=True,
         )
         assert not lease.released
-        # First release
-        asyncio.run(lease.release_once(reason="test"))
-        assert lease.released
-        # Second release is a no-op
+        outcomes_1 = asyncio.run(lease.release_once(reason="test"))
+        assert outcomes_1[0].error == "missing dependency: router"
+        assert not lease.released
         outcomes_2 = asyncio.run(lease.release_once(reason="test"))
-        assert outcomes_2 == []
+        assert outcomes_2[0].error == "missing dependency: router"
+        assert not lease.released
+
+    @pytest.mark.parametrize(
+        ("lease_kwargs", "dependency_name"),
+        [
+            (
+                {"quota_reservation_acquired": True},
+                "quota_estimator",
+            ),
+            (
+                {"health_probe_acquired": True},
+                "health_manager",
+            ),
+        ],
+    )
+    def test_missing_acquired_dependency_is_not_converged(
+        self, lease_kwargs: dict[str, bool], dependency_name: str
+    ) -> None:
+        lease = AttemptRuntimeLease(account_name="acct", **lease_kwargs)
+        outcomes = asyncio.run(lease.release_once(reason="test"))
+        assert outcomes[0].error == f"missing dependency: {dependency_name}"
+        assert not lease.released
+        assert lease.completed_components == frozenset()
 
     def test_release_with_router(self) -> None:
         """Active count release calls router.release_active."""

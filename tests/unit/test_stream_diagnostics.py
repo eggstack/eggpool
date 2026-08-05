@@ -73,6 +73,7 @@ def _timeout_stream_coordinator() -> tuple[Any, Any, Any]:
         synthetic_cache_result=None,
         upstream_connect_ms=0,
         upstream_headers_ms=None,
+        response_handoff=SimpleNamespace(started=False),
     )
     selected = SelectedAttempt(
         attempt_id=1,

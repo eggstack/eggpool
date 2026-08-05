@@ -163,19 +163,43 @@ def _tool_token_padding(payload: dict[str, Any]) -> int:
     return max(64, total_bytes // 4)
 
 
-def get_client_ip(request: Request) -> str:
-    """Extract the reported client IP, accounting for reverse proxies."""
-    forwarded_for = request.headers.get("x-forwarded-for")
-    if forwarded_for:
-        return forwarded_for.split(",", 1)[0].strip()
+_MAX_FORWARDED_CLIENT_IP_CHARS = 64
 
-    real_ip = request.headers.get("x-real-ip")
-    if real_ip:
-        return real_ip.strip()
 
-    if request.client and request.client.host:
-        return request.client.host
-    return ""
+def _valid_forwarded_client_ip(value: str | None) -> str | None:
+    """Return one bounded attribution value, or ignore malformed input."""
+    if value is None:
+        return None
+    candidate = value.strip()
+    if (
+        not candidate
+        or len(candidate) > _MAX_FORWARDED_CLIENT_IP_CHARS
+        or any(ord(char) < 32 or ord(char) == 127 for char in candidate)
+    ):
+        return None
+    return candidate
+
+
+def get_client_ip(
+    request: Request,
+    *,
+    trusted_proxies: tuple[str, ...] = (),
+) -> str:
+    """Return the peer address, honoring forwarding only from trusted peers."""
+    peer = request.client.host if request.client and request.client.host else ""
+    if peer in trusted_proxies:
+        forwarded_for = request.headers.get("x-forwarded-for")
+        if forwarded_for is not None:
+            first_forwarded = forwarded_for.split(",", 1)[0]
+            forwarded_ip = _valid_forwarded_client_ip(first_forwarded)
+            if forwarded_ip is not None:
+                return forwarded_ip
+
+        real_ip = _valid_forwarded_client_ip(request.headers.get("x-real-ip"))
+        if real_ip is not None:
+            return real_ip
+
+    return peer
 
 
 def render_proxy_response(result: PreparedProxyResponse) -> Response:
@@ -901,7 +925,12 @@ async def _handle_proxy_request_inner(
             # ``_send_upstream_request`` can compute ``local_pre_upstream_ms``.
             request_received_monotonic_ns=request_received_monotonic_ns,
             provider_id=provider_id,
-            client_ip=get_client_ip(request),
+            client_ip=get_client_ip(
+                request,
+                trusted_proxies=tuple(config.security.trusted_proxies)
+                if config is not None
+                else (),
+            ),
             upstream_body=_rewrite_upstream_model(payload_for_rewrite, model_id),
             upstream_protocol=endpoint.protocol,
             transcode_required=False,

@@ -259,6 +259,6 @@ async def test_cleanup_structured_outcome(
     assert cleanup is not None, "cleanup diagnostics should be recorded"
     # cleanup may be a dict or dataclass depending on serialization
     if isinstance(cleanup, dict):
-        assert cleanup.get("primary_failure") == "deliberate failure"
+        assert "deliberate failure" in cleanup.get("primary_failure", "")
     else:
-        assert cleanup.primary_failure == "deliberate failure"
+        assert "deliberate failure" in cleanup.primary_failure

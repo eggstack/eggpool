@@ -85,7 +85,7 @@ def _minimal_config() -> Any:
             "server": {
                 "host": "127.0.0.1",
                 "port": 0,
-                "threads": 2,
+                "threads": 1,
                 "api_key_env": "",
             },
             "database": {"path": ":memory:"},

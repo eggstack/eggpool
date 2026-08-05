@@ -115,10 +115,10 @@ For OpenCode-style workloads, budget these limits:
 - `database.worker_threads`: 2 is sufficient for dashboards; raise
   to 4 if the dashboard itself lags.
 
-Keep `server.threads` bounded and leave `workers=1`. The default of
-4 helps the single worker multiplex dashboard work and active streams;
-it does not increase HTTPX pool capacity. Adding workers multiplies the
-connection budget per upstream IP.
+Keep `server.threads = 1` and leave `workers=1`. The single event loop
+multiplexes dashboard work and active streams; connection-pool sizing is
+controlled by the provider HTTPX settings. Adding workers multiplies the
+connection budget per upstream IP and is not supported.
 
 ## Closure validation
 

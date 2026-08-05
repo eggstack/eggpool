@@ -31,7 +31,7 @@ def _config_body(**overrides: object) -> str:
         f'[server]\napi_key = "{SERVER_API_KEY}"\n'
         'log_level = "INFO"\n'
         "access_log = true\n"
-        "threads = 4\n\n"
+        "threads = 1\n\n"
         "[providers.opencode-go]\n"
         'id = "opencode-go"\n'
         'base_url = "https://opencode.ai/zen/go/v1"\n'

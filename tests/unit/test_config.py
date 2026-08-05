@@ -568,6 +568,23 @@ def test_config_example_validates() -> None:
     assert len(config.all_accounts()) == 0
 
 
+def test_file_backed_config_rejects_ephemeral_server_port(tmp_path: Path) -> None:
+    config_file = tmp_path / "ephemeral.toml"
+    config_file.write_text("[server]\nport = 0\n", encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="port must be between 1 and 65535"):
+        AppConfig.from_toml(str(config_file))
+
+
+def test_server_config_rejects_multi_loop_runtime_threads() -> None:
+    from pydantic import ValidationError
+
+    from eggpool.models.config import ServerConfig
+
+    with pytest.raises(ValidationError):
+        ServerConfig(threads=2)
+
+
 def test_packaged_config_example_validates() -> None:
     config = AppConfig.from_toml("src/eggpool/_share/config.example.toml")
     assert config.server.port == 11300

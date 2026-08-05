@@ -143,7 +143,7 @@ class TestRecoverCommand:
             )
 
             # Mutate the live files so the restore is observable.
-            config.write_text("[server]\nport = 0\n")
+            config.write_text("[server]\nport = 11300\n")
             Path("usage.sqlite3").write_bytes(b"corrupted")
 
             result = runner.invoke(

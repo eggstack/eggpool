@@ -69,32 +69,16 @@ class ServerConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     host: str = DEFAULT_HOST
+    # ``0`` remains available to direct in-memory application/test helpers;
+    # file-backed production configuration rejects it in ``from_toml``.
     port: int = Field(default=DEFAULT_PORT, ge=0, le=65535)
     api_key: str | None = None
     api_key_env: str = "SERVER_API_KEY"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     access_log: bool = True
-    # Number of Granian runtime (event-loop) threads.  The supported
-    # single-loop model (Model 1, Milestone F) uses ``threads=1``.
-    # Values > 1 enable Granian's multi-thread runtime which may
-    # cause ``asyncio.Lock`` cross-loop failures; use only when the
-    # operator has verified that all long-lived asyncio primitives
-    # tolerate multiple event loops.
-    threads: int = Field(default=1, ge=1, le=64)
-
-    @model_validator(mode="after")
-    def _warn_multi_thread(self) -> ServerConfig:
-        if self.threads > 1:
-            import warnings  # noqa: PLC0415
-
-            warnings.warn(
-                f"threads={self.threads} enables Granian multi-thread "
-                "runtime; asyncio.Lock primitives are loop-bound and "
-                "may fail under multi-loop access (Milestone F). "
-                "threads=1 is the supported single-loop default.",
-                stacklevel=1,
-            )
-        return self
+    # Granian's single worker owns loop-bound asyncio primitives throughout
+    # the process. Multiple runtime threads are not a supported topology.
+    threads: int = Field(default=1, ge=1, le=1)
 
     @property
     def resolved_api_key(self) -> str | None:
@@ -629,10 +613,30 @@ class SecurityConfig(BaseModel):
 
     allowed_hosts: list[str] = Field(default_factory=list)
     cors_origins: list[str] = Field(default_factory=list)
+    trusted_proxies: list[str] = Field(default_factory=list)
     redact_headers: list[str] = Field(
         default_factory=lambda: ["authorization", "x-api-key"]
     )
     persist_redacted_error_detail: bool = False
+
+    @field_validator("trusted_proxies")
+    @classmethod
+    def validate_trusted_proxies(cls, value: list[str]) -> list[str]:
+        """Accept exact peer-address entries, not proxy networks."""
+        normalized: list[str] = []
+        for peer in value:
+            if (
+                not peer
+                or peer != peer.strip()
+                or len(peer) > 64
+                or any(ord(char) < 32 or ord(char) == 127 for char in peer)
+            ):
+                raise ConfigError(
+                    "security.trusted_proxies entries must be bounded, "
+                    "non-empty exact peer addresses"
+                )
+            normalized.append(peer)
+        return normalized
 
 
 class ProxyConfig(BaseModel):
@@ -1606,6 +1610,14 @@ class AppConfig(BaseModel):
             raise ConfigError(f"Invalid TOML in {path}: {exc}") from exc
 
         try:
-            return cls.model_validate(raw)
+            config = cls.model_validate(raw)
+            if config.server.port == 0:
+                raise ConfigError(
+                    "server.port must be between 1 and 65535 in production "
+                    "configuration"
+                )
+            return config
         except Exception as exc:
+            if isinstance(exc, ConfigError):
+                raise
             raise ConfigError(f"Config validation failed: {exc}") from exc

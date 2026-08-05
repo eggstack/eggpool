@@ -14,6 +14,11 @@ REDACTED = "[REDACTED]"
 # the fail-closed top-level array path all honor this limit.
 MAX_REDACTED_ERROR_DETAIL_CHARS = 2048
 
+# Shorter bound for process-local diagnostics such as cleanup failures. These
+# messages are useful for identifying the failing stage, but must never become
+# an unbounded retention or logging channel.
+MAX_SAFE_DIAGNOSTIC_CHARS = 512
+
 # Authorization: Bearer <token>  /  Authorization: <scheme> <value>
 _AUTH_HEADER_RE = re.compile(
     r"(?i)(authorization\s*[:=]\s*)(?:[^\s,;\"'}]+(?:\s+[^\s,;\"'}]+)*)"
@@ -273,6 +278,33 @@ def _bound_output(value: str) -> str:
         # the bound so the result is still bounded and informative.
         return suffix[:MAX_REDACTED_ERROR_DETAIL_CHARS]
     return value[:keep] + suffix
+
+
+def safe_exception_detail(
+    value: object,
+    *,
+    stage: str | None = None,
+    max_chars: int = MAX_SAFE_DIAGNOSTIC_CHARS,
+) -> str:
+    """Return bounded, redacted diagnostic text for an arbitrary value.
+
+    Exception class names and a bounded, redacted exception message are
+    retained because they are useful during local cleanup.  The optional
+    stage is restricted to a short diagnostic label.  This helper is for
+    process-local diagnostics and logs, not for preserving request content.
+    """
+    bounded_limit = max(1, min(max_chars, MAX_SAFE_DIAGNOSTIC_CHARS))
+    value_type = type(value).__name__
+    try:
+        raw_detail = str(value)
+    except Exception:
+        raw_detail = REDACTED
+    redacted_detail = redact_error_detail(raw_detail) or REDACTED
+    safe_stage = ""
+    if stage:
+        safe_stage = re.sub(r"[^A-Za-z0-9_.:-]", "_", stage)[:64]
+    prefix = f"{safe_stage}: " if safe_stage else ""
+    return _bound_output(f"{prefix}{value_type}: {redacted_detail}")[:bounded_limit]
 
 
 def redact_error_detail(value: str | None) -> str | None:

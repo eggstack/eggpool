@@ -287,7 +287,9 @@ Streaming usage accumulation across chunks.
 ## Key Invariants
 
 - Requests persisted before upstream dispatch
-- Pre-body failures can retry; no retry after first downstream byte
+- Pre-handoff failures can retry; streaming handoff occurs at ASGI
+  `http.response.start`, so no retry occurs after response start. An empty
+  started stream is post-handoff; `bytes_emitted` is payload accounting only.
 - Every retryable failed attempt reaches terminal state before next attempt
 - Each attempt reservation released exactly once via `AttemptFinalizer`
 - Same URL composition rules for catalog fetch and chat dispatch

@@ -1536,14 +1536,14 @@ class TestGranianServe:
         with pytest.raises(ValidationError):
             ServerConfig(threads=0)
 
-    def test_server_config_threads_capped(self) -> None:
-        """``threads`` is capped at 64 to prevent runaway thread counts."""
+    def test_server_config_threads_two_rejected(self) -> None:
+        """Only the single event-loop runtime is supported."""
         from pydantic import ValidationError
 
         from eggpool.models.config import ServerConfig
 
         with pytest.raises(ValidationError):
-            ServerConfig(threads=65)
+            ServerConfig(threads=2)
 
     def test_app_does_not_write_or_remove_pid_file(self) -> None:
         """Lifespan does not own the PID file (supervisor does)."""
@@ -1576,7 +1576,7 @@ class TestGranianServe:
         pid_file = tmp_path / "eggpool.pid"
         config_path = tmp_path / "config.toml"
         config_path.write_text(
-            '[server]\nhost = "127.0.0.1"\nport = 0\n', encoding="utf-8"
+            '[server]\nhost = "127.0.0.1"\nport = 11300\n', encoding="utf-8"
         )
         monkeypatch.setattr("eggpool.constants.PID_FILE", pid_file)
 
@@ -1621,7 +1621,7 @@ class TestGranianServe:
         pid_file = tmp_path / "eggpool.pid"
         config_path = tmp_path / "config.toml"
         config_path.write_text(
-            '[server]\nhost = "127.0.0.1"\nport = 0\n', encoding="utf-8"
+            '[server]\nhost = "127.0.0.1"\nport = 11300\n', encoding="utf-8"
         )
         monkeypatch.setattr("eggpool.constants.PID_FILE", pid_file)
         pid_file.write_text("999999", encoding="utf-8")
@@ -1666,7 +1666,7 @@ class TestGranianServe:
         pid_file = tmp_path / "eggpool.pid"
         config_path = tmp_path / "config.toml"
         config_path.write_text(
-            '[server]\nhost = "127.0.0.1"\nport = 0\n', encoding="utf-8"
+            '[server]\nhost = "127.0.0.1"\nport = 11300\n', encoding="utf-8"
         )
         monkeypatch.setattr("eggpool.constants.PID_FILE", pid_file)
         monkeypatch.setattr(runtime_module, "read_pid", lambda: None)
@@ -1704,7 +1704,7 @@ class TestGranianServe:
         pid_file = tmp_path / "eggpool.pid"
         config_path = tmp_path / "config.toml"
         config_path.write_text(
-            '[server]\nhost = "127.0.0.1"\nport = 0\nthreads = 4\n',
+            '[server]\nhost = "127.0.0.1"\nport = 11300\nthreads = 4\n',
             encoding="utf-8",
         )
         monkeypatch.setattr("eggpool.constants.PID_FILE", pid_file)
@@ -1728,9 +1728,9 @@ class TestGranianServe:
             cli_module.cli, ["--config", str(config_path), "serve", "--verbose"]
         )
 
-        assert result.exit_code == 0, result.output
-        assert captured.get("runtime_threads") == 4  # explicit threads=4 in config
-        assert captured.get("workers") == 1
+        assert result.exit_code != 0
+        assert "threads" in result.output.lower()
+        assert captured == {}
 
 
 class TestProbeHealthz:

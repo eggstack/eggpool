@@ -175,6 +175,25 @@ class TestCandidateAbort:
         assert "bad" in diag.close_errors[0]
 
     @pytest.mark.asyncio
+    async def test_abort_diagnostics_redact_and_bound_exception_text(self) -> None:
+        secret = "sk-" + "a" * 40
+        cause = RuntimeError(f"api_key={secret} " + "x" * 2000)
+        c = _make_candidate()
+        c.register_resource(
+            "bad",
+            MagicMock(side_effect=RuntimeError(f"token={secret} " + "y" * 2000)),
+        )
+
+        diag = await c.abort(cause, failure_stage="build")
+
+        assert diag is not None
+        combined = " ".join((diag.primary_failure, *diag.close_errors))
+        assert secret not in combined
+        assert "[REDACTED]" in combined
+        assert len(diag.primary_failure) <= 512
+        assert all(len(error) <= 512 for error in diag.close_errors)
+
+    @pytest.mark.asyncio
     async def test_abort_does_not_mask_primary_error(self) -> None:
         c = _make_candidate()
         c.register_resource("pool", MagicMock(side_effect=RuntimeError("close fail")))
@@ -367,7 +386,7 @@ class TestCandidateAbortOnBuildFailure:
         assert close_log == ["outbound_manager", "client_pool"]  # reverse order
         assert diag is not None
         assert diag.generation_id == 7
-        assert diag.primary_failure == "mid-build failure"
+        assert "mid-build failure" in diag.primary_failure
 
 
 # ---------------------------------------------------------------------------

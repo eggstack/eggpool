@@ -35,6 +35,8 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
+from eggpool.security.redaction import safe_exception_detail
+
 if TYPE_CHECKING:
     from eggpool.db.connection import Database
     from eggpool.failure import EffectsApplier, FailureEffects
@@ -195,93 +197,139 @@ class AttemptRuntimeLease:
         if (
             self.active_count_acquired
             and "active_count" not in self._released_components
-            and router is not None
         ):
-            try:
-                release_active = getattr(router, "decrement_active_request_count", None)
-                if release_active is None:
-                    release_active = router.release_active
-                result = release_active(self.account_name)
-                if inspect.isawaitable(result):
-                    await result
-                self._released_components.add("active_count")
-                outcomes.append(
-                    RuntimeReleaseOutcome(component="active_count", released=True)
-                )
-            except Exception as exc:
+            if router is None:
                 outcomes.append(
                     RuntimeReleaseOutcome(
                         component="active_count",
                         released=False,
-                        error=f"{type(exc).__name__}: {exc}",
+                        error="missing dependency: router",
                     )
                 )
+            else:
+                try:
+                    release_active = getattr(
+                        router, "decrement_active_request_count", None
+                    )
+                    if not callable(release_active):
+                        release_active = getattr(router, "release_active", None)
+                    if not callable(release_active):
+                        raise AttributeError("missing active-count release method")
+                    result = release_active(self.account_name)
+                    if inspect.isawaitable(result):
+                        await result
+                    self._released_components.add("active_count")
+                    outcomes.append(
+                        RuntimeReleaseOutcome(component="active_count", released=True)
+                    )
+                except Exception as exc:
+                    outcomes.append(
+                        RuntimeReleaseOutcome(
+                            component="active_count",
+                            released=False,
+                            error=safe_exception_detail(
+                                exc, stage="release:active_count"
+                            ),
+                        )
+                    )
 
         if (
             self.quota_reservation_acquired
             and "quota_reservation" not in self._released_components
-            and quota_estimator is not None
         ):
-            try:
-                remove_reservation = getattr(
-                    quota_estimator, "remove_reservation", None
-                )
-                if remove_reservation is not None:
-                    result = remove_reservation(
-                        self.account_name,
-                        self.estimated_microdollars,
-                        requests=1,
-                        tokens=self.estimated_tokens,
-                    )
-                else:
-                    result = quota_estimator.release_reservation(
-                        self.account_name, self.estimated_tokens
-                    )
-                if inspect.isawaitable(result):
-                    await result
-                self._released_components.add("quota_reservation")
-                outcomes.append(
-                    RuntimeReleaseOutcome(component="quota_reservation", released=True)
-                )
-            except Exception as exc:
+            if quota_estimator is None:
                 outcomes.append(
                     RuntimeReleaseOutcome(
                         component="quota_reservation",
                         released=False,
-                        error=f"{type(exc).__name__}: {exc}",
+                        error="missing dependency: quota_estimator",
                     )
                 )
+            else:
+                try:
+                    remove_reservation = getattr(
+                        quota_estimator, "remove_reservation", None
+                    )
+                    if callable(remove_reservation):
+                        result = remove_reservation(
+                            self.account_name,
+                            self.estimated_microdollars,
+                            requests=1,
+                            tokens=self.estimated_tokens,
+                        )
+                    else:
+                        release_reservation = getattr(
+                            quota_estimator, "release_reservation", None
+                        )
+                        if not callable(release_reservation):
+                            raise AttributeError(
+                                "missing quota-reservation release method"
+                            )
+                        result = release_reservation(
+                            self.account_name, self.estimated_tokens
+                        )
+                    if inspect.isawaitable(result):
+                        await result
+                    self._released_components.add("quota_reservation")
+                    outcomes.append(
+                        RuntimeReleaseOutcome(
+                            component="quota_reservation", released=True
+                        )
+                    )
+                except Exception as exc:
+                    outcomes.append(
+                        RuntimeReleaseOutcome(
+                            component="quota_reservation",
+                            released=False,
+                            error=safe_exception_detail(
+                                exc, stage="release:quota_reservation"
+                            ),
+                        )
+                    )
 
         if (
             self.health_probe_acquired
             and "health_probe" not in self._released_components
-            and health_manager is not None
         ):
-            try:
-                result = health_manager.release_request(self.account_name)
-                if inspect.isawaitable(result):
-                    await result
-                self._released_components.add("health_probe")
-                outcomes.append(
-                    RuntimeReleaseOutcome(component="health_probe", released=True)
-                )
-            except Exception as exc:
+            if health_manager is None:
                 outcomes.append(
                     RuntimeReleaseOutcome(
                         component="health_probe",
                         released=False,
-                        error=f"{type(exc).__name__}: {exc}",
+                        error="missing dependency: health_manager",
                     )
                 )
+            else:
+                try:
+                    release_request = getattr(health_manager, "release_request", None)
+                    if not callable(release_request):
+                        raise AttributeError("missing health-probe release method")
+                    result = release_request(self.account_name)
+                    if inspect.isawaitable(result):
+                        await result
+                    self._released_components.add("health_probe")
+                    outcomes.append(
+                        RuntimeReleaseOutcome(component="health_probe", released=True)
+                    )
+                except Exception as exc:
+                    outcomes.append(
+                        RuntimeReleaseOutcome(
+                            component="health_probe",
+                            released=False,
+                            error=safe_exception_detail(
+                                exc, stage="release:health_probe"
+                            ),
+                        )
+                    )
 
         required = {
             component
-            for component, acquired, dependency in (
-                ("active_count", self.active_count_acquired, router),
-                ("quota_reservation", self.quota_reservation_acquired, quota_estimator),
-                ("health_probe", self.health_probe_acquired, health_manager),
+            for component, acquired in (
+                ("active_count", self.active_count_acquired),
+                ("quota_reservation", self.quota_reservation_acquired),
+                ("health_probe", self.health_probe_acquired),
             )
-            if acquired and dependency is not None
+            if acquired
         }
         self.released = required.issubset(self._released_components)
         return outcomes
@@ -336,6 +384,158 @@ class FinalizationResult:
     terminal_conflict: bool = False
 
 
+_UNSET = object()
+
+
+def _terminal_scalar(value: object) -> object:
+    """Return a bounded scalar suitable for terminal semantic comparison."""
+    if isinstance(value, str):
+        return value[:256]
+    if isinstance(value, (bool, int, float)) or value is None:
+        return value
+    enum_value = getattr(value, "value", _UNSET)
+    if enum_value is not _UNSET and enum_value is not value:
+        return _terminal_scalar(enum_value)
+    return type(value).__name__
+
+
+def _failure_effects_key(effects: object) -> tuple[object, ...] | None:
+    if effects is None:
+        return None
+    return tuple(
+        _terminal_scalar(getattr(effects, field_name, None))
+        for field_name in (
+            "retry",
+            "retry_scope",
+            "client_outcome",
+            "account_effect",
+            "model_effect",
+            "circuit_penalty",
+            "persist_backoff",
+            "backoff_reason",
+            "backoff_until",
+            "release_probe_only",
+            "evidence_class",
+            "circuit_transition",
+            "probe_convergence",
+            "provider_attributable",
+            "source",
+            "response_signal",
+            "retry_after_s",
+        )
+    )
+
+
+def _normalized_usage_key(usage: object) -> tuple[object, ...] | None:
+    if usage is None:
+        return None
+    return tuple(
+        _terminal_scalar(getattr(usage, field_name, None))
+        for field_name in (
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "cached_input_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+            "cache_write_input_tokens",
+            "reasoning_tokens",
+            "cache_counter_status",
+        )
+    )
+
+
+def _runtime_lease_key(lease: AttemptRuntimeLease | None) -> tuple[object, ...] | None:
+    if lease is None:
+        return None
+    return tuple(
+        _terminal_scalar(getattr(lease, field_name, None))
+        for field_name in (
+            "account_name",
+            "estimated_tokens",
+            "estimated_microdollars",
+            "active_count_acquired",
+            "quota_reservation_acquired",
+            "health_probe_acquired",
+            "usage_outcome_required",
+            "health_outcome_required",
+            "account_runtime_outcome_required",
+        )
+    )
+
+
+def _terminal_semantic_key(
+    identity: FinalizationIdentity,
+    outcome: str,
+    finalization_data: object,
+    runtime_lease: AttemptRuntimeLease | None,
+    failure_effects: object,
+) -> tuple[object, ...]:
+    """Build a bounded, secret-free key for duplicate terminal commands."""
+    identity_key = tuple(
+        _terminal_scalar(getattr(identity, field_name))
+        for field_name in (
+            "proxy_request_id",
+            "db_request_id",
+            "attempt_id",
+            "reservation_id",
+            "account_id",
+            "account_name",
+            "provider_id",
+            "model_id",
+            "client_protocol",
+            "upstream_protocol",
+            "attempt_number",
+        )
+    )
+    data_key = (
+        None
+        if finalization_data is None
+        else tuple(
+            _terminal_scalar(getattr(finalization_data, field_name, None))
+            for field_name in (
+                "outcome",
+                "status_code",
+                "error_class",
+                "input_tokens",
+                "output_tokens",
+                "cache_read_tokens",
+                "cache_write_tokens",
+                "reasoning_tokens",
+                "thinking_characters",
+                "bytes_emitted",
+                "downstream_started",
+                "bytes_received",
+                "upstream_request_id",
+                "release_reason",
+                "health_already_applied",
+                "provider_cost_microdollars",
+                "provider_cost_source",
+                "upstream_protocol",
+                "transcoded",
+            )
+        ),
+    )
+    data_failure_effects = (
+        _failure_effects_key(getattr(finalization_data, "failure_effects", None))
+        if finalization_data is not None
+        else None
+    )
+    return (
+        identity_key,
+        _terminal_scalar(outcome),
+        data_key,
+        _normalized_usage_key(
+            getattr(finalization_data, "normalized_usage", None)
+            if finalization_data is not None
+            else None
+        ),
+        data_failure_effects,
+        _failure_effects_key(failure_effects),
+        _runtime_lease_key(runtime_lease),
+    )
+
+
 @dataclass
 class RequestFinalizationJob:
     """Process-owned finalization job for one selected attempt.
@@ -384,6 +584,7 @@ class RequestFinalizationJob:
     )
     _result: FinalizationResult = field(default_factory=FinalizationResult)
     _durable_result: Any = field(default=None, repr=False)  # noqa: ANN401
+    _terminal_semantic_key: tuple[object, ...] = field(init=False, repr=False)
 
     # Dependencies — set after construction
     _finalizer: RequestFinalizer | None = None
@@ -393,6 +594,15 @@ class RequestFinalizationJob:
     _quota_estimator: Any = None  # noqa: ANN401
     _health_manager: Any = None  # noqa: ANN401
     _stream_diagnostics: Any = None  # noqa: ANN401
+
+    def __post_init__(self) -> None:
+        self._terminal_semantic_key = _terminal_semantic_key(
+            self.identity,
+            self.outcome,
+            self.finalization_data,
+            self.runtime_lease,
+            self.failure_effects,
+        )
 
     @property
     def is_complete(self) -> bool:
@@ -434,54 +644,62 @@ class RequestFinalizationJob:
         self,
         outcome: str,
         finalization_data: Any = None,  # noqa: ANN401
+        *,
+        runtime_lease: AttemptRuntimeLease | None | object = _UNSET,
+        failure_effects: FailureEffects | None | object = _UNSET,
     ) -> None:
         """Bind the first terminal command, rejecting conflicting reuse."""
-        if self.outcome != outcome:
+        candidate_lease = (
+            self.runtime_lease if runtime_lease is _UNSET else runtime_lease
+        )
+        candidate_effects = (
+            self.failure_effects if failure_effects is _UNSET else failure_effects
+        )
+        candidate_key = _terminal_semantic_key(
+            self.identity,
+            outcome,
+            finalization_data,
+            candidate_lease,  # type: ignore[arg-type]
+            candidate_effects,
+        )
+        if candidate_key != self._terminal_semantic_key:
             raise TerminalConflictError(
-                "conflicting terminal outcome for attempt",
+                "conflicting terminal submission for attempt",
                 step="bind_terminal",
                 request_id=self.request_id,
             )
-        if (
-            self.finalization_data is not None
-            and finalization_data is not None
-            and repr(self.finalization_data) != repr(finalization_data)
-        ):
-            raise TerminalConflictError(
-                "conflicting terminal payload for attempt",
-                step="bind_terminal",
-                request_id=self.request_id,
-            )
-        self.outcome = outcome
-        if finalization_data is not None:
-            self.finalization_data = finalization_data
 
     def bind_runtime_lease(self, runtime_lease: AttemptRuntimeLease | None) -> None:
         """Join duplicate registration only when ownership facts agree."""
         if runtime_lease is None:
             return
-        existing = self.runtime_lease
-        if existing is None:
-            self.runtime_lease = runtime_lease
-            return
-        fields = (
-            "account_name",
-            "estimated_tokens",
-            "estimated_microdollars",
-            "active_count_acquired",
-            "quota_reservation_acquired",
-            "health_probe_acquired",
-            "usage_outcome_required",
-            "health_outcome_required",
-            "account_runtime_outcome_required",
+        candidate_key = _terminal_semantic_key(
+            self.identity,
+            self.outcome,
+            self.finalization_data,
+            runtime_lease,
+            self.failure_effects,
         )
-        if any(
-            getattr(existing, field) != getattr(runtime_lease, field)
-            for field in fields
-        ):
-            raise FinalizationInvariantError(
+        if candidate_key != self._terminal_semantic_key:
+            raise TerminalConflictError(
                 "incompatible runtime ownership for duplicate terminal submission",
                 step="bind_runtime_lease",
+                request_id=self.request_id,
+            )
+
+    def bind_failure_effects(self, failure_effects: FailureEffects | None) -> None:
+        """Join duplicate registration only when effects decisions agree."""
+        candidate_key = _terminal_semantic_key(
+            self.identity,
+            self.outcome,
+            self.finalization_data,
+            self.runtime_lease,
+            failure_effects,
+        )
+        if candidate_key != self._terminal_semantic_key:
+            raise TerminalConflictError(
+                "conflicting failure effects for duplicate terminal submission",
+                step="bind_failure_effects",
                 request_id=self.request_id,
             )
 
@@ -654,7 +872,37 @@ class RequestFinalizationJob:
             self._result = replace(self._result, runtime_cleanup_complete=True)
             return
         if self._finalizer is None or self._selected is None:
-            self.runtime_lease.released = True
+            outcomes = await self.runtime_lease.release_once(
+                reason=self.outcome,
+                router=self._router,
+                quota_estimator=self._quota_estimator,
+                health_manager=self._health_manager,
+            )
+            self._release_outcomes.extend(outcomes)
+            runtime_obligations_complete = all(
+                not required or marker in self.runtime_lease.completed_components
+                for marker, required in (
+                    ("usage", self.runtime_lease.usage_outcome_required),
+                    ("health", self.runtime_lease.health_outcome_required),
+                    (
+                        "account_runtime",
+                        self.runtime_lease.account_runtime_outcome_required,
+                    ),
+                )
+            )
+            if (
+                any(not outcome.released for outcome in outcomes)
+                or not self.runtime_lease.released
+                or not runtime_obligations_complete
+            ):
+                self._refresh_runtime_result_from_lease()
+                self._result = replace(
+                    self._result,
+                    runtime_cleanup_complete=False,
+                    retryable=True,
+                    detail="runtime cleanup incomplete",
+                )
+                raise RuntimeError("runtime cleanup incomplete")
         else:
             durable = self._durable_result
             if durable is None:
@@ -687,12 +935,19 @@ class RequestFinalizationJob:
             return
         components = self.runtime_lease.completed_components
         runtime_cleanup_complete = self.runtime_lease.released
+        health_probe_complete = (
+            not self.runtime_lease.health_probe_acquired or "health_probe" in components
+        )
+        health_outcome_complete = (
+            self.runtime_lease.health_outcome_required is not True
+            or "health" in components
+        )
         self._result = replace(
             self._result,
             quota_reservation_removed="quota_reservation" in components,
             active_count_decremented="active_count" in components,
             health_released_or_recorded=(
-                "health_probe" in components or "health" in components
+                health_probe_complete and health_outcome_complete
             ),
             runtime_cleanup_complete=runtime_cleanup_complete,
             retryable=False if runtime_cleanup_complete else self._result.retryable,
@@ -872,8 +1127,14 @@ class RequestFinalizationSupervisor:
         existing = self._active_jobs.get(job_key)
         if existing is not None:
             try:
-                existing.bind_terminal(outcome, finalization_data)
+                existing.bind_terminal(
+                    outcome,
+                    finalization_data,
+                    runtime_lease=runtime_lease,
+                    failure_effects=failure_effects,
+                )
                 existing.bind_runtime_lease(runtime_lease)
+                existing.bind_failure_effects(failure_effects)
             except TerminalConflictError:
                 self._terminal_conflicts += 1
                 raise

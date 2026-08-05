@@ -79,7 +79,9 @@ Key invariants:
 - Local preparation, request construction/serialization, and client-facing response adaptation failures are local terminal errors; they do not retry or penalize a provider. Only typed HTTPX transport failures can retry across distinct accounts before the explicit `downstream_started` handoff fact.
 - Retry cleanup converges before reselection, and total attempts are bounded by both distinct eligible accounts and `1 + max_retries_before_stream`; a truncated traversal records `attempt_ceiling_reached`.
 - Non-streaming response adaptation completes before durable `COMPLETED`. Native invalid JSON may pass through when usage is optional; required transcoded response failures are not recorded as success.
-- Pre-body failures can retry; no retry after response handoff
+- Pre-handoff failures can retry; streaming handoff occurs at ASGI
+  `http.response.start`, so no retry occurs after response start. An empty
+  started stream is post-handoff; `bytes_emitted` is payload accounting only.
 - **Protocol-aware streaming EOF**: `SSEDecoder` (`proxy/sse.py`) owns bounded UTF-8/SSE framing and emits shared `DecodedSSEFrame` objects. `IncrementalSSEObserver` retains bounded completion evidence (`[DONE]` for OpenAI, `message_stop` for Anthropic), and `classify_stream_eof()` maps clean exhaustion to canonical completion, provider-policy compatibility, empty, premature, or malformed EOF. The coordinator drains the shared decoder and classifies before `StreamingTranscoder.finish()`. A premature/malformed stream is finalized through the canonical `MIDSTREAM_ERROR` owner; it cannot clear success backoff or emit a synthetic downstream terminal marker. Provider policy is explicit on `ProviderConfig.stream_completion_policy` and defaults to `strict`.
 - Every retryable failed attempt must reach terminal state, confirm its reservation is terminal, and release all owned runtime components before the next attempt
 - Each attempt reservation is released exactly once via `AttemptFinalizer`
@@ -2928,17 +2930,21 @@ Granular dashboard handlers touched: `handle_runtime`, `handle_cache`, `handle_t
 
 #### Granian Runtime Threads
 
-`ServerConfig.threads` defaults to `1` (single event-loop thread is canonical; values > 1 emit a startup warning). The default config example exposes the knob:
+`ServerConfig.threads` is fixed at `1`. Configuration validation rejects any
+other value because all long-lived `asyncio.Lock` objects are bound to the
+single worker event loop. The default config example documents the invariant:
 
 ```toml
 [server]
 threads = 1
 ```
 
-Granian still passes `workers=1`. A single runtime thread keeps all `asyncio.Lock` objects on one event loop, avoiding cross-loop contention. Values > 1 enable Granian multi-thread mode but require the operator to verify all long-lived asyncio primitives tolerate multiple event loops; a startup warning is emitted. `1` remains the documented canonical default. Startup logs the effective profile:
+Granian still passes `workers=1`. A single runtime thread keeps all
+`asyncio.Lock` objects on one event loop, avoiding cross-loop access. Startup
+logs the effective profile:
 
 ```text
-Granian profile: workers=1 runtime_threads=N database_worker_threads=M access_log=...
+Granian profile: workers=1 runtime_threads=1 database_worker_threads=M access_log=...
 ```
 
 #### Background Task Staggering

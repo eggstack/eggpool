@@ -309,6 +309,7 @@ EXPECTED_INVENTORY_SNAPSHOT: tuple[tuple[str, str, bool], ...] = (
     ("security.cors_origins", "restart_required", False),
     ("security.persist_redacted_error_detail", "live", False),
     ("security.redact_headers", "restart_required", False),
+    ("security.trusted_proxies", "restart_required", False),
     ("server.access_log", "restart_required", False),
     ("server.api_key", "restart_required", True),
     ("server.api_key_env", "restart_required", True),

@@ -1,7 +1,7 @@
 # Plan 078 — Runtime Invariant and Request-Boundary Corrections
 
 Date: 2026-08-05
-Status: ready for implementation
+Status: completed (2026-08-05)
 Parent roadmap: `plans/077-sbc-lifecycle-simplification-and-runtime-correctness-roadmap.md`
 Planning baseline: `cd8967799e6613f3a5965af8cd15ce3c5269aaa8`
 
@@ -246,17 +246,17 @@ uv run pytest tests/smoke/ -q --tb=short --maxfail=1
 
 ## Acceptance criteria
 
-- [ ] Every acquired runtime component is included in the required convergence set.
-- [ ] A missing dependency produces an incomplete local release outcome and never successful convergence.
-- [ ] Completed components are not replayed on retry.
-- [ ] `server.threads` accepts only one.
-- [ ] Production startup cannot use port zero unless an explicit supported reason is documented.
-- [ ] Duplicate terminal comparison is semantic, bounded, and secret-free.
-- [ ] Candidate abort diagnostics and logs are redacted and length bounded.
-- [ ] Forwarded client attribution is honored only from configured trusted peers.
-- [ ] Current documentation consistently defines response handoff as ASGI response start.
-- [ ] Focused tests and the existing smoke gate pass.
-- [ ] No new supervisor, compatibility mode, framework, or CI job is added.
+- [x] Every acquired runtime component is included in the required convergence set.
+- [x] A missing dependency produces an incomplete local release outcome and never successful convergence.
+- [x] Completed components are not replayed on retry.
+- [x] `server.threads` accepts only one.
+- [x] Production startup cannot use port zero unless an explicit supported reason is documented.
+- [x] Duplicate terminal comparison is semantic, bounded, and secret-free.
+- [x] Candidate abort diagnostics and logs are redacted and length bounded.
+- [x] Forwarded client attribution is honored only from configured trusted peers.
+- [x] Current documentation consistently defines response handoff as ASGI response start.
+- [x] Focused tests and the existing smoke gate pass.
+- [x] No new supervisor, compatibility mode, framework, or CI job is added.
 
 ## Rejection conditions
 

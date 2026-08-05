@@ -57,6 +57,11 @@ cleanup_interval_s = 86400
 [metrics.dispatch_spans]
 sample_rate = 0.0
 
+[security]
+# Honor forwarded client-attribution headers only from these exact peers.
+# An empty list ignores X-Forwarded-For/X-Real-IP.
+trusted_proxies = []
+
 [dashboard]
 enabled = true
 public = true

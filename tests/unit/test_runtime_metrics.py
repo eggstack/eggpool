@@ -36,7 +36,7 @@ def _build_config() -> AppConfig:
                 "api_key_env": "OPENCODE_TEST_KEY",
                 "host": "127.0.0.1",
                 "port": 0,
-                "threads": 2,
+                "threads": 1,
             },
             "database": {"path": ":memory:"},
             "upstream": {"base_url": "http://localhost:19999"},
@@ -248,7 +248,7 @@ async def test_server_and_memory_fields_present(db: Database) -> None:
     assert isinstance(server["platform"], str)
     assert isinstance(server["is_daemon_hint"], bool)
     assert isinstance(server["configured_server_threads"], int)
-    assert server["configured_server_threads"] == 2
+    assert server["configured_server_threads"] == 1
 
     memory = snapshot["memory"]
     for key in ("rss_bytes", "vms_bytes", "open_fd_count", "thread_count"):

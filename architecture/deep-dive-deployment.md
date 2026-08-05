@@ -82,7 +82,7 @@ Runtime configuration. Key sections:
 - `[dashboard]` — theme, auth policy
 - `[metrics]` — buffering, flush modes
 - `[backup]` — automatic backup schedule
-- `[security]` — header redaction
+- `[security]` — header redaction and exact trusted reverse-proxy peers
 
 ### `.env`
 

@@ -226,6 +226,9 @@ class TestRequestFinalizationJob:
                 calls["usage"] += 1
 
         class Health:
+            def release_request(self, account_name: str) -> None:
+                assert account_name == "acct"
+
             def record_success(self, account_name: str, model_id: str) -> None:
                 assert account_name == "acct"
                 assert model_id == "model"
@@ -290,7 +293,7 @@ class TestRequestFinalizationJob:
         assert job.result.retryable
         assert job.result.detail == "runtime cleanup incomplete"
         assert lease.completed_components == frozenset(
-            {"active_count", "quota_reservation", "usage"}
+            {"active_count", "quota_reservation", "health_probe", "usage"}
         )
         assert calls == {
             "durable": 1,
@@ -325,6 +328,26 @@ class TestRequestFinalizationJob:
             "account": 1,
         }
 
+    @pytest.mark.asyncio
+    async def test_runtime_cleanup_stays_incomplete_with_missing_dependency(
+        self,
+    ) -> None:
+        lease = AttemptRuntimeLease(
+            account_name="acct",
+            active_count_acquired=True,
+        )
+        job = RequestFinalizationJob(
+            identity=_make_identity(),
+            outcome=FinalizationOutcome.CLIENT_CANCELLED.value,
+            runtime_lease=lease,
+        )
+
+        with pytest.raises(RuntimeError, match="runtime cleanup incomplete"):
+            await job.run()
+        assert not job.result.runtime_cleanup_complete
+        assert not job.result.active_count_decremented
+        assert job.result.retryable
+
 
 # ---------------------------------------------------------------------------
 # RequestFinalizationSupervisor
@@ -350,6 +373,57 @@ class TestRequestFinalizationSupervisor:
         job2 = sup.register_or_get(_make_identity(), "client_cancelled")
         assert job1 is job2
         assert sup.active_count == 1
+
+    def test_semantically_identical_terminal_duplicates_join(self) -> None:
+        sup = self._make_supervisor()
+        first = FinalizationData(
+            outcome=FinalizationOutcome.COMPLETED,
+            input_tokens=10,
+            error_detail="diagnostic-a",
+            upstream_latency_ms=10,
+        )
+        second = FinalizationData(
+            outcome=FinalizationOutcome.COMPLETED,
+            input_tokens=10,
+            error_detail="diagnostic-b",
+            upstream_latency_ms=20,
+        )
+
+        job1 = sup.register_or_get(
+            _make_identity(),
+            FinalizationOutcome.COMPLETED.value,
+            finalization_data=first,
+        )
+        job2 = sup.register_or_get(
+            _make_identity(),
+            FinalizationOutcome.COMPLETED.value,
+            finalization_data=second,
+        )
+
+        assert job2 is job1
+        assert sup.active_count == 1
+
+    def test_semantically_different_terminal_duplicate_does_not_mutate(self) -> None:
+        sup = self._make_supervisor()
+        first = sup.register_or_get(
+            _make_identity(),
+            FinalizationOutcome.COMPLETED.value,
+            finalization_data=FinalizationData(
+                outcome=FinalizationOutcome.COMPLETED,
+                input_tokens=10,
+            ),
+        )
+        with pytest.raises(TerminalConflictError):
+            sup.register_or_get(
+                _make_identity(),
+                FinalizationOutcome.COMPLETED.value,
+                finalization_data=FinalizationData(
+                    outcome=FinalizationOutcome.COMPLETED,
+                    input_tokens=11,
+                ),
+            )
+        assert sup.active_count == 1
+        assert first.finalization_data.input_tokens == 10
 
     def test_registry_key_includes_attempt_id(self) -> None:
         sup = self._make_supervisor()

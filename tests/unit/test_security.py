@@ -66,6 +66,7 @@ def _make_chat_app() -> FastAPI:
     app = FastAPI()
     config = AppConfig()
     config.server.api_key_env = ""  # disable auth
+    config.security.trusted_proxies = ["127.0.0.1"]
     app.state.config = config
     # Mock objects so handler attributes don't crash
     app.state.registry = MagicMock()
@@ -350,6 +351,7 @@ def _make_real_chat_app() -> FastAPI:
     app = FastAPI()
     config = AppConfig()
     config.server.api_key_env = ""  # disable auth
+    config.security.trusted_proxies = ["127.0.0.1"]
     app.state.config = config
     app.state.coordinator = MagicMock()
 
@@ -365,6 +367,7 @@ def _make_real_messages_app() -> FastAPI:
     app = FastAPI()
     config = AppConfig()
     config.server.api_key_env = ""  # disable auth
+    config.security.trusted_proxies = ["127.0.0.1"]
     app.state.config = config
     app.state.coordinator = MagicMock()
 
@@ -399,6 +402,7 @@ async def test_proxy_endpoints_build_protocol_specific_context(
             }
         }
     )
+    app.state.config.security.trusted_proxies = ["127.0.0.1"]
     app.state.coordinator.execute = AsyncMock(
         return_value=PreparedProxyResponse(
             status_code=200,

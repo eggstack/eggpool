@@ -29,7 +29,7 @@ def test_cli_check_config_valid(tmp_path: object) -> None:
         "[server]\n"
         'api_key_env = "SMOKE_CFG_KEY"\n'
         'host = "127.0.0.1"\n'
-        "port = 0\n"
+        "port = 11300\n"
         "\n"
         "[database]\n"
         'path = ":memory:"\n'

@@ -226,6 +226,7 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "dashboard.refresh_interval_s": ReloadDisposition.RESTART_REQUIRED,
     "security.allowed_hosts": ReloadDisposition.RESTART_REQUIRED,
     "security.cors_origins": ReloadDisposition.RESTART_REQUIRED,
+    "security.trusted_proxies": ReloadDisposition.RESTART_REQUIRED,
     "security.redact_headers": ReloadDisposition.RESTART_REQUIRED,
     # ``persist_redacted_error_detail`` controls whether the finalizer
     # serialises upstream error bodies into the persisted row.  The

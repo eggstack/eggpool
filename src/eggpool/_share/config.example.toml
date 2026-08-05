@@ -4,8 +4,9 @@ port = 11300
 # api_key = "ep_..." # Auto-generated on first `configsetup`; use `eggpool newkey` to regenerate
 log_level = "INFO"
 access_log = true
-# Granian runtime threads inside the single worker process. Keep workers=1.
-# Keep the supported single-event-loop default. Granian still runs workers=1.
+# Granian runtime threads inside the single worker process. Exactly one
+# event-loop thread is required; high concurrency is handled by asyncio tasks,
+# HTTP connection-pool sizing, and bounded writers.
 threads = 1
 
 [upstream]
@@ -143,6 +144,9 @@ refresh_interval_s = 60
 [security]
 allowed_hosts = []
 cors_origins = []
+# Honor X-Forwarded-For/X-Real-IP only when the immediate peer is listed here.
+# An empty list ignores forwarded client-attribution headers.
+trusted_proxies = []
 redact_headers = ["authorization", "x-api-key"]
 persist_redacted_error_detail = false
 

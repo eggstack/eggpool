@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
-from eggpool.security.redaction import REDACTED, redact_error_detail
+from eggpool.security.redaction import (
+    REDACTED,
+    redact_error_detail,
+    safe_exception_detail,
+)
 
-__all__ = ["REDACTED", "redact_error_detail"]
+__all__ = ["REDACTED", "redact_error_detail", "safe_exception_detail"]

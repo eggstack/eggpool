@@ -754,7 +754,7 @@ class TestAppStateAuditEnforcement:
             / "runtime_tasks.py"
         )
         source = runtime_tasks_path.read_text()
-        assert "_health_disabled_models_prune_once" in source, (
+        assert "prune_health_disabled_models_once" in source, (
             "runtime_tasks.py must register health_disabled_models_prune"
         )
         assert "leased_runtime" in source, (

@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 def _scrubbed_provider_config() -> AppConfig:
     """Build a config that removes ``test-provider-a`` from the candidate."""
     return AppConfig(
-        server=ServerConfig(host="127.0.0.1", port=0),
+        server=ServerConfig(host="127.0.0.1", port=11300),
         providers={
             "test-provider-b": ProviderConfig(
                 id="test-provider-b",
@@ -51,7 +51,7 @@ def _scrubbed_provider_config() -> AppConfig:
 def _transcode_loss_strict_config() -> AppConfig:
     """Build a candidate with stricter transcode loss policy."""
     cfg = AppConfig(
-        server=ServerConfig(host="127.0.0.1", port=0),
+        server=ServerConfig(host="127.0.0.1", port=11300),
         providers={
             "test-provider-a": ProviderConfig(
                 id="test-provider-a",

@@ -6,8 +6,9 @@ single-loop model (**Model 1**).
 
 ## Runtime Model Summary
 
-EggPool runs as a **single Granian worker** (`workers=1`) with
-configurable event-loop threads (`runtime_threads`, default `1`).
+EggPool runs as a **single Granian worker** (`workers=1`) with exactly one
+event-loop thread (`runtime_threads=1`). Configuration validation rejects
+multi-loop runtime settings.
 All `asyncio.Lock` instances are bound to the event loop where they
 are created.  Under Model 1, there is exactly **one event loop** per
 process, so all asyncio locks are safe.
@@ -82,9 +83,7 @@ coalescer, `record_ns()` in dispatch overhead recorders).
 
 ## Multi-Loop Risk Assessment
 
-If Granian were configured with `runtime_threads > 1` and each thread
-ran its own event loop, all `asyncio.Lock` instances would fail
-intermittently.  The `Database` class already has defensive code to
-handle idle locks bound to other loops (see `connection.py:280-302`).
-This is why Milestone F recommends `threads=1` as the default for
-the supported single-loop profile.
+Granian multi-loop runtime settings are rejected before startup. This is a
+fail-closed requirement: every long-lived `asyncio.Lock` is owned by the one
+worker event loop, and no lock rebinding or experimental compatibility mode is
+supported.

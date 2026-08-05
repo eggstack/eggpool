@@ -3080,8 +3080,8 @@ def _update_server_config(config_path: str, key: str, value: str) -> None:
         except ValueError:
             click.echo(f"Invalid port: {value!r} is not an integer.", err=True)
             sys.exit(1)
-        if not 0 <= parsed_port <= 65535:
-            click.echo("Invalid port: expected a value from 0 to 65535.", err=True)
+        if not 1 <= parsed_port <= 65535:
+            click.echo("Invalid port: expected a value from 1 to 65535.", err=True)
             sys.exit(1)
         toml_value = str(parsed_port)
     else:

@@ -4,7 +4,8 @@ Back to [Overview](overview.md)
 
 ## Purpose
 
-Header redaction, API key authentication, and security utilities to protect sensitive data in transit and at rest.
+Header redaction, API key authentication, trusted reverse-proxy attribution,
+and security utilities to protect sensitive data in transit and at rest.
 
 ## Key Modules
 
@@ -15,6 +16,14 @@ Strips sensitive headers from upstream responses before they reach clients:
 - `X-Api-Key` → redacted
 - Provider-specific auth headers → redacted
 - Custom headers via config → redacted
+
+### Forwarded client attribution
+
+`[security].trusted_proxies` is an exact immediate-peer allowlist. The proxy
+uses `X-Forwarded-For` or `X-Real-IP` only when the ASGI peer address is in
+that list, and accepts only the first bounded, control-character-free value.
+An empty list ignores forwarded attribution headers and falls back to the
+immediate peer.
 
 ### `auth.py` — Local API Key Authentication
 
@@ -57,3 +66,4 @@ Constant-time API key comparison to prevent timing attacks:
 - `.env` files never committed
 - Dashboard auth gate always active
 - No raw prompts in any output surface
+- Forwarded client-IP headers are never trusted from an unconfigured peer

@@ -124,6 +124,8 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from eggpool.security.redaction import safe_exception_detail
+
 if TYPE_CHECKING:
     from eggpool.accounts.registry import AccountRegistry
     from eggpool.catalog.pricing import CostCalculator
@@ -325,7 +327,7 @@ class RuntimeGenerationCandidate:
                     close_duration_s=0.0,
                     close_errors=(),
                     timed_out=False,
-                    primary_failure=str(cause),
+                    primary_failure=safe_exception_detail(cause, stage=failure_stage),
                     primary_failure_stage=failure_stage,
                     ownership_state_at_failure=self._state.value,
                 )
@@ -354,13 +356,16 @@ class RuntimeGenerationCandidate:
                             continue
                 except Exception as exc:  # noqa: BLE001 -- close path must not raise
                     error_type = type(exc).__name__
-                    close_errors.append(f"{resource.name}: {exc!r}")
+                    safe_error = safe_exception_detail(
+                        exc, stage=f"close:{resource.name}"
+                    )
+                    close_errors.append(safe_error)
                     close_errors_by_type.append((resource.name, error_type))
                     logger.warning(
-                        "Candidate %d resource %s close failed: %r",
+                        "Candidate %d resource %s close failed: %s",
                         self._generation_id,
                         resource.name,
-                        exc,
+                        safe_error,
                     )
                 else:
                     closed_names.append(resource.name)
@@ -377,7 +382,7 @@ class RuntimeGenerationCandidate:
                 close_duration_s=close_duration,
                 close_errors=tuple(close_errors),
                 timed_out=timed_out,
-                primary_failure=str(cause),
+                primary_failure=safe_exception_detail(cause, stage=failure_stage),
                 primary_failure_stage=failure_stage,
                 close_errors_by_type=tuple(close_errors_by_type),
                 ownership_state_at_failure=ownership_state_at_failure,

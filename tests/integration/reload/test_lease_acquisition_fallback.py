@@ -143,7 +143,7 @@ async def test_lease_exhaustion_during_publication_race() -> None:
     try:
         rm = RuntimeManager()
         # Install initial generation.
-        config = AppConfig(server=ServerConfig(host="127.0.0.1", port=0))
+        config = AppConfig(server=ServerConfig(host="127.0.0.1", port=11300))
         builder = rm_mod.RuntimeGenerationBuilder()
         build = await builder.build_initial(
             config,

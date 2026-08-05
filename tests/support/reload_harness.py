@@ -59,7 +59,7 @@ def make_initial_config() -> AppConfig:
     - Default task intervals
     """
     return AppConfig(
-        server=ServerConfig(host="127.0.0.1", port=0),
+        server=ServerConfig(host="127.0.0.1", port=11300),
         providers={
             "test-provider-a": ProviderConfig(
                 id="test-provider-a",
@@ -84,7 +84,7 @@ def make_candidate_config() -> AppConfig:
     - routing.trace.mode changed (LIVE field)
     """
     return AppConfig(
-        server=ServerConfig(host="127.0.0.1", port=0),
+        server=ServerConfig(host="127.0.0.1", port=11300),
         providers={
             "test-provider-a": ProviderConfig(
                 id="test-provider-a",

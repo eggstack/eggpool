@@ -108,17 +108,16 @@ include_score_components = false
 ## Process Model
 
 EggPool's default process model is Pi-friendly: one `eggpool serve`
-supervisor process plus one Granian worker, with a single event-loop
-thread in the worker (configurable via `[server].threads`). Both
+supervisor process plus one Granian worker, with one required event-loop
+thread in the worker. Both
 processes appear as `eggpool` in `ps` / `top` (no generic `python`
 entry), so the total footprint is two processes and one runtime thread before
 considering any upstream outbound connections.
 
-The single tuning knob for per-worker concurrency is `[server].threads`
-(int, default `1`, max `64`), which maps to Granian `runtime_threads`.
-The supported default is `1` (single event-loop thread). Values greater
-than one are experimental — all `asyncio.Lock` objects are loop-bound
-and may fail under multi-loop access:
+`[server].threads` maps to Granian `runtime_threads` and must remain `1`.
+Values greater than one fail configuration validation because all
+`asyncio.Lock` objects are loop-bound; multi-loop compatibility is not
+supported:
 
 ```toml
 [server]

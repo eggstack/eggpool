@@ -49,7 +49,7 @@ def _build_toml_config(
 [server]
 api_key_env = "{TEST_KEY_ENV}"
 host = "127.0.0.1"
-port = 0
+port = 11300
 log_level = "INFO"
 
 [upstream]
@@ -110,7 +110,7 @@ def _build_disabled_accounts_toml(db_path: str) -> str:
 [server]
 api_key_env = "{TEST_KEY_ENV}"
 host = "127.0.0.1"
-port = 0
+port = 11300
 log_level = "INFO"
 
 [upstream]

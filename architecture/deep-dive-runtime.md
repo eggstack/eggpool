@@ -33,7 +33,7 @@ Manages the EggPool process lifecycle, runtime generations, and the supervisor +
 - Daemon mode (default for `eggpool serve`)
 - `--verbose` for foreground mode
 - Health probes for supervisor
-- `runtime_threads=1` (single event-loop thread is canonical; >1 emits startup warning)
+- `runtime_threads=1` is required; other values fail configuration validation
 - Runtime database integrity/indeterminate-state failures close admission and
   exit the worker; systemd restart runs startup integrity and crash repair.
 

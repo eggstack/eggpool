@@ -336,7 +336,7 @@ class TestSetConfig:
         config = AppConfig.from_toml(str(config_path))
         assert config.server.host == 'local"host\\name'
 
-    @pytest.mark.parametrize("port", ["not-a-port", "-1", "65536"])
+    @pytest.mark.parametrize("port", ["0", "not-a-port", "-1", "65536"])
     def test_update_server_config_rejects_invalid_port(self, tmp_path, port):
         """Invalid ports fail before the config file is mutated."""
         config_path = tmp_path / "config.toml"

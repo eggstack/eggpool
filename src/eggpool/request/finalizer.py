@@ -954,20 +954,14 @@ class RequestFinalizer:
                 account_runtime_required=not data.health_already_applied,
             )
 
-        release_health = (
-            data.outcome
-            in (
-                FinalizationOutcome.CLIENT_CANCELLED,
-                FinalizationOutcome.CLIENT_ERROR,
-                FinalizationOutcome.MIDSTREAM_ERROR,
-            )
-            and runtime_lease.health_outcome_required is not False
-        )
         outcomes = await runtime_lease.release_once(
             reason=data.outcome.value,
             router=self._router,
             quota_estimator=self._quota_estimator,
-            health_manager=self._health_manager if release_health else None,
+            # Releasing an acquired half-open probe is a runtime ownership
+            # obligation even when the terminal health outcome was already
+            # applied or does not produce provider evidence.
+            health_manager=self._health_manager,
         )
         if any(not outcome.released for outcome in outcomes):
             raise RuntimeError("runtime release incomplete")
@@ -1057,20 +1051,12 @@ class RequestFinalizer:
 
         required = {
             component
-            for component, acquired, dependency in (
-                ("active_count", runtime_lease.active_count_acquired, self._router),
-                (
-                    "quota_reservation",
-                    runtime_lease.quota_reservation_acquired,
-                    self._quota_estimator,
-                ),
-                (
-                    "health_probe",
-                    runtime_lease.health_probe_acquired,
-                    self._health_manager if release_health else None,
-                ),
+            for component, acquired in (
+                ("active_count", runtime_lease.active_count_acquired),
+                ("quota_reservation", runtime_lease.quota_reservation_acquired),
+                ("health_probe", runtime_lease.health_probe_acquired),
             )
-            if acquired and dependency is not None
+            if acquired
         }
         runtime_lease.released = required.issubset(
             runtime_lease.completed_components

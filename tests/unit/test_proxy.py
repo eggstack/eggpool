@@ -2,11 +2,53 @@
 
 from __future__ import annotations
 
+from starlette.requests import Request
+
+from eggpool.api.proxy_request import get_client_ip
 from eggpool.proxy.client import (
     HOP_BY_HOP_HEADERS,
     filter_request_headers,
     filter_response_headers,
 )
+
+
+def _request_with_peer(peer: str, headers: list[tuple[bytes, bytes]]) -> Request:
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "raw_path": b"/",
+        "query_string": b"",
+        "headers": headers,
+        "client": (peer, 1234),
+        "server": ("127.0.0.1", 11300),
+        "scheme": "http",
+    }
+    return Request(scope, lambda: None)  # type: ignore[arg-type]
+
+
+def test_forwarded_client_ip_ignored_from_untrusted_peer() -> None:
+    request = _request_with_peer(
+        "10.0.0.8",
+        [(b"x-forwarded-for", b"198.51.100.4"), (b"x-real-ip", b"203.0.113.5")],
+    )
+    assert get_client_ip(request, trusted_proxies=("127.0.0.1",)) == "10.0.0.8"
+
+
+def test_forwarded_client_ip_honored_from_trusted_peer() -> None:
+    request = _request_with_peer(
+        "127.0.0.1",
+        [(b"x-forwarded-for", b"198.51.100.4, 10.0.0.8")],
+    )
+    assert get_client_ip(request, trusted_proxies=("127.0.0.1",)) == "198.51.100.4"
+
+
+def test_malformed_forwarded_client_ip_falls_back_to_peer() -> None:
+    request = _request_with_peer(
+        "127.0.0.1",
+        [(b"x-forwarded-for", b"\x00" + b"x" * 100)],
+    )
+    assert get_client_ip(request, trusted_proxies=("127.0.0.1",)) == "127.0.0.1"
 
 
 def test_filter_request_headers_removes_auth() -> None:

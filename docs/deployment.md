@@ -254,7 +254,7 @@ families as `LIVE`, so editing ``[providers.<id>]``,
 ``[[providers.<id>.accounts]]``, ``[routing]``, ``[model_overrides.<id>]``,
 or ``[model_capabilities.<id>]`` applies without a restart. Other
 fields (server bind host/port, Granian construction, database path,
-middleware, security headers, metrics topology, backup paths,
+middleware, security headers and trusted-proxy attribution, metrics topology, backup paths,
 transcoder/compression storage topology) remain `RESTART_REQUIRED` —
 use `eggpool restart` for those. A mixed live + restart-required
 change is rejected entirely (exit code `2`); no partial application.
@@ -610,13 +610,11 @@ address for the probe). Either a live PID or a 200 from the probe
 causes the new `serve` to exit non-zero so a stale PID file is
 never silently overwritten.
 
-The primary tuning knob is `[server].threads` (int, default `1`,
-min `1`, max `64`), which sets Granian `runtime_threads` — the
-number of event-loop threads in the worker. The supported default of
-one thread uses asyncio task concurrency for high-throughput streaming
-proxy traffic. Values greater than one are experimental — all
-`asyncio.Lock` objects are loop-bound and may fail under multi-loop
-access:
+`[server].threads` sets Granian `runtime_threads` and must remain `1`.
+One event-loop thread uses asyncio task concurrency for high-throughput
+streaming proxy traffic. Values greater than one fail configuration
+validation because all `asyncio.Lock` objects are loop-bound; multi-loop
+compatibility is not supported:
 
 ```toml
 [server]
