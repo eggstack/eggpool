@@ -30,6 +30,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Error isolation: provider-specific validation errors (e.g. unsupported MiniMax-M3 thinking through OpenCode Go) are contained to a single request — no account/model/circuit/quarantine penalties, no restart or database deletion required
 - Attempt-scoped failure decisions: one bounded canonical decision carries retry, provider evidence, health/quarantine, circuit, backoff, and probe-convergence effects; retained attempt ownership prevents identical failures from colliding or replaying
 - Process-owned finalization: every selected request-terminal outcome (completion, cancellation, capability rejection, upstream client error, or stream failure) is reconciled by one bounded, attempt-keyed retained job with explicit runtime ownership; the supervisor owns capped timer-driven retries, enforces an absolute retry-age deadline, and exposes durable-terminal, reservation, and runtime-cleanup convergence separately, including partial runtime progress while a retry is pending and a non-retryable, detail-free result after the lease converges
+- Truthful stream handoff: `downstream_started` is marked when the proxy forwards ASGI `http.response.start`, before body iteration; an empty started stream is post-handoff with `bytes_emitted = 0`, and cannot be retried
 - Restart-safe crash recovery: startup reconciliation repairs durable requests and reservations left by a prior process; normal runtime cleanup remains owned by the selected attempt
 - Database recovery: fail-closed startup integrity and restart-safe crash reconciliation; an indeterminate runtime SQLite state closes admission and lets systemd restart the worker
 - Bounded model quarantine: TTL-based suspected/quarantined state with corroboration thresholds and automatic recovery
@@ -117,6 +118,7 @@ Use `eggpool connect` for interactive provider setup. See [docs/providers.md](do
 | `[server]` | Bind address, port (default 11300), API key, logging, threads |
 | `[upstream]` | Upstream API base URL, timeouts, connection pool |
 | `[database]` | SQLite path, WAL mode |
+| `[dispatch_writer]` | Optional process-owned durable dispatch writer |
 | `[models]` | Catalog refresh, exposure mode, model collapse, withdrawal policy |
 | `[routing]` | Routing strategy, retry limits, quota mode, same-tier fairness |
 | `[dashboard]` | Dashboard toggle, theme, refresh interval |

@@ -16,6 +16,7 @@ from eggpool.request.provider_bound_request import (
     ProviderBoundRequest,
     SegmentationValidityKey,
 )
+from eggpool.request.response_handoff import ResponseHandoffState
 from eggpool.request.transform_pipeline import (
     PipelineResult,
     TransformContext,
@@ -36,6 +37,7 @@ __all__ = [
     "ProviderBoundRequest",
     "ProxyRequestContext",
     "RequestCoordinator",
+    "ResponseHandoffState",
     "SegmentationValidityKey",
     "TransformContext",
     "TransformMeta",

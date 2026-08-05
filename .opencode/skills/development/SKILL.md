@@ -122,6 +122,11 @@ and the real response path. Verify that canonical `[DONE]`/`message_stop` stream
 complete, markerless payload streams record incomplete EOF, and transcoded streams
 do not receive a synthetic terminal marker after premature EOF.
 
+Streaming handoff regressions should invoke the proxy streaming response through a
+direct ASGI send collector. `downstream_started` is marked at
+`http.response.start`, before the first body iteration; an empty started stream
+therefore remains post-handoff with zero emitted bytes.
+
 Dispatch-boundary regressions should cover distinct-account failover, the
 configured attempt ceiling, cleanup-before-reselection, local request
 construction failures without provider health changes, response adaptation

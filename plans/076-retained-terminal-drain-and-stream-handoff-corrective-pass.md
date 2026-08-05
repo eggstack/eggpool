@@ -1,7 +1,7 @@
 # Plan 076 — Retained Terminal Drain and Stream Handoff Corrective Pass
 
 Date: 2026-08-05
-Status: ready for implementation
+Status: complete (2026-08-05)
 Parent roadmap: `plans/070-failure-resilience-router-recovery-and-sbc-simplification-roadmap.md`
 Depends on:
 
@@ -416,30 +416,30 @@ No live-provider, long-stream soak, process farm, systemd CI service, coverage t
 
 ## Plan acceptance criteria
 
-- [ ] Retained failed-attempt cleanup and claim compensation are represented by one explicitly tagged command type.
-- [ ] One registry owns command progress and active task state without incompatible alias dictionaries.
-- [ ] The same durable identity cannot silently change command kind.
-- [ ] One dispatcher chooses the correct runner from the stored command kind.
-- [ ] Shutdown drain iterates the registry once and resumes each command with the correct runner.
-- [ ] A failed claim-compensation command remains resumable and is not passed to failed-attempt cleanup.
-- [ ] A failed attempt-cleanup command remains resumable and is not passed to claim compensation.
-- [ ] Completed commands retire only after component convergence is proven.
-- [ ] Capacity remains globally bounded and fail closed.
-- [ ] Diagnostics count command kinds without using aliased registries.
-- [ ] One request-owned state records streaming ASGI response start.
-- [ ] `downstream_started` no longer depends on first body bytes.
-- [ ] An empty started stream records handoff true and bytes emitted zero.
-- [ ] Pre-start failure remains distinguishable from post-start, pre-body failure.
-- [ ] Every streaming terminal path uses the authoritative handoff state.
-- [ ] Finalization saturation after response start uses the post-handoff behavior even with zero bytes.
-- [ ] Retry/reroute is impossible after ASGI response start.
-- [ ] Generation lease release and upstream response closure remain correct.
-- [ ] No provider health effect is created by retained-command type mismatch or local response wrapper failure.
-- [ ] Roadmap 070 references Plan 076 and is not marked complete before this pass closes.
-- [ ] The canonical dispatch-writer configuration surface is documented truthfully without a migration framework.
-- [ ] Focused regressions, Ruff, Pyright, and the existing smoke suite pass.
-- [ ] CI remains one Python 3.11 job with no matrix, coverage, performance, soak, or fault-campaign gate.
-- [ ] No new supervisor, generic workflow engine, persistent cleanup queue, response buffer, replay mechanism, or distributed coordination is introduced.
+- [x] Retained failed-attempt cleanup and claim compensation are represented by one explicitly tagged command type.
+- [x] One registry owns command progress and active task state without incompatible alias dictionaries.
+- [x] The same durable identity cannot silently change command kind.
+- [x] One dispatcher chooses the correct runner from the stored command kind.
+- [x] Shutdown drain iterates the registry once and resumes each command with the correct runner.
+- [x] A failed claim-compensation command remains resumable and is not passed to failed-attempt cleanup.
+- [x] A failed attempt-cleanup command remains resumable and is not passed to claim compensation.
+- [x] Completed commands retire only after component convergence is proven.
+- [x] Capacity remains globally bounded and fail closed.
+- [x] Diagnostics count command kinds without using aliased registries.
+- [x] One request-owned state records streaming ASGI response start.
+- [x] `downstream_started` no longer depends on first body bytes.
+- [x] An empty started stream records handoff true and bytes emitted zero.
+- [x] Pre-start failure remains distinguishable from post-start, pre-body failure.
+- [x] Every streaming terminal path uses the authoritative handoff state.
+- [x] Finalization saturation after response start uses the post-handoff behavior even with zero bytes.
+- [x] Retry/reroute is impossible after ASGI response start.
+- [x] Generation lease release and upstream response closure remain correct.
+- [x] No provider health effect is created by retained-command type mismatch or local response wrapper failure.
+- [x] Roadmap 070 references Plan 076 and is not marked complete before this pass closes.
+- [x] The canonical dispatch-writer configuration surface is documented truthfully without a migration framework.
+- [x] Focused regressions, Ruff, Pyright, and the existing smoke suite pass.
+- [x] CI remains one Python 3.11 job with no matrix, coverage, performance, soak, or fault-campaign gate.
+- [x] No new supervisor, generic workflow engine, persistent cleanup queue, response buffer, replay mechanism, or distributed coordination is introduced.
 
 ## Rejection conditions
 
@@ -461,3 +461,19 @@ Do not close this plan if:
 ## Definition of done
 
 Plan 076 is complete when retained terminal work has one type-safe command registry and one correct shutdown dispatcher, streaming handoff is recorded at the actual ASGI response-start boundary rather than first body output, empty and immediately failing streams are classified truthfully, focused regressions prove both fixes, and Roadmap 070 can be closed without restoring any of the recovery or verification complexity removed by Plans 071–075.
+
+### Closure verification
+
+Focused and repository-gate commands completed:
+
+```bash
+uv run pytest tests/unit/test_request_coordinator_cleanup.py tests/unit/test_stream_completion.py tests/integration/test_response_transparency.py -q --tb=short --maxfail=1
+uv run pytest tests/integration/test_streaming_edge_cases.py tests/integration/test_streaming_cancel_shield.py tests/integration/test_coordinator_disconnect.py tests/integration/test_streaming_transcode_concurrency.py tests/integration/test_streaming_error_response_closure.py -q --tb=short --maxfail=1
+uv run pytest tests/unit/test_coordinator_provider.py tests/unit/test_coordinator_claim_lock_scope.py tests/unit/test_coordinator_lock_scope.py tests/unit/test_request_finalization_supervisor.py tests/unit/test_request_finalizer.py tests/unit/test_failure_effects_table.py tests/integration/test_response_transparency.py -q --tb=short --maxfail=1
+uv run eggpool --config config.example.toml check-config
+uv run eggpool --config config.sbc.example.toml check-config
+uv run ruff format --check src/ tests/ scripts/
+uv run ruff check src/ tests/ scripts/
+uv run pyright src/ scripts/
+PYTHONHASHSEED=0 TZ=UTC uv run pytest tests/smoke/ -q --tb=short --maxfail=1
+```

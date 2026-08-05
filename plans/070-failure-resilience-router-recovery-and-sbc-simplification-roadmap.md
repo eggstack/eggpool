@@ -1,7 +1,7 @@
 # Failure Resilience, Router Recovery, and SBC Simplification Roadmap
 
 Date: 2026-08-04
-Status: complete
+Status: complete — corrective follow-up completed by Plan 076
 Plan: 070
 Planning baseline: `e73db213e7e381043cda3cfb8a3dd8109f3f39ca`
 Completed predecessor: `plans/058-durable-convergence-exact-update-sbc-hotpath-roadmap.md`
@@ -13,6 +13,7 @@ Implementation plans:
 - `plans/073-bounded-backoff-and-router-self-healing.md`
 - `plans/074-restart-safe-runtime-and-database-simplification.md`
 - `plans/075-sbc-resource-profile-and-verification-consolidation.md`
+- `plans/076-retained-terminal-drain-and-stream-handoff-corrective-pass.md`
 
 ## Purpose
 

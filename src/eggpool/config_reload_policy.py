@@ -132,22 +132,6 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "database.worker_threads": ReloadDisposition.RESTART_REQUIRED,
     # ---- dispatch writer (process-owned; restart-required until safe
     # reconfiguration path is implemented and tested) ----
-    "database.dispatch_writer.enabled": ReloadDisposition.RESTART_REQUIRED,
-    "database.dispatch_writer.max_queue_depth": ReloadDisposition.RESTART_REQUIRED,
-    "database.dispatch_writer.max_batch_size": ReloadDisposition.RESTART_REQUIRED,
-    "database.dispatch_writer.max_batch_wait_ms": ReloadDisposition.RESTART_REQUIRED,
-    "database.dispatch_writer.enqueue_timeout_ms": ReloadDisposition.RESTART_REQUIRED,
-    "database.dispatch_writer.shutdown_drain_timeout_s": (
-        ReloadDisposition.RESTART_REQUIRED
-    ),
-    "database.dispatch_writer.sample_window": ReloadDisposition.RESTART_REQUIRED,
-    "database.dispatch_writer.low_pressure_batch_wait_ms": (
-        ReloadDisposition.RESTART_REQUIRED
-    ),
-    "database.dispatch_writer.high_pressure_batch_wait_ms": (
-        ReloadDisposition.RESTART_REQUIRED
-    ),
-    # Also support top-level dispatch_writer shorthand for convenience
     "dispatch_writer.enabled": ReloadDisposition.RESTART_REQUIRED,
     "dispatch_writer.max_queue_depth": ReloadDisposition.RESTART_REQUIRED,
     "dispatch_writer.max_batch_size": ReloadDisposition.RESTART_REQUIRED,

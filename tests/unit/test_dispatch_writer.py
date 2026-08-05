@@ -1756,12 +1756,6 @@ class TestRehashExtended:
             "dispatch_writer.max_batch_wait_ms",
             "dispatch_writer.max_queue_depth",
             "dispatch_writer.shutdown_drain_timeout_s",
-            "database.dispatch_writer.enabled",
-            "database.dispatch_writer.enqueue_timeout_ms",
-            "database.dispatch_writer.max_batch_size",
-            "database.dispatch_writer.max_batch_wait_ms",
-            "database.dispatch_writer.max_queue_depth",
-            "database.dispatch_writer.shutdown_drain_timeout_s",
         ):
             assert _disposition_for(path) is ReloadDisposition.RESTART_REQUIRED, (
                 f"{path} must be RESTART_REQUIRED — dispatch_writer is process-owned "
@@ -2896,7 +2890,7 @@ class TestConfigFieldClassification:
         dispatch_writer_fields = {
             k: v for k, v in _FIELD_DISPOSITION.items() if "dispatch_writer" in k
         }
-        assert len(dispatch_writer_fields) == 18  # 9 fields × 2 paths
+        assert len(dispatch_writer_fields) == 9
 
         for field_path, disposition in dispatch_writer_fields.items():
             assert disposition == ReloadDisposition.RESTART_REQUIRED, (
@@ -2910,23 +2904,13 @@ class TestConfigFieldClassification:
         from eggpool.models.config import DispatchWriterConfig
 
         config_fields = set(DispatchWriterConfig.model_fields.keys())
-        # Check both paths (database.dispatch_writer.* and dispatch_writer.*)
-        policy_fields_db = {
-            k.split("database.dispatch_writer.")[-1]
-            for k in _FIELD_DISPOSITION
-            if k.startswith("database.dispatch_writer.")
-        }
         policy_fields_top = {
             k.split("dispatch_writer.")[-1]
             for k in _FIELD_DISPOSITION
             if k.startswith("dispatch_writer.") and "database." not in k
         }
-        # Every config field should appear in both paths
+        # Every config field should appear on the canonical top-level path.
         for field_name in config_fields:
-            assert field_name in policy_fields_db, (
-                f"DispatchWriterConfig.{field_name} missing from "
-                f"database.dispatch_writer.* reload policy"
-            )
             assert field_name in policy_fields_top, (
                 f"DispatchWriterConfig.{field_name} missing from "
                 f"dispatch_writer.* reload policy"

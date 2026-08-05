@@ -192,39 +192,17 @@ class TestIntervalChanges:
 
 
 class TestModelInfoEnableDisable:
-    def test_inventory_diff_shows_enabled_change(self) -> None:
-        """inventory_for_config returns all tasks; disabled tasks have enabled=False.
-        compute_spec_diff classifies them as 'changed' since name matches."""
-        config_enabled = _make_config()
-        config_enabled.model_info.enabled = True  # type: ignore[union-attr]
-        config_enabled.model_info.refresh_interval_s = 21600  # type: ignore[union-attr]
-
-        config_disabled = _make_config()
-        config_disabled.model_info.enabled = False  # type: ignore[union-attr]
-        config_disabled.model_info.refresh_interval_s = 21600  # type: ignore[union-attr]
-
-        specs_enabled = inventory_for_config(
-            config_enabled,
+    def test_inventory_omits_model_info_tasks(self) -> None:
+        """Model-info work is not represented by the periodic task inventory."""
+        config = _make_config()
+        specs = inventory_for_config(
+            config,
             include_update_checker=False,  # type: ignore[arg-type]
         )
-        specs_disabled = inventory_for_config(
-            config_disabled,
-            include_update_checker=False,  # type: ignore[arg-type]
-        )
+        names = {spec.name for spec in specs}
 
-        by_name_enabled = {s.name: s for s in specs_enabled}
-        by_name_disabled = {s.name: s for s in specs_disabled}
-
-        assert by_name_enabled["model_info_refresh"].enabled is True
-        assert by_name_enabled["model_info_canonical_backfill"].enabled is True
-        assert by_name_disabled["model_info_refresh"].enabled is False
-        assert by_name_disabled["model_info_canonical_backfill"].enabled is False
-
-        # Diff shows changed (same name, different enabled flag)
-        diff = compute_spec_diff(specs_enabled, specs_disabled)
-        changed_names = [c[0].name for c in diff.changed]
-        assert "model_info_refresh" in changed_names
-        assert "model_info_canonical_backfill" in changed_names
+        assert "model_info_refresh" not in names
+        assert "model_info_canonical_backfill" not in names
 
     @pytest.mark.asyncio
     async def test_model_info_disable_enable_via_supervisor(self) -> None:

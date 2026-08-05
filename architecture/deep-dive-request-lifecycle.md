@@ -114,7 +114,7 @@ The orchestrator. Wires together all lifecycle stages:
 - Request persisted before upstream dispatch
 - Dispatch stages have narrow exception ownership: local preparation, request construction/serialization, and client-facing adaptation faults are local terminal errors; only typed HTTPX transport faults are retry candidates.
 - Retry uses distinct accounts only, converges failed-attempt cleanup before reselection, and stops at `min(distinct eligible accounts, 1 + max_retries_before_stream)` without sleeping. A ceiling-truncated traversal records `attempt_ceiling_reached`.
-- Response handoff is an explicit `downstream_started` fact set immediately before stream delivery; no retry occurs after handoff, even when zero payload bytes have been emitted.
+- Response handoff is an explicit `downstream_started` fact marked immediately before forwarding ASGI `http.response.start`; no retry occurs after handoff, even when zero payload bytes have been emitted. Body-byte accounting is separate.
 - Non-streaming response adaptation completes before durable `COMPLETED`; native pass-through may retain invalid JSON, but required transcoded response adaptation must succeed first.
 - Every retryable failed attempt reaches terminal state before next attempt
 - Same URL composition rules for catalog fetch and chat dispatch
@@ -146,14 +146,14 @@ Per-attempt finalization with idempotent reservation release. Each attempt reser
 ### Coordinator-retained cleanup
 
 Retryable pre-body attempt cleanup and post-commit claim compensation are
-separate coordinator-owned commands. Each records durable transition,
+two tagged command kinds in one coordinator-owned retained registry. Each records durable transition,
 reservation, active-count, quota, health/probe, and completion progress before
 the next await, so a later duplicate caller resumes only unfinished releases.
 The durable attempt transition and reservation terminal state remain separate:
 an attempt update is not evidence that its reservation is released. A caller
 may proceed only after the progress record explicitly reports convergence;
 normal child-task completion alone is insufficient.
-Each registry is capped at 128 entries by default; capacity exhaustion fails
+The single registry is capped at 128 entries by default; capacity exhaustion fails
 closed rather than creating detached work. Generation shutdown performs one
 bounded drain and reports unresolved identities for the existing startup
 recovery safety net. If a request waiter is cancelled during either command,

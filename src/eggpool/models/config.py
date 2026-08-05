@@ -240,9 +240,6 @@ class DatabaseConfig(BaseModel):
     # not share the data-plane connection lock. Set to 1 for minimum-footprint
     # mode on extremely constrained devices or in-memory test databases.
     worker_threads: int = Field(default=2, ge=1, le=2)
-    dispatch_writer: DispatchWriterConfig = Field(
-        default_factory=DispatchWriterConfig,
-    )
     recovery: DatabaseRecoveryConfig = Field(
         default_factory=DatabaseRecoveryConfig,
     )

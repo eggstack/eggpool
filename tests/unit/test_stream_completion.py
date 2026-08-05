@@ -22,7 +22,7 @@ def test_openai_done_is_retained_when_fragmented() -> None:
             protocol="openai",
             policy="strict",
             snapshot=snapshot,
-            downstream_bytes_emitted=len(payload),
+            downstream_started=True,
         ).classification
         == "complete"
     )
@@ -47,7 +47,7 @@ def test_payload_without_terminal_is_premature_after_response_handoff() -> None:
         protocol="openai",
         policy="strict",
         snapshot=observer.completion_snapshot,
-        downstream_bytes_emitted=1,
+        downstream_started=True,
     )
     assert decision.classification == "premature_eof"
     assert decision.downstream_started
@@ -67,7 +67,7 @@ def test_markerless_usage_can_only_complete_under_provider_policy() -> None:
             protocol="openai",
             policy="strict",
             snapshot=snapshot,
-            downstream_bytes_emitted=0,
+            downstream_started=False,
         ).classification
         == "premature_eof"
     )
@@ -76,7 +76,7 @@ def test_markerless_usage_can_only_complete_under_provider_policy() -> None:
             protocol="openai",
             policy="compatible",
             snapshot=snapshot,
-            downstream_bytes_emitted=0,
+            downstream_started=False,
         ).classification
         == "compatibility_eof"
     )

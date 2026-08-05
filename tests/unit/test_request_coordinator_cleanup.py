@@ -12,6 +12,7 @@ from eggpool.request.coordinator import (
     ClaimCompensationProgress,
     ProxyRequestContext,
     RequestCoordinator,
+    RetainedTerminalCommand,
     RuntimePublicationReceipt,
     SelectedAttempt,
     _RetryableUpstreamError,
@@ -169,14 +170,19 @@ async def test_cleanup_normal_return_requires_convergence() -> None:
     coordinator = object.__new__(RequestCoordinator)
     selected = _selected()
     key = (selected.proxy_request_id, selected.attempt_id)
-    coordinator._attempt_cleanup_progress = {
-        key: AttemptCleanupProgress(completed=False),
+    coordinator._retained_terminal_commands = {
+        key: RetainedTerminalCommand(
+            kind="failed_attempt_cleanup",
+            progress=AttemptCleanupProgress(completed=False),
+        )
     }
 
     async def retained_work() -> None:
         return
 
-    coordinator._attempt_cleanup_tasks = {key: asyncio.create_task(retained_work())}
+    coordinator._retained_terminal_commands[key].task = asyncio.create_task(
+        retained_work()
+    )
 
     with pytest.raises(RuntimeError, match="did not converge"):
         await coordinator._cleanup_failed_attempt(
@@ -250,10 +256,7 @@ async def test_cancelled_cleanup_submits_one_request_terminal(
     cleanup_kind: str,
 ) -> None:
     coordinator = object.__new__(RequestCoordinator)
-    coordinator._attempt_cleanup_tasks = {}
-    coordinator._attempt_cleanup_progress = {}
-    coordinator._claim_compensation_tasks = {}
-    coordinator._claim_compensation_progress = {}
+    coordinator._retained_terminal_commands = {}
     selected = _selected()
     context = _context()
     terminal_outcomes: list[str] = []
@@ -264,8 +267,9 @@ async def test_cancelled_cleanup_submits_one_request_terminal(
 
     coordinator._finalize_terminal = finalize_terminal  # type: ignore[method-assign]
     if cleanup_kind == "attempt":
-        coordinator._attempt_cleanup_progress[("req-1", 1)] = AttemptCleanupProgress(
-            completed=True
+        coordinator._retained_terminal_commands[("req-1", 1)] = RetainedTerminalCommand(
+            kind="failed_attempt_cleanup",
+            progress=AttemptCleanupProgress(completed=True),
         )
         assert await coordinator._await_cleanup_then_finalize_cancelled(
             context=context,
@@ -274,8 +278,9 @@ async def test_cancelled_cleanup_submits_one_request_terminal(
     else:
         context.client_metadata["_post_commit_selected"] = selected
         context.client_metadata["post_commit_interrupted"] = True
-        coordinator._claim_compensation_progress[("req-1", 1)] = (
-            ClaimCompensationProgress(completed=True)
+        coordinator._retained_terminal_commands[("req-1", 1)] = RetainedTerminalCommand(
+            kind="claim_compensation",
+            progress=ClaimCompensationProgress(completed=True),
         )
         assert await coordinator._handle_selection_cancellation(context)
     assert terminal_outcomes == ["client_cancelled"]
@@ -287,12 +292,12 @@ async def test_retained_cleanup_capacity_fails_closed() -> None:
     coordinator = object.__new__(RequestCoordinator)
     coordinator._retained_cleanup_capacity = 1
     coordinator._retained_cleanup_capacity_rejections = 0
-    coordinator._attempt_cleanup_tasks = {}
-    coordinator._attempt_cleanup_progress = {
-        ("existing", 1): AttemptCleanupProgress(),
+    coordinator._retained_terminal_commands = {
+        ("existing", 1): RetainedTerminalCommand(
+            kind="failed_attempt_cleanup",
+            progress=AttemptCleanupProgress(),
+        )
     }
-    coordinator._claim_compensation_tasks = {}
-    coordinator._claim_compensation_progress = {}
 
     with pytest.raises(RuntimeError, match="capacity exhausted"):
         await coordinator._cleanup_failed_attempt(
@@ -300,7 +305,7 @@ async def test_retained_cleanup_capacity_fails_closed() -> None:
             selected=_selected(),
             error=_RetryableUpstreamError("retry"),
         )
-    assert coordinator._attempt_cleanup_tasks == {}
+    assert len(coordinator._retained_terminal_commands) == 1
     assert coordinator._retained_cleanup_capacity_rejections == 1
 
 
@@ -333,3 +338,104 @@ async def test_finalization_capacity_uses_explicit_handoff(
             await call
     else:
         await call
+
+
+@pytest.mark.asyncio
+async def test_mixed_retained_drain_dispatches_each_kind_once() -> None:
+    coordinator = object.__new__(RequestCoordinator)
+    coordinator._retained_cleanup_drain_timeout_s = 1.0
+    coordinator._retained_terminal_commands = {
+        ("attempt", 1): RetainedTerminalCommand(
+            kind="failed_attempt_cleanup",
+            progress=AttemptCleanupProgress(),
+        ),
+        ("claim", 2): RetainedTerminalCommand(
+            kind="claim_compensation",
+            progress=ClaimCompensationProgress(),
+        ),
+    }
+    calls: list[str] = []
+
+    async def run_attempt(progress: AttemptCleanupProgress) -> None:
+        calls.append("failed_attempt_cleanup")
+        progress.completed = True
+
+    async def run_claim(progress: ClaimCompensationProgress) -> None:
+        calls.append("claim_compensation")
+        progress.completed = True
+
+    coordinator._run_failed_attempt_cleanup = run_attempt  # type: ignore[method-assign]
+    coordinator._run_claim_compensation = run_claim  # type: ignore[method-assign]
+
+    assert await coordinator.drain_retained_cleanup() == 0
+    assert calls == ["failed_attempt_cleanup", "claim_compensation"]
+    assert coordinator._retained_terminal_commands == {}
+
+
+@pytest.mark.asyncio
+async def test_failed_retained_command_stays_registered_for_drain_rejoin() -> None:
+    coordinator = object.__new__(RequestCoordinator)
+    coordinator._retained_terminal_commands = {
+        ("claim", 1): RetainedTerminalCommand(
+            kind="claim_compensation",
+            progress=ClaimCompensationProgress(),
+        )
+    }
+    coordinator._retained_cleanup_drain_timeout_s = 1.0
+    calls: list[str] = []
+
+    async def fail_once(progress: ClaimCompensationProgress) -> None:
+        calls.append("failed")
+        raise RuntimeError("temporary local failure")
+
+    coordinator._run_claim_compensation = fail_once  # type: ignore[method-assign]
+    command = coordinator._retained_terminal_commands[("claim", 1)]
+    with pytest.raises(RuntimeError, match="temporary local failure"):
+        await coordinator._start_retained_terminal_task(command)
+    await asyncio.sleep(0)
+    assert command.task is None
+    assert ("claim", 1) in coordinator._retained_terminal_commands
+
+    async def resume(progress: ClaimCompensationProgress) -> None:
+        calls.append("resumed")
+        progress.completed = True
+
+    coordinator._run_claim_compensation = resume  # type: ignore[method-assign]
+    assert await coordinator.drain_retained_cleanup() == 0
+    assert calls == ["failed", "resumed"]
+
+
+def test_retained_command_kind_conflict_fails_closed() -> None:
+    coordinator = object.__new__(RequestCoordinator)
+    coordinator._retained_terminal_commands = {}
+    coordinator._retained_cleanup_capacity = 4
+    coordinator._retained_cleanup_capacity_rejections = 0
+    key = ("same", 1)
+    coordinator._register_retained_terminal_command(
+        key,
+        "claim_compensation",
+        context=_context(),
+        claim_identity=object(),
+        receipt=RuntimePublicationReceipt(),
+    )
+
+    with pytest.raises(RuntimeError, match="kind conflict"):
+        coordinator._register_retained_terminal_command(
+            key,
+            "failed_attempt_cleanup",
+            context=_context(),
+            selected=_selected(),
+            error=_RetryableUpstreamError("retry"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_retained_dispatch_rejects_kind_progress_mismatch() -> None:
+    coordinator = object.__new__(RequestCoordinator)
+    command = RetainedTerminalCommand(
+        kind="failed_attempt_cleanup",
+        progress=ClaimCompensationProgress(),
+    )
+
+    with pytest.raises(RuntimeError, match="incompatible progress"):
+        await coordinator._run_retained_terminal_command(command)

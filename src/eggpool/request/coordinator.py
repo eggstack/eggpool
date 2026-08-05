@@ -11,7 +11,7 @@ import time
 import typing
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import httpx
 
@@ -104,6 +104,7 @@ from eggpool.request.finalizer import (
 from eggpool.request.limits import estimate_reservation_tokens
 from eggpool.request.parsed_payload import ParsedRequestPayload  # noqa: TC001
 from eggpool.request.provider_bound_request import ProviderBoundRequest
+from eggpool.request.response_handoff import ResponseHandoffState
 from eggpool.request.selection_claim import (  # noqa: F401  (Milestone B scaffolding)
     SelectionClaim,  # type: ignore[reportUnusedImport]
     SelectionClaimError,  # type: ignore[reportUnusedImport]
@@ -526,6 +527,7 @@ class ProxyRequestContext:
     # from ``dispatch_overhead`` (the coordinator-internal slice).
     local_pre_upstream_ms: int | None = None
     client_metadata: dict[str, Any] = field(default_factory=dict[str, Any])
+    response_handoff: ResponseHandoffState = field(default_factory=ResponseHandoffState)
     attempted_accounts: set[str] = field(default_factory=set[str])
     provider_id: str | None = None
     client_ip: str = ""
@@ -614,6 +616,7 @@ class PreparedProxyResponse:
     usage: StreamUsageResult | None = None
     latency_ms: int = 0
     attempt_count: int = 1
+    response_handoff: ResponseHandoffState = field(default_factory=ResponseHandoffState)
 
 
 @dataclass(slots=True)
@@ -666,6 +669,25 @@ class ClaimCompensationProgress:
     receipt: RuntimePublicationReceipt | None = field(default=None, repr=False)
 
 
+RetainedTerminalKind = Literal[
+    "failed_attempt_cleanup",
+    "claim_compensation",
+]
+
+
+@dataclass(slots=True)
+class RetainedTerminalCommand:
+    """One tagged, process-owned terminal command and its resumable state."""
+
+    kind: RetainedTerminalKind
+    progress: AttemptCleanupProgress | ClaimCompensationProgress
+    task: asyncio.Task[None] | None = field(default=None, repr=False)
+
+
+class _RetainedTerminalInvariantError(RuntimeError):
+    """Raised when retained command identity or typing invariants are broken."""
+
+
 class _RetainedCleanupIncompleteError(RuntimeError):
     """Raised when retained work returns without converging ownership."""
 
@@ -683,53 +705,6 @@ class RequestCoordinator:
     - On error: finalize via RequestFinalizer, release reservation, update health
     - Pre-body failures retry on another account (excluding failed accounts)
     """
-
-    def _retained_registry(self, name: str) -> dict[tuple[str, int], Any]:
-        registry = getattr(self, name, None)
-        if registry is None:
-            registry = {}
-            setattr(self, name, registry)
-        return cast("dict[tuple[str, int], Any]", registry)
-
-    @property
-    def _attempt_cleanup_tasks(self) -> dict[tuple[str, int], asyncio.Task[None]]:
-        """Compatibility view of the single retained terminal task registry."""
-        return self._retained_registry("_retained_terminal_tasks")
-
-    @_attempt_cleanup_tasks.setter
-    def _attempt_cleanup_tasks(
-        self, value: dict[tuple[str, int], asyncio.Task[None]]
-    ) -> None:
-        self._retained_registry("_retained_terminal_tasks").update(value)
-
-    @property
-    def _claim_compensation_tasks(self) -> dict[tuple[str, int], asyncio.Task[None]]:
-        """Compatibility view of the single retained terminal task registry."""
-        return self._attempt_cleanup_tasks
-
-    @_claim_compensation_tasks.setter
-    def _claim_compensation_tasks(
-        self, value: dict[tuple[str, int], asyncio.Task[None]]
-    ) -> None:
-        self._attempt_cleanup_tasks = value
-
-    @property
-    def _attempt_cleanup_progress(self) -> dict[tuple[str, int], Any]:
-        """Compatibility view of the single retained progress registry."""
-        return self._retained_registry("_retained_terminal_progress")
-
-    @_attempt_cleanup_progress.setter
-    def _attempt_cleanup_progress(self, value: dict[tuple[str, int], Any]) -> None:
-        self._retained_registry("_retained_terminal_progress").update(value)
-
-    @property
-    def _claim_compensation_progress(self) -> dict[tuple[str, int], Any]:
-        """Compatibility view of the single retained progress registry."""
-        return self._attempt_cleanup_progress
-
-    @_claim_compensation_progress.setter
-    def _claim_compensation_progress(self, value: dict[tuple[str, int], Any]) -> None:
-        self._attempt_cleanup_progress = value
 
     @staticmethod
     def _serialize_provider_request(context: ProxyRequestContext) -> bytes:
@@ -807,10 +782,11 @@ class RequestCoordinator:
         self._select_lock = asyncio.Lock()
         self._selection_claim_lock = asyncio.Lock()
         # One retained process-owned terminal registry covers retry cleanup
-        # and post-commit compensation. The compatibility properties above
-        # expose the historical names without creating competing ownership.
-        self._retained_terminal_tasks: dict[tuple[str, int], asyncio.Task[None]] = {}
-        self._retained_terminal_progress: dict[tuple[str, int], Any] = {}
+        # and post-commit compensation. Each entry carries its command kind,
+        # progress, and active task together so mixed drains are type-safe.
+        self._retained_terminal_commands: dict[
+            tuple[str, int], RetainedTerminalCommand
+        ] = {}
         self._retained_cleanup_capacity = max(1, retained_cleanup_capacity)
         self._retained_cleanup_drain_timeout_s = max(
             0.1, retained_cleanup_drain_timeout_s
@@ -1017,35 +993,33 @@ class RequestCoordinator:
         cleanup ownership.
         """
         key = (selected.proxy_request_id, selected.attempt_id)
-        progress = self._attempt_cleanup_progress.get(key)
-        if progress is not None and progress.completed:
-            self._attempt_cleanup_progress.pop(key, None)
-            return
-        if progress is None:
-            self._check_retained_cleanup_capacity(
-                registry_name="attempt cleanup",
-                registry=self._attempt_cleanup_progress,
+        command = self._retained_terminal_commands.get(key)
+        if command is not None and command.kind != "failed_attempt_cleanup":
+            raise _RetainedTerminalInvariantError(
+                f"retained command kind conflict for request_id={key[0]} "
+                f"attempt_id={key[1]}: expected failed_attempt_cleanup, "
+                f"found {command.kind}"
             )
-            progress = AttemptCleanupProgress(
+        if command is not None and command.progress.completed:
+            self._retained_terminal_commands.pop(key, None)
+            return
+        if command is None:
+            command = self._register_retained_terminal_command(
+                key,
+                "failed_attempt_cleanup",
                 context=context,
                 selected=selected,
                 error=error,
-                effect_progress=FailureEffectProgress(
-                    attempt_key=f"{selected.proxy_request_id}:{selected.attempt_id}"
-                ),
             )
-            self._attempt_cleanup_progress[key] = progress
-        task = self._attempt_cleanup_tasks.get(key)
-        if task is None:
-            task = self._start_attempt_cleanup_task(key, progress)
+        task = self._start_retained_terminal_task(command)
         await asyncio.shield(task)
-        progress = self._attempt_cleanup_progress.get(key)
+        progress = command.progress
         self._require_cleanup_completed(
             identity=key,
             progress=progress,
             operation="attempt cleanup",
         )
-        self._attempt_cleanup_progress.pop(key, None)
+        self._retained_terminal_commands.pop(key, None)
 
     @staticmethod
     def _require_cleanup_completed(
@@ -1061,37 +1035,144 @@ class RequestCoordinator:
                 f"request_id={identity[0]} attempt_id={identity[1]}"
             )
 
-    def _check_retained_cleanup_capacity(
-        self,
-        *,
-        registry_name: str,
-        registry: dict[tuple[str, int], Any],
-    ) -> None:
-        """Fail closed before creating untracked retained cleanup work."""
-        if len(registry) < self._retained_cleanup_capacity:
+    def _check_retained_cleanup_capacity(self) -> None:
+        """Fail closed before creating untracked retained terminal work."""
+        if len(self._retained_terminal_commands) < self._retained_cleanup_capacity:
             return
         self._retained_cleanup_capacity_rejections += 1
         logger.error(
-            "Retained %s registry at capacity (%d); refusing detached work",
-            registry_name,
+            "Retained terminal command registry at capacity (%d); refusing "
+            "detached work",
             self._retained_cleanup_capacity,
         )
-        raise RuntimeError(f"retained {registry_name} capacity exhausted")
+        raise RuntimeError("retained terminal command capacity exhausted")
 
-    def _start_attempt_cleanup_task(
+    def _register_retained_terminal_command(
         self,
         key: tuple[str, int],
-        progress: AttemptCleanupProgress,
+        kind: RetainedTerminalKind,
+        *,
+        context: ProxyRequestContext,
+        selected: SelectedAttempt | None = None,
+        error: BaseException | None = None,
+        claim_identity: Any = None,  # noqa: ANN401
+        db_request_id: str | None = None,
+        attempt_id: int | None = None,
+        reservation_id: str | None = None,
+        estimated_tokens: int = 0,
+        receipt: RuntimePublicationReceipt | None = None,
+    ) -> RetainedTerminalCommand:
+        """Register one kind-stable retained command before starting work."""
+        if kind not in {"failed_attempt_cleanup", "claim_compensation"}:
+            raise _RetainedTerminalInvariantError(
+                f"unknown retained terminal command kind: {kind}"
+            )
+        existing = self._retained_terminal_commands.get(key)
+        if existing is not None:
+            if existing.kind != kind:
+                raise _RetainedTerminalInvariantError(
+                    f"retained command kind conflict for request_id={key[0]} "
+                    f"attempt_id={key[1]}: expected {kind}, found {existing.kind}"
+                )
+            return existing
+
+        self._check_retained_cleanup_capacity()
+        if kind == "failed_attempt_cleanup":
+            if selected is None or error is None:
+                raise _RetainedTerminalInvariantError(
+                    "failed-attempt cleanup registration requires selected and error"
+                )
+            progress: AttemptCleanupProgress | ClaimCompensationProgress = (
+                AttemptCleanupProgress(
+                    context=context,
+                    selected=selected,
+                    error=error,
+                    effect_progress=FailureEffectProgress(
+                        attempt_key=f"{key[0]}:{key[1]}"
+                    ),
+                )
+            )
+        else:
+            if claim_identity is None or receipt is None:
+                raise _RetainedTerminalInvariantError(
+                    "claim compensation registration requires identity and receipt"
+                )
+            progress = ClaimCompensationProgress(
+                context=context,
+                claim_identity=claim_identity,
+                db_request_id=db_request_id,
+                attempt_id=attempt_id,
+                reservation_id=reservation_id,
+                estimated_tokens=estimated_tokens,
+                error=error,
+                receipt=receipt,
+            )
+        command = RetainedTerminalCommand(kind=kind, progress=progress)
+        self._retained_terminal_commands[key] = command
+        return command
+
+    @staticmethod
+    def _command_progress(
+        command: RetainedTerminalCommand,
+        kind: RetainedTerminalKind,
+    ) -> AttemptCleanupProgress | ClaimCompensationProgress:
+        """Validate a tagged command before invoking its kind-specific runner."""
+        if command.kind != kind:
+            raise _RetainedTerminalInvariantError(
+                f"retained command dispatcher expected {kind}, found {command.kind}"
+            )
+        if kind == "failed_attempt_cleanup" and not isinstance(
+            command.progress, AttemptCleanupProgress
+        ):
+            raise _RetainedTerminalInvariantError(
+                "failed_attempt_cleanup command has incompatible progress"
+            )
+        if kind == "claim_compensation" and not isinstance(
+            command.progress, ClaimCompensationProgress
+        ):
+            raise _RetainedTerminalInvariantError(
+                "claim_compensation command has incompatible progress"
+            )
+        return command.progress
+
+    async def _run_retained_terminal_command(
+        self, command: RetainedTerminalCommand
+    ) -> None:
+        """Dispatch exactly one retained command by its stored kind."""
+        if command.kind == "failed_attempt_cleanup":
+            progress = self._command_progress(command, command.kind)
+            assert isinstance(progress, AttemptCleanupProgress)
+            await self._run_failed_attempt_cleanup(progress)
+        elif command.kind == "claim_compensation":
+            progress = self._command_progress(command, command.kind)
+            assert isinstance(progress, ClaimCompensationProgress)
+            await self._run_claim_compensation(progress)
+        else:
+            raise _RetainedTerminalInvariantError(
+                f"unknown retained terminal command kind: {command.kind}"
+            )
+
+    def _start_retained_terminal_task(
+        self, command: RetainedTerminalCommand
     ) -> asyncio.Task[None]:
-        task = asyncio.create_task(
-            self._run_failed_attempt_cleanup(progress),
-            name=f"attempt-cleanup-{key[0]}-{key[1]}",
+        """Start one retained command, preserving failed progress for rejoin."""
+        if command.task is not None and not command.task.done():
+            return command.task
+        self._command_progress(command, command.kind)
+        key = next(
+            key
+            for key, candidate in self._retained_terminal_commands.items()
+            if candidate is command
         )
-        self._attempt_cleanup_tasks[key] = task
+        task = asyncio.create_task(
+            self._run_retained_terminal_command(command),
+            name=f"{command.kind}-{key[0]}-{key[1]}",
+        )
+        command.task = task
 
         def _remove(done: asyncio.Task[None]) -> None:
-            if self._attempt_cleanup_tasks.get(key) is done:
-                self._attempt_cleanup_tasks.pop(key, None)
+            if command.task is done:
+                command.task = None
             if done.cancelled():
                 return
             try:
@@ -1100,8 +1181,9 @@ class RequestCoordinator:
                 return
             if error is not None:
                 logger.warning(
-                    "Retained attempt cleanup remains resumable: request_id=%s "
-                    "attempt_id=%s error=%s",
+                    "Retained terminal command remains resumable: kind=%s "
+                    "request_id=%s attempt_id=%s error=%s",
+                    command.kind,
                     key[0],
                     key[1],
                     type(error).__name__,
@@ -1206,7 +1288,11 @@ class RequestCoordinator:
 
     async def _join_attempt_cleanup(self, key: tuple[str, int]) -> bool:
         """Join retained attempt cleanup and report full convergence."""
-        task = self._attempt_cleanup_tasks.get(key)
+        command = self._retained_terminal_commands.get(key)
+        if command is None:
+            return True
+        progress = self._command_progress(command, "failed_attempt_cleanup")
+        task = command.task
         if task is not None:
             try:
                 await asyncio.shield(task)
@@ -1220,11 +1306,8 @@ class RequestCoordinator:
                     key[1],
                 )
                 return False
-        progress = self._attempt_cleanup_progress.get(key)
-        if progress is None:
-            return True
         if progress.completed:
-            self._attempt_cleanup_progress.pop(key, None)
+            self._retained_terminal_commands.pop(key, None)
             return True
         return False
 
@@ -1247,6 +1330,7 @@ class RequestCoordinator:
                 error_class="CancelledError",
                 upstream_latency_ms=self._elapsed_ms(context),
                 bytes_received=len(context.original_body),
+                downstream_started=context.response_handoff.started,
                 health_already_applied=health_already_applied,
                 upstream_protocol=context.upstream_protocol,
                 thinking_trace_json=_serialize_thinking_trace(context.thinking_trace),
@@ -1294,38 +1378,27 @@ class RequestCoordinator:
             if timeout_s is None
             else max(0.1, timeout_s)
         )
-        for key, progress in list(self._attempt_cleanup_progress.items()):
-            if progress.completed:
-                self._attempt_cleanup_progress.pop(key, None)
+        for key, command in list(self._retained_terminal_commands.items()):
+            if command.progress.completed:
+                self._retained_terminal_commands.pop(key, None)
                 continue
-            if key not in self._attempt_cleanup_tasks and not progress.completed:
-                self._start_attempt_cleanup_task(key, progress)
-        for key, progress in list(self._claim_compensation_progress.items()):
-            if progress.completed:
-                self._claim_compensation_progress.pop(key, None)
-                continue
-            if key not in self._claim_compensation_tasks and not progress.completed:
-                self._start_claim_compensation_task(key, progress)
+            self._start_retained_terminal_task(command)
 
         tasks = [
-            *self._attempt_cleanup_tasks.values(),
-            *self._claim_compensation_tasks.values(),
+            command.task
+            for command in self._retained_terminal_commands.values()
+            if command.task is not None
         ]
-        pending: set[asyncio.Task[None]] = set()
         if tasks:
-            _, pending = await asyncio.wait(tasks, timeout=timeout)
+            await asyncio.wait(tasks, timeout=timeout)
         await asyncio.sleep(0)
+        for key, command in list(self._retained_terminal_commands.items()):
+            if command.progress.completed:
+                self._retained_terminal_commands.pop(key, None)
         unresolved = {
-            *(
-                key
-                for key, progress in self._attempt_cleanup_progress.items()
-                if not progress.completed
-            ),
-            *(
-                key
-                for key, progress in self._claim_compensation_progress.items()
-                if not progress.completed
-            ),
+            key
+            for key, command in self._retained_terminal_commands.items()
+            if not command.progress.completed
         }
         if unresolved:
             logger.warning(
@@ -1333,19 +1406,34 @@ class RequestCoordinator:
                 len(unresolved),
                 sorted(unresolved),
             )
-        return max(len(unresolved), len(pending))
+        return len(unresolved)
 
     def retained_cleanup_snapshot(self) -> dict[str, int]:
         """Return compact diagnostics for the one retained terminal registry."""
-        retained_tasks = len(self._attempt_cleanup_tasks)
-        retained_progress = len(self._attempt_cleanup_progress)
+        commands = self._retained_terminal_commands
+        attempt_commands = [
+            command
+            for command in commands.values()
+            if command.kind == "failed_attempt_cleanup"
+        ]
+        claim_commands = [
+            command
+            for command in commands.values()
+            if command.kind == "claim_compensation"
+        ]
         return {
-            "active_attempt_cleanup_tasks": retained_tasks,
-            "resumable_attempt_cleanup_entries": retained_progress,
-            "active_claim_compensation_tasks": 0,
-            "resumable_claim_compensation_entries": 0,
-            "active_retained_terminal_tasks": retained_tasks,
-            "resumable_retained_terminal_entries": retained_progress,
+            "active_attempt_cleanup_tasks": sum(
+                command.task is not None for command in attempt_commands
+            ),
+            "resumable_attempt_cleanup_entries": len(attempt_commands),
+            "active_claim_compensation_tasks": sum(
+                command.task is not None for command in claim_commands
+            ),
+            "resumable_claim_compensation_entries": len(claim_commands),
+            "active_retained_terminal_tasks": sum(
+                command.task is not None for command in commands.values()
+            ),
+            "resumable_retained_terminal_entries": len(commands),
             "capacity_rejections": self._retained_cleanup_capacity_rejections,
         }
 
@@ -1787,6 +1875,12 @@ class RequestCoordinator:
                 return result
             except _RetryableUpstreamError as err:
                 last_error = err
+                if context.response_handoff.started:
+                    raise AcceptedFinalizationInvariantError(
+                        "retry reached a started downstream response",
+                        step="retry_after_response_start",
+                        request_id=context.request_id,
+                    ) from err
                 # Track the last useful upstream response
                 if err.upstream_response is not None:
                     last_upstream_response = err.upstream_response
@@ -2193,18 +2287,22 @@ class RequestCoordinator:
         """
 
         task_key = (context.request_id, attempt_id or -1)
-        progress = self._claim_compensation_progress.get(task_key)
-        if progress is not None and progress.completed:
-            self._claim_compensation_progress.pop(task_key, None)
+        command = self._retained_terminal_commands.get(task_key)
+        if command is not None and command.kind != "claim_compensation":
+            raise _RetainedTerminalInvariantError(
+                f"retained command kind conflict for request_id={task_key[0]} "
+                f"attempt_id={task_key[1]}: expected claim_compensation, "
+                f"found {command.kind}"
+            )
+        if command is not None and command.progress.completed:
+            self._retained_terminal_commands.pop(task_key, None)
             context.client_metadata["post_commit_interrupted"] = True
             self._selection_claim_diagnostics.record_compensation(success=True)
             return
-        if progress is None:
-            self._check_retained_cleanup_capacity(
-                registry_name="claim compensation",
-                registry=self._claim_compensation_progress,
-            )
-            progress = ClaimCompensationProgress(
+        if command is None:
+            command = self._register_retained_terminal_command(
+                task_key,
+                "claim_compensation",
                 context=context,
                 claim_identity=claim_identity,
                 db_request_id=db_request_id,
@@ -2214,10 +2312,7 @@ class RequestCoordinator:
                 error=error,
                 receipt=receipt,
             )
-            self._claim_compensation_progress[task_key] = progress
-        task = self._claim_compensation_tasks.get(task_key)
-        if task is None:
-            task = self._start_claim_compensation_task(task_key, progress)
+        task = self._start_retained_terminal_task(command)
         try:
             await asyncio.shield(task)
         except asyncio.CancelledError:
@@ -2226,7 +2321,7 @@ class RequestCoordinator:
             self._selection_claim_diagnostics.record_compensation(success=False)
             raise
 
-        progress = self._claim_compensation_progress.get(task_key)
+        progress = self._command_progress(command, "claim_compensation")
         try:
             self._require_cleanup_completed(
                 identity=task_key,
@@ -2236,43 +2331,11 @@ class RequestCoordinator:
         except _RetainedCleanupIncompleteError:
             self._selection_claim_diagnostics.record_compensation(success=False)
             raise
-        self._claim_compensation_progress.pop(task_key, None)
+        self._retained_terminal_commands.pop(task_key, None)
 
         context.client_metadata["post_commit_interrupted"] = True
         self._selection_claim_diagnostics.record_compensation(success=True)
         del error  # only logged for the trace; no type narrowing needed
-
-    def _start_claim_compensation_task(
-        self,
-        key: tuple[str, int],
-        progress: ClaimCompensationProgress,
-    ) -> asyncio.Task[None]:
-        task = asyncio.create_task(
-            self._run_claim_compensation(progress),
-            name=f"claim-compensation-{key[0]}-{key[1]}",
-        )
-        self._claim_compensation_tasks[key] = task
-
-        def _remove(done: asyncio.Task[None]) -> None:
-            if self._claim_compensation_tasks.get(key) is done:
-                self._claim_compensation_tasks.pop(key, None)
-            if done.cancelled():
-                return
-            try:
-                task_error = done.exception()
-            except asyncio.CancelledError:
-                return
-            if task_error is not None:
-                logger.warning(
-                    "Retained claim compensation remains resumable: "
-                    "request_id=%s attempt_id=%s error=%s",
-                    key[0],
-                    key[1],
-                    type(task_error).__name__,
-                )
-
-        task.add_done_callback(_remove)
-        return task
 
     async def _run_claim_compensation(
         self,
@@ -2353,7 +2416,11 @@ class RequestCoordinator:
 
     async def _join_claim_compensation(self, key: tuple[str, int]) -> bool:
         """Join retained claim compensation and report full convergence."""
-        task = self._claim_compensation_tasks.get(key)
+        command = self._retained_terminal_commands.get(key)
+        if command is None:
+            return True
+        progress = self._command_progress(command, "claim_compensation")
+        task = command.task
         if task is not None:
             try:
                 await asyncio.shield(task)
@@ -2367,11 +2434,8 @@ class RequestCoordinator:
                     key[1],
                 )
                 return False
-        progress = self._claim_compensation_progress.get(key)
-        if progress is None:
-            return True
         if progress.completed:
-            self._claim_compensation_progress.pop(key, None)
+            self._retained_terminal_commands.pop(key, None)
             return True
         return False
 
@@ -2393,10 +2457,15 @@ class RequestCoordinator:
             )
             return True
         key = (selected_obj.proxy_request_id, selected_obj.attempt_id)
+        command = self._retained_terminal_commands.get(key)
         compensation_started = (
-            key in self._claim_compensation_progress
-            or key in self._claim_compensation_tasks
+            command is not None and command.kind == "claim_compensation"
         )
+        if command is not None and command.kind != "claim_compensation":
+            raise _RetainedTerminalInvariantError(
+                f"selection cancellation found {command.kind} for request_id="
+                f"{key[0]} attempt_id={key[1]}"
+            )
         if compensation_started:
             if not await self._join_claim_compensation(key):
                 logger.error(
@@ -3199,6 +3268,7 @@ class RequestCoordinator:
                     error_class="CancelledError",
                     upstream_latency_ms=elapsed_ms,
                     bytes_received=len(context.original_body),
+                    downstream_started=context.response_handoff.started,
                     upstream_protocol=context.upstream_protocol,
                     thinking_trace_json=_serialize_thinking_trace(
                         context.thinking_trace
@@ -3861,6 +3931,7 @@ class RequestCoordinator:
             account_name=selected.account_name,
             latency_ms=self._elapsed_ms(context),
             attempt_count=attempt_num,
+            response_handoff=context.response_handoff,
         )
 
     def _build_stream_generator(
@@ -3988,11 +4059,9 @@ class RequestCoordinator:
                         if out_chunks:
                             output = b"".join(out_chunks)
                             downstream_bytes_emitted += len(output)
-                            context.client_metadata["downstream_started"] = True
                             yield output
                     else:
                         downstream_bytes_emitted += len(chunk)
-                        context.client_metadata["downstream_started"] = True
                         yield chunk
 
                 # Transport EOF is not protocol completion. Drain the parser,
@@ -4018,14 +4087,14 @@ class RequestCoordinator:
                     # event-stream responses only.
                     eof_decision = StreamEOFDecision(
                         classification="complete",
-                        downstream_started=downstream_bytes_emitted > 0,
+                        downstream_started=context.response_handoff.started,
                     )
                 else:
                     eof_decision = classify_stream_eof(
                         protocol=context.upstream_protocol,
                         policy=completion_policy,
                         snapshot=observer.completion_snapshot,
-                        downstream_bytes_emitted=downstream_bytes_emitted,
+                        downstream_started=context.response_handoff.started,
                     )
                 if eof_decision.classification not in {
                     "complete",
@@ -4112,7 +4181,6 @@ class RequestCoordinator:
                     if out_chunks:
                         output = b"".join(out_chunks)
                         downstream_bytes_emitted += len(output)
-                        context.client_metadata["downstream_started"] = True
                         yield output
                 usage_result = observer.usage
 
@@ -4162,9 +4230,7 @@ class RequestCoordinator:
                     selected,
                     FinalizationData(
                         outcome=FinalizationOutcome.COMPLETED,
-                        downstream_started=bool(
-                            context.client_metadata.get("downstream_started")
-                        ),
+                        downstream_started=context.response_handoff.started,
                         status_code=upstream_response.status_code,
                         input_tokens=usage_result.input_tokens,
                         output_tokens=usage_result.output_tokens,
@@ -4256,9 +4322,7 @@ class RequestCoordinator:
                     )
                     fin_data = FinalizationData(
                         outcome=FinalizationOutcome.CLIENT_CANCELLED,
-                        downstream_started=bool(
-                            context.client_metadata.get("downstream_started")
-                        ),
+                        downstream_started=context.response_handoff.started,
                         first_byte_ms=(
                             int(first_byte_ms) if first_byte_ms > 0 else None
                         ),
@@ -4333,9 +4397,7 @@ class RequestCoordinator:
                     connect_ms=mid_connect_ms_value,
                     read_ms=mid_read_ms_value,
                 )
-                downstream_started = bool(
-                    context.client_metadata.get("downstream_started")
-                )
+                downstream_started = context.response_handoff.started
                 failure_source = (
                     "transcoding"
                     if isinstance(exc, _LocalStreamTranslationError)
@@ -4349,7 +4411,7 @@ class RequestCoordinator:
                     ),
                     error_class=type(exc).__name__,
                     source=failure_source,
-                    response_started=True,
+                    response_started=downstream_started,
                     downstream_started=downstream_started,
                 )
                 if isinstance(exc, ProviderStreamTimeoutError):
@@ -4365,9 +4427,7 @@ class RequestCoordinator:
                     selected,
                     FinalizationData(
                         outcome=FinalizationOutcome.MIDSTREAM_ERROR,
-                        downstream_started=bool(
-                            context.client_metadata.get("downstream_started")
-                        ),
+                        downstream_started=context.response_handoff.started,
                         first_byte_ms=int(first_byte_ms) if first_byte_ms > 0 else None,
                         upstream_latency_ms=mid_latency_total,
                         bytes_emitted=bytes_emitted,
@@ -5916,6 +5976,7 @@ class RequestCoordinator:
                     error_class=error_class,
                     error_detail=error_detail,
                     upstream_latency_ms=elapsed_ms,
+                    downstream_started=context.response_handoff.started,
                     health_already_applied=health_already_applied,
                     bytes_received=len(context.original_body),
                     upstream_protocol=context.upstream_protocol,
@@ -5996,6 +6057,7 @@ class RequestCoordinator:
                     error_class=error_class,
                     error_detail=error_detail,
                     upstream_latency_ms=elapsed_ms,
+                    downstream_started=context.response_handoff.started,
                     bytes_received=len(context.original_body),
                     upstream_protocol=context.upstream_protocol,
                     thinking_trace_json=_serialize_thinking_trace(

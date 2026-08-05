@@ -122,7 +122,7 @@ class TestOldConfigCompatibility:
             }
         )
         # Dispatch writer should default to disabled
-        assert config.database.dispatch_writer.enabled is False
+        assert config.dispatch_writer.enabled is False
 
     def test_config_without_span_sampling(self) -> None:
         """Config without span sampling settings must validate with
@@ -298,13 +298,11 @@ class TestDispatchWriterSettings:
                     "host": "127.0.0.1",
                     "port": 0,
                 },
-                "database": {
-                    "path": ":memory:",
-                    "dispatch_writer": {
-                        "enabled": True,
-                        "max_queue_depth": 1000,
-                        "max_batch_size": 50,
-                    },
+                "database": {"path": ":memory:"},
+                "dispatch_writer": {
+                    "enabled": True,
+                    "max_queue_depth": 1000,
+                    "max_batch_size": 50,
                 },
                 "upstream": {"base_url": "https://test.example.com"},
                 "models": {"startup_refresh": False, "refresh_interval_s": 0},
@@ -312,7 +310,7 @@ class TestDispatchWriterSettings:
                 "dashboard": {"enabled": False},
             }
         )
-        writer = config.database.dispatch_writer
+        writer = config.dispatch_writer
         assert writer.enabled is True
         assert writer.max_queue_depth == 1000
         assert writer.max_batch_size == 50
@@ -404,7 +402,7 @@ class TestRehashClassification:
 
     def test_dispatch_writer_enabled_restart_required(self) -> None:
         """Dispatch writer enabled flag requires restart."""
-        assert classify_reload_field("database.dispatch_writer.enabled") == (
+        assert classify_reload_field("dispatch_writer.enabled") == (
             ReloadDisposition.RESTART_REQUIRED
         )
 

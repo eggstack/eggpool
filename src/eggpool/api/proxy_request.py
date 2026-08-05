@@ -75,10 +75,43 @@ from eggpool.transcoder.segmentation_guard import should_segment_request
 
 if TYPE_CHECKING:
     from fastapi import Request
+    from starlette.types import Message, Receive, Scope, Send
 
     from eggpool.models.config import AppConfig
+    from eggpool.request.response_handoff import ResponseHandoffState
 
 logger = logging.getLogger(__name__)
+
+
+class ProxyStreamingResponse(StreamingResponse):
+    """Streaming response that records the ASGI response-start boundary."""
+
+    def __init__(
+        self,
+        content: Any,
+        *,
+        response_handoff: ResponseHandoffState,
+        status_code: int = 200,
+        headers: Any = None,  # noqa: ANN401
+        media_type: str | None = None,
+        background: Any = None,  # noqa: ANN401
+    ) -> None:
+        super().__init__(
+            content,
+            status_code=status_code,
+            headers=headers,
+            media_type=media_type,
+            background=background,
+        )
+        self.response_handoff = response_handoff
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        async def handoff_send(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                self.response_handoff.mark_started()
+            await send(message)
+
+        await super().__call__(scope, receive, handoff_send)
 
 
 class ErrorResponseFactory(Protocol):
@@ -148,10 +181,11 @@ def get_client_ip(request: Request) -> str:
 def render_proxy_response(result: PreparedProxyResponse) -> Response:
     """Render a prepared response without re-encoding its body or headers."""
     if result.stream_iterator is not None:
-        response: Response = StreamingResponse(
+        response: Response = ProxyStreamingResponse(
             result.stream_iterator,
             status_code=result.status_code,
             media_type=None,
+            response_handoff=result.response_handoff,
         )
     else:
         response = Response(
@@ -992,13 +1026,14 @@ async def _handle_proxy_request_inner(
     if (
         lease is not None
         and result.stream_iterator is not None
-        and isinstance(response, StreamingResponse)
+        and isinstance(response, ProxyStreamingResponse)
     ):
-        response = StreamingResponse(
+        response = ProxyStreamingResponse(
             wrap_stream_with_lease(result.stream_iterator, lease),
             status_code=response.status_code,
             media_type=response.media_type,
             headers=response.headers,
+            response_handoff=response.response_handoff,
         )
     elif lease is not None:
         # Non-streaming: release immediately since finalization is done.

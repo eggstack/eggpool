@@ -27,7 +27,7 @@ def classify_stream_eof(
     protocol: str,
     policy: CompletionPolicy,
     snapshot: StreamCompletionSnapshot,
-    downstream_bytes_emitted: int,
+    downstream_started: bool,
 ) -> StreamEOFDecision:
     """Classify EOF from upstream protocol evidence and response state.
 
@@ -35,7 +35,6 @@ def classify_stream_eof(
     absence of a marker is never globally treated as success.
     """
     del protocol  # Reserved for protocol-specific policy extensions.
-    downstream_started = downstream_bytes_emitted > 0
     if snapshot.saw_terminal_event:
         classification: EOFClassification = (
             "malformed_eof" if snapshot.parser_error_count else "complete"

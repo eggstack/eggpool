@@ -2045,8 +2045,9 @@ Key invariants:
 
 The writer is process-owned (on `ProcessRuntime`, not
 `RuntimeGeneration`) and is not duplicated by live rehash.
-Configuration lives under `[database.dispatch_writer]` with all
-fields restart-required.  Runtime diagnostics are exposed via
+Configuration lives under the top-level `[dispatch_writer]` section with all
+fields restart-required; `[database.dispatch_writer]` is not a supported
+configuration path. Runtime diagnostics are exposed via
 `/api/stats/runtime` `dispatch_writer` (queue depth, batch sizes,
 timing, error counts).  All sample storage uses bounded
 `deque(maxlen=sample_window)`; snapshot p95 remains stable after
@@ -3136,10 +3137,10 @@ remains as a fallback when no supervisor is available.
   metadata is cleared, so an already-terminal durable state is converged, not
   a retry failure.
 - **Response lifecycle is explicit**. `FinalizationData.downstream_started`
-  is set by the call site that owns the local response boundary: non-streaming
-  finalization before `PreparedProxyResponse` return is false, while work
-  inside the active stream iterator is true. `bytes_emitted` remains payload
-  accounting and never classifies response mutability.
+  is marked immediately before forwarding ASGI `http.response.start`; it is
+  false before response handoff and true for the active stream, including an
+  empty stream. `bytes_emitted` remains payload accounting and never classifies
+  response mutability.
 - **Runtime obligations are lease-owned**. Usage, health, and account-runtime
   outcome components are bound to `AttemptRuntimeLease` and are not inferred
   from `DurableFinalizationResult.request_transitioned`. An already-terminal

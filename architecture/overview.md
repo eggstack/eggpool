@@ -244,7 +244,7 @@ SQLite WAL with single-connection serialization. All DML runs inside `async with
 `ProviderBoundRequest` is the single provider-payload authority after client parsing. Copy-on-write generation-aware mutations, one final serialization cache, frozen before dispatch. `ProxyRequestContext.upstream_body` is a compatibility mirror only.
 
 ### Request Finalization
-Every request-terminal outcome is owned by one retained `RequestFinalizationJob` carrying explicit runtime publication ownership. `FinalizationData.downstream_started` records whether the local response has started: it is false for pre-return non-streaming finalization and true inside the active stream iterator, including a zero-byte stream. Payload `bytes_emitted` is accounting only. Runtime usage, health, and account-runtime obligations belong to the lease and still converge when the durable request row was already terminal. Retryable runtime cleanup resumes component-by-component from `RUNTIME_RELEASE_PENDING`; the supervisor enforces one absolute retry-age deadline and exposes its bounded snapshot as `finalization_supervisor` in `/api/stats/runtime`. A released lease projects a non-retryable result without stale runtime-cleanup detail. Startup crash reconciliation repairs only durable work left by a prior process; normal runtime requests are never reclaimed by age.
+Every request-terminal outcome is owned by one retained `RequestFinalizationJob` carrying explicit runtime publication ownership. `FinalizationData.downstream_started` records whether ASGI `http.response.start` was sent or attempted: it is false before response handoff and true inside the active stream, including a zero-byte stream. Payload `bytes_emitted` is accounting only. Runtime usage, health, and account-runtime obligations belong to the lease and still converge when the durable request row was already terminal. Retryable runtime cleanup resumes component-by-component from `RUNTIME_RELEASE_PENDING`; the supervisor enforces one absolute retry-age deadline and exposes its bounded snapshot as `finalization_supervisor` in `/api/stats/runtime`. A released lease projects a non-retryable result without stale runtime-cleanup detail. Startup crash reconciliation repairs only durable work left by a prior process; normal runtime requests are never reclaimed by age.
 
 ## Directory Structure
 
@@ -318,7 +318,8 @@ Runtime configuration lives in `config.toml` + `.env` (API keys). Key sections:
 |---------|---------|
 | `[server]` | Host, port, workers |
 | `[upstream]` | Default upstream settings |
-| `[database]` | SQLite path, WAL mode, dispatch writer |
+| `[database]` | SQLite path and WAL mode |
+| `[dispatch_writer]` | Process-owned durable dispatch writer |
 | `[routing]` | Fairness mode/epsilon/scope |
 | `[models]` | `collapse_models`, catalog withdrawal |
 | `[providers.<id>]` | Per-provider config (URL, auth, protocols, accounts) |

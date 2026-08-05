@@ -33,7 +33,7 @@ All data-plane requests flow through `RequestCoordinator`:
 - Dispatch persistence is binary: a batch returns fully valid durable identities or raises; rollback never creates placeholder success results. The process-owned writer is bound to the canonical single event loop and rejects foreign-loop submissions.
 - Dispatch exception boundaries are stage-local. Provider/client preparation, request construction or serialization, and client-facing response adaptation faults are local terminal errors with no provider retry or penalty. Only typed HTTPX transport failures are retry candidates.
 - Retries use distinct accounts only, converge failed-attempt cleanup before reselection, and stop at `min(distinct eligible accounts, 1 + max_retries_before_stream)`. The request records `attempt_ceiling_reached` when the configured ceiling leaves eligible accounts unattempted.
-- Pre-handoff failures can retry; once `downstream_started` is set immediately before stream delivery, no retry is possible. `asyncio.CancelledError` propagates.
+- Pre-handoff failures can retry; `downstream_started` becomes true when the proxy forwards ASGI `http.response.start`, before body iteration, so no retry is possible after response handoff. `asyncio.CancelledError` propagates. Empty started streams are post-handoff even with zero body bytes.
 - Non-streaming response adaptation completes before durable `COMPLETED`; native invalid JSON may pass through when usage is optional, while required transcoded responses must adapt successfully.
 - Every retryable failed attempt must reach terminal state through retained attempt cleanup before the next attempt
 - Each attempt reservation is released exactly once via `AttemptFinalizer`
@@ -149,6 +149,8 @@ for `/readyz`.
 ## Request Finalization
 
 `RequestFinalizationJob` keyed by `(proxy_request_id, attempt_id)`. `RequestFinalizationSupervisor` is the sole process-owned retry owner and uses one bounded timer with configured retry age/backoff. `FinalizationData.downstream_started` is the explicit response handoff fact; `bytes_emitted` is payload accounting only. `AttemptRuntimeLease` owns usage, health, and account-runtime outcome obligations independently of durable request transition, so already-terminal durable state can still converge them. `FinalizationResult` distinguishes durable terminal state, durable transition, reservation convergence, and runtime cleanup, projects completed lease markers while a later runtime component is retry-pending, and clears transient retry metadata when the lease is released. Retryable attempts use coordinator-retained cleanup with 128-entry capacity.
+
+The coordinator also has one tagged retained-terminal registry for failed-attempt cleanup and post-commit claim compensation. Its bounded shutdown drain dispatches by command kind, validates the progress type, counts unique durable identities, and retains incomplete entries for rejoin or startup repair.
 
 Request and attempt recovery use explicit durable identities; canonical terminal
 status sets live in `request/terminal_status.py`. Unknown status or identity
