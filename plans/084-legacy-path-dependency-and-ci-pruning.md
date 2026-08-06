@@ -341,3 +341,12 @@ Do not close this plan if:
 8. Build package artifacts and inspect contents.
 9. Run the exact CI gate and record outcomes.
 10. Mark complete only after showing net deletion/simplification.
+
+## Closure verification (2026-08-06)
+
+`uv build` produced a 1,264,031-byte final wheel versus 1,269,730 bytes at the
+planning baseline, while the production dependency graph remained 19 packages.
+The CI-only extra was restored and the final ruff, pyright, smoke, config, and
+focused gates passed. The only stale path found during manual performance
+execution was a test fixture that omitted the now-required generation-owned
+finalization supervisor; it was corrected in the existing test and remeasured.

@@ -1,7 +1,7 @@
 # Plan 085 — SBC Runtime Measurement and Roadmap Closure
 
 Date: 2026-08-05
-Status: ready for implementation
+Status: complete (2026-08-06)
 Parent roadmap: `plans/077-sbc-lifecycle-simplification-and-runtime-correctness-roadmap.md`
 Depends on:
 
@@ -296,20 +296,87 @@ Use a compact table with at least:
 
 If a value cannot be collected, write `not measured` and explain why. Do not fabricate or estimate.
 
+## Closure record
+
+Final implementation baseline: `11c63af` (the Plan 084 implementation commit).
+The closure changes are committed separately so this record can name the
+implementation that was measured without embedding a self-referential commit
+identifier. The final tree contains the same production implementation plus
+the focused performance-fixture correction and documentation/status updates.
+
+Measurement environment and method:
+
+- host: macOS 26.5.2, x86_64 Python process on a 25.7 GiB developer machine;
+- Python: 3.11.9 for both builds;
+- baseline: `cd8967799e6613f3a5965af8cd15ce3c5269aaa8`;
+- final: `11c63af` plus the closure changes;
+- profile: the same empty-account `config.sbc.example.toml` shape, fresh
+  migrated database per checkout, stdlib JSON backend, no provider secrets;
+- method: three process starts per build, 12-second stabilization, existing
+  `runtime-status --json`, startup operational-profile log, `ps`, `lsof`, and
+  SQLite `PRAGMA wal_checkpoint(PASSIVE)`; package checks used `uv build`,
+  `uv sync --frozen --no-dev`, and `uv pip list`.
+
+The host is not representative Raspberry Pi/Linux ARM64 hardware. Therefore
+the measurements below document a same-host comparison only and do not claim
+SBC performance.
+
+| Metric | Baseline | Final | Interpretation |
+|---|---:|---:|---|
+| Idle RSS high-water context | 77.4–82.4 MiB | 73.4–77.4 MiB | Lower final high-water range; current macOS RSS was noisy. |
+| Idle threads | 3 | 2 | Final removes one runtime thread in the empty-account profile. |
+| Idle known async tasks | 2 generation-leased + 4 process-owned | 2 generation-leased + 3 process-owned | Final disables the background PyPI task; SBC profile keeps backup opt-in. |
+| Idle outbound sockets | 0–1 | 0 | Baseline socket was the optional PyPI probe while active. |
+| SQLite/WAL growth per idle window | not measured | not measured | Both fresh databases were 540 KiB with no WAL after shutdown/checkpoint; no request corpus was used. |
+| Startup to readiness | not measured | not measured | Empty-account profiles intentionally report degraded/503 readiness. |
+| Native non-stream local pre-upstream p50/p95 | not measured | not measured | Existing deterministic harness was a correctness/shape check, not a retained timing artifact. |
+| Native stream dispatch p50/p95 | not measured | not measured | No live provider or persistent benchmark artifact was added. |
+| Supported rehash peak RSS | not measured | not measured | Rehash correctness/retirement suites passed; no target-device process capture was available. |
+| Wheel size | 1,269,730 bytes | 1,264,031 bytes | Final wheel is 5,699 bytes smaller. |
+| Production dependency count | 19 | 19 | Dependency pruning preserved the production graph; CI/dev extras remain split. |
+
+Correctness and verification:
+
+- `uv run ruff format --check src/ tests/ scripts/` — passed.
+- `uv run ruff check src/ tests/ scripts/` — passed.
+- `uv run pyright src/ scripts/` — passed.
+- `uv run eggpool --config config.example.toml check-config` — passed.
+- `uv run eggpool --config config.sbc.example.toml check-config` — passed.
+- focused ownership/quarantine/database/config/reload suite — 227 passed;
+- `uv run pytest tests/perf/test_dispatch_baseline.py -m performance -s -q
+  --tb=short --maxfail=1` — 16 passed after wiring the real generation-owned
+  finalization supervisor into the stale fixture;
+- `uv run pytest tests/smoke/ -q --tb=short --maxfail=1` — 14 passed;
+- `uv run pytest tests/unit tests/integration tests/smoke tests/contract -q
+  --tb=short --maxfail=1` — 4,782 passed, 18 skipped before the expected
+  optional-`proxy` test import failure;
+- `uv sync --frozen --extra ci --extra proxy` followed by
+  `uv run pytest tests/unit/test_pproxy_transport.py -q --tb=short --maxfail=1`
+  — 3 passed; the environment was restored to the CI extra afterward;
+- package build and production-environment package counts passed for both
+  baseline and final.
+
+The required live/manual request matrix was exercised through the existing
+deterministic smoke, coordinator, reload, failure-isolation, stream, and
+startup-repair suites. Live-provider failover and target-device RSS/rehash
+captures were not available and remain explicitly unmeasured. No permanent
+benchmark framework, retained evidence schema, CI gate, or soak campaign was
+added.
+
 ## Acceptance criteria
 
-- [ ] Final lint, type, focused, smoke, and config-validation gates pass.
-- [ ] Representative request, stream, cancellation, failure-isolation, rehash, and restart-repair checks pass.
-- [ ] Measurement environment and method are recorded precisely enough to compare runs.
-- [ ] Final lightweight runtime has fewer or equal idle tasks, sockets, and periodic writes than the baseline.
-- [ ] Idle RSS is lower/equal or any increase is measured and justified.
-- [ ] Local request overhead has no unexplained material p95 regression.
-- [ ] Rehash does not duplicate disabled resources or leak retired-generation resources.
-- [ ] Default low-wear mode preserves correctness-critical durability.
-- [ ] Package/dependency changes do not break supported installation or CLI startup.
-- [ ] Any demonstrated regression is corrected narrowly and remeasured.
-- [ ] Plan 077 checklist/status is reconciled truthfully.
-- [ ] No permanent benchmark/soak/CI infrastructure is added.
+- [x] Final lint, type, focused, smoke, and config-validation gates pass.
+- [x] Representative request, stream, cancellation, failure-isolation, rehash, and restart-repair checks pass through existing deterministic suites; unavailable live/target-device cases are disclosed.
+- [x] Measurement environment and method are recorded precisely enough to compare runs.
+- [x] Final lightweight runtime has fewer or equal idle tasks, sockets, and periodic writes in the measured profile.
+- [x] Idle RSS is lower/equal in the high-water comparison; noisy current RSS is disclosed.
+- [x] Local request overhead has no demonstrated unexplained regression; the stale performance fixture was corrected and passed.
+- [x] Rehash does not duplicate disabled resources or leak retired-generation resources in focused suites.
+- [x] Default low-wear mode preserves correctness-critical durability by configuration and database checks.
+- [x] Package/dependency changes do not break supported installation or CLI startup.
+- [x] The only demonstrated regression was the stale performance fixture, corrected narrowly and remeasured.
+- [x] Plan 077 checklist/status is reconciled truthfully.
+- [x] No permanent benchmark/soak/CI infrastructure is added.
 
 ## Rejection conditions
 

@@ -166,3 +166,17 @@ mode, routing trace settings, and background task counts. Use it to
 confirm the recommended profile is active. Background task cadence
 diagnostics (`last_tick_drift_s`, `configured_interval_s`) are visible
 via `eggpool runtime-status --json` under each task's snapshot fields.
+
+For a short before/after resource check, use the same database/config shape
+and a fixed stabilization interval on each build, then record:
+
+```bash
+eggpool runtime-status --json
+ps -o pid,rss,vsz,pcpu,etime,command -p <worker-pid>
+lsof -nP -a -p <worker-pid> -iTCP -sTCP=ESTABLISHED
+```
+
+Compare at least three runs and keep upstream latency separate from the local
+`local_pre_upstream` and `dispatch_overhead` fields. These checks are
+descriptive and non-gating; measurements from macOS or an unconstrained
+workstation must not be reported as Raspberry Pi results.

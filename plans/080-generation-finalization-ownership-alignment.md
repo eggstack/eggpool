@@ -265,3 +265,11 @@ Do not close this plan if:
 7. Correct ownership documentation.
 8. Run focused checks, then smoke.
 9. Mark complete only with exact commands and observed outcomes.
+
+## Closure verification (2026-08-06)
+
+The shared generation/finalization/reload focused suite passed 227 tests. The
+canonical performance harness was also repaired to install the generation-owned
+finalization supervisor and passed all 16 tests; no direct-finalization fallback
+was restored. Final smoke, type, lint, and both shipped config checks are
+recorded in Plan 085.

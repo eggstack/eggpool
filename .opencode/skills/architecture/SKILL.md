@@ -116,7 +116,8 @@ Plus `RuntimeManagerLeaseExhaustedError` (RuntimeError, mapped to HTTP 503).
 ## Process Model
 
 - Supervisor + Granian worker (`workers=1`), daemon mode (`--verbose` for foreground)
-- `[server].threads` default `1` (values > 1 emit startup warning)
+- `[server].threads` default `1`; values greater than `1` fail configuration
+  validation because long-lived asyncio primitives are loop-bound
 - `database_worker_threads=1` by default; `2` explicitly opts into a separate
   stats connection
 - Readiness probe is process-owned (survives generation swaps) and disabled by
@@ -229,6 +230,12 @@ bounded state machine with corroboration before terminal withdrawal.
 - `RuntimeMetricsService.snapshot()["finalization_ownership"]` — bounded
   generation-aware counts for active and retiring supervisors, terminal
   references, retirement age, and redacted blocked/failure facts.
+
+For deployment comparison, use the existing runtime snapshot after a fixed
+short stabilization window and keep local proxy timings separate from upstream
+latency. Record the host, Python, config shape, database state, and optional
+feature flags. These are descriptive manual observations, not thresholds or a
+benchmark gate; workstation data must not be labeled as SBC data.
 
 ## Database Recovery
 

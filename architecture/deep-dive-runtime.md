@@ -90,6 +90,18 @@ Unified task registration for startup and candidate generation construction.
 
 `RUNTIME_TASK_INVENTORY` — reviewable inventory of all background tasks.
 
+### Measuring a deployment profile
+
+Use `eggpool runtime-status --json` after a fixed short stabilization window
+to inspect RSS context, thread count, known background tasks, local dispatch
+timings, SQLite/WAL facts, and generation-retirement ownership. Pair it with
+the host's process and socket tools when file-descriptor or outbound-socket
+counts are needed. Compare baseline and final runs only on the same host,
+Python, config shape, database state, and measurement window; upstream latency
+must remain separate from `local_pre_upstream` and `dispatch_overhead`. These
+observations are descriptive and non-gating. A workstation cannot stand in for
+an ARM64 SBC result.
+
 ### `fastcli.py` — Fast-Path CLI (stdlib-only)
 
 Handles `croncheck` and `ensure-running` without importing Click:

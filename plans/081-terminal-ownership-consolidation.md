@@ -284,3 +284,11 @@ Do not close this plan if:
 8. Reconcile architecture documentation.
 9. Run focused checks, then smoke.
 10. Mark complete only after proving the old paths are unreachable/deleted.
+
+## Closure verification (2026-08-06)
+
+The shared terminal ownership, coordinator cleanup, runtime, reload, database,
+and configuration suite passed 227 tests. The manually invoked dispatch
+performance harness passed 16 tests after its stale fixture was migrated to
+the canonical generation-owned supervisor. No second retained registry or
+compatibility queue was introduced.

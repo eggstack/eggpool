@@ -135,7 +135,7 @@ Circuit breaker-based health tracking for accounts and models. `HealthManager` (
 | **Path** | `src/eggpool/background/` |
 | **Deep Dive** | [deep-dive-background.md](deep-dive-background.md) |
 
-`TaskSupervisor` manages supervised background tasks with restart, backoff, and periodic scheduling. Tasks run in daemon mode (long-running coroutine with restart + exponential backoff) or periodic mode (supervisor-owned scheduling with tick factory, initial delay, timeout). Process-owned tasks survive generation swaps; generation-leased tasks retire with their generation. Key process-owned tasks: checkpoint, metrics_flush, update_checker, automatic_backup. `background/backup.py` handles automatic backup scheduling. `background/cleanup.py` reconciles expired reservations. `background/maintenance.py` implements periodic DB maintenance. `apply_spec_diff()` provides atomic task schedule swap during reload.
+`TaskSupervisor` manages supervised background tasks with restart, backoff, and periodic scheduling. Tasks run in daemon mode (long-running coroutine with restart + exponential backoff) or periodic mode (supervisor-owned scheduling with tick factory, initial delay, timeout). Process-owned tasks survive generation swaps; generation-leased tasks retire with their generation. The ordinary profile registers checkpoint and low-wear metrics flush; update_checker and automatic_backup are opt-in process-owned tasks. `background/backup.py` handles automatic backup scheduling. `background/cleanup.py` reconciles expired reservations. `background/maintenance.py` implements periodic DB maintenance. `apply_spec_diff()` provides atomic task schedule swap during reload.
 
 ### Dashboard & Stats
 

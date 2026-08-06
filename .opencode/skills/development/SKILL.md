@@ -126,6 +126,11 @@ uv run pytest tests/smoke/ -q --tb=short --maxfail=1
 
 The smoke suite covers: package import, config parsing, invalid config rejection, check-config validation, DB migration, one non-stream request, one streaming request, one upstream failure followed by recovery, one premature EOF, one Anthropic request, and CLI help. Broader tests are selected by changed ownership boundary, not by a mandatory full-suite or soak ceremony.
 
+Performance tests under `tests/perf/` remain manually invoked diagnostics. They
+must not become CI gates or imply universal timing/resource thresholds; compare
+fixed request shapes and report local proxy timing separately from upstream
+latency.
+
 Streaming completion regressions should include both the pure EOF decision table
 and the real response path. Verify that canonical `[DONE]`/`message_stop` streams
 complete, markerless payload streams record incomplete EOF, and transcoded streams

@@ -281,3 +281,11 @@ Do not close this plan if:
 7. Reconcile current documentation.
 8. Run focused checks, then smoke.
 9. Mark this plan complete only with the exact commands and outcomes recorded.
+
+## Closure verification (2026-08-06)
+
+The closure pass reran the shared ownership/configuration/reload/database
+focused suite (the exact command and 227-test result are recorded in Plan 085),
+both shipped `check-config` commands, and the final CI-equivalent gate. The
+documentation sweep also removed the remaining current-profile wording that
+described `threads > 1` as a warning-only mode.

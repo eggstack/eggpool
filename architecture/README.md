@@ -3332,7 +3332,7 @@ Tests: `tests/unit/test_routing_trace_writer.py`,
 
 ### Supported Runtime Model
 
-EggPool uses **Model 1: Single runtime loop is canonical**. The `server.threads` default is `1`; values > 1 emit a startup warning. This decision is based on:
+EggPool uses **Model 1: Single runtime loop is canonical**. The `server.threads` default is `1`; values > 1 fail configuration validation. This decision is based on:
 
 - All `asyncio.Lock` objects are loop-bound and would fail under multi-loop access
 - SQLite serialization is the actual concurrency bottleneck, not Python GIL

@@ -195,10 +195,10 @@ the number of event-loop threads in the worker process.
   concurrency is achieved through asyncio tasks, connection-pool
   sizing, and bounded writers. All `asyncio.Lock` objects are
   loop-bound and safe under single-loop execution.
-- **Greater than 1**: Experimental. Values > 1 emit a startup warning.
-  Multi-loop topology has not been proven safe for all process-owned
-  async primitives. Use at your own risk with explicit validation of
-  your specific workload and configuration.
+- **Greater than 1**: Rejected during configuration validation. All
+  process-owned `asyncio.Lock` objects are bound to the single supported
+  worker event loop; use asyncio task concurrency and connection-pool sizing
+  for higher concurrency.
 
 ## Database Worker Threads
 

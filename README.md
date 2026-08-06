@@ -47,6 +47,11 @@ remain explicit configuration choices.
 For a copyable SBC profile with an explicit LAN bind and provider discovery
 cadence, see [config.sbc.example.toml](config.sbc.example.toml).
 
+Resource behavior is intentionally profile-driven rather than governed by a
+universal RSS threshold. Use `eggpool runtime-status --json` after startup to
+inspect the bounded task inventory, local dispatch timings, database/WAL
+state, and generation-retirement ownership on the target host.
+
 ## Quick Start
 
 ```bash

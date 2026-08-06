@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Plan 085 runtime closure.** The lean profile was compared with the
+  planning-baseline SBC-shaped profile using the existing runtime snapshot and
+  short manual process measurements. The comparison confirmed fewer worker
+  threads, optional background work, DNS state, and outbound sockets on the
+  final profile; workstation RSS was noisy and no Raspberry Pi claim is made.
+  The manual performance harness now installs the canonical generation-owned
+  finalization supervisor instead of relying on the removed direct fallback.
 - **Plan 084 legacy-path and CI pruning.** Requests now require a published
   runtime generation and the canonical finalization supervisor. The provider
   bound request is the sole provider-payload authority; the unreleased

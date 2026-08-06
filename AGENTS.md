@@ -95,9 +95,13 @@ Target-device validation is optional and risk-based. For request lifecycle,
 streaming, database, reload, or dependency changes, run the short manual
 smoke described in `docs/releasing.md` when representative hardware is
 available. It is a confidence check, not a CI gate or a retained evidence
-format. The high-concurrency reproducer in
-`scripts/repro_high_concurrency_streams.py` remains available for diagnosing
-stream-specific regressions.
+format. For SBC resource checks, use a fixed short stabilization window and
+the existing `eggpool runtime-status --json`, OS process/socket tools, and
+startup operational-profile log. Record host, Python, config profile, and
+whether optional features are enabled; never present workstation measurements
+as Raspberry Pi results and never turn a numeric observation into a CI gate.
+The high-concurrency reproducer in `scripts/repro_high_concurrency_streams.py`
+remains available for diagnosing stream-specific regressions.
 
 ## File Organization
 

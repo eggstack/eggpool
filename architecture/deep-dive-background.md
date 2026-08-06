@@ -17,8 +17,8 @@ The `TaskSupervisor` manages periodic and startup tasks for maintenance, cleanup
                │
     ┌──────────▼──────────┐
     │ Process-Owned Tasks │ (survive generation swaps)
-    │ • checkpoint        │
-    │ • metrics_flush     │
+    │ • checkpoint        │ (default)
+    │ • metrics_flush     │ (default)
     │ • update_checker    │ (opt-in)
     │ • automatic_backup  │
     └─────────────────────┘
@@ -55,11 +55,18 @@ Automatic backup task (zip archives).
 
 ### Process-Owned Tasks
 
-Survive generation swaps (live reload):
+Survive generation swaps (live reload). The ordinary low-wear profile registers
+the default rows below; update checking and automatic backups are explicit
+opt-ins:
 - **`checkpoint`** — Database WAL checkpoint
 - **`metrics_flush`** — Metrics buffer flush
 - **`update_checker`** — optional PyPI update check (conservative, no freshness bypass)
 - **`automatic_backup`** — Scheduled backup
+
+The task inventory is exposed through `eggpool runtime-status --json` and the
+startup `Operational profile` log line. Those are bounded diagnostics for a
+fixed short measurement window, not a benchmark framework or a steady-state
+resource guarantee across hosts.
 
 ### Generation-Leased Tasks
 

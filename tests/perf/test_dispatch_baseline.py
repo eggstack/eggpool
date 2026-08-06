@@ -32,6 +32,7 @@ import httpx
 import pytest
 import pytest_asyncio
 import respx
+from fastapi import FastAPI
 
 from eggpool.runtime_dispatch import (
     DispatchOverheadRecorder,
@@ -39,6 +40,7 @@ from eggpool.runtime_dispatch import (
     LocalPreUpstreamRecorder,
 )
 from eggpool.runtime_metrics import RuntimeMetricsService
+from tests.helpers.real_runtime import install_test_runtime_manager
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -140,7 +142,19 @@ async def baseline_coordinator(
         local_pre_upstream_recorder=local_pre_upstream,
         dispatch_span_recorder=dispatch_spans,
     )
+    application = FastAPI()
+    runtime_manager = await install_test_runtime_manager(
+        application,
+        config=perf_config,
+        db=perf_db,
+        registry=registry,
+        catalog=catalog,
+        router=router,
+        coordinator=coord,
+        client_pool=httpx_client,
+    )
     yield coord, dispatch_overhead, local_pre_upstream, dispatch_spans
+    await runtime_manager.shutdown()
     await httpx_client.aclose()
 
 

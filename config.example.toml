@@ -31,11 +31,10 @@ path = "usage.sqlite3"
 busy_timeout_ms = 5000
 wal = true
 synchronous = "NORMAL"
-# aiosqlite uses one worker thread per connection. The default opens one
-# primary read/write connection plus one read-only stats/dashboard connection
-# for file-backed SQLite. This keeps dashboard analytics from queuing behind
-# request-path writes on Raspberry Pi-class installs. Set to 1 for
-# minimum-footprint mode on extremely constrained devices or in-memory tests.
+# aiosqlite uses one worker thread per connection. The lean default keeps one
+# primary read/write connection; set worker_threads = 2 to opt into a separate
+# read-only stats/dashboard connection for file-backed SQLite when dashboard
+# isolation is worth the extra connection and thread.
 worker_threads = 1
 
 # ─── Maintenance Budgets ────────────────────────────────────────────

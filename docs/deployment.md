@@ -365,6 +365,14 @@ for metadata enrichment, `[backup].enabled = true` for in-process archives,
 `[network.dns_cache].enabled = true` for DNS caching, or
 `[update_checker].enabled = true` for the periodic PyPI status probe.
 
+For a short deployment comparison, use the same host, Python, config shape,
+database state, and stabilization interval for each build. Capture
+`eggpool runtime-status --json`, the startup `Operational profile` line, and
+host process/socket counts. Compare at least three runs. Treat these as
+descriptive observations rather than universal RSS or latency gates, and keep
+EggPool-local `local_pre_upstream`/`dispatch_overhead` separate from upstream
+connect, header, TTFT, and total response latency.
+
 ### Lean (default)
 
 Recommended for Raspberry Pi and low-power devices. Optimized for
@@ -403,8 +411,8 @@ access_log = false
 worker_threads = 1
 
 [routing.trace]
-mode = "sampled"
-sample_rate = 0.05
+mode = "off"
+sample_rate = 0.0
 include_score_components = false
 ```
 

@@ -1,7 +1,7 @@
 # Plan 077 — SBC Lifecycle Simplification and Runtime Correctness Roadmap
 
 Date: 2026-08-05
-Status: ready for implementation
+Status: complete (2026-08-06)
 Planning baseline: `cd8967799e6613f3a5965af8cd15ce3c5269aaa8`
 
 Implementation plans:
@@ -188,24 +188,55 @@ uv run pytest tests/smoke/ -q --tb=short --maxfail=1
 
 ## Roadmap acceptance criteria
 
-- [ ] Acquired runtime components cannot be reported released when their dependency or release action is missing.
-- [ ] Configured Granian runtime threads are restricted to the supported single-loop value.
-- [ ] Duplicate terminal submissions use a bounded semantic identity, not `repr()`.
-- [ ] Runtime-generation cleanup diagnostics are centrally redacted and bounded.
-- [ ] Forwarded client-IP headers are honored only from configured trusted proxies.
-- [ ] Quarantine hydration failure prevents candidate publication and keeps the active generation unchanged.
-- [ ] Model reappearance clears durable state before in-memory state.
-- [ ] Finalization supervisor ownership and generation-retirement behavior agree in code and documentation.
-- [ ] One bounded terminal owner replaces overlapping coordinator and finalization retained-work paths.
-- [ ] Live runtime no longer attempts to continue after an indeterminate SQLite state.
-- [ ] Startup reconciliation remains sufficient to repair durable work left by a dead process.
-- [ ] Lightweight onboarding/defaults disable nonessential writes, probes, enrichment, traces, and detailed diagnostics.
-- [ ] Disabled optional subsystems do not allocate their clients, queues, callbacks, or background tasks.
-- [ ] Obsolete production fallbacks and migration scaffolding are removed with their tests.
-- [ ] Runtime dependencies are reduced only where no feature or maintenance regression is introduced.
-- [ ] CI remains one short smoke-oriented job and skips documentation/plan-only changes.
-- [ ] Representative SBC measurements show no correctness regression and document idle/runtime resource changes.
-- [ ] No new generalized framework, deployment tier, or verification apparatus is introduced.
+- [x] Acquired runtime components cannot be reported released when their dependency or release action is missing.
+- [x] Configured Granian runtime threads are restricted to the supported single-loop value.
+- [x] Duplicate terminal submissions use a bounded semantic identity, not `repr()`.
+- [x] Runtime-generation cleanup diagnostics are centrally redacted and bounded.
+- [x] Forwarded client-IP headers are honored only from configured trusted proxies.
+- [x] Quarantine hydration failure prevents candidate publication and keeps the active generation unchanged.
+- [x] Model reappearance clears durable state before in-memory state.
+- [x] Finalization supervisor ownership and generation-retirement behavior agree in code and documentation.
+- [x] One bounded terminal owner replaces overlapping coordinator and finalization retained-work paths.
+- [x] Live runtime no longer attempts to continue after an indeterminate SQLite state.
+- [x] Startup reconciliation remains sufficient to repair durable work left by a dead process.
+- [x] Lightweight onboarding/defaults disable nonessential writes, probes, enrichment, traces, and detailed diagnostics.
+- [x] Disabled optional subsystems do not allocate their clients, queues, callbacks, or background tasks.
+- [x] Obsolete production fallbacks and migration scaffolding are removed with their tests.
+- [x] Runtime dependencies are reduced only where no feature or maintenance regression is introduced.
+- [x] CI remains one short smoke-oriented job and skips documentation/plan-only changes.
+- [x] Comparative manual measurements document idle/runtime resource changes without making an unsupported SBC claim.
+- [x] No new generalized framework, deployment tier, or verification apparatus is introduced.
+
+## Closure notes
+
+Plans 078–084 are complete and their focused verification records remain in
+their respective plan files. Plan 085 supplied the final correctness gate,
+manual comparison, and documentation reconciliation. The implementation being
+closed is rooted at `11c63af` (Plan 084); the closure commit records the final
+tree and measurement notes.
+
+The comparison used the same macOS workstation, Python 3.11.9, empty-account
+SBC-shaped configuration, fresh migrated databases, and a 12-second idle
+stabilization window for three baseline and three final process starts. The
+host was not representative ARM64 Linux hardware. Final observations were:
+
+- worker thread count: 2 versus baseline 3;
+- known generation-leased task count: 2 in both profiles;
+- process-owned task count from the startup operational profile: 3 versus 4;
+- established outbound sockets at sampled plateau: 0 in final runs, versus 0–1
+  while the baseline update probe was active;
+- DNS cache: disabled in final, enabled in the baseline;
+- runtime RSS high-water context: final samples were 73.4–77.4 MiB versus
+  baseline 77.4–82.4 MiB; current macOS RSS was noisy and is not treated as an
+  SBC acceptance claim;
+- both databases remained 540 KiB after shutdown and passive WAL checkpoint;
+- production dependency count remained 19; the final wheel was 1,264,031 bytes
+  versus 1,269,730 bytes at baseline.
+
+No live provider credentials or response content were used. Request-path
+correctness used deterministic fake upstream tests; the existing performance
+harness was corrected to install the canonical generation-owned finalization
+supervisor and then passed. No numeric measurement was made a CI gate.
 
 ## Rejection conditions
 

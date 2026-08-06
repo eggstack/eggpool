@@ -329,3 +329,12 @@ Do not close this plan if:
   smoke suite pass; focused config/factory/onboarding/reload/startup tests and
   catalog/model-info tests also pass.
 - No target-device measurements were added; those remain part of Plan 085.
+
+## Closure verification (2026-08-06)
+
+Plan 085 compared three short idle starts per build using the same
+SBC-shaped empty-account profile. The final profile had two worker threads
+versus three at baseline, three process-owned tasks versus four, DNS caching
+disabled, and no sampled established outbound sockets. The host was macOS, so
+these are same-host observations rather than Raspberry Pi claims. Both shipped
+config examples passed `check-config`.
