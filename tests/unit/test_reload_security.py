@@ -69,8 +69,12 @@ def socket_dir(tmp_path: Path) -> Path:
             if f.suffix == ".sock":
                 with contextlib.suppress(OSError):
                     f.unlink()
+    else:
+        _SOCKET_DIR.mkdir(parents=True, exist_ok=True)
+        os.chmod(_SOCKET_DIR, 0o700)
     d = _SOCKET_DIR / uuid4().hex[:8]
     d.mkdir(parents=True, exist_ok=True)
+    os.chmod(d, 0o700)
     yield d
     shutil.rmtree(d, ignore_errors=True)
 

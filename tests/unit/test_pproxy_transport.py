@@ -9,6 +9,8 @@ import httpcore
 import httpx
 import pytest
 
+pytest.importorskip("pproxy")
+
 from eggpool.providers.pproxy_transport import (
     AsyncPProxyTransport,
     PProxyNetworkBackend,

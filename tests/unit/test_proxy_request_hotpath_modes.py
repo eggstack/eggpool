@@ -145,6 +145,90 @@ class _FakeApp:
         self.state = state
 
 
+class _FakeCatalogCache:
+    """Stub for ``ModelCatalogCache`` that skips limit enforcement and
+    reports every model as natively supporting the OpenAI protocol.
+    """
+
+    def get_effective_limits(self, model_id: str, provider_id: str | None) -> Any:
+        return None
+
+    def get_model_protocols(
+        self, model_id: str, provider_id: str | None = None
+    ) -> set[str]:
+        return {"openai"}
+
+    def get_transcodable_protocols(
+        self,
+        model_id: str,
+        client_protocol: str,
+        provider_id: str | None = None,
+    ) -> set[str]:
+        return set()
+
+    def count_eligible_accounts_for_protocol(
+        self,
+        model_id: str,
+        protocol: str,
+        provider_id: str | None = None,
+    ) -> int:
+        return 0
+
+
+class _FakeCatalog:
+    """Stub for the generation's ``catalog`` attribute."""
+
+    cache = _FakeCatalogCache()
+
+
+class _FakeRuntime:
+    """Stub for the leased ``RuntimeGeneration`` surface used by the proxy."""
+
+    def __init__(
+        self,
+        *,
+        coordinator: Any,
+        recorder: DispatchSpanRecorder,
+        config: Any,
+        immutable_request_state: Any,
+        compression_policy: Any,
+        compression_tuning_registry: Any,
+    ) -> None:
+        self.coordinator = coordinator
+        self.dispatch_span_recorder = recorder
+        self.config = config
+        self.immutable_request_state = immutable_request_state
+        self.catalog = _FakeCatalog()
+        self.transcoder_policy = None
+        self.compression_policy = compression_policy
+        self.compression_tuning_registry = compression_tuning_registry
+
+
+class _FakeLease:
+    """Stub for ``GenerationLease`` used by the hot-path proxy tests."""
+
+    def __init__(self, runtime: _FakeRuntime) -> None:
+        self._runtime = runtime
+        self.released = False
+
+    @property
+    def runtime(self) -> _FakeRuntime:
+        return self._runtime
+
+    async def release(self) -> None:
+        self.released = True
+
+
+class _FakeRuntimeManager:
+    """Stub for ``RuntimeManager`` whose ``acquire`` yields a stub lease."""
+
+    def __init__(self, lease: _FakeLease) -> None:
+        self._lease = lease
+
+    async def acquire(self) -> _FakeLease:
+        return self._lease
+
+
 class _FakeRequest:
     def __init__(self, body: bytes, app: Any) -> None:
         self._body = body
@@ -208,16 +292,35 @@ def _build_state(
 ) -> _FakeApp:
     """Assemble a fake app/state with mode-aware compression_policy."""
 
+    from eggpool.runtime_manager import ImmutableRequestState
+
+    config = _minimal_config()
+    compression_policy = _FakeCompressionPolicy(enabled=enabled, mode=mode)
+    runtime = _FakeRuntime(
+        coordinator=coordinator,
+        recorder=recorder,
+        config=config,
+        immutable_request_state=ImmutableRequestState(
+            provider_ids=frozenset(),
+            account_names=frozenset(),
+            hop_by_hop_headers=frozenset(),
+            local_credential_headers=frozenset(),
+        ),
+        compression_policy=compression_policy,
+        compression_tuning_registry=None,
+    )
+    lease = _FakeLease(runtime)
     state = type(
         "State",
         (),
         {
+            "runtime_manager": _FakeRuntimeManager(lease),
             "coordinator": coordinator,
-            "compression_policy": _FakeCompressionPolicy(enabled=enabled, mode=mode),
+            "compression_policy": compression_policy,
             "compression_tuning_registry": None,
             "dispatch_span_recorder": recorder,
-            "config": _minimal_config(),
-            "catalog": None,
+            "config": config,
+            "catalog": runtime.catalog,
             "transcoder_policy": None,
         },
     )()

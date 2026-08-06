@@ -152,6 +152,7 @@ class TestProviderClientPool:
         ]
 
     def test_from_app_config_uses_account_proxy_clients(self) -> None:
+        pytest.importorskip("pproxy")
         config = AppConfig(
             proxies={"local": {"url": "http://127.0.0.1:8081"}},
             providers={

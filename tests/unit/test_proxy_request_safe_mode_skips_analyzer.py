@@ -142,16 +142,77 @@ async def _invoke_analyzer_skip_for_mode(
     monkeypatch.setattr(apply_mod, "apply_safe_compression", _spy_apply)
 
     coordinator = _FakeCoordinator()
+    config = _minimal_config()
+
+    class _FakeCatalogCache:
+        def get_effective_limits(self, model_id, provider_id=None):
+            return None
+
+        def get_model_protocols(self, model_id, provider_id=None):
+            return {"openai"}
+
+        def get_transcodable_protocols(
+            self, model_id, client_protocol, provider_id=None
+        ):
+            return set()
+
+        def count_eligible_accounts_for_protocol(
+            self, model_id, protocol, provider_id=None
+        ):
+            return 0
+
+    class _FakeCatalog:
+        cache = _FakeCatalogCache()
+
+    class _FakeRuntime:
+        def __init__(self) -> None:
+            self.coordinator = coordinator
+            self.dispatch_span_recorder = None
+            self.config = config
+            from eggpool.runtime_manager import ImmutableRequestState
+
+            self.immutable_request_state = ImmutableRequestState(
+                provider_ids=frozenset(),
+                account_names=frozenset(),
+                hop_by_hop_headers=frozenset(),
+                local_credential_headers=frozenset(),
+            )
+            self.catalog = _FakeCatalog()
+            self.transcoder_policy = None
+            self.compression_policy = _FakeCompressionPolicy(mode=mode)
+            self.compression_tuning_registry = None
+
+    class _FakeLease:
+        def __init__(self, runtime: _FakeRuntime) -> None:
+            self._runtime = runtime
+            self.released = False
+
+        @property
+        def runtime(self) -> _FakeRuntime:
+            return self._runtime
+
+        async def release(self) -> None:
+            self.released = True
+
+    class _FakeRuntimeManager:
+        def __init__(self, lease: _FakeLease) -> None:
+            self._lease = lease
+
+        async def acquire(self) -> _FakeLease:
+            return self._lease
+
+    lease = _FakeLease(_FakeRuntime())
     state = type(
         "State",
         (),
         {
+            "runtime_manager": _FakeRuntimeManager(lease),
             "coordinator": coordinator,
             "compression_policy": _FakeCompressionPolicy(mode=mode),
             "compression_tuning_registry": None,
             "dispatch_span_recorder": None,
-            "config": _minimal_config(),
-            "catalog": None,
+            "config": config,
+            "catalog": lease.runtime.catalog,
             "transcoder_policy": None,
         },
     )()

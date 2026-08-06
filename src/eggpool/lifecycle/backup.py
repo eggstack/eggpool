@@ -78,13 +78,13 @@ def default_backup_dir() -> Path:
 
 def backup_filename(now: datetime | None = None) -> str:
     """Return the canonical timestamped backup filename."""
-    stamp = (now or datetime.now(UTC)).astimezone()
+    stamp = (now or datetime.now(UTC)).astimezone(UTC)
     return f"eggpool-backup-{stamp.strftime('%Y%m%d-%H%M%S')}.zip"
 
 
 def _now_iso(now: datetime | None) -> str:
     """Format the timestamp used in META."""
-    stamp = (now or datetime.now(UTC)).astimezone()
+    stamp = (now or datetime.now(UTC)).astimezone(UTC)
     return stamp.isoformat(timespec="seconds")
 
 
@@ -291,7 +291,7 @@ def create_backup(
     suffix = 0
     while archive_path.exists():
         suffix += 1
-        stamp = (now or datetime.now(UTC)).astimezone().strftime("%Y%m%d-%H%M%S")
+        stamp = (now or datetime.now(UTC)).astimezone(UTC).strftime("%Y%m%d-%H%M%S")
         archive_path = target_dir / f"eggpool-backup-{stamp}-{suffix}.zip"
 
     tmp_path = archive_path.with_suffix(".zip.tmp")

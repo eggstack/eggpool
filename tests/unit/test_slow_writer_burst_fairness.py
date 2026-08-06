@@ -49,6 +49,7 @@ from eggpool.request.dispatch_intent import (
     DispatchTransactionError,
     PersistedDispatchResult,
 )
+from eggpool.request.finalization_job import RequestFinalizationSupervisor
 from eggpool.request.selection_claim_diagnostics import (
     SelectionClaimDiagnostics,
 )
@@ -283,6 +284,7 @@ async def _build_fixture() -> dict[str, Any]:
         dispatch_writer=writer,
         use_dispatch_writer=True,
     )
+    coordinator._finalization_supervisor = RequestFinalizationSupervisor(db=db)  # pyright: ignore[reportPrivateUsage]
     return {
         "coordinator": coordinator,
         "db": db,

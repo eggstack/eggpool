@@ -181,7 +181,7 @@ class TestDispositionCoverage:
 
         leaves: list[str] = []
         if isinstance(model, BaseModel):
-            for name, _field in model.model_fields.items():
+            for name, _field in type(model).model_fields.items():
                 child = getattr(model, name, None)
                 path = f"{prefix}.{name}" if prefix else name
                 if isinstance(child, BaseModel):

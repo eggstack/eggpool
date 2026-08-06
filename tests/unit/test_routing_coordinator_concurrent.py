@@ -41,6 +41,7 @@ from eggpool.db.repositories import (
 from eggpool.models.config import AppConfig
 from eggpool.quota.estimation import AccountQuota, QuotaEstimator
 from eggpool.request.coordinator import ProxyRequestContext, RequestCoordinator
+from eggpool.request.finalization_job import RequestFinalizationSupervisor
 from eggpool.routing.router import Router
 
 
@@ -254,6 +255,7 @@ async def _build_coordinator_fixture(
         health_manager=None,
         routing_trace_writer=trace_writer,
     )
+    coordinator._finalization_supervisor = RequestFinalizationSupervisor(db=db)  # pyright: ignore[reportPrivateUsage]
 
     return _CoordinatorFixture(
         db=db,

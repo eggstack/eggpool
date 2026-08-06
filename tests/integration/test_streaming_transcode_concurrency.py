@@ -38,6 +38,7 @@ from eggpool.request.coordinator import (
     ProxyRequestContext,
     RequestCoordinator,
 )
+from eggpool.request.finalization_job import RequestFinalizationSupervisor
 from eggpool.request.stream_diagnostics import (
     STREAM_OUTCOME_COMPLETED,
     get_stream_diagnostics,
@@ -142,6 +143,7 @@ async def coordinator(
         usage_window_repo=UsageWindowRepository(db),
         health_manager=health_manager,
     )
+    coord._finalization_supervisor = RequestFinalizationSupervisor(db=db)  # pyright: ignore[reportPrivateUsage]
     yield coord
     await httpx_client.aclose()
 

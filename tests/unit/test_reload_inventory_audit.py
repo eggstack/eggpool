@@ -41,7 +41,7 @@ def _schema_leaves(model: Any, prefix: str = "") -> list[str]:
 
     leaves: list[str] = []
     if isinstance(model, BaseModel):
-        for name in model.model_fields:
+        for name in type(model).model_fields:
             child = getattr(model, name, None)
             path = f"{prefix}.{name}" if prefix else name
             if isinstance(child, BaseModel):
@@ -633,7 +633,7 @@ def _collect_field_names(model: Any, prefix: str, out: set[str]) -> None:
     from pydantic import BaseModel
 
     if isinstance(model, BaseModel):
-        for name in model.model_fields:
+        for name in type(model).model_fields:
             out.add(name)
             child = getattr(model, name, None)
             if isinstance(child, BaseModel):
