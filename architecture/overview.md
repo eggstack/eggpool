@@ -191,14 +191,77 @@ Cache-preserving request-shaping stack spanning 10 phases: cache reporting (Phas
 
 Typed attempt-scoped failure decisions and bounded model quarantine. `failure/classifier.py` (`classify_failure_effects()`) is the only production decision table for retry and shared-state effects. `failure/effects.py` defines the immutable decision, including retry scope, provider attribution, circuit transition, and probe convergence. `failure/applier.py` applies component progress owned by the retained `(proxy_request_id, attempt_id)` cleanup/finalization lifecycle; its compatibility cache is bounded and is not the production idempotency boundary. `HealthManager.record_failure()` owns the circuit-failure transition, so one attempt cannot incur a duplicate circuit penalty. `failure/quarantine.py` implements `ModelQuarantine` — a bounded state machine with corroboration before terminal withdrawal. `failure/signal.py` and `failure/signal_extract.py` extract bounded failure signals from upstream responses. `failure/observation.py` records normalized failure facts without raw bodies, credentials, or tracebacks.
 
-### Deployment & Operations
+### Model Catalog
 
 | | |
 |---|---|
-| **Path** | `deploy/`, `scripts/`, `docs/`, `src/eggpool/deploy/` |
-| **Deep Dive** | [deep-dive-deployment.md](deep-dive-deployment.md) |
+| **Path** | `src/eggpool/catalog/` |
+| **Deep Dive** | [deep-dive-catalog.md](deep-dive-catalog.md) |
 
-Systemd unit with security hardening (`NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, syscall filtering). Logrotate config (daily, 14 days, 100MB max). `scripts/` contains operational tools: `check_database.py` (schema validation), `validate_routing.py`, `verify_upstream_auth.py`, `repro_high_concurrency_streams.py` (stream regressor), `install.sh` (one-shot installer). `src/eggpool/deploy/` bundles systemd/logrotate/cron snippets for CLI output. `docs/` holds 20+ operator guides and runbooks.
+Model discovery, normalization, pricing, protocol resolution, and capability detection. `catalog/service.py` (~1678 lines) orchestrates periodic refresh from provider `/v1/models` endpoints. `catalog/fetcher.py` calls each provider's models endpoint; `catalog/normalizer.py` normalizes heterogeneous response shapes into a canonical model list. `catalog/protocols.py` resolves per-model protocol (`openai`/`anthropic`) via a 6-tier resolution chain (TOML override → upstream metadata → exact known mapping → family prefix → persisted → error). `catalog/capabilities.py` tracks model capabilities (thinking support, budget bounds, `CapabilityStatus`). `catalog/pricing.py` and `catalog/pricing_resolver.py` handle cost estimation with alias resolution (`catalog/pricing_aliases.py`). `catalog/cache.py` maintains the in-memory model catalog cache with `AccountCatalogOutcome` tracking. `catalog/limits.py` extracts upstream context-window limits. `catalog/models_dev.py` merges metadata from external `models.dev` sources and derives OpenCode Go supported efforts. `catalog/catalog_resolvers.py` implements OpenRouter and pricing resolver pipelines.
+
+### Control Plane
+
+| | |
+|---|---|
+| **Path** | `src/eggpool/control/` |
+| **Deep Dive** | [deep-dive-control.md](deep-dive-control.md) |
+
+Unix-domain socket control server for live config rehash. `control/server.py` implements a single-shot newline-delimited JSON protocol (v1) on a UDS (`~/.local/state/eggpool/eggpool.sock`) for `eggpool rehash`. Socket mode `0o600` (owner-only). `control/client.py` connects from the CLI to issue reload commands. `control/reload_manager.py` orchestrates the staged reload: `stage()` → `commit()`/`rollback()` → `finalize_retirement()`. `control/accepted_finalization.py` tracks accepted finalization invariants during reload. The control plane is the only path for live config changes without process restart.
+
+### Data Models
+
+| | |
+|---|---|
+| **Path** | `src/eggpool/models/` |
+| **Deep Dive** | [deep-dive-models.md](deep-dive-models.md) |
+
+Pydantic v2 models for configuration, domain objects, API payloads, and database rows. `models/config.py` (~1571 lines) defines `AppConfig` and all nested config models (`ProviderConfig`, `AccountConfig`, `RoutingConfig`, `TranscoderPolicy`, `CompressionConfig`, etc.) with field validators and TOML parsing. `models/api.py` defines OpenAI and Anthropic request/response models. `models/database.py` defines SQLite row models. `models/domain.py` defines domain objects shared across modules. These models are the single source of truth for schema validation and serialization boundaries.
+
+### Observability
+
+| | |
+|---|---|
+| **Path** | `src/eggpool/observability/` |
+| **Deep Dive** | [deep-dive-observability.md](deep-dive-observability.md) |
+
+Routing trace persistence for debugging and dashboard drill-down. `observability/routing_trace_writer.py` implements a process-owned, single-drain-task writer that collects immutable `RoutingTraceEvent` objects via a non-blocking `submit()` and persists them in micro-batches via `RoutingDecisionRepository`. Bounded queue (`collections.deque(maxlen=queue_capacity)`) drops newest events when full. Thread-safe submission via `threading.Lock`. Silent failures — every exception is swallowed and its counter incremented. Routing traces are opt-in and powered by the `[routing].trace_enabled` config flag.
+
+### Retry Classification
+
+| | |
+|---|---|
+| **Path** | `src/eggpool/retry/` |
+| **Deep Dive** | [deep-dive-retry.md](deep-dive-retry.md) |
+
+Upstream failure classification and retry decision logic. `retry/classification.py` defines `RetryCategory` (NEVER, BAD_REQUEST, AUTH_FAILURE, QUOTA_EXCEEDED, TEMPORARY, TRANSIENT, FATAL, MODEL_UNAVAILABLE) and `classify_retry()` which maps HTTP status codes and error patterns to retry categories with optional `retry_after` durations. Integrates with `failure/classifier.py` for typed failure effects. The retry module is consumed by `RequestCoordinator` to determine whether a failed attempt should retry, which accounts to exclude, and how long to backoff.
+
+### Metrics & Telemetry
+
+| | |
+|---|---|
+| **Path** | `src/eggpool/metrics/`, `src/eggpool/event_loop_lag.py`, `src/eggpool/runtime_metrics.py`, `src/eggpool/runtime_dispatch.py` |
+| **Deep Dive** | [deep-dive-metrics.md](deep-dive-metrics.md) |
+
+Structured observability across three subsystems. `metrics/buffer.py` implements a low-wear metrics buffer with periodic flush to SQLite. `metrics/thinking.py` (`ThinkingMetricsCounter`) tracks thinking/reasoning decision outcomes with low-cardinality labels (protocol, decision, capability_status, provider_id). `metrics/failure_effects.py` records normalized failure effect counters. `event_loop_lag.py` implements a lightweight event-loop lag monitor for SBC deployments — fixed-size sample buffer, single background task, no per-request allocations; exposes `EventLoopLagSnapshot` with p50/p50/p95/avg/min/max. `runtime_metrics.py` gathers process topology, memory, background task state, database health, OS load average, and dispatch-overhead distribution. `runtime_dispatch.py` implements `DispatchOverheadRecorder` (always-on coarse coordinator slice) and `LocalPreUpstreamRecorder` (detailed span sampling) using monotonic clocks.
+
+### Lifecycle Management
+
+| | |
+|---|---|
+| **Path** | `src/eggpool/lifecycle/` |
+| **Deep Dive** | [deep-dive-lifecycle.md](deep-dive-lifecycle.md) |
+
+Backup, restore, and uninstall orchestration. `lifecycle/backup.py` (~564 lines) creates timestamped `.zip` archives containing `config.toml`, `.env`, and `usage.sqlite3` with uncompressed storage (contents are small). `lifecycle/uninstall.py` (~760 lines) reverses installation by detecting the installer method (`pipx`, `uv tool`, source, manual) and scrubbing PATH entries added by the install script. Both modules are invoked by CLI commands (`eggpool backup`, `eggpool uninstall`) and designed for testability without terminal interaction.
+
+### Config Reload Policy
+
+| | |
+|---|---|
+| **Path** | `src/eggpool/config_reload_policy.py` |
+| **Deep Dive** | [deep-dive-core.md](deep-dive-core.md) |
+
+Typed configuration diff and reload policy. Classifies every `AppConfig` field as `LIVE` (applied via staged generation swap), `RESTART_REQUIRED` (consumed by constructor-owned state), or `IGNORED` (audit-only). The default for unclassified fields is `RESTART_REQUIRED` — fail-closed against partial live reloads. `config_reload_policy.py` (~836 lines) is the single reviewable map of fields that staged generation swaps can apply live. Used by `eggpool rehash` and the control plane to determine which changes take effect immediately vs. requiring a restart.
 
 ## Component Index
 
@@ -214,11 +277,18 @@ Systemd unit with security hardening (`NoNewPrivileges`, `ProtectSystem=strict`,
 | 8 | **Dashboard & Stats** — Server-rendered HTML, JSON API, stats service | [deep-dive-dashboard.md](deep-dive-dashboard.md) |
 | 9 | **Background Tasks** — TaskSupervisor, cleanup, backups | [deep-dive-background.md](deep-dive-background.md) |
 | 10 | **Health Management** — Circuit breaker, cooldown, failure effects, quarantine | [deep-dive-health.md](deep-dive-health.md) |
-| 11 | **Model Info Sidecar** — Multi-source metadata enrichment | [deep-dive-model-info.md](deep-dive-model-info.md) |
-| 12 | **External Integrations** — OpenCode, Claude Code, Aider, Codex, 8+ tools | [deep-dive-integrations.md](deep-dive-integrations.md) |
-| 13 | **Security** — Header redaction, API key auth, constant-time compare | [deep-dive-security.md](deep-dive-security.md) |
-| 14 | **Cache & Compression** — Observability, safe compression, synthetic cache, tuning | [deep-dive-cache-compression.md](deep-dive-cache-compression.md) |
-| 15 | **Deployment & Operations** — Systemd, scripts, install, operational tools | [deep-dive-deployment.md](deep-dive-deployment.md) |
+| 11 | **Model Catalog** — Discovery, normalization, pricing, protocol resolution, capabilities | [deep-dive-catalog.md](deep-dive-catalog.md) |
+| 12 | **Model Info Sidecar** — Multi-source metadata enrichment | [deep-dive-model-info.md](deep-dive-model-info.md) |
+| 13 | **Control Plane** — Unix socket, live reload, staged generation swap | [deep-dive-control.md](deep-dive-control.md) |
+| 14 | **Data Models** — Pydantic config, domain, API, database models | [deep-dive-models.md](deep-dive-models.md) |
+| 15 | **External Integrations** — OpenCode, Claude Code, Aider, Codex, 8+ tools | [deep-dive-integrations.md](deep-dive-integrations.md) |
+| 16 | **Security** — Header redaction, API key auth, constant-time compare | [deep-dive-security.md](deep-dive-security.md) |
+| 17 | **Cache & Compression** — Observability, safe compression, synthetic cache, tuning | [deep-dive-cache-compression.md](deep-dive-cache-compression.md) |
+| 18 | **Observability** — Routing trace writer, structured diagnostics | [deep-dive-observability.md](deep-dive-observability.md) |
+| 19 | **Retry Classification** — Error categorization, backoff, retry decisions | [deep-dive-retry.md](deep-dive-retry.md) |
+| 20 | **Metrics & Telemetry** — Thinking counters, event-loop lag, dispatch overhead | [deep-dive-metrics.md](deep-dive-metrics.md) |
+| 21 | **Lifecycle Management** — Backup, restore, uninstall orchestration | [deep-dive-lifecycle.md](deep-dive-lifecycle.md) |
+| 22 | **Deployment & Operations** — Systemd, scripts, install, operational tools | [deep-dive-deployment.md](deep-dive-deployment.md) |
 
 ## Key Architecture Patterns
 
@@ -251,47 +321,65 @@ Every live terminal outcome is owned by one kind-qualified command in the genera
 ```
 src/eggpool/
 ├── accounts/          # Account registry and runtime state
-├── api/               # API endpoint handlers
+├── api/               # API endpoint handlers (chat completions, messages, stats)
 ├── background/        # TaskSupervisor, cleanup, periodic tasks
-├── catalog/           # Model catalog, pricing, protocols
+├── catalog/           # Model catalog, pricing, protocols, fetcher, normalizer
 ├── control/           # Control plane (Unix socket, live reload)
 ├── dashboard/         # Server-rendered HTML dashboard (50+ themes)
-├── db/                # SQLite connection, migrations, repositories
+├── db/                # SQLite connection, migrations, repositories, schema
 ├── failure/           # Failure effects and quarantine
 ├── health/            # Circuit breaker and health tracking
-├── integrations/      # External tool configuration generation
+├── integrations/      # External tool configuration generation (11 tools)
 ├── lifecycle/         # Backup and uninstall orchestration
-├── metrics/           # Metrics buffering and thinking observability
+├── metrics/           # Metrics buffering, thinking observability, failure counters
 ├── model_info/        # Model metadata sidecar (multi-source enrichment)
-├── models/            # Pydantic config, domain, API models
+├── models/            # Pydantic config, domain, API, database models
 ├── observability/     # Routing trace writer
-├── providers/         # Provider client pool and contracts
-├── proxy/             # Transparent proxy, SSE observer, usage
+├── providers/         # Provider client pool, contracts, auth
+├── proxy/             # Transparent proxy, SSE observer, usage normalization
 ├── quota/             # Quota estimation, reservations, scoring
-├── request/           # RequestCoordinator, finalizers, dispatch
-├── retry/             # Error classification
-├── routing/           # Quota-aware routing, eligibility, fairness
+├── request/           # RequestCoordinator, finalizers, dispatch, body reader
+├── retry/             # Error classification and retry decisions
+├── routing/           # Quota-aware routing, eligibility, fairness, provider parsing
 ├── security/          # Header redaction, security utilities
 ├── stats/             # Statistics queries and service
-├── transcoder/        # Protocol transcoding + compression stack
+├── transcoder/        # Protocol transcoding (OpenAI ↔ Anthropic)
 │   └── compression/   # Safe compression, policy, tuning
 ├── _share/            # Bundled config examples for pipx
 ├── auth.py            # Local API key auth (constant-time)
 ├── cli.py             # CLI bootstrap (tiny)
-├── cli_full.py        # Click CLI commands
+├── cli_full.py        # Click CLI commands (heavy imports)
+├── cli_rehash_format.py  # Rehash output formatting
+├── cli_rehash_helper.py  # Rehash CLI helpers
 ├── config.py          # Config file helpers
-├── config_validation.py
-├── config_reload_policy.py
+├── config_reload_policy.py  # Typed config diff and reload policy
+├── config_utils.py    # Config utility functions
+├── config_validation.py  # Reusable validation contract
 ├── constants.py       # Project-wide constants
-├── errors.py          # Exception hierarchy
-├── jsonx.py           # JSON backend abstraction
-├── runtime.py         # Process management
+├── cost_recompute.py  # Cost recompute CLI command
+├── cost_repair.py     # Cost repair CLI command
+├── deploy_user.py     # Deploy user and path resolution
+├── errors.py          # Exception hierarchy (20+ subclasses)
+├── event_loop_lag.py  # Lightweight event-loop lag monitor
+├── fastcli.py         # Fast-path CLI (stdlib-only, croncheck/ensure-running)
+├── generation_factory.py  # Runtime generation construction
+├── jsonx.py           # JSON backend abstraction (orjson/stdlib)
+├── logging.py         # Structured logging setup
+├── onboard.py         # Interactive onboarding script
+├── reload_diagnostics.py  # Reload result categories and counters
+├── reload_transaction.py  # Monotonic state machine for atomic reload
+├── runtime.py         # Process management (restart, stop, PID lifecycle)
+├── runtime_dispatch.py  # Dispatch timing recorders
 ├── runtime_manager.py # Runtime generation ownership
-├── runtime_dispatch.py# Dispatch timing recorders
 ├── runtime_metrics.py # Runtime/ops metrics
 ├── runtime_paths.py   # PID/log path resolution (stdlib-only)
-├── fastcli.py         # Fast-path CLI (stdlib-only)
-└── update_checker.py  # PyPI update checker
+├── runtime_task_inventory.py  # Task inventory
+├── runtime_tasks.py   # Runtime task management
+├── toml_edit.py       # Formatting-preserving TOML edits
+├── update_checker.py  # PyPI update checker
+├── py.typed           # PEP 561 type marker
+├── __init__.py        # Package init, version
+└── __main__.py        # python -m eggpool entry
 
 tests/
 ├── unit/              # Focused module-level behavior
@@ -300,6 +388,7 @@ tests/
 ├── perf/              # Optional local performance checks
 ├── live/              # Opt-in live external-source tests
 ├── smoke/             # Small canonical CI correctness floor
+├── soak/              # Long-running stability checks
 ├── helpers/           # Shared test utilities
 └── fixtures/          # Test fixtures (cache_compression, streaming, etc.)
 
@@ -308,6 +397,7 @@ deploy/                # Systemd, logrotate, cron artifacts
 docs/                  # Operator documentation (20+ topics)
 plans/                 # 90+ design/implementation plans
 config-examples/       # Agent config examples
+architecture/          # Architecture docs and deep dives
 ```
 
 ## Configuration
