@@ -1089,10 +1089,9 @@ class TestPublishOrdering:
         ``QuotaEstimator`` is a ``@dataclass(slots=True)`` so its
         methods cannot be reassigned directly.  Instead we
         monkeypatch the coordinator's ``_quota_estimator`` reference
-        with a thin wrapper that fails on ``add_reservation`` while
-        delegating the other accessors the coordinator uses
-        (``get_account_reserved_cost``, ``estimate_cost``,
-        ``get_account_quota``) to the underlying estimator.
+        with a thin wrapper that fails on pending-load conversion while
+        delegating the other accessors the coordinator uses to the
+        underlying estimator.
         """
         names = ["alpha", "bravo"]
         fixture = await _build_coordinator_fixture(names)
@@ -1103,10 +1102,28 @@ class TestPublishOrdering:
             estimator = router.quota_estimator
 
             class _FailingEstimator:
-                """Thin wrapper that fails on add_reservation."""
+                """Thin wrapper that fails on pending-load conversion."""
 
                 def __init__(self, inner: Any) -> None:
                     self._inner = inner
+
+                def add_pending_claim(self, account_name: str, *, tokens: int) -> None:
+                    self._inner.add_pending_claim(account_name, tokens=tokens)
+
+                def convert_pending_claim(
+                    self,
+                    account_name: str,
+                    cost: int,
+                    *,
+                    tokens: int,
+                ) -> None:
+                    del account_name, cost, tokens
+                    raise RuntimeError("simulated reservation failure")
+
+                def release_pending_claim(
+                    self, account_name: str, *, tokens: int
+                ) -> None:
+                    self._inner.release_pending_claim(account_name, tokens=tokens)
 
                 async def add_reservation(
                     self,
@@ -1139,6 +1156,15 @@ class TestPublishOrdering:
 
             assert ctx.client_metadata.get("post_commit_interrupted") is True, (
                 "post_commit_interrupted flag missing on context"
+            )
+            assert await estimator.get_account_reserved_load(names) == {
+                name: (0, 0) for name in names
+            }
+            assert all(
+                estimator._account_pending_requests.get(name, 0) == 0 for name in names
+            )
+            assert all(
+                estimator._account_pending_tokens.get(name, 0) == 0 for name in names
             )
 
             # After monkeypatch is reverted, the next selection

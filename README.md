@@ -23,7 +23,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Protocol-aware stream completion: clean EOF is classified from upstream `[DONE]`/`message_stop` evidence; truncated streams are never recorded as successful
 - Isolated upstream dispatch: only typed HTTPX transport failures retry across distinct accounts before response handoff; local preparation and response-adaptation faults terminate safely without provider penalties
 - Dispatch timing: distinct `local_pre_upstream` (full EggPool-side) and `dispatch_overhead` (coordinator-internal) metrics with cadence drift diagnostics for background tasks
-- Selection hot path: generation-hydrated account identities keep SQLite outside the claim lock, while routing plans carry quarantine exclusions directly into sampled diagnostic traces
+- Selection hot path: generation-hydrated account identities keep SQLite outside the claim lock, while provisional request/token load is visible to later scorers before persistence and routing plans carry quarantine exclusions directly into sampled diagnostic traces
 - Durable dispatch write pipeline: process-owned microbatching writer for dispatch intents with bounded queue, adaptive batching, binary success/exception persistence semantics, durable-identity validation, and diagnostics
 - Amortized quota-window maintenance: ordered observations expire incrementally, while rare out-of-order timestamps remain correct through a bounded slow path
 - Bounded observability: coarse metrics by default, opt-in request-coherent spans, bounded rolling-window metrics, and constant-bounded snapshot cost regardless of uptime

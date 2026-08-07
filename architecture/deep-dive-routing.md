@@ -111,6 +111,22 @@ Load-based scoring with four inputs:
 
 Per-account quota window tracking (5h/7d/30d windows). Local estimates are advisory (`local_quota_mode = "score_only"` by default).
 
+#### Pending claim publication
+
+The coordinator uses the estimator's in-memory reservation mirror for one
+provisional ownership path. Under `_selection_claim_lock`, a successful
+health/account claim adds one pending request and its estimated tokens before
+SQLite request/reservation/attempt persistence begins. `get_account_reserved_load`
+includes pending and canonical load in one scorer snapshot, so a concurrent
+selector cannot score the claimed account as idle.
+
+After durable persistence, the second claim-lock section synchronously converts
+the pending counters into the canonical reservation counters without a gap or
+double count. Persistence failure, cancellation, or publication failure
+releases the pending counters through the receipt/compensation owner. This is
+process-local, single-loop accounting: there is no pending-claim table,
+sweeper, background task, or cross-process reservation protocol.
+
 ### `quota/reservation.py`
 
 Reservation management — tracks reserved cost/requests per account.
@@ -182,6 +198,9 @@ Every `routing_decisions` row carries `score_components_json`:
 - Priority tier boundaries are strict: lower-priority never advance ahead of higher-priority
 - `weight` scales effective request/token capacity within a tier;
   `routing_priority` orders tiers
+- A claimed account's pending request/token load is visible to later scoring
+  before SQLite persistence, and conversion/release leaves no provisional
+  residue
 - Upstream-derived backoffs persist across restarts in `account_backoffs` table
 - Durable backoffs are restart hints only; malformed, expired, unknown, or overlong rows have zero routing effect
 - Local-estimate overage never produces a backoff row

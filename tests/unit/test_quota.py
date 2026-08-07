@@ -501,6 +501,38 @@ class TestQuotaFairScorer:
         assert by_name["heavy"].quota_score < by_name["baseline"].quota_score
 
     @pytest.mark.asyncio()
+    async def test_pending_claim_load_obeys_weighted_scoring(self) -> None:
+        """Provisional request/token load uses the same weighted score."""
+        estimator = QuotaEstimator()
+        for name, weight in (("heavy", 2.0), ("baseline", 1.0)):
+            estimator.accounts[name] = AccountQuota(
+                account_name=name,
+                weight=weight,
+                capacity_5h_requests=100,
+                capacity_5h_tokens=1_000,
+            )
+            estimator.add_pending_claim(name, tokens=100)
+
+        scores = await QuotaFairScorer(
+            quota_estimator=estimator,
+        ).score_accounts(
+            ["heavy", "baseline"],
+            request_estimates={"heavy": 100, "baseline": 100},
+        )
+        by_name = {score.account_name: score for score in scores}
+
+        assert by_name["heavy"].reserved_requests == 1
+        assert by_name["heavy"].reserved_tokens == 100
+        assert by_name["heavy"].quota_score < by_name["baseline"].quota_score
+
+    def test_pending_claim_release_underflow_is_observable(self) -> None:
+        """A duplicate pending release must remain an observable invariant error."""
+        estimator = QuotaEstimator()
+
+        with pytest.raises(RuntimeError, match="pending claim ownership underflow"):
+            estimator.release_pending_claim("acct", tokens=1)
+
+    @pytest.mark.asyncio()
     async def test_proportional_weighted_load_converges(self) -> None:
         """Proportional request load produces equal normalized pressure."""
         estimator = QuotaEstimator()

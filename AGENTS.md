@@ -122,6 +122,7 @@ remains available for diagnosing stream-specific regressions.
 > Full design details are in `architecture/README.md` and the `architecture` skill.
 
 - **Request lifecycle**: `RequestCoordinator` orchestrates endpoint → routing → persistence → dispatch → finalization.
+- **Pending claim publication**: after a routing plan selects an account, `_selection_claim_lock` publishes one provisional request/token unit through `QuotaEstimator` before SQLite persistence. Persistence remains outside the lock; success converts that ownership to the canonical reservation, while failure or cancellation releases it exactly once.
 - **Dispatch isolation**: local preparation and response adaptation failures are terminal local errors with no provider retry. Only typed HTTPX transport failures may retry, only across distinct accounts before `downstream_started`.
 - **Multi-provider architecture**: provider-suffixed model IDs (`model-id/provider-id`), `ProviderClientPool`, `OutboundClientManager`.
 - **Provider contracts**: `compose_provider_url()` is the single source of truth for upstream URLs.
@@ -148,6 +149,7 @@ remains available for diagnosing stream-specific regressions.
 - **`static_models` is source of truth for provider-specific protocol**: providers serving non-default protocol must ship `[[providers.<id>.static_models]]` rows.
 - **Upstream-authoritative suppression**: local quota estimates are advisory. Only upstream-observed failures suppress routing.
 - **Routing is load-based, not cost-based**: `QuotaFairScorer` uses request count and token count, never `cost_microdollars`.
+- **Selection claim visibility**: `QuotaEstimator` folds pending request/token claims into the same scorer reservation-load snapshot. There is no pending-claim table, sweeper, background task, or cross-process coordination.
 - **Routing trace persistence**: `RoutingDecisionRepository.create_many()` uses one `executemany` operation inside the caller-owned transaction and propagates database failures; trace-off and unsampled paths do not call it.
 - **Account weight semantics**: weight is a relative capacity/share hint only among otherwise eligible accounts in the selected priority tier. It affects request/token utilization, not cost, and does not promise exact request ratios across different request sizes or provider histories.
 - **`app.state` generation-owned attributes are mirrors, not authority**: New code should use `get_active_generation(request)` or acquire a lease.

@@ -1907,6 +1907,39 @@ class RequestCoordinator:
 
         return result.db_request_id, result.reservation_id, result.attempt_id
 
+    def _release_unpublished_claim(
+        self,
+        *,
+        account_name: str,
+        estimated_tokens: int,
+        receipt: RuntimePublicationReceipt,
+    ) -> None:
+        """Release provisional claim ownership before durable publication.
+
+        This is intentionally synchronous and database-free.  It is used
+        for persistence, cancellation, and identity failures while the
+        durable claim has no retained finalization identity yet.
+        """
+        if (
+            receipt.pending_request_added
+            and not receipt.pending_load_converted
+            and not receipt.pending_load_released
+        ):
+            estimator = self._quota_estimator
+            if estimator is None:
+                raise RuntimeError("pending claim release requires the quota estimator")
+            release_pending = getattr(estimator, "release_pending_claim", None)
+            if not callable(release_pending):
+                raise RuntimeError("quota estimator cannot release pending claims")
+            release_pending(account_name, tokens=estimated_tokens)
+            receipt.pending_load_released = True
+
+        if receipt.health_probe_acquired and not receipt.health_probe_released:
+            if self._health_manager is None:
+                raise RuntimeError("health probe release requires the health manager")
+            self._health_manager.release_request(account_name)
+            receipt.health_probe_released = True
+
     async def _publish_runtime_state(
         self,
         *,
@@ -1915,18 +1948,34 @@ class RequestCoordinator:
         estimated_microdollars: int,
         receipt: RuntimePublicationReceipt,
     ) -> None:
-        """Increment the runtime-side active count and quota reservation.
+        """Convert pending load and publish canonical runtime ownership.
 
-        Milestone B: this is the canonical publication phase that
-        runs INSIDE a brief second acquisition of
-        ``_selection_claim_lock`` so a concurrent selector that
-        enters the lock next observes this attempt's runtime state.
-        Database I/O has already committed at this point.
+        This runs INSIDE the brief second acquisition of
+        ``_selection_claim_lock`` so a concurrent selector observes either
+        the provisional claim or its canonical reservation. Database I/O has
+        already committed at this point.
         """
+
+        if receipt.pending_request_added and not receipt.pending_load_converted:
+            estimator = self._quota_estimator
+            if estimator is None:
+                raise RuntimeError(
+                    "pending claim conversion requires the quota estimator"
+                )
+            convert_pending = getattr(estimator, "convert_pending_claim", None)
+            if not callable(convert_pending):
+                raise RuntimeError("quota estimator cannot convert pending claims")
+            convert_pending(
+                account_name,
+                estimated_microdollars,
+                tokens=estimated_tokens,
+            )
+            receipt.pending_load_converted = True
+            receipt.quota_reservation_added = True
 
         await self._router.increment_active_request_count(account_name)
         receipt.active_count_added = True
-        if self._quota_estimator is not None:
+        if self._quota_estimator is not None and not receipt.quota_reservation_added:
             await self._quota_estimator.add_reservation(
                 account_name,
                 estimated_microdollars,
@@ -1934,7 +1983,6 @@ class RequestCoordinator:
                 tokens=estimated_tokens,
             )
             receipt.quota_reservation_added = True
-        receipt.health_probe_acquired = self._health_manager is not None
         self._selection_claim_diagnostics.record_claim_published()
 
     async def _compensate_or_rollback_claim(
@@ -1952,10 +2000,11 @@ class RequestCoordinator:
     ) -> None:
         """Undo partial runtime state on post-commit publication failure.
 
-        Mirrors the original compensating behavior: decrement the
-        active count if publication already incremented it, ask the
-        attempt finalizer to mark the attempt ``PostCommitInterrupted``,
-        release the circuit-breaker slot, and tag
+        Mirrors the original compensating behavior: release any
+        unconverted provisional load, decrement the active count if
+        publication already incremented it, ask the attempt finalizer to
+        mark the attempt ``PostCommitInterrupted``, release the
+        circuit-breaker slot, and tag
         ``context.client_metadata`` so downstream diagnostics know
         the publish failed after commit.  The original exception is
         re-raised by the caller after this method returns.
@@ -2029,6 +2078,23 @@ class RequestCoordinator:
         """Release a committed claim one acquired component at a time."""
         receipt = submission.receipt
 
+        if receipt.pending_request_added and not progress.pending_load_released:
+            if receipt.pending_load_converted or receipt.pending_load_released:
+                progress.pending_load_released = True
+            elif self._quota_estimator is None:
+                raise RuntimeError(
+                    "pending claim compensation requires quota estimator"
+                )
+            else:
+                self._quota_estimator.release_pending_claim(
+                    submission.account_name,
+                    tokens=submission.estimated_tokens,
+                )
+                receipt.pending_load_released = True
+                progress.pending_load_released = True
+        else:
+            progress.pending_load_released = True
+
         if receipt.active_count_added and not progress.active_count_released:
             await self._router.decrement_active_request_count(submission.account_name)
             progress.active_count_released = True
@@ -2078,14 +2144,20 @@ class RequestCoordinator:
             progress.durable_attempt_finalized = True
 
         if not progress.probe_released:
-            if self._health_manager is not None:
+            if (
+                receipt.health_probe_acquired
+                and not receipt.health_probe_released
+                and self._health_manager is not None
+            ):
                 self._health_manager.release_request(submission.account_name)
+                receipt.health_probe_released = True
             progress.probe_released = True
 
         progress.completed = all(
             (
                 progress.active_count_released,
                 progress.quota_reservation_released,
+                progress.pending_load_released,
                 progress.durable_attempt_finalized,
                 progress.durable_reservation_converged,
                 progress.probe_released,
@@ -2178,33 +2250,34 @@ class RequestCoordinator:
 
         Ordering invariants:
 
-        1. ``_select_lock`` is held across the durable selection
-           transaction AND the runtime publication step.
-        2. The inner ``db.transaction()`` context manager EXITS before
-           publication runs so SQLite has committed the request /
-           reservation / attempt rows.  The routing-decision trace
-           write is best-effort and runs AFTER the lock releases; a
-           trace-write failure cannot fail the dispatch.
-        3. ``_execute_upstream`` and all upstream I/O happen OUTSIDE
-           ``_select_lock``.
+        1. The first ``_selection_claim_lock`` acquisition revalidates the
+           selected account, resolves in-memory identity, and publishes
+           provisional request/token load. No SQLite I/O occurs under it.
+        2. Durable request/reservation/attempt persistence runs outside the
+           claim lock. Its transaction commits before the second claim-lock
+           acquisition converts provisional load to canonical ownership.
+        3. ``_execute_upstream`` and all upstream I/O happen outside the
+           selection locks.
 
         Phase 5: thinking classification, reservation-token estimate,
         capability policy resolution, and routing-plan construction
         are pure computations that read no mutable runtime state.
         They run OUTSIDE ``_select_lock`` so the lock only holds the
         correctness-critical work (circuit probe, account-ID lookup,
-        DB writes, runtime publication).  The plan invariants are
-        preserved: the in-process active counter and circuit-breaker
-        state are the only mutable runtime inputs to selection, and
-        those remain serialized under the lock.
+        pending-load publication, and runtime conversion).  The plan
+        invariants are preserved: the in-process active counter,
+        provisional/canonical quota mirrors, and circuit-breaker state are
+        the mutable runtime inputs to selection, and those remain serialized
+        under the claim lock.
 
-        Compensation: if publication fails after the durable commit,
-        active count is decremented, the reservation is removed, the
-        attempt is finalized as ``PostCommitInterrupted``, and the
-        health slot is released. The outer ``except BaseException``
-        catches ``CancelledError`` / ``SystemExit`` /
-        ``KeyboardInterrupt`` and re-raises them after compensation so
-        they cannot be swallowed.
+        Compensation: if persistence fails before durable identity
+        publication, provisional load and the health slot are released. If
+        publication fails after the durable commit, canonical runtime state
+        is released, any unconverted provisional load is released, the
+        attempt is finalized as ``PostCommitInterrupted``, and the health
+        slot is released. The outer ``except BaseException`` catches
+        ``CancelledError`` / ``SystemExit`` / ``KeyboardInterrupt`` and
+        re-raises them after compensation so they cannot be swallowed.
         """
         if (
             self._request_repo is None
@@ -2418,6 +2491,7 @@ class RequestCoordinator:
         selected_score: float | None = None
         selected_tier: int | None = None
         exclusions: list[RoutingExclusion] = []
+        claim_receipt = RuntimePublicationReceipt()
         # The first attempt of each request enters the lock; the
         # breaker may have changed state since the plan was built.
         # The locked loop below re-validates the chosen candidate
@@ -2464,6 +2538,9 @@ class RequestCoordinator:
                                 )
                             )
                             continue
+                        claim_receipt.health_probe_acquired = (
+                            self._health_manager is not None
+                        )
                         selected_state = candidate_state
                         selected_score = float(score.final_score)
                         selected_tier = score.tier
@@ -2528,8 +2605,11 @@ class RequestCoordinator:
                     api_key = self._registry.get_api_key(account_name)
                     has_creds = self._registry.has_usable_credentials(account_name)
                     if api_key is None or not has_creds:
-                        if self._health_manager is not None:
-                            self._health_manager.release_request(account_name)
+                        self._release_unpublished_claim(
+                            account_name=account_name,
+                            estimated_tokens=estimated_tokens,
+                            receipt=claim_receipt,
+                        )
                         raise AuthenticationError(
                             f"API key not available for account {account_name!r}"
                         )
@@ -2537,8 +2617,11 @@ class RequestCoordinator:
                     identity = self._account_identities.get(account_name)
                     account_id = identity.account_id if identity is not None else None
                     if account_id is None:
-                        if self._health_manager is not None:
-                            self._health_manager.release_request(account_name)
+                        self._release_unpublished_claim(
+                            account_name=account_name,
+                            estimated_tokens=estimated_tokens,
+                            receipt=claim_receipt,
+                        )
                         raise DatabaseError(
                             f"Account {account_name!r} not found in database"
                         )
@@ -2565,6 +2648,21 @@ class RequestCoordinator:
                     api_key=api_key,
                     estimated_microdollars=estimated_microdollars,
                 )
+                if self._quota_estimator is not None:
+                    try:
+                        self._quota_estimator.add_pending_claim(
+                            account_name,
+                            tokens=estimated_tokens,
+                        )
+                    except BaseException:
+                        self._release_unpublished_claim(
+                            account_name=account_name,
+                            estimated_tokens=estimated_tokens,
+                            receipt=claim_receipt,
+                        )
+                        raise
+                    claim_receipt.pending_request_added = True
+                    claim_receipt.pending_tokens_added = True
 
         # --- Phase B: durable commit, OUTSIDE the lock ---
         db_request_id: str | None = None
@@ -2597,10 +2695,11 @@ class RequestCoordinator:
                             attempt_number=attempt_number,
                         )
                 except BaseException:
-                    if self._health_manager is not None:
-                        self._health_manager.release_request(
-                            claim_identity.account_name
-                        )
+                    self._release_unpublished_claim(
+                        account_name=claim_identity.account_name,
+                        estimated_tokens=estimated_tokens,
+                        receipt=claim_receipt,
+                    )
                     raise
         else:
             with (
@@ -2638,10 +2737,11 @@ class RequestCoordinator:
                 except BaseException:
                     # SQLite transaction rolled back; release the
                     # health slot the lock took, then re-raise.
-                    if self._health_manager is not None:
-                        self._health_manager.release_request(
-                            claim_identity.account_name
-                        )
+                    self._release_unpublished_claim(
+                        account_name=claim_identity.account_name,
+                        estimated_tokens=estimated_tokens,
+                        receipt=claim_receipt,
+                    )
                     raise
 
         if (
@@ -2651,8 +2751,11 @@ class RequestCoordinator:
             or isinstance(attempt_id, bool)
             or attempt_id < 1
         ):
-            if self._health_manager is not None:
-                self._health_manager.release_request(claim_identity.account_name)
+            self._release_unpublished_claim(
+                account_name=claim_identity.account_name,
+                estimated_tokens=estimated_tokens,
+                receipt=claim_receipt,
+            )
             raise DatabaseError(
                 "Dispatch persistence returned an invalid durable identity"
             )
@@ -2684,7 +2787,7 @@ class RequestCoordinator:
 
         # --- Phase C: runtime publication under _selection_claim_lock #2 ---
         publish_lock_wait_ns = time.perf_counter_ns()
-        publication_receipt = RuntimePublicationReceipt()
+        publication_receipt = claim_receipt
         try:
             with _maybe_span(self._dispatch_span_recorder, SPAN_SELECTION_CLAIM_HELD):
                 async with self._selection_claim_lock:

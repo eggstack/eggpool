@@ -1,7 +1,7 @@
 # Plan 088 — Pending Claim Load Publication
 
 Date: 2026-08-07
-Status: ready for implementation
+Status: complete
 Parent roadmap: `plans/086-sbc-routing-and-storage-efficiency-roadmap.md`
 Depends on: `plans/087-weighted-routing-semantics.md`
 Planning baseline: `d6c49dea5ed800bfcd22d95fe8c7943a29590125`
@@ -173,18 +173,18 @@ Optionally run the existing manual high-concurrency reproducer if it can exercis
 
 ## Acceptance criteria
 
-- [ ] A claimed account's provisional request/token load is visible to subsequent scoring before SQLite persistence begins.
-- [ ] SQLite I/O remains outside `_selection_claim_lock`.
-- [ ] No new background task, persistent claim table, or generic reservation framework is introduced.
-- [ ] Persistence failure releases provisional load exactly once.
-- [ ] Cancellation before commit releases provisional load exactly once.
-- [ ] Durable success converts provisional ownership without double-counting active/reserved load.
-- [ ] Post-commit compensation cannot leave provisional residue.
-- [ ] Finalization returns successful request load to baseline.
-- [ ] Health/circuit request-slot ownership remains balanced.
-- [ ] Plan 087 weighted scoring remains correct with pending load included.
-- [ ] Focused deterministic concurrency tests pass.
-- [ ] Standard smoke gate passes.
+- [x] A claimed account's provisional request/token load is visible to subsequent scoring before SQLite persistence begins.
+- [x] SQLite I/O remains outside `_selection_claim_lock`.
+- [x] No new background task, persistent claim table, or generic reservation framework is introduced.
+- [x] Persistence failure releases provisional load exactly once.
+- [x] Cancellation before commit releases provisional load exactly once.
+- [x] Durable success converts provisional ownership without double-counting active/reserved load.
+- [x] Post-commit compensation cannot leave provisional residue.
+- [x] Finalization returns successful request load to baseline.
+- [x] Health/circuit request-slot ownership remains balanced.
+- [x] Plan 087 weighted scoring remains correct with pending load included.
+- [x] Focused deterministic concurrency tests pass.
+- [x] Standard smoke gate passes.
 
 ## Rejection conditions
 
@@ -210,3 +210,21 @@ Do not close this plan if:
 8. Run focused concurrency/cancellation tests.
 9. Run lint/type/smoke checks.
 10. Record exact verification and mark complete only when all counter/probe invariants are proven.
+
+## Implementation record
+
+- `QuotaEstimator` now owns one process-local pending request/token counter pair. The scorer's existing `get_account_reserved_load()` snapshot includes pending and canonical load; no second accounting manager, durable table, sweeper, or cross-process coordination was added.
+- `RuntimePublicationReceipt` carries pending request/token ownership, health-probe ownership, conversion, and release state. Phase A publishes pending load under `_selection_claim_lock`; SQLite dispatch persistence remains outside it; Phase C converts pending load to the canonical reservation atomically with active-count publication.
+- Pre-commit failure/cancellation releases pending load and the health probe through one receipt helper. Post-commit compensation releases unconverted pending load and only the runtime components proven acquired. Successful `AttemptRuntimeLease` finalization returns active/reserved/pending state to baseline.
+- Deterministic event-driven coverage was added to the existing quota/coordinator/slow-writer suites for blocked persistence visibility, less-loaded peer selection, failed persistence, cancellation, conversion, finalization release, compensation, probe balance, and weighted pending-load scoring.
+
+### Verification evidence
+
+- `uv sync --frozen --extra ci` — completed successfully.
+- `uv run pytest tests/unit/test_quota.py tests/unit/test_routing_coordinator_concurrent.py tests/unit/test_slow_writer_burst_fairness.py tests/unit/test_coordinator_claim_lock_scope.py tests/unit/test_request_coordinator_cleanup.py -q --tb=short --maxfail=1` — **81 passed**.
+- `uv run pytest tests/unit/test_coordinator_*.py tests/unit/test_routing*.py tests/unit/test_quota*.py tests/unit/test_request_finalization*.py tests/unit/test_request_coordinator_cleanup.py tests/unit/test_runtime_ownership_token.py -q --tb=short --maxfail=1` — **350 passed**.
+- `uv run ruff format --check src/ tests/ scripts/` — **725 files already formatted**.
+- `uv run ruff check src/ tests/ scripts/` — **passed**.
+- `uv run pyright src/ scripts/` — **0 errors, 0 warnings, 0 informations**.
+- `PYTHONHASHSEED=0 TZ=UTC uv run pytest tests/smoke/ -q --tb=short --maxfail=1` — **14 passed**.
+- `git diff --check` — **passed**.

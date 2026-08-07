@@ -101,6 +101,7 @@ class SlowDispatchWriter:
         self._submitted: list[DispatchIntent] = []
         self._futures: list[Future[PersistedDispatchResult]] = []
         self._commit_counter = 0
+        self.submitted_event = asyncio.Event()
 
     @property
     def submitted(self) -> list[DispatchIntent]:
@@ -147,6 +148,7 @@ class SlowDispatchWriter:
         fut: Future[PersistedDispatchResult] = Future()
         self._submitted.append(intent)
         self._futures.append(fut)
+        self.submitted_event.set()
         return fut
 
 
@@ -323,6 +325,115 @@ async def _wait_for_writer_submitted(
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio()
+async def test_pending_claim_is_visible_before_writer_commit() -> None:
+    """A blocked durable write still publishes load to the next scorer."""
+    fixture = await _build_fixture()
+    try:
+        coord = fixture["coordinator"]
+        router = fixture["router"]
+        writer = fixture["writer"]
+        estimator = router.quota_estimator
+        router._scorer.tiebreaker_range = 0.0  # pyright: ignore[reportPrivateUsage]
+
+        first_task = asyncio.create_task(
+            coord._select_and_persist_attempt(_make_context("req-pending-a"), 1)
+        )
+        await writer.submitted_event.wait()
+        first_intent = writer.submitted[0]
+        first_account = first_intent.account_name
+
+        scores = await router.score_accounts_for_model("gpt-4")
+        by_name = {state.name: score for state, score in scores}
+        assert by_name[first_account].reserved_requests == 1
+        assert by_name[first_account].reserved_tokens == first_intent.estimated_tokens
+
+        second = await router.select_account(
+            "gpt-4",
+            request_estimates={
+                name: first_intent.estimated_tokens for name in fixture["names"]
+            },
+        )
+        assert second is not None
+        assert second.name != first_account
+
+        writer.complete_commit(0)
+        selected = await first_task
+        assert selected.account_name == first_account
+        assert await estimator.get_account_reserved_load([first_account]) == {
+            first_account: (1, first_intent.estimated_tokens)
+        }
+    finally:
+        await fixture["db"].disconnect()
+
+
+@pytest.mark.asyncio()
+async def test_cancellation_releases_pending_claim_once() -> None:
+    """Cancellation while persistence is blocked releases pending load and probe."""
+    fixture = await _build_fixture()
+    try:
+        coord = fixture["coordinator"]
+        router = fixture["router"]
+        writer = fixture["writer"]
+        task = asyncio.create_task(
+            coord._select_and_persist_attempt(_make_context("req-pending-cancel"), 1)
+        )
+        await writer.submitted_event.wait()
+        account = writer.submitted[0].account_name
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert await router.quota_estimator.get_account_reserved_load([account]) == {
+            account: (0, 0)
+        }
+        releases = fixture["health_manager"].snapshot()["releases"]
+        assert releases == [account]
+    finally:
+        await fixture["db"].disconnect()
+
+
+@pytest.mark.asyncio()
+async def test_conversion_and_runtime_release_return_to_baseline() -> None:
+    """Successful conversion is counted once and finalization releases it."""
+    fixture = await _build_fixture()
+    try:
+        coord = fixture["coordinator"]
+        router = fixture["router"]
+        writer = fixture["writer"]
+        task = asyncio.create_task(
+            coord._select_and_persist_attempt(_make_context("req-pending-success"), 1)
+        )
+        await writer.submitted_event.wait()
+        intent = writer.submitted[0]
+        writer.complete_commit(0)
+        selected = await task
+
+        estimator = router.quota_estimator
+        assert estimator._account_pending_requests.get(intent.account_name, 0) == 0
+        assert estimator._account_pending_tokens.get(intent.account_name, 0) == 0
+        assert await estimator.get_account_reserved_load([intent.account_name]) == {
+            intent.account_name: (1, intent.estimated_tokens)
+        }
+
+        assert selected.runtime_lease is not None
+        outcomes = await selected.runtime_lease.release_once(
+            reason="test",
+            router=router,
+            quota_estimator=estimator,
+            health_manager=fixture["health_manager"],
+        )
+        assert all(outcome.released for outcome in outcomes)
+        assert await estimator.get_account_reserved_load([intent.account_name]) == {
+            intent.account_name: (0, 0)
+        }
+        assert router._registry.get_state(intent.account_name).active_request_count == 0
+        assert fixture["health_manager"].snapshot()["releases"] == [intent.account_name]
+    finally:
+        await fixture["db"].disconnect()
 
 
 @pytest.mark.asyncio()
@@ -597,6 +708,9 @@ async def test_failed_persistence_releases_health_slot_exactly_once() -> None:
         assert len(releases) == 1, (
             f"Health slot released {len(releases)} times, expected 1: {releases}"
         )
+        assert await fixture["router"].quota_estimator.get_account_reserved_load(
+            fixture["names"]
+        ) == {name: (0, 0) for name in fixture["names"]}
     finally:
         await fixture["db"].disconnect()
 
@@ -673,6 +787,9 @@ async def test_failed_post_commit_publication_invokes_compensation() -> None:
         assert len(releases) == 1, (
             f"Health slot released {len(releases)} times, expected 1"
         )
+        assert await fixture["router"].quota_estimator.get_account_reserved_load(
+            fixture["names"]
+        ) == {name: (0, 0) for name in fixture["names"]}
     finally:
         await fixture["db"].disconnect()
 

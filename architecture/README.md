@@ -76,6 +76,7 @@ All outbound dispatch paths (non-streaming chat, streaming chat, catalog refresh
 
 Key invariants:
 - Requests must be persisted before upstream dispatch
+- After the routing plan selects an account, the first `_selection_claim_lock` acquisition revalidates health, resolves in-memory identity, and publishes one provisional request/token load through `QuotaEstimator`. SQLite persistence remains outside the lock; durable success converts that same ownership to the canonical reservation under the second acquisition, while failure/cancellation releases it exactly once.
 - Local preparation, request construction/serialization, and client-facing response adaptation failures are local terminal errors; they do not retry or penalize a provider. Only typed HTTPX transport failures can retry across distinct accounts before the explicit `downstream_started` handoff fact.
 - Retry cleanup converges before reselection, and total attempts are bounded by both distinct eligible accounts and `1 + max_retries_before_stream`; a truncated traversal records `attempt_ceiling_reached`.
 - Non-streaming response adaptation completes before durable `COMPLETED`. Native invalid JSON may pass through when usage is optional; required transcoded response failures are not recorded as success.
@@ -1933,13 +1934,13 @@ section alongside the broader `_select_lock`, with two
 acquisitions per attempt:
 
 1. **Phase A** — first acquisition of `_selection_claim_lock`. The
-   coordinator probes the circuit breaker (`SPAN_CIRCUIT_PROBE`) and
-   resolves the per-attempt identity
-   (`SPAN_ACCOUNT_LOOKUP`): API key, account id, provider id,
-   reservation cost. Account IDs/provider IDs come from the immutable,
-   generation-hydrated identity map; a cache miss never creates a
-   repository or awaits SQLite under this lock. The result is captured
-   into a frozen `_ClaimIdentity` dataclass and the lock releases.
+   coordinator revalidates the circuit breaker (`SPAN_CIRCUIT_PROBE`),
+   resolves the per-attempt identity (`SPAN_ACCOUNT_LOOKUP`), and adds one
+   provisional request/token unit to `QuotaEstimator`. Account IDs/provider
+   IDs come from the immutable, generation-hydrated identity map; a cache
+   miss never creates a repository or awaits SQLite under this lock. The
+   `RuntimePublicationReceipt` proves provisional ownership before the lock
+   releases.
 2. **Phase B** — durable commit, OUTSIDE the lock.
    `_persist_dispatch_bundle` opens its own
    `async with self._db.transaction():` and inserts the request,
@@ -1951,11 +1952,10 @@ acquisitions per attempt:
    `SPAN_DISPATCH_PERSISTENCE_TRANSACTION` /
    `SPAN_DISPATCH_PERSISTENCE_COMMIT`.
 3. **Phase C** — second acquisition of `_selection_claim_lock`. The
-   coordinator publishes runtime state
-   (`_publish_runtime_state` → `Router.increment_active_request_count`
-   + `QuotaEstimator.add_reservation`, wrapping
-   `SPAN_RUNTIME_PUBLICATION` and the new
-   `SPAN_POST_COMMIT_PUBLICATION`) and the lock releases. The
+   coordinator converts the provisional request/token unit to the canonical
+   reservation, increments the active request count, and publishes runtime
+   state (`_publish_runtime_state`, wrapping `SPAN_RUNTIME_PUBLICATION` and
+   `SPAN_POST_COMMIT_PUBLICATION`) before the lock releases. The
    `attempted_accounts` set is recorded while the lock is held so a
    concurrent selector entering Phase A next observes this attempt's
    runtime state and the freshly-stamped attempted-account history.
@@ -1967,8 +1967,8 @@ end of the call) so historical dashboards stay comparable, but the
 new selection-claim spans are the authoritative timing source for
 operators looking to spot a contended lock on a hot path.
 
-The compensation chain (`_compensate_or_rollback_claim` →
-`decrement` → finalize-as-cancelled → release health slot →
+The compensation chain (`_compensate_or_rollback_claim` → release any
+unconverted provisional load → `decrement` → finalize-as-cancelled → release health slot →
 set `client_metadata["post_commit_interrupted"]` → re-raise) wraps
 Phase C and catches `BaseException` (including `CancelledError` /
 `SystemExit` / `KeyboardInterrupt`, re-raised without swallowing).

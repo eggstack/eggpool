@@ -679,6 +679,11 @@ class QuotaEstimator:
     _account_reserved_cost: dict[str, int] = field(default_factory=dict[str, int])
     _account_reserved_requests: dict[str, int] = field(default_factory=dict[str, int])
     _account_reserved_tokens: dict[str, int] = field(default_factory=dict[str, int])
+    # Claims are made visible to the scorer before durable dispatch
+    # persistence starts.  These counters are provisional ownership only;
+    # publication converts them into the canonical reservation mirrors.
+    _account_pending_requests: dict[str, int] = field(default_factory=dict[str, int])
+    _account_pending_tokens: dict[str, int] = field(default_factory=dict[str, int])
     # Serializes record_usage + persisted_snapshot updates so concurrent
     # finalizers cannot interleave between the two updates and lose cost
     # increments.
@@ -979,6 +984,79 @@ class QuotaEstimator:
         """Get quota state for an account."""
         return self.accounts.get(account_name)
 
+    def _sync_reservation_mirrors(self, account_name: str) -> None:
+        """Keep the diagnostic reservation fields aligned with all ownership."""
+        quota = self.get_account_quota(account_name)
+        if quota is None:
+            return
+        quota.reserved_cost = self._account_reserved_cost.get(account_name, 0)
+        quota.reserved_requests = self._account_reserved_requests.get(
+            account_name, 0
+        ) + self._account_pending_requests.get(account_name, 0)
+        quota.reserved_tokens = self._account_reserved_tokens.get(
+            account_name, 0
+        ) + self._account_pending_tokens.get(account_name, 0)
+
+    def add_pending_claim(self, account_name: str, *, tokens: int) -> None:
+        """Publish provisional request/token load for a claimed account.
+
+        This method is intentionally synchronous and database-free.  The
+        coordinator calls it while holding ``_selection_claim_lock`` so a
+        subsequent selector cannot score the account between the claim and
+        its durable dispatch persistence.
+        """
+        if tokens < 0:
+            raise ValueError("pending claim tokens must be non-negative")
+        self._account_pending_requests[account_name] = clamp_sqlite_integer(
+            self._account_pending_requests.get(account_name, 0) + 1
+        )
+        self._account_pending_tokens[account_name] = clamp_sqlite_integer(
+            self._account_pending_tokens.get(account_name, 0) + tokens
+        )
+        self._sync_reservation_mirrors(account_name)
+
+    def release_pending_claim(self, account_name: str, *, tokens: int) -> None:
+        """Release one provisional claim, surfacing ownership underflow."""
+        if tokens < 0:
+            raise ValueError("pending claim tokens must be non-negative")
+        pending_requests = self._account_pending_requests.get(account_name, 0)
+        pending_tokens = self._account_pending_tokens.get(account_name, 0)
+        if pending_requests < 1 or pending_tokens < tokens:
+            raise RuntimeError(
+                "pending claim ownership underflow for "
+                f"account={account_name!r} requests={pending_requests} "
+                f"tokens={pending_tokens} release_tokens={tokens}"
+            )
+        self._account_pending_requests[account_name] = pending_requests - 1
+        self._account_pending_tokens[account_name] = pending_tokens - tokens
+        self._sync_reservation_mirrors(account_name)
+
+    def convert_pending_claim(
+        self,
+        account_name: str,
+        cost: int,
+        *,
+        tokens: int,
+    ) -> None:
+        """Convert provisional load into one canonical reservation.
+
+        The operation is synchronous so the coordinator can perform the
+        replacement as one local transition while holding the selection
+        claim lock.  It performs no SQLite I/O and never creates a second
+        representation of the same request.
+        """
+        self.release_pending_claim(account_name, tokens=tokens)
+        self._account_reserved_cost[account_name] = clamp_sqlite_integer(
+            self._account_reserved_cost.get(account_name, 0) + cost
+        )
+        self._account_reserved_requests[account_name] = clamp_sqlite_integer(
+            self._account_reserved_requests.get(account_name, 0) + 1
+        )
+        self._account_reserved_tokens[account_name] = clamp_sqlite_integer(
+            self._account_reserved_tokens.get(account_name, 0) + tokens
+        )
+        self._sync_reservation_mirrors(account_name)
+
     def get_account_weight(self, account_name: str) -> float:
         """Get account weight for weighted routing."""
         quota = self.accounts.get(account_name)
@@ -1090,9 +1168,7 @@ class QuotaEstimator:
             )
             quota = self.get_account_quota(account_name)
             if quota is not None:
-                quota.reserved_cost = self._account_reserved_cost[account_name]
-                quota.reserved_requests = self._account_reserved_requests[account_name]
-                quota.reserved_tokens = self._account_reserved_tokens[account_name]
+                self._sync_reservation_mirrors(account_name)
 
     async def remove_reservation(
         self,
@@ -1118,13 +1194,7 @@ class QuotaEstimator:
                 )
             quota = self.get_account_quota(account_name)
             if quota is not None:
-                quota.reserved_cost = self._account_reserved_cost.get(account_name, 0)
-                quota.reserved_requests = self._account_reserved_requests.get(
-                    account_name, 0
-                )
-                quota.reserved_tokens = self._account_reserved_tokens.get(
-                    account_name, 0
-                )
+                self._sync_reservation_mirrors(account_name)
 
     async def get_account_reserved_cost(self, account_name: str) -> int:
         """Get total reserved cost for a single account.
@@ -1163,8 +1233,10 @@ class QuotaEstimator:
         async with self._snapshot_lock:
             return {
                 name: (
-                    self._account_reserved_requests.get(name, 0),
-                    self._account_reserved_tokens.get(name, 0),
+                    self._account_reserved_requests.get(name, 0)
+                    + self._account_pending_requests.get(name, 0),
+                    self._account_reserved_tokens.get(name, 0)
+                    + self._account_pending_tokens.get(name, 0),
                 )
                 for name in account_names
             }

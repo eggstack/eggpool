@@ -19,7 +19,7 @@ description: Architecture principles and design decisions for the EggPool projec
 All data-plane requests flow through `RequestCoordinator`:
 
 1. **Endpoint** (`api/chat_completions.py` or `api/messages.py`) extracts model ID, parses provider suffix
-2. **Routing** selects an eligible account via quota-aware scoring (`routing/router.py`)
+2. **Routing** selects an eligible account via quota-aware scoring (`routing/router.py`) and publishes its provisional request/token load before durable persistence
 3. **Attempt** is persisted to SQLite before upstream dispatch
 4. **Provider Contract** renders absolute URL (`compose_provider_url()`) and auth headers (`build_upstream_headers()`) from `providers/contract.py`
 5. **Protocol Transcoding** (if enabled) translates the request body when the client protocol differs from the upstream protocol
@@ -30,6 +30,7 @@ All data-plane requests flow through `RequestCoordinator`:
 ### Key Invariants
 
 - Requests must be persisted before upstream dispatch
+- A successful account claim publishes provisional request/token load under `_selection_claim_lock` before SQLite persistence. Persistence stays outside the lock; durable success converts the same ownership to the canonical reservation, while failure/cancellation releases it exactly once.
 - Dispatch persistence is binary: a batch returns fully valid durable identities or raises; rollback never creates placeholder success results. The process-owned writer is bound to the canonical single event loop and rejects foreign-loop submissions.
 - Dispatch exception boundaries are stage-local. Provider/client preparation, request construction or serialization, and client-facing response adaptation faults are local terminal errors with no provider retry or penalty. Only typed HTTPX transport failures are retry candidates.
 - Retries use distinct accounts only, converge failed-attempt cleanup before reselection, and stop at `min(distinct eligible accounts, 1 + max_retries_before_stream)`. The request records `attempt_ceiling_reached` when the configured ceiling leaves eligible accounts unattempted.
@@ -72,6 +73,7 @@ Transparent request/response format conversion between OpenAI and Anthropic prot
 - Ordered `QuotaWindow` observations use cached totals and left-edge expiry; out-of-order observations use one bounded rebuild path.
 - Persisted 5h/7d/30d snapshots refresh from timestamped retained request data, preserving exact horizon boundaries for long-lived generations.
 - **Load-based, never cost-based**: request count + token count + active count + health
+- Pending request/token claims are included in the existing `QuotaEstimator` reservation-load snapshot; they are not a second routing system or durable table.
 - `QuotaFairScorer` does NOT consume cache/compression fields
 
 Routing trace batches use one `executemany` call inside the transaction owner’s
@@ -194,6 +196,12 @@ transition, so already-terminal durable state can still converge them.
 `FinalizationResult` distinguishes durable terminal state, durable transition,
 reservation convergence, and runtime cleanup. The coordinator submits and
 joins commands; it has no retained terminal registry or parallel capacity.
+
+Before a durable identity exists, `RuntimePublicationReceipt` owns the
+provisional request/token claim and health probe. After persistence, publication
+converts the provisional load to the canonical reservation in one claim-lock
+transition; post-commit compensation and `AttemptRuntimeLease` own only the
+components actually acquired.
 
 Request and attempt recovery use explicit durable identities; canonical terminal
 status sets live in `request/terminal_status.py`. Unknown status or identity

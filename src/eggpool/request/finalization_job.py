@@ -84,11 +84,22 @@ TerminalIdentity = FinalizationIdentity
 
 @dataclass(slots=True)
 class RuntimePublicationReceipt:
-    """Runtime components acquired while publishing a durable claim."""
+    """Runtime components acquired while publishing a durable claim.
 
+    The pending fields represent the provisional request/token load that is
+    visible to routing while SQLite persistence is in progress.  Exactly one
+    of ``pending_load_converted`` or ``pending_load_released`` must become
+    true after a pending claim is acquired.
+    """
+
+    pending_request_added: bool = False
+    pending_tokens_added: bool = False
+    pending_load_converted: bool = False
+    pending_load_released: bool = False
     active_count_added: bool = False
     quota_reservation_added: bool = False
     health_probe_acquired: bool = False
+    health_probe_released: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +148,7 @@ class ClaimCompensationSubmission:
 class ClaimCompensationProgress:
     """Resumable progress for post-commit claim compensation."""
 
+    pending_load_released: bool = False
     active_count_released: bool = False
     quota_reservation_released: bool = False
     durable_attempt_finalized: bool = False
