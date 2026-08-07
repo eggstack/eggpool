@@ -277,6 +277,40 @@ the model appears in `/v1/models`:
 The two knobs are independent. `collapse_models` changes the *catalog shape*;
 `routing_priority` changes the *selection order* inside that shape.
 
+### Account weight
+
+Each `[[providers.<id>.accounts]]` entry may set a positive `weight` (default
+`1.0`). Weight is a relative capacity/share hint used only after an account is
+eligible and inside its priority tier:
+
+- `weight = 1.0` is the baseline share.
+- `weight = 2.0` gives an otherwise comparable account approximately twice the
+  effective request/token capacity of `weight = 1.0`.
+- `weight = 0.5` gives approximately half the effective capacity.
+
+The scorer applies the multiplier to both request-count and token-count quota
+pressure, including persisted load, reservations, offsets, and the projected
+incoming request. It does not use cost. Higher `routing_priority` tiers still
+win before weight is considered; health, circuit, quarantine, catalog, and
+protocol eligibility gates also remain authoritative. Weight does not promise
+an exact long-run request ratio when request sizes or provider health/capacity
+histories differ substantially.
+
+For example, two otherwise equivalent keys can receive a 2:1 relative share
+hint like this:
+
+```toml
+[[providers.opencode-go.accounts]]
+name = "primary"
+api_key_env = "OPENCODE_GO_KEY_PRIMARY"
+weight = 2.0
+
+[[providers.opencode-go.accounts]]
+name = "secondary"
+api_key_env = "OPENCODE_GO_KEY_SECONDARY"
+weight = 1.0
+```
+
 ### Worked example
 
 Three providers all expose `minimax-m2.7`. The desired order is

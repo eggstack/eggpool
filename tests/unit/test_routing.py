@@ -34,18 +34,21 @@ def test_eligible_accounts_basic() -> None:
 
 def test_eligible_accounts_excludes_cooldown() -> None:
     cache = ModelCatalogCache()
-    cache.update_from_account(
-        "acct1", "opencode-go", [{"model_id": "gpt-4", "protocol": "openai"}]
-    )
+    for name in ("acct1", "acct2"):
+        cache.update_from_account(
+            name, "opencode-go", [{"model_id": "gpt-4", "protocol": "openai"}]
+        )
     states = [
         AccountRuntimeState(
             name="acct1",
+            weight=100.0,
             health_state="cooldown",
             cooldown_until=9999999999,  # Far future
         ),
+        AccountRuntimeState(name="acct2", weight=1.0),
     ]
     eligible = get_eligible_accounts(states, "gpt-4", cache)
-    assert len(eligible) == 0
+    assert [state.name for state in eligible] == ["acct2"]
 
 
 def test_eligible_accounts_model_not_supported() -> None:

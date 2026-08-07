@@ -241,8 +241,8 @@ class TestFairnessBandExtraction:
         assert reason == "ok"
         assert len(rest) == 0
 
-    def test_fairness_band_separates_different_weights(self) -> None:
-        """Candidates with different weights are NOT in the same band."""
+    def test_fairness_band_accepts_different_weights_when_scores_tie(self) -> None:
+        """Normalized score ties can rotate across different weights."""
         from eggpool.routing.router import _fairness_band
 
         states = [
@@ -264,11 +264,9 @@ class TestFairnessBandExtraction:
         ranked = list(zip(states, scores, strict=True))
 
         band, rest, reason = _fairness_band(ranked, epsilon=0.1, prefer_native=True)
-        # acct0001 has weight 2.0, acct0002 has weight 1.0 — different
-        # weights means they are not in the same band. Band starts from
-        # the top; since the second candidate differs, band < 2 → "not_tied".
-        assert len(band) == 0
-        assert reason == "not_tied"
+        assert len(band) == 3
+        assert reason == "ok"
+        assert rest == []
 
     def test_fairness_band_separates_different_tiers(self) -> None:
         """Candidates from different priority tiers are NOT in the same band."""
@@ -469,20 +467,15 @@ class TestIntegrationEvenDistribution:
 
 
 # ---------------------------------------------------------------------------
-# Test 6: Mixed weights — sub-band of equal-weight peers
+# Test 6: Mixed weights — normalized-score fairness band
 # ---------------------------------------------------------------------------
 
 
-class TestMixedWeightSubBand:
-    """Different-weight accounts do not all end up in one fairness band."""
+class TestMixedWeightFairness:
+    """Different-weight accounts can share a normalized-score band."""
 
-    def test_fairness_band_forms_sub_band_for_equal_weight_subset(self) -> None:
-        """When weights are 2.0, 1.0, 1.0 the two weight-1.0 accounts
-        form a fairness band if they are at the top of the scored order.
-
-        The plan requires that equal-peer rotor either applies only to
-        the weight-1.0 subset or skips with ``reason = "different_weights"``.
-        """
+    def test_fairness_band_includes_different_weights_within_epsilon(self) -> None:
+        """A near-tie band is based on normalized scores, not weight."""
         from eggpool.routing.router import _fairness_band
 
         # Simulate scored order where the two weight-1.0 accounts are
@@ -507,21 +500,13 @@ class TestMixedWeightSubBand:
         ranked = list(zip(states, scores, strict=True))
 
         band, rest, reason = _fairness_band(ranked, epsilon=0.1, prefer_native=True)
-        # The two weight-1.0 accounts should form a band; the weight-2.0
-        # account should be excluded because its weight differs.
-        assert len(band) == 2
+        assert len(band) == 3
         assert reason == "ok"
-        assert len(rest) == 1
-        assert rest[0][0].name == "heavy01"
-        assert {s[0].name for s in band} == {"light01", "light02"}
+        assert rest == []
+        assert {s[0].name for s in band} == {"light01", "light02", "heavy01"}
 
-    def test_fairness_band_rejects_when_best_weight_differs(self) -> None:
-        """When the best candidate has a different weight from the runner-up,
-        band < 2 and fairness is not applied.
-
-        This is the ``reason = "not_tied"`` path: the best is weight-2.0,
-        the next is weight-1.0, so they cannot form an equal-peer band.
-        """
+    def test_fairness_band_accepts_when_best_weight_differs(self) -> None:
+        """A different best weight does not block a normalized-score tie."""
         from eggpool.routing.router import _fairness_band
 
         states = [
@@ -543,10 +528,9 @@ class TestMixedWeightSubBand:
         ranked = list(zip(states, scores, strict=True))
 
         band, rest, reason = _fairness_band(ranked, epsilon=0.1, prefer_native=True)
-        # Best is weight-2.0, runner-up is weight-1.0 → different weights
-        # → band can only contain the first candidate → band < 2.
-        assert len(band) == 0
-        assert reason == "not_tied"
+        assert len(band) == 3
+        assert reason == "ok"
+        assert rest == []
 
 
 # ---------------------------------------------------------------------------

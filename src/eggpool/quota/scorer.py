@@ -166,6 +166,11 @@ class QuotaFairScorer:
                 quota = self.quota_estimator.get_account_quota(name)
                 if quota:
                     weight = quota.weight
+                    # Config validation requires a positive weight. Keep a
+                    # baseline denominator if a malformed persisted runtime
+                    # state reaches the scorer so it cannot disable the
+                    # request/token signals or divide by zero.
+                    effective_weight = weight if weight > 0 else 1.0
                     # Above-capacity accounts remain scoreable with
                     # high utilization; they are not hard-gated here.
                     # Upstream quota_exhausted health makes them
@@ -223,8 +228,8 @@ class QuotaFairScorer:
                         reserved_tokens,
                         request_token_estimate,
                         quota.token_offset_5h,
-                        cap_5h_req,
-                        cap_5h_tok,
+                        cap_5h_req * effective_weight,
+                        cap_5h_tok * effective_weight,
                     )
                     pw = self._calc_window_utilization(
                         requests_7d,
@@ -235,8 +240,8 @@ class QuotaFairScorer:
                         reserved_tokens,
                         request_token_estimate,
                         quota.token_offset_7d,
-                        cap_7d_req,
-                        cap_7d_tok,
+                        cap_7d_req * effective_weight,
+                        cap_7d_tok * effective_weight,
                     )
                     pm = self._calc_window_utilization(
                         requests_30d,
@@ -247,8 +252,8 @@ class QuotaFairScorer:
                         reserved_tokens,
                         request_token_estimate,
                         quota.token_offset_30d,
-                        cap_30d_req,
-                        cap_30d_tok,
+                        cap_30d_req * effective_weight,
+                        cap_30d_tok * effective_weight,
                     )
 
             # Base quota score: max of window utilizations
@@ -311,8 +316,8 @@ class QuotaFairScorer:
         reserved_tokens: int,
         incoming_tokens: int,
         token_offset: int,
-        request_capacity: int,
-        token_capacity: int,
+        request_capacity: float,
+        token_capacity: float,
     ) -> float:
         """Calculate utilization ratio for a single window.
 

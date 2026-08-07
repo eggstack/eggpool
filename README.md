@@ -148,6 +148,13 @@ The catalog refresh is **non-destructive by default**: failed, empty, or partial
 
 Full config reference: [`config.example.toml`](config.example.toml) | [docs/providers.md](docs/providers.md)
 
+Account `weight` is a positive, relative capacity/share hint within an
+eligible priority tier. `1.0` is the baseline; `2.0` approximately doubles an
+account's effective request/token capacity and `0.5` approximately halves it.
+Weight is load-based (never cost-based), does not override priority or health
+eligibility, and does not promise exact request ratios when request sizes or
+provider capacity histories differ. See [Provider configuration](docs/providers.md#account-weight).
+
 ## Protocol transcoding
 
 When `[transcoder] enabled = true`, EggPool bridges OpenAI Chat Completions and Anthropic Messages bidirectionally so a single client ecosystem (e.g. OpenCode, which speaks only OpenAI) can reach Anthropic-only upstreams and vice versa.

@@ -103,13 +103,25 @@ class TestRouterTieredSelection:
                         "id": "low",
                         "base_url": "https://api.example.com/v1",
                         "routing_priority": 0,
-                        "accounts": [{"name": "low_acct", "api_key_env": "K_LOW"}],
+                        "accounts": [
+                            {
+                                "name": "low_acct",
+                                "api_key_env": "K_LOW",
+                                "weight": 100.0,
+                            }
+                        ],
                     },
                     {
                         "id": "high",
                         "base_url": "https://api.example.com/v1",
                         "routing_priority": 5,
-                        "accounts": [{"name": "high_acct", "api_key_env": "K_HIGH"}],
+                        "accounts": [
+                            {
+                                "name": "high_acct",
+                                "api_key_env": "K_HIGH",
+                                "weight": 0.5,
+                            }
+                        ],
                     },
                 ]
             )
@@ -125,7 +137,8 @@ class TestRouterTieredSelection:
 
             selected = await router.select_account("gpt-4")
             assert selected is not None
-            # Always pick the higher priority provider's account
+            # Priority remains authoritative even when the lower tier has
+            # a much larger weighted capacity.
             assert selected.name == "high_acct"
         finally:
             del os.environ["K_HIGH"]

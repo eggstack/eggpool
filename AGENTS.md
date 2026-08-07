@@ -128,7 +128,7 @@ remains available for diagnosing stream-specific regressions.
 - **Protocol transcoding**: `src/eggpool/transcoder/` — OpenAI ↔ Anthropic conversion. The transcoder's `usage` property returns a default; finalization reads usage from the coordinator's observer.
 - **JSON backend (`eggpool.jsonx`)**: preferred `orjson` (`eggpool[fast]`), falls back to stdlib. Override with `EGGPOOL_JSON_BACKEND=orjson|stdlib|auto`. Off the request path, stdlib `json` allowed for deterministic hashing.
 - **Database invariants**: SQLite WAL, single-connection serialization, `async with db.transaction():` for all DML.
-- **Quota and routing**: tier-based via `routing_priority`, `QuotaFairScorer`, upstream-authoritative suppression, same-tier fairness rotor. Load-based (request count + token count + active count + health), never cost-based.
+- **Quota and routing**: tier-based via `routing_priority`, `QuotaFairScorer`, upstream-authoritative suppression, same-tier fairness rotor. Load-based (request count + token count + active count + health), never cost-based. Positive account `weight` scales effective request/token capacity within an eligible tier (`1.0` baseline, `2.0` approximately double, `0.5` approximately half); priority and health eligibility remain authoritative.
 - **Error hierarchy**: `AggregatorError` → `UpstreamError` → specific subclasses. See `errors.py`.
 - **Process model**: supervisor + Granian worker (`workers=1`), daemon mode (`--verbose` for foreground). `runtime_threads=1` is required. Readiness probe is process-owned and disabled by default.
 - **Lean defaults**: loopback binding, low-wear analytics, provider pools of 16/4, background outbound pools of 8/2. Model-info, routing traces, readiness writes, automatic backups, dispatch writing are opt-in. Disabled features are `None` and construct no clients/tasks.
@@ -149,6 +149,7 @@ remains available for diagnosing stream-specific regressions.
 - **Upstream-authoritative suppression**: local quota estimates are advisory. Only upstream-observed failures suppress routing.
 - **Routing is load-based, not cost-based**: `QuotaFairScorer` uses request count and token count, never `cost_microdollars`.
 - **Routing trace persistence**: `RoutingDecisionRepository.create_many()` uses one `executemany` operation inside the caller-owned transaction and propagates database failures; trace-off and unsampled paths do not call it.
+- **Account weight semantics**: weight is a relative capacity/share hint only among otherwise eligible accounts in the selected priority tier. It affects request/token utilization, not cost, and does not promise exact request ratios across different request sizes or provider histories.
 - **`app.state` generation-owned attributes are mirrors, not authority**: New code should use `get_active_generation(request)` or acquire a lease.
 - **When constructing `RequestCoordinator` in tests**: pass an explicit `transcoder_policy` or assert the desired default.
 - **`CapabilityError` (400) is distinct from `ModelNotFoundError` (404) and `ModelUnavailableError` (503)**.

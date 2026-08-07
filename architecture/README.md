@@ -1761,8 +1761,12 @@ unchanged against the accounts of the chosen tier, balancing across:
 - Health penalty for degraded accounts
 - Random tie-breaking for near-equal scores
 
-The `weight` field continues to bias scoring inside a single tier. `weight`
-orders accounts within a tier; `routing_priority` orders tiers.
+The `weight` field is a relative capacity/share multiplier inside a single
+tier. A weight of `2.0` gives an otherwise comparable account approximately
+twice the effective request/token capacity of `1.0`; `0.5` gives half. The
+scorer applies it to request-count and token-count utilization, including
+reservations and projected request load, while cost remains diagnostic-only.
+`routing_priority` orders tiers before weight is considered.
 
 **Cache/compression metrics NEVER enter routing.** See
 [Routing Guardrails and Non-Interference (Phase 8)](#routing-guardrails-and-non-interference-phase-8)
@@ -1798,12 +1802,12 @@ missing credentials, all explicitly disabled, model unknown).
 ### Same-Tier Fairness
 
 EggPool is not purely lowest-score-wins for same-tier peer accounts. When
-accounts are effectively tied by priority, weight, health, protocol, and
+accounts are effectively tied by priority, health, protocol, and
 utilization score, same-tier fairness rotates candidates to avoid stable
 config-order bias and subscription starvation.
 
-When multiple accounts share the same `routing_priority`, weight, transcode
-status, and have scores within `fairness_epsilon` of the best (default:
+When multiple accounts share the same `routing_priority`, transcode status,
+and have scores within `fairness_epsilon` of the best (default:
 `near_tie_epsilon`), they are considered *same-tier peers*. Without fairness
 intervention, stable config order or minor score noise can cause severe
 routing skew (one account receiving nearly all traffic).
@@ -1847,9 +1851,9 @@ Scope semantics for the fairness key:
 The fairness band is extracted *after* quota scoring and *before* the
 coordinator selects the first circuit-breaker-accepted candidate. Priority
 tier boundaries remain strict: lower-priority accounts never advance ahead
-of higher-priority eligible accounts. Different-weight accounts opt out of
-equal-peer rotation; the band requires identical weights within floating-point
-tolerance.
+of higher-priority eligible accounts. Different weights do not by themselves
+exclude candidates from a near-tie fairness band; their normalized scores
+determine whether they are tied.
 
 Fairness decisions are recorded in ``routing_decisions.score_components_json``
 under the ``fairness`` key for operator diagnostics:
@@ -1912,9 +1916,6 @@ Interpretation:
 - ``fairness_applied = false`` with ``reason = not_tied``: scores diverge
   beyond ``fairness_epsilon``; the skew is driven by score policy, not
   config order.
-- ``fairness_applied = false`` with ``reason = different_weights``: accounts
-  have unequal weights; adjust weights to match if equal peer rotation is
-  desired.
 - ``eligible_count = 1`` or ``scored_count = 1``: this is not a fairness
   problem; accounts are excluded by catalog, health, or quota policy.
 - ``fairness_applied = false`` with ``reason = disabled``: ``fairness_mode``

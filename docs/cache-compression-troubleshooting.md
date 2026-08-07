@@ -330,7 +330,7 @@ One account or one provider is getting a disproportionate share of requests.
 - Model eligibility. The routed model must be supported by the candidate account. Confirm via `eggpool accounts explain --model <id> --provider <id>`.
 - Catalog staleness. If `models_endpoint.method = "DISABLED"` but `static_models` is missing for a provider, the account may not surface the requested model.
 - Account refresh staleness. Failed / partial / empty refreshes do not de-pool an account under default `catalog_withdrawal_policy = "preserve_until_health"`, so a stale-but-healthy account may keep traffic.
-- `routing_priority` and `weight`. Higher `routing_priority` tiers are preferred; lower tiers are only reached via `exclude_accounts` retry paths.
+- `routing_priority` and `weight`. Higher `routing_priority` tiers are preferred; lower tiers are only reached via `exclude_accounts` retry paths. Within the selected eligible tier, weight is a relative request/token capacity hint (`2.0` is approximately twice the capacity of `1.0`); it is not cost weighting or a hard limit.
 
 **What is NOT a routing cause:**
 

@@ -68,6 +68,7 @@ Transparent request/response format conversion between OpenAI and Anthropic prot
 ## Quota and Routing
 
 - Tier-based routing via `routing_priority`, `QuotaFairScorer`, upstream-authoritative suppression, same-tier fairness rotor
+- Positive account `weight` scales effective request/token capacity within the selected eligible tier: `1.0` is baseline, `2.0` is approximately double capacity, and `0.5` is approximately half. Weight never enters cost scoring and never overrides priority or health eligibility.
 - Ordered `QuotaWindow` observations use cached totals and left-edge expiry; out-of-order observations use one bounded rebuild path.
 - Persisted 5h/7d/30d snapshots refresh from timestamped retained request data, preserving exact horizon boundaries for long-lived generations.
 - **Load-based, never cost-based**: request count + token count + active count + health

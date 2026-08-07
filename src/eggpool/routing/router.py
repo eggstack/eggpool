@@ -68,7 +68,7 @@ def _fairness_band(
 
     Returns ``(band, rest, reason)`` where *band* contains candidates
     within *epsilon* of the best score in the same priority tier with
-    the same weight and transcode status.  If the band has fewer than
+    the same transcode status.  If the band has fewer than
     two members, returns ``([], ranked, reason)`` so the caller falls
     back to score-ordered ranking.
     """
@@ -84,8 +84,6 @@ def _fairness_band(
         if state.routing_priority != best_state.routing_priority:
             break
         if prefer_native and score.requires_transcode != best_score.requires_transcode:
-            break
-        if abs(score.weight - best_score.weight) > 1e-9:
             break
         if abs(score.final_score - best_score.final_score) > epsilon:
             break

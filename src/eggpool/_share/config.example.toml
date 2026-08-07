@@ -422,6 +422,7 @@ enabled = false
 # [[providers.opencode-go.accounts]]
 # name = "personal"
 # api_key = "sk-your-opencode-go-key"
+# weight = 1.0  # relative request/token capacity hint; 2.0 is ~double
 # # Optional per-key proxy. Omit this field for the default direct connection.
 # # proxy = "residential-us"
 # # proxy_url = "ss://chacha20:password@proxy.example.com:8388"

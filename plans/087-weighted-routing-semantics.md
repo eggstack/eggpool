@@ -1,7 +1,7 @@
 # Plan 087 — Weighted Routing Semantics
 
 Date: 2026-08-07
-Status: ready for implementation
+Status: complete
 Parent roadmap: `plans/086-sbc-routing-and-storage-efficiency-roadmap.md`
 Depends on: none
 Planning baseline: `d6c49dea5ed800bfcd22d95fe8c7943a29590125`
@@ -118,17 +118,17 @@ No live-provider test is required.
 
 ## Acceptance criteria
 
-- [ ] `weight` materially affects quota/load routing score.
-- [ ] `weight = 1.0` preserves existing baseline semantics.
-- [ ] larger weight means proportionally more effective routing capacity, not an additive arbitrary preference.
-- [ ] both request-count and token-count utilization honor weight.
-- [ ] cost remains excluded from routing decisions.
-- [ ] priority tiers, health/circuit/quarantine gates, and native-protocol preference retain existing precedence.
-- [ ] fairness-band logic no longer rejects a near tie merely because configured weights differ, unless a concrete invariant is documented and tested.
-- [ ] no new routing strategy/config field/persistence table is added.
-- [ ] focused routing tests pass.
-- [ ] standard smoke gate passes.
-- [ ] operator documentation describes weight as a relative capacity/share hint.
+- [x] `weight` materially affects quota/load routing score.
+- [x] `weight = 1.0` preserves existing baseline semantics.
+- [x] larger weight means proportionally more effective routing capacity, not an additive arbitrary preference.
+- [x] both request-count and token-count utilization honor weight.
+- [x] cost remains excluded from routing decisions.
+- [x] priority tiers, health/circuit/quarantine gates, and native-protocol preference retain existing precedence.
+- [x] fairness-band logic no longer rejects a near tie merely because configured weights differ, unless a concrete invariant is documented and tested.
+- [x] no new routing strategy/config field/persistence table is added.
+- [x] focused routing tests pass.
+- [x] standard smoke gate passes.
+- [x] operator documentation describes weight as a relative capacity/share hint.
 
 ## Rejection conditions
 
@@ -152,3 +152,36 @@ Do not close this plan if:
 6. Update concise routing/config documentation.
 7. Run lint/type/smoke checks.
 8. Record exact commands/results in this plan and mark complete only after all acceptance criteria are proven.
+
+## Implementation record
+
+- `QuotaFairScorer` scales each request-count and token-count capacity by the
+  positive `AccountQuota.weight` using float denominators; persisted load,
+  reservations, offsets, and projected request tokens remain unchanged.
+  `RoutingScore.weight` and cost audit fields remain diagnostic data only.
+- `_fairness_band()` retains priority, native/transcode, and epsilon boundaries
+  but no longer uses configured weight as an additional equality gate.
+- Regression coverage uses fixed inputs for baseline weight, `2.0`, `0.5`,
+  proportional load, request/token dimensions, reservations, in-flight load,
+  priority precedence, cooldown exclusion, and mixed-weight fairness bands.
+- Operator guidance was updated in `README.md`, `docs/providers.md`,
+  `docs/cache-compression-troubleshooting.md`, `architecture/README.md`,
+  `architecture/deep-dive-routing.md`, `AGENTS.md`, the architecture skill,
+  and both shipped config templates. No migration or new routing field was
+  added.
+
+### Verification evidence
+
+- `uv run pytest tests/unit/test_quota.py tests/unit/test_fairness.py tests/unit/test_routing.py tests/unit/test_routing_priority.py tests/unit/test_routing_guardrails.py -q --tb=short --maxfail=1` — **151 passed**.
+- `uv run pytest tests/unit/test_routing.py tests/unit/test_routing_guardrails.py tests/unit/test_routing_transcode_eligibility.py tests/unit/test_config.py tests/unit/test_config_validation.py -q --tb=short --maxfail=1` — **203 passed** (before the final two additional regression cases).
+- `uv sync --frozen --extra ci` — completed successfully.
+- `uv run ruff format --check src/ tests/ scripts/` — **725 files already formatted**.
+- `uv run ruff check src/ tests/ scripts/` — **passed**.
+- `uv run pyright src/ scripts/` — **0 errors, 0 warnings, 0 informations**.
+- `uv run pytest tests/smoke/ -q --tb=short --maxfail=1` — **14 passed**.
+- `git diff --check` — **passed**.
+
+An additional unfiltered `uv run pytest -q --tb=short --maxfail=1` sweep was
+started but interrupted after roughly eight minutes because quiet mode emitted
+no progress. It reported no failure before interruption; the focused suites
+and the repository's required CI-equivalent gate completed successfully.

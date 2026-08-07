@@ -12,6 +12,7 @@ from eggpool.quota.estimation import (
     MODEL_FAMILY_FALLBACKS,
     AccountQuota,
     ManualOffset,
+    PersistedWindowSnapshot,
     QuotaEstimator,
     QuotaWindow,
 )
@@ -387,6 +388,154 @@ class TestQuotaFairScorer:
         assert len(scores) == 2
         # account1 used 50%, account2 used 90% — account1 should score lower
         assert scores[0].quota_score < scores[1].quota_score
+
+    @pytest.mark.asyncio()
+    async def test_weight_one_preserves_baseline_score(self) -> None:
+        """The baseline weight keeps the pre-weighted score formula."""
+        estimator = QuotaEstimator()
+        estimator.accounts["acct"] = AccountQuota(
+            account_name="acct",
+            weight=1.0,
+            capacity_5h_requests=100,
+            persisted_snapshot=PersistedWindowSnapshot(
+                account_id=1,
+                request_count_5h=49,
+            ),
+        )
+
+        scores = await QuotaFairScorer(
+            quota_estimator=estimator,
+        ).score_accounts(["acct"])
+
+        # The incoming request makes 50/100 requests used in the 5h
+        # window. The same incoming request is included in the other
+        # windows, so calculate the complete pre-weighted formula.
+        p5 = 0.5
+        pw = 1 / 35_000
+        pm = 1 / 150_000
+        expected = max(p5, pw, pm) + 0.15 * (p5 + pw + pm) / 3
+        assert scores[0].quota_score == pytest.approx(expected)
+
+    @pytest.mark.asyncio()
+    async def test_weight_scales_request_pressure_with_reservations(self) -> None:
+        """A larger weight doubles effective request capacity."""
+        estimator = QuotaEstimator()
+        for name, weight in (("heavy", 2.0), ("baseline", 1.0)):
+            estimator.accounts[name] = AccountQuota(
+                account_name=name,
+                weight=weight,
+                capacity_5h_requests=100,
+                persisted_snapshot=PersistedWindowSnapshot(
+                    account_id=1,
+                    request_count_5h=49,
+                ),
+            )
+            await estimator.add_reservation(name, 0, requests=2)
+
+        scores = await QuotaFairScorer(
+            quota_estimator=estimator,
+        ).score_accounts(
+            ["heavy", "baseline"],
+            active_requests={"heavy": 3, "baseline": 3},
+        )
+        by_name = {score.account_name: score for score in scores}
+
+        assert by_name["heavy"].quota_score < by_name["baseline"].quota_score
+        assert by_name["heavy"].final_score < by_name["baseline"].final_score
+
+    @pytest.mark.asyncio()
+    async def test_half_weight_increases_request_pressure(self) -> None:
+        """A half-weight account has half the effective request capacity."""
+        estimator = QuotaEstimator()
+        estimator.accounts["light"] = AccountQuota(
+            account_name="light",
+            weight=0.5,
+            capacity_5h_requests=100,
+            persisted_snapshot=PersistedWindowSnapshot(
+                account_id=1,
+                request_count_5h=49,
+            ),
+        )
+        estimator.accounts["baseline"] = AccountQuota(
+            account_name="baseline",
+            weight=1.0,
+            capacity_5h_requests=100,
+            persisted_snapshot=PersistedWindowSnapshot(
+                account_id=2,
+                request_count_5h=49,
+            ),
+        )
+
+        scores = await QuotaFairScorer(
+            quota_estimator=estimator,
+        ).score_accounts(["light", "baseline"])
+        by_name = {score.account_name: score for score in scores}
+
+        assert by_name["light"].quota_score > by_name["baseline"].quota_score
+
+    @pytest.mark.asyncio()
+    async def test_weight_scales_token_pressure(self) -> None:
+        """A larger weight doubles effective token capacity."""
+        estimator = QuotaEstimator()
+        for name, weight in (("heavy", 2.0), ("baseline", 1.0)):
+            estimator.accounts[name] = AccountQuota(
+                account_name=name,
+                weight=weight,
+                capacity_5h_tokens=1_000,
+                persisted_snapshot=PersistedWindowSnapshot(
+                    account_id=1,
+                    token_count_5h=499,
+                ),
+            )
+            await estimator.add_reservation(name, 0, requests=0, tokens=50)
+
+        scores = await QuotaFairScorer(
+            quota_estimator=estimator,
+        ).score_accounts(
+            ["heavy", "baseline"],
+            active_requests={"heavy": 1, "baseline": 1},
+            request_estimates={"heavy": 100, "baseline": 100},
+        )
+        by_name = {score.account_name: score for score in scores}
+
+        assert by_name["heavy"].quota_score < by_name["baseline"].quota_score
+
+    @pytest.mark.asyncio()
+    async def test_proportional_weighted_load_converges(self) -> None:
+        """Proportional request load produces equal normalized pressure."""
+        estimator = QuotaEstimator()
+        estimator.accounts["heavy"] = AccountQuota(
+            account_name="heavy",
+            weight=2.0,
+            capacity_5h_requests=100,
+            capacity_7d_requests=100,
+            capacity_30d_requests=100,
+            persisted_snapshot=PersistedWindowSnapshot(
+                account_id=1,
+                request_count_5h=99,
+                request_count_7d=99,
+                request_count_30d=99,
+            ),
+        )
+        estimator.accounts["baseline"] = AccountQuota(
+            account_name="baseline",
+            weight=1.0,
+            capacity_5h_requests=100,
+            capacity_7d_requests=100,
+            capacity_30d_requests=100,
+            persisted_snapshot=PersistedWindowSnapshot(
+                account_id=2,
+                request_count_5h=49,
+                request_count_7d=49,
+                request_count_30d=49,
+            ),
+        )
+
+        scores = await QuotaFairScorer(
+            quota_estimator=estimator,
+        ).score_accounts(["heavy", "baseline"])
+
+        assert scores[0].quota_score == pytest.approx(scores[1].quota_score)
 
     def test_select_account(self) -> None:
         """Test account selection. Lower score = less utilized = preferred."""

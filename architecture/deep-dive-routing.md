@@ -129,9 +129,22 @@ Quota audit queries for diagnostics.
 - `false`: one provider-suffixed entry per `(model_id, provider_id)`
 - `true`: same base model collapses to single unsuffixed ID, routed across all supporting providers
 
+## Account Weight
+
+`AccountConfig.weight` is a positive relative capacity/share hint within an
+eligible priority tier. The scorer divides request-count and token-count
+utilization pressure by the effective weight, so `2.0` is approximately twice
+the effective capacity of `1.0` and `0.5` is approximately half. Persisted
+load, reservations, offsets, and the projected request remain in the same
+numerators. Cost remains diagnostic-only.
+
+Priority tiers, health/circuit/quarantine, catalog, protocol, and native
+preference retain precedence; weight only affects otherwise eligible accounts
+in the selected tier. Equal weights preserve the baseline score semantics.
+
 ## Same-Tier Fairness
 
-When accounts are effectively tied (same priority, weight, health, protocol, score within `fairness_epsilon`):
+When accounts are effectively tied (same priority, health, protocol, score within `fairness_epsilon`):
 - Round-robin rotor rotates candidates to avoid config-order bias
 - Position tracked per fairness key (provider × model × protocol × priority × client_protocol)
 - Fairness decisions recorded in `routing_decisions.score_components_json`
@@ -167,7 +180,8 @@ Every `routing_decisions` row carries `score_components_json`:
 - Cache/compression metrics NEVER enter routing
 - Same-provider fairness preserved across adversarial cache/compression profiles
 - Priority tier boundaries are strict: lower-priority never advance ahead of higher-priority
-- `weight` orders accounts within a tier; `routing_priority` orders tiers
+- `weight` scales effective request/token capacity within a tier;
+  `routing_priority` orders tiers
 - Upstream-derived backoffs persist across restarts in `account_backoffs` table
 - Durable backoffs are restart hints only; malformed, expired, unknown, or overlong rows have zero routing effect
 - Local-estimate overage never produces a backoff row
