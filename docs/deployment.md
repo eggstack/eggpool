@@ -842,8 +842,7 @@ section.  On Linux the snapshot reads current RSS from
 `/proc/self/stat`; on macOS it falls back to `ru_maxrss` (a
 high-water mark).
 
-The following in-memory growth axes are bounded by design; see
-`plans/memory.md` for the full design:
+The following in-memory growth axes are bounded by design:
 
 - `QuotaEstimator.account_model_ewma` and `global_model_ewma` are
   LRU-capped at `EWMA_HARD_CAP = 4096` and `GLOBAL_EWMA_HARD_CAP = 1024`

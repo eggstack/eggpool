@@ -659,7 +659,7 @@ The streaming and non-streaming dispatch paths share identical cleanup semantics
 
 ### Phase I — Final Polish
 
-This small polish pass (`plans/thinking_reasoning_final_polish.md`) hardens the trace metadata and the no-health-penalty guarantee after Phase H:
+This small polish pass hardens the trace metadata and the no-health-penalty guarantee after Phase H:
 
 - **`upstream_fields` is always populated when the recompute writes.** `_recompute_thinking_budget_for_selected_provider()` treats an empty list the same as `None` when deciding whether to populate `thinking_trace.upstream_fields = ["thinking"]`. A pre-populated non-empty list is preserved verbatim so future paths can stack additional upstream fields without being clobbered. The preflight translation already populates the field, so this is a defensive change for non-preflight paths (synthetic requests, future providers, alternate code paths).
 - **No-health-penalty guarantee is test-pinned.** The strict-rejection cleanup tests now assert `HealthManager.is_account_healthy()` stays `True` and the underlying `AccountHealth` fields (`consecutive_failures`, `health_state`, `disabled_models`, `disabled_until`, `disabled_reason`, `cooldown_until`) stay at their default values after both the non-streaming and streaming cleanup paths, and through a double invocation. Capability rejection remains a client-validation outcome and never records an upstream health signal.

@@ -122,8 +122,6 @@ Phase 10 adds structured observability for thinking/reasoning decisions:
 
 - **Dashboard**: overview page shows a Thinking/Reasoning stat card with total count and per-decision breakdown.
 
-See `plans/thinking_reasoning_phase_10_observability.md` for the full design.
-
 ### Thinking/Reasoning Test Matrix
 
 Phase 11 adds a comprehensive regression test matrix (`tests/unit/test_thinking_reasoning_matrix.py`) covering all thinking/reasoning subsystems:
@@ -139,11 +137,9 @@ Phase 11 adds a comprehensive regression test matrix (`tests/unit/test_thinking_
 9. **App/coordinator integration** — TranscoderPolicy injection, feature flag gating
 10. **Observability** — counter increments, event dispatch, request trace metadata
 
-See `plans/thinking_reasoning_phase_11_test_matrix.md` for the full plan.
-
 ### Thinking/Reasoning Closing Pass
 
-The closing pass (`plans/thinking_reasoning_closing_pass.md`) hardens the thinking/reasoning subsystem against silent semantic gaps:
+The closing pass hardens the thinking/reasoning subsystem against silent semantic gaps:
 
 - **Phase A — Missing metadata == `unknown`.** `extract_thinking_status_from_entry()` is the canonical helper used by `get_eligible_accounts()` and `Router._collect_gate_status()`. Catalog entries with no `capabilities.thinking` block now participate in the `[transcoder.capability_policy].unknown_thinking` policy evaluation rather than silently being treated as `supported`.
 - **Phase B — `BudgetResolutionError` is a `CapabilityError`.** Strict-policy rejections now flow through the existing 400 renderer without manual mapping.
@@ -153,7 +149,7 @@ The closing pass (`plans/thinking_reasoning_closing_pass.md`) hardens the thinki
 - **Phase F — `supports_tools` removed.** Tool support is owned by transcoder features, not `ModelCapabilities`.
 - **Phase G — Explicit Anthropic top-level thinking drop kind.** `anthropic_top_level_thinking_dropped` is now an explicit warning kind rather than the generic `dropped_field` bucket.
 - **Phase H — Final provider budget cleanup.** The selected-provider recompute parses `context.original_body` rather than the provider-bound payload so the resolver sees the original `reasoning_effort` / `thinking.budget_tokens` intent. The helper `_extract_original_thinking_budget_inputs()` returns `(effort, None)` for OpenAI clients and `(None, budget)` for Anthropic clients; for OpenAI this is what lets the selected provider's `effort_to_budget_tokens` mapping win over global/default mappings when collapsed model ids route to that provider. Post-selection strict rejections (e.g. provider-specific clamp) now flow through `_finalize_selected_capability_rejection()` which finalizes the attempt row (`release_reason = "capability_rejected"`), releases the reservation durably and in-memory, decrements the active request count, releases the health-manager probe slot, and stamps `thinking_trace.decision = "rejected"` — without recording an upstream health penalty. Streaming and non-streaming dispatch paths share the same cleanup via `_apply_selected_provider_transcode_adjustments()`.
-- **Phase I — Final polish (`plans/thinking_reasoning_final_polish.md`).** `_recompute_thinking_budget_for_selected_provider()` populates `thinking_trace.upstream_fields = ["thinking"]` whenever the recompute actually writes/validates Anthropic `thinking.budget_tokens` and the trace carries an empty list (the default shape). A pre-populated non-empty list is preserved verbatim so future paths can stack additional upstream fields without being clobbered. The strict-rejection cleanup tests additionally pin `HealthManager.is_account_healthy()` and the underlying `AccountHealth` dataclass fields (`consecutive_failures`, `disabled_models`, `disabled_until`, `disabled_reason`, `cooldown_until`) so a capability rejection cannot silently record an upstream health penalty.
+- **Phase I — Final polish.** `_recompute_thinking_budget_for_selected_provider()` populates `thinking_trace.upstream_fields = ["thinking"]` whenever the recompute actually writes/validates Anthropic `thinking.budget_tokens` and the trace carries an empty list (the default shape). A pre-populated non-empty list is preserved verbatim so future paths can stack additional upstream fields without being clobbered. The strict-rejection cleanup tests additionally pin `HealthManager.is_account_healthy()` and the underlying `AccountHealth` dataclass fields (`consecutive_failures`, `disabled_models`, `disabled_until`, `disabled_reason`, `cooldown_until`) so a capability rejection cannot silently record an upstream health penalty.
 
 ## Multi-Provider Architecture
 
@@ -298,13 +294,13 @@ route through `eggpool.jsonx`. The `requests/messages` error envelopes
 in `app.py` and `coordinator.py` also use the helper. Tests under
 `tests/unit/test_jsonx.py` are parametrised across both backends so the
 stdlib and orjson branches stay semantically equivalent. The plan that
-introduced this layer is `plans/transcoded-json-backend-orjson.md`.
+introduced this layer is the `eggpool.jsonx` module.
 
 **Phase 4 — Routing eligibility widening**: transcoding is **on by default**. The routing layer widens the candidate set to include accounts whose `provider.protocols` includes the model's native protocol even if it does not include the client protocol. `_validate_endpoint` checks for transcodable routes before raising `ProtocolMismatchError`. The `_resolve_upstream_protocol` method determines which protocol to use upstream based on the largest eligible-account set. `prefer_native = true` (default) keeps native-protocol accounts ranked above transcodable ones via a secondary sort key in `QuotaFairScorer`. The two-pass context-limit check in `api/proxy_request.py` validates both client-side and upstream limits when transcoding is active. The `[transcoder] enabled = false` flag is a deprecated escape hatch that disables all translation and reverts to the pre-default protocol-exact routing.
 
 **Phase 5 — Operator controls and docs**: the default `[transcoder]` config block is documented in `config.example.toml`. `eggpool stats transcoding` reports transcoded request counts and loss-warning summaries. The dashboard `/runtime` page includes a "Transcoding" card showing real-time counters. Structured DEBUG logs are emitted for every transcoded request and a startup line announces transcoding state. Loss warnings remain at INFO. See `docs/transcoding.md` for the full operator guide.
 
-**Phase 6.1 — Tool-use transcoding**: bidirectional tool calling translation in both directions for non-streaming and streaming requests. `OpenAIToAnthropic.encode_request` / `decode_response` and `AnthropicToOpenAI.encode_request` / `decode_response` translate `tools`, `tool_choice`, `parallel_tool_calls`, assistant `tool_calls` history, `role: "tool"` history, and `tool_use` / `tool_result` content blocks. A per-request `ToolCallIdMap` (on `TranscodeContext.id_map`) mints `call_<24 hex>` and `toolu_<24 hex>` ids so the two namespaces never collide. The streaming transcoders (`OpenAIToAnthropicStreaming`, `AnthropicToOpenAIStreaming`) extend their state machines to track `content_block_start` / `input_json_delta` / `content_block_stop` triples and emit OpenAI `tool_calls` deltas in insertion order; the reverse direction buffers OpenAI `tool_calls[*].function.arguments` chunks and flushes Anthropic `tool_use` blocks on `finish_reason: "tool_calls"`. Anthropic's `pause_turn` `stop_reason` maps to `finish_reason: "tool_calls"` plus a synthetic `__eggpool_pause_turn__` tool_call entry so OpenAI clients can detect pause-and-resume flows. `stream_options.include_usage` is lifted onto `TranscodeContext.request_include_usage` so the streaming transcoder can decide whether to forward upstream usage chunks. New loss-warning kinds (`tool_call_id_translated`, `tool_call_id_changed`, `parallel_tool_calls_collapsed`, `malformed_tool_arguments`, `invalid_tool_choice`, `unsupported_tool_type`, `empty_tool_use_block`, `tool_result_image_dropped`, `tool_result_error_passthrough`, `cache_control_feature_disabled`, `cache_control_unsupported_by_target_protocol`, `cache_control_invalid_shape`, `provider_extension_not_preserved`, `stable_prefix_preserved`, `stable_prefix_reordered_canonically`, `pause_turn`, `non_text_content_dropped`, `tool_result_inferred`) are added to `LOSS_WARNING_KINDS`. See `docs/transcoding.md` § Tool-Use Transcoding and `plans/tooltranscoding.md` for the full design.
+**Phase 6.1 — Tool-use transcoding**: bidirectional tool calling translation in both directions for non-streaming and streaming requests. `OpenAIToAnthropic.encode_request` / `decode_response` and `AnthropicToOpenAI.encode_request` / `decode_response` translate `tools`, `tool_choice`, `parallel_tool_calls`, assistant `tool_calls` history, `role: "tool"` history, and `tool_use` / `tool_result` content blocks. A per-request `ToolCallIdMap` (on `TranscodeContext.id_map`) mints `call_<24 hex>` and `toolu_<24 hex>` ids so the two namespaces never collide. The streaming transcoders (`OpenAIToAnthropicStreaming`, `AnthropicToOpenAIStreaming`) extend their state machines to track `content_block_start` / `input_json_delta` / `content_block_stop` triples and emit OpenAI `tool_calls` deltas in insertion order; the reverse direction buffers OpenAI `tool_calls[*].function.arguments` chunks and flushes Anthropic `tool_use` blocks on `finish_reason: "tool_calls"`. Anthropic's `pause_turn` `stop_reason` maps to `finish_reason: "tool_calls"` plus a synthetic `__eggpool_pause_turn__` tool_call entry so OpenAI clients can detect pause-and-resume flows. `stream_options.include_usage` is lifted onto `TranscodeContext.request_include_usage` so the streaming transcoder can decide whether to forward upstream usage chunks. New loss-warning kinds (`tool_call_id_translated`, `tool_call_id_changed`, `parallel_tool_calls_collapsed`, `malformed_tool_arguments`, `invalid_tool_choice`, `unsupported_tool_type`, `empty_tool_use_block`, `tool_result_image_dropped`, `tool_result_error_passthrough`, `cache_control_feature_disabled`, `cache_control_unsupported_by_target_protocol`, `cache_control_invalid_shape`, `provider_extension_not_preserved`, `stable_prefix_preserved`, `stable_prefix_reordered_canonically`, `pause_turn`, `non_text_content_dropped`, `tool_result_inferred`) are added to `LOSS_WARNING_KINDS`. See `docs/transcoding.md` § Tool-Use Transcoding for the full design.
 
 **Phase 7 — Budget resolution**: `resolve_thinking_budget()` in `src/eggpool/transcoder/budget_resolver.py` is the single source of truth for effort-to-budget translation. Resolution order: explicit `thinking.budget_tokens` (Anthropic style) → `reasoning_effort` (OpenAI style) via `ThinkingCapability.effort_to_budget_tokens` → `[transcoder.thinking_budget_defaults]` → hard-coded fallback (low=1024, medium=4096, high=16384). Budgets are clamped to `budget_tokens_min`/`budget_tokens_max` when known. `budget_resolution_policy = "strict"` rejects unknown efforts and clamped budgets before dispatch. New loss-warning kinds: `budget_clamped`, `unknown_effort`, `budget_rejected`, `budget_resolution_no_input`. The `BodyTranscoder.encode_request` protocol accepts optional `thinking_capability`, `budget_defaults`, and `budget_resolution_policy` kwargs.
 
@@ -1351,9 +1347,7 @@ A future opt-in **cache-aware routing** mode would require:
 - dashboard warnings that surface the mode change
 
 Phase 8 deliberately does not implement any of these.  The existence
-of this note prevents accidental partial implementation.  See
-`plans/cache_compression_phase_08_routing_guardrails.md` for the
-full design.
+of this note prevents accidental partial implementation.
 
 ## Synthetic Cache Controls (Phase 9)
 
@@ -1548,7 +1542,6 @@ Phase 11 is reporting-only.  The harness is invoked from pytest fixtures and nev
 - `tests/unit/test_replay_fixtures_regression.py` -- 13 regression test classes + standalone function
 - `tests/unit/test_replay_fixtures_sanitization.py` -- 8 sanitization linter tests
 - `src/eggpool/transcoder/__init__.py` -- public exports used by the harness
-- `plans/cache_compression_phase_11_replay_fixtures_regression_tests.md` -- design plan
 
 ### Phase 12 polish pass (replay-shape and default smoke coverage)
 
@@ -1569,7 +1562,6 @@ No production request-shaping behavior changes. The `QuotaFairScorer` does not c
 - `tests/helpers/cache_compression_replay.py` -- `run_full_replay` now exercises provider-bound synthetic cache for transcode fixtures; `run_provider_bound_synthetic_replay` exposes the explicit provider-bound lifecycle; `ReplayBundle` carries `synthetic_cache_shape` + `provider_bound_*` fields
 - `tests/unit/test_replay_fixtures_regression.py` -- `TestProviderBoundSyntheticReplay` and `TestReplaySmoke` test classes
 - `tests/fixtures/cache_compression/README.md` -- Replay shape semantics section
-- `plans/cache_compression_phase_12_polish_pass.md` -- design plan
 
 ## Operator Documentation, Profiles, and Rollout (Phase 12)
 
@@ -1681,7 +1673,6 @@ inputs.
 - `src/eggpool/_share/config.example.toml` -- pipx-install copy
 - `src/eggpool/api/stats.py` -- `/api/stats/cache-observability`, `/api/stats/canonical-request-segmentation`, `/api/stats/cache-stability`, `/api/stats/compression-observability`, `/api/stats/compression-runtime`, `/api/stats/compression-policies`, `/api/stats/synthetic-cache-observability`, `/api/stats/compression-tuning`
 - `src/eggpool/dashboard/render.py` -- request-shaping cards on `/cache` page (`compression`, `compression_runtime`, `compression_policy`, `cache_stability`) plus synthetic cache and tuning cards
-- `plans/cache_compression_phase_12_operator_docs_profiles.md` -- design plan
 
 ## Update Checker — freshness and CLI install-decision isolation
 
@@ -2372,7 +2363,7 @@ AggregatorError (base)
 
 ### Corrective Pass (Phases A–F)
 
-The model-info corrective plan in `plans/model-info-corrective-catalog-models-and-cards.md` makes the sidecar **observation-first** instead of usage-first, ensures external sources reach every model they should, and surfaces catalog presence on the dashboard.
+The model-info corrective plan makes the sidecar **observation-first** instead of usage-first, ensures external sources reach every model they should, and surfaces catalog presence on the dashboard.
 
 - **Configured-alias seeding (Phase A)**: `ModelInfoService.seed_configured_aliases()` runs at startup (inside `load_cache()`) and inserts every `[model_info.aliases]` entry into `model_info_aliases` before the first external source fetch. Skips empty source/source_model_id; tolerates duplicates; uses `_alias_confidence_to_float()` to map names like `exact`/`curated`/`high` to numeric confidences. Mandates Hugging Face exact-source matches, which are otherwise impossible to link.
 - **Observation-driven canonical detail (Phase B)**: `build_canonical_detail(latest_observations, sources, *, summary=None, supports_vision=None, ...)` merges the freshest observation per source into a single `detail` dict, then layers manual overrides and conflict detection (`_detect_context_conflicts`, `_detect_benchmark_conflicts`). The merged detail exposes a nested `detail["limits"]` block with `effective_context`, `external_context`, `effective_output`, `external_output`; the API detail handler reads from this block via a legacy fallback that maps the pre-Phase-B flat keys (`context_tokens`→`effective_context`, `context_window_external`→`external_context`, etc.). `reconcile_catalog_snapshot()` and `refresh_due_models()` are non-destructive — observation `last_refreshed_at` is preserved across restarts.
@@ -2386,7 +2377,7 @@ The model-info corrective plan in `plans/model-info-corrective-catalog-models-an
 
 ### Dashboard Display Fix Plan (Phase G — Visibility & Lookup Correctness)
 
-The plan in `plans/model-info-dashboard-display-fix.md` makes the dashboard's model-info surface correct under every catalog shape (collapsed / provider-scoped / case differences) and observable to operators when the subsystem is degraded.
+The dashboard's model-info surface is correct under every catalog shape (collapsed / provider-scoped / case differences) and observable to operators when the subsystem is degraded.
 
 - **Fail-open with degraded-state visibility** (Phase 1): `_get_model_info_summary_state()` in `dashboard/routes.py` returns a `ModelInfoDashboardState` dataclass (`summaries`, `available`, `degraded_reason`, `error_class`, `summary_count`). Missing service -> `degraded_reason="service_unattached"` with a server warning. Exception during fetch -> `degraded_reason="fetch_error"` with full traceback logged under `eggpool.dashboard.routes` and `error_class` set. Both render a visible degraded-state panel above the table via `render_models(model_info_state=...)`. `handle_model_detail()` distinguishes "no canonical row" from "lookup failed" via an optional `model_info_error` kwarg on `render_model_detail()`. Traceback text is never embedded in HTML.
 - **Case-insensitive batch canonical lookup** (Phase 2): `ModelInfoRepository.get_canonical_many()` now uses `lower(model_id) IN (...)` with `casefold` normalization to mirror `get_canonical()`'s `COLLATE NOCASE` semantics. When `model_ids` is supplied, the returned dict is keyed by the **requested** id (not the stored id); when `None`, all rows are returned keyed by stored id. Empty-list input short-circuits to `{}`.
@@ -2396,7 +2387,7 @@ The plan in `plans/model-info-dashboard-display-fix.md` makes the dashboard's mo
 
 ### OpenRouter Enrichment Corrective Plan
 
-The plan in `plans/model_info_openrouter_enrichment_corrective_plan.md` makes OpenRouter enrichment reliable, observable, and accurately projected on the dashboard/API without requiring process restarts.
+The OpenRouter enrichment corrective plan makes OpenRouter enrichment reliable, observable, and accurately projected on the dashboard/API without requiring process restarts.
 
 - **Source health reflects catalog availability** (Phase 1.1): `refresh_model_info()` records `record_source_success("openrouter", payload_count=N)` immediately after `_openrouter_source.fetch_all()`, independent of any per-model match. `refresh_due_models()` does the same after its bulk OpenRouter fetch. Source success therefore represents catalog availability, not local-model match success; an OpenRouter catalog with no matching alias still updates `model_info_source_health.last_success_at` and `last_payload_count`.
 - **`source_diagnostics` in forced-refresh responses** (Phase 1.2): `refresh_model_info()` returns a `source_diagnostics` dict alongside `sources_attempted`/`sources_matched`. The OpenRouter entry carries `initialized`, `fetched`, `catalog_count`, `alias_candidates`, `matched_source_model_id`, `miss_reason`, and `cache_retry`. Miss reasons are stable strings (`source_not_initialized`, `fetch_error`, `empty_catalog`, `no_aliases`, `alias_not_in_catalog`, `ambiguous_aliases`, `matched`).
@@ -2410,7 +2401,7 @@ The plan in `plans/model_info_openrouter_enrichment_corrective_plan.md` makes Op
 
 ### OpenRouter Polish Closeout Plan
 
-The plan in `plans/model_info_openrouter_polish_closeout_plan.md` closes the remaining polish holes from the corrective pass: alias-candidate determinism, non-misleading observation fallback, and parity between manual and scheduled refresh.
+The closeout addresses the remaining polish holes from the corrective pass: alias-candidate determinism, non-misleading observation fallback, and parity between manual and scheduled refresh.
 
 - **Deterministic alias candidate selection** (Phase 1): `ModelInfoRepository.list_alias_rows_for_model()` already returns rows in deterministic order; `choose_alias_candidates()` (`src/eggpool/model_info/identity.py`) prefers rows whose stored `model_id == requested_model_id` exactly, then `dedupe_alias_strings()` collapses identical alias strings. `resolve_openrouter_record()` consumes these helpers so two case-variant rows pointing to the same OpenRouter id resolve to one match (no false ambiguity), exact-case rows win over case-folded conflicting rows, and folded-case rows with no exact-case match that disagree on the source id produce a clean no-match the caller can surface as `miss_reason = ambiguous_aliases`. When multiple distinct aliases remain but only one is in the OpenRouter index, that one wins and the others are ignored.
 - **Richer `source_diagnostics` for OpenRouter** (Phase 1): `source_diagnostics.openrouter` now exposes `alias_rows` (one entry per alias candidate with `match_kind = "exact_case" | "case_folded"`) and `alias_selection` so operators can audit why the resolver chose a particular row. `alias_candidates` is the deduped list.
@@ -2435,7 +2426,7 @@ The plan in `plans/model_info_openrouter_polish_closeout_plan.md` closes the rem
 
 ### Suffix Matching, Benchmark Enrichment, and Startup Task Plan
 
-The plan in `plans/model_info_suffix_benchmarks_startup_tasks_plan.md` extends the model-info subsystem along three axes: deployment-suffix identity matching, benchmark source diagnostics + tiered Artificial Analysis (AA) matching, and operator-friendly background task first-run behavior. None of the changes alter routing or billing; they tighten the sidecar so live `/models` and `/api/model-info` panels surface accurate, auditable state without surprises.
+The model-info suffix benchmarks and startup tasks plan extends the model-info subsystem along three axes: deployment-suffix identity matching, benchmark source diagnostics + tiered Artificial Analysis (AA) matching, and operator-friendly background task first-run behavior. None of the changes alter routing or billing; they tighten the sidecar so live `/models` and `/api/model-info` panels surface accurate, auditable state without surprises.
 
 - **Deployment-suffix tier 2b (Phase 1)**: `src/eggpool/model_info/normalization.py` adds `DEPLOYMENT_SUFFIX_TOKENS` (`highspeed`, `fast`, `turbo`, `speed`, `lowlatency`, `lowlat`) and `SEMANTIC_VARIANT_TOKENS` (`pro`, `mini`, `flash`, `lite`, `max`, `plus`, `instruct`, `chat`, `reasoning`, `thinking`, `preview`, `code`, `coder`, `omni`). `generate_deployment_suffix_variants()` enumerates conservative stripping candidates and `has_digit_or_family_anchor()` guards against stripping tokens when the original identifier contains a digit or family anchor. `matching.py` adds `_tier_deployment_suffix_normalized_exact` between tier 2 (`normalized_exact`) and tier 3 (`regex_rule`); the tier is opt-in via `ModelInfoMatchingConfig.deployment_suffix_normalized_exact: bool = True` and refuses to strip any candidate whose original contains a `SEMANTIC_VARIANT_TOKENS` token, so `MiniMax-M2.7-highspeed` resolves to `minimax/minimax-m2.7` while `claude-3-haiku-highspeed` keeps its semantic shape.
 - **Highspeed fixtures (Phase 2)**: `tests/fixtures/model_info/openrouter_minimax_highspeed_sample.json` and `tests/fixtures/model_info/provider_catalog_sample_minimax_highspeed.json` cover the `M2.1`/`M2.5`/`M2.7` highspeed variants. `tests/unit/test_model_info_deployment_suffix.py` pins status advancement, ambiguity rejection, persistence, and the `deployment_suffix_normalized_exact = False` opt-out. The highspeed tier 2b only fires when the suffix-stripped candidate is unique — ambiguous candidates fall through to the lower-priority tiers rather than risking a wrong alias.
@@ -2452,7 +2443,7 @@ The plan in `plans/model_info_suffix_benchmarks_startup_tasks_plan.md` extends t
 
 ### Dashboard Model-Info Join Corrective Plan
 
-The plan in `plans/model_info_dashboard_join_corrective_plan.md` closes the gap where the API reports canonical model-info rows but the `/models` dashboard page renders unknown pills. The failure modes it addresses:
+The model-info dashboard join corrective plan closes the gap where the API reports canonical model-info rows but the `/models` dashboard page renders unknown pills. The failure modes it addresses:
 
 * Catalog row construction silently swallowed exceptions, dropping the entire table when `catalog.cache.get_provider_model_entries()` (or `catalog.get_models_for_exposure()`) raised.
 * Provider-suffixed dashboard rows (`minimax-m3/opencode-go`) needed a deterministic normalization step before the join so the renderer looked up the canonical `minimax-m3` row.
@@ -2470,7 +2461,7 @@ What changed:
 
 ### Provider-Scoped Catalog Entries Accessor (Targeted Fix)
 
-The narrow follow-up in `plans/dashboard_provider_catalog_accessor_targeted_fix.md` tightens the cache accessor that `_get_provider_scoped_catalog_rows()` already depends on so `protocol=None` rows still render as unavailable and the deprecated placeholder never leaks onto `/models`.
+The narrow follow-up tightens the cache accessor that `_get_provider_scoped_catalog_rows()` already depends on so `protocol=None` rows still render as unavailable and the deprecated placeholder never leaks onto `/models`.
 
 - **`ModelCatalogCache.get_provider_model_entries()`** (`src/eggpool/catalog/cache.py`): returns a `dict[(model_id, provider_id), dict[str, Any]]` keyed by exact provider-scoped tuple. Iteration order is stable (`sorted(self._provider_models)` by `(model_id, provider_id)`), the deprecated `__deprecated__` placeholder is filtered out, and each value is a shallow copy so mutations cannot leak back into `_provider_models`. Configured capability overrides apply via `get_provider_model_entry()` whenever `cache._config` is attached — matching the single-row accessor contract. There is **no** global fallback: rows whose only representative entry is the `_models` global row do not appear, so the dashboard always renders exact provider availability.
 - **Resolved and unresolved rows both flow through**: an entry with `protocol=None` is kept (not dropped) so the dashboard can render it as `available=False, catalog_status="unavailable"` instead of silently omitting it.
@@ -2602,8 +2593,6 @@ Provider catalog data always outranks external source data. When two external so
 Only explicit API-control documentation produces `status = "supported"`. For example, OpenRouter's `supported_parameters` listing "reasoning" or "thinking" is treated as explicit API-control evidence. Vague descriptions like "reasoning model" or "thinking model" do NOT produce `status = "supported"` — they remain `unknown`.
 
 `_propagate_enriched_capabilities()` writes the enriched thinking capability back to the catalog cache during reconciliation, so `_copy_exposed_model` picks it up before config overrides are applied. Provider-native thinking capabilities (source == "provider_catalog") are never overwritten by model-info enrichment.
-
-See `plans/thinking_reasoning_phase_04_model_info_enrichment.md` for the full design.
 
 ## Model Context Limits
 
@@ -3008,8 +2997,6 @@ Operators can tell at a glance whether the install is on the recommended profile
 - `tests/unit/test_routing_trace_mode.py` pins the lean `off` default and `include_score_components = false` defaults.
 - `tests/unit/test_config.py::test_database_worker_threads_two_allowed` and `test_database_worker_threads_above_two_rejected` pin the `[1, 2]` range.
 
-See `plans/2026-07-05-dashboard-low-power-performance-optimization-plan.md` for the full design.
-
 ### Phase 7 — Dashboard Graph First-Paint Latency Fix
 
 Dashboard charts (overview request timeseries, reliability, bandwidth, timeseries, cache) can remain blank for several seconds because the current code path blocks on a broad `asyncio.gather()` of independent stats calls before returning HTML. The page shell cannot render until the full dashboard response arrives, so a slow stats query gates the entire first paint. Rollup paths exist but fall back to raw `requests` table aggregation when rollups return empty, and the fixed 30-second cache is too short for expensive historical aggregates.
@@ -3024,8 +3011,6 @@ Seven phases addressed the data-first rendering problem:
 - **Phase 6 — Chart.js preload**: chart pages emit `<link rel="preload" href="/static/chart.js" as="script">` so the browser starts fetching Chart.js earlier in the network waterfall. CSS loading shell styles (`src/eggpool/dashboard/static/dashboard.css`) provide a fixed-height container with spinner animation.
 - **Phase 7 — Acceptance benchmarks**: `tests/perf/test_dashboard_first_paint_benchmarks.py` ships 8 acceptance benchmarks (6 small + 2 medium/slow) seeded with representative data at small (1k), medium (100k), and large (1M) scales. Regression tests in `tests/unit/test_dashboard_first_paint.py` (22 tests), `tests/unit/test_dashboard_telemetry.py` (8 tests), `tests/unit/test_dashboard_indexes.py` (9 tests), `tests/unit/test_dashboard_rollups.py::TestRollupFirstPaintBehavior` (9 tests), and `tests/unit/test_stats.py::TestDashboardStatsCache` (6 tests) pin the new behavior.
 
-See `plans/2026-07-08-dashboard-graph-first-paint-latency-fix.md` for the full design.
-
 ### Benchmark and Regression Harness
 
 `tests/perf/` contains baseline benchmarks and regression guards:
@@ -3038,7 +3023,7 @@ performance comparison is useful; it is not part of ordinary CI.
 
 ## In-Memory Bounds and Memory Footprint
 
-Long-running deployments — especially Raspberry Pi / SBC nodes — must keep steady-state RSS bounded by workload throughput, not workload cardinality. Every growth axis in the hot path is capped by a hardcoded module constant or a per-catalog config knob; see `plans/memory.md` for the full design and the per-request regression test (`tests/integration/test_memory.py`, marked `pytest.mark.slow`).
+Long-running deployments — especially Raspberry Pi / SBC nodes — must keep steady-state RSS bounded by workload throughput, not workload cardinality. Every growth axis in the hot path is capped by a hardcoded module constant or a per-catalog config knob; see the per-request regression test (`tests/integration/test_memory.py`, marked `pytest.mark.slow`).
 
 | Structure | Location | Cap | Eviction |
 |-----------|----------|-----|----------|
@@ -3059,7 +3044,7 @@ The `frozenset` switch on `_account_support` (`src/eggpool/catalog/cache.py:639`
 - Ambiguous bare upstream prices fail toward underestimation: absent an explicit suffix (`/token`, `/1k`, `/1M`) or an unambiguous field-name hint, the resolver defaults bare values to dollars-per-million, not dollars-per-token. Nested `pricing.cache_read` / `pricing.cache_write` fields inherit the surrounding pricing-cluster unit regime instead of hardcoding per-token semantics.
 - Every resolved category is normalized to microdollars-per-million before persistence. Implausible local rates are rejected by snapshot trust gates in `apply_snapshot_trust_gates()` so a bad upstream payload cannot become the latest trusted snapshot.
 - Canonical request-cost precedence in `RequestFinalizer`: `provider_reported` upstream cost wins; otherwise only trusted local `derived` / `partial` / `exact` values may become canonical. Positive local `estimated` values are routed through `choose_bounded_estimated_cost()` so, when both values are plausible, the lower value between the local estimate and `selected.estimated_microdollars` wins — a generous reservation MUST NOT silently override a tighter local estimate, and nothing later in finalization floors that choice back to the reservation. The structured `cost.reservation_fallback_suppressed` event is emitted when the reservation would otherwise dominate.
-- **Reservation-fallback canonicalization** (plans/2026-07-03-...): the reservation estimate is a preflight budget, not a bill. `_QUOTA_RESERVATION_COST_CEILING_MICRODOLLARS` ($2.50) caps every reservation estimate — well below `MAX_REQUEST_COST_MICRODOLLARS` ($250) which bounds canonical cost — so a regression cannot use the reservation as canonical billing. Shared helpers (`total_billable_tokens`, `is_plausible_request_cost`, `choose_bounded_estimated_cost`) live in `src/eggpool/catalog/pricing.py` and are reused by the finalizer, the repair tool, and the dashboard summary.
+- **Reservation-fallback canonicalization**: the reservation estimate is a preflight budget, not a bill. `_QUOTA_RESERVATION_COST_CEILING_MICRODOLLARS` ($2.50) caps every reservation estimate — well below `MAX_REQUEST_COST_MICRODOLLARS` ($250) which bounds canonical cost — so a regression cannot use the reservation as canonical billing. Shared helpers (`total_billable_tokens`, `is_plausible_request_cost`, `choose_bounded_estimated_cost`) live in `src/eggpool/catalog/pricing.py` and are reused by the finalizer, the repair tool, and the dashboard summary.
 - `CostCalculator.calculate_cost()` validates the **raw, pre-clamp** cost-per-token against `_MAX_TRUSTED_COST_PER_TOKEN_MICRODOLLARS` in both partial and derived paths so a wildly inflated snapshot can no longer hide behind the per-request cap. Implausible rates fall back to `_estimate_cost()` with `estimated` exactness.
 - `QuotaEstimator.record_usage()` refuses to seed the EWMA on a first observation whose per-token rate exceeds `_QUOTA_ESTIMATED_COST_PER_TOKEN_MICRODOLLARS` (a unit-misclassification sample cannot permanently poison future reservations). All five `estimate_cost` tiers route through `_finalize_estimate()` which enforces both per-token and absolute reservation ceilings.
 - Dashboard visibility for reservation-fallback canonicalization: `stats/queries.py` exposes `reservation_fallback_rows` and `reservation_fallback_excess_microdollars` on the global summary; `_render_reservation_fallback_warning()` (`src/eggpool/dashboard/render.py`) renders a banner card when either metric is non-zero so operators can run `eggpool stats repair-costs --apply`.
@@ -3427,9 +3412,7 @@ configuration changes to a running process. The new ownership map:
 
 Mixed live + restart-required changes are rejected entirely (no
 partial application); the CLI returns exit code `2` so scripts and
-deployment tooling can detect the situation. See
-`plans/2026-07-13-live-config-rehash-closure-plan.md` for the
-complete closure criteria.
+deployment tooling can detect the situation.
 
 #### Closure pass D1 — request-policy expansion
 
@@ -3486,9 +3469,7 @@ and inheritance is pinned by
 Identity separation between active and candidate policies is pinned
 by `TestMilestoneD1CandidateBuild` in `tests/unit/test_reload_manager.py`,
 and end-to-end behavioral reload is pinned by the `test_d1_*`
-tests in `tests/integration/test_rehash_streaming_swap.py`. See
-`plans/2026-07-14-live-config-rehash-final-milestone-d1-request-policy-expansion.md`
-for the rollout plan.
+tests in `tests/integration/test_rehash_streaming_swap.py`.
 
 #### Closure pass D2 — background and observability expansion
 
@@ -3566,9 +3547,7 @@ Tests: `tests/unit/test_runtime_task_inventory.py` (35 tests),
 changes, enable/disable, retention policy, metrics/backup cadence,
 rapid reloads, observability), and `tests/unit/test_runtime_tasks.py`
 extended with `TestProcessSupervisorRouting` and
-`TestProcessSupervisorSurvival`.  See
-`plans/2026-07-14-live-config-rehash-final-milestone-d2-background-observability-expansion.md`
-for the rollout plan.
+`TestProcessSupervisorSurvival`.
 
 #### Closure pass D3 — release validation and security
 
@@ -3586,7 +3565,6 @@ caught two gaps: `dns_cache.ttl_seconds` (actual path is
 `network.dns_cache.positive_ttl_seconds`) and 14 missing
 `pricing.catalogs.*` entries.  Performance baseline: reload p50
 ≈ 480 ms, p95 ≈ 750 ms; concurrent-traffic p95 < 750 ms.
-See `plans/2026-07-14-live-config-rehash-final-milestone-d3-release-validation-and-closure.md`.
 
 ### Validation contract
 

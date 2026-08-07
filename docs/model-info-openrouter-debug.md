@@ -2,8 +2,7 @@
 
 This document walks an operator through the live verification flow for
 the model-info OpenRouter enrichment.  It complements the broader
-[architecture](../architecture/README.md) and the
-[OpenRouter polish closeout plan](../plans/model_info_openrouter_polish_closeout_plan.md).
+[architecture](../architecture/README.md).
 
 ## One-shot verification script
 

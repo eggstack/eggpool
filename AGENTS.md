@@ -82,7 +82,7 @@ uv run ruff check --fix src/
 - `asyncio_default_fixture_loop_scope = "function"` is set; do not override without understanding the implications
 - `--strict-markers` enforced
 - respx for HTTPX upstream mocking
-- Tests in `tests/unit/`, `tests/integration/`, `tests/smoke/`, `tests/perf/`, `tests/live/`, `tests/contract/`, `tests/soak/`
+- Tests in `tests/unit/`, `tests/integration/`, `tests/smoke/`, `tests/perf/`, `tests/live/`, `tests/contract/`
 - Smoke suite (`tests/smoke/`): package import, config parsing, invalid config rejection, check-config validation, DB migration, one non-stream request, one streaming request, one upstream failure followed by recovery, one premature EOF, one Anthropic request, and CLI help
 - Provider contract tests: `uv run pytest tests/unit/test_contract.py tests/unit/test_contract_urls.py -v`
 - Performance, live, and diagnostic reproducer tests are manually invoked, not run in CI
@@ -171,7 +171,7 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 
 - `AggregatorError` → `ConfigError`, `DatabaseError`, `ProxyError`
 - `ConfigError` → `ConfigValidationError` (with subclasses: `ConfigFileAccessError`, `ConfigParseError`, `ConfigSchemaError`, `ConfigStartupAuthError`, `ConfigAccountCredentialError`, `ConfigInternalError`)
-- `DatabaseError` → `DatabaseCommitError`, `DatabaseConnectionInvalidatedError`, `DatabaseRollbackError`, `ModelQuarantineHydrationError`, `ModelQuarantineRecoveryError`
+- `DatabaseError` → `DatabaseCommitError`, `DatabaseConnectionInvalidatedError`, `DatabaseRollbackError`, `DatabaseTransactionOwnershipError`, `ModelQuarantineHydrationError`, `ModelQuarantineRecoveryError`
 - `UpstreamError` (has `status_code`) → `TemporaryUpstreamError`, `TransientUpstreamError`, `AuthenticationError`, `QuotaExhaustedError`, `RateLimitError` (has `retry_after`), `ModelUnavailableError`
 - `ProxyError` → `PrematureStreamEOFError`
 - `ModelNotFoundError` (has `model_id`), `NoEligibleAccountError`, `CatalogUnavailableError`, `AuthenticationUnavailableError`, `UpstreamExhaustedError`, `AccountSuspendedError`, `RequestTooLargeError`, `ModelInfoSourceFetchError`, `ContextLimitExceededError`, `CapabilityError`

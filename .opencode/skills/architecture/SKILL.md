@@ -82,11 +82,18 @@ worker boundary.
 ```
 AggregatorError (base)
 ├── ConfigError
-│   └── ConfigValidationError
+│   └── ConfigValidationError (config_validation.py, not errors.py)
+│       ├── ConfigFileAccessError
+│       ├── ConfigParseError
+│       ├── ConfigSchemaError
+│       ├── ConfigStartupAuthError
+│       ├── ConfigAccountCredentialError
+│       └── ConfigInternalError
 ├── DatabaseError
 │   ├── DatabaseCommitError
 │   ├── DatabaseConnectionInvalidatedError
 │   ├── DatabaseRollbackError
+│   ├── DatabaseTransactionOwnershipError
 │   ├── ModelQuarantineHydrationError
 │   └── ModelQuarantineRecoveryError
 ├── UpstreamError (status_code attribute)
@@ -108,10 +115,13 @@ AggregatorError (base)
 ├── ModelInfoSourceFetchError
 ├── ContextLimitExceededError
 ├── CapabilityError (400 for thinking mismatches)
-└── AcceptedFinalizationInvariantError
+│   └── BudgetResolutionError (thinking budget rejection)
+└── AcceptedFinalizationInvariantError (reload invariant violation)
 ```
 
 Plus `RuntimeManagerLeaseExhaustedError` (RuntimeError, mapped to HTTP 503).
+Plus `TranscodeLossError` (from `transcoder.errors`) — HTTP 400 when `loss_policy = "reject"`.
+Plus `ProtocolMismatchError` (from `catalog.protocols`) — endpoint/model-protocol mismatch.
 
 ## Process Model
 
