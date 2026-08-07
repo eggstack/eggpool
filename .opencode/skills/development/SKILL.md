@@ -47,6 +47,11 @@ workflow changes still run the gate.
 
 ## Focused Verification
 
+Catalog/storage changes should run the catalog, ping, reconciliation, provider-aware,
+unresolved-model, and migration compatibility suites before the smoke gate. The
+focused assertions should inspect durable rows/application DML effects, not
+SQLite page-write counts.
+
 ```bash
 # Single test file
 uv run pytest tests/unit/test_contract.py -v

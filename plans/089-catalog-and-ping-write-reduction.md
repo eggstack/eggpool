@@ -1,7 +1,7 @@
 # Plan 089 — Catalog and Ping Write Reduction
 
 Date: 2026-08-07
-Status: ready for implementation
+Status: complete
 Parent roadmap: `plans/086-sbc-routing-and-storage-efficiency-roadmap.md`
 Depends on: none
 Planning baseline: `d6c49dea5ed800bfcd22d95fe8c7943a29590125`
@@ -221,3 +221,45 @@ Do not close this plan if:
 8. Run focused migration/repository tests if schema changed.
 9. Run lint/type/smoke/config checks.
 10. Record exact verification and mark complete only when identical-refresh write reduction is directly proven.
+
+## Implementation record
+
+- Added migration `0052_catalog_refresh_state.sql`, with conservative legacy
+  hydration from existing account/model timestamps.
+- `_persist_catalog()` now canonicalizes JSON and compares semantic global and
+  provider rows in memory before issuing delta DML. Freshness is persisted in
+  one compact row per account.
+- `PingRepository` persists failures and success/failure transitions
+  immediately and coarsens steady successful samples to one row per account /
+  provider pair per 30 minutes without a new configuration knob or writer.
+- Added deterministic row/DML and restart-hydration coverage in the existing
+  catalog and ping suites. Existing failure, partial/empty, withdrawal,
+  quarantine, provider-aware, and migration compatibility coverage remains in
+  place.
+- Updated README, AGENTS.md, architecture/deployment guidance, SBC templates,
+  and project skills to document that discovery cadence is not full catalog
+  rewrite cadence.
+
+## Acceptance record
+
+- [x] Unchanged successful refreshes skip global and provider semantic row updates.
+- [x] Account-model support DML is limited to changed relationships.
+- [x] Semantic changes remain durable and restart-hydratable.
+- [x] Compact freshness state preserves restart-safe routing staleness behavior.
+- [x] Existing failure, partial/empty, and withdrawal semantics remain covered.
+- [x] Steady successful pings are coarsened; failures and transitions remain immediate.
+- [x] No general metrics pipeline, background writer, or SQLite durability change was introduced.
+- [x] Local focused tests, migration compatibility, lint, type, smoke, and config checks pass.
+
+Verification:
+
+```text
+uv run pytest tests/unit/test_catalog.py tests/unit/test_catalog_service_limits.py tests/unit/test_catalog_service_ping.py tests/unit/test_catalog_withdrawal_policy.py tests/integration/test_catalog_cache_reload.py tests/integration/test_catalog_unresolved_models.py tests/integration/test_provider_aware_catalog.py tests/integration/test_ping_e2e.py -q --tb=short --maxfail=1
+uv run pytest tests/unit/test_ping_repository.py tests/integration/test_catalog_persistence_reconcile.py tests/integration/test_migration_compatibility.py tests/smoke/test_database_smoke.py -q --tb=short --maxfail=1
+uv run ruff format --check src/ tests/ scripts/
+uv run ruff check src/ tests/ scripts/
+uv run pyright src/ scripts/
+uv run pytest tests/smoke/ -q --tb=short --maxfail=1
+uv run eggpool --config config.example.toml check-config
+uv run eggpool --config config.sbc.example.toml check-config
+```

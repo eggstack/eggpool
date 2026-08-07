@@ -77,6 +77,16 @@ class CatalogRefreshResult:
     pruned_count: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class _PendingRefreshState:
+    """One successful account refresh waiting for compact persistence."""
+
+    provider_id: str
+    refreshed_at: float
+    outcome: AccountCatalogOutcome
+    model_count: int
+
+
 def _ts_to_unix(value: object) -> float:
     """Convert a DB TIMESTAMP string (or numeric) to a Unix float.
 
@@ -119,6 +129,75 @@ def _unix_to_db_timestamp(value: object, *, fallback: float) -> str:
         timestamp = fallback
     return _dt.datetime.fromtimestamp(timestamp, tz=_dt.UTC).strftime(
         "%Y-%m-%d %H:%M:%S"
+    )
+
+
+def _canonical_json(value: object) -> str:
+    """Serialize catalog JSON with stable ordering for semantic comparison."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _canonical_stored_json(value: object) -> str:
+    """Normalize a JSON value read from SQLite for semantic comparison."""
+    if isinstance(value, (str, bytes, bytearray)):
+        try:
+            return _canonical_json(json.loads(value))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return str(value)
+    return _canonical_json(value)
+
+
+def _model_semantic_key(row: tuple[Any, ...]) -> tuple[object, ...]:
+    """Return the durable semantic fields for one desired global row."""
+    return (row[1], row[2], row[3], row[4], row[7], "resolved")
+
+
+def _stored_model_semantic_key(row: Any) -> tuple[object, ...]:
+    """Return the durable semantic fields for one stored global row."""
+    return (
+        row["display_name"],
+        row["protocol"],
+        _canonical_stored_json(row["capabilities"]),
+        _canonical_stored_json(row["source_metadata"]),
+        row["protocol_source"],
+        row["resolution_status"],
+    )
+
+
+def _provider_semantic_key(row: tuple[Any, ...]) -> tuple[object, ...]:
+    """Return the durable semantic fields for one desired provider row."""
+    return (row[2], row[3], row[4], row[5], row[6], row[9])
+
+
+def _stored_provider_semantic_key(row: Any) -> tuple[object, ...]:
+    """Return the durable semantic fields for one stored provider row."""
+    return (
+        row["display_name"],
+        row["protocol"],
+        _canonical_stored_json(row["capabilities"]),
+        _canonical_stored_json(row["source_metadata"]),
+        row["protocol_source"],
+        row["resolution_status"],
+    )
+
+
+def _price_snapshot_matches(
+    resolved: Any,
+    latest: dict[str, Any] | None,
+    provider_id: str,
+) -> bool:
+    """Return whether resolved pricing is already the latest durable value."""
+    if latest is None:
+        return False
+    return (
+        latest.get("input_price_per_1k") == resolved.input_price_per_1k
+        and latest.get("output_price_per_1k") == resolved.output_price_per_1k
+        and latest.get("cache_read_per_million_microdollars")
+        == resolved.cache_read_per_million_microdollars
+        and latest.get("cache_write_per_million_microdollars")
+        == resolved.cache_write_per_million_microdollars
+        and latest.get("source") == resolved.source
+        and latest.get("provider_id", DEFAULT_PROVIDER_ID) == provider_id
     )
 
 
@@ -217,6 +296,27 @@ class CatalogService:
         self._models_dev_provider_cache: dict[
             str, tuple[float, dict[str, dict[str, Any]]]
         ] = {}
+        # Successful refresh timestamps are persisted once per account in
+        # catalog_refresh_state.  Keeping only the current pending result
+        # avoids rewriting freshness for an account that has not refreshed.
+        self._pending_refresh_states: dict[str, _PendingRefreshState] = {}
+
+    def _record_successful_refresh(
+        self,
+        account_name: str,
+        provider_id: str,
+        outcome: AccountCatalogOutcome,
+        model_count: int,
+    ) -> None:
+        """Remember a successful fetch for the next catalog persistence."""
+        refreshed_at = time.time()
+        self._cache.set_account_refresh_time(account_name, refreshed_at)
+        self._pending_refresh_states[account_name] = _PendingRefreshState(
+            provider_id=provider_id,
+            refreshed_at=refreshed_at,
+            outcome=outcome,
+            model_count=model_count,
+        )
 
     def _catalog_http_client(self) -> CatalogHttpClient | None:
         """Return the long-lived client used for external catalog lookups."""
@@ -841,6 +941,12 @@ class CatalogService:
                 # advertising. The non-destructive default keeps prior
                 # rows alive.
                 update = self._cache.update_from_account(account_name, provider_id, [])
+                self._record_successful_refresh(
+                    account_name,
+                    provider_id,
+                    AccountCatalogOutcome.SUCCESS_EMPTY,
+                    result.model_count,
+                )
                 return AccountCatalogOutcome.SUCCESS_EMPTY, update
 
             models = normalize_models(result.response)
@@ -858,6 +964,12 @@ class CatalogService:
                     provider_id,
                 )
                 update = self._cache.update_from_account(account_name, provider_id, [])
+                self._record_successful_refresh(
+                    account_name,
+                    provider_id,
+                    AccountCatalogOutcome.SUCCESS_EMPTY,
+                    result.model_count,
+                )
                 return AccountCatalogOutcome.SUCCESS_EMPTY, update
             provider_cfg = provider_cfg or self._config.providers.get(provider_id)
             await self._enrich_opencode_go_models(provider_id, provider_cfg, models)
@@ -998,6 +1110,12 @@ class CatalogService:
                 update.updated_support,
                 update.preserved_support,
                 update.withdrawn_support,
+            )
+            self._record_successful_refresh(
+                account_name,
+                provider_id,
+                outcome,
+                result.model_count,
             )
             return outcome, update
         except Exception as exc:
@@ -1174,6 +1292,18 @@ class CatalogService:
                                     model_id, provider_id, provider_entry
                                 )
 
+            refresh_rows = await self._db.fetch_all(
+                "SELECT a.name, crs.last_successful_refresh_at "
+                "FROM catalog_refresh_state AS crs "
+                "JOIN accounts AS a ON a.id = crs.account_id"
+            )
+            for row in refresh_rows:
+                self._cache.set_account_refresh_time(
+                    str(row["name"]),
+                    _ts_to_unix(row["last_successful_refresh_at"]),
+                    durable=True,
+                )
+
             if self._cache.model_count > 0:
                 logger.info(
                     "Loaded %d cached models from database",
@@ -1187,13 +1317,30 @@ class CatalogService:
             raise
 
     async def _persist_catalog(self) -> None:
-        """Persist the in-memory catalog to the database."""
+        """Persist only semantic catalog and support deltas.
+
+        Serialization, durable comparison, and desired-set construction all
+        happen before the write transaction.  Refresh freshness is written
+        separately to one compact row per successfully fetched account.
+        """
         now = _dt.datetime.now(_dt.UTC).timestamp()
         now_iso = _unix_to_db_timestamp(now, fallback=now)
 
         acct_rows = await self._db.fetch_all("SELECT id, name FROM accounts")
         existing_support_rows = await self._db.fetch_all(
-            "SELECT account_id, model_id FROM account_models WHERE enabled = 1"
+            "SELECT account_id, model_id, enabled FROM account_models"
+        )
+        existing_model_rows = await self._db.fetch_all(
+            "SELECT model_id, display_name, protocol, capabilities, "
+            "source_metadata, protocol_source, resolution_status "
+            "FROM models WHERE model_id <> ?",
+            (DEPRECATED_MODEL_ID,),
+        )
+        existing_provider_rows = await self._db.fetch_all(
+            "SELECT model_id, provider_id, display_name, protocol, capabilities, "
+            "source_metadata, protocol_source, resolution_status "
+            "FROM provider_model_metadata WHERE model_id <> ?",
+            (DEPRECATED_MODEL_ID,),
         )
         latest_prices = await PriceSnapshotRepository(self._db).get_all_latest()
         model_rows: list[tuple[Any, ...]] = []
@@ -1230,8 +1377,8 @@ class CatalogService:
                     model_id,
                     model_info.get("display_name"),
                     model_info["protocol"],
-                    json.dumps(model_info.get("capabilities", {})),
-                    json.dumps(model_info.get("source_metadata", {})),
+                    _canonical_json(model_info.get("capabilities", {})),
+                    _canonical_json(model_info.get("source_metadata", {})),
                     _unix_to_db_timestamp(
                         model_info.get("first_seen_at"), fallback=now
                     ),
@@ -1262,8 +1409,8 @@ class CatalogService:
                     provider_id,
                     model_info.get("display_name"),
                     model_info.get("protocol"),
-                    json.dumps(model_info.get("capabilities", {})),
-                    json.dumps(model_info.get("source_metadata", {})),
+                    _canonical_json(model_info.get("capabilities", {})),
+                    _canonical_json(model_info.get("source_metadata", {})),
                     model_info.get("protocol_source"),
                     _unix_to_db_timestamp(
                         model_info.get("first_seen_at"), fallback=now
@@ -1273,89 +1420,197 @@ class CatalogService:
                 )
             )
 
+        existing_models = {str(row["model_id"]): row for row in existing_model_rows}
+        model_inserts = [
+            row for row in model_rows if str(row[0]) not in existing_models
+        ]
+        model_updates = [
+            (
+                row[1],
+                row[2],
+                row[3],
+                row[4],
+                row[6],
+                row[7],
+                row[0],
+            )
+            for row in model_rows
+            if str(row[0]) in existing_models
+            and _model_semantic_key(row)
+            != _stored_model_semantic_key(existing_models[str(row[0])])
+        ]
+
+        existing_providers = {
+            (str(row["model_id"]), str(row["provider_id"])): row
+            for row in existing_provider_rows
+        }
+        provider_inserts = [
+            row
+            for row in provider_model_rows
+            if (str(row[0]), str(row[1])) not in existing_providers
+        ]
+        provider_updates = [
+            (
+                row[2],
+                row[3],
+                row[4],
+                row[5],
+                row[6],
+                row[8],
+                row[9],
+                row[0],
+                row[1],
+            )
+            for row in provider_model_rows
+            if (str(row[0]), str(row[1])) in existing_providers
+            and _provider_semantic_key(row)
+            != _stored_provider_semantic_key(
+                existing_providers[(str(row[0]), str(row[1]))]
+            )
+        ]
+
         existing_support = {
             (int(row["account_id"]), str(row["model_id"]))
             for row in existing_support_rows
+            if int(row["enabled"])
         }
         support_to_enable = desired_support - existing_support
         support_to_disable = existing_support - desired_support
 
+        account_ids = {str(row["name"]): int(row["id"]) for row in acct_rows}
+        pending_refresh_rows = [
+            (
+                account_ids[account_name],
+                state.provider_id,
+                _unix_to_db_timestamp(state.refreshed_at, fallback=now),
+                state.outcome.value,
+                state.model_count,
+            )
+            for account_name, state in self._pending_refresh_states.items()
+            if account_name in account_ids
+        ]
+        persisted_model_ids = {str(row[0]) for row in model_rows}
+        desired_provider_keys = {
+            (str(row[0]), str(row[1])) for row in provider_model_rows
+        }
+        existing_model_ids = set(existing_models)
+        existing_provider_keys = set(existing_providers)
+        needs_reconciliation = bool(
+            existing_model_ids - persisted_model_ids
+            or existing_provider_keys - desired_provider_keys
+            or support_to_disable
+        )
+        pending_price_snapshots: list[tuple[str, str, Any]] = []
+        for (
+            pid_model_id,
+            pid,
+        ), pinfo in self._cache.get_provider_model_entries().items():
+            if not self._cache.has_model(pid_model_id):
+                continue
+            resolved = await self._resolve_price_snapshot(pid_model_id, pinfo, pid)
+            latest = latest_prices.get((pid_model_id, pid))
+            if resolved is None or _price_snapshot_matches(resolved, latest, pid):
+                continue
+            pending_price_snapshots.append((pid_model_id, pid, resolved))
+
         async with self._db.transaction():
-            await self._db.execute_many(
-                """
+            if model_inserts:
+                await self._db.execute_many(
+                    """
                     INSERT INTO models (
                         model_id, display_name, protocol,
                         capabilities, source_metadata,
                         first_seen_at, last_seen_at, protocol_source,
                         resolution_status
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'resolved')
-                    ON CONFLICT(model_id) DO UPDATE SET
-                        display_name = excluded.display_name,
-                        protocol = excluded.protocol,
-                        capabilities = excluded.capabilities,
-                        source_metadata = excluded.source_metadata,
-                        last_seen_at = excluded.last_seen_at,
-                        protocol_source = excluded.protocol_source,
-                        resolution_status = 'resolved'
-                """,
-                model_rows,
-            )
-            await self._db.execute_many(
-                """
+                    """,
+                    model_inserts,
+                )
+            if model_updates:
+                await self._db.execute_many(
+                    "UPDATE models SET display_name = ?, protocol = ?, "
+                    "capabilities = ?, source_metadata = ?, last_seen_at = ?, "
+                    "protocol_source = ?, resolution_status = 'resolved' "
+                    "WHERE model_id = ?",
+                    model_updates,
+                )
+            if provider_inserts:
+                await self._db.execute_many(
+                    """
                     INSERT INTO provider_model_metadata (
                         model_id, provider_id, display_name, protocol,
                         capabilities, source_metadata, protocol_source,
                         first_seen_at, last_seen_at, resolution_status
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(model_id, provider_id) DO UPDATE SET
-                        display_name = excluded.display_name,
-                        protocol = excluded.protocol,
-                        capabilities = excluded.capabilities,
-                        source_metadata = excluded.source_metadata,
-                        protocol_source = excluded.protocol_source,
-                        last_seen_at = excluded.last_seen_at,
-                        resolution_status = excluded.resolution_status
-                """,
-                provider_model_rows,
-            )
-            await self._db.execute_many(
-                """
+                    """,
+                    provider_inserts,
+                )
+            if provider_updates:
+                await self._db.execute_many(
+                    "UPDATE provider_model_metadata SET display_name = ?, "
+                    "protocol = ?, capabilities = ?, source_metadata = ?, "
+                    "protocol_source = ?, last_seen_at = ?, "
+                    "resolution_status = ? WHERE model_id = ? AND provider_id = ?",
+                    provider_updates,
+                )
+            if support_to_enable:
+                await self._db.execute_many(
+                    """
                     INSERT INTO account_models (
                         account_id, model_id, enabled, created_at
                     ) VALUES (?, ?, 1, ?)
                     ON CONFLICT(account_id, model_id) DO UPDATE SET enabled = 1
-                """,
-                [(*pair, now_iso) for pair in sorted(support_to_enable)],
-            )
-            await self._db.execute_many(
-                "UPDATE account_models SET enabled = 0 "
-                "WHERE account_id = ? AND model_id = ? AND enabled = 1",
-                sorted(support_to_disable),
-            )
+                    """,
+                    [(*pair, now_iso) for pair in sorted(support_to_enable)],
+                )
+            if support_to_disable:
+                await self._db.execute_many(
+                    "UPDATE account_models SET enabled = 0 "
+                    "WHERE account_id = ? AND model_id = ? AND enabled = 1",
+                    sorted(support_to_disable),
+                )
+            if pending_refresh_rows:
+                await self._db.execute_many(
+                    "INSERT INTO catalog_refresh_state ("
+                    "account_id, provider_id, last_successful_refresh_at, "
+                    "last_outcome, model_count) VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(account_id) DO UPDATE SET "
+                    "provider_id = excluded.provider_id, "
+                    "last_successful_refresh_at = excluded.last_successful_refresh_at, "
+                    "last_outcome = excluded.last_outcome, "
+                    "model_count = excluded.model_count",
+                    pending_refresh_rows,
+                )
 
-            # Persist provider-specific pricing only. A global snapshot would
-            # create phantom default-provider pricing when a model is offered
-            # exclusively by another provider.
-            for (
-                pid_model_id,
-                pid,
-            ), pinfo in self._cache.get_provider_model_entries().items():
-                if self._cache.has_model(pid_model_id):
-                    await self._maybe_insert_price_snapshot(
-                        pid_model_id,
-                        pinfo,
-                        provider_id=pid,
-                        latest=latest_prices.get((pid_model_id, pid)),
-                    )
+            # Persist provider-specific pricing only. Resolution and external
+            # catalog lookups were completed before the write transaction.
+            for pid_model_id, pid, resolved in pending_price_snapshots:
+                await self._record_price_snapshot(pid_model_id, pid, resolved)
 
             # Reconcile the durable catalog with the live cache.
             # Models and provider rows that are no longer advertised
             # by any account are deleted; rows with historical
             # request/reservation references are relinked to the
             # placeholder so usage data is preserved.
-            await self._reconcile_catalog(persisted_model_ids)
+            if needs_reconciliation:
+                await self._reconcile_catalog(
+                    persisted_model_ids,
+                    live_provider_keys=desired_provider_keys,
+                )
 
-    async def _reconcile_catalog(self, live_model_ids: set[str]) -> None:
+        for account_name, state in list(self._pending_refresh_states.items()):
+            if (
+                self._pending_refresh_states.get(account_name) == state
+                and account_name in account_ids
+            ):
+                del self._pending_refresh_states[account_name]
+
+    async def _reconcile_catalog(
+        self,
+        live_model_ids: set[str],
+        *,
+        live_provider_keys: set[tuple[str, str]] | None = None,
+    ) -> None:
         """Align the durable catalog tables with the live in-memory cache.
 
         The caller's transaction is already open. Steps:
@@ -1391,7 +1646,8 @@ class CatalogService:
         withdrawn_ids = durable_model_ids - live_model_ids
 
         if not withdrawn_ids and not await self._has_orphan_provider_rows(
-            live_model_ids
+            live_model_ids,
+            live_provider_keys=live_provider_keys,
         ):
             return
 
@@ -1430,7 +1686,10 @@ class CatalogService:
             )
             deleted_models += 1
 
-        deleted_provider_rows = await self._delete_orphan_provider_rows(live_model_ids)
+        deleted_provider_rows = await self._delete_orphan_provider_rows(
+            live_model_ids,
+            live_provider_keys=live_provider_keys,
+        )
         deleted_account_links = await self._delete_stale_account_links()
 
         if deleted_models or deleted_provider_rows or deleted_account_links:
@@ -1444,17 +1703,32 @@ class CatalogService:
                 deleted_account_links,
             )
 
-    async def _has_orphan_provider_rows(self, live_model_ids: set[str]) -> bool:
-        """Return whether durable provider rows reference a withdrawn model."""
+    async def _has_orphan_provider_rows(
+        self,
+        live_model_ids: set[str],
+        *,
+        live_provider_keys: set[tuple[str, str]] | None = None,
+    ) -> bool:
+        """Return whether durable provider rows are no longer live."""
         rows = await self._db.fetch_all(
-            "SELECT model_id FROM provider_model_metadata WHERE model_id <> ?",
+            "SELECT model_id, provider_id FROM provider_model_metadata "
+            "WHERE model_id <> ?",
             (DEPRECATED_MODEL_ID,),
         )
-        durable = {str(r["model_id"]) for r in rows}
-        return bool(durable - live_model_ids)
+        if live_provider_keys is None:
+            return bool({str(r["model_id"]) for r in rows} - live_model_ids)
+        return any(
+            (str(row["model_id"]), str(row["provider_id"])) not in live_provider_keys
+            for row in rows
+        )
 
-    async def _delete_orphan_provider_rows(self, live_model_ids: set[str]) -> int:
-        """Delete ``provider_model_metadata`` rows the live cache no longer carries."""
+    async def _delete_orphan_provider_rows(
+        self,
+        live_model_ids: set[str],
+        *,
+        live_provider_keys: set[tuple[str, str]] | None = None,
+    ) -> int:
+        """Delete provider rows the live cache no longer carries."""
         rows = await self._db.fetch_all(
             "SELECT model_id, provider_id FROM provider_model_metadata "
             "WHERE model_id <> ?",
@@ -1464,7 +1738,11 @@ class CatalogService:
         for row in rows:
             model_id = str(row["model_id"])
             provider_id = str(row["provider_id"])
-            if model_id not in live_model_ids:
+            if (
+                (model_id, provider_id) not in live_provider_keys
+                if live_provider_keys is not None
+                else model_id not in live_model_ids
+            ):
                 stale.append((model_id, provider_id))
         if not stale:
             return 0
@@ -1522,6 +1800,23 @@ class CatalogService:
         The snapshot is only inserted when its values differ from the
         latest snapshot for the same model.
         """
+        resolved = await self._resolve_price_snapshot(model_id, model_info, provider_id)
+        if resolved is None:
+            return
+
+        # Skip insert when every field already matches the latest snapshot.
+        if _price_snapshot_matches(resolved, latest, provider_id):
+            return  # No change, skip insert
+
+        await self._record_price_snapshot(model_id, provider_id, resolved)
+
+    async def _resolve_price_snapshot(
+        self,
+        model_id: str,
+        model_info: dict[str, Any],
+        provider_id: str,
+    ) -> Any | None:
+        """Resolve pricing without performing SQLite I/O."""
         # Per-category override values (None means: no override for this
         # category, fall back to upstream).
         global_override = self._config.model_overrides.get(model_id)
@@ -1575,34 +1870,25 @@ class CatalogService:
         if resolved is None:
             return
 
+        return resolved
+
+    async def _record_price_snapshot(
+        self,
+        model_id: str,
+        provider_id: str,
+        resolved: Any,
+    ) -> None:
+        """Write one already-resolved price snapshot."""
         input_price = resolved.input_price_per_1k
         output_price = resolved.output_price_per_1k
         cache_read_price = resolved.cache_read_per_million_microdollars
         cache_write_price = resolved.cache_write_per_million_microdollars
         source = resolved.source
 
-        # Skip insert when every field already matches the latest snapshot.
-        snapshot_repo = PriceSnapshotRepository(self._db)
-        if latest is not None:
-            old_input = latest.get("input_price_per_1k")
-            old_output = latest.get("output_price_per_1k")
-            old_cache_read = latest.get("cache_read_per_million_microdollars")
-            old_cache_write = latest.get("cache_write_per_million_microdollars")
-            old_source = latest.get("source")
-            old_provider = latest.get("provider_id", DEFAULT_PROVIDER_ID)
-            if (
-                old_input == input_price
-                and old_output == output_price
-                and old_cache_read == cache_read_price
-                and old_cache_write == cache_write_price
-                and old_source == source
-                and old_provider == provider_id
-            ):
-                return  # No change, skip insert
-
         # Insert new snapshot. Cache rates are always int microdollars
         # here; legacy float input/output are forwarded to the repo's
         # auto-conversion path.
+        snapshot_repo = PriceSnapshotRepository(self._db)
         await snapshot_repo.record(
             model_id,
             input_price_per_1k=input_price,

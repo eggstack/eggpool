@@ -164,6 +164,9 @@ class ModelCatalogCache:
         self._config: AppConfig | None = None
         # Per-account last successful refresh timestamp
         self._account_last_refresh: dict[str, float] = {}
+        # Accounts with a durable freshness row.  Legacy model timestamps are
+        # only a fallback for accounts absent from this set.
+        self._durable_refresh_accounts: set[str] = set()
         # Per-account set of (model_id, provider_id) keys the account
         # currently advertises.  Used by ``update_from_account`` to
         # drop stale ``_provider_models`` rows when an upstream removes
@@ -355,7 +358,7 @@ class ModelCatalogCache:
             self._account_support[model_id] = existing_support | {account_name}
 
         self._last_refresh = now
-        self._account_last_refresh[account_name] = now
+        self.set_account_refresh_time(account_name, now)
         return AccountCatalogUpdateResult(
             account_name=account_name,
             provider_id=provider_id,
@@ -998,6 +1001,28 @@ class ModelCatalogCache:
     def last_refresh(self) -> float:
         return self._last_refresh
 
+    def set_account_refresh_time(
+        self,
+        account_name: str,
+        refreshed_at: float,
+        *,
+        durable: bool = False,
+    ) -> None:
+        """Hydrate or publish one account's successful refresh timestamp.
+
+        Refresh freshness is durable in ``catalog_refresh_state``.  The
+        model-row timestamp fallback remains available for databases created
+        before that table was introduced.
+        """
+        if refreshed_at <= 0:
+            return
+        if durable:
+            self._durable_refresh_accounts.add(account_name)
+        if refreshed_at > self._account_last_refresh.get(account_name, 0.0):
+            self._account_last_refresh[account_name] = refreshed_at
+        if refreshed_at > self._last_refresh:
+            self._last_refresh = refreshed_at
+
     def hydrate_refresh_age(self) -> None:
         """Set _last_refresh to the newest last_seen_at across loaded models.
 
@@ -1024,6 +1049,8 @@ class ModelCatalogCache:
         """
         for model_id, accounts in self._account_support.items():
             for account_name in accounts:
+                if account_name in self._durable_refresh_accounts:
+                    continue
                 provider_id = self._account_providers.get(account_name)
                 model_info = (
                     self._provider_models.get((model_id, provider_id))
@@ -1040,6 +1067,8 @@ class ModelCatalogCache:
                 existing = self._account_last_refresh.get(account_name, 0.0)
                 if last_seen > existing:
                     self._account_last_refresh[account_name] = last_seen
+                    if last_seen > self._last_refresh:
+                        self._last_refresh = last_seen
 
     @property
     def model_count(self) -> int:
@@ -1277,6 +1306,18 @@ class ModelCatalogCache:
             if account_name is None:
                 continue
             self.add_account_support(str(row["model_id"]), account_name)
+
+        refresh_rows = await db.fetch_all(
+            "SELECT a.name, crs.last_successful_refresh_at "
+            "FROM catalog_refresh_state AS crs "
+            "JOIN accounts AS a ON a.id = crs.account_id"
+        )
+        for row in refresh_rows:
+            self.set_account_refresh_time(
+                str(row["name"]),
+                _ts_to_unix(row["last_successful_refresh_at"]),
+                durable=True,
+            )
 
         self.hydrate_account_refresh_ages()
         self.hydrate_refresh_age()

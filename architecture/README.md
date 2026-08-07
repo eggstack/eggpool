@@ -2235,6 +2235,16 @@ A run with many `FAILED` or `PARTIAL` rows is signal that an upstream
 or DNS path is unhealthy; a sudden shift in `AUTHORITATIVE` count
 indicates a real catalog change that may need rebalancing.
 
+The five-minute discovery cadence is not a five-minute full SQLite catalog
+rewrite. `_persist_catalog()` serializes and compares stable semantic fields
+outside the write transaction, then writes only changed model/provider rows and
+support relationships. Successful refresh freshness is stored in the compact
+`catalog_refresh_state` table, one row per account, so restart-safe routing
+freshness no longer depends on touching every semantic row. `PingRepository`
+keeps failures and success/failure transitions durable immediately while
+coarsening steady successful samples to one row per account/provider pair per
+30 minutes. No new metrics pipeline or background writer is involved.
+
 ### Gate diagnostics for `accounts explain`
 
 `Router.explain_account_eligibility(include_gates=True)` returns a

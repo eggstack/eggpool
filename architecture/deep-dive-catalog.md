@@ -77,6 +77,22 @@ Cost estimation and pricing resolution:
 - Atomic swap semantics during refresh
 - Thread-safe read access from request path
 
+### Durable refresh and diagnostic writes
+
+The five-minute discovery cadence is not equivalent to a five-minute full
+catalog rewrite. `_persist_catalog()` computes stable desired-vs-durable
+semantic deltas outside the SQLite write transaction. Unchanged `models` and
+`provider_model_metadata` rows are left untouched, as are unchanged
+`account_models` relationships. Successful freshness is stored in the compact
+`catalog_refresh_state` table, one row per account, and is hydrated before the
+legacy model-timestamp fallback so routing staleness remains restart-safe.
+
+`PingRepository` writes upstream failures and success/failure transitions
+immediately. Steady successful samples are coarsened to one durable sample per
+account/provider pair per 30 minutes, including across restarts. The in-memory
+cache still receives every successful refresh timestamp used by the current
+runtime.
+
 ### Limits (`limits.py`)
 
 `ModelLimitResolver` extracts upstream context-window limits from provider metadata. Used by the request lifecycle to enforce context-limit checks before dispatch.

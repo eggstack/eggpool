@@ -199,6 +199,12 @@ aggregate_only = true
 
 This trades dashboard freshness and trace detail for materially fewer database writes. Correctness-critical state (requests, reservations, routing) is never affected.
 
+The five-minute model discovery cadence is not a five-minute full catalog
+rewrite. Unchanged semantic model/provider rows are skipped, successful
+freshness is stored compactly per account, and steady successful provider pings
+are sampled internally; failures and success/failure transitions remain
+durable immediately.
+
 ### Optional `orjson` JSON backend
 
 The hot-path JSON helper (`eggpool.jsonx`) auto-detects `orjson` when it

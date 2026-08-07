@@ -89,7 +89,7 @@ async def test_get_provider_ping_summary(db: Database) -> None:
     repo = PingRepository(db)
     async with db.transaction():
         await repo.record_ping("provider-a", "acct1", 100, 200, None, 5)
-        await repo.record_ping("provider-a", "acct1", 200, 200, None, 5)
+        await repo.record_ping("provider-a", "acct2", 200, 200, None, 5)
         await repo.record_ping("provider-a", "acct1", 300, 500, "HTTP 500", 0)
 
     # Use a wide time range to match any timestamp format
@@ -103,6 +103,34 @@ async def test_get_provider_ping_summary(db: Database) -> None:
     assert row["max_latency_ms"] == 300
     assert row["success_count"] == 2
     assert row["failure_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_steady_success_is_coarsened(db: Database) -> None:
+    """A steady account success is sampled once per persistence interval."""
+    repo = PingRepository(db)
+    async with db.transaction():
+        assert await repo.record_ping("provider-a", "acct1", 100, 200, None, 5)
+        assert not await repo.record_ping("provider-a", "acct1", 110, 200, None, 5)
+
+    recent = await repo.get_ping_recent(provider_id="provider-a", limit=10)
+    assert len(recent) == 1
+    assert recent[0]["latency_ms"] == 100
+
+
+@pytest.mark.asyncio
+async def test_failure_and_recovery_bypass_success_coarsening(db: Database) -> None:
+    """Failures and the following recovery remain immediately durable."""
+    repo = PingRepository(db)
+    async with db.transaction():
+        assert await repo.record_ping("provider-a", "acct1", 100, 200, None, 5)
+        assert await repo.record_ping("provider-a", "acct1", 300, 500, "HTTP 500", 0)
+        assert await repo.record_ping("provider-a", "acct1", 120, 200, None, 5)
+
+    recent = await repo.get_ping_recent(provider_id="provider-a", limit=10)
+    assert len(recent) == 3
+    assert recent[0]["status_code"] == 200
+    assert recent[1]["status_code"] == 500
 
 
 @pytest.mark.asyncio

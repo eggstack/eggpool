@@ -78,6 +78,12 @@ Catalog refresh is also the event source for model-info reconciliation and
 health/model recovery. Usage windows are hydrated while constructing a
 generation, so neither concern needs a periodic reload task.
 
+The five-minute default discovery cadence is a fetch cadence, not a full
+SQLite catalog rewrite. Successful refresh freshness is written to compact
+per-account state, unchanged semantic catalog rows are skipped, and steady
+successful ping history is sampled internally at a coarse cadence. Failure
+pings and success/failure transitions remain immediate diagnostics.
+
 ## Safety-Net Tasks
 
 Recorded in `operational_events` table:

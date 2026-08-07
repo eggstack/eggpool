@@ -54,8 +54,9 @@ worker_threads = 1
 
 [models]
 # How often to refresh the model catalog from upstream providers (seconds).
-# Also serves as the provider ping interval — each GET /models call measures
-# latency and records health data.
+# Also serves as the provider probe interval. Each GET /models call measures
+# latency; failures and state transitions are durable immediately, while
+# steady successful ping samples are persisted at a coarse internal cadence.
 refresh_interval_s = 300
 expose_mode = "union"
 startup_refresh = true

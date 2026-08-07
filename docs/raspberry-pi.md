@@ -64,6 +64,11 @@ max_keepalive = 4
 refresh_interval_s = 7200
 ```
 
+Catalog discovery is separate from catalog rewriting: unchanged semantic
+model/provider rows are not rewritten on each refresh. Successful refresh
+freshness uses compact per-account state, and steady successful pings are
+sampled internally while failures remain immediately durable.
+
 ## Recommended Performance Profile
 
 The default config is tuned for Pi-class devices. The supported

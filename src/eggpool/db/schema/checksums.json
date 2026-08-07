@@ -50,6 +50,7 @@
     "0048_request_cost_repairs.sql": "8df6ed6b24a0d076c5dc00bf4c3d28c624c56ed05d7f1bcfe3617ce919afda65",
     "0049_model_info_match_evidence.sql": "ed87a96750593860c358ef9f47c46bcaf78e51822be9202bf173b4e7905a7507",
     "0050_routing_decisions_retention_index.sql": "840974404c8bf1dca1b5e8db7360814b49be2de087801425382f15ef56412a60",
-    "0051_model_quarantine.sql": "e60128ee2006073c9dd54af80facb70f6b3a8edfaf69d6619d0b41e35180a940"
+    "0051_model_quarantine.sql": "e60128ee2006073c9dd54af80facb70f6b3a8edfaf69d6619d0b41e35180a940",
+    "0052_catalog_refresh_state.sql": "3931b8b1ef87b2e6413f8bba2f16f26b1cee899ea4e962ac9e5ff50be590c99d"
   }
 }

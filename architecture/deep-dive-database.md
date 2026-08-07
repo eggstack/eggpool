@@ -101,7 +101,7 @@ Schema migration execution. Ordered SQL files in `db/schema/`.
 
 ### `db/schema/`
 
-51 SQL migration files (`0001_initial.sql` through `0051_model_quarantine.sql`), plus `checksums.json`.
+52 SQL migration files (`0001_initial.sql` through `0052_catalog_refresh_state.sql`), plus `checksums.json`.
 
 ## Key Tables
 
@@ -113,11 +113,14 @@ Schema migration execution. Ordered SQL files in `db/schema/`.
 | `accounts` | Account configuration and state |
 | `providers` | Provider configuration |
 | `models` | Model catalog |
+| `provider_model_metadata` | Provider-scoped semantic catalog metadata |
+| `account_models` | Account/model support relationships |
+| `catalog_refresh_state` | Compact per-account successful catalog freshness |
 | `quotas` | Quota reservations |
 | `account_backoffs` | Upstream-derived backoff state |
 | `account_events` | Account event log |
 | `operational_events` | Safety-net task events |
-| `pings` | Provider health pings |
+| `provider_pings` | Provider health ping observations |
 | `prices` | Model price snapshots |
 | `model_info_canonical` | Model metadata sidecar |
 | `model_info_observations` | Source observations |

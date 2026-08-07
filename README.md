@@ -146,6 +146,13 @@ startup reconciliation repairs durable leftovers.
 
 The catalog refresh is **non-destructive by default**: failed, empty, or partial upstream responses never silently de-pool a healthy account. Set `[models].catalog_withdrawal_policy` (`preserve_until_health` default, `confirmed_once`, `confirmed_twice`) to opt into destructive behavior on authoritative refreshes. See `architecture/README.md` § Catalog Refresh Semantics.
 
+The default five-minute discovery cadence is not a five-minute full catalog
+rewrite. Semantic model/provider rows are updated only when their metadata or
+support relationships change; successful refresh freshness is kept in compact
+per-account state. Diagnostic ping failures and success/failure transitions are
+durable immediately, while steady successful latency samples are retained at a
+coarse internal cadence.
+
 Full config reference: [`config.example.toml`](config.example.toml) | [docs/providers.md](docs/providers.md)
 
 Account `weight` is a positive, relative capacity/share hint within an

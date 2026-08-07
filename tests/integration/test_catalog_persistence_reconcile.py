@@ -28,6 +28,7 @@ import httpx
 import pytest
 
 from eggpool.accounts.registry import AccountRegistry
+from eggpool.catalog.cache import AccountCatalogOutcome
 from eggpool.catalog.service import CatalogService
 from eggpool.constants import DEPRECATED_MODEL_ID
 from eggpool.db.connection import Database
@@ -376,5 +377,158 @@ async def test_reconcile_clears_stale_account_links() -> None:
                 (account_id, "no-usage"),
             )
             assert link is None
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_identical_refresh_only_updates_compact_freshness_state() -> None:
+    """An unchanged refresh does not rewrite semantic catalog rows."""
+    db = Database(path=":memory:")
+    await db.connect()
+    await MigrationRunner(db).run()
+    try:
+        config = _config()
+        async with db.transaction():
+            await db.execute_write(
+                "INSERT INTO accounts "
+                "(name, api_key_env, enabled, weight, provider_id) "
+                "VALUES (?, ?, 1, 1.0, ?)",
+                ("test-acct", "EGGPOOL_TEST_KEY", "opencode-go"),
+            )
+
+        async with httpx.AsyncClient() as client:
+            service = CatalogService(config, AccountRegistry(config), db, client)
+            models = [
+                {
+                    "model_id": "stable-model",
+                    "display_name": "Stable",
+                    "protocol": "openai",
+                    "protocol_source": "exact_mapping",
+                    "capabilities": {"supports_tools": True},
+                    "source_metadata": {"family": "stable"},
+                }
+            ]
+            service.cache.update_from_account("test-acct", "opencode-go", models)
+            service._record_successful_refresh(  # pyright: ignore[reportPrivateUsage]
+                "test-acct",
+                "opencode-go",
+                AccountCatalogOutcome.SUCCESS_AUTHORITATIVE,
+                1,
+            )
+            await service._persist_catalog()  # pyright: ignore[reportPrivateUsage]
+
+            before = await db.fetch_one(
+                "SELECT m.last_seen_at AS model_seen, "
+                "pm.last_seen_at AS provider_seen "
+                "FROM models AS m JOIN provider_model_metadata AS pm "
+                "ON pm.model_id = m.model_id "
+                "WHERE m.model_id = ?",
+                ("stable-model",),
+            )
+            changes_before = await db.fetch_one("SELECT total_changes() AS changes")
+            assert before is not None
+            assert changes_before is not None
+
+            service.cache.update_from_account("test-acct", "opencode-go", models)
+            service._record_successful_refresh(  # pyright: ignore[reportPrivateUsage]
+                "test-acct",
+                "opencode-go",
+                AccountCatalogOutcome.SUCCESS_AUTHORITATIVE,
+                1,
+            )
+            await service._persist_catalog()  # pyright: ignore[reportPrivateUsage]
+
+            after = await db.fetch_one(
+                "SELECT m.last_seen_at AS model_seen, "
+                "pm.last_seen_at AS provider_seen "
+                "FROM models AS m JOIN provider_model_metadata AS pm "
+                "ON pm.model_id = m.model_id "
+                "WHERE m.model_id = ?",
+                ("stable-model",),
+            )
+            changes_after = await db.fetch_one("SELECT total_changes() AS changes")
+            state = await db.fetch_one(
+                "SELECT last_successful_refresh_at, last_outcome, model_count "
+                "FROM catalog_refresh_state"
+            )
+            assert after == before
+            assert changes_after is not None
+            assert changes_before is not None
+            assert int(changes_after["changes"]) - int(changes_before["changes"]) == 1
+            assert state is not None
+            assert state["last_outcome"] == "success_authoritative"
+            assert state["model_count"] == 1
+
+            restarted = CatalogService(config, AccountRegistry(config), db, client)
+            await restarted._load_cached_models()  # pyright: ignore[reportPrivateUsage]
+            assert not restarted.cache.is_account_stale("test-acct", 60)
+            assert restarted.cache.get_supporting_accounts("stable-model") == {
+                "test-acct"
+            }
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_semantic_change_updates_only_affected_model_rows() -> None:
+    """A changed capability does not rewrite an unchanged sibling row."""
+    db = Database(path=":memory:")
+    await db.connect()
+    await MigrationRunner(db).run()
+    try:
+        config = _config()
+        async with db.transaction():
+            await db.execute_write(
+                "INSERT INTO accounts "
+                "(name, api_key_env, enabled, weight, provider_id) "
+                "VALUES (?, ?, 1, 1.0, ?)",
+                ("test-acct", "EGGPOOL_TEST_KEY", "opencode-go"),
+            )
+        async with httpx.AsyncClient() as client:
+            service = CatalogService(config, AccountRegistry(config), db, client)
+            for model_id in ("changed-model", "unchanged-model"):
+                service.cache.update_from_account(
+                    "test-acct",
+                    "opencode-go",
+                    [{"model_id": model_id, "protocol": "openai", "capabilities": {}}],
+                )
+            await service._persist_catalog()  # pyright: ignore[reportPrivateUsage]
+            sibling_before = await db.fetch_one(
+                "SELECT capabilities, last_seen_at FROM models WHERE model_id = ?",
+                ("unchanged-model",),
+            )
+            assert sibling_before is not None
+
+            service.cache.update_from_account(
+                "test-acct",
+                "opencode-go",
+                [
+                    {
+                        "model_id": "changed-model",
+                        "protocol": "openai",
+                        "capabilities": {"supports_tools": True},
+                    },
+                    {
+                        "model_id": "unchanged-model",
+                        "protocol": "openai",
+                        "capabilities": {},
+                    },
+                ],
+            )
+            await service._persist_catalog()  # pyright: ignore[reportPrivateUsage]
+
+            changed = await db.fetch_one(
+                "SELECT capabilities FROM provider_model_metadata "
+                "WHERE model_id = ? AND provider_id = ?",
+                ("changed-model", "opencode-go"),
+            )
+            sibling_after = await db.fetch_one(
+                "SELECT capabilities, last_seen_at FROM models WHERE model_id = ?",
+                ("unchanged-model",),
+            )
+            assert changed is not None
+            assert changed["capabilities"] == '{"supports_tools":true}'
+            assert sibling_after == sibling_before
     finally:
         await db.disconnect()
