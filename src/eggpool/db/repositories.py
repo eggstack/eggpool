@@ -7,6 +7,7 @@ import datetime as _dt
 import logging
 import math
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from eggpool.background.maintenance import MaintenanceBudget, MaintenancePassResult
@@ -28,6 +29,30 @@ if TYPE_CHECKING:
     from eggpool.db.connection import Database
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class RequestFinalizationMutation:
+    """Bounded result of a conditional request terminal transition."""
+
+    transitioned: bool
+    status: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AttemptFinalizationMutation:
+    """Bounded result of a conditional attempt terminal transition."""
+
+    transitioned: bool
+    terminal: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ReservationReleaseMutation:
+    """Bounded result of a conditional reservation release."""
+
+    transitioned: bool
+    status: str | None = None
 
 
 class AccountRepository:
@@ -362,7 +387,7 @@ class RequestRepository:
             ),
         )
 
-    async def finalize_if_pending(
+    async def finalize_if_pending_returning(
         self,
         request_id: str,
         status: str,
@@ -450,11 +475,11 @@ class RequestRepository:
         synthetic_cache_policy_name: str | None = None,
         synthetic_cache_policy_source: str | None = None,
         synthetic_cache_summary_json: str | None = None,
-    ) -> bool:
+    ) -> RequestFinalizationMutation:
         """Finalize a request only if it is still pending.
 
-        Returns True if the row was updated (transition performed),
-        False if the request was already terminal (idempotent).
+        Returns the resulting terminal status when the row was updated,
+        or a non-transition result when the request was already terminal.
 
         The cache-observability fields added by migration 0040 carry
         the provider-neutral usage shape from
@@ -469,7 +494,7 @@ class RequestRepository:
         segmentation should set ``segmentation_status = 'not_collected'``
         so the dashboard can distinguish it from an empty request.
         """
-        rowcount = await self._db.execute_write(
+        rows = await self._db.execute_returning(
             "UPDATE requests SET "
             "status = ?, completed_at = CURRENT_TIMESTAMP, "
             "input_tokens = ?, output_tokens = ?, cost_microdollars = ?, "
@@ -535,7 +560,8 @@ class RequestRepository:
             "synthetic_cache_policy_name = ?, "
             "synthetic_cache_policy_source = ?, "
             "synthetic_cache_summary_json = ? "
-            "WHERE id = ? AND status = 'pending'",
+            "WHERE id = ? AND status = 'pending' "
+            "RETURNING status",
             (
                 status,
                 input_tokens,
@@ -625,7 +651,17 @@ class RequestRepository:
                 request_id,
             ),
         )
-        return rowcount > 0
+        if not rows:
+            return RequestFinalizationMutation(transitioned=False)
+        return RequestFinalizationMutation(
+            transitioned=True,
+            status=str(rows[0]["status"]),
+        )
+
+    async def finalize_if_pending(self, *args: Any, **kwargs: Any) -> bool:
+        """Finalize a pending request, preserving the legacy bool contract."""
+        result = await self.finalize_if_pending_returning(*args, **kwargs)
+        return result.transitioned
 
     async def get_by_id(self, request_id: str) -> dict[str, Any] | None:
         """Fetch a request by id."""
@@ -678,18 +714,30 @@ class ReservationRepository:
         )
         return str(last_id)
 
-    async def release(self, reservation_id: str, reason: str) -> bool:
-        """Mark a reservation as released.
-
-        Returns True if a reservation was actually released.
-        """
-        rowcount = await self._db.execute_write(
+    async def release_returning(
+        self,
+        reservation_id: str,
+        reason: str,
+    ) -> ReservationReleaseMutation:
+        """Release an active reservation and return its resulting status."""
+        rows = await self._db.execute_returning(
             "UPDATE reservations SET status = 'released', "
             "released_at = CURRENT_TIMESTAMP, release_reason = ? "
-            "WHERE id = ? AND status = 'active'",
+            "WHERE id = ? AND status = 'active' "
+            "RETURNING status",
             (reason, reservation_id),
         )
-        return rowcount > 0
+        if not rows:
+            return ReservationReleaseMutation(transitioned=False)
+        return ReservationReleaseMutation(
+            transitioned=True,
+            status=str(rows[0]["status"]),
+        )
+
+    async def release(self, reservation_id: str, reason: str) -> bool:
+        """Mark a reservation as released, preserving the legacy bool contract."""
+        result = await self.release_returning(reservation_id, reason)
+        return result.transitioned
 
     async def get_status(self, reservation_id: str) -> str | None:
         """Return one reservation status, or ``None`` when it is missing."""
@@ -865,7 +913,7 @@ class AttemptRepository:
                 ),
             )
 
-    async def finalize_if_incomplete(
+    async def finalize_if_incomplete_returning(
         self,
         attempt_id: int,
         status_code: int | None = None,
@@ -878,17 +926,17 @@ class AttemptRepository:
         retry_category: str | None = None,
         release_reason: str | None = None,
         is_retry_outcome: bool = False,
-    ) -> bool:
+    ) -> AttemptFinalizationMutation:
         """Finalize an attempt only if it is still incomplete.
 
-        Returns True if the row was updated (transition performed).
-        When the transition occurs the attempt is also stamped as
-        the parent request's ``last_attempt_id`` so the trace
-        endpoint can resolve the winning attempt without scanning.
+        Returns whether the row transitioned and whether the attempt is
+        terminal. When the transition occurs the attempt is also stamped
+        as the parent request's ``last_attempt_id`` so the trace endpoint
+        can resolve the winning attempt without scanning.
         """
         retry_flag = 1 if is_retry_outcome else 0
         async with self._db.transaction():
-            rowcount = await self._db.execute_write(
+            rows = await self._db.execute_returning(
                 "UPDATE request_attempts SET "
                 "status_code = ?, error_class = ?, error_detail = ?, "
                 "upstream_request_id = ?, bytes_emitted = ?, "
@@ -896,7 +944,8 @@ class AttemptRepository:
                 "retry_category = ?, release_reason = ?, "
                 "is_retry_outcome = ?, "
                 "completed_at = CURRENT_TIMESTAMP "
-                "WHERE id = ? AND completed_at IS NULL",
+                "WHERE id = ? AND completed_at IS NULL "
+                "RETURNING completed_at",
                 (
                     status_code,
                     error_class,
@@ -911,14 +960,22 @@ class AttemptRepository:
                     attempt_id,
                 ),
             )
-            if rowcount > 0:
+            if rows:
                 await self._db.execute_write(
                     "UPDATE requests SET last_attempt_id = ? "
                     "WHERE id = (SELECT request_id FROM request_attempts "
                     "WHERE id = ?)",
                     (attempt_id, attempt_id),
                 )
-        return rowcount > 0
+        return AttemptFinalizationMutation(
+            transitioned=bool(rows),
+            terminal=bool(rows and rows[0]["completed_at"] is not None),
+        )
+
+    async def finalize_if_incomplete(self, *args: Any, **kwargs: Any) -> bool:
+        """Finalize an incomplete attempt, preserving the legacy bool contract."""
+        result = await self.finalize_if_incomplete_returning(*args, **kwargs)
+        return result.transitioned
 
     async def get_for_request(self, request_id: str) -> list[dict[str, Any]]:
         """Get all attempts for a request, ordered by attempt number."""

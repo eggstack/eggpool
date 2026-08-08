@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -17,6 +17,7 @@ from eggpool.db.repositories import (
 from eggpool.request.finalizer import (
     AttemptRuntimeLease,
     DurableFinalizationResult,
+    DurableTerminalConflictError,
     FinalizationData,
     FinalizationOutcome,
     RequestFinalizer,
@@ -246,6 +247,166 @@ class TestRequestFinalizerCostPrecedence:
             assert row["local_cost_exactness"] == "derived"
         finally:
             await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_first_finalization_avoids_convergence_selects() -> None:
+    """A first terminalization needs no read-after-write convergence queries."""
+    db, request_repo, attempt_repo, reservation_repo = await _fresh_finalizer_db()
+    try:
+        selected, _request_id = await _seed_request(
+            db,
+            request_repo,
+            attempt_repo,
+            reservation_repo,
+        )
+        finalizer = RequestFinalizer(
+            db=db,
+            request_repo=request_repo,
+            attempt_repo=attempt_repo,
+            reservation_repo=reservation_repo,
+        )
+
+        with patch.object(db, "fetch_one", wraps=db.fetch_one) as fetch_one:
+            result = await finalizer.finalize(
+                selected,
+                FinalizationData(
+                    outcome=FinalizationOutcome.COMPLETED,
+                    status_code=200,
+                    input_tokens=10,
+                    output_tokens=20,
+                ),
+            )
+
+        assert result.durable_converged
+        assert result.request_transitioned
+        assert result.attempt_transitioned
+        assert result.reservation_transitioned
+        fetch_one.assert_not_awaited()
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_finalization_falls_back_to_component_reads() -> None:
+    """A replay still reads each unchanged component to prove convergence."""
+    db, request_repo, attempt_repo, reservation_repo = await _fresh_finalizer_db()
+    try:
+        selected, _request_id = await _seed_request(
+            db,
+            request_repo,
+            attempt_repo,
+            reservation_repo,
+        )
+        finalizer = RequestFinalizer(
+            db=db,
+            request_repo=request_repo,
+            attempt_repo=attempt_repo,
+            reservation_repo=reservation_repo,
+        )
+        data = FinalizationData(
+            outcome=FinalizationOutcome.COMPLETED,
+            status_code=200,
+            input_tokens=10,
+            output_tokens=20,
+        )
+        first = await finalizer.finalize(selected, data)
+        assert first.durable_converged
+
+        with patch.object(db, "fetch_one", wraps=db.fetch_one) as fetch_one:
+            second = await finalizer.finalize(selected, data)
+
+        assert second.durable_converged
+        assert not second.request_transitioned
+        assert not second.attempt_transitioned
+        assert not second.reservation_transitioned
+        assert fetch_one.await_count == 3
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_partial_convergence_reads_terminal_request_and_expired_reservation() -> (
+    None
+):
+    """No-transition components retain focused reads for partial repair."""
+    db, request_repo, attempt_repo, reservation_repo = await _fresh_finalizer_db()
+    try:
+        selected, request_id = await _seed_request(
+            db,
+            request_repo,
+            attempt_repo,
+            reservation_repo,
+        )
+        async with db.transaction():
+            await db.execute_write(
+                "UPDATE requests SET status = 'completed', "
+                "completed_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (request_id,),
+            )
+            await db.execute_write(
+                "UPDATE reservations SET status = 'expired', "
+                "released_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (selected.reservation_id,),
+            )
+
+        finalizer = RequestFinalizer(
+            db=db,
+            request_repo=request_repo,
+            attempt_repo=attempt_repo,
+            reservation_repo=reservation_repo,
+        )
+        with patch.object(db, "fetch_one", wraps=db.fetch_one) as fetch_one:
+            result = await finalizer.finalize(
+                selected,
+                FinalizationData(
+                    outcome=FinalizationOutcome.COMPLETED,
+                    status_code=200,
+                ),
+            )
+
+        assert result.durable_converged
+        assert not result.request_transitioned
+        assert result.attempt_transitioned
+        assert not result.reservation_transitioned
+        assert fetch_one.await_count == 2
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_conflicting_terminal_identity_remains_rejected() -> None:
+    db, request_repo, attempt_repo, reservation_repo = await _fresh_finalizer_db()
+    try:
+        selected, _request_id = await _seed_request(
+            db,
+            request_repo,
+            attempt_repo,
+            reservation_repo,
+        )
+        finalizer = RequestFinalizer(
+            db=db,
+            request_repo=request_repo,
+            attempt_repo=attempt_repo,
+            reservation_repo=reservation_repo,
+        )
+        await finalizer.finalize(
+            selected,
+            FinalizationData(
+                outcome=FinalizationOutcome.COMPLETED,
+                status_code=200,
+            ),
+        )
+
+        with pytest.raises(DurableTerminalConflictError):
+            await finalizer.validate_terminal_identity(
+                selected,
+                FinalizationData(
+                    outcome=FinalizationOutcome.CLIENT_CANCELLED,
+                ),
+            )
+    finally:
+        await db.disconnect()
 
     @pytest.mark.asyncio
     async def test_estimated_local_cost_beats_higher_reservation_floor_regression(

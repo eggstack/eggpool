@@ -1,7 +1,7 @@
 # Plan 090 — Finalization Round-Trip Reduction
 
 Date: 2026-08-07
-Status: ready for implementation
+Status: complete
 Parent roadmap: `plans/086-sbc-routing-and-storage-efficiency-roadmap.md`
 Depends on: none
 Planning baseline: `d6c49dea5ed800bfcd22d95fe8c7943a29590125`
@@ -154,17 +154,31 @@ No benchmark gate is required. The focused test should prove the reduced applica
 
 ## Acceptance criteria
 
-- [ ] First request transition proves `request_terminal` from the mutation result without a follow-up request SELECT.
-- [ ] First attempt transition proves `attempt_terminal` from the mutation result without a follow-up attempt SELECT.
-- [ ] First reservation release proves `reservation_terminal` from the mutation result without a follow-up status SELECT.
-- [ ] No-transition/idempotent paths still read durable state as needed.
-- [ ] Conflicting terminal identity detection remains intact.
-- [ ] First-terminal data remains authoritative and cannot be overwritten by duplicate finalizers.
-- [ ] Request/attempt/reservation changes remain in one correctness transaction.
-- [ ] Runtime convergence still occurs only after durable convergence/commit.
-- [ ] Ambiguous/fatal database failures retain existing fail-closed behavior.
-- [ ] Focused tests prove the common-path DB call reduction.
-- [ ] Standard smoke gate passes.
+- [x] First request transition proves `request_terminal` from the mutation result without a follow-up request SELECT.
+- [x] First attempt transition proves `attempt_terminal` from the mutation result without a follow-up attempt SELECT.
+- [x] First reservation release proves `reservation_terminal` from the mutation result without a follow-up status SELECT.
+- [x] No-transition/idempotent paths still read durable state as needed.
+- [x] Conflicting terminal identity detection remains intact.
+- [x] First-terminal data remains authoritative and cannot be overwritten by duplicate finalizers.
+- [x] Request/attempt/reservation changes remain in one correctness transaction.
+- [x] Runtime convergence still occurs only after durable convergence/commit.
+- [x] Ambiguous/fatal database failures retain existing fail-closed behavior.
+- [x] Focused tests prove the common-path DB call reduction.
+- [x] Standard smoke gate passes.
+
+## Verification
+
+Focused terminal-owner, repository, database, and finalizer tests passed:
+
+```text
+uv run pytest tests/unit/test_request_finalizer.py tests/unit/test_finalizer_transaction_scope.py tests/unit/test_finalizer_reservation_regression.py -q --tb=short --maxfail=1  # 16 passed after partial/conflict coverage
+uv run pytest tests/unit/test_attempt_stats.py tests/integration/test_provider_cost_audit_columns.py tests/integration/test_reservation_expiry_race.py tests/unit/test_request_finalization_state_machine.py tests/unit/test_request_finalization_supervisor.py tests/integration/test_database_transaction_contract.py tests/unit/test_database_fault_matrix.py -q --tb=short --maxfail=1  # 98 passed
+```
+
+The standard local CI-equivalent gate also passed: frozen CI dependencies,
+Ruff format check, Ruff lint, Pyright, and the 14-test smoke suite. An
+unbounded repository-wide `pytest` invocation was stopped after several
+minutes without output; the changed-boundary and CI suites completed cleanly.
 
 ## Rejection conditions
 

@@ -158,6 +158,12 @@ before durable success, native invalid-JSON pass-through, and cancellation
 propagation. Run the focused coordinator/proxy/transcoder suites before the
 repository-wide CI gate.
 
+Finalization round-trip changes should run the request-finalizer, repository,
+attempt, reservation, transaction-failure, and retained-terminal-owner suites.
+The first-finalization regression should assert application-level convergence
+reads, while duplicate and partial-convergence cases must retain their focused
+fallback reads.
+
 ## Code Style
 
 - Python 3.11+ with `from __future__ import annotations` in all files

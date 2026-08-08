@@ -4484,6 +4484,19 @@ Before Plan 028, the non-streaming success path parsed the upstream response bod
 
 All diagnostic serialization (segmentation summary JSON, compression observation/result JSON, synthetic cache JSON, resolved policy JSON) is precomputed in `_precompute_finalization_diagnostics()` before the `BEGIN IMMEDIATE` transaction. The transaction only executes the DML statements. Best-effort account event enrichment runs after the correctness transaction commits.
 
+Conditional terminal mutations now use SQLite `RETURNING` results for the
+request, attempt, and reservation rows. A first transition therefore proves
+the resulting request status, attempt completion, and reservation release
+without read-after-write SELECTs. If a conditional mutation affects no row,
+the finalizer performs the existing focused read to distinguish an idempotent
+terminal component from incomplete durable state. The three mutations remain
+inside the same correctness transaction, and the legacy boolean repository
+methods remain available for callers that do not need the returned state.
+
+The focused regression coverage is in
+`tests/unit/test_request_finalizer.py`: it asserts zero convergence reads on
+the first finalization and three fallback reads on an identical replay.
+
 ### Tests
 
 - `tests/unit/test_plan_028_provider_bound_request.py` — lifecycle object, validity keys, payload mutation, segmentation caching

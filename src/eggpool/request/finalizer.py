@@ -624,7 +624,7 @@ class RequestFinalizer:
 
         async with self._db.transaction():
             # 3. Finalize request only if pending (idempotent)
-            transitioned = await self._request_repo.finalize_if_pending(
+            request_mutation = await self._request_repo.finalize_if_pending_returning(
                 request_id=db_request_id,
                 status=status,
                 status_code=data.status_code,
@@ -714,17 +714,21 @@ class RequestFinalizer:
                 synthetic_cache_policy_source=diag.synthetic_cache_policy_source,
                 synthetic_cache_summary_json=diag.synthetic_cache_summary_json,
             )
+            transitioned = request_mutation.transitioned
 
             # 4. Finalize attempt only if request transitioned and attempt
             #    is still incomplete (idempotent; preserves first terminal data)
-            request_row = await self._request_repo.get_by_id(db_request_id)
-            request_terminal = transitioned or bool(
-                isinstance(request_row, dict)
-                and request_row.get("status") in REQUEST_TERMINAL_STATUSES
-            )
+            if transitioned:
+                request_terminal = request_mutation.status in REQUEST_TERMINAL_STATUSES
+            else:
+                request_row = await self._request_repo.get_by_id(db_request_id)
+                request_terminal = bool(
+                    isinstance(request_row, dict)
+                    and request_row.get("status") in REQUEST_TERMINAL_STATUSES
+                )
             if request_terminal:
-                attempt_transitioned = bool(
-                    await self._attempt_repo.finalize_if_incomplete(
+                attempt_mutation = (
+                    await self._attempt_repo.finalize_if_incomplete_returning(
                         attempt_id=selected.attempt_id,
                         status_code=data.status_code,
                         error_class=data.error_class,
@@ -736,26 +740,35 @@ class RequestFinalizer:
                         or self._release_reason_for_outcome(data.outcome),
                     )
                 )
+                attempt_transitioned = attempt_mutation.transitioned
+                attempt_terminal = attempt_mutation.terminal
 
                 # 5. Release reservation
-                reservation_released = bool(
-                    await self._reservation_repo.release(
-                        selected.reservation_id, reason=status
+                reservation_mutation = await self._reservation_repo.release_returning(
+                    selected.reservation_id, reason=status
+                )
+                reservation_released = reservation_mutation.transitioned
+                if reservation_released:
+                    reservation_terminal = (
+                        reservation_mutation.status
+                        in self._reservation_repo.TERMINAL_STATUSES
                     )
-                )
+                else:
+                    reservation_status = await self._reservation_repo.get_status(
+                        selected.reservation_id
+                    )
+                    reservation_terminal = (
+                        reservation_status in self._reservation_repo.TERMINAL_STATUSES
+                    )
 
-                attempt_row = await self._attempt_repo.get_by_id(selected.attempt_id)
-                attempt_terminal = attempt_transitioned or bool(
-                    isinstance(attempt_row, dict)
-                    and attempt_row.get("completed_at") is not None
-                )
-                reservation_status = await self._reservation_repo.get_status(
-                    selected.reservation_id
-                )
-                reservation_terminal = reservation_released or reservation_status in {
-                    "released",
-                    "expired",
-                }
+                if not attempt_transitioned:
+                    attempt_row = await self._attempt_repo.get_by_id(
+                        selected.attempt_id
+                    )
+                    attempt_terminal = bool(
+                        isinstance(attempt_row, dict)
+                        and attempt_row.get("completed_at") is not None
+                    )
 
                 # 6. Insert account event for significant failures
                 if (

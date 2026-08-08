@@ -198,6 +198,15 @@ transition, so already-terminal durable state can still converge them.
 reservation convergence, and runtime cleanup. The coordinator submits and
 joins commands; it has no retained terminal registry or parallel capacity.
 
+The common first-finalization path uses the repository `..._returning()`
+variants for request, attempt, and reservation mutations. SQLite's returned
+terminal values prove convergence without read-after-write SELECTs. A
+conditional mutation that does not transition still falls back to the focused
+durable read needed for idempotent replay, partial convergence, and expired
+reservation handling. All three durable components remain in one correctness
+transaction; compatibility boolean repository methods remain for other
+callers.
+
 Before a durable identity exists, `RuntimePublicationReceipt` owns the
 provisional request/token claim and health probe. After persistence, publication
 converts the provisional load to the canonical reservation in one claim-lock
