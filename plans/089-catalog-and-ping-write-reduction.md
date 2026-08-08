@@ -183,18 +183,18 @@ A short manual SQLite/WAL observation may be recorded, but it is not a CI gate.
 
 ## Acceptance criteria
 
-- [ ] An unchanged successful catalog refresh does not rewrite all `models` rows.
-- [ ] An unchanged successful catalog refresh does not rewrite all `provider_model_metadata` rows.
-- [ ] Account-model support DML occurs only for changed relationships.
-- [ ] Semantic changes still persist correctly and atomically enough for current restart behavior.
-- [ ] Restart-safe catalog freshness no longer requires touching every semantic row each refresh.
-- [ ] Failed/partial/empty refresh behavior preserves prior support exactly as before.
-- [ ] Withdrawal policies retain existing semantics.
-- [ ] Repeated steady-state successful pings are durably recorded much less often than the model refresh cadence.
-- [ ] Provider/account failures remain immediately visible in durable diagnostics.
-- [ ] No new general metrics pipeline/background writer is introduced.
-- [ ] Write transactions contain precomputed delta DML rather than avoidable serialization/comparison work.
-- [ ] Focused catalog/ping tests and smoke gate pass.
+- [x] An unchanged successful catalog refresh does not rewrite all `models` rows.
+- [x] An unchanged successful catalog refresh does not rewrite all `provider_model_metadata` rows.
+- [x] Account-model support DML occurs only for changed relationships.
+- [x] Semantic changes still persist correctly and atomically enough for current restart behavior.
+- [x] Restart-safe catalog freshness no longer requires touching every semantic row each refresh.
+- [x] Failed/partial/empty refresh behavior preserves prior support exactly as before.
+- [x] Withdrawal policies retain existing semantics.
+- [x] Repeated steady-state successful pings are durably recorded much less often than the model refresh cadence.
+- [x] Provider/account failures remain immediately visible in durable diagnostics.
+- [x] No new general metrics pipeline/background writer is introduced.
+- [x] Write transactions contain precomputed delta DML rather than avoidable serialization/comparison work.
+- [x] Focused catalog/ping tests and smoke gate pass.
 
 ## Rejection conditions
 

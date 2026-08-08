@@ -1,7 +1,7 @@
 # Plan 086 — SBC Routing and Storage Efficiency Roadmap
 
 Date: 2026-08-07
-Status: ready for implementation
+Status: complete
 Planning baseline: `d6c49dea5ed800bfcd22d95fe8c7943a29590125`
 
 Implementation plans:
@@ -163,21 +163,28 @@ Child plans add focused unit/integration tests only for changed invariants. Perf
 
 ## Roadmap acceptance criteria
 
-- [ ] Account weight has one documented, implemented routing meaning; equal-weight behavior remains stable.
-- [ ] Concurrent selectors cannot ignore workload already claimed by another request during dispatch persistence.
-- [ ] Pending-claim failure/cancellation paths release their accounting exactly once.
-- [ ] SQLite remains outside the selection claim lock.
-- [ ] Unchanged catalog refreshes no longer rewrite the full semantic model/provider catalog.
-- [ ] Successful ping persistence is materially less frequent while provider errors remain visible.
-- [ ] Common first-finalization does not perform redundant request/attempt/reservation convergence SELECTs.
-- [ ] Duplicate/idempotent finalization still proves durable terminal state correctly.
-- [ ] Stale `_select_lock` state and obsolete lock documentation are removed.
-- [ ] Disabled optional features avoid unnecessary common-path construction/import work where removal is safe and measurable.
-- [ ] `DispatchPersistenceWriter` is either removed cleanly or retained with explicit existing evidence and a narrowly documented reason.
-- [ ] The core `requests` schema is declared frozen for optional diagnostics; no cosmetic migration is introduced.
-- [ ] WAL/NORMAL SQLite defaults, core dependencies, and the current one-job CI remain intact.
-- [ ] Focused tests and the existing smoke gate pass.
-- [ ] Closure uses existing diagnostics/manual tools and adds no benchmark/soak infrastructure.
+- [x] Account weight has one documented, implemented routing meaning; equal-weight behavior remains stable.
+- [x] Concurrent selectors cannot ignore workload already claimed by another request during dispatch persistence.
+- [x] Pending-claim failure/cancellation paths release their accounting exactly once.
+- [x] SQLite remains outside the selection claim lock.
+- [x] Unchanged catalog refreshes no longer rewrite the full semantic model/provider catalog.
+- [x] Successful ping persistence is materially less frequent while provider errors remain visible.
+- [x] Common first-finalization does not perform redundant request/attempt/reservation convergence SELECTs.
+- [x] Duplicate/idempotent finalization still proves durable terminal state correctly.
+- [x] Stale `_select_lock` state and obsolete lock documentation are removed.
+- [x] Disabled optional features avoid unnecessary common-path construction/import work where removal is safe and measurable.
+- [x] `DispatchPersistenceWriter` is removed cleanly with the existing evidence-based disposition recorded in Plan 091.
+- [x] The core `requests` schema is declared frozen for optional diagnostics; no cosmetic migration is introduced.
+- [x] WAL/NORMAL SQLite defaults, core dependencies, and the current one-job CI remain intact.
+- [x] Focused tests and the existing smoke gate pass.
+- [x] Closure uses existing diagnostics/manual tools and adds no benchmark/soak infrastructure.
+
+## Closure reference
+
+Plan 092 records the direct closure verification, ARM64 SBC host details,
+application-level write comparisons, and the explicit unmeasured runtime
+observations. The implementation tip before the closure documentation is
+commit `8564e4e`.
 
 ## Explicit non-goals
 

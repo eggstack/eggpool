@@ -1,7 +1,7 @@
 # Plan 092 — SBC Efficiency Closure
 
 Date: 2026-08-07
-Status: ready for implementation
+Status: complete
 Parent roadmap: `plans/086-sbc-routing-and-storage-efficiency-roadmap.md`
 Depends on:
 
@@ -179,21 +179,71 @@ Use `not measured` where necessary. Do not estimate missing values.
 
 ## Acceptance criteria
 
-- [ ] Plans 087–091 are complete with recorded focused verification.
-- [ ] Standard lint/type/smoke/config gates pass.
-- [ ] Weighted routing behaves according to documented relative-capacity semantics.
-- [ ] Pending claims are visible before SQLite commit and release/convert exactly once.
-- [ ] Provider/client/request-local failures still cannot poison later proxy operation.
-- [ ] Identical catalog refreshes avoid full semantic catalog rewrites.
-- [ ] Successful ping durability is coarser while failures remain immediate.
-- [ ] Common first-finalization avoids redundant convergence SELECTs.
-- [ ] Duplicate finalization and crash-repair semantics remain correct.
-- [ ] Lean default background task/thread/socket footprint is not increased by this roadmap.
-- [ ] Dispatch-writer disposition from Plan 091 is documented and consistent across config/code/docs/tests.
-- [ ] Core request-schema freeze is documented without a cosmetic migration.
-- [ ] No core dependency replacement, SQLite durability weakening, or CI expansion occurred.
-- [ ] Roadmap 086 is reconciled and marked complete only from direct evidence.
-- [ ] No permanent benchmark/soak infrastructure was added.
+- [x] Plans 087–091 are complete with recorded focused verification.
+- [x] Standard lint/type/smoke/config gates pass.
+- [x] Weighted routing behaves according to documented relative-capacity semantics.
+- [x] Pending claims are visible before SQLite commit and release/convert exactly once.
+- [x] Provider/client/request-local failures still cannot poison later proxy operation.
+- [x] Identical catalog refreshes avoid full semantic catalog rewrites.
+- [x] Successful ping durability is coarser while failures remain immediate.
+- [x] Common first-finalization avoids redundant convergence SELECTs.
+- [x] Duplicate finalization and crash-repair semantics remain correct.
+- [x] Lean default background task/thread/socket footprint is not increased by this roadmap.
+- [x] Dispatch-writer disposition from Plan 091 is documented and consistent across config/code/docs/tests.
+- [x] Core request-schema freeze is documented without a cosmetic migration.
+- [x] No core dependency replacement, SQLite durability weakening, or CI expansion occurred.
+- [x] Roadmap 086 is reconciled and marked complete only from direct evidence.
+- [x] No permanent benchmark/soak infrastructure was added.
+
+## Closure record
+
+The roadmap implementation tip before closure documentation is `8564e4e`
+(`Prune dormant dispatch writer and freeze request schema`). Closure/status
+reconciliation is committed separately after this record is added.
+
+| Check | Baseline | Final | Result |
+|---|---:|---:|---|
+| Identical-refresh semantic model/provider writes | full rewrite | 0 | pass; compact freshness state changed once |
+| Durable success pings per fixed refresh window | 1 per refresh | at most 1 per account/provider per 30 minutes | pass; failures/transitions remain immediate |
+| Common first-finalization convergence SELECTs | 3 | 0 | pass; duplicate/no-transition path retains 3 fallback reads |
+| Idle threads/tasks | not measured | not measured | no configured EggPool instance/corpus for safe observation |
+| Idle WAL growth over fixed refresh window | not measured | not measured | no configured EggPool instance/corpus |
+| Short request-corpus WAL growth | not measured | not measured | no configured EggPool instance/corpus |
+| Routing pending-claim visibility | absent | present | pass; deterministic blocked-persistence tests |
+| Weighted routing semantics | ineffective | effective | pass; deterministic scorer/router tests |
+
+Host: `rasp10`, ARM64/aarch64 Raspberry Pi kernel (`6.8.0-1060-raspi`),
+Python `3.12.3`. The SBC configuration was validated but no live provider
+credentials or request corpus were present, so process/RSS/socket/WAL samples
+were intentionally not fabricated. Existing runtime task/config tests confirm
+that disabled optional planes do not add their periodic tasks; the shipped SBC
+profile remains one server thread, one database worker, traces off, model-info
+and readiness off, with dashboard and daily backup enabled.
+
+Optional `orjson`: not enabled; dashboard: enabled in SBC template; routing
+traces: disabled; model-info: disabled; dispatch writer: removed; second stats
+connection: disabled. No new benchmark, soak suite, telemetry schema, or CI
+job was added.
+
+Exact commands and results:
+
+```text
+uv sync --frozen --extra ci                         # success
+uv run ruff format --check src/ tests/ scripts/     # 717 files formatted
+uv run ruff check src/ tests/ scripts/              # passed
+uv run pyright src/ scripts/                        # 0 errors, 0 warnings
+PYTHONHASHSEED=0 TZ=UTC uv run pytest tests/smoke/ -q --tb=short --maxfail=1  # 14 passed
+uv run eggpool --config config.example.toml check-config                       # passed
+uv run eggpool --config config.sbc.example.toml check-config                   # passed
+PYTHONHASHSEED=0 TZ=UTC uv run pytest <curated Plans 087–091 union> -q --tb=short --maxfail=1  # 790 passed, 1 warning
+```
+
+The curated union covered routing/quota/concurrency, catalog/ping/migration,
+finalization/repository/database, startup/config, runtime, and reload tests.
+The warning is the existing reload policy inventory warning; it is non-fatal.
+No correction was required by the closure checks. Plans 087–091 retain their
+focused commands and acceptance records, Plan 089's stale checklist is now
+reconciled, and Roadmap 086 is marked complete from this direct evidence.
 
 ## Rejection conditions
 
