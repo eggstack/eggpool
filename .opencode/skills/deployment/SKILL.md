@@ -80,10 +80,6 @@ For the hardened systemd unit:
 - Graceful shutdown: stops accepting new connections, waits for
   in-flight requests (up to 30s), closes connections, exits cleanly
 
-The dispatch persistence writer is process-owned and configured only under the
-top-level `[dispatch_writer]` section. It survives generation swaps and is
-restart-required when changed; `[database.dispatch_writer]` is not a supported
-configuration path.
 
 ---
 

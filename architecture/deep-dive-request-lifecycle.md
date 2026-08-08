@@ -102,7 +102,7 @@ The orchestrator. Wires together all lifecycle stages:
 
 - Receives `ProxyRequestContext` from endpoint handlers
 - Calls `Router.select_accounts_for_failover()` for routing
-- Persists dispatch bundles (via `DispatchPersistenceWriter` in Milestone C)
+- Persists the request/reservation/attempt bundle in one transaction
 - Builds upstream URL via `_get_upstream_url()` (provider contract)
 - Builds upstream headers via `_build_upstream_headers()` (provider contract)
 - Applies synthetic cache controls (post-route, Phase 9)
@@ -176,22 +176,6 @@ Cached JSON parse with derived state (model, tools, messages, etc.).
 ### `request/limits.py` — Request Limit Enforcement
 
 Enforces model context and output limits before dispatch.
-
-### `request/dispatch_intent.py` / `dispatch_writer.py`
-
-Milestone C durable dispatch write pipeline:
-- `DispatchIntent`: immutable intent object
-- `DispatchPersistenceWriter`: process-owned microbatching writer
-
-Dispatch persistence is a fail-closed boundary. The repository validates
-intents before `BEGIN` and either commits a complete request/reservation/
-attempt bundle or raises the transaction error. The writer fans that same
-failure to all batch waiters and does not count those intents as persisted.
-`PersistedDispatchResult` validates its durable IDs, and the coordinator
-validates them again before runtime quota/active ownership publication. The
-writer is single-loop only: `start()` captures the owner loop and submissions
-from another loop fail immediately.
-- No upstream request sent before dispatch bundle commit acknowledged
 
 ### `request/finalization_job.py` — RequestFinalizationSupervisor
 
@@ -288,4 +272,4 @@ Streaming usage accumulation across chunks.
 - Each attempt reservation released exactly once via `AttemptFinalizer`
 - Same URL composition rules for catalog fetch and chat dispatch
 - Selection-claim lock splits DB I/O from runtime publication (Milestone B)
-- Dispatch persistence is microbatched (Milestone C), not per-request transactional
+- Dispatch persistence is one direct per-request transaction

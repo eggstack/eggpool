@@ -1,6 +1,6 @@
-"""Phase 5 concurrency tests: selection lock correctness.
+"""Phase 5 concurrency tests: selection claim correctness.
 
-Verifies that concurrent dispatches through the selection lock produce
+Verifies that concurrent dispatches through the selection claim produce
 valid account selections, create reservations exactly once per attempt,
 publish and release active request counters correctly, and exclude
 attempted accounts on retry.

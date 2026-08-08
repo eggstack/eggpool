@@ -55,7 +55,6 @@ from eggpool.runtime_dispatch import (
     SPAN_DB_WRITE_RESERVATION,
     SPAN_DISPATCH_PERSISTENCE_COMMIT,
     SPAN_DISPATCH_PERSISTENCE_TRANSACTION,
-    SPAN_DISPATCH_PERSISTENCE_WAIT,
     SPAN_POST_COMMIT_COMPENSATION,  # noqa: F401  (registered; populated by compensation path)
     SPAN_POST_COMMIT_PUBLICATION,
     SPAN_RUNTIME_PUBLICATION,
@@ -210,7 +209,6 @@ async def test_claim_lock_held_spans_populated_per_attempt() -> None:
         assert SPAN_SELECTION_REVALIDATION in recorded
         assert SPAN_CIRCUIT_PROBE in recorded
         assert SPAN_ACCOUNT_LOOKUP in recorded
-        assert SPAN_DISPATCH_PERSISTENCE_WAIT in recorded
         assert SPAN_DISPATCH_PERSISTENCE_TRANSACTION in recorded
         assert SPAN_DISPATCH_PERSISTENCE_COMMIT in recorded
         assert SPAN_POST_COMMIT_PUBLICATION in recorded

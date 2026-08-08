@@ -103,7 +103,7 @@ class TestDispatchSpanRecorder:
             "json_parse",
             "segmentation",
             "compression_apply",
-            "selection_lock_wait",
+            "selection_claim_wait",
             "routing_plan",
         ):
             assert key in ALL_SPAN_KEYS

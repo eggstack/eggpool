@@ -9,7 +9,6 @@ Captures a reproducible fixed-load baseline for:
 6. CPU utilization
 7. RSS
 8. Event-loop lag p50/p95/p99
-9. Dispatch writer queue wait and batch size
 
 Additionally captures:
 - Reload prepare/commit/total latency
@@ -158,14 +157,6 @@ class TestComprehensiveBaseline:
         from eggpool.event_loop_lag import EventLoopLagMonitor
         from eggpool.health.health_manager import HealthManager
         from eggpool.request.coordinator import ProxyRequestContext, RequestCoordinator
-        from eggpool.request.dispatch_intent import (
-            DispatchIntent,
-            PersistedDispatchResult,
-        )
-        from eggpool.request.dispatch_writer import (
-            DispatchPersistenceWriter,
-            _QueuedIntent,
-        )
         from eggpool.routing.router import Router
 
         # -- Wire coordinator with recorders --
@@ -292,41 +283,6 @@ class TestComprehensiveBaseline:
 
         contention = perf_db.contention_snapshot()
 
-        # Dispatch writer metrics (separate test path — writer-enabled)
-        writer = DispatchPersistenceWriter(
-            perf_db, max_batch_size=32, max_batch_wait_ms=50.0
-        )
-        writer.start()
-
-        from concurrent.futures import Future as CFuture
-
-        futures: list[CFuture[PersistedDispatchResult]] = []
-        for i in range(25):
-            intent = DispatchIntent(
-                proxy_request_id=f"baseline-writer-{i}",
-                attempt_number=1,
-                account_id=1,
-                account_name="perf-acct",
-                provider_id="openai",
-                model_id="gpt-4",
-                protocol="openai",
-                streamed=False,
-                estimated_tokens=100,
-                estimated_microdollars=1_000,
-                started_at="2026-01-01T00:00:00Z",
-            )
-            future: CFuture[PersistedDispatchResult] = CFuture()
-            qi = _QueuedIntent(intent=intent, future=future)
-            writer._submitted_total += 1
-            await writer._enqueue_from_event_loop(qi)
-            futures.append(future)
-
-        await asyncio.gather(
-            *[asyncio.wait_for(asyncio.wrap_future(f), timeout=5.0) for f in futures]
-        )
-        writer_snap = writer.snapshot()
-        await writer.stop()
-
         # -- Reload timing --
         from tests.support.reload_harness import ReloadHarness
 
@@ -385,16 +341,6 @@ class TestComprehensiveBaseline:
                     "p99_ms": lag_snap.p99_ms,
                     "cadence_s": lag_snap.cadence_s,
                 },
-                "dispatch_writer": {
-                    "queue_depth": writer_snap.get("queue_depth", 0),
-                    "batch_count": writer_snap.get("batch_count", 0),
-                    "batch_size_max": writer_snap.get("batch_size_max", 0),
-                    "transaction_ms_p50": writer_snap.get("transaction_ms_p50", 0),
-                    "transaction_ms_p95": writer_snap.get("transaction_ms_p95", 0),
-                    "queue_age_ms_p50": writer_snap.get("queue_age_ms_p50", 0),
-                    "queue_age_ms_p95": writer_snap.get("queue_age_ms_p95", 0),
-                    "persisted_total": writer_snap.get("persisted_total", 0),
-                },
                 "reload_timing": {
                     "count": len(reload_times),
                     "p50_ms": sorted(reload_times)[len(reload_times) // 2],
@@ -404,8 +350,6 @@ class TestComprehensiveBaseline:
                 "dispatch_spans": dispatch_spans.snapshot_for_spans(
                     [
                         "routing_plan",
-                        "selection_lock_wait",
-                        "selection_locked",
                         "db_write_request",
                         "db_write_attempt",
                         "json_parse",
@@ -423,71 +367,10 @@ class TestComprehensiveBaseline:
         assert summary["metrics"]["throughput"]["rps"] > 0
         assert summary["metrics"]["cpu"]["process_time_s"] > 0
         assert summary["metrics"]["event_loop_lag"]["sample_count"] >= 1
-        assert summary["metrics"]["dispatch_writer"]["persisted_total"] == 25
         assert summary["metrics"]["reload_timing"]["count"] == 5
         assert summary["metrics"]["dispatch_spans"] is not None
 
         await httpx_client.aclose()
-
-
-class TestSQLiteContentionUnderLoad:
-    """Verify SQLite lock-wait remains bounded under concurrent writes."""
-
-    @pytest.mark.asyncio()
-    async def test_lock_wait_bounded_under_contention(
-        self,
-        perf_db: Any,  # noqa: ANN401
-    ) -> None:
-        from concurrent.futures import Future as CFuture
-
-        from eggpool.request.dispatch_intent import (
-            DispatchIntent,
-            PersistedDispatchResult,
-        )
-        from eggpool.request.dispatch_writer import (
-            DispatchPersistenceWriter,
-            _QueuedIntent,
-        )
-
-        writer = DispatchPersistenceWriter(
-            perf_db, max_batch_size=16, max_batch_wait_ms=50.0
-        )
-        writer.start()
-
-        count = 40
-        futures: list[CFuture[PersistedDispatchResult]] = []
-        for i in range(count):
-            intent = DispatchIntent(
-                proxy_request_id=f"contention-load-{i}",
-                attempt_number=1,
-                account_id=1,
-                account_name="perf-acct",
-                provider_id="openai",
-                model_id="gpt-4",
-                protocol="openai",
-                streamed=False,
-                estimated_tokens=100,
-                estimated_microdollars=1_000,
-                started_at="2026-01-01T00:00:00Z",
-            )
-            future: CFuture[PersistedDispatchResult] = CFuture()
-            qi = _QueuedIntent(intent=intent, future=future)
-            writer._submitted_total += 1
-            await writer._enqueue_from_event_loop(qi)
-            futures.append(future)
-
-        await asyncio.gather(
-            *[asyncio.wait_for(asyncio.wrap_future(f), timeout=10.0) for f in futures]
-        )
-
-        snap = perf_db.contention_snapshot()
-        await writer.stop()
-
-        # Lock wait must be bounded — no lock convoy
-        lock_wait_p95 = snap.get("lock_wait_p95_ms") or 0.0
-        assert lock_wait_p95 < 200.0, (
-            f"Lock wait p95 under contention: {lock_wait_p95:.1f}ms"
-        )
 
 
 class TestReloadLatencyBaseline:

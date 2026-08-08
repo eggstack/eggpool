@@ -362,7 +362,7 @@ async def test_db_snapshot_fields_and_modes(db: Database, tmp_path: Any) -> None
         "shm_size_bytes",
     ):
         assert key in db_info
-    assert db_info["configured_worker_threads"] == 2
+    assert db_info["configured_worker_threads"] == 1
 
     mem_config = AppConfig.from_dict(
         {

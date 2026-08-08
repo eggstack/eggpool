@@ -896,31 +896,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     app.state.metrics_coalescer = metrics_coalescer
     process.metrics_coalescer = metrics_coalescer
 
-    # 8. Process-owned DispatchPersistenceWriter.
-    # Created before the factory so process.dispatch_writer is
-    # available for the coordinator's dispatch wiring.
-    dispatch_writer = None
-    if config.dispatch_writer.enabled:
-        from eggpool.request.dispatch_writer import (  # noqa: PLC0415
-            DispatchPersistenceWriter,
-        )
-
-        dispatch_writer = DispatchPersistenceWriter(
-            db=db,
-            max_queue_depth=config.dispatch_writer.max_queue_depth,
-            max_batch_size=config.dispatch_writer.max_batch_size,
-            max_batch_wait_ms=config.dispatch_writer.max_batch_wait_ms,
-            low_pressure_batch_wait_ms=config.dispatch_writer.low_pressure_batch_wait_ms,
-            high_pressure_batch_wait_ms=config.dispatch_writer.high_pressure_batch_wait_ms,
-            enqueue_timeout_ms=config.dispatch_writer.enqueue_timeout_ms,
-            shutdown_drain_timeout_s=config.dispatch_writer.shutdown_drain_timeout_s,
-            sample_window=config.dispatch_writer.sample_window,
-        )
-        dispatch_writer.start()
-    process.dispatch_writer = dispatch_writer
-    app.state.dispatch_writer = dispatch_writer
-
-    # 9. Process-owned RoutingTraceWriter. Diagnostic trace
+    # 8. Process-owned RoutingTraceWriter. Diagnostic trace
     # infrastructure is absent when the effective trace policy is disabled.
     routing_trace_writer = None
     if config.routing.trace.mode != "off" and (
@@ -1133,7 +1109,6 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         routing_trace_guard=getattr(app.state, "routing_trace_guard", None),
         runtime_manager=None,  # wired in step 24 below
         process=process,
-        dispatch_writer=dispatch_writer,
         routing_trace_writer=routing_trace_writer,
         maintenance_state=app.state.maintenance_state,
         event_loop_lag_monitor=event_loop_lag_monitor,
@@ -1497,15 +1472,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                 await readiness_probe.stop()
             except Exception:
                 logger.exception("Error stopping readiness probe during shutdown")
-
-        # Drain the dispatch writer before closing the database so
-        # committed intents are not lost.
-        dispatch_writer: Any = getattr(app.state, "dispatch_writer", None)
-        if dispatch_writer is not None:
-            try:
-                await dispatch_writer.stop()
-            except Exception:
-                logger.exception("Error stopping dispatch writer during shutdown")
 
         routing_trace_writer: Any = getattr(app.state, "routing_trace_writer", None)
         if routing_trace_writer is not None:
@@ -1902,20 +1868,6 @@ def create_app(
                 status_code=503,
                 media_type="application/json",
             )
-
-        dispatch_writer: Any = getattr(request.app.state, "dispatch_writer", None)
-        if dispatch_writer is not None:
-            writer_state = getattr(dispatch_writer, "state", None)
-            if writer_state in ("closed", "draining"):
-                return Response(
-                    content=(
-                        '{"status":"degraded",'
-                        f'"reason":"dispatch writer {writer_state}"'
-                        "}"
-                    ),
-                    status_code=503,
-                    media_type="application/json",
-                )
 
         return Response(
             content='{"status":"ok"}',

@@ -82,18 +82,13 @@ All repositories in one module:
 
 Buffered analytics rollups for performance.
 
-### `db/dispatch_repository.py`
+### Direct dispatch persistence
 
-`persist_dispatch_bundles()` — durable dispatch write pipeline (Milestone C). Batches multiple dispatch intents in a single transaction.
-
-The dispatch repository validates every intent before opening the transaction.
-Its contract is binary: successful calls return one fully populated
-`PersistedDispatchResult` per input, in input order; statement, rollback, and
-unknown-commit failures raise and never return placeholder rows. A persisted
-result requires non-empty request and reservation IDs and a positive attempt ID.
-The writer propagates one failed-batch exception to every waiting caller, so
-failed intents do not increment persisted counters and later batches can
-continue after deterministic failures.
+`RequestCoordinator` creates the request, reservation, and attempt rows inside
+one caller-owned transaction outside the selection claim lock. Runtime
+ownership is published only after commit; statement, rollback, and ambiguous
+commit failures raise and release provisional ownership. No placeholder
+durable identity is returned.
 
 ### `db/migrations.py` — MigrationRunner
 
@@ -141,26 +136,40 @@ Schema migration execution. Ordered SQL files in `db/schema/`.
 
 ## Schema Evolution
 
+### Core request schema freeze
+
+The existing `requests` table is frozen for optional diagnostics. New columns
+are acceptable only for durable correctness/accounting facts required by
+request lifecycle, billing/usage truth, routing repair, or externally visible
+compatibility. Feature-specific diagnostics use an existing sparse
+diagnostic/event table or a narrowly scoped sidecar keyed by request ID;
+disabled features create no sidecar row. Sidecar data follows the existing
+retention and redaction policy. Do not introduce a generic EAV/property store.
+
+No migration is required to state this policy, and historical request columns
+are not split for cosmetic reasons.
+
 Migrations are additive and non-destructive:
 - New columns have sensible defaults
 - Legacy callers continue to work
 - Pre-migration rows render default values
 - Checksums tracked in `checksums.json`
 
-## Dispatch Persistence (Milestone C)
+## Dispatch Persistence
 
-Replaces per-request correctness-critical dispatch transactions with process-owned microbatching:
-1. Coordinator builds `DispatchIntent`
-2. Enqueues to `DispatchPersistenceWriter`
-3. Writer collects batches (bounded size + wait time)
-4. Single `db.transaction()` per batch via `persist_dispatch_bundles()`
-5. On failure, entire batch rolls back
-6. Each intent's future resolves with `PersistedDispatchResult`
+Direct persistence is the canonical request-boundary write path:
+
+1. The coordinator publishes provisional claim ownership.
+2. It opens one `db.transaction()` outside the claim lock.
+3. The transaction creates request, reservation, and attempt identities.
+4. Commit completes before runtime quota/active ownership is published.
+5. Failure rolls back durable rows and releases provisional ownership.
+
+No process-owned batching writer, queue, or dispatch-writer configuration is
+supported. SQLite connection serialization remains the database boundary.
 
 Key invariants:
 - No upstream request before dispatch bundle commit
-- Every intent receives exactly one outcome
-- Queue saturation fails closed
-- Isolated requests don't incur unconditional batching sleep
-- A dispatch writer is bound to the event loop captured by `start()`; cross-loop
-  submission is rejected rather than bridged.
+- Every request receives one durable request/reservation/attempt outcome
+- Transaction failure fails closed before upstream dispatch
+- Claim compensation releases provisional ownership exactly once

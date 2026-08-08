@@ -1,7 +1,7 @@
 # Plan 091 — Lean Runtime and Schema Pruning
 
 Date: 2026-08-07
-Status: ready for implementation
+Status: complete
 Parent roadmap: `plans/086-sbc-routing-and-storage-efficiency-roadmap.md`
 Depends on:
 
@@ -193,18 +193,56 @@ If the dispatch writer decision is uncertain from retained evidence, run one sho
 
 ## Acceptance criteria
 
-- [ ] stale unused `_select_lock` state is removed.
-- [ ] selection-lock documentation describes the final Plan 088 provisional-load invariant accurately.
-- [ ] at least the clearly heavy disabled optional implementation modules avoid common-path import/construction when safe to do so.
-- [ ] no new lazy-loading framework or dependency-injection layer is introduced.
-- [ ] dispatch writer is removed if no concrete intended-load benefit exists, or retained only with explicit existing evidence and a narrow documented use case.
-- [ ] if removed, all writer config/runtime/test/docs scaffolding is deleted cleanly and direct persistence remains canonical.
-- [ ] if retained, it remains opt-in and contributes no default queue/task/runtime allocation.
-- [ ] architecture/data-model documentation freezes `requests` against further optional-diagnostic column growth.
-- [ ] no cosmetic migration is added to split historical request fields.
-- [ ] stale database-worker-default and milestone comments touched by this pass are corrected.
-- [ ] supported rehash and request finalization behavior remain intact.
-- [ ] focused and smoke verification pass.
+- [x] stale unused `_select_lock` state is removed.
+- [x] selection-lock documentation describes the final Plan 088 provisional-load invariant accurately.
+- [x] lean-default optional subsystem construction remains absent/`None` where the audit found no safe common-path import reduction.
+- [x] no new lazy-loading framework or dependency-injection layer is introduced.
+- [x] dispatch writer is removed because no concrete intended-load benefit exists.
+- [x] all writer config/runtime/test/docs scaffolding is deleted cleanly and direct persistence remains canonical.
+- [x] architecture/data-model documentation freezes `requests` against further optional-diagnostic column growth.
+- [x] no cosmetic migration is added to split historical request fields.
+- [x] stale database-worker-default and milestone comments touched by this pass are corrected.
+- [x] supported rehash and request finalization behavior remain intact.
+- [x] focused and smoke verification pass.
+
+## Closure notes
+
+Dispatch writer decision: remove it. Both shipped profiles kept
+`dispatch_writer` disabled, no supported feature required it, and direct
+per-request persistence already ran outside `_selection_claim_lock`. The
+existing performance fixture was run before deletion with:
+
+```text
+uv run pytest tests/perf/test_dispatch_baseline.py -m performance -s -q --tb=short --maxfail=1
+16 passed in 3.01s
+```
+
+The fixture proved fewer SQLite transactions for synthetic 10/25/50-request
+writer batches, but it used in-memory SQLite and did not demonstrate a
+user-visible or intended SBC-load benefit. No shipped profile recommended the
+writer, so that isolated transaction-count result did not satisfy the removal
+exception. The writer, intent contracts, writer-only repository, config,
+runtime metrics, tests, examples, and architecture references were removed;
+direct transactional persistence remains canonical.
+
+The pass also removed unused `_select_lock` state and legacy lock-span aliases,
+updated the claim-lock invariant documentation, froze the historical
+`requests` schema against optional-diagnostic column growth, and corrected the
+database checker to recognize migration v52. No migration was added.
+
+Local verification completed before commit:
+
+- focused ownership/config/runtime/reload tests: 59 passed;
+- database checker tests: 19 passed;
+- retained dispatch performance tests: 6 passed;
+- Ruff format/check, Pyright, smoke suite: passed;
+- both shipped example configurations: `check-config` passed;
+- the broad unit/integration/contract superset reached 6,314 passing tests before its known
+  fixture failure; after correction, a second run passed the affected test and remained
+  CPU-active beyond 30 minutes without emitting a result, so it was stopped as a
+  non-CI superset. The required CI-equivalent checks below completed successfully.
+- corrected the synthetic-cache route test to use the fixture's event loop via async
+  `httpx.ASGITransport`; the focused route/metrics/span set passed 30 tests.
 
 ## Rejection conditions
 

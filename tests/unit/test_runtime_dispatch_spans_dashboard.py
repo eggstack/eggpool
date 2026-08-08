@@ -81,8 +81,8 @@ class TestDispatchSpansPanelPresentWithData:
             _make_span(
                 "compression_apply", sample_count=10, p50_ms=0.1, p95_ms=0.4, max_ms=0.9
             ),
-            _make_span("selection_lock_wait", sample_count=0),
-            _make_span("selection_locked", sample_count=0),
+            _make_span("selection_claim_wait", sample_count=0),
+            _make_span("selection_claim_held", sample_count=0),
             _make_span("routing_trace_write", sample_count=0),
         ]
         html = render_runtime(_make_snapshot(spans))
@@ -91,8 +91,8 @@ class TestDispatchSpansPanelPresentWithData:
         assert "Segmentation" in html
         assert "Compression analyze" in html
         assert "Compression apply" in html
-        assert "Selection lock wait" in html
-        assert "Selection locked" in html
+        assert "Selection claim wait" in html
+        assert "Selection claim held" in html
         assert "Routing trace write" in html
 
     def test_panel_present_with_sample_counts(self) -> None:
@@ -166,14 +166,14 @@ class TestDispatchSpansPresentSpansRenderP50P95Max:
                 "compression_apply", sample_count=5, p50_ms=0.05, p95_ms=0.1, max_ms=0.2
             ),
             _make_span(
-                "selection_lock_wait",
+                "selection_claim_wait",
                 sample_count=5,
                 p50_ms=0.01,
                 p95_ms=0.02,
                 max_ms=0.03,
             ),
             _make_span(
-                "selection_locked",
+                "selection_claim_held",
                 sample_count=5,
                 p50_ms=0.01,
                 p95_ms=0.02,
@@ -220,14 +220,14 @@ class TestDispatchSpansPresentSpansRenderP50P95Max:
                 max_ms=None,
             ),
             _make_span(
-                "selection_lock_wait",
+                "selection_claim_wait",
                 sample_count=10,
                 p50_ms=None,
                 p95_ms=None,
                 max_ms=None,
             ),
             _make_span(
-                "selection_locked",
+                "selection_claim_held",
                 sample_count=10,
                 p50_ms=None,
                 p95_ms=None,
@@ -254,8 +254,8 @@ class TestDispatchSpansPanelIncludesActionableSpans:
             _make_span("segmentation", sample_count=5),
             _make_span("compression_analyze", sample_count=5),
             _make_span("compression_apply", sample_count=5),
-            _make_span("selection_lock_wait", sample_count=5),
-            _make_span("selection_locked", sample_count=5),
+            _make_span("selection_claim_wait", sample_count=5),
+            _make_span("selection_claim_held", sample_count=5),
             _make_span("routing_trace_write", sample_count=5),
         ]
         html = _render_dispatch_spans_panel(spans)
@@ -269,8 +269,8 @@ class TestDispatchSpansPanelIncludesActionableSpans:
             _make_span("segmentation", sample_count=0),
             _make_span("compression_analyze", sample_count=0),
             _make_span("compression_apply", sample_count=0),
-            _make_span("selection_lock_wait", sample_count=0),
-            _make_span("selection_locked", sample_count=0),
+            _make_span("selection_claim_wait", sample_count=0),
+            _make_span("selection_claim_held", sample_count=0),
             _make_span("routing_trace_write", sample_count=0),
         ]
         html = _render_dispatch_spans_panel(spans)
@@ -498,6 +498,6 @@ class TestDispatchSpansDashboardEndToEnd:
         for label in _DISPATCH_SPAN_LABELS.values():
             assert label in html, f"Missing actionable span label: {label}"
         # The three populated spans show numeric ms; the four zero-sample
-        # actionable spans (``compression_analyze``, ``selection_lock_wait``,
-        # ``selection_locked``, ``routing_trace_write``) show ``not observed``.
+        # actionable spans (``compression_analyze``, ``selection_claim_wait``,
+        # ``selection_claim_held``, ``routing_trace_write``) show ``not observed``.
         assert html.count("not observed in recent window") == 4

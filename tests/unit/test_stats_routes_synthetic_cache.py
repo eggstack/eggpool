@@ -5,9 +5,10 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, Any
 
+import httpx
+import pytest
 import pytest_asyncio
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
 from eggpool.dashboard.routes import register_dashboard_routes
 from eggpool.db.connection import Database
@@ -18,8 +19,6 @@ from eggpool.stats import StatsService
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
-
-    import pytest
 
 
 def _build_config(
@@ -86,16 +85,20 @@ async def app_with_key(db: Database, monkeypatch: pytest.MonkeyPatch) -> FastAPI
     return app
 
 
+@pytest.mark.asyncio
 class TestSyntheticCacheObservabilityEndpoint:
     """GET /api/stats/synthetic-cache-observability returns expected shape."""
 
-    def test_returns_200_with_auth(self, app_with_key: FastAPI) -> None:
+    async def test_returns_200_with_auth(self, app_with_key: FastAPI) -> None:
         """The endpoint returns 200 with valid JSON shape."""
-        client = TestClient(app_with_key)
-        response = client.get(
-            "/api/stats/synthetic-cache-observability",
-            headers={"Authorization": "Bearer test-key-12345678"},
-        )
+        transport = httpx.ASGITransport(app=app_with_key)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            response = await client.get(
+                "/api/stats/synthetic-cache-observability",
+                headers={"Authorization": "Bearer test-key-12345678"},
+            )
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("application/json")
         data = response.json()
@@ -106,37 +109,48 @@ class TestSyntheticCacheObservabilityEndpoint:
         assert isinstance(data["status_counts"], dict)
         assert isinstance(data["by_policy"], list)
 
-    def test_empty_db_has_stable_shape(self, app_with_key: FastAPI) -> None:
+    async def test_empty_db_has_stable_shape(self, app_with_key: FastAPI) -> None:
         """An empty DB returns the full response shape with zeros."""
-        client = TestClient(app_with_key)
-        response = client.get(
-            "/api/stats/synthetic-cache-observability",
-            headers={"Authorization": "Bearer test-key-12345678"},
-        )
+        transport = httpx.ASGITransport(app=app_with_key)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            response = await client.get(
+                "/api/stats/synthetic-cache-observability",
+                headers={"Authorization": "Bearer test-key-12345678"},
+            )
         data = response.json()
         assert data["total_requests"] == 0
         assert "status_counts" in data
         assert "by_policy" in data
 
-    def test_routing_separation_notice_content(self, app_with_key: FastAPI) -> None:
+    async def test_routing_separation_notice_content(
+        self, app_with_key: FastAPI
+    ) -> None:
         """The routing-separation notice is always present."""
-        client = TestClient(app_with_key)
-        response = client.get(
-            "/api/stats/synthetic-cache-observability",
-            headers={"Authorization": "Bearer test-key-12345678"},
-        )
+        transport = httpx.ASGITransport(app=app_with_key)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            response = await client.get(
+                "/api/stats/synthetic-cache-observability",
+                headers={"Authorization": "Bearer test-key-12345678"},
+            )
         data = response.json()
         notice = data["routing_separation_notice"]
         assert "QuotaFairScorer" in notice
         assert "reporting only" in notice.lower() or "Reporting only" in notice
 
-    def test_no_raw_content_in_response(self, app_with_key: FastAPI) -> None:
+    async def test_no_raw_content_in_response(self, app_with_key: FastAPI) -> None:
         """No raw prompts or auth headers leak into the JSON response."""
-        client = TestClient(app_with_key)
-        response = client.get(
-            "/api/stats/synthetic-cache-observability",
-            headers={"Authorization": "Bearer test-key-12345678"},
-        )
+        transport = httpx.ASGITransport(app=app_with_key)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            response = await client.get(
+                "/api/stats/synthetic-cache-observability",
+                headers={"Authorization": "Bearer test-key-12345678"},
+            )
         import json
 
         body = json.dumps(response.json())

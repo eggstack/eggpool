@@ -1572,7 +1572,6 @@ class TestMemoryDbGracefulDegradation:
             routing_trace_guard=None,
             runtime_manager=None,
             process=MagicMock(),
-            dispatch_writer=None,
             routing_trace_writer=None,
         )
 

@@ -25,17 +25,16 @@ Run with::
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
-import pytest
+if TYPE_CHECKING:
+    import pytest
 
 from eggpool.runtime_dispatch import (
     SPAN_COMPRESSION_ANALYZE,
     SPAN_COMPRESSION_APPLY,
     SPAN_ROUTING_TRACE_WRITE,
-    SPAN_SELECTION_LOCK_WAIT,
-    SPAN_SELECTION_LOCKED,
     DispatchSpanRecorder,
 )
 from eggpool.transcoder.compression.apply import (
@@ -125,41 +124,6 @@ class TestSafeModeDoesNotInvokeAnalyzer:
                 policy=_noop_policy(),
             )
             assert mocked.call_count == 0
-
-
-class TestLockSpanAccounting:
-    """Lock wait / lock held must record exactly one sample per attempt.
-
-    Phase 5 polish removed the placeholder ``_maybe_span`` wrappers inside
-    ``_select_and_persist_attempt`` so the wait span no longer records a
-    near-zero dummy sample in addition to the real measurement.
-    """
-
-    def test_lock_spans_record_exactly_one_sample_per_attempt(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Each success path produces exactly one sample per lock span.
-
-        This is the high-level behavioral invariant.  Detailed coverage
-        lives in ``tests/unit/test_coordinator_lock_scope.py`` which uses
-        the lower-level fixture machinery; this test exists to flag a
-        regression at the hot-path guard level even when the dedicated
-        fixture is refactored.
-        """
-        recorder = DispatchSpanRecorder()
-        # Manually simulate the post-lock recording path that the
-        # coordinator performs.  If the impl regresses to record both a
-        # placeholder and a real sample, this will skip the duplicate.
-        recorder.record_ns(SPAN_SELECTION_LOCK_WAIT, 500_000)  # 0.5 ms
-        recorder.record_ns(SPAN_SELECTION_LOCKED, 1_500_000)  # 1.5 ms
-        snap = recorder.snapshot_for_spans(
-            [SPAN_SELECTION_LOCK_WAIT, SPAN_SELECTION_LOCKED]
-        )
-        rows = {row["span"]: row for row in snap["spans"]}
-        assert rows[SPAN_SELECTION_LOCK_WAIT]["sample_count"] == 1
-        assert rows[SPAN_SELECTION_LOCKED]["sample_count"] == 1
-        assert rows[SPAN_SELECTION_LOCK_WAIT]["avg_ms"] == pytest.approx(0.5)
-        assert rows[SPAN_SELECTION_LOCKED]["avg_ms"] == pytest.approx(1.5)
 
 
 class TestRoutingTraceSpanAbsentWhenDisabled:

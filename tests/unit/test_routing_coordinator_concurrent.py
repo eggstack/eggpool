@@ -843,7 +843,7 @@ class TestExplainAccountEligibility:
 
 
 class TestInFlightPenaltyPropagation:
-    """Reservations are visible to subsequent scorers via the lock fix."""
+    """Reservations are visible to subsequent scorers via claim publication."""
 
     @pytest.mark.asyncio()
     async def test_inflight_penalty_visible_to_next_selector(self) -> None:
@@ -881,21 +881,21 @@ class TestInFlightPenaltyPropagation:
 
 
 class TestPublishOrdering:
-    """Lock/transaction nesting guarantees for the cleanup pass.
+    """Transaction/publication ordering guarantees for the cleanup pass.
 
     These tests assert the invariant introduced by Phase 1 of the
     cleanup plan: the durable selection transaction commits BEFORE
     the runtime publication step (``increment_active_request_count`` +
     ``add_reservation``), AND that publication runs BEFORE
-    ``_select_lock`` releases.  The earlier compound-context shape
-    (``async with self._select_lock, self._db.transaction():``)
+    claim publication completes. The earlier compound-context shape
+    (``async with claim_lock, self._db.transaction():``)
     published while the SQLite transaction was still open; if the
     transaction defers commit visibility until exit (which it does
     per ``Database.transaction``), the publication would see no
     durable rows for the just-selected attempt.
 
     Phase 5: the routing-decision trace is observability data and is
-    written AFTER ``_select_lock`` releases (and therefore after
+    written AFTER claim publication completes (and therefore after
     publication).  A trace-write failure cannot fail dispatch.  The
     three correctness-critical rows (request, reservation, attempt)
     are still durably visible at publication time.
@@ -997,7 +997,7 @@ class TestPublishOrdering:
             await fixture.db.disconnect()
 
     @pytest.mark.asyncio()
-    async def test_select_lock_released_only_after_runtime_publication(
+    async def test_claim_lock_released_only_after_runtime_publication(
         self,
     ) -> None:
         """A concurrent selector must not be able to enter the
@@ -1007,7 +1007,7 @@ class TestPublishOrdering:
         We hold the publication step on an ``asyncio.Event`` so we
         can deterministically interleave a second selector against
         the first. The second selector must block on
-        ``_select_lock`` until the first selector's publication is
+        the claim lock until the first selector's publication is
         released; once released, the second selector must observe
         the first selector's contributions.
         """
@@ -1060,9 +1060,9 @@ class TestPublishOrdering:
             await asyncio.sleep(0)
             await asyncio.sleep(0)
             # The second task should still be blocked waiting on
-            # _select_lock while we hold publication.
+            # the claim lock while we hold publication.
             assert not second_task.done(), (
-                "second selector entered _select_lock before first "
+                "second selector entered the claim phase before first "
                 "publication completed"
             )
             # Release the first selector's publication.

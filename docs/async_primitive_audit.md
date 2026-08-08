@@ -20,7 +20,6 @@ are safe across any thread.
 
 | Primitive | Module | Creating Loop | Consuming Loops | Ownership | Cross-Loop Safety | Shutdown |
 |-----------|--------|---------------|-----------------|-----------|-------------------|----------|
-| `_select_lock` | `coordinator.py:625` | event loop | event loop | generation | `asyncio.Lock` (loop-bound) | cleared on generation swap |
 | `_selection_claim_lock` | `coordinator.py:626` | event loop | event loop | generation | `asyncio.Lock` (loop-bound) | cleared on generation swap |
 | `router._active_count_lock` | `router.py:224` | event loop | event loop | generation | `asyncio.Lock` (loop-bound) | cleared on generation swap |
 | `router._missing_account_recovery_lock` | `router.py:242` | event loop | event loop | generation | `asyncio.Lock` (loop-bound) | cleared on generation swap |

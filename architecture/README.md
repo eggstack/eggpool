@@ -99,7 +99,7 @@ The ordinary generated configuration is deliberately local and low-wear:
 loopback binding, one SQLite worker, provider pools of 16 connections/4
 keepalives, background outbound pools of 8/2 when needed, low-wear analytics,
 and no routing traces, detailed spans, model-info enrichment, readiness probe,
-DNS cache, automatic backup, dispatch writer, event-loop lag monitor, or
+DNS cache, automatic backup, event-loop lag monitor, or
 background PyPI checker. `eggpool onboard` makes LAN binding an explicit
 interactive choice and keeps loopback for noninteractive runs.
 
@@ -1929,9 +1929,8 @@ Interpretation:
 `RequestCoordinator._select_and_persist_attempt()` is split into three
 phases so database I/O can never convoy other selectors through the
 selection critical section. The narrow
-`RequestCoordinator._selection_claim_lock` provides the narrow critical
-section alongside the broader `_select_lock`, with two
-acquisitions per attempt:
+`RequestCoordinator._selection_claim_lock` provides the claim critical
+section with two acquisitions per attempt:
 
 1. **Phase A** — first acquisition of `_selection_claim_lock`. The
    coordinator revalidates the circuit breaker (`SPAN_CIRCUIT_PROBE`),
@@ -1946,9 +1945,7 @@ acquisitions per attempt:
    `async with self._db.transaction():` and inserts the request,
    reservation, and attempt rows. Because the coordinator lock is
    not held here, a SQLite waiter can no longer convoy other
-   selectors; the broader `_select_lock` (if any concurrent reader
-   uses it) stays free. The helper reports
-   `SPAN_DISPATCH_PERSISTENCE_WAIT` /
+   selectors; SQLite persistence is never performed while the claim lock is held. The helper reports
    `SPAN_DISPATCH_PERSISTENCE_TRANSACTION` /
    `SPAN_DISPATCH_PERSISTENCE_COMMIT`.
 3. **Phase C** — second acquisition of `_selection_claim_lock`. The
@@ -1961,11 +1958,9 @@ acquisitions per attempt:
    runtime state and the freshly-stamped attempted-account history.
 
 `SPAN_SELECTION_CLAIM_HELD` is recorded once per acquisition via the
-`_maybe_span` placeholder. The legacy `SPAN_SELECTION_LOCK_WAIT` /
-`SPAN_SELECTION_LOCKED` spans continue to fire (recorded once at the
-end of the call) so historical dashboards stay comparable, but the
-new selection-claim spans are the authoritative timing source for
-operators looking to spot a contended lock on a hot path.
+`_maybe_span` placeholder. The claim-lock spans are the authoritative
+timing source for operators looking to spot contention on the two narrow
+runtime-publication critical sections.
 
 The compensation chain (`_compensate_or_rollback_claim` → release any
 unconverted provisional load → `decrement` → finalize-as-cancelled → release health slot →
@@ -1984,94 +1979,14 @@ Process-local diagnostics live on `SelectionClaimDiagnostics`
 `claim_lock_wait_overflows` / `claim_lock_wait_recent`
 (`{sample_count, p50_ms, p95_ms, p99_ms, max_ms}`).
 
-#### Pre-milestone-B ordering (Phase 5 reference)
+#### Durable dispatch persistence
 
-The pre-milestone-B lock held `_select_lock` across BOTH the durable
-transaction (`request_attempts` + `routing_decisions` INSERT inside
-`async with self._db.transaction():`) AND the runtime publication
-step (`Router.increment_active_request_count` +
-`QuotaEstimator.add_reservation`). The publication ran AFTER the
-transaction committed but BEFORE the lock released, so a concurrent
-selector that entered the lock next observed this attempt's runtime
-state. The publish was fast (in-process counter + cache mutation),
-so the lock-hold stayed tight while still closing the burst-skew race
-previously caused by publishing inside the transaction body.
-
-The two contexts were written as explicit nested `async with` blocks
-(outer `_select_lock`, inner `_db.transaction()`) — NOT as a compound
-`async with self._select_lock, self._db.transaction():`. A compound
-form would still exit right-to-left (transaction commits before the
-lock releases), so context-exit order alone was not the invariant.
-The actual bug was that the runtime publication block lived INSIDE
-the transaction body; active-count and reserved-cost state were
-therefore published before the transaction committed. The explicit
-nested form made it hard to accidentally place publication inside
-the transaction while still keeping publication under `_select_lock`.
-The key invariant was block placement (publication must be outside
-the DB transaction body but still inside `_select_lock`), not
-context-exit order. Milestone B replaces this with two narrow
-acquisitions of `_selection_claim_lock` so DB I/O never holds the
-coordinator lock at all.
-
-#### Milestone C: durable dispatch write pipeline
-
-Milestone C replaces per-request correctness-critical dispatch
-transactions with a process-owned, bounded in-process persistence
-pipeline.  A `DispatchPersistenceWriter` (attached to
-`ProcessRuntime`, survives generation swaps) collects immutable
-`DispatchIntent` objects from concurrent coordinators and persists
-them in microbatches.
-
-Core flow:
-
-1. Coordinator builds a `DispatchIntent` after routing and selection.
-2. Coordinator enqueues the intent to the process-owned writer via
-   `submit_intent()`, which returns a `Future[PersistedDispatchResult]`.
-3. The writer's single drain task collects intents, forming batches
-   up to `max_batch_size` with a bounded `max_batch_wait_ms` wait.
-4. Batch persistence runs in a single `db.transaction()` via
-   `persist_dispatch_bundles()`.  On failure, the entire batch
-   rolls back.
-5. Each successful intent's future resolves with a
-   `PersistedDispatchResult` carrying durable IDs.
-6. The coordinator receives the result, publishes runtime state,
-   and proceeds with upstream dispatch.
-
-The repository contract is binary: it returns a same-order list of fully
-validated durable results or raises. It never returns placeholder IDs after a
-rollback. `PersistedDispatchResult` requires non-empty request/reservation IDs
-and a positive attempt ID; the coordinator validates the result again before
-publishing runtime ownership. The writer fans one batch exception to every
-waiter and leaves failed intents out of persisted counters. It is bound to the
-event loop captured by `start()` and rejects cross-loop submission.
-
-Key invariants:
-- No upstream request is sent before its own dispatch bundle commit
-  is acknowledged.
-- Every accepted intent receives exactly one success or failure
-  outcome.
-- Queue saturation fails closed before upstream dispatch and is
-  visible in diagnostics.
-- Isolated requests do not incur an unconditional batching sleep.
-- Caller cancellation cannot cancel unrelated batch members.
-
-The writer is process-owned (on `ProcessRuntime`, not
-`RuntimeGeneration`) and is not duplicated by live rehash.
-Configuration lives under the top-level `[dispatch_writer]` section with all
-fields restart-required; `[database.dispatch_writer]` is not a supported
-configuration path. Runtime diagnostics are exposed via
-`/api/stats/runtime` `dispatch_writer` (queue depth, batch sizes,
-timing, error counts).  All sample storage uses bounded
-`deque(maxlen=sample_window)`; snapshot p95 remains stable after
-1M synthetic batches (Plan 029).
-
-New modules:
-- `src/eggpool/request/dispatch_intent.py` — immutable
-  `DispatchIntent`, `PersistedDispatchResult`, and error classes.
-- `src/eggpool/db/dispatch_repository.py` — repository-level
-  bundle persistence (`persist_dispatch_bundles`).
-- `src/eggpool/request/dispatch_writer.py` — process-owned
-  `DispatchPersistenceWriter` with adaptive microbatching.
+Each request persists its request, reservation, and attempt rows in one
+caller-owned `async with db.transaction():` before upstream dispatch. The
+transaction runs outside `_selection_claim_lock`; a successful commit returns
+validated durable identities, while any statement, rollback, or ambiguous
+commit failure raises and releases the provisional claim. There is no
+process-owned batching queue or optional dispatch persistence configuration.
 
 ### Score components and eligibility diagnostics
 

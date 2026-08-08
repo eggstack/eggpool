@@ -150,7 +150,6 @@ from eggpool.runtime_dispatch import (
     SPAN_DB_WRITE_RESERVATION,
     SPAN_DISPATCH_PERSISTENCE_COMMIT,  # type: ignore[reportUnusedImport]  # noqa: F401
     SPAN_DISPATCH_PERSISTENCE_TRANSACTION,  # type: ignore[reportUnusedImport]  # noqa: F401
-    SPAN_DISPATCH_PERSISTENCE_WAIT,  # type: ignore[reportUnusedImport]  # noqa: F401
     SPAN_POST_COMMIT_COMPENSATION,  # type: ignore[reportUnusedImport]  # noqa: F401
     SPAN_POST_COMMIT_PUBLICATION,  # type: ignore[reportUnusedImport]  # noqa: F401
     SPAN_RESERVATION_ESTIMATE,
@@ -160,8 +159,6 @@ from eggpool.runtime_dispatch import (
     SPAN_RUNTIME_PUBLICATION,
     SPAN_SELECTION_CLAIM_HELD,  # type: ignore[reportUnusedImport]  # noqa: F401
     SPAN_SELECTION_CLAIM_WAIT,  # type: ignore[reportUnusedImport]  # noqa: F401
-    SPAN_SELECTION_LOCK_WAIT,
-    SPAN_SELECTION_LOCKED,
     SPAN_SELECTION_REVALIDATION,  # type: ignore[reportUnusedImport]  # noqa: F401
     SPAN_THINKING_CLASSIFICATION,
     DispatchSpanRecorder,
@@ -182,7 +179,6 @@ if TYPE_CHECKING:
     from eggpool.health.health_manager import HealthManager
     from eggpool.models.config import AppConfig
     from eggpool.quota.estimation import QuotaEstimator
-    from eggpool.request.dispatch_intent import DispatchIntent
     from eggpool.routing.router import Router
     from eggpool.transcoder.policy import TranscoderPolicy
     from eggpool.transcoder.prepared import PreparedTranscode
@@ -670,8 +666,6 @@ class RequestCoordinator:
         routing_trace_enabled: bool = True,
         routing_trace_writer: Any | None = None,  # noqa: ANN401
         selection_claim_diagnostics: SelectionClaimDiagnostics | None = None,
-        dispatch_writer: Any | None = None,  # noqa: ANN401
-        use_dispatch_writer: bool = False,
         effects_applier: EffectsApplier | None = None,
         quarantine: ModelQuarantine | None = None,
         account_identities: dict[str, AccountRuntimeIdentity] | None = None,
@@ -695,7 +689,6 @@ class RequestCoordinator:
         self._cost_calculator = cost_calculator
         self._quota_estimator = quota_estimator
         self._classifier = RetryClassifier()
-        self._select_lock = asyncio.Lock()
         self._selection_claim_lock = asyncio.Lock()
         self._selection_claim_diagnostics = (
             selection_claim_diagnostics
@@ -735,8 +728,6 @@ class RequestCoordinator:
             routing_trace_guard = get_routing_trace_guard()
         self._routing_trace_guard = routing_trace_guard
         self._routing_trace_writer = routing_trace_writer
-        self._dispatch_writer = dispatch_writer
-        self._use_dispatch_writer = use_dispatch_writer and dispatch_writer is not None
 
         # Plan 025: typed failure effects applier + bounded quarantine.
         # The factory constructs and injects these; legacy tests may
@@ -1829,84 +1820,6 @@ class RequestCoordinator:
         self._selection_claim_diagnostics.record_claim_committed()
         return db_request_id, reservation_id, attempt_id
 
-    def _build_dispatch_intent(
-        self,
-        *,
-        context: ProxyRequestContext,
-        claim_identity: _ClaimIdentity,
-        estimated_tokens: int,
-        attempt_number: int,
-    ) -> DispatchIntent:
-        """Build an immutable :class:`DispatchIntent` from the coordinator context.
-
-        Called by the writer-delegated Phase B path to construct the
-        persistence intent that flows through the microbatching pipeline.
-        """
-        from eggpool.request.dispatch_intent import (  # noqa: PLC0415
-            DispatchIntent,
-        )
-
-        return DispatchIntent(
-            proxy_request_id=context.request_id,
-            attempt_number=attempt_number,
-            account_id=claim_identity.account_id,
-            account_name=claim_identity.account_name,
-            provider_id=claim_identity.resolved_provider_id,
-            model_id=context.model_id,
-            protocol=context.protocol,
-            streamed=context.streaming,
-            estimated_tokens=estimated_tokens,
-            estimated_microdollars=claim_identity.estimated_microdollars,
-            started_at=str(context.started_at),
-            client_ip=context.client_ip or None,
-            existing_db_request_id=context.client_metadata.get("db_request_id"),
-        )
-
-    async def _persist_dispatch_bundle_via_writer(
-        self,
-        *,
-        context: ProxyRequestContext,
-        claim_identity: _ClaimIdentity,
-        estimated_tokens: int,
-        attempt_number: int,
-    ) -> tuple[str, str, int]:
-        """Delegate Phase B persistence to the process-owned writer.
-
-        Builds a :class:`DispatchIntent`, submits it to the writer, and
-        awaits the committed result.  The writer owns the transaction;
-        this method blocks until durability is acknowledged.
-        """
-        from concurrent.futures import InvalidStateError  # noqa: PLC0415
-
-        from eggpool.request.dispatch_intent import (  # noqa: PLC0415
-            DispatchAmbiguousCommitError,
-            DispatchWriterError,
-        )
-
-        intent = self._build_dispatch_intent(
-            context=context,
-            claim_identity=claim_identity,
-            estimated_tokens=estimated_tokens,
-            attempt_number=attempt_number,
-        )
-        assert self._dispatch_writer is not None
-        future = self._dispatch_writer.submit_intent(intent)
-        try:
-            result = await asyncio.wrap_future(future)
-        except DispatchWriterError:
-            raise
-        except InvalidStateError as exc:
-            raise DispatchAmbiguousCommitError(
-                f"Writer future in unexpected state for "
-                f"intent {intent.proxy_request_id}"
-            ) from exc
-
-        # Durable identity must be proven before any runtime ownership or
-        # upstream dispatch is published. No cleanup identity exists yet.
-        result.validate()
-
-        return result.db_request_id, result.reservation_id, result.attempt_id
-
     def _release_unpublished_claim(
         self,
         *,
@@ -2257,12 +2170,12 @@ class RequestCoordinator:
            claim lock. Its transaction commits before the second claim-lock
            acquisition converts provisional load to canonical ownership.
         3. ``_execute_upstream`` and all upstream I/O happen outside the
-           selection locks.
+           claim locks.
 
         Phase 5: thinking classification, reservation-token estimate,
         capability policy resolution, and routing-plan construction
         are pure computations that read no mutable runtime state.
-        They run OUTSIDE ``_select_lock`` so the lock only holds the
+        They run before the claim lock so the lock only holds the
         correctness-critical work (circuit probe, account-ID lookup,
         pending-load publication, and runtime conversion).  The plan
         invariants are preserved: the in-process active counter,
@@ -2668,18 +2581,12 @@ class RequestCoordinator:
         db_request_id: str | None = None
         attempt_id: int | None = None
         reservation_id: str | None = None
-        if self._use_dispatch_writer:
-            with (
-                _maybe_span(
-                    self._dispatch_span_recorder,
-                    SPAN_DISPATCH_PERSISTENCE_WAIT,
-                ),
-                _maybe_span(
-                    self._dispatch_span_recorder,
-                    SPAN_DISPATCH_PERSISTENCE_TRANSACTION,
-                ),
-            ):
-                try:
+        with _maybe_span(
+            self._dispatch_span_recorder,
+            SPAN_DISPATCH_PERSISTENCE_TRANSACTION,
+        ):
+            try:
+                async with self._db.transaction():
                     with _maybe_span(
                         self._dispatch_span_recorder,
                         SPAN_DISPATCH_PERSISTENCE_COMMIT,
@@ -2688,61 +2595,23 @@ class RequestCoordinator:
                             db_request_id,
                             reservation_id,
                             attempt_id,
-                        ) = await self._persist_dispatch_bundle_via_writer(
+                        ) = await self._persist_dispatch_bundle(
                             context=context,
-                            claim_identity=claim_identity,
+                            account_id=claim_identity.account_id,
+                            resolved_provider_id=claim_identity.resolved_provider_id,
                             estimated_tokens=estimated_tokens,
+                            estimated_microdollars=claim_identity.estimated_microdollars,
                             attempt_number=attempt_number,
                         )
-                except BaseException:
-                    self._release_unpublished_claim(
-                        account_name=claim_identity.account_name,
-                        estimated_tokens=estimated_tokens,
-                        receipt=claim_receipt,
-                    )
-                    raise
-        else:
-            with (
-                _maybe_span(
-                    self._dispatch_span_recorder,
-                    SPAN_DISPATCH_PERSISTENCE_WAIT,
-                ),
-                _maybe_span(
-                    self._dispatch_span_recorder,
-                    SPAN_DISPATCH_PERSISTENCE_TRANSACTION,
-                ),
-            ):
-                try:
-                    async with self._db.transaction():
-                        with _maybe_span(
-                            self._dispatch_span_recorder,
-                            SPAN_DISPATCH_PERSISTENCE_COMMIT,
-                        ):
-                            (
-                                db_request_id,
-                                reservation_id,
-                                attempt_id,
-                            ) = await self._persist_dispatch_bundle(
-                                context=context,
-                                account_id=claim_identity.account_id,
-                                resolved_provider_id=(
-                                    claim_identity.resolved_provider_id
-                                ),
-                                estimated_tokens=estimated_tokens,
-                                estimated_microdollars=(
-                                    claim_identity.estimated_microdollars
-                                ),
-                                attempt_number=attempt_number,
-                            )
-                except BaseException:
-                    # SQLite transaction rolled back; release the
-                    # health slot the lock took, then re-raise.
-                    self._release_unpublished_claim(
-                        account_name=claim_identity.account_name,
-                        estimated_tokens=estimated_tokens,
-                        receipt=claim_receipt,
-                    )
-                    raise
+            except BaseException:
+                # SQLite transaction rolled back; release the health slot
+                # the claim phase took, then re-raise.
+                self._release_unpublished_claim(
+                    account_name=claim_identity.account_name,
+                    estimated_tokens=estimated_tokens,
+                    receipt=claim_receipt,
+                )
+                raise
 
         if (
             not db_request_id
@@ -2851,23 +2720,6 @@ class RequestCoordinator:
             runtime_lease=runtime_lease,
         )
         context.client_metadata["_post_commit_selected"] = post_commit_selected
-
-        # Record broad Phase 5 selection-lock spans as the combined
-        # wait/held timing of the two narrow acquisitions.  The
-        # narrow ``SPAN_SELECTION_CLAIM_*`` waits were already
-        # recorded via the ``_maybe_span`` placeholders above; this
-        # keeps the legacy SPAN_SELECTION_LOCK_WAIT /
-        # SPAN_SELECTION_LOCKED samples populated so historical
-        # dashboards stay comparable.
-        if self._dispatch_span_recorder is not None:
-            self._dispatch_span_recorder.record_ns(
-                SPAN_SELECTION_LOCK_WAIT,
-                claim_lock_acquired_ns - claim_lock_wait_ns,
-            )
-            self._dispatch_span_recorder.record_ns(
-                SPAN_SELECTION_LOCKED,
-                time.perf_counter_ns() - claim_lock_wait_ns,
-            )
 
         # Aliases after the lock releases so the trace-write and
         # SelectedAttempt construction below keep the same variable

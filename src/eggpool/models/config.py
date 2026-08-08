@@ -110,49 +110,6 @@ class UpstreamConfig(BaseModel):
         return self
 
 
-class DispatchWriterConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: bool = False
-    max_queue_depth: int = Field(default=256, ge=16, le=4096)
-    max_batch_size: int = Field(default=32, ge=1, le=256)
-    max_batch_wait_ms: float = Field(default=50.0, gt=0.0, le=500.0)
-    low_pressure_batch_wait_ms: float = Field(
-        default=0.5,
-        ge=0.0,
-        le=50.0,
-        description="Coalescing delay (ms) when queue is empty/low pressure.",
-    )
-    high_pressure_batch_wait_ms: float = Field(
-        default=5.0,
-        ge=0.0,
-        le=500.0,
-        description="Maximum batch wait (ms) under high pressure.",
-    )
-    enqueue_timeout_ms: float = Field(default=5_000.0, gt=0.0, le=60_000.0)
-    shutdown_drain_timeout_s: float = Field(
-        default=5.0,
-        gt=0.0,
-        le=30.0,
-    )
-    sample_window: int = Field(
-        default=2048,
-        ge=64,
-        le=65536,
-        description="Maximum rolling-window samples retained for diagnostics.",
-    )
-
-    @model_validator(mode="after")
-    def _validate_wait_ordering(self) -> DispatchWriterConfig:
-        if self.low_pressure_batch_wait_ms > self.high_pressure_batch_wait_ms:
-            raise ValueError(
-                "low_pressure_batch_wait_ms must be <= high_pressure_batch_wait_ms"
-            )
-        if self.high_pressure_batch_wait_ms > self.max_batch_wait_ms:
-            raise ValueError("high_pressure_batch_wait_ms must be <= max_batch_wait_ms")
-        return self
-
-
 class DatabaseConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1323,9 +1280,6 @@ class AppConfig(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     upstream: UpstreamConfig = Field(default_factory=UpstreamConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
-    dispatch_writer: DispatchWriterConfig = Field(
-        default_factory=DispatchWriterConfig,
-    )
     models: ModelsConfig = Field(default_factory=ModelsConfig)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     limits: LimitsConfig = Field(default_factory=LimitsConfig)

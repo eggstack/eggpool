@@ -831,7 +831,7 @@ async def _handle_proxy_request_inner(
 
     # Phase 5: precompute thinking requirement, reservation tokens, and
     # context-input tokens once here so the coordinator does not have to
-    # reparse ``original_body`` (and re-classify) inside ``_select_lock``.
+    # reparse ``original_body`` (and re-classify) inside the selection claim.
     # These computations are pure functions of the body and the client
     # protocol — they read no mutable runtime state and therefore do not
     # need to be serialized against other concurrent requests.

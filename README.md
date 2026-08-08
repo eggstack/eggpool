@@ -24,7 +24,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Isolated upstream dispatch: only typed HTTPX transport failures retry across distinct accounts before response handoff; local preparation and response-adaptation faults terminate safely without provider penalties
 - Dispatch timing: distinct `local_pre_upstream` (full EggPool-side) and `dispatch_overhead` (coordinator-internal) metrics with cadence drift diagnostics for background tasks
 - Selection hot path: generation-hydrated account identities keep SQLite outside the claim lock, while provisional request/token load is visible to later scorers before persistence and routing plans carry quarantine exclusions directly into sampled diagnostic traces
-- Durable dispatch write pipeline: process-owned microbatching writer for dispatch intents with bounded queue, adaptive batching, binary success/exception persistence semantics, durable-identity validation, and diagnostics
+- Durable dispatch persistence: each request commits its request, reservation, and attempt identities in one transaction before upstream dispatch
 - Amortized quota-window maintenance: ordered observations expire incrementally, while rare out-of-order timestamps remain correct through a bounded slow path
 - Bounded observability: coarse metrics by default, opt-in request-coherent spans, bounded rolling-window metrics, and constant-bounded snapshot cost regardless of uptime
 - Error isolation: provider-specific validation errors (e.g. unsupported MiniMax-M3 thinking through OpenCode Go) are contained to a single request — no account/model/circuit/quarantine penalties, no restart or database deletion required
@@ -129,7 +129,6 @@ Use `eggpool connect` for interactive provider setup. See [docs/providers.md](do
 | `[server]` | Bind address, port (default 11300), API key, logging, threads |
 | `[upstream]` | Upstream API base URL, timeouts, connection pool |
 | `[database]` | SQLite path, WAL mode |
-| `[dispatch_writer]` | Optional process-owned durable dispatch writer |
 | `[models]` | Catalog refresh, exposure mode, model collapse, withdrawal policy |
 | `[routing]` | Routing strategy, retry limits, quota mode, same-tier fairness |
 | `[dashboard]` | Dashboard toggle, theme, refresh interval |

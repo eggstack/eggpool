@@ -72,7 +72,7 @@ The CLI entry point is a two-phase bootstrap: `cli.py` (73 lines) first tries `f
 | **Path** | `src/eggpool/request/`, `src/eggpool/api/`, `src/eggpool/proxy/` |
 | **Deep Dive** | [deep-dive-request-lifecycle.md](deep-dive-request-lifecycle.md) |
 
-The request lifecycle is orchestrated by `RequestCoordinator` in `request/coordinator.py`. API handlers (`api/chat_completions.py` for OpenAI, `api/messages.py` for Anthropic) parse the request and call `handle_proxy_request()` — a shared 1022-line pipeline in `api/proxy_request.py` that handles auth, body parsing, model/provider resolution, capability checks, context-limit enforcement, transcoding preflight, segmentation, compression, dispatch, and response handling. The coordinator persists each attempt to SQLite before dispatch, manages retry with failover, and ensures every terminal outcome is owned by exactly one `RequestFinalizationJob`. Dispatch retries are limited to typed HTTPX transport failures before an explicit response-handoff fact; local preparation and response-adaptation faults are isolated as local errors. Non-streaming adaptation precedes durable success, while streaming responses flow through `proxy/sse.py` (bounded SSE decoder) and `proxy/sse_observer.py` (diagnostic observation). The `request/` subpackage also contains `ProviderBoundRequest` (single-decode lifecycle for provider payloads), `DispatchPersistenceWriter` (microbatched DB writes), and `RequestFinalizationSupervisor` (shutdown drain).
+The request lifecycle is orchestrated by `RequestCoordinator` in `request/coordinator.py`. API handlers (`api/chat_completions.py` for OpenAI, `api/messages.py` for Anthropic) parse the request and call `handle_proxy_request()` — a shared 1022-line pipeline in `api/proxy_request.py` that handles auth, body parsing, model/provider resolution, capability checks, context-limit enforcement, transcoding preflight, segmentation, compression, dispatch, and response handling. The coordinator persists each attempt to SQLite before dispatch, manages retry with failover, and ensures every terminal outcome is owned by exactly one `RequestFinalizationJob`. Dispatch retries are limited to typed HTTPX transport failures before an explicit response-handoff fact; local preparation and response-adaptation faults are isolated as local errors. Non-streaming adaptation precedes durable success, while streaming responses flow through `proxy/sse.py` (bounded SSE decoder) and `proxy/sse_observer.py` (diagnostic observation). The `request/` subpackage also contains `ProviderBoundRequest` (single-decode lifecycle for provider payloads) and `RequestFinalizationSupervisor` (shutdown drain).
 
 ### Protocol Transcoding
 
@@ -409,7 +409,6 @@ Runtime configuration lives in `config.toml` + `.env` (API keys). Key sections:
 | `[server]` | Host, port, workers |
 | `[upstream]` | Default upstream settings |
 | `[database]` | SQLite path and WAL mode |
-| `[dispatch_writer]` | Process-owned durable dispatch writer |
 | `[routing]` | Fairness mode/epsilon/scope |
 | `[models]` | `collapse_models`, catalog withdrawal |
 | `[providers.<id>]` | Per-provider config (URL, auth, protocols, accounts) |

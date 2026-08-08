@@ -12,12 +12,6 @@ generation-owned services, and returns a publication-ready result.
 Startup-only operations (database migrations, crash recovery, initial
 catalog refresh, process-worker startup) remain outside the factory.
 
-**Dispatch writer enablement (Phase 8)**: the factory derives the
-coordinator's ``use_dispatch_writer`` selection from two conditions:
-the process-owned writer object must be non-``None`` *and*
-``config.dispatch_writer.enabled`` must be ``True``.  Both must hold
-for the microbatch persistence path to be selected.  This prevents
-the accidental default where a writer exists but is never used.
 """
 
 from __future__ import annotations
@@ -126,13 +120,6 @@ class RuntimeGenerationFactory:
     database migrations, crash recovery, initial catalog refresh,
     process-worker startup, or control-socket setup.
 
-    **Dispatch writer enablement**: when the process-owned dispatch
-    writer is non-``None`` *and* ``config.dispatch_writer.enabled`` is
-    ``True``, the coordinator's ``use_dispatch_writer`` flag is set
-    ``True`` so the microbatch persistence path is selected.  Both
-    conditions must hold; a missing writer object or a disabled config
-    results in direct persistence.  This is the single authoritative
-    rule that prevents the writer from existing without being used.
     """
 
     async def prepare(
@@ -460,10 +447,6 @@ class RuntimeGenerationFactory:
                     config.routing.trace.mode == "all"
                     or config.routing.trace.sample_rate > 0
                 )
-            ),
-            dispatch_writer=process.dispatch_writer,
-            use_dispatch_writer=(
-                process.dispatch_writer is not None and config.dispatch_writer.enabled
             ),
             effects_applier=effects_applier,
             quarantine=quarantine,

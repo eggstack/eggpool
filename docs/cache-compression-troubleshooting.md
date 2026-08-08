@@ -195,8 +195,6 @@ These spans measure work inside `RequestCoordinator._select_and_persist_attempt(
 
 | Span key | What it measures |
 |----------|-----------------|
-| `selection_lock_wait_ms` | Time waiting to acquire `_select_lock` |
-| `selection_locked_ms` | Total time while `_select_lock` is held |
 | `thinking_classification_ms` | Thinking/reasoning requirement classification |
 | `reservation_estimate_ms` | Token reservation estimation |
 | `routing_plan_ms` | `Router.build_routing_plan()` |
@@ -217,8 +215,7 @@ These spans measure work inside `RequestCoordinator._select_and_persist_attempt(
 
 ### Interpreting coordinator spans
 
-- `selection_lock_wait_ms` near zero means no contention. High values indicate concurrent requests serializing on the same lock.
-- `selection_locked_ms` is retained compatibility timing for the two narrow claim-lock acquisitions: plan-selected circuit probe, in-memory identity/pending-load publication, and post-commit conversion/runtime publication. SQLite request/reservation/attempt creation runs outside the lock. Pure computation (thinking classification, reservation estimation, routing plan) also runs outside the lock.
+- `selection_claim_wait` and `selection_claim_held` are the authoritative timing spans for the two narrow claim-lock acquisitions. SQLite request/reservation/attempt creation runs outside the lock. Pure computation (thinking classification, reservation estimation, routing plan) also runs outside the lock.
 - `routing_plan_ms` reflects the cost of `Router.build_routing_plan()`. This runs outside the lock on the precomputed `ProxyRequestContext`.
 - `routing_trace_build_ms` and `routing_trace_write_ms` are absent when `[routing.trace].mode = "off"` or the sample was not selected.
 

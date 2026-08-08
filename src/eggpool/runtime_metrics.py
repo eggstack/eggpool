@@ -127,7 +127,6 @@ class RuntimeMetricsService:
         runtime_manager: Any | None = None,  # noqa: ANN401
         reload_manager: Any | None = None,  # noqa: ANN401
         process: Any | None = None,  # noqa: ANN401 — ProcessRuntime, avoids circular import
-        dispatch_writer: Any | None = None,  # noqa: ANN401
         routing_trace_writer: Any | None = None,  # noqa: ANN401
         maintenance_state: Any | None = None,  # noqa: ANN401
         event_loop_lag_monitor: Any | None = None,  # noqa: ANN401
@@ -156,7 +155,6 @@ class RuntimeMetricsService:
         self._runtime_manager = runtime_manager
         self._reload_manager = reload_manager
         self._process = process
-        self._dispatch_writer = dispatch_writer
         self._routing_trace_writer = routing_trace_writer
         self._maintenance_state = maintenance_state
         self._event_loop_lag_monitor = event_loop_lag_monitor
@@ -257,7 +255,6 @@ class RuntimeMetricsService:
         result["routing_trace_guard"] = self._snapshot_routing_trace_guard(probe_errors)
 
         result["reload_state"] = self._snapshot_reload_state(probe_errors)
-        result["dispatch_writer"] = self._snapshot_dispatch_writer(probe_errors)
         result["routing_trace_writer"] = self._snapshot_routing_trace_writer(
             probe_errors
         )
@@ -1171,19 +1168,6 @@ class RuntimeMetricsService:
             _append_probe_error(
                 probe_errors,
                 f"Reload manager snapshot failed: {exc}",
-            )
-            return {"enabled": True, "error": str(exc)}
-
-    def _snapshot_dispatch_writer(self, probe_errors: list[str]) -> dict[str, Any]:
-        """Dispatch persistence writer diagnostics (Milestone C)."""
-        if self._dispatch_writer is None:
-            return {"enabled": False}
-        try:
-            return {"enabled": True, **self._dispatch_writer.snapshot()}
-        except Exception as exc:
-            _append_probe_error(
-                probe_errors,
-                f"Dispatch writer snapshot failed: {exc}",
             )
             return {"enabled": True, "error": str(exc)}
 

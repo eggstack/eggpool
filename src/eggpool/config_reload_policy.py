@@ -125,17 +125,6 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "database.wal": ReloadDisposition.RESTART_REQUIRED,
     "database.synchronous": ReloadDisposition.RESTART_REQUIRED,
     "database.worker_threads": ReloadDisposition.RESTART_REQUIRED,
-    # ---- dispatch writer (process-owned; restart-required until safe
-    # reconfiguration path is implemented and tested) ----
-    "dispatch_writer.enabled": ReloadDisposition.RESTART_REQUIRED,
-    "dispatch_writer.max_queue_depth": ReloadDisposition.RESTART_REQUIRED,
-    "dispatch_writer.max_batch_size": ReloadDisposition.RESTART_REQUIRED,
-    "dispatch_writer.max_batch_wait_ms": ReloadDisposition.RESTART_REQUIRED,
-    "dispatch_writer.enqueue_timeout_ms": ReloadDisposition.RESTART_REQUIRED,
-    "dispatch_writer.shutdown_drain_timeout_s": ReloadDisposition.RESTART_REQUIRED,
-    "dispatch_writer.sample_window": ReloadDisposition.RESTART_REQUIRED,
-    "dispatch_writer.low_pressure_batch_wait_ms": ReloadDisposition.RESTART_REQUIRED,
-    "dispatch_writer.high_pressure_batch_wait_ms": ReloadDisposition.RESTART_REQUIRED,
     # ---- models catalog refresh cadence ----
     # Request-path-visible subset: the candidate builder rebuilds the
     # catalog and re-registers periodic tasks per generation so these

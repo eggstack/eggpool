@@ -31,7 +31,7 @@ All data-plane requests flow through `RequestCoordinator`:
 
 - Requests must be persisted before upstream dispatch
 - A successful account claim publishes provisional request/token load under `_selection_claim_lock` before SQLite persistence. Persistence stays outside the lock; durable success converts the same ownership to the canonical reservation, while failure/cancellation releases it exactly once.
-- Dispatch persistence is binary: a batch returns fully valid durable identities or raises; rollback never creates placeholder success results. The process-owned writer is bound to the canonical single event loop and rejects foreign-loop submissions.
+- Dispatch persistence is binary: the direct per-request transaction returns fully valid durable identities or raises; rollback never creates placeholder success results. SQLite persistence stays outside `_selection_claim_lock`.
 - Dispatch exception boundaries are stage-local. Provider/client preparation, request construction or serialization, and client-facing response adaptation faults are local terminal errors with no provider retry or penalty. Only typed HTTPX transport failures are retry candidates.
 - Retries use distinct accounts only, converge failed-attempt cleanup before reselection, and stop at `min(distinct eligible accounts, 1 + max_retries_before_stream)`. The request records `attempt_ceiling_reached` when the configured ceiling leaves eligible accounts unattempted.
 - Pre-handoff failures can retry; `downstream_started` becomes true when the proxy forwards ASGI `http.response.start`, before body iteration, so no retry is possible after response handoff. `asyncio.CancelledError` propagates. Empty started streams are post-handoff even with zero body bytes.
@@ -65,6 +65,13 @@ Transparent request/response format conversion between OpenAI and Anthropic prot
 - `Database.vacuum()` is the only sanctioned path for `VACUUM`
 - Readiness probes use `probe_writable()` with owned transactions
 - Schema migrations in `src/eggpool/db/schema/` (numbered SQL files)
+
+The historical `requests` table is frozen for optional diagnostics. Add columns
+only for durable lifecycle/accounting facts, routing repair, billing/usage truth,
+or externally visible compatibility. New feature diagnostics belong in an
+existing sparse diagnostic/event table or a narrowly scoped request-keyed
+sidecar; disabled features create no sidecar row. Follow retention/redaction
+rules and never introduce a generic EAV/property store.
 
 ## Quota and Routing
 
@@ -138,7 +145,7 @@ Plus `ProtocolMismatchError` (from `catalog.protocols`) — endpoint/model-proto
   default
 - The lean default binds to loopback, uses low-wear analytics, and leaves
   model-info, routing traces, detailed spans, backups, DNS caching, event-loop
-  lag, the dispatch writer, and the in-process PyPI checker dormant
+  lag, and the in-process PyPI checker dormant
 - Optional diagnostics are genuinely dormant when disabled: their clients,
   writers, queues, recorders, and tasks are not instantiated. The canonical
   shipped template is `config.example.toml`; `config.sbc.example.toml` is an

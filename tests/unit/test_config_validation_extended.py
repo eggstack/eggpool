@@ -5,7 +5,7 @@ Tests:
 - Old configuration with no new fields.
 - New provider-control policy fields.
 - Model capability overrides.
-- Dispatch writer metric/batching settings.
+- Removed optional subsystem configuration is rejected strictly.
 - Instrumentation sampling settings.
 - Invalid values and contradictory combinations.
 - Rehash changes classified correctly as live/restart-required.
@@ -27,11 +27,7 @@ from eggpool.config_reload_policy import (
     _disposition_for as classify_reload_field,
 )
 from eggpool.errors import ConfigError
-from eggpool.models.config import (
-    AppConfig,
-    DispatchSpansConfig,
-    DispatchWriterConfig,
-)
+from eggpool.models.config import AppConfig, DispatchSpansConfig
 from eggpool.transcoder.policy import ProviderControlPolicyConfig
 
 pytestmark = [pytest.mark.unit]
@@ -82,25 +78,10 @@ class TestOldConfigCompatibility:
         # Provider control policy should have defaults
         assert config.transcoder.provider_control_policy is not None
 
-    def test_config_without_dispatch_writer(self) -> None:
-        """Config without dispatch writer settings must validate with
-        defaults."""
-        config = AppConfig.from_dict(
-            {
-                "server": {
-                    "api_key_env": "TEST_KEY",
-                    "host": "127.0.0.1",
-                    "port": 0,
-                },
-                "database": {"path": ":memory:"},
-                "upstream": {"base_url": "https://test.example.com"},
-                "models": {"startup_refresh": False, "refresh_interval_s": 0},
-                "accounts": [{"name": "test", "api_key_env": "TEST_KEY"}],
-                "dashboard": {"enabled": False},
-            }
-        )
-        # Dispatch writer should default to disabled
-        assert config.dispatch_writer.enabled is False
+    def test_removed_dispatch_writer_is_rejected(self) -> None:
+        """The removed writer section fails strict configuration validation."""
+        with pytest.raises(ConfigError, match="dispatch_writer"):
+            AppConfig.from_dict({"dispatch_writer": {"enabled": True}})
 
     def test_config_without_span_sampling(self) -> None:
         """Config without span sampling settings must validate with
@@ -182,49 +163,6 @@ class TestProviderControlPolicyFields:
 
 
 # ---------------------------------------------------------------------------
-# Dispatch writer settings
-# ---------------------------------------------------------------------------
-
-
-class TestDispatchWriterSettings:
-    """Dispatch writer settings must validate."""
-
-    def test_dispatch_writer_defaults(self) -> None:
-        """Dispatch writer config has correct defaults."""
-        writer = DispatchWriterConfig()
-        assert writer.enabled is False
-        assert writer.max_queue_depth > 0
-        assert writer.max_batch_size > 0
-        assert writer.max_batch_wait_ms > 0
-
-    def test_dispatch_writer_enabled(self) -> None:
-        """Dispatch writer can be enabled."""
-        config = AppConfig.from_dict(
-            {
-                "server": {
-                    "api_key_env": "TEST_KEY",
-                    "host": "127.0.0.1",
-                    "port": 0,
-                },
-                "database": {"path": ":memory:"},
-                "dispatch_writer": {
-                    "enabled": True,
-                    "max_queue_depth": 1000,
-                    "max_batch_size": 50,
-                },
-                "upstream": {"base_url": "https://test.example.com"},
-                "models": {"startup_refresh": False, "refresh_interval_s": 0},
-                "accounts": [{"name": "test", "api_key_env": "TEST_KEY"}],
-                "dashboard": {"enabled": False},
-            }
-        )
-        writer = config.dispatch_writer
-        assert writer.enabled is True
-        assert writer.max_queue_depth == 1000
-        assert writer.max_batch_size == 50
-
-
-# ---------------------------------------------------------------------------
 # Instrumentation sampling settings
 # ---------------------------------------------------------------------------
 
@@ -300,12 +238,6 @@ class TestRehashClassification:
         """Provider control policy changes are live."""
         assert classify_reload_field("transcoder.provider_control_policy") == (
             ReloadDisposition.LIVE
-        )
-
-    def test_dispatch_writer_enabled_restart_required(self) -> None:
-        """Dispatch writer enabled flag requires restart."""
-        assert classify_reload_field("dispatch_writer.enabled") == (
-            ReloadDisposition.RESTART_REQUIRED
         )
 
     def test_span_sampling_live(self) -> None:

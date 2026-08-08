@@ -67,7 +67,6 @@ Both use monotonic/performance clocks. Metrics additive: `local_pre_upstream` in
 - OS load average (`os.getloadavg` + normalized per-core)
 - Bounded rolling-window dispatch-overhead distribution
 - Selection claim diagnostics
-- Dispatch writer diagnostics
 - Model info health snapshot
 - `finalization_supervisor`: the active generation's bounded retained-terminal
   job snapshot, including active/retry-pending/failed counts, saturation and
@@ -147,7 +146,6 @@ failed durable clear leaves the current in-memory suppression intact.
 | Component | Ownership | Survives Generation Swap |
 |-----------|-----------|-------------------------|
 | Database connections | `ProcessRuntime` | Yes |
-| `DispatchPersistenceWriter` | `ProcessRuntime` | Yes |
 | Account registry | `RuntimeGeneration` | No (rebuilt) |
 | Model catalog | `RuntimeGeneration` | No (rebuilt) |
 | Health manager | `RuntimeGeneration` | No (rebuilt) |

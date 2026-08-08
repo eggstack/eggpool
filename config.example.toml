@@ -286,10 +286,6 @@ ttl_seconds = 86400
 # prefer_ipv6 = false              # prefer IPv6 addresses in DNS resolution (default: false)
 # lookup_timeout_seconds = 5       # timeout for DNS lookups in seconds (default: 5)
 
-# Optional subsystems are deliberately explicit in the shipped template.
-[dispatch_writer]
-enabled = false
-
 [readiness_probe]
 enabled = false
 

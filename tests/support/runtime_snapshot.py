@@ -94,9 +94,6 @@ class RuntimeSnapshot:
     routing_trace_writer_mode: str | None
     routing_trace_writer_sample_rate: float | None
 
-    # Dispatch writer state
-    dispatch_writer_present: bool
-
     # Open generation-owned resources
     open_client_pool_count: int
     open_outbound_manager_count: int
@@ -196,7 +193,6 @@ class RuntimeSnapshot:
             rt_sample_rate,
         ) = _capture_routing_trace_writer(process)
         (
-            dispatch_present,
             client_pool_count,
             outbound_count,
             dns_count,
@@ -225,7 +221,6 @@ class RuntimeSnapshot:
             process_supervisor_task_ids=supervisor_task_ids,
             routing_trace_writer_mode=rt_mode,
             routing_trace_writer_sample_rate=rt_sample_rate,
-            dispatch_writer_present=dispatch_present,
             open_client_pool_count=client_pool_count,
             open_outbound_manager_count=outbound_count,
             open_dns_backend_count=dns_count,
@@ -583,14 +578,8 @@ def _capture_routing_trace_writer(
 def _capture_resources(
     runtime_manager: Any,
     process: Any,
-) -> tuple[bool, int, int, int]:
-    """Capture dispatch-writer presence and open client pool / outbound / DNS counts."""
-    dispatch_present = False
-    with contextlib.suppress(Exception):
-        dispatch_present = (
-            process is not None
-            and getattr(process, "dispatch_writer", None) is not None
-        )
+) -> tuple[int, int, int]:
+    """Capture open client pool, outbound manager, and DNS backend counts."""
 
     client_pool_count = 0
     outbound_count = 0
@@ -616,7 +605,7 @@ def _capture_resources(
             if getattr(gen, "dns_backend", None) is not None:
                 dns_count += 1
 
-    return dispatch_present, client_pool_count, outbound_count, dns_count
+    return client_pool_count, outbound_count, dns_count
 
 
 def _capture_control_socket() -> tuple[str | None, int | None]:

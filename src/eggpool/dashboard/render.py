@@ -887,8 +887,8 @@ _DISPATCH_SPAN_LABELS: dict[str, str] = {
     "segmentation": "Segmentation",
     "compression_analyze": "Compression analyze",
     "compression_apply": "Compression apply",
-    "selection_lock_wait": "Selection lock wait",
-    "selection_locked": "Selection locked",
+    "selection_claim_wait": "Selection claim wait",
+    "selection_claim_held": "Selection claim held",
     "routing_trace_write": "Routing trace write",
 }
 

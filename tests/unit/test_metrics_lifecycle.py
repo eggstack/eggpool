@@ -12,6 +12,11 @@ import pytest_asyncio
 
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
+from eggpool.db.repositories import (
+    AttemptFinalizationMutation,
+    RequestFinalizationMutation,
+    ReservationReleaseMutation,
+)
 from eggpool.db.rollup_repository import UsageRollupRepository
 from eggpool.metrics.buffer import MetricsWriteCoalescer, UsageMetricEvent
 from eggpool.models.config import MetricsConfig
@@ -187,7 +192,20 @@ class TestFinalizerEmitsUsageEvent:
         attempt_repo = AsyncMock()
         reservation_repo = AsyncMock()
 
-        request_repo.finalize_if_pending = AsyncMock(return_value=True)
+        request_repo.finalize_if_pending_returning = AsyncMock(
+            return_value=RequestFinalizationMutation(
+                transitioned=True, status="completed"
+            )
+        )
+        attempt_repo.finalize_if_incomplete_returning = AsyncMock(
+            return_value=AttemptFinalizationMutation(transitioned=True, terminal=True)
+        )
+        reservation_repo.release_returning = AsyncMock(
+            return_value=ReservationReleaseMutation(
+                transitioned=True, status="released"
+            )
+        )
+        reservation_repo.TERMINAL_STATUSES = frozenset({"released", "expired"})
 
         finalizer = RequestFinalizer(
             db=db,
@@ -245,7 +263,20 @@ class TestFinalizerEmitsUsageEvent:
         attempt_repo = AsyncMock()
         reservation_repo = AsyncMock()
 
-        request_repo.finalize_if_pending = AsyncMock(return_value=True)
+        request_repo.finalize_if_pending_returning = AsyncMock(
+            return_value=RequestFinalizationMutation(
+                transitioned=True, status="completed"
+            )
+        )
+        attempt_repo.finalize_if_incomplete_returning = AsyncMock(
+            return_value=AttemptFinalizationMutation(transitioned=True, terminal=True)
+        )
+        reservation_repo.release_returning = AsyncMock(
+            return_value=ReservationReleaseMutation(
+                transitioned=True, status="released"
+            )
+        )
+        reservation_repo.TERMINAL_STATUSES = frozenset({"released", "expired"})
 
         finalizer = RequestFinalizer(
             db=db,
@@ -299,7 +330,9 @@ class TestFinalizerEmitsUsageEvent:
         attempt_repo = AsyncMock()
         reservation_repo = AsyncMock()
 
-        request_repo.finalize_if_pending = AsyncMock(return_value=False)
+        request_repo.finalize_if_pending_returning = AsyncMock(
+            return_value=RequestFinalizationMutation(transitioned=False)
+        )
 
         finalizer = RequestFinalizer(
             db=db,
@@ -345,7 +378,20 @@ class TestFinalizerEmitsUsageEvent:
         attempt_repo = AsyncMock()
         reservation_repo = AsyncMock()
 
-        request_repo.finalize_if_pending = AsyncMock(return_value=True)
+        request_repo.finalize_if_pending_returning = AsyncMock(
+            return_value=RequestFinalizationMutation(
+                transitioned=True, status="completed"
+            )
+        )
+        attempt_repo.finalize_if_incomplete_returning = AsyncMock(
+            return_value=AttemptFinalizationMutation(transitioned=True, terminal=True)
+        )
+        reservation_repo.release_returning = AsyncMock(
+            return_value=ReservationReleaseMutation(
+                transitioned=True, status="released"
+            )
+        )
+        reservation_repo.TERMINAL_STATUSES = frozenset({"released", "expired"})
 
         finalizer = RequestFinalizer(
             db=db,

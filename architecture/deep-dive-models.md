@@ -36,7 +36,6 @@ class AppConfig(BaseModel):
     metrics: MetricsConfig
     backup: BackupConfig
     security: SecurityConfig
-    dispatch_writer: DispatchWriterConfig
 ```
 
 **Key nested models:**

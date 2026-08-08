@@ -36,9 +36,6 @@ strategy = "quota_fair"
 mode = "off"
 sample_rate = 0.0
 
-[dispatch_writer]
-enabled = false
-
 [readiness_probe]
 enabled = false
 
