@@ -123,6 +123,8 @@ Automatic backup task (zip archives):
 - Config files
 - Database
 - Scheduled via `[backup]` config
+- Disabled in the copyable low-wear SBC profile unless explicitly enabled
+- Runtime snapshot/archive work runs off the canonical asyncio event loop
 
 ## Key Invariants
 

@@ -1,7 +1,7 @@
 # Plan 094 — Backup I/O and SBC Profile
 
 Date: 2026-08-10
-Status: planned
+Status: complete
 Parent roadmap: `plans/093-sbc-runtime-and-maintenance-simplification-roadmap.md`
 Planning baseline: `ad7eee822f1dfb8c43dfbe20410c41009697cd7d`
 
@@ -153,18 +153,34 @@ If a representative local database is available, one manual backup while issuing
 
 ## Acceptance criteria
 
-- [ ] `create_runtime_backup()` no longer performs database-size-proportional archive copy work on the canonical event-loop thread.
-- [ ] Staged database cleanup that may involve large files does not block the event loop.
-- [ ] SQLite snapshot consistency still uses `sqlite3.Connection.backup()`.
-- [ ] Final archive publication remains atomic; no partially built final archive is exposed after failure.
-- [ ] Runtime backup failures remain isolated and observable without terminating ordinary proxy service.
-- [ ] Backup retention still runs only after successful archive publication.
-- [ ] The existing backup format and restore path remain compatible.
-- [ ] The SBC example no longer claims minimum-footprint/low-wear behavior while silently enabling daily full-database backups; default-off is implemented unless the profile is explicitly renamed/documented as balanced.
-- [ ] Enabling backup explicitly continues to work without additional services/dependencies.
-- [ ] Focused tests prove off-loop execution deterministically without timing thresholds.
-- [ ] Existing smoke/config gates pass.
-- [ ] No new executor service, queue, worker process, compression dependency, remote backup feature, or automatic VACUUM is introduced.
+- [x] `create_runtime_backup()` no longer performs database-size-proportional archive copy work on the canonical event-loop thread.
+- [x] Staged database cleanup that may involve large files does not block the event loop.
+- [x] SQLite snapshot consistency still uses `sqlite3.Connection.backup()`.
+- [x] Final archive publication remains atomic; no partially built final archive is exposed after failure.
+- [x] Runtime backup failures remain isolated and observable without terminating ordinary proxy service.
+- [x] Backup retention still runs only after successful archive publication.
+- [x] The existing backup format and restore path remain compatible.
+- [x] The SBC example no longer claims minimum-footprint/low-wear behavior while silently enabling daily full-database backups; its default is now off and opt-in is documented.
+- [x] Enabling backup explicitly continues to work without additional services/dependencies.
+- [x] Focused tests prove off-loop execution deterministically without timing thresholds.
+- [x] Existing smoke/config gates pass.
+- [x] No new executor service, queue, worker process, compression dependency, remote backup feature, or automatic VACUUM is introduced.
+
+## Implementation and verification
+
+Implemented in the working tree on 2026-08-10. Runtime snapshotting, archive
+construction/publication, and staging cleanup now run in one
+`asyncio.to_thread()` helper; the existing SQLite backup and atomic archive
+semantics are unchanged. The root and bundled SBC examples default to
+`backup.enabled = false`, with operator opt-in documented.
+
+Verification passed:
+
+- Focused lifecycle/background/config tests: 163 passed.
+- Application startup integration tests: 14 passed.
+- `ruff format --check`, `ruff check`, and `pyright`: passed (Pyright 0 errors).
+- Smoke suite: 14 passed.
+- `eggpool --config config.sbc.example.toml check-config`: passed.
 
 ## Rejection conditions
 

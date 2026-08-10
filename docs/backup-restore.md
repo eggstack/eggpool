@@ -10,7 +10,7 @@ delay) and retains the last 14 by default.
 ```toml
 # Optional — automatic backups are disabled by default
 [backup]
-enabled = true
+enabled = true  # Opt in; disabled in the low-wear SBC example.
 interval_s = 86400         # every 24 hours
 retain_count = 14          # keep last 14 backups
 startup_delay_s = 300      # wait 5 min after boot before first backup
@@ -24,7 +24,8 @@ The default backup directory depends on the installation type:
 - **Personal**: `~/backups/eggpool/` (or `$XDG_BACKUP_HOME/eggpool`)
 
 The automatic task uses `sqlite3.Connection.backup()` for consistent
-snapshots and writes archives atomically (write-to-temp + rename).
+snapshots and writes archives atomically (write-to-temp + rename). Snapshot,
+archive-copy, and staging cleanup work runs off the asyncio event loop.
 No external `sqlite3` binary is required.
 
 The `eggpool deploy backup-cron` path remains available for operators

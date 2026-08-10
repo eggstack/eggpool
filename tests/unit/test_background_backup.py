@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from pathlib import Path
 
 import pytest
@@ -262,3 +263,60 @@ class TestAutomaticBackupLoop:
             names = zf.namelist()
         assert "usage.sqlite3-wal" not in names
         assert "usage.sqlite3-shm" not in names
+
+    @pytest.mark.asyncio()
+    async def test_archive_work_runs_off_event_loop(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Runtime snapshot and archive work use a non-event-loop thread."""
+        import eggpool.lifecycle.backup as backup_module
+        from eggpool.lifecycle.backup import create_runtime_backup
+
+        config, config_path = _make_config(tmp_path, startup_delay_s=0)
+        db_path = Path(config.database.path)
+        _init_sqlite_db(db_path)
+        backup_dir = tmp_path / "backups"
+        event_loop_thread = threading.get_ident()
+        archive_thread: int | None = None
+        original_build_archive = backup_module._build_archive
+
+        def observe_archive(*args, **kwargs) -> None:
+            nonlocal archive_thread
+            archive_thread = threading.get_ident()
+            original_build_archive(*args, **kwargs)
+
+        monkeypatch.setattr(backup_module, "_build_archive", observe_archive)
+        archive = await create_runtime_backup(
+            db_path=db_path,
+            config_path=config_path,
+            env_path=None,
+            output_dir=backup_dir,
+            install_method="runtime",
+            include_env=False,
+        )
+
+        assert archive.exists()
+        assert archive_thread is not None
+        assert archive_thread != event_loop_thread
+        assert list(backup_dir.glob(".eggpool-backup-staging-*")) == []
+
+    @pytest.mark.asyncio()
+    async def test_backup_failure_propagates_from_single_attempt(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A single automatic attempt exposes failures to its supervisor."""
+        import eggpool.background.backup as background_backup
+
+        config, config_path = _make_config(tmp_path, startup_delay_s=0)
+
+        async def fail_backup(**kwargs):
+            raise RuntimeError("archive failed")
+
+        monkeypatch.setattr(background_backup, "create_runtime_backup", fail_backup)
+        with pytest.raises(RuntimeError, match="archive failed"):
+            await background_backup.run_backup_once(
+                config=config,
+                db=None,  # type: ignore[arg-type]
+                config_path=config_path,
+                env_path=None,
+            )

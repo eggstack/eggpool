@@ -29,6 +29,11 @@ Creates timestamped `.zip` archives containing the complete installation state.
 
 **Storage:** Uncompressed (`zipfile.ZIP_STORED`) because contents are already small. The `.zip` suffix is used because it's hand-restorable on any platform without `tar` or `gzip`.
 
+Runtime backups use `sqlite3.Connection.backup()` for a consistent snapshot.
+Snapshotting, full-file archive construction, atomic publication, and staging
+cleanup run together through `asyncio.to_thread()` so large backups do not
+block EggPool's canonical event loop. Retention pruning is also off-loop.
+
 **Metadata format:**
 ```
 version=0.6.5

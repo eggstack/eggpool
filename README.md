@@ -46,7 +46,9 @@ bind to the LAN; noninteractive onboarding keeps loopback. Optional features
 remain explicit configuration choices.
 
 For a copyable SBC profile with an explicit LAN bind and provider discovery
-cadence, see [config.sbc.example.toml](config.sbc.example.toml).
+cadence, see [config.sbc.example.toml](config.sbc.example.toml). Its full
+database backup is disabled by default to keep the low-wear profile truthful;
+enable `[backup]` deliberately when local recovery copies are required.
 
 Resource behavior is intentionally profile-driven rather than governed by a
 universal RSS threshold. Use `eggpool runtime-status --json` after startup to

@@ -326,6 +326,32 @@ async def create_runtime_backup(
     the correct on-disk location.
     """
     import asyncio
+
+    return await asyncio.to_thread(
+        _create_runtime_backup_sync,
+        db_path=db_path,
+        config_path=config_path,
+        env_path=env_path,
+        output_dir=output_dir,
+        install_method=install_method,
+        include_env=include_env,
+        busy_timeout_ms=busy_timeout_ms,
+        now=now,
+    )
+
+
+def _create_runtime_backup_sync(
+    *,
+    db_path: Path,
+    config_path: Path,
+    env_path: Path | None,
+    output_dir: Path,
+    install_method: str,
+    include_env: bool,
+    busy_timeout_ms: int,
+    now: datetime | None,
+) -> Path:
+    """Create a runtime backup entirely in a default-executor thread."""
     import shutil
     import sqlite3
     import tempfile
@@ -340,19 +366,15 @@ async def create_runtime_backup(
     staged_db = staging_dir / "usage.sqlite3"
 
     try:
-
-        def _snapshot_sqlite() -> None:
-            src_conn = sqlite3.connect(str(db_path), timeout=busy_timeout_ms / 1000.0)
+        src_conn = sqlite3.connect(str(db_path), timeout=busy_timeout_ms / 1000.0)
+        try:
+            dst_conn = sqlite3.connect(str(staged_db))
             try:
-                dst_conn = sqlite3.connect(str(staged_db))
-                try:
-                    src_conn.backup(dst_conn)
-                finally:
-                    dst_conn.close()
+                src_conn.backup(dst_conn)
             finally:
-                src_conn.close()
-
-        await asyncio.to_thread(_snapshot_sqlite)
+                dst_conn.close()
+        finally:
+            src_conn.close()
 
         source = BackupSource(
             config_source=config_path,

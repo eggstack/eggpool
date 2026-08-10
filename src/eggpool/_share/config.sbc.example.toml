@@ -66,6 +66,7 @@ enabled = true
 public = false
 
 [backup]
-enabled = true
+enabled = false # Full snapshots are opt-in to minimize SBC storage wear.
 interval_s = 86400
 retain_count = 7
+# Enable deliberately when local recovery copies are required.

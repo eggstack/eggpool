@@ -279,6 +279,13 @@ Operator-only; bypasses EggPool to confirm the configured key works directly ups
 
 ### Backup
 
+Automatic in-process backups are opt-in through `[backup].enabled`. Runtime
+backups use SQLite's consistent `Connection.backup()` snapshot and publish
+the restore-compatible archive atomically. Snapshotting, archive copying, and
+staging cleanup run through `asyncio.to_thread()`; retention pruning is also
+off the canonical event loop. The copyable low-wear SBC profile leaves this
+feature disabled until an operator explicitly enables it.
+
 ```bash
 eggpool backup                          # Default: ~/backups/eggpool/
 eggpool backup --output-dir /var/backups/eggpool

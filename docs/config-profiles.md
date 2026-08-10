@@ -75,7 +75,12 @@ retain_count = 14
 Use the repository's [copyable SBC configuration](../config.sbc.example.toml)
 instead of merging a profile fragment into another file. It is a complete,
 validated example with one SQLite worker, low-wear buffered analytics,
-diagnostics disabled, and daily retention/backup cadence.
+diagnostics disabled, with automatic backups disabled by default.
+
+Automatic full-database backups are disabled in this low-wear example. Enable
+`[backup].enabled = true` deliberately when local recovery copies are worth
+the additional storage I/O; the configured daily cadence and seven-copy
+retention then apply.
 
 The trade-off is lower dashboard freshness and less diagnostic detail in
 exchange for lower memory, connection, and microSD write pressure. Add only
