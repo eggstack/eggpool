@@ -165,6 +165,9 @@ attempt, reservation, transaction-failure, and retained-terminal-owner suites.
 The first-finalization regression should assert application-level convergence
 reads, while duplicate and partial-convergence cases must retain their focused
 fallback reads.
+Also verify that first-attempt timestamp persistence does not issue a separate
+parent UPDATE and that only terminal request finalization writes
+`last_attempt_id`.
 
 ## Code Style
 

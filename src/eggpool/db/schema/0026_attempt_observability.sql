@@ -46,10 +46,10 @@ SET provider_id = (
     )
 WHERE provider_id IS NULL;
 
--- First-attempt timestamp on requests.  Set once when the first
--- attempt row is inserted; subsequent updates leave it alone.  Used
--- by the dashboard to compute coordinator overhead (time from
--- request open to first attempt dispatch).
+-- First-attempt timestamp on requests.  New rows set this once on the
+-- request INSERT at the first durable-attempt boundary; subsequent
+-- updates leave it alone.  Used by the dashboard to compute coordinator
+-- overhead (time from request open to first attempt dispatch).
 ALTER TABLE requests ADD COLUMN first_attempt_at TIMESTAMP;
 
 UPDATE requests

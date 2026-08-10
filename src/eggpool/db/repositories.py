@@ -192,6 +192,7 @@ class RequestRepository:
         account_id: int,
         reserved_microdollars: int = 0,
         started_at: float | None = None,
+        first_attempt_at: float | None = None,
         provider_id: str = DEFAULT_PROVIDER_ID,
         client_ip: str = "",
     ) -> str:
@@ -208,9 +209,16 @@ class RequestRepository:
         before selection must defer the INSERT until after the
         account has been chosen.
         """
-        if started_at is not None:
-            import datetime as _dt
+        import datetime as _dt
 
+        first_attempt_at_str = (
+            _dt.datetime.fromtimestamp(first_attempt_at, tz=_dt.UTC).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+            if first_attempt_at is not None
+            else None
+        )
+        if started_at is not None:
             started_at_str = _dt.datetime.fromtimestamp(
                 started_at, tz=_dt.UTC
             ).strftime("%Y-%m-%d %H:%M:%S")
@@ -218,8 +226,8 @@ class RequestRepository:
                 "INSERT INTO requests "
                 "(account_id, model_id, started_at, status, protocol, "
                 "streamed, reserved_microdollars, proxy_request_id, "
-                "provider_id, client_ip) "
-                "VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)",
+                "provider_id, client_ip, first_attempt_at) "
+                "VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)",
                 (
                     account_id,
                     model_id,
@@ -230,6 +238,7 @@ class RequestRepository:
                     request_id,
                     provider_id,
                     client_ip,
+                    first_attempt_at_str,
                 ),
             )
         else:
@@ -237,8 +246,8 @@ class RequestRepository:
                 "INSERT INTO requests "
                 "(account_id, model_id, status, protocol, streamed, "
                 "reserved_microdollars, proxy_request_id, provider_id, "
-                "client_ip) "
-                "VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?)",
+                "client_ip, first_attempt_at) "
+                "VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)",
                 (
                     account_id,
                     model_id,
@@ -248,6 +257,7 @@ class RequestRepository:
                     request_id,
                     provider_id,
                     client_ip,
+                    first_attempt_at_str,
                 ),
             )
         return str(last_id)
@@ -475,6 +485,7 @@ class RequestRepository:
         synthetic_cache_policy_name: str | None = None,
         synthetic_cache_policy_source: str | None = None,
         synthetic_cache_summary_json: str | None = None,
+        last_attempt_id: int | None = None,
     ) -> RequestFinalizationMutation:
         """Finalize a request only if it is still pending.
 
@@ -497,6 +508,7 @@ class RequestRepository:
         rows = await self._db.execute_returning(
             "UPDATE requests SET "
             "status = ?, completed_at = CURRENT_TIMESTAMP, "
+            "last_attempt_id = ?, "
             "input_tokens = ?, output_tokens = ?, cost_microdollars = ?, "
             "exactness = ?, first_byte_ms = ?, "
             "error_class = ?, error_detail = ?, upstream_request_id = ?, "
@@ -564,6 +576,7 @@ class RequestRepository:
             "RETURNING status",
             (
                 status,
+                last_attempt_id,
                 input_tokens,
                 output_tokens,
                 cost_microdollars,
@@ -814,10 +827,10 @@ class AttemptRepository:
     ) -> int:
         """Create a new attempt row, return its id.
 
-        On ``attempt_number == 1`` the parent request's
-        ``first_attempt_at`` column is also stamped with the current
-        timestamp. This anchors coordinator-overhead analytics without
-        requiring the coordinator to issue a second UPDATE.
+        The parent request's ``first_attempt_at`` is populated by the
+        request INSERT at the first durable-attempt boundary. Keeping
+        that timestamp on the request creation mutation avoids a second
+        request-row round trip without changing its meaning.
         """
         attempt_id = await self._db.execute_insert(
             "INSERT INTO request_attempts "
@@ -834,12 +847,6 @@ class AttemptRepository:
                 1 if streamed else 0,
             ),
         )
-        if attempt_number == 1:
-            await self._db.execute_write(
-                "UPDATE requests SET first_attempt_at = CURRENT_TIMESTAMP "
-                "WHERE id = ? AND first_attempt_at IS NULL",
-                (request_id,),
-            )
         return attempt_id
 
     async def update(
@@ -859,9 +866,9 @@ class AttemptRepository:
     ) -> None:
         """Update an attempt with outcome fields.
 
-        Also records the attempt as the parent request's
-        ``last_attempt_id`` so the trace endpoint can resolve the
-        winning attempt without re-scanning the attempts table.
+        Parent request terminal bookkeeping is handled by
+        ``RequestRepository.finalize_if_pending_returning`` so an
+        intermediate retry cannot appear to be the winning attempt.
         """
         retry_flag = 1 if is_retry_outcome else 0
         if completed:
@@ -930,9 +937,8 @@ class AttemptRepository:
         """Finalize an attempt only if it is still incomplete.
 
         Returns whether the row transitioned and whether the attempt is
-        terminal. When the transition occurs the attempt is also stamped
-        as the parent request's ``last_attempt_id`` so the trace endpoint
-        can resolve the winning attempt without scanning.
+        terminal. The parent request backlink is written by the terminal
+        request mutation, not by this attempt-only mutation.
         """
         retry_flag = 1 if is_retry_outcome else 0
         async with self._db.transaction():
@@ -960,13 +966,6 @@ class AttemptRepository:
                     attempt_id,
                 ),
             )
-            if rows:
-                await self._db.execute_write(
-                    "UPDATE requests SET last_attempt_id = ? "
-                    "WHERE id = (SELECT request_id FROM request_attempts "
-                    "WHERE id = ?)",
-                    (attempt_id, attempt_id),
-                )
         return AttemptFinalizationMutation(
             transitioned=bool(rows),
             terminal=bool(rows and rows[0]["completed_at"] is not None),

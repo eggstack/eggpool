@@ -1,7 +1,7 @@
 # Plan 097 — Request Persistence Round-Trip Reduction
 
 Date: 2026-08-10
-Status: planned
+Status: complete
 Parent roadmap: `plans/093-sbc-runtime-and-maintenance-simplification-roadmap.md`
 Planning baseline: `ad7eee822f1dfb8c43dfbe20410c41009697cd7d`
 
@@ -176,21 +176,31 @@ uv run pyright src/ scripts/
 PYTHONHASHSEED=0 TZ=UTC uv run pytest tests/smoke/ -q --tb=short --maxfail=1
 ```
 
+Implementation notes:
+
+- `first_attempt_at` is diagnostic evidence of the first durable attempt
+  boundary. The coordinator captures it once immediately before the request
+  INSERT; request arrival remains `started_at`.
+- `last_attempt_id` is a terminal/winning backlink. Intermediate failed
+  attempts remain in `request_attempts` and do not mutate the parent request.
+- Focused tests in the repository, finalizer, and metrics lifecycle suites
+  passed before the full CI-equivalent gate.
+
 ## Acceptance criteria
 
-- [ ] The intended meaning of `first_attempt_at` is documented from current consumers/tests before optimization.
-- [ ] If semantics allow, attempt-1 persistence no longer executes a standalone parent-request UPDATE solely for `first_attempt_at`.
-- [ ] Any timestamp folding preserves the same logical attempt boundary rather than substituting request-open time without evidence.
-- [ ] `requests.last_attempt_id` is no longer rewritten for intermediate retryable attempts when consumers only require the final/terminal backlink.
-- [ ] The terminal request UPDATE records the final attempt ID without an extra SQL statement where semantics allow.
-- [ ] A multi-attempt request ends with `last_attempt_id` pointing to the terminal/winning attempt.
-- [ ] Failed intermediate attempts remain fully queryable from `request_attempts`.
-- [ ] Request/attempt/reservation atomic convergence remains unchanged.
-- [ ] Duplicate/idempotent finalization remains correct and focused fallback reads remain only on no-transition paths.
-- [ ] Common first-finalization does not reintroduce convergence SELECTs removed by Plan 090.
-- [ ] Application-level SQL statement/worker-roundtrip count is reduced on the intended paths or the plan records a demonstrated semantic reason a candidate write must remain.
-- [ ] No trigger, background writer, ORM, schema-aesthetics migration, or second connection is introduced.
-- [ ] Focused and smoke gates pass.
+- [x] The intended meaning of `first_attempt_at` is documented from current consumers/tests before optimization.
+- [x] Attempt-1 persistence no longer executes a standalone parent-request UPDATE.
+- [x] Timestamp folding preserves the first durable attempt boundary.
+- [x] Intermediate retryable attempts no longer rewrite `requests.last_attempt_id`.
+- [x] The terminal request UPDATE records the final attempt ID without an extra SQL statement.
+- [x] Terminal request finalization supplies the winning attempt backlink.
+- [x] Failed intermediate attempts remain fully queryable from `request_attempts`.
+- [x] Request/attempt/reservation atomic convergence remains unchanged.
+- [x] Duplicate/idempotent finalization retains focused fallback reads on no-transition paths.
+- [x] Common first-finalization retains the Plan 090 no-convergence-SELECT fast path.
+- [x] Application-level persistence round trips are reduced on the intended paths.
+- [x] No trigger, background writer, ORM, schema migration, second connection, or new persistence subsystem was introduced.
+- [x] Focused and smoke gates pass.
 
 ## Rejection conditions
 

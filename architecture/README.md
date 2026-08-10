@@ -4412,6 +4412,12 @@ terminal component from incomplete durable state. The three mutations remain
 inside the same correctness transaction, and the legacy boolean repository
 methods remain available for callers that do not need the returned state.
 
+The first-attempt diagnostic timestamp is captured once at the first durable
+attempt boundary and carried by the existing request INSERT. The request's
+`last_attempt_id` backlink is supplied to that same terminal request mutation;
+intermediate retry cleanup updates only its attempt row, while the full chain
+remains available to trace queries.
+
 The focused regression coverage is in
 `tests/unit/test_request_finalizer.py`: it asserts zero convergence reads on
 the first finalization and three fallback reads on an identical replay.

@@ -308,8 +308,12 @@ class TestAttemptFinalizerNewFields:
         assert row["is_retry_outcome"] == 1
 
     @pytest.mark.asyncio()
-    async def test_first_attempt_stamps_first_attempt_at(self, db: Database) -> None:
+    async def test_first_attempt_timestamp_is_folded_into_request_insert(
+        self, db: Database
+    ) -> None:
         attempt_repo = AttemptRepository(db)
+        request_repo = RequestRepository(db)
+        first_attempt_at = 1_700_000_123.0
         async with db.transaction():
             await db.execute_write(
                 "INSERT INTO accounts (name, api_key_env, enabled) VALUES (?, ?, ?)",
@@ -319,12 +323,13 @@ class TestAttemptFinalizerNewFields:
                 "INSERT INTO models (model_id, protocol) VALUES (?, ?)",
                 ("model_q", "openai"),
             )
-            await RequestRepository(db).create_pending(
+            await request_repo.create_pending(
                 request_id="trace-test-1",
                 model_id="model_q",
                 protocol="openai",
                 streamed=False,
                 account_id=1,
+                first_attempt_at=first_attempt_at,
             )
         rows = await db.fetch_all("SELECT id FROM requests")
         request_id = int(rows[0]["id"])
@@ -341,10 +346,12 @@ class TestAttemptFinalizerNewFields:
             "SELECT first_attempt_at FROM requests WHERE id = ?",
             (request_id,),
         )
-        assert request_rows[0]["first_attempt_at"] is not None
+        assert request_rows[0]["first_attempt_at"] == "2023-11-14 22:15:23"
 
     @pytest.mark.asyncio()
-    async def test_finalize_stamps_last_attempt_id(self, db: Database) -> None:
+    async def test_intermediate_attempt_does_not_stamp_terminal_backlink(
+        self, db: Database
+    ) -> None:
         attempt_repo = AttemptRepository(db)
         async with db.transaction():
             await db.execute_write(
@@ -373,6 +380,14 @@ class TestAttemptFinalizerNewFields:
                 model_id="model_p",
                 protocol="openai",
             )
+            terminal_attempt_id = await attempt_repo.create(
+                request_id=request_id,
+                attempt_number=2,
+                account_id=1,
+                provider_id="opencode-go",
+                model_id="model_p",
+                protocol="openai",
+            )
         await attempt_repo.finalize_if_incomplete(
             attempt_id=attempt_id,
             status_code=200,
@@ -383,7 +398,34 @@ class TestAttemptFinalizerNewFields:
             "SELECT last_attempt_id FROM requests WHERE id = ?",
             (request_id,),
         )
-        assert int(rows[0]["last_attempt_id"]) == attempt_id
+        assert rows[0]["last_attempt_id"] is None
+
+        async with db.transaction():
+            await RequestRepository(db).finalize_if_pending(
+                request_id=str(request_id),
+                status="completed",
+                last_attempt_id=terminal_attempt_id,
+            )
+        rows = await db.fetch_all(
+            "SELECT last_attempt_id FROM requests WHERE id = ?",
+            (request_id,),
+        )
+        assert int(rows[0]["last_attempt_id"]) == terminal_attempt_id
+
+        async with db.transaction():
+            await RequestRepository(db).finalize_if_pending(
+                request_id=str(request_id),
+                status="error",
+                last_attempt_id=attempt_id,
+            )
+        rows = await db.fetch_all(
+            "SELECT last_attempt_id FROM requests WHERE id = ?",
+            (request_id,),
+        )
+        assert int(rows[0]["last_attempt_id"]) == terminal_attempt_id
+
+        attempts = await attempt_repo.get_for_request(str(request_id))
+        assert [row["id"] for row in attempts] == [attempt_id, terminal_attempt_id]
 
 
 def test_period_label_includes_iso_range() -> None:

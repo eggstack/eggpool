@@ -1776,6 +1776,7 @@ class RequestCoordinator:
 
         created_request = "db_request_id" not in context.client_metadata
         if created_request:
+            first_attempt_at = time.time() if attempt_number == 1 else None
             with _maybe_span(self._dispatch_span_recorder, SPAN_DB_WRITE_REQUEST):
                 db_request_id = await self._request_repo.create_pending(
                     request_id=context.request_id,
@@ -1785,6 +1786,7 @@ class RequestCoordinator:
                     account_id=account_id,
                     reserved_microdollars=estimated_microdollars,
                     started_at=context.started_at,
+                    first_attempt_at=first_attempt_at,
                     provider_id=resolved_provider_id,
                     client_ip=context.client_ip,
                 )

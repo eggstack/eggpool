@@ -627,6 +627,7 @@ class RequestFinalizer:
             request_mutation = await self._request_repo.finalize_if_pending_returning(
                 request_id=db_request_id,
                 status=status,
+                last_attempt_id=selected.attempt_id,
                 status_code=data.status_code,
                 input_tokens=data.input_tokens,
                 output_tokens=data.output_tokens,

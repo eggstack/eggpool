@@ -217,6 +217,12 @@ reservation handling. All three durable components remain in one correctness
 transaction; compatibility boolean repository methods remain for other
 callers.
 
+The first-attempt diagnostic timestamp is captured once at the first durable
+attempt boundary and stored by the existing request INSERT. The request's
+`last_attempt_id` backlink is written by that same request terminal mutation,
+so retryable intermediate attempts remain queryable without being presented as
+the winning attempt.
+
 Before a durable identity exists, `RuntimePublicationReceipt` owns the
 provisional request/token claim and health probe. After persistence, publication
 converts the provisional load to the canonical reservation in one claim-lock
