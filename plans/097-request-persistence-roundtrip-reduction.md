@@ -186,6 +186,19 @@ Implementation notes:
 - Focused tests in the repository, finalizer, and metrics lifecycle suites
   passed before the full CI-equivalent gate.
 
+Verification results:
+
+- `uv run pytest tests/unit/test_request_finalizer.py tests/unit/test_finalizer_reservation_regression.py tests/unit/test_finalizer_transaction_scope.py tests/unit/test_attempt_stats.py tests/integration/test_coordinator_lifecycle.py tests/integration/test_failover_matrix.py tests/integration/test_health_idempotency.py tests/integration/test_migration_compatibility.py tests/integration/test_database_transaction_contract.py -q --tb=short --maxfail=1` — 107 passed.
+- `uv run pytest tests/unit/test_attempt_stats.py tests/unit/test_finalizer_transaction_scope.py tests/unit/test_metrics_lifecycle.py -q --tb=short --maxfail=1` — 33 passed.
+- `uv run ruff format --check src/ tests/ scripts/` — 717 files already formatted.
+- `uv run ruff check src/ tests/ scripts/` — passed.
+- `uv run pyright src/ scripts/` — 0 errors, 0 warnings, 0 informations.
+- `PYTHONHASHSEED=0 TZ=UTC uv run pytest tests/smoke/ -q --tb=short --maxfail=1` — 14 passed.
+- `uv run eggpool --config config.example.toml check-config` and the equivalent
+  `config.sbc.example.toml` command — both passed.
+- Remote GitHub Actions run [31431226706](https://github.com/eggstack/eggpool/actions/runs/31431226706)
+  for commit `71c32bf` — `check` passed.
+
 ## Acceptance criteria
 
 - [x] The intended meaning of `first_attempt_at` is documented from current consumers/tests before optimization.
