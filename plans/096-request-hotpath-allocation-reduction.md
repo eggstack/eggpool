@@ -165,7 +165,7 @@ No network/live-provider test is required.
 
 ## Completion record
 
-Implementation commit: recorded in the follow-up documentation commit.
+Implementation commit: `5a4daaaed46b89203ae0a33c0812b814eb64da92`.
 
 Implemented the ASCII estimator fast path, allocation-free translated tool
 padding arithmetic, generation-owned provider/trusted-proxy lookup sets, and
