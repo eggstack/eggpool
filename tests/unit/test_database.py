@@ -207,7 +207,6 @@ async def test_concurrent_readers_during_write() -> None:
         db1._read_only = False  # type: ignore[reportPrivateUsage]
         db1._connection_lock = asyncio.Lock()
         db1._canonical_loop = asyncio.get_running_loop()  # type: ignore[reportPrivateUsage]
-        db1._transaction_depth = ContextVar("database_transaction_depth", default=0)
         db1._transaction_owner = ContextVar("database_transaction_owner", default=None)
         db1._in_transaction_context = ContextVar(
             "database_in_transaction_context1", default=False
@@ -223,9 +222,6 @@ async def test_concurrent_readers_during_write() -> None:
         db1._max_lock_wait_s = 0.0  # type: ignore[reportPrivateUsage]
         db1._lock_wait_count = 0  # type: ignore[reportPrivateUsage]
         db1._lock_wait_samples_s = collections.deque(maxlen=512)  # type: ignore[reportPrivateUsage]
-        db1._transaction_state = ContextVar(  # type: ignore[reportPrivateUsage]
-            "database_transaction_state1", default=None
-        )
         db1._test_inject_before_commit = None  # type: ignore[reportPrivateUsage]
         db1._test_inject_commit_call = None  # type: ignore[reportPrivateUsage]
         db1._invalidated_reason = None  # type: ignore[reportPrivateUsage]
@@ -247,7 +243,6 @@ async def test_concurrent_readers_during_write() -> None:
         db2._read_only = False  # type: ignore[reportPrivateUsage]
         db2._connection_lock = asyncio.Lock()
         db2._canonical_loop = asyncio.get_running_loop()  # type: ignore[reportPrivateUsage]
-        db2._transaction_depth = ContextVar("database_transaction_depth2", default=0)
         db2._transaction_owner = ContextVar("database_transaction_owner2", default=None)
         db2._in_transaction_context = ContextVar(
             "database_in_transaction_context2", default=False
@@ -263,9 +258,6 @@ async def test_concurrent_readers_during_write() -> None:
         db2._max_lock_wait_s = 0.0  # type: ignore[reportPrivateUsage]
         db2._lock_wait_count = 0  # type: ignore[reportPrivateUsage]
         db2._lock_wait_samples_s = collections.deque(maxlen=512)  # type: ignore[reportPrivateUsage]
-        db2._transaction_state = ContextVar(  # type: ignore[reportPrivateUsage]
-            "database_transaction_state2", default=None
-        )
         db2._test_inject_before_commit = None  # type: ignore[reportPrivateUsage]
         db2._test_inject_commit_call = None  # type: ignore[reportPrivateUsage]
         db2._invalidated_reason = None  # type: ignore[reportPrivateUsage]

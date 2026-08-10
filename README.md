@@ -33,6 +33,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Low-round-trip finalization: first request terminalization uses SQLite `RETURNING` results to prove request, attempt, and reservation convergence in one transaction, while duplicate and partial paths retain focused durable reads
 - Truthful stream handoff: `downstream_started` is marked when the proxy forwards ASGI `http.response.start`, before body iteration; an empty started stream is post-handoff with `bytes_emitted = 0`, and cannot be retried
 - Restart-safe crash recovery: startup reconciliation repairs durable requests and reservations left by a prior process; normal runtime cleanup remains owned by the selected attempt
+- Database transactions: one asyncio task owns each SQLite transaction; child or unrelated tasks cannot execute inside another task's boundary, and rollback remains private to that owner.
 - Database recovery: fail-closed startup integrity and restart-safe crash reconciliation; an indeterminate runtime SQLite state closes admission and lets systemd restart the worker
 - Bounded model quarantine: TTL-based suspected/quarantined state with corroboration thresholds and automatic recovery
 - Self-healing provider health: every nonterminal account/model suppression is capped at 30 minutes, durable hints are bounded during hydration, and half-open probes always converge

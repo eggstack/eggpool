@@ -166,7 +166,7 @@ Each child plan adds only focused unit/integration verification for its changed 
 
 - [ ] Runtime automatic backup performs SQLite snapshotting, archive creation/copying, and staging cleanup without blocking the canonical event loop on full-file I/O.
 - [ ] The SBC example's backup default/documentation truthfully reflects the low-wear/minimum-footprint target.
-- [ ] `Database.safe_rollback()` is either removed as unused or made ownership-safe; no task can rollback another task's transaction.
+- [x] `Database.safe_rollback()` removed as unused; no public rollback escape hatch remains and no task can rollback another task's transaction.
 - [ ] ASCII-heavy context estimation avoids the Python per-character path while preserving estimator output.
 - [ ] Transcoded context padding no longer materializes fake zero-filled request bytes.
 - [ ] Repeated construction of immutable provider/trusted-proxy collections is removed where safe.

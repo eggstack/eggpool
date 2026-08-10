@@ -44,8 +44,7 @@ aiosqlite wrapper with:
   supervisor restart creates a fresh worker
 - `writes_admitted` / `reads_admitted` are cached admission facts used by
   readiness and background writers
-- `_safe_rollback()` provides bounded diagnostics for confirmed rollback and
-  fail-closed rollback failure handling
+- `_safe_rollback()` is a private transaction-owned helper with bounded diagnostics for confirmed rollback and fail-closed rollback failure handling; there is no public rollback escape hatch.
 - Connection invalidation closes read/write admission and invokes the
   process-fatal worker boundary; it does not publish a replacement connection
   into a live request process.

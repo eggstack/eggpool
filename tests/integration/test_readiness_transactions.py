@@ -9,6 +9,7 @@ import pytest
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
 from eggpool.db.repositories import RequestRepository
+from eggpool.errors import DatabaseTransactionOwnershipError
 
 
 async def _seed_db(db: Database) -> None:
@@ -114,7 +115,7 @@ async def test_child_task_does_not_inherit_ownership() -> None:
     await runner.run()
     await _seed_db(db)
 
-    child_saw_nested = []
+    child_errors: list[DatabaseTransactionOwnershipError] = []
 
     async def parent_task() -> None:
         async with db.transaction():
@@ -128,17 +129,14 @@ async def test_child_task_does_not_inherit_ownership() -> None:
             await child
 
     async def child_task() -> None:
-        # The child should NOT be treated as nested owner
-        # It should wait for the parent's transaction to complete
-        depth = db._transaction_depth.get()
-        owner = db._transaction_owner.get()
-        current = asyncio.current_task()
-        # If owner is the parent (not current task), depth check would fail nested path
-        is_nested_owner = depth > 0 and owner is current
-        child_saw_nested.append(is_nested_owner)
+        # ContextVar inheritance must not grant the child transaction ownership.
+        with pytest.raises(DatabaseTransactionOwnershipError) as exc_info:
+            async with db.transaction():
+                pass
+        child_errors.append(exc_info.value)
 
     await parent_task()
-    assert child_saw_nested == [False]
+    assert len(child_errors) == 1
     await db.disconnect()
 
 

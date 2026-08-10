@@ -158,6 +158,8 @@ before durable success, native invalid-JSON pass-through, and cancellation
 propagation. Run the focused coordinator/proxy/transcoder suites before the
 repository-wide CI gate.
 
+Database ownership changes should run the focused transaction and fault-matrix suites; verify child-task ownership rejection and rollback-failure invalidation without exposing a public rollback helper.
+
 Finalization round-trip changes should run the request-finalizer, repository,
 attempt, reservation, transaction-failure, and retained-terminal-owner suites.
 The first-finalization regression should assert application-level convergence

@@ -4345,7 +4345,7 @@ predicates at startup.
 - Durable request/attempt/reservation identities — startup reconciliation is
   authoritative for operations whose previous process may have died.
 - `DatabaseRollbackError` — typed error when ROLLBACK itself fails after a body exception, distinct from `DatabaseCommitError`.
-- `_safe_rollback()` helper with bounded diagnostics.
+- `_safe_rollback()` private transaction-owned helper with bounded diagnostics; no public rollback escape hatch.
 - The removed `[database.recovery]` compatibility surface is rejected by
   strict configuration validation; SQLite uncertainty is handled by the
   fail-closed startup/restart boundary above.

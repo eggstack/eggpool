@@ -1,7 +1,7 @@
 # Plan 095 — Database Rollback Ownership
 
 Date: 2026-08-10
-Status: planned
+Status: completed
 Parent roadmap: `plans/093-sbc-runtime-and-maintenance-simplification-roadmap.md`
 Planning baseline: `ad7eee822f1dfb8c43dfbe20410c41009697cd7d`
 
@@ -206,3 +206,11 @@ Reject the implementation if:
 8. Run the ordinary smoke/lint/type gate.
 9. Update this plan with the implementation commit, call-site result, and exact verification commands/results.
 10. Stop; leave broader `connection.py` cleanup for Plan 099.
+
+## Closure record
+
+- Disposition: deleted the unused public `Database.safe_rollback()` method. Repository-wide search found no production runtime, startup/reload, CLI, tooling, or test call sites; `_safe_rollback()` remains only for the owning `Database.transaction()` failure paths.
+- Proven-dead state removed: `_transaction_depth`, `_transaction_state`, and `_TransactionState`; production had no reads, and the former state marker was only written/reset.
+- Regression coverage: child tasks inheriting transaction ContextVars now exercise and assert `DatabaseTransactionOwnershipError`; existing deterministic transaction isolation and rollback-failure fault-matrix coverage remains green.
+- Documentation: updated `README.md`, `AGENTS.md`, `architecture/README.md`, `architecture/deep-dive-database.md`, and the local architecture/development skills.
+- Verification: `rtk uv run pytest tests/integration/test_readiness_transactions.py tests/unit/test_database.py tests/unit/test_database_fault_matrix.py tests/integration/test_database_maintenance.py -q --tb=short --maxfail=1` (56 passed); `rtk uv run ruff format --check src/ tests/ scripts/`, `rtk uv run ruff check src/ tests/ scripts/`, and `rtk uv run pyright src/ scripts/` passed; `PYTHONHASHSEED=0 TZ=UTC rtk uv run pytest tests/smoke/ -q --tb=short --maxfail=1` (14 passed); both shipped `check-config` commands passed.

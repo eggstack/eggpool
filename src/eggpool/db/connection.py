@@ -9,7 +9,6 @@ import sqlite3
 import time
 from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import aiosqlite
@@ -43,13 +42,6 @@ class DatabaseLifecycleState(enum.Enum):
 
 class _RollbackProbeError(Exception):
     """Sentinel exception for probe_writable to roll back without logging."""
-
-
-@dataclass(slots=True)
-class _TransactionState:
-    """Mutable marker shared by tasks that inherit a transaction context."""
-
-    active: bool = True
 
 
 def _classify_op_kind(sql: str) -> str:
@@ -174,10 +166,6 @@ class Database:
         self._conn: aiosqlite.Connection | None = None
         self._connection_lock = asyncio.Lock()
         self._canonical_loop: asyncio.AbstractEventLoop | None = None
-        self._transaction_depth: ContextVar[int] = ContextVar(
-            "database_transaction_depth",
-            default=0,
-        )
         # Contention counters (in-memory only, never persisted)
         self._write_ops: int = 0
         self._read_ops: int = 0
@@ -197,10 +185,6 @@ class Database:
         self._in_transaction_context: ContextVar[bool] = ContextVar(
             "database_in_transaction_context",
             default=False,
-        )
-        self._transaction_state: ContextVar[_TransactionState | None] = ContextVar(
-            "database_transaction_state",
-            default=None,
         )
         # Tracks which asyncio.Task issued ``BEGIN IMMEDIATE`` for
         # the active outermost transaction on this connection.
@@ -438,20 +422,6 @@ class Database:
             in_transaction_after,
             rollback_exc,
         )
-
-    async def safe_rollback(self) -> bool:
-        """Public safe rollback for callers outside a transaction.
-
-        Returns True on success and False on failure.  Used by
-        component-level cleanup paths that need to discard a
-        half-written transaction without raising.
-        """
-        if self._conn is None:
-            return False
-        _, succeeded, _, _ = await self._safe_rollback()
-        if succeeded:
-            self._rollback_success_count += 1
-        return succeeded
 
     async def _commit_connection(self) -> None:
         """Execute the SQLite COMMIT. May be patched in tests."""
@@ -1002,21 +972,10 @@ class Database:
             self._total_transactions += 1
             owner = asyncio.current_task()
             owner_token = self._transaction_owner.set(owner)
-            state = _TransactionState()
-            state_context = getattr(self, "_transaction_state", None)
-            if state_context is None:
-                state_context = ContextVar[_TransactionState | None](
-                    "database_transaction_state_compat",
-                    default=None,
-                )
-                self._transaction_state = state_context
-            state_token = state_context.set(state)
             ctx_token = self._in_transaction_context.set(True)
             try:
                 await self._conn.execute("BEGIN IMMEDIATE")
             except Exception as exc:
-                state.active = False
-                state_context.reset(state_token)
                 self._in_transaction_context.reset(ctx_token)
                 self._transaction_owner.reset(owner_token)
                 if _is_fatal_database_error(exc):
@@ -1188,7 +1147,5 @@ class Database:
                         outcome=outcome,
                     ) from commit_exc
             finally:
-                state.active = False
-                state_context.reset(state_token)
                 self._in_transaction_context.reset(ctx_token)
                 self._transaction_owner.reset(owner_token)

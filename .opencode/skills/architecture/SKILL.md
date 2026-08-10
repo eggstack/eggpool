@@ -9,6 +9,8 @@ description: Architecture principles and design decisions for the EggPool projec
 
 ## Core Principles
 
+- Database transactions use one shared connection and one asyncio-task owner; rollback is private to the owning transaction path.
+
 - Package boundaries must remain explicit
 - Request proxying, routing, accounting, and dashboard concerns must not be combined in endpoint handlers
 - Use Pydantic v2 for all data validation
