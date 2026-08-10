@@ -15,11 +15,28 @@ from eggpool.catalog.cache import ModelCatalogCache
 from eggpool.catalog.limits import EffectiveModelLimits
 from eggpool.errors import ContextLimitExceededError
 from eggpool.request.limits import (
+    ESTIMATED_CONTEXT_BYTES_PER_TOKEN_FLOOR,
+    _estimate_string_tokens,
     estimate_context_input_tokens,
     estimate_input_tokens,
     estimate_reservation_tokens,
     requested_output_tokens,
 )
+
+
+def _legacy_context_estimate(
+    body: bytes,
+    payload: dict[str, object],
+    tool_token_padding: int,
+) -> int:
+    """Reference the former synthetic-byte-padding calculation."""
+    padded_length = len(body) + tool_token_padding * (
+        ESTIMATED_CONTEXT_BYTES_PER_TOKEN_FLOOR
+    )
+    return estimate_context_input_tokens(
+        b"x" * padded_length,
+        payload,
+    )
 
 
 class MockCatalogCache:
@@ -63,6 +80,42 @@ def test_context_input_estimate_is_conservative_and_unbounded() -> None:
     assert estimate_input_tokens(b"x" * 6000) == 2_000
     assert estimate_input_tokens(b"x" * 6001) == 2_001
     assert estimate_input_tokens(b"x" * 1_000_000) == 333_334
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["", "short ASCII", "x" * 10_000, "{" + '"tools":' + "[]" * 2_000 + "}"],
+)
+def test_ascii_string_fast_path_preserves_estimate(value: str) -> None:
+    expected = (len(value) + 3) // 4
+    assert _estimate_string_tokens(value) == expected
+
+
+@pytest.mark.parametrize("padding", [0, 1, 64, 10_000, 1_000_000])
+def test_context_padding_arithmetic_matches_legacy_synthetic_bytes(
+    padding: int,
+) -> None:
+    payload = {"model": "m1", "messages": [{"role": "user", "content": "x"}]}
+    body = json.dumps(payload).encode()
+
+    assert estimate_context_input_tokens(
+        body,
+        payload,
+        extra_input_tokens=padding,
+    ) == _legacy_context_estimate(body, payload, padding)
+
+
+def test_context_padding_arithmetic_does_not_materialize_padding() -> None:
+    payload = {"model": "m1", "messages": []}
+    body = b'{"model":"m1","messages":[]}'
+
+    result = estimate_context_input_tokens(
+        body,
+        payload,
+        extra_input_tokens=10_000_000,
+    )
+
+    assert result == 10_000_004
 
 
 def test_context_limit_estimate_uses_decoded_text_not_json_escape_overhead() -> None:

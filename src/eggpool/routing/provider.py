@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Collection
+
 
 def parse_model_provider(
-    model_id: str, known_providers: set[str] | None = None
+    model_id: str, known_providers: Collection[str] | None = None
 ) -> tuple[str, str | None]:
     """Parse 'model-id/provider-id' into (model_id, provider_id).
 

@@ -452,6 +452,7 @@ class ImmutableRequestState:
     account_names: frozenset[str]
     hop_by_hop_headers: frozenset[str]
     local_credential_headers: frozenset[str]
+    trusted_proxies: frozenset[str] = frozenset()
 
 
 # ---------------------------------------------------------------------------
@@ -570,6 +571,7 @@ class RuntimeGeneration:
             account_names=frozenset(),
             hop_by_hop_headers=frozenset(),
             local_credential_headers=frozenset(),
+            trusted_proxies=frozenset(),
         ),
     )
 
@@ -2354,6 +2356,7 @@ class RuntimeGenerationBuilder:
             ),
             hop_by_hop_headers=HOP_BY_HOP_HEADERS,
             local_credential_headers=LOCAL_CREDENTIAL_HEADERS,
+            trusted_proxies=frozenset(config.security.trusted_proxies),
         )
 
         generation = RuntimeGeneration(

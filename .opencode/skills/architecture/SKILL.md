@@ -48,6 +48,7 @@ All data-plane requests flow through `RequestCoordinator`:
 Transparent request/response format conversion between OpenAI and Anthropic protocols in `src/eggpool/transcoder/`. `select_transcoder()` in `protocol.py` is the dispatch source of truth. Controlled by `[transcoder]` config; on by default.
 
 - **Streaming hot path**: one bounded `SSEDecoder` per upstream stream, synchronous `translate_frame()`/`finish()`, compact JSON separators `(",",":")`, lazy JSON-object parse cache
+- **Request preparation hot path**: ASCII-only context strings use the native `str.isascii()` path; translated tool allowance is passed as estimator arithmetic rather than synthetic bytes. Provider IDs and trusted proxies are immutable, generation-owned lookup sets used directly by leased requests.
 - **Provider payload lifecycle**: `ProviderBoundRequest` is the sole provider-payload authority after client parsing. Copy-on-write generation-aware mutations, one final serialization cache, frozen before dispatch. Original client bytes remain separate from the provider-bound payload.
 - The transcoder's `usage` property returns a default; finalization must read usage from the coordinator's observer
 

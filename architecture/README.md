@@ -2524,6 +2524,10 @@ Only explicit API-control documentation produces `status = "supported"`. For exa
 
 EggPool supports configurable effective context limits per model per provider, allowing operators to advertise smaller context windows than the provider physically supports.
 
+The request guardrail estimates decoded payload values conservatively; ASCII-heavy
+text takes a native fast path, and translated tool-schema allowance is applied
+arithmetically without allocating synthetic request-body padding.
+
 ### Configuration
 
 - **`ModelLimitOverrideConfig`** — reusable Pydantic model with `max_context_tokens`, `max_input_tokens`, `max_output_tokens`, `enforce_context_limit`
@@ -3266,8 +3270,8 @@ The async primitive audit (`docs/async_primitive_audit.md`) documents every long
 ### Hot-Path Optimizations
 
 - **ParsedRequestPayload** (`src/eggpool/request/parsed_payload.py`): caches the original JSON parse and derived state (model, streaming, thinking requirement) to avoid repeated parsing per request
-- **estimate_padded_size()** (`src/eggpool/request/payload_utils.py`): replaces synthetic `b"\x00"*padding` allocation with a length-based API
-- **ImmutableRequestState** (`src/eggpool/runtime_manager.py`): precomputes provider/account/header frozensets per generation, invalidated naturally through generation swap
+- **Context estimation** (`src/eggpool/request/limits.py`): uses an ASCII fast path and arithmetic translated-tool allowance without allocating synthetic padding bytes
+- **ImmutableRequestState** (`src/eggpool/runtime_manager.py`): precomputes provider/account/header/trusted-proxy frozensets per generation, invalidated naturally through generation swap
 - **build_upstream_headers()** (`src/eggpool/proxy/client.py`): combines header sanitization + auth injection in a single pass
 
 ### Bounded Runtime Diagnostics

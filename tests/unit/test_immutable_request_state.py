@@ -40,6 +40,7 @@ class TestImmutableRequestState:
         assert isinstance(state.account_names, frozenset)
         assert isinstance(state.hop_by_hop_headers, frozenset)
         assert isinstance(state.local_credential_headers, frozenset)
+        assert isinstance(state.trusted_proxies, frozenset)
 
     def test_empty_state(self) -> None:
         state = ImmutableRequestState(
@@ -50,6 +51,17 @@ class TestImmutableRequestState:
         )
         assert len(state.provider_ids) == 0
         assert len(state.account_names) == 0
+        assert state.trusted_proxies == frozenset()
+
+    def test_trusted_proxies_are_generation_owned(self) -> None:
+        state = ImmutableRequestState(
+            provider_ids=frozenset(),
+            account_names=frozenset(),
+            hop_by_hop_headers=frozenset(),
+            local_credential_headers=frozenset(),
+            trusted_proxies=frozenset({"127.0.0.1", "::1"}),
+        )
+        assert state.trusted_proxies == frozenset({"127.0.0.1", "::1"})
 
     def test_hop_by_hop_headers_match_module_constants(self) -> None:
         state = ImmutableRequestState(

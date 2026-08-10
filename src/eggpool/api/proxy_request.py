@@ -42,15 +42,13 @@ from eggpool.request.coordinator import (
     RequestCoordinator,
 )
 from eggpool.request.limits import (
-    ESTIMATED_CONTEXT_BYTES_PER_TOKEN_FLOOR,
+    check_context_limits as _check_context_limits,
+)
+from eggpool.request.limits import (
     estimate_context_input_tokens,
     estimate_reservation_tokens,
 )
-from eggpool.request.limits import (
-    check_context_limits as _check_context_limits,
-)
 from eggpool.request.parsed_payload import ParsedRequestPayload
-from eggpool.request.payload_utils import estimate_padded_size
 from eggpool.request.provider_bound_request import ProviderBoundRequest
 from eggpool.routing.provider import parse_model_provider
 from eggpool.runtime_dispatch import (
@@ -74,6 +72,8 @@ from eggpool.transcoder.prepared import PreparedTranscode
 from eggpool.transcoder.segmentation_guard import should_segment_request
 
 if TYPE_CHECKING:
+    from collections.abc import Collection
+
     from fastapi import Request
     from starlette.types import Message, Receive, Scope, Send
 
@@ -183,7 +183,7 @@ def _valid_forwarded_client_ip(value: str | None) -> str | None:
 def get_client_ip(
     request: Request,
     *,
-    trusted_proxies: tuple[str, ...] = (),
+    trusted_proxies: Collection[str] = (),
 ) -> str:
     """Return the peer address, honoring forwarding only from trusted peers."""
     peer = request.client.host if request.client and request.client.host else ""
@@ -516,7 +516,7 @@ async def _handle_proxy_request_inner(
     # constructed).  Reading through ``request.app.state.config`` would
     # bypass the lease and use a generation that may already be retired.
     config: AppConfig = lease.runtime.config
-    known_providers = set(lease.runtime.immutable_request_state.provider_ids)
+    known_providers = lease.runtime.immutable_request_state.provider_ids
     with _span(span_recorder, SPAN_MODEL_PARSE):
         model_id, provider_id = parse_model_provider(model_value, known_providers)
 
@@ -567,23 +567,14 @@ async def _handle_proxy_request_inner(
                 encoded_translated_body = encode_json_body(
                     preflight.translated_payload,
                 )
-                limit_check_body = encoded_translated_body
-                if preflight.tool_token_padding > 0:
-                    padded_len = estimate_padded_size(
-                        len(encoded_translated_body),
-                        preflight.tool_token_padding
-                        * ESTIMATED_CONTEXT_BYTES_PER_TOKEN_FLOOR,
-                    )
-                    limit_check_body = encoded_translated_body + (
-                        b"\x00" * (padded_len - len(encoded_translated_body))
-                    )
                 _check_context_limits(
                     model_id=model_id,
                     provider_id=provider_id,
-                    body=limit_check_body,
+                    body=encoded_translated_body,
                     payload=preflight.translated_payload,
                     protocol=preflight.upstream_protocol,
                     catalog_cache=catalog.cache,
+                    extra_input_tokens=preflight.tool_token_padding,
                 )
             except ContextLimitExceededError as exc:
                 return endpoint.error_response(
@@ -881,7 +872,7 @@ async def _handle_proxy_request_inner(
             provider_id=provider_id,
             client_ip=get_client_ip(
                 request,
-                trusted_proxies=tuple(config.security.trusted_proxies),
+                trusted_proxies=lease.runtime.immutable_request_state.trusted_proxies,
             ),
             upstream_protocol=endpoint.protocol,
             transcode_required=False,

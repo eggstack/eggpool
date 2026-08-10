@@ -175,7 +175,12 @@ Cached JSON parse with derived state (model, tools, messages, etc.).
 
 ### `request/limits.py` — Request Limit Enforcement
 
-Enforces model context and output limits before dispatch.
+Enforces model context and output limits before dispatch. ASCII-heavy decoded
+strings use a native `str.isascii()` fast path while preserving the existing
+four-characters-per-token estimate. Translated tool-schema allowance is added
+to the byte-floor arithmetic through `extra_input_tokens`; the preflight keeps
+the encoded provider body unchanged and never materializes synthetic zero-byte
+padding.
 
 ### `request/finalization_job.py` — RequestFinalizationSupervisor
 

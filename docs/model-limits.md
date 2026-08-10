@@ -80,6 +80,10 @@ When `enforce_context_limit = true` (the default), EggPool rejects requests that
 
 Enforcement returns HTTP 400 with protocol-appropriate error envelopes for OpenAI and Anthropic endpoints.
 
+For translated requests, tool-schema allowance is included in the context
+estimate mathematically. It is not appended to the encoded provider body, so
+the upstream payload remains unchanged.
+
 ## Restart Requirements
 
 Configuration changes to model limits require a service restart. Live reload is not supported for model limit policy.

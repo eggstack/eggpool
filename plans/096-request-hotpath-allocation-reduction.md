@@ -1,7 +1,7 @@
 # Plan 096 — Request Hot-Path Allocation Reduction
 
 Date: 2026-08-10
-Status: planned
+Status: complete
 Parent roadmap: `plans/093-sbc-runtime-and-maintenance-simplification-roadmap.md`
 Planning baseline: `ad7eee822f1dfb8c43dfbe20410c41009697cd7d`
 
@@ -163,21 +163,49 @@ PYTHONHASHSEED=0 TZ=UTC uv run pytest tests/smoke/ -q --tb=short --maxfail=1
 
 No network/live-provider test is required.
 
+## Completion record
+
+Implementation commit: recorded in the follow-up documentation commit.
+
+Implemented the ASCII estimator fast path, allocation-free translated tool
+padding arithmetic, generation-owned provider/trusted-proxy lookup sets, and
+the read-only provider collection contract. Updated request-limit, runtime,
+architecture, operator, project-guidance, and skill documentation. Also
+repaired the manually wired transcoding-routing fixture so it installs the
+generation finalization supervisor required by the current coordinator
+contract.
+
+Verification completed locally:
+
+- `uv sync --frozen --extra ci`
+- `uv run ruff format --check src/ tests/ scripts/`
+- `uv run ruff check src/ tests/ scripts/`
+- `uv run pyright src/ scripts/`
+- `PYTHONHASHSEED=0 TZ=UTC uv run pytest tests/smoke/ -q --tb=short --maxfail=1` — 14 passed
+- Focused estimator/state/proxy/transcoding suites — passed
+- `uv run pytest tests/unit/test_hotpath_equivalence.py tests/unit/test_payload_utils.py tests/perf/test_hot_path_performance.py -q --tb=short --maxfail=1` — 60 passed
+- `uv run pytest tests/integration/test_transcode_routing.py -q --tb=short --maxfail=1` — 3 passed
+- `uv run eggpool --config config.example.toml check-config` — passed
+- `uv run eggpool --config config.sbc.example.toml check-config` — passed
+
+No benchmark or target-SBC measurement was added; permanent performance
+thresholds remain out of CI.
+
 ## Acceptance criteria
 
-- [ ] ASCII-only strings bypass the Python per-character counting loop.
-- [ ] ASCII token estimates are exactly identical to the pre-change estimator for the same strings.
-- [ ] Non-ASCII estimation behavior remains unchanged unless an explicitly equivalent native-code optimization is proven.
-- [ ] Tool-aware translated context checks no longer allocate zero-filled padding bytes proportional to `tool_token_padding`.
-- [ ] New arithmetic padding produces the same admission/rejection result as the previous synthetic-padding formula across focused boundary cases.
-- [ ] Synthetic padding is never included in the actual upstream/provider-bound body.
-- [ ] Provider-ID membership does not construct a new `set` on every request when immutable generation state can provide the lookup set directly.
-- [ ] Trusted-proxy membership does not construct a new tuple/set on every request when immutable generation state can provide the lookup collection directly.
-- [ ] Rehash/generation leases preserve configuration consistency for these precomputed values.
-- [ ] No extra JSON parse or serialization pass is introduced.
-- [ ] OpenAI/Anthropic, streaming/non-streaming, and transcoded context-limit behavior remains correct.
-- [ ] No tokenizer/native/runtime dependency or permanent benchmark infrastructure is added.
-- [ ] Focused and smoke verification passes.
+- [x] ASCII-only strings bypass the Python per-character counting loop.
+- [x] ASCII token estimates are exactly identical to the pre-change estimator for the same strings.
+- [x] Non-ASCII estimation behavior remains unchanged unless an explicitly equivalent native-code optimization is proven.
+- [x] Tool-aware translated context checks no longer allocate zero-filled padding bytes proportional to `tool_token_padding`.
+- [x] New arithmetic padding produces the same admission/rejection result as the previous synthetic-padding formula across focused boundary cases.
+- [x] Synthetic padding is never included in the actual upstream/provider-bound body.
+- [x] Provider-ID membership does not construct a new `set` on every request when immutable generation state can provide the lookup set directly.
+- [x] Trusted-proxy membership does not construct a new tuple/set on every request when immutable generation state can provide the lookup collection directly.
+- [x] Rehash/generation leases preserve configuration consistency for these precomputed values.
+- [x] No extra JSON parse or serialization pass is introduced.
+- [x] OpenAI/Anthropic, streaming/non-streaming, and transcoded context-limit behavior remains correct.
+- [x] No tokenizer/native/runtime dependency or permanent benchmark infrastructure is added.
+- [x] Focused and smoke verification passes.
 
 ## Rejection conditions
 

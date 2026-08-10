@@ -51,6 +51,8 @@ def estimate_reservation_tokens(body: bytes) -> int:
 def estimate_context_input_tokens(
     body: bytes,
     payload: Mapping[str, Any],
+    *,
+    extra_input_tokens: int = 0,
 ) -> int:
     """Estimate request input tokens for context-limit enforcement.
 
@@ -61,7 +63,11 @@ def estimate_context_input_tokens(
     """
     payload_estimate = _estimate_json_value_tokens(payload)
     byte_floor = _ceil_div(len(body), ESTIMATED_CONTEXT_BYTES_PER_TOKEN_FLOOR)
-    return max(MIN_ESTIMATED_INPUT_TOKENS, payload_estimate, byte_floor)
+    return max(
+        MIN_ESTIMATED_INPUT_TOKENS,
+        payload_estimate,
+        byte_floor + max(0, extra_input_tokens),
+    )
 
 
 def requested_output_tokens(
@@ -93,6 +99,7 @@ def check_context_limits(
     payload: Mapping[str, Any],
     protocol: ProtocolName,
     catalog_cache: ModelLimitCatalog,
+    extra_input_tokens: int = 0,
 ) -> None:
     """Reject requests that exceed a model's configured effective limits."""
     effective = catalog_cache.get_effective_limits(model_id, provider_id)
@@ -105,7 +112,11 @@ def check_context_limits(
     if max_context is None and max_input is None and max_output is None:
         return
 
-    estimated_input = estimate_context_input_tokens(body, payload)
+    estimated_input = estimate_context_input_tokens(
+        body,
+        payload,
+        extra_input_tokens=extra_input_tokens,
+    )
     requested_output = requested_output_tokens(payload, protocol)
 
     if max_input is not None and estimated_input > max_input:
@@ -192,6 +203,8 @@ def _estimate_string_tokens(value: str) -> int:
     """
     if not value:
         return 0
+    if value.isascii():
+        return _ceil_div(len(value), ESTIMATED_TEXT_CHARS_PER_TOKEN)
     ascii_chars = 0
     non_ascii_bytes = 0
     for char in value:

@@ -48,6 +48,11 @@ Runtime generation ownership:
 
 Request-path code obtains `GenerationLease` via `wrap_stream_with_lease` or `leased_runtime`. A generation swap never interrupts in-flight requests.
 
+Each generation also precomputes immutable request lookup sets, including
+provider identifiers and exact trusted-proxy peer addresses. Requests use the
+sets through their lease, so a rehash changes only new requests while existing
+leases retain a consistent provider/parser and client-attribution view.
+
 ### `runtime_dispatch.py` — Dispatch Timing
 
 Bounded rolling-window timing recorders:

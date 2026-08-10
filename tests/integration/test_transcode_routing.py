@@ -22,6 +22,7 @@ from eggpool.db.repositories import (
 from eggpool.health.health_manager import HealthManager
 from eggpool.models.config import AppConfig
 from eggpool.request.coordinator import ProxyRequestContext, RequestCoordinator
+from eggpool.request.finalization_job import RequestFinalizationSupervisor
 from eggpool.routing.router import Router
 from eggpool.transcoder.policy import TranscoderPolicy
 
@@ -138,7 +139,13 @@ async def coordinator(
         transcoder_policy=transcoder_policy,
         config=config,
     )
+    finalization_supervisor = RequestFinalizationSupervisor(
+        db=two_account_db,
+        effects_applier=coord._effects_applier,  # pyright: ignore[reportPrivateUsage]
+    )
+    coord._finalization_supervisor = finalization_supervisor  # pyright: ignore[reportPrivateUsage]
     yield coord
+    await finalization_supervisor.shutdown()
     await httpx_client.aclose()
 
 
@@ -270,6 +277,11 @@ async def test_native_protocol_no_transcoding() -> None:
         transcoder_policy=transcoder_policy,
         config=config,
     )
+    finalization_supervisor = RequestFinalizationSupervisor(
+        db=db,
+        effects_applier=coord._effects_applier,  # pyright: ignore[reportPrivateUsage]
+    )
+    coord._finalization_supervisor = finalization_supervisor  # pyright: ignore[reportPrivateUsage]
 
     context = ProxyRequestContext(
         request_id="native-proto",
@@ -298,5 +310,6 @@ async def test_native_protocol_no_transcoding() -> None:
     assert response.status_code == 200
     # No transcoding needed: upstream matches client protocol
     assert context.transcode_required is False
+    await finalization_supervisor.shutdown()
     await httpx_client.aclose()
     await db.disconnect()
