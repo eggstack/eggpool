@@ -213,13 +213,75 @@ def test_request_below_context_limit_is_forwarded() -> None:
     )
     body = b'{"model":"m1","messages":[]}'
     payload = {"model": "m1", "messages": []}
-    _check_context_limits(
+    estimate = _check_context_limits(
         model_id="m1",
         provider_id=None,
         body=body,
         payload=payload,
         protocol="openai",
         catalog_cache=cache,
+    )
+    assert estimate == estimate_context_input_tokens(body, payload)
+
+
+def test_context_limit_uses_supplied_estimate_without_rewalking_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache = MockCatalogCache(
+        {
+            "effective_limits": {
+                "context_tokens": 100_000,
+                "enforce": True,
+            }
+        }
+    )
+    body = b'{"model":"m1","messages":[]}'
+    payload = {"model": "m1", "messages": []}
+    expected = estimate_context_input_tokens(body, payload)
+
+    def fail_if_recomputed(*args: object, **kwargs: object) -> int:
+        raise AssertionError("context estimate should be reused")
+
+    monkeypatch.setattr(
+        "eggpool.request.limits.estimate_context_input_tokens",
+        fail_if_recomputed,
+    )
+    assert (
+        _check_context_limits(
+            model_id="m1",
+            provider_id=None,
+            body=body,
+            payload=payload,
+            protocol="openai",
+            catalog_cache=cache,
+            estimated_input_tokens=expected,
+        )
+        == expected
+    )
+
+
+def test_context_limit_skips_estimation_when_not_enforced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache = MockCatalogCache(None)
+
+    def fail_if_estimated(*args: object, **kwargs: object) -> int:
+        raise AssertionError("unbounded models do not need a context estimate")
+
+    monkeypatch.setattr(
+        "eggpool.request.limits.estimate_context_input_tokens",
+        fail_if_estimated,
+    )
+    assert (
+        _check_context_limits(
+            model_id="m1",
+            provider_id=None,
+            body=b"x",
+            payload={"model": "m1"},
+            protocol="openai",
+            catalog_cache=cache,
+        )
+        is None
     )
 
 

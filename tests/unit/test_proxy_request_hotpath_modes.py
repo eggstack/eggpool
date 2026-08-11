@@ -596,3 +596,54 @@ class TestDisabledCompressionEndToEnd:
         assert by_span[SPAN_SEGMENTATION]["sample_count"] == 0
         assert by_span[SPAN_COMPRESSION_APPLY]["sample_count"] == 0
         assert by_span[SPAN_COMPRESSION_ANALYZE]["sample_count"] == 0
+
+
+class TestContextEstimateReuse:
+    @pytest.mark.asyncio
+    async def test_handler_computes_canonical_context_estimate_once(
+        self, monkeypatch: Any
+    ) -> None:
+        from eggpool.catalog.limits import EffectiveModelLimits
+        from eggpool.request import limits
+
+        recorder = DispatchSpanRecorder(window_size=200, detailed_span_sample_rate=1.0)
+        coordinator = _CapturingCoordinator()
+        app = _build_state(
+            mode="observe",
+            enabled=False,
+            coordinator=coordinator,
+            recorder=recorder,
+            monkeypatch=monkeypatch,
+        )
+        monkeypatch.setattr(
+            _FakeCatalogCache,
+            "get_effective_limits",
+            lambda self, model_id, provider_id: EffectiveModelLimits(
+                context_tokens=1_000_000,
+                input_tokens=None,
+                output_tokens=None,
+                enforce=True,
+                context_source="test",
+                input_source=None,
+                output_source=None,
+            ),
+        )
+
+        original_estimator = limits.estimate_context_input_tokens
+        calls = 0
+
+        def count_estimate(*args: Any, **kwargs: Any) -> int:
+            nonlocal calls
+            calls += 1
+            return original_estimator(*args, **kwargs)
+
+        monkeypatch.setattr(limits, "estimate_context_input_tokens", count_estimate)
+        body = _make_chunky_payload()
+        result = await handle_proxy_request(_FakeRequest(body, app), _endpoint())
+
+        assert result is not None
+        assert calls == 1
+        assert coordinator.context.estimated_context_input_tokens == original_estimator(
+            body,
+            json.loads(body),
+        )

@@ -32,7 +32,6 @@ from eggpool.errors import (
     RequestTooLargeError,
     UpstreamExhaustedError,
 )
-from eggpool.jsonx import dumps_bytes
 from eggpool.jsonx import loads as jsonx_loads
 from eggpool.request.body import encode_json_body, read_body_limited
 from eggpool.request.coordinator import (
@@ -44,7 +43,7 @@ from eggpool.request.limits import (
     check_context_limits as _check_context_limits,
 )
 from eggpool.request.limits import (
-    estimate_context_input_tokens,
+    estimate_json_value_tokens,
     estimate_reservation_tokens,
 )
 from eggpool.request.parsed_payload import ParsedRequestPayload
@@ -149,17 +148,14 @@ def _tool_token_padding(payload: dict[str, Any]) -> int:
     """Estimate extra input tokens from tool schemas in a translated payload.
 
     Anthropic tool schemas (``input_schema``) are typically 30 % of their
-    JSON size in tokens.  The padding is conservative enough to avoid
-    false rejections without inflating reservations excessively.
+    JSON size in tokens.  Reuse the decoded structural estimator instead of
+    encoding each nested tool independently.  The minimum keeps this rough
+    guardrail conservative for small schemas.
     """
     tools = payload.get("tools")
     if not isinstance(tools, list) or not tools:
         return 0
-    total_bytes = 0
-    tool_list = cast("list[dict[str, Any]]", tools)
-    for tool in tool_list:
-        total_bytes += len(dumps_bytes(tool))
-    return max(64, total_bytes // 4)
+    return max(64, estimate_json_value_tokens(cast("list[object]", tools)))
 
 
 _MAX_FORWARDED_CLIENT_IP_CHARS = 64
@@ -535,9 +531,10 @@ async def _handle_proxy_request_inner(
     transcoder_policy = lease.runtime.transcoder_policy
     preflight: TranscodePreflightResult | None = None
     prepared_transcode: PreparedTranscode | None = None
+    precomputed_context_input_tokens: int | None = None
     with _span(span_recorder, SPAN_CONTEXT_LIMIT):
         try:
-            _check_context_limits(
+            precomputed_context_input_tokens = _check_context_limits(
                 model_id=model_id,
                 provider_id=provider_id,
                 body=body,
@@ -830,22 +827,24 @@ async def _handle_proxy_request_inner(
     # the provider-bound payload with full upstream protocol context.
     synthetic_cache_result: Any = None
 
-    # Phase 5: precompute thinking requirement, reservation tokens, and
-    # context-input tokens once here so the coordinator does not have to
-    # reparse ``original_body`` (and re-classify) inside the selection claim.
-    # These computations are pure functions of the body and the client
-    # protocol — they read no mutable runtime state and therefore do not
-    # need to be serialized against other concurrent requests.
+    # Phase 5: precompute thinking requirement and reservation tokens so the
+    # coordinator does not have to reparse ``original_body`` (and re-classify)
+    # inside the selection claim.  The canonical context estimate, when
+    # needed, was returned by the limit check above and is already carried in
+    # ``precomputed_context_input_tokens``. These computations are pure
+    # functions of the body and client protocol — they read no mutable runtime
+    # state and therefore do not need serialization against other requests.
     precomputed_thinking_req: Any = None
     precomputed_reservation_tokens: int | None = None
-    precomputed_context_input_tokens: int | None = None
+    # The context-limit check above returns the same canonical estimate used
+    # for request context.  An unbounded/no-enforcement model leaves this as
+    # ``None`` because coordinator admission only needs the reservation
+    # estimate in that case.
     precomputed_thinking_req = classify_thinking_request(
         cast("dict[str, object]", payload),
         endpoint.protocol,
     )
     precomputed_reservation_tokens = estimate_reservation_tokens(body)
-    precomputed_context_input_tokens = estimate_context_input_tokens(body, payload)
-
     with _span(span_recorder, SPAN_CONTEXT_BUILD):
         # Plan 028: create a typed provider-bound lifecycle object so
         # the coordinator and downstream consumers read from a single

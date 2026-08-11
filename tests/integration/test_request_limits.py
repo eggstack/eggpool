@@ -82,6 +82,12 @@ class TestReadBodyLimited:
         result = await read_body_limited(req, max_bytes=100)
         assert result == b"hello"
 
+    async def test_malformed_content_length_still_enforces_stream_limit(self) -> None:
+        req = FakeRequest([b"x" * 60, b"y" * 50])
+        req._headers["content-length"] = "not-a-number"
+        with pytest.raises(RequestTooLargeError):
+            await read_body_limited(req, max_bytes=100)
+
 
 class TestBodyLimitMiddleware:
     """Tests for the request body size middleware (raw ASGI)."""

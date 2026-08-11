@@ -18,7 +18,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Model metadata enrichment from provider catalogs, OpenRouter, Artificial Analysis, and Hugging Face
 - Provider-neutral request shaping: capability-gated native cache-boundary translation, cache reporting, safe suffix compression, policy-scoped overrides, optional synthetic cache controls, and advisory threshold tuning
 - Single-decode provider payload lifecycle: selected-provider transforms share one immutable client snapshot, generation-aware provider payload, and final serialization cache
-- Request preparation is allocation-conscious: ASCII context estimation uses a native fast path, translated tool allowance is arithmetic-only, and provider/trusted-proxy lookup sets are generation-owned
+- Request preparation is allocation-conscious: canonical decoded context estimates are computed once when model limits are enforced, translated tool allowance reuses the shared structural estimator without per-tool encoding, and provider/trusted-proxy lookup sets are generation-owned
 - Thinking/reasoning capability-aware routing with configurable budget mapping
 - High-concurrency stream stability: bounded terminal-finalization supervision, lock-contention diagnostics, and an OpenCode-specific operator playbook for sustained coding-agent streaming loads
 - Protocol-aware stream completion: clean EOF is classified from upstream `[DONE]`/`message_stop` evidence; truncated streams are never recorded as successful

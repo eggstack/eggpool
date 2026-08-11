@@ -61,13 +61,23 @@ def estimate_context_input_tokens(
     are not model input tokens.  Use decoded JSON values for the context
     guardrail while keeping the older byte estimator for quota reservations.
     """
-    payload_estimate = _estimate_json_value_tokens(payload)
+    payload_estimate = estimate_json_value_tokens(payload)
     byte_floor = _ceil_div(len(body), ESTIMATED_CONTEXT_BYTES_PER_TOKEN_FLOOR)
     return max(
         MIN_ESTIMATED_INPUT_TOKENS,
         payload_estimate,
         byte_floor + max(0, extra_input_tokens),
     )
+
+
+def estimate_json_value_tokens(value: object) -> int:
+    """Estimate tokens represented by one decoded JSON value.
+
+    This is the same structural estimator used by context-limit enforcement.
+    Exposing the narrow helper lets other rough guardrails reuse the decoded
+    value without serializing nested JSON objects independently.
+    """
+    return _estimate_json_value_tokens(value)
 
 
 def requested_output_tokens(
@@ -100,23 +110,31 @@ def check_context_limits(
     protocol: ProtocolName,
     catalog_cache: ModelLimitCatalog,
     extra_input_tokens: int = 0,
-) -> None:
-    """Reject requests that exceed a model's configured effective limits."""
+    estimated_input_tokens: int | None = None,
+) -> int | None:
+    """Reject requests that exceed limits and return the input estimate used.
+
+    The returned estimate is ``None`` when no input/context/output limit is
+    enforced.  Callers that already computed an estimate for this exact body
+    generation may pass it through to avoid a second decoded-payload walk.
+    """
     effective = catalog_cache.get_effective_limits(model_id, provider_id)
     if effective is None or not effective.enforce:
-        return
+        return None
 
     max_context = _positive_limit(effective.context_tokens)
     max_input = _positive_limit(effective.input_tokens)
     max_output = _positive_limit(effective.output_tokens)
     if max_context is None and max_input is None and max_output is None:
-        return
+        return None
 
-    estimated_input = estimate_context_input_tokens(
-        body,
-        payload,
-        extra_input_tokens=extra_input_tokens,
-    )
+    estimated_input = estimated_input_tokens
+    if estimated_input is None:
+        estimated_input = estimate_context_input_tokens(
+            body,
+            payload,
+            extra_input_tokens=extra_input_tokens,
+        )
     requested_output = requested_output_tokens(payload, protocol)
 
     if max_input is not None and estimated_input > max_input:
@@ -141,6 +159,7 @@ def check_context_limits(
             max_input,
             max_output,
         )
+
     if (
         max_context is not None
         and estimated_input + (requested_output or 0) > max_context
@@ -153,6 +172,8 @@ def check_context_limits(
             max_input,
             max_output,
         )
+
+    return estimated_input
 
 
 def _positive_limit(value: Any) -> int | None:

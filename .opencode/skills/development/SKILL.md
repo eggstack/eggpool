@@ -178,6 +178,16 @@ and retry/freeze focused suites. Verify unchanged reuse adopts the translated
 generation without a second encode or recursive ownership walk, while
 provider-specific mutations leave the prepared source unchanged.
 
+Request-estimation changes should run the request-limit, proxy-admission,
+prepared-transcode/tool-padding, and body-limit suites. Verify that an
+enforced canonical context estimate is counted once and carried into
+`ProxyRequestContext`, that unbounded models do not perform an unnecessary
+decoded-payload walk, and that translated tool padding uses the shared
+structural estimator without serializing each tool. The bounded body reader
+and full incoming-header snapshot are intentional: they preserve oversized
+body draining/keep-alive behavior and downstream forwarding/finalization
+contracts, respectively.
+
 Database ownership changes should run the focused transaction and fault-matrix suites; verify child-task ownership rejection and rollback-failure invalidation without exposing a public rollback helper or production test-injection seam. Patch private callable boundaries from test support when deterministic failure injection is needed.
 
 Finalization round-trip changes should run the request-finalizer, repository,

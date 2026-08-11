@@ -1,7 +1,7 @@
 # Plan 116 — Request Estimation and Ingress Efficiency
 
 Date: 2026-08-11
-Status: ready
+Status: complete
 Parent roadmap: `plans/113-sbc-hotpath-reduction-and-protocol-clarity-roadmap.md`
 Planning baseline: `6f4df9bd42b5ca336d3da5ef458ab1793e515185`
 Depends on: `plans/114-provider-payload-copy-on-write.md` for final request ownership conventions
@@ -180,22 +180,22 @@ No full retained-suite requirement and no permanent benchmark.
 
 ## Explicit acceptance criteria
 
-- [ ] The canonical decoded request context-input estimate is computed no more than once during ordinary admission for a given canonical request.
-- [ ] That canonical estimate is reused for client-side context-limit enforcement and coordinator request context.
-- [ ] A transcode preflight computes at most one translated model-input estimate for the translated generation.
-- [ ] Canonical and translated estimates are never accidentally interchanged.
-- [ ] Reservation-token behavior remains bounded by the existing reservation policy and is not silently replaced by context estimation.
-- [ ] Context-limit rejection behavior remains correct for configured max input/output/context limits.
-- [ ] Metadata-only provider mutations such as stream usage options do not force another full model-input traversal without a semantic reason.
-- [ ] `_tool_token_padding()` no longer JSON-serializes each tool independently if the shared structural estimator can preserve the guardrail contract; otherwise the closure records why retaining it is necessary.
-- [ ] No new tokenizer/runtime dependency is introduced.
-- [ ] No global or cross-request estimate cache is introduced.
-- [ ] Oversized request bodies are still rejected before avoidable parse/transcode work.
-- [ ] The default 10 MiB body ceiling and rehash/config semantics remain unchanged.
-- [ ] Body-reader changes, if any, are simpler/equivalent and preserve cancellation/drain semantics; otherwise the existing reader is explicitly retained.
-- [ ] Header retention is narrowed only if safe and useful; authentication/redaction behavior is unchanged.
-- [ ] Focused limit/admission/transcode/body tests pass.
-- [ ] Ruff, Pyright, 14 smoke tests, and both config checks pass.
+- [x] The canonical decoded request context-input estimate is computed no more than once during ordinary admission for a given canonical request.
+- [x] That canonical estimate is reused for client-side context-limit enforcement and coordinator request context.
+- [x] A transcode preflight computes at most one translated model-input estimate for the translated generation.
+- [x] Canonical and translated estimates are never accidentally interchanged.
+- [x] Reservation-token behavior remains bounded by the existing reservation policy and is not silently replaced by context estimation.
+- [x] Context-limit rejection behavior remains correct for configured max input/output/context limits.
+- [x] Metadata-only provider mutations such as stream usage options do not force another full model-input traversal without a semantic reason.
+- [x] `_tool_token_padding()` no longer JSON-serializes each tool independently; the shared structural estimator remains conservative on representative small and large schemas.
+- [x] No new tokenizer/runtime dependency is introduced.
+- [x] No global or cross-request estimate cache is introduced.
+- [x] Oversized request bodies are still rejected before avoidable parse/transcode work.
+- [x] The default 10 MiB body ceiling and rehash/config semantics remain unchanged.
+- [x] The existing body reader is explicitly retained because it preserves bounded streaming, cancellation, drain, and keep-alive behavior without a more valuable simpler replacement.
+- [x] The full incoming-header snapshot is retained because downstream forwarding and finalization still require it; authentication/redaction behavior is unchanged.
+- [x] Focused limit/admission/transcode/body tests pass.
+- [x] Ruff, Pyright, 14 smoke tests, and both config checks pass.
 
 ## Rejection conditions
 
@@ -222,3 +222,45 @@ Reject the implementation if:
 7. Run focused tests and ordinary gate.
 8. Record implementation SHA, before/after estimate/serialization call behavior, body-reader disposition, and exact verification results.
 9. Stop. Do not expand into tokenizer accuracy or provider billing accounting.
+
+## Implementation closure
+
+Implementation commit: recorded in the follow-up closure commit after the
+implementation commit is created.
+
+The request handler now receives the canonical context estimate from
+`check_context_limits()` and carries that exact value into
+`ProxyRequestContext`. A model with no enforced input/context/output limit
+does not perform that decoded-payload walk, because routing admission uses the
+separate bounded reservation estimate. The translated preflight keeps its
+encoded body and validates the translated generation once with its own
+`extra_input_tokens` allowance; it never reuses the canonical estimate.
+
+Before/after request-preparation behavior:
+
+- Enforced canonical requests: two decoded context-estimator calls (limit
+  guard plus context construction) became one.
+- Unbounded/no-enforcement canonical requests: the former context-construction
+  walk is omitted; reservation estimation remains unchanged and bounded.
+- Translated tool padding: one `dumps_bytes()` call per tool became one shared
+  decoded structural-estimator walk over the tools list. The retained minimum
+  and large-schema regression preserve the previous conservative guardrail.
+- Body/header ingress: `read_body_limited()` and the full incoming-header
+  snapshot were audited and intentionally unchanged for bounded draining,
+  keep-alive, forwarding, finalization, and redaction contracts.
+
+Verification completed locally:
+
+- `uv sync --frozen --extra ci` — passed.
+- Focused Plan 116 union — 108 passed; prepared-transcode padding — 19
+  passed.
+- `uv run ruff format --check src/ tests/ scripts/` — passed.
+- `uv run ruff check src/ tests/ scripts/` — passed.
+- `uv run pyright src/ scripts/` — 0 errors, 0 warnings, 0 informations.
+- `PYTHONHASHSEED=0 TZ=UTC uv run pytest tests/smoke/ -q --tb=short
+  --maxfail=1` — 14 passed.
+- `uv run eggpool --config config.example.toml check-config` — passed.
+- `uv run eggpool --config config.sbc.example.toml check-config` — passed.
+
+No tokenizer dependency, global estimate cache, custom body-buffer stack,
+benchmark gate, or permanent profiling instrumentation was added.

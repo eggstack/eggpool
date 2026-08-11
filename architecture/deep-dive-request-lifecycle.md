@@ -202,10 +202,16 @@ cross-request cache.
 
 Enforces model context and output limits before dispatch. ASCII-heavy decoded
 strings use a native `str.isascii()` fast path while preserving the existing
-four-characters-per-token estimate. Translated tool-schema allowance is added
-to the byte-floor arithmetic through `extra_input_tokens`; the preflight keeps
-the encoded provider body unchanged and never materializes synthetic zero-byte
-padding.
+four-characters-per-token estimate. When an effective input/context limit is
+enforced, `check_context_limits()` returns the exact decoded-payload estimate
+it used so the endpoint can carry it into `ProxyRequestContext` without a
+second recursive walk. Unbounded/no-enforcement models leave that optional
+field unset because routing admission uses the separate bounded reservation
+estimate. Translated tool-schema allowance is added to the byte-floor
+arithmetic through `extra_input_tokens`; rough tool padding reuses the shared
+decoded structural estimator and never serializes each tool independently.
+The preflight keeps the encoded provider body unchanged and never materializes
+synthetic zero-byte padding.
 
 ### `request/finalization_job.py` — RequestFinalizationSupervisor
 

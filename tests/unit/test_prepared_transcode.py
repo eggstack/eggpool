@@ -7,6 +7,7 @@ import json
 import pytest
 
 from eggpool.api.proxy_request import TranscodePreflightResult, _tool_token_padding
+from eggpool.request.limits import estimate_json_value_tokens
 from eggpool.transcoder.prepared import RECOMPUTE_REASONS, PreparedTranscode
 
 
@@ -93,16 +94,15 @@ class TestPaddingIsolation:
 
 
 class TestToolTokenPaddingCompact:
-    def test_uses_compact_separators(self):
+    def test_uses_shared_structural_estimator(self) -> None:
         tool = {
             "type": "function",
             "function": {"name": "get_weather", "parameters": {"type": "object"}},
         }
-        compact = json.dumps(tool, separators=(",", ":"))
-        default = json.dumps(tool)
-
-        assert len(compact) < len(default)
-        assert _tool_token_padding({"tools": [tool]}) == max(64, len(compact) // 4)
+        assert _tool_token_padding({"tools": [tool]}) == max(
+            64,
+            estimate_json_value_tokens([tool]),
+        )
 
     def test_no_tools_returns_zero(self):
         assert _tool_token_padding({}) == 0
@@ -114,8 +114,39 @@ class TestToolTokenPaddingCompact:
             {"type": "function", "function": {"name": "a"}},
             {"type": "function", "function": {"name": "b"}},
         ]
-        total = sum(len(json.dumps(t, separators=(",", ":"))) for t in tools)
-        assert _tool_token_padding({"tools": tools}) == max(64, total // 4)
+        assert _tool_token_padding({"tools": tools}) == max(
+            64,
+            estimate_json_value_tokens(tools),
+        )
+
+    def test_does_not_encode_each_tool(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from eggpool.api import proxy_request
+
+        def fail_if_serialized(*args: object, **kwargs: object) -> bytes:
+            raise AssertionError("tool padding must not serialize nested tools")
+
+        # ``dumps_bytes`` was the old per-tool path.  Keep this guard even
+        # though the symbol is no longer imported by the implementation.
+        monkeypatch.setattr(
+            proxy_request, "dumps_bytes", fail_if_serialized, raising=False
+        )
+        tools = [{"name": "tool", "description": "schema"}]
+        assert _tool_token_padding({"tools": tools}) == max(
+            64,
+            estimate_json_value_tokens(tools),
+        )
+
+    def test_shared_estimator_is_not_less_conservative_for_large_schema(self) -> None:
+        tool = {
+            "name": "large_tool",
+            "description": "x" * 1_000,
+            "input_schema": {
+                "type": "object",
+                "properties": {"value": {"type": "string"}},
+            },
+        }
+        legacy_padding = len(json.dumps(tool, separators=(",", ":"))) // 4
+        assert _tool_token_padding({"tools": [tool]}) >= max(64, legacy_padding)
 
 
 class TestRecomputeReasons:

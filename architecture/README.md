@@ -2509,8 +2509,12 @@ Only explicit API-control documentation produces `status = "supported"`. For exa
 EggPool supports configurable effective context limits per model per provider, allowing operators to advertise smaller context windows than the provider physically supports.
 
 The request guardrail estimates decoded payload values conservatively; ASCII-heavy
-text takes a native fast path, and translated tool-schema allowance is applied
-arithmetically without allocating synthetic request-body padding.
+text takes a native fast path. Enforced canonical estimates are returned by
+the limit check and reused in `ProxyRequestContext`, while unbounded models
+skip that extra walk. Translated tool-schema allowance is applied
+arithmetically, and rough tool padding uses the shared decoded structural
+estimator without independently encoding each tool or allocating synthetic
+request-body padding.
 
 ### Configuration
 
@@ -3254,7 +3258,7 @@ The async primitive audit (`docs/async_primitive_audit.md`) documents every long
 ### Hot-Path Optimizations
 
 - **ParsedRequestPayload** (`src/eggpool/request/parsed_payload.py`): caches the original JSON parse and derived state (model, streaming, thinking requirement) to avoid repeated parsing per request
-- **Context estimation** (`src/eggpool/request/limits.py`): uses an ASCII fast path and arithmetic translated-tool allowance without allocating synthetic padding bytes
+- **Context estimation** (`src/eggpool/request/limits.py`): uses an ASCII fast path; returns enforced canonical estimates for context reuse, skips unnecessary walks for unbounded models, and applies translated-tool allowance through the shared structural estimator without per-tool encoding or synthetic padding bytes
 - **ImmutableRequestState** (`src/eggpool/runtime_manager.py`): precomputes provider/account/header/trusted-proxy frozensets per generation, invalidated naturally through generation swap
 - **build_upstream_headers()** (`src/eggpool/proxy/client.py`): combines header sanitization + auth injection in a single pass
 
