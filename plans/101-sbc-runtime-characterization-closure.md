@@ -1,7 +1,7 @@
 # Plan 101 — SBC Runtime Characterization Closure
 
 Date: 2026-08-10
-Status: planned
+Status: complete
 Parent roadmap: `plans/093-sbc-runtime-and-maintenance-simplification-roadmap.md`
 Depends on:
 
@@ -199,65 +199,71 @@ Update only stale documentation caused by this roadmap:
 
 Do not create a separate performance report if this closure record is sufficient.
 
-## Minimum closure record
+## Closure record
 
-Add a concise closure section to this file containing:
+Final implementation tip before closure documentation: `c733cf8271c24ecbf453c01bb8dac59db829fb92`.
 
-- final implementation tip SHA before closure docs;
-- test/measurement host and architecture;
-- Python version;
-- storage type if known;
-- enabled optional features;
-- exact commands run;
-- focused/smoke results;
-- backup event-loop result;
-- rollback ownership result;
-- ASCII/padding parity result;
-- request SQL operation comparison;
-- final index decisions/query-plan result;
-- test corpus before/after collection count;
-- target runtime observations or `not measured`;
-- connection cap decision;
-- limitations.
+Environment: Raspberry Pi 5 Model B Rev 1.0, aarch64, Linux 6.8.0-1060-raspi;
+Python 3.12.3. The root filesystem is on an `mmc` block device; the exact
+storage model/endurance was not measured. No optional features, provider
+credentials, or configured accounts were present, so live-provider and
+representative-concurrency observations are `not measured`.
 
-Suggested compact table:
+Verification commands and results:
 
-| Check | Baseline | Final | Result |
-|---|---:|---:|---|
-| Full-file backup archive on event loop | present | | |
-| Non-owner rollback possibility | unsafe API surface | | |
-| ASCII estimator Python char loop | present | | |
-| Synthetic padding allocation | proportional to padding | | |
-| Attempt-1 standalone request timestamp UPDATE | present | | |
-| Intermediate attempt parent backlink UPDATE | present where applicable | | |
-| Request/attempt analytics indexes | current set | | |
-| Retained collected tests | record at Plan 100 start | | |
-| Idle RSS | not measured in Roadmap 086 | | |
-| Idle threads/tasks | not measured in Roadmap 086 | | |
-| Idle WAL growth | not measured in Roadmap 086 | | |
-| Short request-corpus WAL growth | not measured in Roadmap 086 | | |
-| Provider pool default | 16/4 SBC example | | |
+- `uv sync --frozen --extra ci` — passed.
+- `uv run ruff format --check src/ tests/ scripts/` — 714 files formatted.
+- `uv run ruff check src/ tests/ scripts/` — passed.
+- `uv run pyright src/ scripts/` — passed with no diagnostics.
+- `PYTHONHASHSEED=0 TZ=UTC uv run pytest tests/smoke/ -q --tb=short --maxfail=1` — 14 passed.
+- Both shipped `check-config` commands — passed.
+- Database ownership/maintenance focused tests — 78 passed.
+- Hot-path/transcoding focused tests — 77 passed.
+- Backup/index/migration/dashboard focused tests — 78 passed.
+- `uv run pytest --collect-only -q` — 8,370 tests collected; Plan 100 records 8,388 before consolidation.
 
-Use `not measured` rather than estimates.
+Closure outcomes:
+
+| Check | Final result |
+|---|---|
+| Backup archive work on event loop | Pass: thread-identity regression proves snapshot/archive work runs off-loop; archive/restore and atomic failure tests pass. |
+| Rollback ownership and ambiguity | Pass: owner-only rollback, child-task rejection, and failed-closed fault matrix pass. |
+| ASCII estimator and padding parity | Pass: focused equivalence and request-limit suites pass; no synthetic padding allocation remains. |
+| Request SQL round trips | Pass: Plan 097 application-boundary evidence records removal of the standalone first-attempt timestamp UPDATE and intermediate backlink UPDATE; terminal/duplicate convergence tests pass. |
+| Index decisions/query plans | Pass: migration 0053 removes only the unused status aggregate index; retained provider/model/retry/recovery/retention plans remain covered by focused tests and disposable-dataset evidence in Plan 098. |
+| Test corpus | 8,388 before Plan 100; 8,370 retained after. Information only; no count gate. |
+| Target-SBC idle/request resource observations | not measured: no configured provider workload. |
+| Provider connection cap | Retain 16 max / 4 keepalive; 8/2 comparison not justified without representative concurrent streams. |
+
+No code correction was required by closure verification. Existing README,
+`AGENTS.md`, architecture, deployment, and local skill documentation already
+state the backup-off SBC default, off-loop backup boundary, 16/4 pool default,
+generation/transaction invariants, and non-gating measurement policy; no stale
+user or operator guidance remained.
+
+Limitations: this closure validates deterministic local behavior on ARM64 but
+does not characterize RSS, CPU, task/socket counts, WAL growth, upstream
+latency, or pool starvation under live traffic. Those values remain
+`not measured`, not extrapolated.
 
 ## Acceptance criteria
 
-- [ ] Plans 094–100 are complete with truthful verification records and no unresolved rejection conditions.
-- [ ] Standard lint/type/smoke/config gates pass.
-- [ ] Runtime backup large-file work is proven off the event loop and backup output/atomicity remain correct.
-- [ ] Database rollback ownership is deterministic; no non-owner can rollback another task's transaction.
-- [ ] Database ambiguity still fails closed and startup reconciliation remains authoritative.
-- [ ] ASCII estimator and arithmetic-padding behavior are equivalent to the prior semantics while avoiding the identified Python/allocation costs.
-- [ ] Request provider/trusted-proxy lookup state remains generation-consistent.
-- [ ] Intended request persistence round trips are removed without weakening terminal convergence or idempotency.
-- [ ] Final index changes, if any, are supported by recorded query-plan evidence; correctness/recovery/retention queries remain bounded.
-- [ ] Runtime archaeology pruning did not break live rehash, finalization ownership, routing/failure isolation, diagnostics needed for correctness, or supported CLI/config behavior.
-- [ ] Test corpus is materially simpler/smaller while protected high-value regression contracts remain.
-- [ ] Ordinary CI remains one Python 3.11 smoke/lint/type job and no performance/soak/hardware/release infrastructure is added.
-- [ ] Target-SBC runtime values are recorded from actual observations or explicitly marked `not measured`.
-- [ ] Provider connection caps are changed only if representative evidence supports the change; otherwise the existing default is retained explicitly.
-- [ ] No broad new optimization/hardening roadmap is spawned from normal resource noise.
-- [ ] Roadmap 093 is reconciled and marked complete only from direct evidence.
+- [x] Plans 094–100 are complete with truthful verification records and no unresolved rejection conditions.
+- [x] Standard lint/type/smoke/config gates pass.
+- [x] Runtime backup large-file work is proven off the event loop and backup output/atomicity remain correct.
+- [x] Database rollback ownership is deterministic; no non-owner can rollback another task's transaction.
+- [x] Database ambiguity still fails closed and startup reconciliation remains authoritative.
+- [x] ASCII estimator and arithmetic-padding behavior are equivalent to the prior semantics while avoiding the identified Python/allocation costs.
+- [x] Request provider/trusted-proxy lookup state remains generation-consistent.
+- [x] Intended request persistence round trips are removed without weakening terminal convergence or idempotency.
+- [x] Final index changes, if any, are supported by recorded query-plan evidence; correctness/recovery/retention queries remain bounded.
+- [x] Runtime archaeology pruning did not break live rehash, finalization ownership, routing/failure isolation, diagnostics needed for correctness, or supported CLI/config behavior.
+- [x] Test corpus is materially simpler/smaller while protected high-value regression contracts remain.
+- [x] Ordinary CI remains one Python 3.11 smoke/lint/type job and no performance/soak/hardware/release infrastructure is added.
+- [x] Target-SBC runtime values are recorded from actual observations or explicitly marked `not measured`.
+- [x] Provider connection caps are changed only if representative evidence supports the change; otherwise the existing default is retained explicitly.
+- [x] No broad new optimization/hardening roadmap is spawned from normal resource noise.
+- [x] Roadmap 093 is reconciled and marked complete only from direct evidence.
 
 ## Rejection conditions
 

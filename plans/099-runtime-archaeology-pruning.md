@@ -165,18 +165,18 @@ A broad canonical-suite run is not required solely because code was deleted; use
 
 ## Acceptance criteria
 
-- [ ] A bounded candidate inventory is completed before deletion, with keep/delete rationale for each symbol changed.
-- [ ] Obsolete dispatch span constants/imports/suppressions are removed where no production/runtime API consumer exists.
-- [ ] Active coarse dispatch/local-pre-upstream diagnostics remain intact.
-- [ ] Transaction state/hooks proven unused by Plan 095 and repository-wide search are removed or simplified without weakening commit/rollback ambiguity tests.
-- [ ] Test-only production fault-injection scaffolding is reduced where ordinary monkeypatchable method boundaries provide equivalent deterministic coverage.
-- [ ] Legacy repository wrappers are removed only when no supported production/external caller remains.
-- [ ] Stale architecture-history comments are rewritten/deleted without removing present-tense safety rationale.
-- [ ] `granian[pname]` is either retained with a concrete operational reason or reduced to `granian` with proof that process-title behavior is nonessential; no forced dependency churn occurs.
-- [ ] Live rehash, finalization ownership, routing/failure isolation, and database fail-closed semantics are behaviorally unchanged.
-- [ ] No new dead-code analysis dependency, abstraction layer, compatibility shim, or replacement framework is introduced.
-- [ ] Focused tests and ordinary smoke/lint/type gate pass.
-- [ ] Net production code/config surface for the touched archaeology areas decreases.
+- [x] A bounded candidate inventory is completed before deletion, with keep/delete rationale for each symbol changed.
+- [x] Obsolete dispatch span constants/imports/suppressions are removed where no production/runtime API consumer exists.
+- [x] Active coarse dispatch/local-pre-upstream diagnostics remain intact.
+- [x] Transaction state/hooks proven unused by Plan 095 and repository-wide search are removed or simplified without weakening commit/rollback ambiguity tests.
+- [x] Test-only production fault-injection scaffolding is reduced where ordinary monkeypatchable method boundaries provide equivalent deterministic coverage.
+- [x] Legacy repository wrappers are removed only when no supported production/external caller remains.
+- [x] Stale architecture-history comments are rewritten/deleted without removing present-tense safety rationale.
+- [x] `granian[pname]` is either retained with a concrete operational reason or reduced to `granian` with proof that process-title behavior is nonessential; no forced dependency churn occurs.
+- [x] Live rehash, finalization ownership, routing/failure isolation, and database fail-closed semantics are behaviorally unchanged.
+- [x] No new dead-code analysis dependency, abstraction layer, compatibility shim, or replacement framework is introduced.
+- [x] Focused tests and ordinary smoke/lint/type gate pass.
+- [x] Net production code/config surface for the touched archaeology areas decreases.
 
 ## Rejection conditions
 
@@ -217,6 +217,8 @@ uv run eggpool --config config.sbc.example.toml check-config
 10. Stop; do not refactor active lifecycle state machines for aesthetics.
 
 ## Closure record
+
+Implementation commit: `9e2c9e91c5aa4bcee0f8ae81b882075916bca73e`.
 
 ### Bounded deletion inventory
 

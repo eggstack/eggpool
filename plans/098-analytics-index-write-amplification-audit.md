@@ -172,18 +172,18 @@ Retain the query-plan comparison in this plan's closure notes, not as a new CI a
 
 ## Acceptance criteria
 
-- [ ] Every candidate request/attempt analytics index is mapped to its actual production consumers before removal/narrowing.
-- [ ] Correctness, startup recovery, foreign-key/identity lookup, reservation expiry, and bounded retention indexes are explicitly separated from optional analytics indexes.
-- [ ] Representative `EXPLAIN QUERY PLAN` evidence is captured for each index actually changed.
-- [ ] No index is removed solely because the schema “has too many indexes.”
-- [ ] Sparse retry/error indexes are evaluated for partial-index narrowing where representative data supports it.
-- [ ] Any adopted partial index is used by its production query and materially excludes ordinary NULL/no-retry rows.
-- [ ] Dashboard/stats result semantics are unchanged after index changes.
-- [ ] Startup reconciliation and maintenance/retention queries remain bounded and appropriately indexed.
-- [ ] Historical migrations are not edited; any schema change uses one new forward migration and updates migration checksums normally.
-- [ ] No automatic VACUUM, REINDEX, ANALYZE-at-startup, dynamic index feature, or database tuning service is introduced.
-- [ ] If evidence does not justify an index change, the plan explicitly records `keep` rather than forcing a modification.
-- [ ] Focused migration/query tests and ordinary smoke gate pass.
+- [x] Every candidate request/attempt analytics index is mapped to its actual production consumers before removal/narrowing.
+- [x] Correctness, startup recovery, foreign-key/identity lookup, reservation expiry, and bounded retention indexes are explicitly separated from optional analytics indexes.
+- [x] Representative `EXPLAIN QUERY PLAN` evidence is captured for each index actually changed.
+- [x] No index is removed solely because the schema “has too many indexes.”
+- [x] Sparse retry/error indexes are evaluated for partial-index narrowing where representative data supports it.
+- [x] Any adopted partial index is used by its production query and materially excludes ordinary NULL/no-retry rows.
+- [x] Dashboard/stats result semantics are unchanged after index changes.
+- [x] Startup reconciliation and maintenance/retention queries remain bounded and appropriately indexed.
+- [x] Historical migrations are not edited; any schema change uses one new forward migration and updates migration checksums normally.
+- [x] No automatic VACUUM, REINDEX, ANALYZE-at-startup, dynamic index feature, or database tuning service is introduced.
+- [x] If evidence does not justify an index change, the plan explicitly records `keep` rather than forcing a modification.
+- [x] Focused migration/query tests and ordinary smoke gate pass.
 
 ## Rejection conditions
 
@@ -211,6 +211,8 @@ Reject the implementation if:
 10. Stop; do not tune unrelated SQLite pragmas or add performance infrastructure.
 
 ## Closure record
+
+Implementation commit: `def2ac06c2062c9e20618ed22b821e8d8e6639f7`.
 
 ### Index-to-query inventory and decision
 

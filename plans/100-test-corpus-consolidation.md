@@ -297,6 +297,8 @@ and one complete retained-suite run if practical. Record counts/results but do n
 
 ## Closure record
 
+Implementation commit: `c733cf8271c24ecbf453c01bb8dac59db829fb92`.
+
 ### Information-only collection baseline
 
 The clean `HEAD` tree collected 8,388 tests before edits; the final tree

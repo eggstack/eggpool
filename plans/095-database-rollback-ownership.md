@@ -1,7 +1,7 @@
 # Plan 095 — Database Rollback Ownership
 
 Date: 2026-08-10
-Status: completed
+Status: complete
 Parent roadmap: `plans/093-sbc-runtime-and-maintenance-simplification-roadmap.md`
 Planning baseline: `ad7eee822f1dfb8c43dfbe20410c41009697cd7d`
 
@@ -171,17 +171,17 @@ No live provider access is required.
 
 ## Acceptance criteria
 
-- [ ] Every production/test call site of `Database.safe_rollback()` and `_safe_rollback()` is classified before code changes are made.
-- [ ] If `Database.safe_rollback()` is unused in supported production paths, it is deleted rather than retained as historical API surface.
-- [ ] If retained, an unrelated asyncio task cannot execute `conn.rollback()` against another task's active transaction.
-- [ ] A child task inheriting transaction ContextVars does not acquire transaction ownership.
-- [ ] The transaction owner can still complete its canonical rollback path without deadlocking on `_connection_lock`.
-- [ ] An ambiguous SQLite transaction state is not repaired opportunistically in-process; existing failed-closed/restart ownership remains authoritative.
-- [ ] Commit/rollback failure diagnostics and fatal notification semantics remain intact.
-- [ ] Any removed transaction marker/state is proven unused by repository-wide search and focused tests.
-- [ ] No new connection pool, savepoint layer, retry loop, or database recovery service is introduced.
-- [ ] Focused deterministic ownership tests pass.
-- [ ] Existing smoke gate passes.
+- [x] Every production/test call site of `Database.safe_rollback()` and `_safe_rollback()` is classified before code changes are made.
+- [x] If `Database.safe_rollback()` is unused in supported production paths, it is deleted rather than retained as historical API surface.
+- [x] If retained, an unrelated asyncio task cannot execute `conn.rollback()` against another task's active transaction.
+- [x] A child task inheriting transaction ContextVars does not acquire transaction ownership.
+- [x] The transaction owner can still complete its canonical rollback path without deadlocking on `_connection_lock`.
+- [x] An ambiguous SQLite transaction state is not repaired opportunistically in-process; existing failed-closed/restart ownership remains authoritative.
+- [x] Commit/rollback failure diagnostics and fatal notification semantics remain intact.
+- [x] Any removed transaction marker/state is proven unused by repository-wide search and focused tests.
+- [x] No new connection pool, savepoint layer, retry loop, or database recovery service is introduced.
+- [x] Focused deterministic ownership tests pass.
+- [x] Existing smoke gate passes.
 
 ## Rejection conditions
 
@@ -209,6 +209,7 @@ Reject the implementation if:
 
 ## Closure record
 
+- Implementation commit: `2d98b7087cc04fd620b6ed73b2eee820a3c669de`.
 - Disposition: deleted the unused public `Database.safe_rollback()` method. Repository-wide search found no production runtime, startup/reload, CLI, tooling, or test call sites; `_safe_rollback()` remains only for the owning `Database.transaction()` failure paths.
 - Proven-dead state removed: `_transaction_depth`, `_transaction_state`, and `_TransactionState`; production had no reads, and the former state marker was only written/reset.
 - Regression coverage: child tasks inheriting transaction ContextVars now exercise and assert `DatabaseTransactionOwnershipError`; existing deterministic transaction isolation and rollback-failure fault-matrix coverage remains green.

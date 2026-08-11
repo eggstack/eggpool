@@ -1,7 +1,7 @@
 # Plan 093 — SBC Runtime and Maintenance Simplification Roadmap
 
 Date: 2026-08-10
-Status: planned
+Status: complete
 Planning baseline: `ad7eee822f1dfb8c43dfbe20410c41009697cd7d`
 
 Implementation plans:
@@ -164,22 +164,22 @@ Each child plan adds only focused unit/integration verification for its changed 
 
 ## Roadmap acceptance criteria
 
-- [ ] Runtime automatic backup performs SQLite snapshotting, archive creation/copying, and staging cleanup without blocking the canonical event loop on full-file I/O.
-- [ ] The SBC example's backup default/documentation truthfully reflects the low-wear/minimum-footprint target.
+- [x] Runtime automatic backup performs SQLite snapshotting, archive creation/copying, and staging cleanup without blocking the canonical event loop on full-file I/O.
+- [x] The SBC example's backup default/documentation truthfully reflects the low-wear/minimum-footprint target.
 - [x] `Database.safe_rollback()` removed as unused; no public rollback escape hatch remains and no task can rollback another task's transaction.
-- [ ] ASCII-heavy context estimation avoids the Python per-character path while preserving estimator output.
-- [ ] Transcoded context padding no longer materializes fake zero-filled request bytes.
-- [ ] Repeated construction of immutable provider/trusted-proxy collections is removed where safe.
-- [ ] Attempt-1 timestamp bookkeeping no longer requires a standalone request UPDATE when an existing mutation can carry the same fact.
-- [ ] `last_attempt_id` bookkeeping is folded into existing terminal request mutation where this preserves retry/finalization semantics.
-- [ ] Analytics indexes are retained, narrowed, or removed from documented `EXPLAIN QUERY PLAN` evidence and representative SBC trade-offs rather than assumption.
-- [ ] No correctness-critical routing, crash-recovery, retention, or identity lookup loses its required index support.
-- [ ] Proven-dead span/transaction/compatibility/test scaffolding is deleted without redesigning active rehash/finalization systems.
-- [ ] The retained test corpus is materially smaller or simpler through semantic consolidation, while high-value regression/contract coverage remains.
-- [ ] Ordinary CI remains the current one-job Python 3.11 smoke gate with no new matrix, benchmark, soak, coverage, release, or hardware jobs.
-- [ ] A final target-SBC/manual observation records actual measured values or explicitly marks unavailable measurements without estimation.
-- [ ] No new core runtime dependency or service is introduced.
-- [ ] The roadmap closes without reopening broad hardening or creating a follow-on optimization framework.
+- [x] ASCII-heavy context estimation avoids the Python per-character path while preserving estimator output.
+- [x] Transcoded context padding no longer materializes fake zero-filled request bytes.
+- [x] Repeated construction of immutable provider/trusted-proxy collections is removed where safe.
+- [x] Attempt-1 timestamp bookkeeping no longer requires a standalone request UPDATE when an existing mutation can carry the same fact.
+- [x] `last_attempt_id` bookkeeping is folded into existing terminal request mutation where this preserves retry/finalization semantics.
+- [x] Analytics indexes are retained, narrowed, or removed from documented `EXPLAIN QUERY PLAN` evidence and representative SBC trade-offs rather than assumption.
+- [x] No correctness-critical routing, crash-recovery, retention, or identity lookup loses its required index support.
+- [x] Proven-dead span/transaction/compatibility/test scaffolding is deleted without redesigning active rehash/finalization systems.
+- [x] The retained test corpus is materially smaller or simpler through semantic consolidation, while high-value regression/contract coverage remains.
+- [x] Ordinary CI remains the current one-job Python 3.11 smoke gate with no new matrix, benchmark, soak, coverage, release, or hardware jobs.
+- [x] A final target-SBC/manual observation records actual measured values or explicitly marks unavailable measurements without estimation.
+- [x] No new core runtime dependency or service is introduced.
+- [x] The roadmap closes without reopening broad hardening or creating a follow-on optimization framework.
 
 ## Rejection conditions
 

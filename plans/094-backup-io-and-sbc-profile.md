@@ -168,6 +168,8 @@ If a representative local database is available, one manual backup while issuing
 
 ## Implementation and verification
 
+Implementation commit: `f63bc5bcd78acdfd0a08089415a55a8fb7255aad`.
+
 Implemented in the working tree on 2026-08-10. Runtime snapshotting, archive
 construction/publication, and staging cleanup now run in one
 `asyncio.to_thread()` helper; the existing SQLite backup and atomic archive
