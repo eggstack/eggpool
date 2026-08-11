@@ -324,7 +324,7 @@ Reject the implementation if:
 
 ## Closure
 
-Implementation commit: `a462c1e`.
+Implementation commit: `be413ba`.
 
 External API assumptions were checked against the official provider
 documentation on 2026-08-11:
