@@ -190,10 +190,13 @@ response is chosen and the stream is handed off, dispatch-only bytes, parsed
 state, and provider payload buffers are released; scalar body-size/accounting
 metadata remains for finalization.
 
-Prepared transcode results may retain recursively immutable mapping/tuple JSON
-graphs for safe reuse. The provider-bound ownership boundary materializes those
-values directly into one ordinary dict/list graph, preserving the same
-copy-on-write rule without attempting to deep-copy immutable mapping proxies.
+Prepared transcode results retain one request-local translated JSON generation
+without recursively freezing or rematerializing it. Valid unchanged reuse
+adopts that generation through `adopt_provider_payload()` and attaches the
+already encoded body. Later provider-specific changes use the normal path-level
+copy-on-write or conservative owning APIs, so the prepared source generation is
+not mutated. Prepared graphs are discarded with the request and are never a
+cross-request cache.
 
 ### `request/limits.py` — Request Limit Enforcement
 

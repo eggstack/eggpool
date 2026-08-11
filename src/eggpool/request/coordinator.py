@@ -557,6 +557,11 @@ class ProxyRequestContext:
         """Release large request-side buffers once the chosen attempt is handed off."""
         self.original_body = b""
         self.parsed_payload = None
+        # Prepared translation is only a pre-dispatch reuse aid. Once retry
+        # is impossible, release its translated graph and encoded body along
+        # with the provider-bound buffers; diagnostics and usage accounting
+        # remain on the smaller context objects.
+        self.prepared_transcode = None
         if self.provider_bound is not None:
             self.provider_bound.release_dispatch_buffers()
 
@@ -1259,7 +1264,15 @@ class RequestCoordinator:
                     and (_thinking_off or not _client_has_thinking)
                 ):
                     # Reuse the cached preflight translation.
-                    provider_bound.set_provider_payload(_prepared.translated_payload)
+                    # The transcoder owns this request-local generation. Use
+                    # Plan 114's trusted adoption boundary so reuse does not
+                    # recursively rematerialize the translated graph; any
+                    # later provider-specific mutation must establish its own
+                    # COW/owned graph before changing it.
+                    provider_bound.adopt_provider_payload(
+                        _prepared.translated_payload,
+                        reason="prepared_transcode",
+                    )
                     provider_bound.set_provider_bytes(_prepared.translated_body)
                     provider_bound.diagnostics.provider_decodes += 0
                     context.transcode_context.loss_warnings.extend(
@@ -4709,12 +4722,11 @@ class RequestCoordinator:
 
         if not context.transcode_required:
             return
-        payload: dict[str, object] = request.provider_payload_copy()
-        thinking_block_obj: object = payload.get("thinking")  # pyright: ignore[reportUnknownMemberType]
+        thinking_block_obj: object = request.provider_payload.get("thinking")
         if not isinstance(thinking_block_obj, dict):
             return
-        thinking_block: dict[str, object] = thinking_block_obj  # pyright: ignore[reportUnknownVariableType]
-        budget_value_obj: object = thinking_block.get("budget_tokens")  # pyright: ignore[reportUnknownMemberType]
+        thinking_block = cast("dict[str, object]", thinking_block_obj)
+        budget_value_obj: object = thinking_block.get("budget_tokens")
         if not isinstance(budget_value_obj, (int, float)):
             return
         budget_defaults: dict[str, int] | None = None
@@ -4734,14 +4746,18 @@ class RequestCoordinator:
             budget_defaults=budget_defaults,
             budget_resolution_policy=policy,
         )
-        thinking_block["budget_tokens"] = resolution.budget_tokens
         if context.thinking_trace is not None:
             context.thinking_trace["resolved_budget_tokens"] = resolution.budget_tokens
             context.thinking_trace["capability_status"] = thinking_capability.status
             context.thinking_trace["capability_source"] = thinking_capability.source
             if not context.thinking_trace.get("upstream_fields"):
                 context.thinking_trace["upstream_fields"] = ["thinking"]
-        request.replace_provider_payload(payload, reason="thinking_budget")
+        request.mutate_top_level_mapping(
+            "thinking",
+            "budget_tokens",
+            resolution.budget_tokens,
+            reason="thinking_budget",
+        )
         if context.transcode_context is not None:
             context.transcode_context.loss_warnings.extend(resolution.warnings)
             if resolution.clamped:

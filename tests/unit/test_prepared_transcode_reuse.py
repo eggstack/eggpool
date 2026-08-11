@@ -9,10 +9,12 @@ or selected-provider overrides invalidate reuse deterministically.
 
 from __future__ import annotations
 
+from eggpool.request.coordinator import ProxyRequestContext
 from eggpool.request.provider_bound_request import (
     PreparedTranscodeValidityKey,
     ProviderBoundRequest,
 )
+from eggpool.transcoder.prepared import PreparedTranscode
 
 
 class TestPreparedTranscodeValidityKey:
@@ -108,6 +110,91 @@ class TestPreparedTranscodeValidityKey:
 
 class TestProviderBoundRequestTranscodeReuse:
     """ProviderBoundRequest carries transcode validity state."""
+
+    def test_prepared_generation_adopts_without_rematerializing_or_alias_leak(
+        self,
+    ) -> None:
+        messages = [{"role": "user", "content": "large"}]
+        prepared_payload = {
+            "messages": messages,
+            "thinking": {"type": "enabled", "budget_tokens": 1024},
+        }
+        prepared = PreparedTranscode(
+            client_protocol="openai",
+            upstream_protocol="anthropic",
+            translated_payload=prepared_payload,
+            translated_body=b"prepared-body",
+            warnings=(),
+            tool_token_padding=0,
+            loss_policy_used="warn",
+        )
+        pbr = ProviderBoundRequest(
+            client_bytes=b"client-body",
+            client_payload={"messages": []},
+            client_protocol="openai",
+            model_id="gpt-4",
+        )
+
+        pbr.adopt_provider_payload(
+            prepared.translated_payload,
+            reason="prepared_transcode",
+        )
+        pbr.set_provider_bytes(prepared.translated_body)
+
+        assert pbr.provider_payload["messages"] is messages
+        assert pbr.provider_bytes is prepared.translated_body
+        assert pbr.diagnostics.provider_encodes == 0
+
+        assert pbr.mutate_top_level_mapping(
+            "thinking",
+            "budget_tokens",
+            2048,
+            reason="thinking_budget",
+        )
+        assert prepared_payload["thinking"] == {
+            "type": "enabled",
+            "budget_tokens": 1024,
+        }
+        assert pbr.provider_payload["messages"] is messages
+        assert pbr.serialize_provider_payload() != prepared.translated_body
+        assert pbr.diagnostics.provider_encodes == 1
+
+    def test_release_drops_prepared_dispatch_references(self) -> None:
+        prepared = PreparedTranscode(
+            client_protocol="openai",
+            upstream_protocol="anthropic",
+            translated_payload={"messages": [{"role": "user"}]},
+            translated_body=b"prepared-body",
+            warnings=(),
+            tool_token_padding=0,
+            loss_policy_used="warn",
+        )
+        pbr = ProviderBoundRequest(
+            client_bytes=b"client-body",
+            client_payload={"messages": []},
+            client_protocol="openai",
+            model_id="gpt-4",
+        )
+        pbr.adopt_provider_payload(prepared.translated_payload, reason="prepared")
+        pbr.set_provider_bytes(prepared.translated_body)
+        pbr.serialize_provider_payload()
+        context = ProxyRequestContext(
+            request_id="request-1",
+            protocol="openai",
+            model_id="gpt-4",
+            streaming=True,
+            original_body=b"client-body",
+            incoming_headers={},
+            prepared_transcode=prepared,
+            provider_bound=pbr,
+        )
+
+        context.release_dispatch_buffers()
+
+        assert context.prepared_transcode is None
+        assert context.original_body == b""
+        assert pbr.provider_bytes is None
+        assert pbr.provider_payload == {}
 
     def test_payload_generation_bumps_on_mutation(self) -> None:
         pbr = ProviderBoundRequest(

@@ -179,7 +179,7 @@ remains available for diagnosing stream-specific regressions.
 - **Diagnostic redaction**: authorization-shape logs contain only header/scheme/length metadata, and transcode loss warnings contain bounded structural metadata—not credential bytes or malformed tool/request content.
 - **Request hot path**: context estimation uses an exact ASCII fast path and translated tool padding is arithmetic-only; provider IDs and trusted proxies come from the leased generation's immutable lookup state.
 - **Request memory/body limits**: `ParsedRequestPayload` parses through `eggpool.jsonx`; `ProviderBoundRequest` keeps canonical state logically immutable, uses path-level copy-on-write for narrow provider mutations, and reuses accepted bytes for unchanged native bodies. Trusted EggPool-owned transformed graphs use `adopt_provider_payload()`; unknown graphs use the conservative owning setters. Dispatch buffers are released after chosen-response handoff. `[server].max_request_body_bytes` defaults to 10 MiB, is live-reloadable, and bounds provider document/media limits.
-- **Prepared transcode ownership**: cached immutable mapping/tuple payloads remain on the conservative ownership path until Plan 115; do not pass mapping proxies to `deepcopy`.
+- **Prepared transcode ownership**: preflight stores one request-local translated generation without recursively freezing it. Unchanged reuse uses `ProviderBoundRequest.adopt_provider_payload()` plus the prepared encoded bytes; later provider-specific changes use the existing COW or conservative ownership APIs. Never share prepared graphs across requests.
 
 ## Error Handling
 

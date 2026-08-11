@@ -75,7 +75,11 @@ Protocol-required static headers for cross-protocol transcoding (e.g. `anthropic
 
 ### `transcoder/prepared.py`
 
-`PreparedTranscode` — reusable preflight with mutable diagnostics.
+`PreparedTranscode` — request-local preflight generation with mutable
+diagnostics. It retains the translated payload and encoded body without a
+recursive physical freeze; unchanged provider reuse adopts the payload through
+`ProviderBoundRequest` and sends the existing bytes, while later provider
+changes create a new provider-owned generation.
 
 ### `transcoder/budget_resolver.py`
 

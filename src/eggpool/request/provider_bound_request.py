@@ -36,10 +36,13 @@ if TYPE_CHECKING:
 def _owned_json_value(value: Any) -> Any:
     """Materialize one ordinary mutable graph from JSON-like input.
 
-    Prepared transcode results intentionally use mapping proxies and tuples
-    while cached.  ``copy.deepcopy`` cannot copy those proxy objects, so the
-    provider-bound ownership boundary performs the one required conversion
-    directly and normalizes JSON arrays back to lists.
+    This is the conservative ownership boundary for unknown or externally
+    supplied graphs. Trusted EggPool-owned graphs, including prepared
+    transcode generations, use :meth:`ProviderBoundRequest.adopt_provider_payload`
+    instead and retain their path-level sharing contract.
+
+    The tuple handling remains for compatibility with callers that provide
+    immutable JSON-like values outside the prepared-transcode path.
     """
     if isinstance(value, Mapping):
         source: dict[str, Any] = dict(cast("Mapping[str, Any]", value))
@@ -128,7 +131,9 @@ class ProviderBoundRequest:
 
     # Decoded provider-bound payload — initially aliases client_payload. Once
     # a transform needs mutation it becomes one detached ordinary dict or an
-    # explicitly adopted EggPool-owned graph.
+    # explicitly adopted EggPool-owned graph. Prepared transcode reuse adopts
+    # its request-local logical generation and supplies its already-encoded
+    # bytes separately; later mutations use the normal COW/owning APIs.
     _provider_payload: dict[str, Any] | None = field(
         default=None, repr=False, compare=False, hash=False
     )
@@ -336,6 +341,10 @@ class ProviderBoundRequest:
             self._provider_bytes is not None
             and self._serialized_generation == self.payload_generation
         ):
+            # Prepared-transcode reuse installs the already-encoded body
+            # before the common serialization boundary. Treat a cache hit as
+            # the same dispatch freeze as a freshly serialized generation.
+            object.__setattr__(self, "_frozen", True)
             return self._provider_bytes
         if not self.mutated:
             body = self.client_bytes

@@ -172,6 +172,12 @@ before durable success, native invalid-JSON pass-through, and cancellation
 propagation. Run the focused coordinator/proxy/transcoder suites before the
 repository-wide CI gate.
 
+Prepared-transcode ownership changes should also run the prepared-transcode,
+provider-bound request, transform-pipeline, thinking-budget, cache-synthesis,
+and retry/freeze focused suites. Verify unchanged reuse adopts the translated
+generation without a second encode or recursive ownership walk, while
+provider-specific mutations leave the prepared source unchanged.
+
 Database ownership changes should run the focused transaction and fault-matrix suites; verify child-task ownership rejection and rollback-failure invalidation without exposing a public rollback helper or production test-injection seam. Patch private callable boundaries from test support when deterministic failure injection is needed.
 
 Finalization round-trip changes should run the request-finalizer, repository,

@@ -220,6 +220,12 @@ Feature flags (`[transcoder.features]`) — all **off** by default:
 
 The streaming hot path is optimised for sustained concurrent coding-agent loads. A single bounded SSE decoder feeds completion tracking, usage extraction, and frame-level translation; shared frames lazily cache JSON parsing, while native pass-through avoids translation work. See [docs/transcoding.md](docs/transcoding.md) for the full translation table, known limitations, and streaming performance notes.
 
+Request transcoding is prepared once during preflight. A valid selected-provider
+reuse adopts that request-local translated generation and sends its already
+encoded bytes; provider-specific thinking or cache changes use the normal
+provider-bound copy-on-write/ownership boundary and serialize only the changed
+generation. Prepared transcodes are never shared across requests.
+
 Streaming completion is determined by the upstream protocol, not by the absence
 of a transport exception. OpenAI streams require `data: [DONE]` and Anthropic
 streams require `event: message_stop`. Provider-specific markerless behavior,

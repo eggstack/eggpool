@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
 from dataclasses import dataclass, field
-from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from eggpool.api.proxy_request import TranscodePreflightResult
     from eggpool.transcoder.policy import TranscoderFeatures
 
@@ -19,23 +19,6 @@ RECOMPUTE_REASONS: set[str] = {
     "thinking_controls_present",
     "transcoder_missing",
 }
-
-
-def _freeze_json_value(value: Any) -> Any:
-    """Return a recursively immutable copy of a JSON-like value."""
-    if isinstance(value, Mapping):
-        mapping = cast("dict[str, Any]", value)
-        frozen_dict: dict[str, Any] = {
-            key: _freeze_json_value(item) for key, item in mapping.items()
-        }
-        return cast("Mapping[str, Any]", MappingProxyType(frozen_dict))
-    if isinstance(value, list):
-        items = cast("list[Any]", value)
-        return tuple(_freeze_json_value(item) for item in items)
-    if isinstance(value, tuple):
-        items = cast("tuple[Any, ...]", value)
-        return tuple(_freeze_json_value(item) for item in items)
-    return value
 
 
 @dataclass(slots=True)
@@ -57,8 +40,10 @@ class PreparedTranscode:
     The prepared result is only reused when the upstream protocol and
     transcoder features match what the coordinator would use; provider-
     specific thinking budget overrides still require a recompute. The
-    dispatch payload is frozen at construction time; mutable bookkeeping
-    lives on :attr:`diagnostics`.
+    translated payload is a request-local logical generation: callers do not
+    mutate it through this object. Provider-bound changes must cross the
+    provider payload's copy-on-write or conservative ownership boundary.
+    Mutable bookkeeping lives on :attr:`diagnostics`.
     """
 
     client_protocol: str
@@ -77,18 +62,14 @@ class PreparedTranscode:
     )
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "translated_payload",
-            cast("Mapping[str, Any]", _freeze_json_value(self.translated_payload)),
-        )
+        # Warning records are bounded metadata. Copy only each warning root so
+        # later diagnostic annotation cannot replace the preflight records;
+        # recursively rebuilding the translated request is deliberately not
+        # part of prepared-transcode construction.
         object.__setattr__(
             self,
             "warnings",
-            tuple(
-                cast("Mapping[str, Any]", _freeze_json_value(warning))
-                for warning in self.warnings
-            ),
+            tuple(dict(warning) for warning in self.warnings),
         )
 
     @classmethod

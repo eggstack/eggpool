@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
-from types import MappingProxyType
 
 import pytest
 
@@ -24,19 +22,6 @@ def _make_preflight(
         warnings=warnings or [],
         tool_token_padding=tool_token_padding,
     )
-
-
-def _freeze_json_value(value: object) -> object:
-    """Recursively freeze a JSON-like value for equality checks."""
-    if isinstance(value, Mapping):
-        return MappingProxyType(
-            {key: _freeze_json_value(item) for key, item in value.items()}
-        )
-    if isinstance(value, list):
-        return tuple(_freeze_json_value(item) for item in value)
-    if isinstance(value, tuple):
-        return tuple(_freeze_json_value(item) for item in value)
-    return value
 
 
 class TestSingleEncode:
@@ -182,7 +167,7 @@ class TestPreparedTranscodeDiagnostics:
 
 
 class TestPreparedTranscodeDispatchData:
-    def test_dispatch_data_is_frozen_and_detached_from_diagnostics(self):
+    def test_dispatch_data_keeps_payload_generation_and_detaches_warnings(self):
         payload = {"messages": [{"role": "user", "content": "hi"}]}
         warnings = [{"field": "tools", "kind": "unsupported"}]
         preflight = _make_preflight(
@@ -200,18 +185,20 @@ class TestPreparedTranscodeDispatchData:
             loss_policy="warn",
             encoded_body=encoded,
         )
-        frozen_payload = _freeze_json_value(payload)
-        frozen_warnings = tuple(_freeze_json_value(warning) for warning in warnings)
 
-        payload["messages"][0]["content"] = "mutated source"
+        # Prepared payload construction adopts the transcoder's request-local
+        # generation instead of recursively rebuilding its graph.
+        assert prepared.translated_payload is payload
+        assert prepared.translated_payload["messages"] is payload["messages"]
+
         warnings[0]["kind"] = "mutated source"
 
         prepared.diagnostics.reused = True
         prepared.diagnostics.recompute_reason = "protocol_or_features_mismatch"
 
         assert prepared.translated_body is encoded
-        assert prepared.translated_payload == frozen_payload
-        assert prepared.warnings == frozen_warnings
+        assert prepared.translated_payload == payload
+        assert prepared.warnings == ({"field": "tools", "kind": "unsupported"},)
         assert prepared.tool_token_padding == 100
         assert prepared.loss_policy_used == "warn"
         assert prepared.features_fingerprint == "none"
@@ -220,13 +207,6 @@ class TestPreparedTranscodeDispatchData:
         assert prepared.diagnostics.recompute_reason == (
             "protocol_or_features_mismatch"
         )
-
-        with pytest.raises(TypeError):
-            prepared.translated_payload["messages"] = ()
-        with pytest.raises(TypeError):
-            prepared.translated_payload["messages"][0]["content"] = "changed"
-        with pytest.raises(TypeError):
-            prepared.warnings[0]["kind"] = "changed"
 
 
 class TestWarningPropagation:
