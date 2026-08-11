@@ -272,4 +272,4 @@ Implemented on 2026-08-11.
 - Regression coverage added for credential-shape logging and both malformed
   tool warning directions.
 - Local verification passed and the implementation commit is
-  `ce40863` (the final amended SHA is reported in the handoff).
+  `33b5d943e3e8d3b3f6f78d5dfba6e6eb7701edec`.
