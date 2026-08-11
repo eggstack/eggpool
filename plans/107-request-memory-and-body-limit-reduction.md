@@ -370,7 +370,7 @@ Reject the implementation if:
 
 ## Implementation closure
 
-Implemented on `main` and verified locally on 2026-08-11.
+Implemented in commit `e3b569d` on `main` and verified locally on 2026-08-11.
 
 - `ParsedRequestPayload` now uses `eggpool.jsonx.loads()` for its lazy parse
   fallback; the endpoint's eager parse remains seeded into the same cache.
