@@ -86,6 +86,9 @@ uv run ruff check --fix src/
 - Smoke suite (`tests/smoke/`): package import, config parsing, invalid config rejection, check-config validation, DB migration, one non-stream request, one streaming request, one upstream failure followed by recovery, one premature EOF, one Anthropic request, and CLI help
 - Provider contract tests: `uv run pytest tests/unit/test_contract.py tests/unit/test_contract_urls.py -v`
 - Performance, live, and diagnostic reproducer tests are manually invoked, not run in CI
+- Historical release matrices and repeated rehash soak tests are not retained as
+  routine corpus; use the capability-focused integration/reload tests and the
+  manually invoked performance diagnostics for those concerns.
 
 ## Release
 

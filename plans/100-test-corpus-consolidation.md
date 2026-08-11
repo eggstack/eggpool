@@ -1,7 +1,7 @@
 # Plan 100 — Test Corpus Consolidation
 
 Date: 2026-08-10
-Status: planned
+Status: complete
 Parent roadmap: `plans/093-sbc-runtime-and-maintenance-simplification-roadmap.md`
 Planning baseline: `ad7eee822f1dfb8c43dfbe20410c41009697cd7d`
 Depends on:
@@ -235,20 +235,20 @@ Do not create a new test policy document unless existing policy cannot be update
 
 ## Acceptance criteria
 
-- [ ] The current one-job Python 3.11 CI workflow remains materially unchanged: format, Ruff, Pyright, smoke tests.
-- [ ] No new coverage threshold, test-count gate, CI matrix, soak job, benchmark job, shard framework, or scheduled workflow is added.
-- [ ] Test consolidation is organized by semantic contract rather than arbitrary file-size/count targets.
-- [ ] Tests for previously observed high-severity routing/failure-isolation/streaming/database/reload defects remain represented by surviving regression or stronger contract tests.
-- [ ] Obsolete tests for production APIs/symbols removed by Plan 099 are deleted rather than forcing compatibility scaffolding back into production.
-- [ ] Duplicate permutations are parameterized or removed where they represent the same production failure mode.
-- [ ] Internal state-machine tests are reduced where externally meaningful convergence tests already cover the invariant.
-- [ ] Concurrency tests prefer deterministic scheduling over high iteration counts.
-- [ ] Metrics/dashboard tests are proportionate to optional local observability and do not impose production-SaaS-style exhaustive verification.
-- [ ] Orphaned fixtures/helpers are removed after their consumers disappear.
-- [ ] The retained suite is materially smaller or simpler in files/functions/collection count, with before/after counts recorded for information only.
-- [ ] No test-count floor/ceiling is codified for future work.
-- [ ] Surviving focused contract/regression tests pass.
-- [ ] Ordinary smoke/lint/type gate passes.
+- [x] The current one-job Python 3.11 CI workflow remains materially unchanged: format, Ruff, Pyright, smoke tests.
+- [x] No new coverage threshold, test-count gate, CI matrix, soak job, benchmark job, shard framework, or scheduled workflow is added.
+- [x] Test consolidation is organized by semantic contract rather than arbitrary file-size/count targets.
+- [x] Tests for previously observed high-severity routing/failure-isolation/streaming/database/reload defects remain represented by surviving regression or stronger contract tests.
+- [x] Obsolete tests for production APIs/symbols removed by Plan 099 are deleted rather than forcing compatibility scaffolding back into production.
+- [x] Duplicate permutations are parameterized or removed where they represent the same production failure mode.
+- [x] Internal state-machine tests are reduced where externally meaningful convergence tests already cover the invariant.
+- [x] Concurrency tests prefer deterministic scheduling over high iteration counts.
+- [x] Metrics/dashboard tests are proportionate to optional local observability and do not impose production-SaaS-style exhaustive verification.
+- [x] Orphaned fixtures/helpers are removed after their consumers disappear.
+- [x] The retained suite is materially smaller or simpler in files/functions/collection count, with before/after counts recorded for information only.
+- [x] No test-count floor/ceiling is codified for future work.
+- [x] Surviving focused contract/regression tests pass.
+- [x] Ordinary smoke/lint/type gate passes.
 
 ## Rejection conditions
 
@@ -294,3 +294,43 @@ and one complete retained-suite run if practical. Record counts/results but do n
 8. Run ordinary lint/type/smoke gate and optionally one full retained-suite pass.
 9. Record before/after collection counts, major clusters consolidated, protected regressions, and exact verification in this plan.
 10. Stop; do not open a new CI/testing architecture project.
+
+## Closure record
+
+### Information-only collection baseline
+
+The clean `HEAD` tree collected 8,388 tests before edits; the final tree
+collects 8,370. The retained corpus was reduced by deleting the
+redundant Phase 17 deployment-readiness matrix (its entries explicitly
+delegated to dedicated tests), removing the repeated D3 rehash soak tests, and
+folding the standalone dashboard-formatting checks into the existing dashboard
+utility suite. Collection counts were used only to describe the change and are
+not a future gate.
+
+### Consolidation summary
+
+- Cross-cutting release/deployment matrix assertions were removed where the
+  file itself documented stronger dedicated coverage in startup, database,
+  migration, credential, smoke, privacy, and checker suites.
+- Repeated 25/10/10/30-reload soak schedules were removed. Deterministic reload
+  acceptance tests remain, and `tests/perf/test_rehash_d3_performance.py`
+  retains its own runtime-snapshot helper for manually invoked diagnostics.
+- Dashboard formatter edge cases were merged into
+  `tests/unit/test_dashboard.py`; no formatter boundary coverage was removed.
+- A stale Phase 15 child-task test was removed after the full-suite run showed
+  it still expected the pre-Plan-095 lock-wait behavior. The authoritative
+  database transaction contract suite already asserts the current fail-closed
+  ownership invariant.
+- No protected routing, failure-isolation, streaming, database, reload,
+  transcoding, capability, or security contract was removed.
+
+### Verification
+
+Focused dashboard, reload, migration, database-ownership, routing/failure,
+streaming, transcoding, and smoke tests passed during implementation. The
+full-suite attempt reached 715 passed and one skipped before exposing the
+stale child-task assertion; after deleting that redundant assertion, its
+neighboring Phase 15/database suite passed 44 tests. The ordinary
+format/lint/type/smoke gate and both shipped configuration checks passed.
+The full suite remains an optional manual confidence run, not an acceptance
+gate.

@@ -26,9 +26,6 @@ from typing import Any
 import httpx
 import pytest
 
-from tests.integration.test_rehash_d3_soak import (
-    _fetch_runtime_snapshot,
-)
 from tests.integration.test_rehash_streaming_swap import (
     _free_port,
     _make_mock_server,
@@ -54,6 +51,21 @@ pytestmark = pytest.mark.performance
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+async def _fetch_runtime_snapshot(
+    client: httpx.AsyncClient,
+    server_port: int,
+    auth: dict[str, str],
+) -> dict[str, Any]:
+    """Fetch the runtime snapshot used by the manual diagnostics below."""
+    response = await client.get(
+        f"http://127.0.0.1:{server_port}/api/stats/runtime",
+        headers=auth,
+        timeout=10.0,
+    )
+    assert response.status_code == 200, f"runtime stats failed: {response.status_code}"
+    return response.json()
 
 
 def _write_measurement(name: str, data: dict[str, Any]) -> None:

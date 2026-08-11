@@ -62,6 +62,13 @@ universal RSS threshold. Use `eggpool runtime-status --json` after startup to
 inspect the bounded task inventory, local dispatch timings, database/WAL
 state, and generation-retirement ownership on the target host.
 
+## Testing
+
+The ordinary CI gate runs formatting, Ruff, Pyright, and the smoke suite. Local
+verification should select focused capability tests for changed boundaries;
+the complete retained suite and performance diagnostics remain manual,
+information-only checks rather than CI gates.
+
 ## Quick Start
 
 ```bash

@@ -135,6 +135,11 @@ uv run pytest tests/smoke/ -q --tb=short --maxfail=1
 
 The smoke suite covers: package import, config parsing, invalid config rejection, check-config validation, DB migration, one non-stream request, one streaming request, one upstream failure followed by recovery, one premature EOF, one Anthropic request, and CLI help. Broader tests are selected by changed ownership boundary, not by a mandatory full-suite or soak ceremony.
 
+Retained tests should be organized around capability contracts. Historical
+release matrices and repeated rehash soak tests are not routine corpus; use the
+focused reload integration suites for lifecycle coverage and the performance
+suite only as a manually invoked diagnostic.
+
 Performance tests under `tests/perf/` remain manually invoked diagnostics. They
 must not become CI gates or imply universal timing/resource thresholds; compare
 fixed request shapes and report local proxy timing separately from upstream

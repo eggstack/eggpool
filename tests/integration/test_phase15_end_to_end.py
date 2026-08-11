@@ -190,54 +190,6 @@ class TestSharedConnectionSerialization:
         assert write_result == [1]
         await db.disconnect()
 
-    @pytest.mark.asyncio
-    async def test_child_task_cannot_inherit_transaction(self) -> None:
-        """A child task spawned inside a transaction must wait for the lock."""
-        db = Database(path=":memory:")
-        await db.connect()
-        runner = MigrationRunner(db)
-        await runner.run()
-
-        parent_in_transaction = asyncio.Event()
-        child_entered = asyncio.Event()
-        child_saw_data: list[bool] = []
-
-        async def parent_task() -> None:
-            async with db.transaction():
-                await db.execute_write(
-                    "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-                    "VALUES (?, ?, 1, 1.0)",
-                    ("parent-acct", "DUMMY"),
-                )
-                parent_in_transaction.set()
-                # Spawn child while holding the transaction lock but do NOT
-                # await it here – that would deadlock.
-                child_task = asyncio.create_task(child_task_fn())
-                await asyncio.sleep(0.1)
-            # Transaction committed, lock released. Now await the child.
-            await child_task
-
-        async def child_task_fn() -> None:
-            # Child should NOT enter until parent completes
-            await parent_in_transaction.wait()
-            # Small delay to ensure we're scheduled while parent holds the lock
-            await asyncio.sleep(0.05)
-            # Child entering transaction must wait on the lock
-            async with db.transaction():
-                child_entered.set()
-                row = await db.fetch_one(
-                    "SELECT name FROM accounts WHERE name = ?",
-                    ("parent-acct",),
-                )
-                child_saw_data.append(row is not None)
-
-        await parent_task()
-
-        # Child entered and could see committed data
-        assert child_entered.is_set()
-        assert child_saw_data == [True]
-        await db.disconnect()
-
 
 # ===========================================================================
 # B. Exhausted retry cleanup
