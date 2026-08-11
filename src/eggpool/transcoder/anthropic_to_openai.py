@@ -787,8 +787,6 @@ class AnthropicToOpenAI:
                 "cache_control_unsupported_by_target_protocol",
                 "cache_control_feature_disabled",
                 "cache_control_invalid_shape",
-                "cache_breakpoint_unsupported_target",
-                "cache_breakpoint_limit_exceeded",
             )
         }
         for path, cache_type in extract_cache_boundaries(payload):

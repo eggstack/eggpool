@@ -188,7 +188,11 @@ The default example intentionally exposes only the stable request-shaping knobs:
 
 These are enforced at config load time:
 
-- **Synthetic cache `ttl`** — only `"ephemeral"` is currently accepted. `"5m"` and `"1h"` are reserved and rejected at config load.
+- **Synthetic cache `ttl`** — only `"ephemeral"` is currently accepted by
+  the synthetic mutator. Synthetic insertion also requires the selected
+  provider/model's explicit Anthropic cache capability contract; provider kind
+  or protocol compatibility alone is insufficient. `"5m"` and `"1h"` remain
+  reserved and rejected at config load for this synthetic setting.
 - **Static-prefix compression** — `compress_static_prefix = true` in any non-default policy override is rejected unless `allow_static_prefix_override = true` is set globally. This prevents an operator from accidentally mutating the stable prefix by editing one row.
 - **Tuning** — recommendation-only; `mode = "apply"` is rejected.
 - **`compress_static_prefix = false`** — the normal setting. The whole cache-compression stack is designed around the invariant that stable prefixes never change.

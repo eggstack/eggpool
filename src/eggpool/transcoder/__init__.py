@@ -85,6 +85,7 @@ LOSS_WARNING_KINDS: frozenset[str] = frozenset(
         "provider_extension_not_preserved",
         "stable_prefix_preserved",
         "stable_prefix_reordered_canonically",
+        "cache_breakpoint_invalid_shape",
         "cache_breakpoint_unsupported_target",
         "cache_breakpoint_limit_exceeded",
         "cache_ttl_mismatch",

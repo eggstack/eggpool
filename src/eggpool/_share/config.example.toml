@@ -137,6 +137,11 @@ prefer_native = true      # prefer native-protocol accounts in routing
 # budget_tokens_min = 1024
 # budget_tokens_max = 16384
 #
+# Native cache controls require a provider/model contract; protocol names alone
+# do not enable them:
+# [model_capabilities."claude-opus".transcoding]
+# prompt_cache_breakpoints.anthropic = { dialect = "first_party", supported_ttls = ["5m", "1h"], default_ttl = "5m", max_breakpoints = 4 }
+#
 # Provider-scoped overrides take precedence over global:
 # [providers.minimax.model_capabilities."minimax-m3".thinking]
 # status = "supported"

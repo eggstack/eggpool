@@ -204,11 +204,20 @@ What is dropped with a structured warning log:
 - Anthropic fields with no OpenAI equivalent (`top_k`, tool-definition
   `cache_control` on Chat Completions, and provider-specific TTLs)
 
-Explicit provider-native prompt-cache boundaries are translated across the
-representable content-block subset only when the target model capability
-explicitly verifies `prompt_cache_breakpoints`. TTLs are never assumed
-equivalent, OpenAI implicit caching does not enable Anthropic caching, and
-cache keys are never synthesized or logged.
+OpenAI's current documentation distinguishes automatic caching, the
+`prompt_cache_key` grouping/routing hint, and explicit content breakpoints
+(`prompt_cache_breakpoint` plus `prompt_cache_options`) on supported Chat
+Completions models. Anthropic uses block-level `cache_control` with its own
+5-minute default and optional 1-hour TTL. EggPool treats those as endpoint and
+provider/model facts: `transcoding.prompt_cache_breakpoints` is a map of
+explicit provider/model contracts whose entries declare `first_party` or
+`compatible_extension` semantics, verified TTLs, and the breakpoint bound.
+Protocol labels alone never enable these fields. TTLs are never assumed
+equivalent, automatic caching is not converted into an explicit boundary, and
+cache keys are never synthesized or logged. See the [OpenAI prompt caching
+guide](https://developers.openai.com/api/docs/guides/prompt-caching) and
+[Anthropic prompt caching guide](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
+for the upstream semantics current at implementation time.
 
 Feature flags (`[transcoder.features]`) — all **off** by default:
 

@@ -66,7 +66,13 @@ class TestBasicRequestTranslation:
             payload,
             _make_context(),
             transcoding_capability=TranscodingCapabilities(
-                prompt_cache_breakpoints=["anthropic"]
+                prompt_cache_breakpoints={
+                    "anthropic": {
+                        "dialect": "first_party",
+                        "supported_ttls": ["5m", "1h"],
+                        "default_ttl": "5m",
+                    }
+                }
             ),
         )
         assert result["messages"][0]["content"][0]["cache_control"] == {

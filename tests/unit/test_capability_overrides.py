@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from eggpool.catalog.capabilities import (
     ModelCapabilities,
     ThinkingCapability,
+    TranscodingCapabilities,
     apply_capability_overrides,
     dict_to_model_capabilities,
     merge_model_capabilities,
@@ -188,6 +189,23 @@ class TestModelCapabilitiesOverrideConfig:
         cfg = ModelCapabilitiesOverrideConfig(thinking=inner)
         assert cfg.thinking is not None
         assert cfg.thinking.status == "supported"
+
+    def test_wraps_provider_cache_contract(self) -> None:
+        cfg = ModelCapabilitiesOverrideConfig(
+            transcoding=TranscodingCapabilities(
+                prompt_cache_breakpoints={
+                    "openai": {
+                        "dialect": "compatible_extension",
+                        "supported_ttls": ["30m"],
+                        "default_ttl": "30m",
+                    }
+                }
+            )
+        )
+        assert cfg.transcoding is not None
+        contract = cfg.transcoding.prompt_cache_capability("openai")
+        assert contract is not None
+        assert contract.dialect == "compatible_extension"
 
     def test_extra_fields_rejected(self) -> None:
         with pytest.raises(ValidationError):

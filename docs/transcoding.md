@@ -201,7 +201,7 @@ Tool calling is translated between OpenAI Chat Completions and Anthropic Message
 | Anthropic input | OpenAI output | Notes |
 |---|---|---|
 | `tools[i].name`, `description`, `input_schema` | `tools[i].type == "function"` with `function.{name, description, parameters}` | `parameters` is the lifted `input_schema` |
-| `tools[i].cache_control` | — | Dropped with warning; OpenAI auto-caches without explicit hints |
+| `tools[i].cache_control` | — | Dropped with warning; OpenAI Chat Completions has no tool-definition boundary placement |
 
 **`tool_choice` translation**:
 
@@ -231,9 +231,12 @@ Tool calling is translated between OpenAI Chat Completions and Anthropic Message
 Provider/model capability overrides use `[model_capabilities.<model>.transcoding]`
 or the provider-scoped equivalent. Supported fields are
 `native_structured_outputs`, `strict_tools`, `parallel_tool_control`,
-`prompt_cache_breakpoints`, and `reasoning_efforts`, each keyed by explicit target protocol names. Empty or
-missing fields mean unknown/unverified support; EggPool never enables native
-fields solely because an account advertises an OpenAI or Anthropic protocol.
+`prompt_cache_breakpoints`, and `reasoning_efforts`. Cache entries are keyed by
+target protocol and must declare `dialect = "first_party"` or
+`dialect = "compatible_extension"`, plus any verified TTLs and breakpoint
+limit. Empty or missing fields mean unknown/unverified support; EggPool never
+enables native fields solely because an account advertises an OpenAI or
+Anthropic protocol.
 
 Prompt-cache translation is best-effort across the representable subset. An
 explicit OpenAI content breakpoint can become an Anthropic block
@@ -241,16 +244,17 @@ explicit OpenAI content breakpoint can become an Anthropic block
 OpenAI `prompt_cache_breakpoint`, only when the target capability explicitly
 lists that protocol. Source-only breakpoint fields are consumed at the
 translation boundary and never remain on the target wire. TTLs are not treated
-as equivalent: Anthropic's 5-minute
-and 1-hour controls do not silently become OpenAI's 30-minute setting (or
-vice versa). Anthropic tool-definition boundaries remain lossy for OpenAI
-Chat Completions when no native tool breakpoint is available. OpenAI's
-implicit caching does not opt translated Anthropic requests into caching, and
+as equivalent: Anthropic's 5-minute and 1-hour controls do not silently become
+OpenAI's 30-minute setting (or vice versa); mismatch metadata uses the selected
+target contract rather than a generic TTL literal. Anthropic tool-definition
+boundaries remain lossy for OpenAI Chat Completions when no native tool
+breakpoint is available. OpenAI's automatic caching and `prompt_cache_key`
+grouping do not opt translated Anthropic requests into explicit caching, and
 explicit source intent takes precedence over synthetic cache insertion. An
 absent OpenAI breakpoint is ordinary content, not a cache loss. In the reverse
 direction, only a breakpoint actually emitted on the OpenAI target counts as a
-mapping; malformed, unsupported, and four-boundary overflow cases remain
-loss-visible without causing `prompt_cache_options` to appear by themselves.
+mapping; malformed, unsupported, and overflow cases remain loss-visible
+without causing `prompt_cache_options` to appear by themselves.
 
 #### Tool-call id translation
 
@@ -567,7 +571,7 @@ The complete catalogue lives in `eggpool.transcoder.LOSS_WARNING_KINDS`.
 | `model_context_window_exceeded` → OpenAI `length` | `lossy_mapping` | Cause obscured |
 | `parallel_tool_calls: false` → Anthropic | `parallel_tool_calls_collapsed` | Target lacks verified parallel-tool control |
 | `tools[].function.strict` → Anthropic | `strict_tool_capability_missing` | Target lacks verified strict-tool support |
-| `tools[].cache_control` → OpenAI | `cache_control_unsupported_by_target_protocol` | OpenAI auto-caches without explicit hints; cache hit-rate will drop on translation |
+| `tools[].cache_control` → OpenAI | `cache_control_unsupported_by_target_protocol` | Chat Completions has no tool-definition breakpoint placement; selected-provider contracts cannot relocate it |
 | Top-level `cache_control` → OpenAI | `cache_control_feature_disabled` | OpenAI has no equivalent field; loss is policy-driven |
 | `messages[].content[].cache_control` → OpenAI | (preserved when capability is verified) | Otherwise the boundary is reported as `cache_control_unsupported_by_target_protocol`; tool-definition boundaries remain unrepresentable |
 | `tools[].cache_control` (OpenAI-side extension) → Anthropic | (preserved) | Boundary annotated `preserved` on `TranscodeContext.cache_boundary_tracker` |

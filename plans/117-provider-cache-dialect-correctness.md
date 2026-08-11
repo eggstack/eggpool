@@ -1,7 +1,7 @@
 # Plan 117 — Provider Cache Dialect Correctness
 
 Date: 2026-08-11
-Status: ready
+Status: complete
 Parent roadmap: `plans/113-sbc-hotpath-reduction-and-protocol-clarity-roadmap.md`
 Planning baseline: `6f4df9bd42b5ca336d3da5ef458ab1793e515185`
 
@@ -224,24 +224,69 @@ No full retained-suite requirement and no live provider requirement for determin
 
 ## Explicit acceptance criteria
 
-- [ ] Implementation closure records execution-date official OpenAI and Anthropic cache field/TTL semantics used for the mapping.
-- [ ] First-party protocol semantics and provider-specific compatible extensions are explicitly distinguished in production capability logic.
-- [ ] Generic `openai` protocol compatibility alone does not enable explicit content cache-breakpoint fields unless current first-party docs verify them as standard.
-- [ ] Generic OpenAI-compatible providers with unknown capability receive no `prompt_cache_breakpoint`/`prompt_cache_options` extension fields.
-- [ ] Verified provider/model extension capability can still enable those fields where intentionally supported.
-- [ ] `prompt_cache_key` remains a grouping/cache-key concept and is not silently converted into a content cache boundary.
-- [ ] Retention/TTL controls map only where semantically representable; otherwise loss is explicit.
-- [ ] Hard-coded target TTL warning metadata is corrected to selected-provider semantics or a bounded non-equivalence label.
-- [ ] Anthropic `cache_control` remains capability-gated and placement-aware.
-- [ ] Plan 112 absence/malformed and successful-mapping semantics remain intact.
-- [ ] Native source cache intent takes precedence over synthetic cache insertion.
-- [ ] Synthetic controls cannot emit an unverified provider extension.
-- [ ] Cache keys, prompt content, raw malformed cache values, and credentials are absent from logs/persistence/diagnostics.
-- [ ] OpenAI Responses API is not added or partially emulated by this plan.
-- [ ] No runtime capability-discovery service, database migration, dependency, or background task is added.
-- [ ] Active docs no longer describe provider-extension cache fields as generic first-party OpenAI behavior unless execution-date docs establish that fact.
-- [ ] Focused cache/transcode/capability/privacy tests pass.
-- [ ] Ruff, Pyright, 14 smoke tests, and both config checks pass.
+- [x] Implementation closure records execution-date official OpenAI and Anthropic cache field/TTL semantics used for the mapping.
+- [x] First-party protocol semantics and provider-specific compatible extensions are explicitly distinguished in production capability logic.
+- [x] Generic `openai` protocol compatibility alone does not enable explicit content cache-breakpoint fields unless current first-party docs verify them as standard.
+- [x] Generic OpenAI-compatible providers with unknown capability receive no `prompt_cache_breakpoint`/`prompt_cache_options` extension fields.
+- [x] Verified provider/model extension capability can still enable those fields where intentionally supported.
+- [x] `prompt_cache_key` remains a grouping/cache-key concept and is not silently converted into a content cache boundary.
+- [x] Retention/TTL controls map only where semantically representable; otherwise loss is explicit.
+- [x] Hard-coded target TTL warning metadata is corrected to selected-provider semantics or a bounded non-equivalence label.
+- [x] Anthropic `cache_control` remains capability-gated and placement-aware.
+- [x] Plan 112 absence/malformed and successful-mapping semantics remain intact.
+- [x] Native source cache intent takes precedence over synthetic cache insertion.
+- [x] Synthetic controls cannot emit an unverified provider extension.
+- [x] Cache keys, prompt content, raw malformed cache values, and credentials are absent from logs/persistence/diagnostics.
+- [x] OpenAI Responses API is not added or partially emulated by this plan.
+- [x] No runtime capability-discovery service, database migration, dependency, or background task is added.
+- [x] Active docs no longer describe provider-extension cache fields as generic first-party OpenAI behavior unless execution-date docs establish that fact.
+- [x] Focused cache/transcode/capability/privacy tests pass.
+- [x] Ruff, Pyright, 14 smoke tests, and both config checks pass.
+
+## Closure record
+
+Implementation commit: `21f5ba0`.
+
+Implementation introduces `PromptCacheCapability` entries under
+`TranscodingCapabilities.prompt_cache_breakpoints`. Each selected
+provider/model contract declares `dialect = "first_party"` or
+`"compatible_extension"`, verified TTL labels, and a maximum of four explicit
+boundaries. A bare OpenAI-compatible protocol label cannot enable cache fields;
+the old persisted protocol-list shape is treated as unknown during cache
+hydration. Synthetic Anthropic `cache_control` insertion uses the same selected
+target contract and reports `capability_unverified` without mutating the body
+when the contract is absent.
+
+Provider documentation was re-verified on 2026-08-11 from the official
+[OpenAI prompt caching guide](https://developers.openai.com/api/docs/guides/prompt-caching),
+[OpenAI Chat Completions reference](https://developers.openai.com/api/reference/resources/chat),
+and [Anthropic prompt caching guide](https://platform.claude.com/docs/en/build-with-claude/prompt-caching).
+The OpenAI guide documents automatic caching, `prompt_cache_key` as a cache
+grouping/routing hint, and GPT-5.6-family explicit content breakpoints using
+`prompt_cache_breakpoint` and `prompt_cache_options`; the documented breakpoint
+TTL is `30m`, with up to four new writes per request. The Chat Completions
+reference lists supported breakpoint content parts. Anthropic documents
+block-level `cache_control`, a 5-minute default, optional `1h` TTL, and up to
+four explicit breakpoints across tools, system, and messages. These facts are
+represented as provider/model contracts; no automatic-to-explicit equivalence
+or TTL conversion is inferred.
+
+Verification completed locally on 2026-08-11:
+
+- `uv sync --frozen --extra ci`: passed.
+- Focused cache/transcoder/capability suites: **632 unit tests passed**;
+  cache/prepared/provider-bound suites: **129 passed**; transcoding
+  integrations: **35 passed**.
+- `ruff format --check src/ tests/ scripts/`: passed; 711 files formatted.
+- `ruff check src/ tests/ scripts/`: passed.
+- `pyright src/ scripts/`: passed with 0 errors, warnings, or information.
+- `PYTHONHASHSEED=0 TZ=UTC pytest tests/smoke/ -q --tb=short --maxfail=1`:
+  passed (14 smoke tests).
+- Both shipped `check-config` commands passed.
+
+No Responses API implementation, dependency, migration, runtime discovery,
+background task, live provider request, hardware, benchmark, soak, or full
+retained-suite evidence is claimed.
 
 ## Rejection conditions
 

@@ -25,7 +25,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Literal, cast
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
 
@@ -183,24 +183,83 @@ class ThinkingCapability(BaseModel):
     notes: str | None = None
 
 
+class PromptCacheCapability(BaseModel):
+    """Provider/model contract for explicit prompt-cache boundaries.
+
+    Protocol compatibility is deliberately not enough to populate this
+    contract.  ``dialect`` identifies whether the selected provider/model
+    implements the first-party protocol fields or a verified compatible
+    provider extension.  TTLs and the boundary limit are facts about that
+    selected contract, not protocol-wide assumptions.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    dialect: Literal["first_party", "compatible_extension"]
+    supported_ttls: list[str] = Field(default_factory=list, max_length=4)
+    default_ttl: str | None = None
+    max_breakpoints: int = Field(default=4, ge=1, le=4)
+
+    def ttl_label(self) -> str:
+        """Return bounded semantic TTL metadata for loss warnings."""
+        values = [value for value in self.supported_ttls if _is_ttl_label(value)]
+        if not values:
+            return "provider-defined"
+        if self.default_ttl is not None and _is_ttl_label(self.default_ttl):
+            if self.default_ttl in values:
+                values = [
+                    self.default_ttl,
+                    *[v for v in values if v != self.default_ttl],
+                ]
+            if len(values) == 1:
+                return values[0]
+            return f"{values[0]} default; {' or '.join(values)} supported"
+        return " or ".join(values)
+
+
+def _is_ttl_label(value: object) -> bool:
+    """Accept only small duration/cache-policy labels in diagnostics."""
+    if not isinstance(value, str) or not value or len(value) > 16:
+        return False
+    if value in {"in_memory", "ephemeral"}:
+        return True
+    if not value[:-1].isdigit():
+        return False
+    return value[-1] in "smhd"
+
+
 class TranscodingCapabilities(BaseModel):
     """Explicit native controls available on a provider/model target.
 
-    Empty lists are intentionally conservative: protocol compatibility does
-    not imply that a compatible provider implements these newer controls.
-    Values are protocol names (``openai`` or ``anthropic``).
+    Empty mappings are intentionally conservative: protocol compatibility
+    does not imply that a compatible provider implements these newer
+    controls.  Cache entries are provider/model contracts keyed by target
+    protocol, not protocol-family defaults.
     """
 
     native_structured_outputs: list[str] = Field(default_factory=list)
     strict_tools: list[str] = Field(default_factory=list)
     parallel_tool_control: list[str] = Field(default_factory=list)
     reasoning_efforts: dict[str, list[str]] = Field(default_factory=dict)
-    prompt_cache_breakpoints: list[str] = Field(default_factory=list)
+    prompt_cache_breakpoints: dict[str, PromptCacheCapability] = Field(
+        default_factory=dict,
+    )
 
     def supports(self, feature: str, protocol: str) -> bool:
         """Return whether *protocol* explicitly supports *feature*."""
         values: object = getattr(self, feature, ())
-        return protocol in values if isinstance(values, list) else False
+        if isinstance(values, list):
+            return protocol in values
+        if feature == "prompt_cache_breakpoints" and isinstance(values, dict):
+            return protocol in values
+        return False
+
+    def prompt_cache_capability(
+        self,
+        protocol: str,
+    ) -> PromptCacheCapability | None:
+        """Return the verified cache contract for a target protocol."""
+        return self.prompt_cache_breakpoints.get(protocol)
 
     def supports_reasoning_effort(self, protocol: str, effort: str) -> bool:
         """Return whether a target explicitly accepts this effort value."""
@@ -582,6 +641,21 @@ def serialize_model_capabilities(
 # ---------------------------------------------------------------------------
 
 
+def _parse_transcoding_capabilities(raw: object) -> TranscodingCapabilities:
+    """Parse cached/configured transcoding data conservatively.
+
+    Releases before the dialect contract stored cache targets as a bare
+    protocol list. Treat that stale shape as unknown instead of allowing it
+    to enable native fields or breaking catalog hydration.
+    """
+    if not isinstance(raw, dict):
+        return TranscodingCapabilities()
+    data = dict(cast("Mapping[str, object]", raw))
+    if isinstance(data.get("prompt_cache_breakpoints"), list):
+        data["prompt_cache_breakpoints"] = {}
+    return TranscodingCapabilities.model_validate(data)
+
+
 def thinking_override_to_capability(
     override: dict[str, object] | None,
 ) -> ThinkingCapability:
@@ -736,11 +810,7 @@ def model_capabilities_override_to_config(
         thinking = ThinkingCapability()
 
     transcode_raw = override.get("transcoding")
-    transcoding = (
-        TranscodingCapabilities.model_validate(transcode_raw)
-        if isinstance(transcode_raw, dict)
-        else TranscodingCapabilities()
-    )
+    transcoding = _parse_transcoding_capabilities(transcode_raw)
     return ModelCapabilities(thinking=thinking, transcoding=transcoding)
 
 
@@ -787,12 +857,7 @@ def dict_to_model_capabilities(data: dict[str, object]) -> ModelCapabilities:
     ignored so the function degrades gracefully with future schema
     extensions.
     """
-    transcoding_raw = data.get("transcoding")
-    transcoding = (
-        TranscodingCapabilities.model_validate(transcoding_raw)
-        if isinstance(transcoding_raw, dict)
-        else TranscodingCapabilities()
-    )
+    transcoding = _parse_transcoding_capabilities(data.get("transcoding"))
     thinking_raw = data.get("thinking")
     if not isinstance(thinking_raw, dict):
         return ModelCapabilities(transcoding=transcoding)

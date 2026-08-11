@@ -7,16 +7,47 @@ from typing import TYPE_CHECKING, Any, cast
 from eggpool.transcoder.cache_stability import CacheBoundaryAnnotation
 
 if TYPE_CHECKING:
-    from eggpool.catalog.capabilities import TranscodingCapabilities
+    from eggpool.catalog.capabilities import (
+        PromptCacheCapability,
+        TranscodingCapabilities,
+    )
     from eggpool.transcoder.context import TranscodeContext
 
-MAX_NATIVE_BREAKPOINTS = 4
+
+def _cache_capability(
+    capability: TranscodingCapabilities | None,
+    protocol: str,
+) -> PromptCacheCapability | None:
+    if capability is None:
+        return None
+    return capability.prompt_cache_capability(protocol)
 
 
-def _supports(capability: TranscodingCapabilities | None, protocol: str) -> bool:
-    return capability is not None and capability.supports(
-        "prompt_cache_breakpoints", protocol
-    )
+def _bounded_ttl_label(value: object) -> str:
+    """Return a non-sensitive, bounded source TTL label."""
+    if not isinstance(value, str) or len(value) > 16:
+        return "invalid"
+    if value in {"in_memory", "ephemeral"}:
+        return value
+    if value[:-1].isdigit() and value[-1] in "smhd":
+        return value
+    return "unrecognized"
+
+
+def prompt_cache_ttl_label(
+    capability: TranscodingCapabilities | None,
+    protocol: str,
+) -> str:
+    """Return target-contract TTL metadata without exposing raw config."""
+    target_capability = _cache_capability(capability, protocol)
+    if target_capability is None:
+        return "unverified target contract"
+    return target_capability.ttl_label()
+
+
+def prompt_cache_source_ttl_label(value: object) -> str:
+    """Return a bounded, non-sensitive source retention label."""
+    return _bounded_ttl_label(value)
 
 
 def openai_breakpoint_to_anthropic(
@@ -61,7 +92,8 @@ def openai_breakpoint_to_anthropic(
             )
         )
         return False
-    if not _supports(capability, "anthropic"):
+    target_capability = _cache_capability(capability, "anthropic")
+    if target_capability is None:
         kind = "cache_breakpoint_unsupported_target"
         warnings.append({"kind": kind, "field": source_path})
         context.cache_boundary_tracker.record(
@@ -74,13 +106,13 @@ def openai_breakpoint_to_anthropic(
             )
         )
         return True
-    if count[0] >= MAX_NATIVE_BREAKPOINTS:
+    if count[0] >= target_capability.max_breakpoints:
         warnings.append(
             {
                 "kind": "cache_breakpoint_limit_exceeded",
                 "field": source_path,
                 "source_count": count[0] + 1,
-                "target_limit": MAX_NATIVE_BREAKPOINTS,
+                "target_limit": target_capability.max_breakpoints,
             }
         )
         context.cache_boundary_tracker.record(
@@ -125,19 +157,24 @@ def anthropic_boundary_to_openai(
         warnings.append({"kind": "cache_control_invalid_shape", "field": source_path})
         return False
     cache_control = cast("dict[str, Any]", cache_control_raw)
-    if not isinstance(cache_control.get("type"), str):
+    if cache_control.get("type") != "ephemeral":
         warnings.append({"kind": "cache_control_invalid_shape", "field": source_path})
         return False
+    target_capability = _cache_capability(capability, "openai")
     if cache_control.get("ttl") is not None:
         warnings.append(
             {
                 "kind": "cache_ttl_mismatch",
                 "field": source_path,
-                "source_ttl": str(cache_control["ttl"]),
-                "target_ttl": "30m",
+                "source_ttl": _bounded_ttl_label(cache_control["ttl"]),
+                "target_ttl": (
+                    target_capability.ttl_label()
+                    if target_capability is not None
+                    else "unverified target contract"
+                ),
             }
         )
-    if not _supports(capability, "openai"):
+    if target_capability is None:
         warnings.append(
             {"kind": "cache_breakpoint_unsupported_target", "field": source_path}
         )
@@ -152,13 +189,13 @@ def anthropic_boundary_to_openai(
             )
         )
         return False
-    if count[0] >= MAX_NATIVE_BREAKPOINTS:
+    if count[0] >= target_capability.max_breakpoints:
         warnings.append(
             {
                 "kind": "cache_breakpoint_limit_exceeded",
                 "field": source_path,
                 "source_count": count[0] + 1,
-                "target_limit": MAX_NATIVE_BREAKPOINTS,
+                "target_limit": target_capability.max_breakpoints,
             }
         )
         context.cache_boundary_tracker.record(

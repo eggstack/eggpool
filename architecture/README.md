@@ -549,8 +549,11 @@ translation:
   `stable_prefix_preserved` / `stable_prefix_reordered_canonically`
   summary at the end of the pass.
 - `AnthropicToOpenAI.encode_request` maps message/system block boundaries to
-  OpenAI `prompt_cache_breakpoint` only when the target capability verifies
-  that field. Tool-definition boundaries remain explicitly unrepresentable.
+  OpenAI `prompt_cache_breakpoint` only when the selected provider/model
+  capability contract verifies that field. The contract distinguishes
+  first-party OpenAI semantics from a compatible-provider extension and
+  supplies the target TTL label/bound. Tool-definition boundaries remain
+  explicitly unrepresentable.
   Only an emitted target breakpoint counts as mapped; absent, malformed,
   unsupported, and overflowed boundaries do not enable explicit mode.
   Top-level Anthropic `cache_control` is reported as
@@ -1367,8 +1370,9 @@ of this note prevents accidental partial implementation.
 ## Synthetic Cache Controls (Phase 9)
 
 Phase 9 layers opt-in synthetic `cache_control` annotations onto
-the provider-bound body for providers that support explicit cache
-boundary hints (initially Anthropic-style).  The selector and
+the provider-bound body for providers/models whose capability contract
+verifies explicit cache boundary hints (initially Anthropic-style). The
+selector and
 mutator run inside `RequestCoordinator._apply_synthetic_cache_controls`
 AFTER account selection and provider-bound transcoding, so the
 feature sees `context.upstream_protocol` (not `endpoint.protocol`).
@@ -1392,6 +1396,9 @@ observe the plan without changing wire bodies.
   representation is normalized internally to `tuple[str | int, ...]`
   so candidates and native-preservation checks use the same form.
   Display strings are generated only in summary JSON.
+- **Capability gate**: provider kind and protocol are routing context only;
+  synthesis does not emit `cache_control` without the selected model's
+  verified cache capability contract.
 - **TTL is explicit**: only `ttl = "ephemeral"` is currently accepted.
   `5m` and `1h` are reserved and rejected at config load.
 - **Structural-diff safety**: apply mode validates the mutated payload

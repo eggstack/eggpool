@@ -12,7 +12,11 @@ from eggpool.transcoder.cache_stability import (
     extract_cache_boundaries,
     extract_cache_control_type,
 )
-from eggpool.transcoder.cache_translation import openai_breakpoint_to_anthropic
+from eggpool.transcoder.cache_translation import (
+    openai_breakpoint_to_anthropic,
+    prompt_cache_source_ttl_label,
+    prompt_cache_ttl_label,
+)
 from eggpool.transcoder.errors import (
     CACHE_CONTROL_LOSS_KINDS,
     TranscodeLossError,
@@ -295,8 +299,11 @@ class OpenAIToAnthropic:
                 {
                     "kind": "cache_ttl_mismatch",
                     "field": "prompt_cache_options.ttl",
-                    "source_ttl": str(cache_options["ttl"]),
-                    "target_ttl": "5m or 1h",
+                    "source_ttl": prompt_cache_source_ttl_label(cache_options["ttl"]),
+                    "target_ttl": prompt_cache_ttl_label(
+                        transcoding_capability,
+                        "anthropic",
+                    ),
                 }
             )
         if payload.get("prompt_cache_retention") is not None:
@@ -304,8 +311,13 @@ class OpenAIToAnthropic:
                 {
                     "kind": "cache_ttl_mismatch",
                     "field": "prompt_cache_retention",
-                    "source_ttl": str(payload["prompt_cache_retention"]),
-                    "target_ttl": "5m or 1h",
+                    "source_ttl": prompt_cache_source_ttl_label(
+                        payload["prompt_cache_retention"]
+                    ),
+                    "target_ttl": prompt_cache_ttl_label(
+                        transcoding_capability,
+                        "anthropic",
+                    ),
                 }
             )
 

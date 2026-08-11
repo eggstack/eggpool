@@ -5047,12 +5047,37 @@ class RequestCoordinator:
             run_synthetic_cache_synthesis,
         )
 
+        target_cache_capability = None
+        try:
+            from eggpool.catalog.capabilities import dict_to_model_capabilities
+
+            model_info = self._catalog.cache.get_model_for_provider(
+                context.model_id,
+                selected.provider_id,
+            )
+            if model_info is not None:
+                capabilities = dict_to_model_capabilities(
+                    cast("dict[str, object]", model_info.get("capabilities", {}))
+                )
+                target_cache_capability = (
+                    capabilities.transcoding.prompt_cache_capability(
+                        context.upstream_protocol or "openai"
+                    )
+                )
+        except Exception:  # noqa: BLE001
+            logger.debug(
+                "synthetic_cache_capability_lookup_failed",
+                extra={"proxy_request_id": context.request_id},
+                exc_info=True,
+            )
+
         result = run_synthetic_cache_synthesis(
             payload,
             segmentation=context.synthetic_cache_segmentation,
             cache_config=self._cache_config,
             target_protocol=context.upstream_protocol or "openai",
             target_provider_kind=target_provider_kind,
+            target_cache_capability=target_cache_capability,
             resolved_policy=resolved_policy,
             transcode_context=context.transcode_context,
         )

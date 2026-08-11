@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from eggpool.transcoder.cache_stability import (
     CACHE_BOUNDARY_KIND_SYNTHESIZED,
@@ -57,12 +57,16 @@ from eggpool.transcoder.segmentation import (
     SegmentSource,
 )
 
+if TYPE_CHECKING:
+    from eggpool.catalog.capabilities import PromptCacheCapability
+
 # Warning codes emitted by the selector and the mutator.  These are
 # stable strings persisted to the ``synthetic_cache_warnings_json``
 # column so dashboards can group by reason.
 WARN_DISABLED = "synthetic_cache_control_disabled"
 WARN_DRY_RUN = "synthetic_cache_control_dry_run"
 WARN_PROVIDER_UNSUPPORTED = "synthetic_cache_control_provider_unsupported"
+WARN_CAPABILITY_UNVERIFIED = "synthetic_cache_control_capability_unverified"
 WARN_NO_STABLE_CANDIDATE = "synthetic_cache_control_no_stable_candidate"
 WARN_BELOW_MIN_TOKENS = "synthetic_cache_control_below_min_tokens"
 WARN_LIMIT_REACHED = "synthetic_cache_control_limit_reached"
@@ -523,6 +527,7 @@ def select_synthetic_cache_candidates(
     cache_config: CacheConfig,
     target_protocol: str,
     target_provider_kind: str | None,
+    target_cache_capability: PromptCacheCapability | None,
     resolved_policy: ResolvedCompressionPolicy | None,
 ) -> SyntheticCachePlan:
     """Run the candidate selector against the segmentation summary.
@@ -619,6 +624,26 @@ def select_synthetic_cache_candidates(
             effective_ttl=effective.ttl,
         )
 
+    if target_cache_capability is None:
+        return SyntheticCachePlan(
+            status="capability_unverified",
+            dry_run=effective.dry_run,
+            candidates=(),
+            applied_count=0,
+            warnings=(WARN_CAPABILITY_UNVERIFIED,),
+            policy_name=policy_name,
+            policy_source=policy_source,
+            effective_ttl=effective.ttl,
+        )
+
+    effective = effective.model_copy(
+        update={
+            "max_breakpoints": min(
+                effective.max_breakpoints,
+                target_cache_capability.max_breakpoints,
+            )
+        }
+    )
     existing_native = _existing_native_cache_controls(payload_dict)
     candidates, selector_warnings = _select_candidates_for_anthropic(
         segmentation,
@@ -818,6 +843,7 @@ def run_synthetic_cache_synthesis(
     cache_config: CacheConfig,
     target_protocol: str,
     target_provider_kind: str | None,
+    target_cache_capability: PromptCacheCapability | None,
     resolved_policy: ResolvedCompressionPolicy | None,
     transcode_context: TranscodeContext | None = None,
 ) -> SyntheticCacheResult:
@@ -836,6 +862,7 @@ def run_synthetic_cache_synthesis(
         cache_config=cache_config,
         target_protocol=target_protocol,
         target_provider_kind=target_provider_kind,
+        target_cache_capability=target_cache_capability,
         resolved_policy=resolved_policy,
     )
     transformed: dict[str, Any] | None = None
@@ -880,6 +907,7 @@ __all__ = [
     "SyntheticCachePlan",
     "SyntheticCacheResult",
     "WARN_BELOW_MIN_TOKENS",
+    "WARN_CAPABILITY_UNVERIFIED",
     "WARN_DISABLED",
     "WARN_DRY_RUN",
     "WARN_EXISTING_NATIVE_PRESERVED",

@@ -117,25 +117,26 @@ Usage canonicalization across protocols (input_tokens ↔ prompt_tokens, cache c
 
 ### Native prompt-cache translation
 
-`TranscodingCapabilities.prompt_cache_breakpoints` is the explicit target
-capability gate for translating provider-native content boundaries. OpenAI
-explicit content breakpoints map to corresponding Anthropic cacheable blocks;
-Anthropic message/system block controls map to corresponding OpenAI content
-parts. Source-only breakpoint markers are consumed and do not remain on the
-target wire. The mapping is bounded to four target breakpoints and emits structured
-loss metadata for overflow, unsupported placement, TTL mismatch, and
-unrepresentable cache keys. Tool-definition boundaries are never moved to a
-message boundary. An absent OpenAI breakpoint is ordinary content and
-produces no warning or tracker annotation; malformed, unsupported, and
-overflowed boundaries return as unmapped, so explicit mode is emitted only
-when a target breakpoint was actually written. No cache key is synthesized or
-persisted.
+`TranscodingCapabilities.prompt_cache_breakpoints` is a provider/model
+contract map, not a protocol-family switch. Each target entry declares a
+`first_party` or verified `compatible_extension` dialect, supported TTL labels,
+and a bounded breakpoint limit. OpenAI explicit content breakpoints map to
+corresponding Anthropic cacheable blocks; Anthropic message/system block
+controls map to corresponding OpenAI content parts only when that selected
+contract exists. Source-only breakpoint markers are consumed and do not remain
+on the target wire. The mapping emits structured loss metadata for overflow,
+unsupported placement, TTL mismatch, and unrepresentable cache keys.
+Tool-definition boundaries are never moved to a message boundary. An absent
+OpenAI breakpoint is ordinary content and produces no warning or tracker
+annotation; malformed, unsupported, and overflowed boundaries return as
+unmapped, so explicit mode is emitted only when a target breakpoint was
+actually written. No cache key is synthesized or persisted.
 
 TTL labels are provider-specific and are never silently converted. OpenAI
-implicit caching is not source intent for Anthropic automatic caching. Native
-source boundaries also suppress conflicting synthetic insertion through the
-existing native-boundary check; broader synthetic-policy simplification is
-reserved for Plan 108.
+automatic caching and `prompt_cache_key` grouping are not source intent for
+Anthropic explicit cache boundaries. Native source boundaries suppress
+conflicting synthetic insertion, and synthetic insertion additionally requires
+the selected provider/model's verified Anthropic cache contract.
 
 ### `transcoder/cache_synthesis.py` / `cache_synthesis_policy.py`
 

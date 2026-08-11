@@ -33,10 +33,12 @@ from typing import Any, cast
 
 import pytest
 
+from eggpool.catalog.capabilities import PromptCacheCapability
 from eggpool.request.provider_bound_request import ProviderBoundRequest
 from eggpool.transcoder.cache_stability import CACHE_BOUNDARY_KIND_SYNTHESIZED
 from eggpool.transcoder.cache_synthesis import (
     WARN_BELOW_MIN_TOKENS,
+    WARN_CAPABILITY_UNVERIFIED,
     WARN_DISABLED,
     WARN_DRY_RUN,
     WARN_EXISTING_NATIVE_PRESERVED,
@@ -50,8 +52,12 @@ from eggpool.transcoder.cache_synthesis import (
     _existing_native_cache_controls,
     _path_to_display,
     apply_synthetic_cache_controls,
-    run_synthetic_cache_synthesis,
-    select_synthetic_cache_candidates,
+)
+from eggpool.transcoder.cache_synthesis import (
+    run_synthetic_cache_synthesis as _run_synthetic_cache_synthesis,
+)
+from eggpool.transcoder.cache_synthesis import (
+    select_synthetic_cache_candidates as _select_synthetic_cache_candidates,
 )
 from eggpool.transcoder.cache_synthesis_policy import (
     CacheConfig,
@@ -72,6 +78,25 @@ from eggpool.transcoder.segmentation import segment_request
 
 ANTHROPIC_PROTOCOL = "anthropic"
 OPENAI_PROTOCOL = "openai"
+
+
+_TEST_ANTHROPIC_CACHE_CAPABILITY = PromptCacheCapability(
+    dialect="first_party",
+    supported_ttls=["5m", "1h"],
+    default_ttl="5m",
+)
+
+
+def select_synthetic_cache_candidates(*args: Any, **kwargs: Any) -> Any:
+    """Use the verified Anthropic contract for legacy selector fixtures."""
+    kwargs.setdefault("target_cache_capability", _TEST_ANTHROPIC_CACHE_CAPABILITY)
+    return _select_synthetic_cache_candidates(*args, **kwargs)
+
+
+def run_synthetic_cache_synthesis(*args: Any, **kwargs: Any) -> Any:
+    """Use the verified Anthropic contract for legacy synthesis fixtures."""
+    kwargs.setdefault("target_cache_capability", _TEST_ANTHROPIC_CACHE_CAPABILITY)
+    return _run_synthetic_cache_synthesis(*args, **kwargs)
 
 
 def _anthropic_payload(
@@ -417,6 +442,32 @@ class TestSelectorGating:
         )
         assert plan.status == "provider_unsupported"
         assert WARN_PROVIDER_UNSUPPORTED in plan.warnings
+
+    def test_unverified_target_capability_blocks_synthesis(self) -> None:
+        payload = _anthropic_payload(system=[{"type": "text", "text": "x" * 4096}])
+        segmentation = segment_request(payload, protocol=ANTHROPIC_PROTOCOL)
+        cache_config = CacheConfig(
+            synthetic_cache_controls=SyntheticCacheControlsConfig(
+                enabled=True,
+                dry_run=False,
+                require_policy=False,
+                min_stable_tokens=0,
+            )
+        )
+
+        plan = _select_synthetic_cache_candidates(
+            segmentation,
+            payload,
+            cache_config=cache_config,
+            target_protocol=ANTHROPIC_PROTOCOL,
+            target_provider_kind="anthropic",
+            target_cache_capability=None,
+            resolved_policy=None,
+        )
+
+        assert plan.status == "capability_unverified"
+        assert plan.candidates == ()
+        assert WARN_CAPABILITY_UNVERIFIED in plan.warnings
 
     def test_non_anthropic_target_protocol_blocked(self) -> None:
         payload: dict[str, Any] = {
@@ -1070,10 +1121,6 @@ class TestPhase9RoutingGuardrails:
     """
 
     def test_selector_does_not_consume_routing_state(self) -> None:
-        from eggpool.transcoder.cache_synthesis import (
-            select_synthetic_cache_candidates,
-        )
-
         payload = _anthropic_payload(system=[{"type": "text", "text": "x" * 4096}])
         segmentation = segment_request(payload, protocol=ANTHROPIC_PROTOCOL)
         cache_config = CacheConfig(
@@ -1085,12 +1132,13 @@ class TestPhase9RoutingGuardrails:
             )
         )
         # No resolved policy => no provider routing information.
-        plan = select_synthetic_cache_candidates(
+        plan = _select_synthetic_cache_candidates(
             segmentation,
             payload,
             cache_config=cache_config,
             target_protocol=ANTHROPIC_PROTOCOL,
             target_provider_kind=None,
+            target_cache_capability=_TEST_ANTHROPIC_CACHE_CAPABILITY,
             resolved_policy=None,
         )
         # Plan carries no fields that could enter a scorer.
@@ -1947,6 +1995,7 @@ class TestSyntheticCachePostRoute:
             "disabled",
             "no_candidates",
             "policy_required",
+            "capability_unverified",
         )
 
     def test_openai_client_to_anthropic_provider_post_route_synthesis(self) -> None:
@@ -2012,6 +2061,7 @@ class TestSyntheticCachePostRoute:
             "no_candidates",
             "disabled",
             "policy_required",
+            "capability_unverified",
         )
 
     def test_openai_client_to_openai_provider_unsupported(self) -> None:
@@ -2447,6 +2497,7 @@ class TestSyntheticCachePostRoute:
             "no_candidates",
             "disabled",
             "policy_required",
+            "capability_unverified",
         )
 
     def test_synthetic_cache_apply_runs_for_streaming_request(self) -> None:
@@ -2567,5 +2618,6 @@ class TestSyntheticCachePostRoute:
             "no_candidates",
             "disabled",
             "policy_required",
+            "capability_unverified",
         )
         assert result.plan.dry_run is True

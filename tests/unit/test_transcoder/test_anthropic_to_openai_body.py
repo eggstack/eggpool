@@ -33,6 +33,20 @@ def transcoder() -> AnthropicToOpenAI:
 
 
 class TestBasicRequestTranslation:
+    @staticmethod
+    def _openai_cache_capability(
+        *, dialect: str = "first_party"
+    ) -> TranscodingCapabilities:
+        return TranscodingCapabilities(
+            prompt_cache_breakpoints={
+                "openai": {
+                    "dialect": dialect,
+                    "supported_ttls": ["30m"],
+                    "default_ttl": "30m",
+                }
+            }
+        )
+
     def test_system_string_prepended_as_system_message(
         self, transcoder: AnthropicToOpenAI
     ) -> None:
@@ -67,9 +81,7 @@ class TestBasicRequestTranslation:
         result, warnings = AnthropicToOpenAI().encode_request(
             payload,
             _make_context(),
-            transcoding_capability=TranscodingCapabilities(
-                prompt_cache_breakpoints=["openai"]
-            ),
+            transcoding_capability=self._openai_cache_capability(),
         )
         assert result["messages"][0]["content"][0]["prompt_cache_breakpoint"] == {
             "mode": "explicit"
@@ -101,9 +113,7 @@ class TestBasicRequestTranslation:
         result, warnings = AnthropicToOpenAI().encode_request(
             payload,
             _make_context(),
-            transcoding_capability=TranscodingCapabilities(
-                prompt_cache_breakpoints=["openai"]
-            ),
+            transcoding_capability=self._openai_cache_capability(),
             loss_policy="reject",
         )
         assert result["prompt_cache_options"] == {"mode": "explicit"}
@@ -183,9 +193,7 @@ class TestBasicRequestTranslation:
         result, warnings = AnthropicToOpenAI().encode_request(
             payload,
             _make_context(),
-            transcoding_capability=TranscodingCapabilities(
-                prompt_cache_breakpoints=["openai"]
-            ),
+            transcoding_capability=self._openai_cache_capability(),
         )
 
         content = result["messages"][0]["content"]
@@ -195,6 +203,73 @@ class TestBasicRequestTranslation:
         assert any(
             warning["kind"] == "cache_breakpoint_limit_exceeded" for warning in warnings
         )
+
+    def test_verified_compatible_extension_maps_without_protocol_inference(
+        self,
+    ) -> None:
+        payload = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "stable",
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                }
+            ]
+        }
+        result, warnings = AnthropicToOpenAI().encode_request(
+            payload,
+            _make_context(),
+            transcoding_capability=self._openai_cache_capability(
+                dialect="compatible_extension"
+            ),
+        )
+
+        assert result["messages"][0]["content"][0]["prompt_cache_breakpoint"] == {
+            "mode": "explicit"
+        }
+        assert result["prompt_cache_options"] == {"mode": "explicit"}
+        assert not any(
+            warning["kind"] == "cache_breakpoint_unsupported_target"
+            for warning in warnings
+        )
+
+    def test_explicit_ttl_loss_uses_verified_target_contract_label(self) -> None:
+        payload = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "stable",
+                            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                        }
+                    ],
+                }
+            ]
+        }
+        _, warnings = AnthropicToOpenAI().encode_request(
+            payload,
+            _make_context(),
+            transcoding_capability=self._openai_cache_capability(),
+        )
+
+        ttl_warnings = [
+            warning for warning in warnings if warning["kind"] == "cache_ttl_mismatch"
+        ]
+        assert ttl_warnings == [
+            {
+                "kind": "cache_ttl_mismatch",
+                "field": "messages[0].content[0].cache_control",
+                "source_ttl": "1h",
+                "target_ttl": "30m",
+            }
+        ]
 
     def test_system_as_list_of_text_blocks_joined(
         self, transcoder: AnthropicToOpenAI
