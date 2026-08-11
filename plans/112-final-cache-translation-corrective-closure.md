@@ -1,7 +1,7 @@
 # Plan 112 — Final Cache Translation Corrective Closure
 
 Date: 2026-08-11
-Status: planned
+Status: complete
 Planning baseline: `69210fc9fa70f9610f8c6f5a8beee369438af995`
 Related roadmap: `plans/103-sbc-protocol-parity-and-runtime-efficiency-roadmap.md`
 Related corrective plan: `plans/111-roadmap-103-corrective-closure.md`
@@ -270,45 +270,45 @@ A full retained-suite pass is optional and is not a closure requirement. No live
 
 ### OpenAI → Anthropic absence semantics
 
-- [ ] A text content part with no `prompt_cache_breakpoint` is treated as ordinary content, not malformed cache input.
-- [ ] Ordinary user content-part arrays emit no `cache_breakpoint_invalid_shape` warning.
-- [ ] Ordinary assistant content-part arrays emit no `cache_breakpoint_invalid_shape` warning.
-- [ ] Ordinary system/developer text-part arrays do not create false cache-loss metadata.
-- [ ] `loss_policy = "reject"` does not reject an otherwise valid request that contains no cache breakpoint.
-- [ ] No cache-boundary tracker annotation is created for a breakpoint that was absent from the source.
-- [ ] A present malformed marker still emits `cache_breakpoint_invalid_shape`, is removed from the Anthropic target body, and remains rejectable under the existing loss policy.
-- [ ] A present valid supported marker still maps to Anthropic `cache_control` and leaves no source-only marker on the target wire.
-- [ ] A present valid unsupported marker still follows the existing bounded unsupported-target semantics.
-- [ ] The source request object remains unmodified.
+- [x] A text content part with no `prompt_cache_breakpoint` is treated as ordinary content, not malformed cache input.
+- [x] Ordinary user content-part arrays emit no `cache_breakpoint_invalid_shape` warning.
+- [x] Ordinary assistant content-part arrays emit no `cache_breakpoint_invalid_shape` warning.
+- [x] Ordinary system/developer text-part arrays do not create false cache-loss metadata.
+- [x] `loss_policy = "reject"` does not reject an otherwise valid request that contains no cache breakpoint.
+- [x] No cache-boundary tracker annotation is created for a breakpoint that was absent from the source.
+- [x] A present malformed marker still emits `cache_breakpoint_invalid_shape`, is removed from the Anthropic target body, and remains rejectable under the existing loss policy.
+- [x] A present valid supported marker still maps to Anthropic `cache_control` and leaves no source-only marker on the target wire.
+- [x] A present valid unsupported marker still follows the existing bounded unsupported-target semantics.
+- [x] The source request object remains unmodified.
 
 ### Anthropic → OpenAI mapping-success semantics
 
-- [ ] `anthropic_boundary_to_openai()` returns success only when it actually emits a target `prompt_cache_breakpoint`.
-- [ ] Missing, malformed, unsupported/unverified, and overflowed source boundaries do not count as successful mappings.
-- [ ] `mapped_breakpoint` becomes true only after at least one actual target breakpoint is emitted.
-- [ ] `message_has_breakpoint` becomes true only for a message that actually receives a target breakpoint.
-- [ ] `mapped_source_paths` contains only exact paths that were successfully represented on the target.
-- [ ] `prompt_cache_options = {"mode": "explicit"}` is absent when zero target breakpoints were emitted.
-- [ ] An unverified/generic OpenAI-compatible target receives neither explicit content breakpoints nor `prompt_cache_options` solely because an Anthropic source cache boundary existed.
-- [ ] Malformed source cache controls do not cause target-native explicit cache fields to be emitted.
-- [ ] A fifth/overflow boundary does not produce a fifth target breakpoint or count as mapped.
-- [ ] One or more genuinely mapped boundaries still cause top-level explicit mode to be emitted as required by the existing OpenAI translation contract.
-- [ ] Successfully mapped message/system boundaries are not reclassified by the later loss sweep.
-- [ ] Genuine unsupported boundaries, including Anthropic tool-definition cache controls, remain visible and rejectable according to existing policy.
-- [ ] Genuine TTL mismatch remains visible/rejectable and is not hidden by the boolean return correction.
+- [x] `anthropic_boundary_to_openai()` returns success only when it actually emits a target `prompt_cache_breakpoint`.
+- [x] Missing, malformed, unsupported/unverified, and overflowed source boundaries do not count as successful mappings.
+- [x] `mapped_breakpoint` becomes true only after at least one actual target breakpoint is emitted.
+- [x] `message_has_breakpoint` becomes true only for a message that actually receives a target breakpoint.
+- [x] `mapped_source_paths` contains only exact paths that were successfully represented on the target.
+- [x] `prompt_cache_options = {"mode": "explicit"}` is absent when zero target breakpoints were emitted.
+- [x] An unverified/generic OpenAI-compatible target receives neither explicit content breakpoints nor `prompt_cache_options` solely because an Anthropic source cache boundary existed.
+- [x] Malformed source cache controls do not cause target-native explicit cache fields to be emitted.
+- [x] A fifth/overflow boundary does not produce a fifth target breakpoint or count as mapped.
+- [x] One or more genuinely mapped boundaries still cause top-level explicit mode to be emitted as required by the existing OpenAI translation contract.
+- [x] Successfully mapped message/system boundaries are not reclassified by the later loss sweep.
+- [x] Genuine unsupported boundaries, including Anthropic tool-definition cache controls, remain visible and rejectable according to existing policy.
+- [x] Genuine TTL mismatch remains visible/rejectable and is not hidden by the boolean return correction.
 
 ### Scope and regression control
 
-- [ ] No auth/exposure, runtime fingerprint, request body limit, routing, DB, finalization, compression, request-memory, pool-size, or SBC characterization behavior is changed.
-- [ ] No dependency, database migration, background task, cache store, telemetry component, benchmark/soak harness, or CI job is added.
-- [ ] Current one-job Python 3.11 CI shape remains unchanged.
-- [ ] The existing four-breakpoint bound is unchanged.
-- [ ] No cache key is synthesized.
-- [ ] No source cache-key value, prompt/tool content, raw malformed payload value, or credential is added to logs/persistence/closure evidence.
-- [ ] Focused OpenAI → Anthropic and Anthropic → OpenAI body tests pass.
-- [ ] Ruff format/check, Pyright, smoke tests, and both shipped config checks pass.
-- [ ] Plan 112 records exact implementation and verification evidence before being marked complete.
-- [ ] After these criteria pass, Roadmap 103/Plan 111 follow-up work is considered closed; do not create another optimization or verification phase from this line of work.
+- [x] No auth/exposure, runtime fingerprint, request body limit, routing, DB, finalization, compression, request-memory, pool-size, or SBC characterization behavior is changed.
+- [x] No dependency, database migration, background task, cache store, telemetry component, benchmark/soak harness, or CI job is added.
+- [x] Current one-job Python 3.11 CI shape remains unchanged.
+- [x] The existing four-breakpoint bound is unchanged.
+- [x] No cache key is synthesized.
+- [x] No source cache-key value, prompt/tool content, raw malformed payload value, or credential is added to logs/persistence/closure evidence.
+- [x] Focused OpenAI → Anthropic and Anthropic → OpenAI body tests pass.
+- [x] Ruff format/check, Pyright, smoke tests, and both shipped config checks pass.
+- [x] Plan 112 records exact implementation and verification evidence before being marked complete.
+- [x] After these criteria pass, Roadmap 103/Plan 111 follow-up work is considered closed; do not create another optimization or verification phase from this line of work.
 
 ## Rejection conditions
 
@@ -340,3 +340,31 @@ Do not close Plan 112 if any of the following remains true:
 10. Run Ruff format/check, Pyright, smoke tests, and both shipped config checks.
 11. Update Plan 112 with implementation SHA and truthful verification evidence; change status to complete only if every acceptance criterion is satisfied.
 12. Stop. Do not reopen Roadmap 103 or create another follow-up phase if this plan closes cleanly.
+
+## Closure record
+
+Implementation and documentation commit: `bce62a56930fe5a3621e9620872d8e0a9d7b997e` (`Correct cache translation mapping semantics`).
+
+The implementation changes only the existing cache-translation helpers: absent
+OpenAI breakpoint markers now return without warning or tracker annotation, and
+the Anthropic boundary helper returns success only after writing a target
+`prompt_cache_breakpoint`. Focused regression coverage remains in the two
+owning body-test files; no new test suite, dependency, schema, task, or CI job
+was added. Active README, AGENTS, architecture skill/deep-dive, and
+transcoding documentation now state the corrected no-op and mapping-success
+contracts. No pruning was required beyond removing no stale material.
+
+Verification completed locally on 2026-08-11:
+
+- `rtk uv sync --frozen --extra ci`: passed.
+- `rtk uv run pytest tests/unit/test_transcoder/test_openai_to_anthropic_body.py -q --tb=short`: **53 passed**.
+- `rtk uv run pytest tests/unit/test_transcoder/test_anthropic_to_openai_body.py -q --tb=short`: **35 passed**.
+- `rtk uv run ruff format --check src/ tests/ scripts/`: passed; 711 files already formatted.
+- `rtk uv run ruff check src/ tests/ scripts/`: passed.
+- `rtk uv run pyright src/ scripts/`: passed with 0 errors, 0 warnings, 0 informations.
+- `PYTHONHASHSEED=0 TZ=UTC rtk uv run pytest tests/smoke/ -q --tb=short --maxfail=1`: **14 passed**.
+- `rtk uv run eggpool --config config.example.toml check-config`: passed.
+- `rtk uv run eggpool --config config.sbc.example.toml check-config`: passed.
+
+No live provider, hardware, benchmark, soak, or full retained-suite evidence
+is claimed or required by this plan.
