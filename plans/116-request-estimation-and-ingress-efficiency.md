@@ -225,8 +225,7 @@ Reject the implementation if:
 
 ## Implementation closure
 
-Implementation commit: recorded in the follow-up closure commit after the
-implementation commit is created.
+Implementation commit: `c2c8f84` (`Reuse request estimates during admission`).
 
 The request handler now receives the canonical context estimate from
 `check_context_limits()` and carries that exact value into
