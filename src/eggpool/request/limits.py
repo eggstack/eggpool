@@ -194,7 +194,7 @@ def _estimate_json_value_tokens(value: object) -> int:
     return max(1, _ceil_div(len(str(value)), ESTIMATED_TEXT_CHARS_PER_TOKEN))
 
 
-def _estimate_string_tokens(value: str) -> int:
+def estimate_text_tokens(value: str) -> int:
     """Estimate tokens for raw decoded text.
 
     ASCII-heavy code and prose average near four characters per token.  For
@@ -216,6 +216,9 @@ def _estimate_string_tokens(value: str) -> int:
         ascii_chars,
         ESTIMATED_TEXT_CHARS_PER_TOKEN,
     ) + _ceil_div(non_ascii_bytes, ESTIMATED_NON_ASCII_BYTES_PER_TOKEN)
+
+
+_estimate_string_tokens = estimate_text_tokens
 
 
 def _ceil_div(value: int, divisor: int) -> int:

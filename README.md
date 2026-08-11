@@ -258,7 +258,7 @@ and matching backoff; a durable failure preserves the current suppression.
 
 EggPool includes an opt-in, cache-preserving request-shaping stack. With shipped defaults the entire stack is **reporting-only**: no request body, header, or route is altered. Routing remains load-based — cache, compression, synthetic-cache, and tuning fields never enter `QuotaFairScorer`.
 
-The stack covers provider cache counters, request segmentation, native cache preservation, optional compression (observe → safe), optional synthetic cache annotations, and advisory tuning. The dashboard `/cache` page provides operator summary cards and drill-down tables; advanced diagnostics stay collapsed unless a warning is present.
+The stack covers provider cache counters, request segmentation, native cache preservation, optional compression (observe → safe), optional synthetic cache annotations, and advisory tuning (`off`/`recommend` only). Explicit native cache boundaries take precedence over synthetic candidates. The dashboard `/cache` page provides operator summary cards and drill-down tables; advanced diagnostics stay collapsed unless a warning is present.
 
 | Operator guide | [docs/cache-compression.md](docs/cache-compression.md) |
 |---|---|

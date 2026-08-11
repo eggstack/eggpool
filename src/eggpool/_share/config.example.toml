@@ -964,7 +964,7 @@ protocol = "anthropic"
 
 # --- Tuning suggestions (advisory only) ---
 # Drives the **Tuning suggestions** panel on `/cache`. Recommend-only
-# by default; runtime overrides remain dormant.
+# by default; recommendations never change runtime policy.
 # [compression.tuning]
 # enabled = false
 # mode = "recommend"

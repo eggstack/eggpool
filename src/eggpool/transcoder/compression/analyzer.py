@@ -50,6 +50,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
+from eggpool.request.limits import (
+    ESTIMATED_TEXT_CHARS_PER_TOKEN,
+    estimate_text_tokens,
+)
 from eggpool.transcoder.segmentation import (
     RequestSegment,
     SegmentationResult,
@@ -253,26 +257,10 @@ _STACK_TRACE_PATTERNS: tuple[str, ...] = (
 # was considered but skipped.
 _JSON_MINIFY_PARSE_LIMIT = 256 * 1024
 
-# Cheap token estimator — same heuristic as the segmenter.
-_ASCII_FLOOR = 4
-_NON_ASCII_FLOOR = 2
-
 
 def _cheap_tokens(text: str) -> int:
-    """Cheap ASCII/non-ASCII token estimate mirroring the segmenter."""
-    if not text:
-        return 0
-    ascii_chars = 0
-    non_ascii_bytes = 0
-    for ch in text:
-        cp = ord(ch)
-        if cp < 128:
-            ascii_chars += 1
-        else:
-            non_ascii_bytes += len(ch.encode("utf-8"))
-    return (ascii_chars + (_ASCII_FLOOR - 1)) // _ASCII_FLOOR + (
-        non_ascii_bytes + (_NON_ASCII_FLOOR - 1)
-    ) // _NON_ASCII_FLOOR
+    """Use the shared cheap estimator, including its ASCII fast path."""
+    return estimate_text_tokens(text)
 
 
 def _segment_id(segment: RequestSegment, index: int) -> str:
@@ -525,7 +513,7 @@ def _segment_tokens(segment: RequestSegment, text_hint: str) -> int:
     if text_hint:
         return _cheap_tokens(text_hint)
     if segment.byte_length > 0:
-        return segment.byte_length // _ASCII_FLOOR
+        return segment.byte_length // ESTIMATED_TEXT_CHARS_PER_TOKEN
     return 0
 
 

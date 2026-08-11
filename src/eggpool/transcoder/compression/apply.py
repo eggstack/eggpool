@@ -52,6 +52,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
+from eggpool.request.limits import estimate_text_tokens
 from eggpool.transcoder.compression.markers import build_marker
 from eggpool.transcoder.segmentation import (
     RequestSegment,
@@ -327,8 +328,6 @@ def _noop_result(payload: Any) -> CompressionResult:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-_ASCII_FLOOR = 4
-_NON_ASCII_FLOOR = 2
 _REPEATED_LINE_MIN_RUN = 5
 _LOG_MIN_LINES = 32
 _JSON_MINIFY_PARSE_LIMIT = 256 * 1024
@@ -341,20 +340,8 @@ _STACK_TRACE_FRAME_RE: re.Pattern[str] = re.compile(r'^\s*File\s+"[^"]+"')
 
 
 def _cheap_tokens(text: str) -> int:
-    """Cheap ASCII/non-ASCII token estimate."""
-    if not text:
-        return 0
-    ascii_chars = 0
-    non_ascii_bytes = 0
-    for ch in text:
-        cp = ord(ch)
-        if cp < 128:
-            ascii_chars += 1
-        else:
-            non_ascii_bytes += len(ch.encode("utf-8"))
-    return (ascii_chars + (_ASCII_FLOOR - 1)) // _ASCII_FLOOR + (
-        non_ascii_bytes + (_NON_ASCII_FLOOR - 1)
-    ) // _NON_ASCII_FLOOR
+    """Use the shared cheap estimator, including its ASCII fast path."""
+    return estimate_text_tokens(text)
 
 
 def _segment_id_for(segment: RequestSegment, index: int) -> str:

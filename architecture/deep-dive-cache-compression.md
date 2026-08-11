@@ -114,8 +114,7 @@ Deterministic compression markers:
 
 Phase 10 closed-loop threshold tuning:
 - `compute_recommendation()` — advisory suggestions
-- `apply_runtime_override()` — dormant (no production path yet)
-- `RuntimeCompressionPolicyOverrideRegistry` — forward compatibility
+- Tuning is recommendation-only; no runtime override registry is constructed.
 
 ### `transcoder/cache_synthesis.py` / `cache_synthesis_policy.py`
 
@@ -172,7 +171,7 @@ With shipped defaults, the entire stack is observability-only:
 Behind explicit operator opt-in:
 - Phase 5 `mode = "safe"` — mutates eligible volatile-suffix segments
 - Phase 9 synthetic cache `apply` mode — adds cache_control annotations
-- Phase 10 `mode = "apply"` — accepted but currently dormant
+- Phase 10 `mode = "recommend"` — advisory threshold suggestions only
 
 ## Key Invariants
 

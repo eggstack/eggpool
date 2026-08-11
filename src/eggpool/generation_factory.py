@@ -191,9 +191,6 @@ class RuntimeGenerationFactory:
         )
         from eggpool.runtime_manager import RuntimeGenerationBuilder  # noqa: PLC0415
         from eggpool.stats import StatsService  # noqa: PLC0415
-        from eggpool.transcoder.compression.tuning import (  # noqa: PLC0415
-            RuntimeCompressionPolicyOverrideRegistry,
-        )
 
         db = process.db
         config.validate_optional_dependencies()
@@ -252,21 +249,16 @@ class RuntimeGenerationFactory:
         # -- Transcoder / compression policy snapshots ---------------------
         transcoder_policy = config.transcoder
         synthetic_cache_enabled = bool(config.cache.synthetic_cache_controls.enabled)
-        tuning_active = bool(
-            config.compression.tuning.enabled
-            and config.compression.tuning.mode != "off"
-        )
         shaping_policy_needed = bool(
             config.compression.enabled
             or config.compression.policies
             or synthetic_cache_enabled
-            or tuning_active
         )
         compression_policy = config.compression if shaping_policy_needed else None
         cache_config = config.cache if synthetic_cache_enabled else None
-        compression_tuning_registry = (
-            RuntimeCompressionPolicyOverrideRegistry() if (tuning_active) else None
-        )
+        # Tuning is recommendation-only and never participates in request
+        # policy resolution; keep the generation slot inert.
+        compression_tuning_registry = None
 
         # -- Health manager (generation-owned) -----------------------------
         health_manager = HealthManager()

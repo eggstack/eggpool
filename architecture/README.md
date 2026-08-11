@@ -1432,21 +1432,15 @@ three tunable thresholds:
 - `min_savings_tokens`
 - `max_compression_latency_ms`
 
-Phase 10 is currently **recommendation-only**.  `mode = "apply"` is
-accepted at config time for forward compatibility but is dormant: no
-production code path registers runtime overrides.  A future
-supervised background task must call `build_runtime_override()` then
-`registry.register()` before apply mode takes effect.  Until then,
-`compute_recommendation` always tags recommendations as
-`recommendation_only`.
+Phase 10 is **recommendation-only**. `mode = "recommend"` is the only
+supported tuning mode; recommendations are persisted for operator review
+and never mutate runtime policy.
 
-The engine is disabled by default.  When `[compression.tuning] mode`
-is `recommend` (the default), the engine writes advisory
-recommendations to the `compression_tuning_recommendations` table and
-the dashboard; request behaviour never changes.  The in-memory
-`RuntimeCompressionPolicyOverrideRegistry` and `apply_runtime_override`
-helper exist for forward compatibility but no production code path
-registers entries yet.
+The engine is disabled by default. When `[compression.tuning] mode` is
+`recommend` (the default), it writes advisory recommendations to the
+`compression_tuning_recommendations` table and dashboard; request
+behaviour never changes. No runtime override registry or adaptive
+controller is constructed.
 
 ### Safety rails
 
@@ -1480,12 +1474,11 @@ is operator-visible only; it does not flow into scorer inputs.
 
 ### Code references
 
-- `src/eggpool/transcoder/compression/tuning.py` -- `compute_recommendation`,
-  `apply_runtime_override`, `RuntimeCompressionPolicyOverrideRegistry`
+- `src/eggpool/transcoder/compression/tuning.py` -- `compute_recommendation`
 - `src/eggpool/transcoder/compression/policy.py` -- `CompressionTuningConfig`,
   `CompressionTuningTargetsConfig`, `CompressionTuningBoundsConfig`
 - `src/eggpool/transcoder/compression/policy_resolver.py` --
-  `resolve_compression_policy(runtime_override_registry=...)`
+  `resolve_compression_policy(...)`
 - `src/eggpool/db/schema/0046_closed_loop_threshold_tuning.sql` -- migration
 - `src/eggpool/app.py` -- `app.state.compression_tuning_registry`
 - `src/eggpool/api/proxy_request.py` -- resolver call site
@@ -1595,7 +1588,7 @@ Each profile is a self-contained TOML snippet:
 3. **Safe suffix compression for coding agents** -- `[compression] enabled = true, mode = "safe"`. Six transforms fire on eligible volatile-suffix segments. Stable-prefix content hash is recomputed; mismatch triggers fail-closed fallback.
 4. **Anthropic synthetic cache dry-run** -- `[cache.synthetic_cache_controls] enabled = true, dry_run = true` plus a matching `[[compression.policies]]` row. Post-route selector computes a plan but does not mutate.
 5. **Anthropic synthetic cache apply mode** -- same as Profile 4 with `dry_run = false`. Structural-diff safety (`_validate_synthetic_cache_diff`) gates every mutation.
-6. **Threshold tuning recommendation-only** -- `[compression.tuning] enabled = true, mode = "recommend"`. Recommendations are advisory; `mode = "apply"` is accepted but currently dormant.
+6. **Threshold tuning recommendation-only** -- `[compression.tuning] enabled = true, mode = "recommend"`. Recommendations are advisory; `mode = "apply"` is rejected.
 
 ### What is safe by default
 
@@ -1616,7 +1609,7 @@ These ship behind explicit operator opt-in:
 
 - Phase 5 `mode = "safe"` -- actually mutates eligible volatile-suffix segments. Even then, the applier fails closed on any stable-prefix mismatch.
 - Phase 9 synthetic cache `apply` mode -- adds `cache_control` annotations to provider-bound Anthropic requests. Dry-run is the default when enabled. Apply mode requires a matching policy row by default (`require_policy = true`).
-- Phase 10 `mode = "apply"` -- accepted at config time but currently dormant. No production code path registers runtime overrides today.
+- Phase 10 `mode = "recommend"` -- advisory threshold suggestions only.
 
 ### What never affects routing
 
@@ -1630,7 +1623,7 @@ No raw prompt, tool output, system message, request body, auth header, or provid
 
 - Synthetic cache `ttl = "ephemeral"` is the only currently accepted value. `5m` and `1h` are reserved and rejected at config load.
 - `compress_static_prefix = true` in any non-default policy override is rejected unless `allow_static_prefix_override = true` is set globally.
-- Tuning `mode = "apply"` is accepted at config time but currently behaves like `recommend` (no production code path registers runtime overrides today).
+- Tuning `mode = "apply"` is rejected; recommendation output never changes runtime policy.
 - `compress_static_prefix = false` is the normal setting.
 - Context-limit checks happen before compression. Compression cannot rescue over-limit requests.
 - Default `max_breakpoints = 4` (Anthropic's documented limit).

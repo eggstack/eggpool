@@ -551,39 +551,6 @@ class TestComputeRecommendation:
         assert rec.status == "suppressed"
         assert rec.reason_codes == ()
 
-    # -- Mode = apply --
-
-    def test_apply_mode_recommendation_only(self) -> None:
-        """``mode = apply`` is accepted at config but does not currently
-        trigger automatic registry registration; recommendations stay
-        advisory until a future lifecycle task is wired.
-        """
-        tuning = _tuning_config(
-            mode="apply",
-            targets=_targets(max_failed_fallback_rate=0.001),
-        )
-        rec = self._recommend(
-            metrics=_metrics(failed_fallback_count=5, total_requests=500),
-            tuning=tuning,
-        )
-        assert rec.status == "recommended"
-        assert REASON_RECOMMENDATION_ONLY in rec.reason_codes
-        assert REASON_APPLIED_RUNTIME_OVERRIDE not in rec.reason_codes
-
-    def test_apply_mode_build_runtime_override(self) -> None:
-        tuning = _tuning_config(
-            mode="apply",
-            targets=_targets(max_failed_fallback_rate=0.001),
-        )
-        rec = self._recommend(
-            metrics=_metrics(failed_fallback_count=5, total_requests=500),
-            tuning=tuning,
-        )
-        override = build_runtime_override(rec, cooldown_s=900, now=N)
-        assert override is not None
-        assert override.policy_name == "<global>"
-        assert "min_candidate_tokens" in override.fields
-
     # -- Mode = off --
 
     def test_mode_off_produces_no_recommendation(self) -> None:
@@ -1060,39 +1027,9 @@ class TestCompressionTuningConfigValidation:
         cfg = CompressionTuningConfig(mode="recommend")
         assert cfg.mode == "recommend"
 
-    def test_mode_apply_accepted(self) -> None:
-        """``mode = apply`` is accepted at config but currently no-op
-        beyond computing the recommendation; no runtime overrides are
-        registered until a future lifecycle task wires the path.
-        """
-        cfg = CompressionTuningConfig(mode="apply")
-        assert cfg.mode == "apply"
-
-    def test_apply_mode_documented_as_noop_until_lifecycle_wired(self) -> None:
-        """Until a background task wires ``build_runtime_override`` +
-        ``registry.register``, ``mode = apply`` behaves like
-        ``mode = recommend`` (advisory only).
-        """
-        rec_recommend = compute_recommendation(
-            policy_name="<global>",
-            config=_base_config(),
-            metrics=_metrics(failed_fallback_count=5, total_requests=500),
-            tuning_config=_tuning_config(
-                mode="recommend",
-                targets=_targets(max_failed_fallback_rate=0.001),
-            ),
-        )
-        rec_apply = compute_recommendation(
-            policy_name="<global>",
-            config=_base_config(),
-            metrics=_metrics(failed_fallback_count=5, total_requests=500),
-            tuning_config=_tuning_config(
-                mode="apply",
-                targets=_targets(max_failed_fallback_rate=0.001),
-            ),
-        )
-        assert rec_recommend.status == rec_apply.status == "recommended"
-        assert rec_recommend.recommended == rec_apply.recommended
+    def test_mode_apply_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            CompressionTuningConfig(mode="apply")  # type: ignore[arg-type]
 
     def test_invalid_mode_rejected(self) -> None:
         with pytest.raises(ValidationError):
@@ -1121,13 +1058,6 @@ class TestCompressionTuningConfigValidation:
     def test_min_window_lte_window(self) -> None:
         with pytest.raises(ValidationError):
             CompressionTuningConfig(window_requests=10, min_window_requests=20)
-
-    def test_apply_ttl_seconds_when_mode_apply(self) -> None:
-        """CompressionTuningConfig does not have apply_ttl_seconds;
-        apply_ttl_seconds lives on a different config surface. Verify
-        that CompressionTuningConfig accepts all valid mode values."""
-        cfg = CompressionTuningConfig(mode="apply")
-        assert cfg.mode == "apply"
 
     def test_extra_forbid(self) -> None:
         with pytest.raises(ValidationError):
@@ -1265,7 +1195,7 @@ class TestRoutingGuardrails:
                 applied_count=200,
             ),
             tuning_config=_tuning_config(
-                mode="apply",
+                mode="recommend",
                 targets=_targets(max_failed_fallback_rate=0.001),
             ),
             now=N,
@@ -1274,10 +1204,7 @@ class TestRoutingGuardrails:
         assert set(override.fields.keys()) <= TUNABLE_FIELDS
 
     def test_recommendation_only_path_does_not_register_override(self) -> None:
-        """Even when mode=apply, no override is registered until a
-        future lifecycle task explicitly calls register().  The
-        registry stays empty by default in tests.
-        """
+        """Recommendations do not register runtime overrides implicitly."""
         registry = RuntimeCompressionPolicyOverrideRegistry()
         assert registry.lookup("<global>") is None
         assert registry.lookup("any-policy") is None

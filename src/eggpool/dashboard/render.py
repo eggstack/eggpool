@@ -5843,8 +5843,8 @@ def _render_advisory_tuning_panel(
     Recommend-only by default. Advisory suggestions for
     <code>min_candidate_tokens</code>, <code>min_savings_tokens</code>,
     and <code>max_compression_latency_ms</code> without changing request
-    behaviour. <code>mode = "apply"</code> is accepted at config time but
-    is dormant — no production code path registers runtime overrides today.
+    behaviour. Only <code>mode = "recommend"</code> is supported; runtime
+    policy is never changed.
     Tuning never inspects raw prompt content and never touches routing.
   </p>
   <section class="cards">
@@ -5885,7 +5885,7 @@ def _render_advisory_tuning_panel(
     </tr></thead>
     <tbody>{ct_rec_rows_html}</tbody>
   </table></div>
-  <h4>Runtime overrides (reserved, dormant)</h4>
+  <h4>Runtime overrides (unsupported)</h4>
   <div class="table-scroll"><table class="data compact">
     <thead><tr>
       <th>Policy</th>

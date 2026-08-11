@@ -111,7 +111,7 @@ These features ship behind explicit operator opt-in:
 
 - **Safe compression `mode = "safe"`** — actually mutates eligible `volatile_suffix` segments. The applier still fails closed on any stable-prefix mismatch.
 - **Synthetic cache apply mode** — adds `cache_control` annotations to provider-bound Anthropic requests. Dry-run is the default and the structural-diff guard rejects unexpected payload changes.
-- **Advisory tuning `mode = "apply"`** — accepted at config time but currently behaves like `recommend`; no production path registers runtime overrides today.
+- **Advisory tuning** — recommendation-only threshold guidance; it never changes runtime policy.
 
 ## What never affects routing
 
@@ -187,7 +187,7 @@ These are enforced at config load time:
 
 - **Synthetic cache `ttl`** — only `"ephemeral"` is currently accepted. `"5m"` and `"1h"` are reserved and rejected at config load.
 - **Static-prefix compression** — `compress_static_prefix = true` in any non-default policy override is rejected unless `allow_static_prefix_override = true` is set globally. This prevents an operator from accidentally mutating the stable prefix by editing one row.
-- **Tuning `mode = "apply"`** — accepted but currently dormant. Recommendations are still advisory unless a future lifecycle task wires runtime overrides.
+- **Tuning** — recommendation-only; `mode = "apply"` is rejected.
 - **`compress_static_prefix = false`** — the normal setting. The whole cache-compression stack is designed around the invariant that stable prefixes never change.
 - **Context-limit precedence** — context-limit checks happen before compression. Compression cannot rescue over-limit requests; the request will be rejected with `ContextLimitExceededError` regardless of compression mode.
 - **Default `max_breakpoints`** — capped at 4 (Anthropic's documented limit). Larger values are rejected by the validator.

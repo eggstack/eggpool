@@ -227,7 +227,7 @@ class FinalizationData:
     # :func:`eggpool.transcoder.cache_synthesis.run_synthetic_cache_synthesis`
     # in :mod:`eggpool.api.proxy_request`.  Carries the selector plan
     # (status, dry_run, candidate/applied/warning counts, audit policy
-    # name/source), the mutated payload when apply mode ran, and the
+    # name/source), the mutated payload when a supported transform ran, and the
     # synthetic boundary annotations recorded against the
     # ``CacheBoundaryTracker``.  ``None`` when synthetic cache
     # controls are disabled, when the call failed, or on legacy

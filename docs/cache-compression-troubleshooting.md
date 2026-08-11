@@ -163,7 +163,7 @@ Warning codes:
 | `recommendations[i].status` | `"issued"` / `"cooldown"` / `"insufficient_data"`. |
 | `recommendations[i].delta` | Per-threshold proposed change (`min_candidate_tokens`, `min_savings_tokens`, `max_compression_latency_ms`). |
 | `recommendations[i].reason_codes` | Why this recommendation was issued (see `docs/cache-compression-profiles.md` § Profile 6). |
-| `overrides` | Always empty in `recommend` mode today. `apply_runtime_override()` is reserved for a future lifecycle task. |
+| `overrides` | Always empty; runtime policy mutation is unsupported. |
 
 ## Dispatch timing fields
 

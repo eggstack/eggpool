@@ -1,7 +1,7 @@
 # Plan 108 — Compression/Cache Surface Simplification
 
 Date: 2026-08-11
-Status: planned
+Status: implemented
 Parent roadmap: `plans/103-sbc-protocol-parity-and-runtime-efficiency-roadmap.md`
 Planning baseline: `de3eeea5936c964ffa33b7939c791e98d35cfcbb`
 Depends on:
@@ -248,26 +248,26 @@ No performance threshold or full-suite run is required.
 
 ## Acceptance criteria
 
-- [ ] Every compression/cache configuration field/mode is classified as active, intentionally diagnostic, or removed/rejected; no accepted mode remains knowingly dormant while claiming runtime behavior.
-- [ ] `compress_static_prefix = true` is validated only after the relevant global opt-in is available.
-- [ ] Global disallow + static-prefix override true is rejected with a clear configuration error.
-- [ ] Global allow + static-prefix override true is accepted when all other policy conditions are valid.
-- [ ] Child override validation no longer rejects a combination that the resolved global policy explicitly permits.
-- [ ] `check-config` and runtime policy resolution agree for these combinations.
-- [ ] Dormant tuning `apply` behavior is not implemented merely to preserve an overgrown config surface; it is removed/rejected unless an actual production path already exists.
-- [ ] Active `recommend`/diagnostic behavior is retained only if it has a real caller and clear bounded operator value.
-- [ ] Production helpers/state used only by removed dormant tuning modes are deleted where doing so does not require cosmetic schema churn.
-- [ ] No new database migration is created solely to remove historical diagnostic columns.
-- [ ] Provider-native cache intent from Plan 106 always takes precedence over synthetic cache insertion.
-- [ ] Synthetic cache branches superseded by native translation are deleted where proven redundant.
-- [ ] Any retained synthetic cache behavior remains opt-in, documented, and cheap when disabled.
-- [ ] Compression/cache coupling remains only where required for correctness, not historical plumbing convenience.
-- [ ] Compression token estimation no longer uses an avoidable Python per-character ASCII path when an equivalent cheap fast path can be reused/applied.
-- [ ] Transform ordering keeps explicit native cache boundaries semantically attached and protected.
-- [ ] Supported safe compression behavior remains functional.
-- [ ] No adaptive tuning framework, background benchmark, new dependency, DB service, metrics subsystem, CI job, or generic transform planner is added.
-- [ ] Focused compression/cache/config/transcode tests pass.
-- [ ] Ruff, Pyright, smoke tests, and both config checks pass.
+- [x] Every compression/cache configuration field/mode is classified as active, intentionally diagnostic, or removed/rejected; no accepted mode remains knowingly dormant while claiming runtime behavior.
+- [x] `compress_static_prefix = true` is validated only after the relevant global opt-in is available.
+- [x] Global disallow + static-prefix override true is rejected with a clear configuration error.
+- [x] Global allow + static-prefix override true is accepted when all other policy conditions are valid.
+- [x] Child override validation no longer rejects a combination that the resolved global policy explicitly permits.
+- [x] `check-config` and runtime policy resolution agree for these combinations.
+- [x] Dormant tuning `apply` behavior is not implemented merely to preserve an overgrown config surface; it is rejected.
+- [x] Active `recommend`/diagnostic behavior is retained only if it has a real caller and clear bounded operator value.
+- [x] Production generation state used only by removed dormant tuning behavior is no longer constructed.
+- [x] No new database migration is created solely to remove historical diagnostic columns.
+- [x] Provider-native cache intent from Plan 106 always takes precedence over synthetic cache insertion.
+- [x] Synthetic cache branches superseded by native translation are not duplicated.
+- [x] Any retained synthetic cache behavior remains opt-in, documented, and cheap when disabled.
+- [x] Compression/cache coupling remains only where required for correctness, not historical plumbing convenience.
+- [x] Compression token estimation no longer uses an avoidable Python per-character ASCII path.
+- [x] Transform ordering keeps explicit native cache boundaries semantically attached and protected.
+- [x] Supported safe compression behavior remains functional.
+- [x] No adaptive tuning framework, background benchmark, new dependency, DB service, metrics subsystem, CI job, or generic transform planner is added.
+- [x] Focused compression/cache/config/transcode tests pass.
+- [x] Ruff, Pyright, smoke tests, and both config checks pass.
 
 ## Rejection conditions
 
@@ -297,3 +297,33 @@ Reject the implementation if:
 10. Run focused tests and ordinary repository gate.
 11. Record implementation SHA, active/removed surface classification, validator resolution rule, retained synthetic behavior, and exact verification results in this plan.
 12. Stop; leave broad test deletion to Plan 109.
+
+## Closure
+
+Implementation completed on 2026-08-11.
+
+- Static-prefix compression is active only as an explicit safe-mode opt-in.
+  Child rows perform field-shape validation; the parent `CompressionConfig`
+  validates the effective global mode and `allow_static_prefix_override`.
+- Compression tuning is active recommendation/observability output only.
+  `off` and `recommend` are accepted; `apply` is rejected. The generation
+  factory no longer constructs a runtime override registry, and no tuning
+  state is persisted beyond the existing recommendation diagnostics.
+- Safe suffix compression, observe-mode analysis, policy overrides, and
+  synthetic cache controls are active documented features. Synthetic cache
+  controls remain opt-in and native provider cache boundaries are preserved
+  and excluded from duplicate synthetic insertion.
+- The shared `request.limits.estimate_text_tokens` helper now supplies the
+  compression analyzer and applier, including the exact ASCII fast path.
+- No compression/cache fields were added to routing; no migration, task,
+  dependency, benchmark gate, or transform planner was introduced.
+
+Verification:
+
+- `uv run ruff format --check src/ tests/ scripts/`
+- `uv run ruff check src/ tests/ scripts/`
+- `uv run pyright src/ scripts/`
+- Focused compression/config/cache suite: 311 passed
+- `PYTHONHASHSEED=0 TZ=UTC uv run pytest tests/smoke/ -q --tb=short --maxfail=1`: 14 passed
+- `uv run eggpool --config config.example.toml check-config`: passed
+- `uv run eggpool --config config.sbc.example.toml check-config`: passed

@@ -165,7 +165,7 @@ synthetic_cache_max_breakpoints = 4
 
 **When to use:** after Profile 3 is stable, if you want to start experimenting with provider cache hints. Always use dry-run first; inspect candidate counts before applying.
 
-## Anthropic synthetic cache apply mode
+## Anthropic synthetic cache application
 
 **Purpose:** opt-in provider-bound mutation after dry-run confidence.
 
@@ -226,7 +226,7 @@ persist_recommendations = true
 - The tuning engine observes compression metrics and emits recommendations for `min_candidate_tokens`, `min_savings_tokens`, and `max_compression_latency_ms`.
 - Recommendations are advisory only. `mode = "recommend"` (the default) writes suggestions to the `compression_tuning_recommendations` table and the dashboard only.
 - Every suggestion is content-private (no prompt inspection), bounded (clamped to `[compression.tuning.bounds]`), rate-limited (`max_adjustment_pct` per step; `cooldown_s` suppresses the next recommendation), and immutable on every other compression knob.
-- `mode = "apply"` is currently dormant. The in-memory `RuntimeCompressionPolicyOverrideRegistry` and `apply_runtime_override` helper exist for forward compatibility, but no production code path registers entries today. A future supervised background task must wire the lifecycle before apply mode takes effect.
+- Only `mode = "recommend"` is supported. Recommendations never register runtime overrides or mutate request policy.
 
 **Dashboard fields to watch:**
 
@@ -235,7 +235,7 @@ The Runtime page's `Advisory tuning` panel summarizes these fields, and
 
 - `recommendations` — list of recent recommendations with `status`, `delta`, and `reason_codes`.
 - `windows` — per-policy window metrics.
-- `overrides` — list of currently registered runtime overrides (always empty in `recommend` mode today).
+- `overrides` — retained compatibility field; it is always empty because runtime policy mutation is unsupported.
 
 **Recommendation reason codes:**
 
@@ -254,7 +254,7 @@ The Runtime page's `Advisory tuning` panel summarizes these fields, and
 | `recommendation_only` | Every recommendation is tagged with this regardless of mode. |
 | `applied_runtime_override` | Reserved for future apply-mode lifecycle. |
 
-**When to use:** after safe compression is stable and you want data-driven threshold suggestions. Always start with `mode = "recommend"`; never set `mode = "apply"` today.
+**When to use:** after safe compression is stable and you want data-driven threshold suggestions. Use `mode = "recommend"`; tuning never applies changes automatically.
 
 ## Profile combinations
 

@@ -24,16 +24,12 @@ scalar fields, merge-on-boolean for transforms), never inspects
 request content, and fails closed (returns the global config plus a
 warning) on any malformed override.
 
-Phase 10 adds optional closed-loop threshold tuning.  The
-``[compression.tuning]`` block enables a recommendation engine that
-analyses recent compression observations and suggests bounded
-adjustments to ``min_candidate_tokens``, ``min_savings_tokens``, and
-``max_compression_latency_ms``.  Tuning never inspects raw prompt
-content, never enables stable-prefix compression, never changes
-routing, and never adds new transforms; it only adjusts the existing
-conservative thresholds within operator-defined bounds.  The first
-implementation milestone is ``mode = "recommend"`` (advisory) with
-``mode = "apply"`` behind explicit opt-in.
+Phase 10 adds optional recommendation-only threshold tuning. The
+``[compression.tuning]`` block analyses recent compression observations
+and suggests bounded adjustments to ``min_candidate_tokens``,
+``min_savings_tokens``, and ``max_compression_latency_ms``. It never
+inspects raw prompt content, changes routing, or changes request
+behaviour.
 
 This module owns the typed config surface.  Validation rules:
 
@@ -57,8 +53,8 @@ This module owns the typed config surface.  Validation rules:
   not reset the global default.  ``compress_static_prefix=true`` in
   an override requires the same ``allow_static_prefix_override=true``
   safety guard as the global config.
-- ``[compression.tuning]`` mode must be one of ``"off"``,
-  ``"recommend"``, or ``"apply"``.  Windows and cooldowns must be
+- ``[compression.tuning]`` mode must be one of ``"off"`` or
+  ``"recommend"``. Windows and cooldowns must be
   positive integers and percentage bounds must satisfy
   ``min <= max``.  Bounds are non-overlapping guards: the tuning
   engine never produces values outside
@@ -80,12 +76,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 CompressionMode = Literal["observe", "safe"]
 CompressionPlacement = Literal["suffix_only", "after_cache_boundary", "anywhere"]
 CompressionProtocolMatch = Literal["openai", "anthropic"]
-CompressionTuningMode = Literal["off", "recommend", "apply"]
+CompressionTuningMode = Literal["off", "recommend"]
 
 _COMMON_TUNING_KEY_RENAMES: dict[str, str] = {
     "window_seconds": "window_requests or update_interval_s, depending on intent",
     "cooldown_seconds": "cooldown_s",
-    "apply_ttl_seconds": "not supported; apply mode does not use a TTL field",
+    "apply_ttl_seconds": "not supported; tuning is recommendation-only",
     "max_latency_warning_rate": "max_latency_budget_warning_rate",
     "target_compression_latency_ms": "max_p95_latency_ms",
 }
@@ -296,10 +292,7 @@ class CompressionTuningConfig(BaseModel):
 
     Disabled by default.  The supported mode is ``"recommend"``,
     which produces advisory suggestions without changing request
-    behaviour.  ``"apply"`` is accepted at config time for forward
-    compatibility but is dormant today: no production code path
-    registers runtime overrides, and recommendations are always
-    surfaced with ``status = "recommended"``.  Tuning never touches
+    behaviour. Tuning never touches
     routing fields, mode, enabled, or static-prefix compression,
     and never inspects raw prompt content.
     """
@@ -552,9 +545,7 @@ class CompressionConfig(BaseModel):
             "enabled, the engine analyses recent compression "
             "observations and produces bounded threshold "
             'recommendations.  ``mode = "recommend"`` is advisory '
-            'and surfaces suggestions; ``mode = "apply"`` is '
-            "accepted at config time but is dormant &mdash; no "
-            "production code path registers runtime overrides today.  "
+            'and surfaces suggestions; ``mode = "recommend"`` is advisory. '
             "Tuning never touches routing, never enables "
             "stable-prefix compression, and never inspects raw "
             "prompt content."
@@ -614,6 +605,20 @@ class CompressionConfig(BaseModel):
                     "at least one match_* field must be set unless the "
                     "policy is explicitly named 'default'.",
                 )
+            if override.compress_static_prefix is True:
+                effective_mode = override.mode or self.mode
+                if effective_mode == "observe":
+                    raise ValueError(
+                        f"compression.policies[{idx}] ({override.name!r}): "
+                        "compress_static_prefix=true is not supported in "
+                        "mode='observe'.",
+                    )
+                if not self.allow_static_prefix_override:
+                    raise ValueError(
+                        f"compression.policies[{idx}] ({override.name!r}): "
+                        "compress_static_prefix=true requires the global "
+                        "[compression] allow_static_prefix_override=true.",
+                    )
         return self
 
 
@@ -825,31 +830,6 @@ class CompressionPolicyOverride(BaseModel):
         tripping the private-usage rule.
         """
         return self._has_any_match_field()
-
-    @model_validator(mode="after")
-    def _validate_compress_static_prefix_override(self) -> CompressionPolicyOverride:
-        """Static-prefix compression must never be silently enabled.
-
-        The override is honoured only when paired with the global
-        ``allow_static_prefix_override`` knob.  Operators who want
-        this safety rail must explicitly opt in via the global
-        config; per-policy opt-in alone is rejected so a single
-        operator cannot accidentally enable prefix compression by
-        editing one row.
-        """
-        if self.compress_static_prefix is True and self.mode == "observe":
-            raise ValueError(
-                "compress_static_prefix=true in a policy override is "
-                "not supported when mode='observe'.",
-            )
-        if self.compress_static_prefix is True and self.mode == "safe":
-            raise ValueError(
-                "compress_static_prefix=true in a policy override "
-                "requires the global allow_static_prefix_override=true; "
-                "set [compression] allow_static_prefix_override=true "
-                "and re-apply the override.",
-            )
-        return self
 
 
 __all__ = [

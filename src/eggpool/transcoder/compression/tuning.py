@@ -1,11 +1,8 @@
 """Phase 10 closed-loop threshold tuning engine.
 
-Phase 10 is currently recommendation-only.  ``mode = "apply"`` is
-accepted at config time but does not currently register runtime
-overrides -- a future supervised background task must call
-``build_runtime_override()`` then ``registry.register()`` before
-apply mode takes effect.  Until then, ``compute_recommendation``
-always tags recommendations as ``recommendation_only``.
+Phase 10 is recommendation-only. ``compute_recommendation`` emits
+bounded suggestions for operator review; it never changes request
+policy or registers runtime overrides.
 
 The tuning engine analyses a per-policy window of compression
 observations and produces bounded recommendations to adjust
@@ -19,7 +16,7 @@ Core invariants:
   in-memory ``CompressionPolicyContext``.  It never reads raw prompt
   text, tool outputs, system messages, or any auth header.
 - The engine never tunes the following fields, even when the global
-  ``mode = "apply"`` is enabled: ``enabled``, ``mode``,
+  tuning is enabled: ``enabled``, ``mode``,
   ``placement``, ``respect_cache_boundaries``, ``compress_static_prefix``,
   and synthetic cache-control knobs.  These are routing, safety, or
   scope decisions that only the operator may make.
@@ -35,8 +32,8 @@ Public surface:
 
 - :class:`TuningWindowMetrics` -- per-policy aggregate window data.
 - :class:`CompressionTuningRecommendation` -- immutable output.
-- :class:`RuntimeCompressionPolicyOverride` -- runtime overlay for
-  future apply mode.  Currently unused outside tests.
+- Runtime override types are retained only as compatibility helpers for
+  historical callers; the production generation never constructs them.
 - :func:`compute_recommendation` -- pure function from inputs to
   recommendation.
 - :func:`clamp_int`, :func:`clamp_float`, :func:`clamp_step` --
@@ -172,10 +169,7 @@ class CompressionTuningRecommendation:
     - ``"recommended"``: at least one tunable was recommended.
     - ``"suppressed"``: cooldown active or no change suggested.
 
-    ``mode = "apply"`` is accepted at config time for forward
-    compatibility but no background task currently wires
-    recommendations into the runtime override registry.  All
-    recommendations are tagged ``"recommended"`` regardless of mode.
+    All recommendations are advisory and tagged ``"recommended"``.
     """
 
     policy_name: str
@@ -207,7 +201,7 @@ class CompressionTuningRecommendation:
 
 @dataclass(frozen=True, slots=True)
 class RuntimeCompressionPolicyOverride:
-    """In-memory runtime override produced by ``mode = "apply"``.
+    """Compatibility representation for a historical runtime override.
 
     This object lives only in the registry; it is never persisted
     back into the operator's config file.  ``expires_at`` is advisory
@@ -420,11 +414,7 @@ def compute_recommendation(
 
     Returns a :class:`CompressionTuningRecommendation` whose
     ``status`` is ``"insufficient_data"`` / ``"recommended"`` /
-    ``"suppressed"``.  ``mode = "apply"`` is accepted at config time
-    for forward compatibility, but no background task currently wires
-    recommendations into the ``RuntimeCompressionPolicyOverrideRegistry``.
-    Until a future lifecycle task is added, every recommendation is
-    advisory regardless of mode.
+    Tuning never wires recommendations into runtime policy.
 
     The function is pure: no I/O, no clock reads, no logging.  The
     caller passes ``now`` and the persisted ``last_recommendation_at``
@@ -677,11 +667,7 @@ def compute_recommendation(
             generated_at=generated_at,
         )
 
-    # Step 9: tag with recommendation_only.  ``mode = "apply"`` is
-    # accepted at config time for forward compatibility, but no
-    # background task currently wires recommendations into the
-    # RuntimeCompressionPolicyOverrideRegistry.  Until a future
-    # lifecycle task is added, every recommendation is advisory.
+    # Step 9: tag the result as advisory.
     reasons_list = list(reasons) + [REASON_RECOMMENDATION_ONLY]
     return CompressionTuningRecommendation(
         policy_name=policy_name,

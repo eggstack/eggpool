@@ -121,29 +121,20 @@ class TestCompressionConfigPolicies:
                 match_provider_ids="single",  # type: ignore[arg-type]
             )
 
-    def test_compress_static_prefix_rejected_in_observe_override(
-        self,
-    ) -> None:
-        """compress_static_prefix=True with mode='observe' is rejected
-        at the override model level."""
-        with pytest.raises(ValidationError, match="compress_static_prefix"):
-            CompressionPolicyOverride(
-                name="test",
-                match_clients=["a"],
-                compress_static_prefix=True,
-                mode="observe",
-            )
-
-    def test_compress_static_prefix_rejected_in_safe_override(self) -> None:
-        """compress_static_prefix=True with mode='safe' is rejected
-        at the override model level."""
-        with pytest.raises(ValidationError, match="compress_static_prefix"):
-            CompressionPolicyOverride(
-                name="test",
-                match_clients=["a"],
-                compress_static_prefix=True,
-                mode="safe",
-            )
+    def test_static_prefix_validation_uses_resolved_global_policy(self) -> None:
+        override = CompressionPolicyOverride(
+            name="test",
+            match_clients=["a"],
+            compress_static_prefix=True,
+            mode="safe",
+        )
+        with pytest.raises(ValidationError, match="global.*allow_static_prefix"):
+            CompressionConfig(policies=[override])
+        config = CompressionConfig(
+            allow_static_prefix_override=True,
+            policies=[override],
+        )
+        assert config.policies[0].compress_static_prefix is True
 
     def test_compress_static_prefix_accepted_without_mode(self) -> None:
         """compress_static_prefix=True with no mode passes the override
