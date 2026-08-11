@@ -254,7 +254,8 @@ Reject the implementation if:
 
 ## Implementation closure
 
-Implemented on `main` and verified locally before push.
+Implemented on `main` in commit `3bc7e2e3734ec2b682b90452c8721ef06acf6c47`
+and verified locally before push.
 
 - `ProviderBoundRequest.mutate_top_level_mapping()` is the narrow path-level
   copy-on-write API used for OpenAI streaming `stream_options` normalization.
