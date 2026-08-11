@@ -139,14 +139,6 @@ class Database:
     execution instead of piggybacking on the parent's commit boundary.
     """
 
-    #: Test-only fault injection seam for the pre-commit boundary.
-    #:
-    #: When set on the class, every outermost ``transaction()`` exits
-    #: by raising this exception *after* the inner work has yielded
-    #: successfully but *before* the SQLite COMMIT is issued.  This
-    #: simulates a process crash / power-loss between yield and commit
-    #: so reload tests can verify that callers see the failure and
-    #: run the rollback / compensation path.  Must default to ``None``
     def __init__(
         self,
         path: str,
