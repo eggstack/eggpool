@@ -348,7 +348,7 @@ Do not create a new testing-policy document. Existing planning policy already st
 - Protected union: **1,061 passed**.
 - CI-equivalent checks: Ruff format/check, Pyright, 14 smoke tests, and both
   example/SBC `check-config` commands passed.
-- Implementation commit: `9ebea44`.
+- Implementation commit: `9f1b898`.
 
 ## Acceptance criteria
 
