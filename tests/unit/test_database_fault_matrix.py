@@ -1,8 +1,7 @@
 """Database fault injection matrix (unit).
 
-Exercises the deterministic database fault seams provided by
-``Database.set_test_inject_*`` hooks.  Covers BEGIN, write, COMMIT,
-ROLLBACK, invalidation-close, and subsequent-use failures.
+Exercises deterministic faults at the database callable boundaries. Covers
+write, COMMIT, ROLLBACK, invalidation-close, and subsequent-use failures.
 """
 
 from __future__ import annotations
@@ -17,6 +16,7 @@ from eggpool.errors import (
     DatabaseConnectionInvalidatedError,
     DatabaseRollbackError,
 )
+from tests.support.database_faults import fail_commit, fail_rollback
 
 pytestmark = pytest.mark.asyncio
 
@@ -42,16 +42,6 @@ async def test_db() -> Database:
 class TestDatabaseFaultMatrix:
     """Deterministic database fault injection tests."""
 
-    async def test_begin_immediate_raises(self, test_db: Database) -> None:
-        """BEGIN injection fires before commit → rollback compensates."""
-        Database.TEST_INJECT_BEFORE_COMMIT_CALL = RuntimeError("simulated begin")
-        try:
-            with pytest.raises(RuntimeError, match="simulated begin"):
-                async with test_db.transaction():
-                    await test_db.execute_write(_TEST_INSERT)
-        finally:
-            Database.TEST_INJECT_BEFORE_COMMIT_CALL = None
-
     async def test_selection_persistence_write_raises(self, test_db: Database) -> None:
         """A write during selection persistence raises → rollback succeeds."""
         with pytest.raises(DatabaseCommitError):
@@ -59,65 +49,60 @@ class TestDatabaseFaultMatrix:
                 await test_db.execute_write(_TEST_INSERT)
                 raise DatabaseCommitError("simulated write failure")
 
-    async def test_commit_injection_rollback_succeeds(self, test_db: Database) -> None:
+    async def test_commit_injection_rollback_succeeds(
+        self, test_db: Database, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """COMMIT injection raises while in_transaction=True, rollback succeeds."""
-        test_db.set_test_inject_commit_call(
-            DatabaseCommitError("simulated commit fail")
-        )
-        try:
-            with pytest.raises(DatabaseCommitError):
-                async with test_db.transaction():
-                    await test_db.execute_write(_TEST_INSERT)
-            # Rollback succeeded — connection is still usable
-            assert test_db.lifecycle_state.value == "ready"
-        finally:
-            test_db.set_test_inject_commit_call(None)
+        fail_commit(monkeypatch, test_db, DatabaseCommitError("simulated commit fail"))
+        with pytest.raises(DatabaseCommitError):
+            async with test_db.transaction():
+                await test_db.execute_write(_TEST_INSERT)
+        assert test_db.lifecycle_state.value == "ready"
 
     async def test_commit_injection_indeterminate_state(
-        self, test_db: Database
+        self, test_db: Database, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """COMMIT injection with in_transaction=False → connection invalidated."""
-        test_db.set_test_inject_commit_call(DatabaseCommitError("indeterminate commit"))
-        test_db.set_test_inject_in_transaction_before_rollback(False)
-        try:
-            with pytest.raises(DatabaseCommitError):
-                async with test_db.transaction():
-                    await test_db.execute_write(_TEST_INSERT)
-            assert test_db.lifecycle_state.value == "failed_closed"
-            assert test_db._invalidated_reason is not None
-        finally:
-            test_db.set_test_inject_commit_call(None)
-            test_db.set_test_inject_in_transaction_before_rollback(None)
+        fail_commit(
+            monkeypatch,
+            test_db,
+            DatabaseCommitError("indeterminate commit"),
+            commit_first=True,
+        )
+        with pytest.raises(DatabaseCommitError):
+            async with test_db.transaction():
+                await test_db.execute_write(_TEST_INSERT)
+        assert test_db.lifecycle_state.value == "failed_closed"
+        assert test_db._invalidated_reason is not None
 
-    async def test_rollback_raises_after_body_failure(self, test_db: Database) -> None:
+    async def test_rollback_raises_after_body_failure(
+        self, test_db: Database, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """ROLLBACK injection raises after transaction body failure.
 
         A rollback failure after a body failure is raised
         as a typed ``DatabaseRollbackError`` so callers see the
         rollback failure distinctly from the original body exception.
         """
-        test_db.set_test_inject_rollback_call(OSError("simulated rollback fail"))
-        try:
-            with pytest.raises((DatabaseCommitError, OSError, DatabaseRollbackError)):
-                async with test_db.transaction():
-                    await test_db.execute_write(_TEST_INSERT)
-                    raise DatabaseCommitError("body failure")
-        finally:
-            test_db.set_test_inject_rollback_call(None)
+        fail_rollback(monkeypatch, test_db, OSError("simulated rollback fail"))
+        with pytest.raises((DatabaseCommitError, OSError, DatabaseRollbackError)):
+            async with test_db.transaction():
+                await test_db.execute_write(_TEST_INSERT)
+                raise DatabaseCommitError("body failure")
 
     async def test_connection_close_during_invalidation(
-        self, test_db: Database
+        self, test_db: Database, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Commit injection with indeterminate state → connection invalidated."""
-        test_db.set_test_inject_commit_call(DatabaseCommitError("trigger invalidation"))
-        test_db.set_test_inject_in_transaction_before_rollback(False)
-        try:
-            with pytest.raises(DatabaseCommitError):
-                async with test_db.transaction():
-                    await test_db.execute_write(_TEST_INSERT)
-        finally:
-            test_db.set_test_inject_commit_call(None)
-            test_db.set_test_inject_in_transaction_before_rollback(None)
+        fail_commit(
+            monkeypatch,
+            test_db,
+            DatabaseCommitError("trigger invalidation"),
+            commit_first=True,
+        )
+        with pytest.raises(DatabaseCommitError):
+            async with test_db.transaction():
+                await test_db.execute_write(_TEST_INSERT)
 
         assert test_db.lifecycle_state.value == "failed_closed"
         with pytest.raises(DatabaseConnectionInvalidatedError):
@@ -125,18 +110,18 @@ class TestDatabaseFaultMatrix:
                 pass
 
     async def test_subsequent_transaction_after_invalidation(
-        self, test_db: Database
+        self, test_db: Database, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Subsequent transaction attempts observe invalidated state."""
-        test_db.set_test_inject_commit_call(DatabaseCommitError("trigger invalidation"))
-        test_db.set_test_inject_in_transaction_before_rollback(False)
-        try:
-            with pytest.raises(DatabaseCommitError):
-                async with test_db.transaction():
-                    await test_db.execute_write(_TEST_INSERT)
-        finally:
-            test_db.set_test_inject_commit_call(None)
-            test_db.set_test_inject_in_transaction_before_rollback(None)
+        fail_commit(
+            monkeypatch,
+            test_db,
+            DatabaseCommitError("trigger invalidation"),
+            commit_first=True,
+        )
+        with pytest.raises(DatabaseCommitError):
+            async with test_db.transaction():
+                await test_db.execute_write(_TEST_INSERT)
 
         assert test_db.lifecycle_state.value == "failed_closed"
         with pytest.raises(DatabaseConnectionInvalidatedError):
@@ -146,17 +131,19 @@ class TestDatabaseFaultMatrix:
             async with test_db.transaction():
                 pass
 
-    async def test_diagnostics_after_invalidation(self, test_db: Database) -> None:
+    async def test_diagnostics_after_invalidation(
+        self, test_db: Database, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Diagnostics reflect invalidation state."""
-        test_db.set_test_inject_commit_call(DatabaseCommitError("diagnostics test"))
-        test_db.set_test_inject_in_transaction_before_rollback(False)
-        try:
-            with pytest.raises(DatabaseCommitError):
-                async with test_db.transaction():
-                    await test_db.execute_write(_TEST_INSERT)
-        finally:
-            test_db.set_test_inject_commit_call(None)
-            test_db.set_test_inject_in_transaction_before_rollback(None)
+        fail_commit(
+            monkeypatch,
+            test_db,
+            DatabaseCommitError("diagnostics test"),
+            commit_first=True,
+        )
+        with pytest.raises(DatabaseCommitError):
+            async with test_db.transaction():
+                await test_db.execute_write(_TEST_INSERT)
 
         diags = test_db.diagnostics()
         assert diags["connection_state"] == "failed_closed"

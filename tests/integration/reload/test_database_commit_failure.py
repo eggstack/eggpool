@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from eggpool.errors import DatabaseCommitError, DatabaseConnectionInvalidatedError
+from tests.support.database_faults import fail_commit
 
 if TYPE_CHECKING:
     from tests.support.reload_harness import ReloadHarness
@@ -25,6 +26,7 @@ if TYPE_CHECKING:
 @pytest.mark.integration()
 async def test_confirmed_rollbacks_keeps_connection_usable(
     reload_harness: ReloadHarness,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A confirmed rollback after commit failure leaves connection usable.
 
@@ -34,7 +36,7 @@ async def test_confirmed_rollbacks_keeps_connection_usable(
     """
     db = reload_harness.db
 
-    db.set_test_inject_commit_call(RuntimeError("simulated commit failure"))
+    fail_commit(monkeypatch, db, RuntimeError("simulated commit failure"))
 
     with pytest.raises(DatabaseCommitError) as exc_info:
         async with db.transaction():
@@ -56,6 +58,7 @@ async def test_confirmed_rollbacks_keeps_connection_usable(
 @pytest.mark.integration()
 async def test_indeterminate_commit_invalidates_connection(
     reload_harness: ReloadHarness,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An indeterminate commit failure invalidates the connection.
 
@@ -65,38 +68,27 @@ async def test_indeterminate_commit_invalidates_connection(
     """
     db = reload_harness.db
 
-    original_commit = db._commit_connection
+    fail_commit(
+        monkeypatch, db, RuntimeError("indeterminate commit failure"), commit_first=True
+    )
+    with pytest.raises(DatabaseCommitError) as exc_info:
+        async with db.transaction():
+            await db.execute_returning("SELECT 1")
 
-    async def fake_commit() -> None:
-        raise RuntimeError("indeterminate commit failure")
-
-    db._commit_connection = fake_commit  # type: ignore[assignment]
-
-    try:
-        with pytest.raises(DatabaseCommitError) as exc_info:
-            async with db.transaction():
-                await db.execute_returning("SELECT 1")
-
-        err = exc_info.value
-        assert err.rollback_attempted is True
-        # For in-memory :memory: databases, aiosqlite may report
-        # in_transaction=False after a failed commit, making it
-        # indeterminate.
-        assert err.outcome in ("rolled_back", "indeterminate")
-
-        # If the connection was invalidated, verify subsequent access fails.
-        if err.connection_invalidated:
-            with pytest.raises(DatabaseConnectionInvalidatedError):
-                async with db.transaction():
-                    await db.execute_returning("SELECT 1")
-    finally:
-        db._commit_connection = original_commit  # type: ignore[assignment]
+    err = exc_info.value
+    assert err.rollback_attempted is True
+    assert err.outcome == "indeterminate"
+    assert err.connection_invalidated is True
+    with pytest.raises(DatabaseConnectionInvalidatedError):
+        async with db.transaction():
+            await db.execute_returning("SELECT 1")
 
 
 @pytest.mark.asyncio()
 @pytest.mark.integration()
 async def test_commit_failure_diagnostics_expose_state(
     reload_harness: ReloadHarness,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """DatabaseCommitError exposes all diagnostic fields.
 
@@ -105,7 +97,7 @@ async def test_commit_failure_diagnostics_expose_state(
     """
     db = reload_harness.db
 
-    db.set_test_inject_commit_call(RuntimeError("diagnostic test failure"))
+    fail_commit(monkeypatch, db, RuntimeError("diagnostic test failure"))
 
     with pytest.raises(DatabaseCommitError) as exc_info:
         async with db.transaction():

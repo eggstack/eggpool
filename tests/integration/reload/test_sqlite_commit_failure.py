@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from eggpool.db.connection import Database  # noqa: TC001
+from tests.support.database_faults import fail_commit
 from tests.support.runtime_snapshot import RuntimeSnapshot
 
 if TYPE_CHECKING:
@@ -117,18 +117,14 @@ async def test_publish_failure_does_not_leak_resources(
 
 
 # ---------------------------------------------------------------------------
-# True SQLite COMMIT bypass injection
+# True SQLite COMMIT failure injection
 # ---------------------------------------------------------------------------
-
-
-def _set_commit_injection(db: Database, exc: Exception | None) -> None:
-    """Helper to install / clear the test-only COMMIT-bypass seam."""
-    type(db).TEST_INJECT_BEFORE_COMMIT_CALL = exc
 
 
 @pytest.mark.asyncio()
 async def test_commit_injection_rolls_back_persistence(
     reload_harness: ReloadHarness,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A COMMIT bypass injection rolls the persistence delta back.
 
@@ -142,11 +138,8 @@ async def test_commit_injection_rolls_back_persistence(
         db=reload_harness.db,
     )
 
-    _set_commit_injection(reload_harness.db, RuntimeError("simulated commit bypass"))
-    try:
-        result = await reload_harness.reload()
-    finally:
-        _set_commit_injection(reload_harness.db, None)
+    fail_commit(monkeypatch, reload_harness.db, RuntimeError("simulated commit bypass"))
+    result = await reload_harness.reload()
 
     assert result.ok is False
     # publication_occurred lives on the diagnostic snapshot, not the wire result.
@@ -172,6 +165,7 @@ async def test_commit_injection_rolls_back_persistence(
 @pytest.mark.asyncio()
 async def test_commit_injection_reopens_lease_admission(
     reload_harness: ReloadHarness,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A COMMIT bypass injection reopens lease admission.
 
@@ -184,11 +178,8 @@ async def test_commit_injection_reopens_lease_admission(
         db=reload_harness.db,
     )
 
-    _set_commit_injection(reload_harness.db, RuntimeError("simulated commit bypass"))
-    try:
-        await reload_harness.reload()
-    finally:
-        _set_commit_injection(reload_harness.db, None)
+    fail_commit(monkeypatch, reload_harness.db, RuntimeError("simulated commit bypass"))
+    await reload_harness.reload()
 
     lease = await reload_harness.runtime_manager.acquire()
     try:
@@ -207,23 +198,23 @@ async def test_commit_injection_reopens_lease_admission(
 @pytest.mark.asyncio()
 async def test_commit_injection_is_one_shot(
     reload_harness: ReloadHarness,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The COMMIT injection must fire only once.
 
-    The seam auto-clears after firing so subsequent transactions
-    succeed normally — a stuck injection would silently wedge every
-    reload.
+    Removing the patch after the first failure proves subsequent
+    transactions succeed normally.
     """
-    _set_commit_injection(
-        reload_harness.db, RuntimeError("simulated one-shot commit bypass")
+    fail_commit(
+        monkeypatch,
+        reload_harness.db,
+        RuntimeError("simulated one-shot commit bypass"),
     )
-    try:
-        result = await reload_harness.reload()
-    finally:
-        _set_commit_injection(reload_harness.db, None)
+    result = await reload_harness.reload()
 
     assert result.ok is False
 
+    monkeypatch.undo()
     result2 = await reload_harness.reload()
     assert result2.ok is True, (
         f"Second reload after auto-cleared injection failed: {result2}"

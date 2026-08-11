@@ -162,7 +162,7 @@ before durable success, native invalid-JSON pass-through, and cancellation
 propagation. Run the focused coordinator/proxy/transcoder suites before the
 repository-wide CI gate.
 
-Database ownership changes should run the focused transaction and fault-matrix suites; verify child-task ownership rejection and rollback-failure invalidation without exposing a public rollback helper.
+Database ownership changes should run the focused transaction and fault-matrix suites; verify child-task ownership rejection and rollback-failure invalidation without exposing a public rollback helper or production test-injection seam. Patch private callable boundaries from test support when deterministic failure injection is needed.
 
 Finalization round-trip changes should run the request-finalizer, repository,
 attempt, reservation, transaction-failure, and retained-terminal-owner suites.

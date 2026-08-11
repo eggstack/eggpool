@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from eggpool.errors import DatabaseCommitError, DatabaseConnectionInvalidatedError
+from tests.support.database_faults import fail_commit
 
 if TYPE_CHECKING:
     from tests.support.reload_harness import ReloadHarness
@@ -16,11 +17,11 @@ if TYPE_CHECKING:
 @pytest.mark.integration()
 async def test_commit_failure_driver_reports_no_active_transaction(
     reload_harness: ReloadHarness,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A false pre-rollback transaction observation is indeterminate."""
     db = reload_harness.db
-    db.set_test_inject_commit_call(RuntimeError("commit lost"))
-    db.set_test_inject_in_transaction_before_rollback(False)
+    fail_commit(monkeypatch, db, RuntimeError("commit lost"), commit_first=True)
 
     with pytest.raises(DatabaseCommitError) as exc_info:
         async with db.transaction():

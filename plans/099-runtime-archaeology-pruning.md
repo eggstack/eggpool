@@ -1,7 +1,7 @@
 # Plan 099 — Runtime Archaeology Pruning
 
 Date: 2026-08-10
-Status: planned
+Status: complete
 Parent roadmap: `plans/093-sbc-runtime-and-maintenance-simplification-roadmap.md`
 Planning baseline: `ad7eee822f1dfb8c43dfbe20410c41009697cd7d`
 Depends on:
@@ -215,3 +215,31 @@ uv run eggpool --config config.sbc.example.toml check-config
 8. Run ordinary lint/type/smoke/config gate.
 9. Record symbols kept/deleted and exact verification in this plan.
 10. Stop; do not refactor active lifecycle state machines for aesthetics.
+
+## Closure record
+
+### Bounded deletion inventory
+
+| Candidate | Evidence and disposition |
+|---|---|
+| `SPAN_SELECTION_*`, `SPAN_DISPATCH_PERSISTENCE_*`, `SPAN_POST_COMMIT_*`, and `SPAN_CLAIM_ROLLBACK` | Kept. Repository-wide production search found active coordinator recording calls; these are runtime diagnostics, not dormant writer residue. |
+| `SPAN_DB_WRITE_*`, `DispatchOverheadRecorder`, `LocalPreUpstreamRecorder` | Kept. Active coarse and row-level timing remain part of the runtime diagnostics contract. |
+| `Database._transaction_depth`, `_transaction_state`, `_TransactionState`, and public `safe_rollback()` | Already removed by Plan 095; repository-wide search confirmed no remaining callers. |
+| `Database.TEST_INJECT_BEFORE_COMMIT_CALL`, instance injection fields, and `set_test_inject_*()` methods | Deleted. All callers were tests; tests now patch `_commit_connection()` or the SQLite rollback callable through `tests/support/database_faults.py`. Production commit/rollback ambiguity handling is unchanged. |
+| Repository `*_returning()` compatibility wrappers | Kept. `finalize_if_pending()` and `ReservationRepository.release()` still have supported callers; no unsupported wrapper was deleted. |
+| `granian[pname]` | Kept. `CHANGELOG.md` records that the serve path uses process naming; dependency removal would change an operator-visible workflow. |
+| Historical phase/plan comments in active observability and coordinator paths | Narrowly rewritten in `runtime_dispatch.py` and `coordinator.py` to describe present-tense behavior. Broader architecture history was retained where it explains current contracts. |
+
+### Verification
+
+- Focused database fault, reload, and dispatch-span suites: 59 passed.
+- `uv run ruff format --check src/ tests/ scripts/`
+- `uv run ruff check src/ tests/ scripts/`
+- `uv run pyright src/ scripts/`
+- `PYTHONHASHSEED=0 TZ=UTC uv run pytest tests/smoke/ -q --tb=short --maxfail=1`
+- `uv run eggpool --config config.example.toml check-config`
+- `uv run eggpool --config config.sbc.example.toml check-config`
+
+The complete local CI-equivalent and configuration gate passed before the
+implementation was committed. No new dead-code dependency, migration, runtime
+state machine, or permanent benchmark gate was added.

@@ -1758,13 +1758,11 @@ class RequestCoordinator:
     ) -> tuple[str, str, int]:
         """Create / update the request, reservation, and attempt rows.
 
-        Milestone B: this is the canonical DB-I/O phase that runs
-        OUTSIDE ``_selection_claim_lock``.  Each row write is recorded
-        under the legacy ``SPAN_DB_WRITE_*`` keys so existing Phase 5
-        spans stay observable; the new ``SPAN_DISPATCH_PERSISTENCE_*``
-        keys wrap the entire phase with wait/transaction/commit
-        boundaries so the duration can be sliced out of the
-        selection critical section.
+        This canonical DB-I/O phase runs OUTSIDE
+        ``_selection_claim_lock``. Each row write is recorded under
+        ``SPAN_DB_WRITE_*``; ``SPAN_DISPATCH_PERSISTENCE_*`` covers the
+        transaction and commit boundaries outside the selection critical
+        section.
         """
 
         if (

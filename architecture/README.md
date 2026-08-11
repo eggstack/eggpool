@@ -4073,7 +4073,10 @@ Parametrize-ready lists: `OPENAI_REASONING_EFFORT_VARIANTS`, `NESTED_REASONING_V
 
 ### Database fault seams
 
-`Database` (`src/eggpool/db/connection.py`) exposes class-level test injection hooks: `TEST_INJECT_BEFORE_COMMIT_CALL`, `set_test_inject_commit_call()`, `set_test_inject_rollback_call()`, `set_test_inject_in_transaction_before_rollback()`.
+Database failure tests patch the private `_commit_connection()` boundary or
+the underlying SQLite rollback callable. The production `Database` object has
+no test-only fault-injection state or public injection methods; commit/rollback
+ambiguity diagnostics remain production-owned and unchanged.
 `tests/support/reload_faults.py` provides `ReloadFaultInjector` for reload-stage faults.
 Each test forces exactly one outcome (no multiple-possible-outcome assertions).
 

@@ -10,6 +10,7 @@ description: Architecture principles and design decisions for the EggPool projec
 ## Core Principles
 
 - Database transactions use one shared connection and one asyncio-task owner; rollback is private to the owning transaction path.
+- Database failure tests patch private commit/rollback callables; production database objects do not expose test-only injection state.
 
 - Package boundaries must remain explicit
 - Request proxying, routing, accounting, and dashboard concerns must not be combined in endpoint handlers

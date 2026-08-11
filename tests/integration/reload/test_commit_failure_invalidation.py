@@ -14,6 +14,7 @@ import pytest
 
 from eggpool.errors import DatabaseCommitError, DatabaseConnectionInvalidatedError
 from eggpool.runtime_manager import CandidateOwnershipState
+from tests.support.database_faults import fail_commit
 
 if TYPE_CHECKING:
     from tests.support.reload_harness import ReloadHarness
@@ -28,16 +29,17 @@ if TYPE_CHECKING:
 @pytest.mark.integration()
 async def test_commit_failure_invalidates_connection_on_ambiguous_state(
     reload_harness: ReloadHarness,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """When commit fails and rollback cannot determine clean state,
     connection is invalidated.
 
-    Uses set_test_inject_commit_call which raises before the actual commit.
-    The connection's in_transaction state determines the outcome.
+    The private commit callable is patched; the connection's transaction
+    state determines the outcome.
     """
     db = reload_harness.db
 
-    db.set_test_inject_commit_call(RuntimeError("simulated commit failure"))
+    fail_commit(monkeypatch, db, RuntimeError("simulated commit failure"))
 
     with pytest.raises(DatabaseCommitError) as exc_info:
         async with db.transaction():
@@ -54,11 +56,12 @@ async def test_commit_failure_invalidates_connection_on_ambiguous_state(
 @pytest.mark.integration()
 async def test_commit_failure_diagnostic_fields(
     reload_harness: ReloadHarness,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """DatabaseCommitError exposes all diagnostic fields correctly."""
     db = reload_harness.db
 
-    db.set_test_inject_commit_call(RuntimeError("diagnostic test failure"))
+    fail_commit(monkeypatch, db, RuntimeError("diagnostic test failure"))
 
     with pytest.raises(DatabaseCommitError) as exc_info:
         async with db.transaction():
@@ -76,11 +79,12 @@ async def test_commit_failure_diagnostic_fields(
 @pytest.mark.integration()
 async def test_connection_invalidated_state_persists(
     reload_harness: ReloadHarness,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """After connection invalidation, subsequent access raises."""
     db = reload_harness.db
 
-    db.set_test_inject_commit_call(RuntimeError("invalidate test"))
+    fail_commit(monkeypatch, db, RuntimeError("invalidate test"))
 
     with pytest.raises(DatabaseCommitError):
         async with db.transaction():

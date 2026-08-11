@@ -18,6 +18,7 @@ from eggpool.errors import (
     DatabaseConnectionInvalidatedError,
     DatabaseRollbackError,
 )
+from tests.support.database_faults import fail_commit, fail_rollback
 
 if TYPE_CHECKING:
     from tests.support.reload_harness import ReloadHarness
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
 @pytest.mark.integration()
 async def test_commit_failure_rollback_success(
     reload_harness: ReloadHarness,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """F4.1: When commit fails but rollback succeeds, outcome is 'rolled_back'.
 
@@ -39,7 +41,7 @@ async def test_commit_failure_rollback_success(
     """
     db = reload_harness.db
 
-    db.set_test_inject_commit_call(RuntimeError("simulated commit failure"))
+    fail_commit(monkeypatch, db, RuntimeError("simulated commit failure"))
 
     with pytest.raises(DatabaseCommitError) as exc_info:
         async with db.transaction():
@@ -64,6 +66,7 @@ async def test_commit_failure_rollback_success(
 @pytest.mark.integration()
 async def test_commit_failure_indeterminate_state(
     reload_harness: ReloadHarness,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """F4.2: When commit fails and rollback cannot determine state,
     outcome is 'indeterminate'.
@@ -74,8 +77,8 @@ async def test_commit_failure_indeterminate_state(
     """
     db = reload_harness.db
 
-    db.set_test_inject_commit_call(RuntimeError("diagnostic test failure"))
-    db.set_test_inject_rollback_call(RuntimeError("rollback unavailable"))
+    fail_commit(monkeypatch, db, RuntimeError("diagnostic test failure"))
+    fail_rollback(monkeypatch, db, RuntimeError("rollback unavailable"))
 
     with pytest.raises((DatabaseCommitError, DatabaseRollbackError)) as exc_info:
         async with db.transaction():
@@ -103,11 +106,12 @@ async def test_commit_failure_indeterminate_state(
 @pytest.mark.integration()
 async def test_commit_failure_diagnostic_fields(
     reload_harness: ReloadHarness,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """F4.3: DatabaseCommitError always exposes all diagnostic fields."""
     db = reload_harness.db
 
-    db.set_test_inject_commit_call(RuntimeError("diagnostic completeness test"))
+    fail_commit(monkeypatch, db, RuntimeError("diagnostic completeness test"))
 
     with pytest.raises(DatabaseCommitError) as exc_info:
         async with db.transaction():
@@ -130,12 +134,13 @@ async def test_commit_failure_diagnostic_fields(
 @pytest.mark.integration()
 async def test_connection_state_after_invalidation(
     reload_harness: ReloadHarness,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """F4.4: Database connection_state reports invalidation."""
     db = reload_harness.db
 
-    db.set_test_inject_commit_call(RuntimeError("state summary test"))
-    db.set_test_inject_rollback_call(RuntimeError("rollback unavailable"))
+    fail_commit(monkeypatch, db, RuntimeError("state summary test"))
+    fail_rollback(monkeypatch, db, RuntimeError("rollback unavailable"))
 
     with pytest.raises((DatabaseCommitError, DatabaseRollbackError)):
         async with db.transaction():

@@ -4,13 +4,12 @@ Stores only nanosecond durations in a bounded rolling window; never
 persists, never logs, and never touches request identity, bodies, or
 auth headers.
 
-Plan 029 — Workstream H: fine-grained spans use deterministic
-request-level sampling.  ``should_sample_request`` makes a stable
-decision per request ID so that one sampled request records all
-relevant spans (coherent trace), rather than an independent decision
-per span (which produces partial traces).  Coarse metrics
-(``DispatchOverheadRecorder``, ``LocalPreUpstreamRecorder``) remain
-always-on and bounded.
+Fine-grained spans use deterministic request-level sampling.
+``should_sample_request`` makes a stable decision per request ID so
+that one sampled request records all relevant spans (coherent trace),
+rather than an independent decision per span (which produces partial
+traces). Coarse metrics (``DispatchOverheadRecorder``,
+``LocalPreUpstreamRecorder``) remain always-on and bounded.
 """
 
 from __future__ import annotations
@@ -25,12 +24,9 @@ from typing import Any
 
 _SpanKey = str
 
-# Plan 029, Workstream H: per-request sampling decision propagated via
-# a ContextVar so the coordinator's span recording (which uses the
-# shared ``DispatchSpanRecorder`` instance) can respect the decision
-# made in ``handle_proxy_request``.  ``None`` means "not set" (e.g.
-# direct unit-test calls to ``record_ns``); ``False`` means the
-# current request was not sampled; ``True`` means it was.
+# The per-request sampling decision is propagated via a ContextVar so
+# coordinator span recording can respect the decision made in the proxy
+# handler. ``None`` means unset (for example, direct recorder tests).
 _request_sampled: ContextVar[bool | None] = ContextVar(
     "eggpool_dispatch_span_sampled", default=None
 )

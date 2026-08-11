@@ -147,9 +147,6 @@ class Database:
     #: simulates a process crash / power-loss between yield and commit
     #: so reload tests can verify that callers see the failure and
     #: run the rollback / compensation path.  Must default to ``None``
-    #: in production; only tests should set this.
-    TEST_INJECT_BEFORE_COMMIT_CALL: Exception | None = None
-
     def __init__(
         self,
         path: str,
@@ -197,13 +194,6 @@ class Database:
             default=None,
         )
         self._fatal_handler: Any = None  # noqa: ANN401
-        # Instance-scoped test-only injection hooks.  These override
-        # the class-level seam for a single Database instance so tests
-        # can target a specific connection without affecting others.
-        self._test_inject_before_commit: Exception | None = None
-        self._test_inject_commit_call: Exception | None = None
-        self._test_inject_rollback_call: Exception | None = None
-        self._test_inject_in_transaction_before_rollback: bool | None = None
         # Fail-closed diagnostics. These facts are retained after the
         # connection is detached so operators can distinguish a terminal
         # database failure from an orderly shutdown.
@@ -389,8 +379,6 @@ class Database:
         - ``rollback_exc`` is the exception raised by the rollback
           call itself, when one was raised.
 
-        The method honours the test-only ``_test_inject_rollback_call``
-        seam so tests can simulate a rollback failure deterministically.
         """
         rollback_attempted = False
         rollback_succeeded = False
@@ -405,10 +393,6 @@ class Database:
                 # Nothing to roll back; treat as success.
                 return True, True, False, None
             rollback_attempted = True
-            rollback_injected = self._test_inject_rollback_call
-            self._test_inject_rollback_call = None
-            if rollback_injected is not None:
-                raise rollback_injected
             await conn.rollback()
             in_transaction_after = getattr(conn, "in_transaction", None)
             if in_transaction_after is False:
@@ -426,25 +410,6 @@ class Database:
     async def _commit_connection(self) -> None:
         """Execute the SQLite COMMIT. May be patched in tests."""
         await self._conn.commit()  # type: ignore[union-attr]
-
-    def set_test_inject_before_commit(self, exc: Exception | None) -> None:
-        """Instance-scoped test hook for pre-commit bypass injection."""
-        self._test_inject_before_commit = exc
-
-    def set_test_inject_commit_call(self, exc: Exception | None) -> None:
-        """Instance-scoped test hook for commit-call failure injection."""
-        self._test_inject_commit_call = exc
-
-    def set_test_inject_rollback_call(self, exc: Exception | None) -> None:
-        """Instance-scoped test hook for deterministic rollback failure."""
-        self._test_inject_rollback_call = exc
-
-    def set_test_inject_in_transaction_before_rollback(
-        self,
-        value: bool | None,
-    ) -> None:
-        """Override transaction-state observation for commit outcome tests."""
-        self._test_inject_in_transaction_before_rollback = value
 
     @staticmethod
     def _build_read_only_uri(path: str) -> tuple[str, bool]:
@@ -1018,34 +983,10 @@ class Database:
                     ) from body_rollback_exc
                 raise
             else:
-                # Plan 016 Workstream F / Plan 017 Workstream E:
-                # test-only fault-injection seam to simulate a process
-                # crash *after* the inner work completed but *before*
-                # the SQLite COMMIT is issued.  Instance-level
-                # ``_test_inject_before_commit`` takes precedence over
-                # the class-level ``TEST_INJECT_BEFORE_COMMIT_CALL``.
-                # The injection MUST NOT swallow real database errors
-                # that arise from the actual ``commit()`` call.
-                injected = (
-                    self._test_inject_before_commit
-                    or Database.TEST_INJECT_BEFORE_COMMIT_CALL
-                )
-                if injected is not None:
-                    # One-shot: clear both instance and class seams.
-                    self._test_inject_before_commit = None
-                    if Database.TEST_INJECT_BEFORE_COMMIT_CALL is not None:
-                        Database.TEST_INJECT_BEFORE_COMMIT_CALL = None
-                    await self._conn.rollback()
-                    raise injected
-
                 # Catch exceptions from the actual ``commit()`` call and
                 # determine whether rollback proved the connection clean.
                 commit_exc: Exception | None = None
                 try:
-                    commit_injected = self._test_inject_commit_call
-                    if commit_injected is not None:
-                        self._test_inject_commit_call = None
-                        raise commit_injected
                     await self._commit_connection()
                 except Exception as exc:
                     commit_exc = exc
@@ -1059,22 +1000,14 @@ class Database:
                     rollback_exc: Exception | None = None
 
                     try:
-                        in_transaction_before_rollback = (
-                            self._test_inject_in_transaction_before_rollback
-                            if self._test_inject_in_transaction_before_rollback
-                            is not None
-                            else getattr(self._conn, "in_transaction", None)
+                        in_transaction_before_rollback = getattr(
+                            self._conn, "in_transaction", None
                         )
-                        self._test_inject_in_transaction_before_rollback = None
                         rollback_attempted = True
                         if (
                             in_transaction_before_rollback is not None
                             and in_transaction_before_rollback
                         ):
-                            rollback_injected = self._test_inject_rollback_call
-                            self._test_inject_rollback_call = None
-                            if rollback_injected is not None:
-                                raise rollback_injected
                             await self._conn.rollback()
                             in_transaction_after_rollback = getattr(
                                 self._conn, "in_transaction", None
