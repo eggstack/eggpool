@@ -331,6 +331,7 @@ The dashboard `/models` page shows enriched model metadata from provider catalog
 | Thinking & reasoning | [docs/thinking.md](docs/thinking.md) |
 | Architecture overview | [architecture/README.md](architecture/README.md) |
 | Live Configuration Rehash | [docs/live-config-rehash.md](docs/live-config-rehash.md) |
+| Database recovery runbook | [docs/runbooks/database-recovery.md](docs/runbooks/database-recovery.md) |
 
 ## Development
 

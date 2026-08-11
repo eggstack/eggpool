@@ -1703,7 +1703,7 @@ SQLite via aiosqlite with WAL mode. Single-connection serialization via a lock +
 
 ### Schema Migrations
 
-Ordered SQL migrations in `db/schema/` (0001 through 0051). Checksums tracked in `checksums.json`.
+Ordered SQL migrations in `db/schema/` (0001 through 0053). Checksums tracked in `checksums.json`.
 
 ### Repositories
 
@@ -2193,8 +2193,14 @@ AggregatorError (base)
 ├── RequestTooLargeError
 ├── ModelInfoSourceFetchError
 ├── ContextLimitExceededError
-└── CapabilityError (model_id, capability, requested_fields attributes)
+├── CapabilityError (model_id, capability, requested_fields attributes)
+│   └── BudgetResolutionError (thinking budget rejection)
+└── AcceptedFinalizationInvariantError (reload invariant violation)
 ```
+
+Plus `RuntimeManagerLeaseExhaustedError` (RuntimeError, mapped to HTTP 503).
+Plus `TranscodeLossError` (from `transcoder.errors`) — HTTP 400 when `loss_policy = "reject"`.
+Plus `ProtocolMismatchError` (from `catalog.protocols`) — endpoint/model-protocol mismatch.
 
 ## Model Information
 
