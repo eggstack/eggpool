@@ -86,12 +86,6 @@ uv run ruff check --fix src/
 - Smoke suite (`tests/smoke/`): package import, config parsing, invalid config rejection, check-config validation, DB migration, one non-stream request, one streaming request, one upstream failure followed by recovery, one premature EOF, one Anthropic request, and CLI help
 - Provider contract tests: `uv run pytest tests/unit/test_contract.py tests/unit/test_contract_urls.py -v`
 - Performance, live, and diagnostic reproducer tests are manually invoked, not run in CI
-- Historical release matrices and repeated rehash soak tests are not retained as
-  routine corpus; use the capability-focused integration/reload tests and the
-  manually invoked performance diagnostics for those concerns.
-- Cache/compression fixture privacy is retained, but broad replay matrices and
-  duplicate fixture replays are not routine tests; use the focused compression,
-  cache-boundary, transcoder, and routing-guardrail contracts.
 
 ## Release
 
@@ -128,7 +122,6 @@ remains available for diagnosing stream-specific regressions.
 > Full design details are in `architecture/README.md` and the `architecture` skill.
 
 - **Request lifecycle**: `RequestCoordinator` orchestrates endpoint → routing → persistence → dispatch → finalization.
-- **Pending claim publication**: after a routing plan selects an account, `_selection_claim_lock` publishes one provisional request/token unit through `QuotaEstimator` before SQLite persistence. Persistence remains outside the lock; success converts that ownership to the canonical reservation, while failure or cancellation releases it exactly once.
 - **Dispatch isolation**: local preparation and response adaptation failures are terminal local errors with no provider retry. Only typed HTTPX transport failures may retry, only across distinct accounts before `downstream_started`.
 - **Multi-provider architecture**: provider-suffixed model IDs (`model-id/provider-id`), `ProviderClientPool`, `OutboundClientManager`.
 - **Provider contracts**: `compose_provider_url()` is the single source of truth for upstream URLs.
@@ -148,6 +141,7 @@ remains available for diagnosing stream-specific regressions.
 
 ## Gotchas
 
+- **`fastcli` and `runtime_paths` are stdlib-only**: no transitive imports. Raspberry Pi watchdog contract.
 - **`eggpool rehash` serializes reload transactions**: only one reload in progress at a time. Concurrent rejections with `reload_in_progress`.
 - **`ReloadObserver` is inert in production**: the observer protocol has no-op defaults.
 - **`eggpool connect`/`logout` don't silently restart**: if the server is healthy but control socket is missing, they return `(False, "control unavailable (server healthy)")`.
