@@ -7,7 +7,10 @@ from typing import TYPE_CHECKING, Any, Protocol
 from eggpool.errors import ConfigError
 
 if TYPE_CHECKING:
-    from eggpool.catalog.capabilities import ThinkingCapability
+    from eggpool.catalog.capabilities import (
+        ThinkingCapability,
+        TranscodingCapabilities,
+    )
     from eggpool.transcoder.context import TranscodeContext
     from eggpool.transcoder.policy import TranscoderFeatures
 
@@ -25,6 +28,7 @@ class BodyTranscoder(Protocol):
         *,
         features: TranscoderFeatures | None = None,
         thinking_capability: ThinkingCapability | None = None,
+        transcoding_capability: TranscodingCapabilities | None = None,
         budget_defaults: dict[str, int] | None = None,
         budget_resolution_policy: str = "lenient",
         loss_policy: str = "warn",

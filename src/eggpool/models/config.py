@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from eggpool.catalog.capabilities import (  # noqa: TCH001
     CapabilitySource,
     CapabilityStatus,
+    TranscodingCapabilities,
 )
 from eggpool.catalog.pricing import (
     parse_microdollars_per_million,
@@ -1033,6 +1034,7 @@ class ModelCapabilitiesOverrideConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     thinking: ThinkingCapabilityOverrideConfig | None = None
+    transcoding: TranscodingCapabilities | None = None
 
 
 _OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"

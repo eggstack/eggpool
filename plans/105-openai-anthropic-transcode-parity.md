@@ -1,7 +1,7 @@
 # Plan 105 — OpenAI/Anthropic Transcode Parity
 
 Date: 2026-08-11
-Status: planned
+Status: implemented
 Parent roadmap: `plans/103-sbc-protocol-parity-and-runtime-efficiency-roadmap.md`
 Planning baseline: `de3eeea5936c964ffa33b7939c791e98d35cfcbb`
 Depends on:
@@ -321,3 +321,58 @@ Reject the implementation if:
 11. Run focused tests, provider contract tests where applicable, then the ordinary repository gate.
 12. Record implementation SHA, external-doc assumptions/date, exact supported/lossy mappings, and verification results in this plan.
 13. Stop; do not broaden into full provider feature parity.
+
+## Closure
+
+Implementation commit: `a462c1e`.
+
+External API assumptions were checked against the official provider
+documentation on 2026-08-11:
+
+- OpenAI Chat Completions uses `response_format.type = "json_schema"`,
+  `json_schema.strict`, function `strict`, top-level `parallel_tool_calls`,
+  and model-specific `reasoning_effort` values. See the [OpenAI API
+  reference](https://platform.openai.com/docs/api-reference/responses-streaming/response/refusal?lang=python).
+- Anthropic Messages uses `output_config.format` with `type = "json_schema"`,
+  tool-level `strict`, and `tool_choice.disable_parallel_tool_use`. Manual
+  thinking uses `thinking.type = "enabled"` with `budget_tokens`; no numeric
+  equivalence to OpenAI effort was assumed. See [Anthropic structured
+  outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs),
+  [strict tool use](https://platform.claude.com/docs/en/agents-and-tools/tool-use/strict-tool-use),
+  and [extended thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking).
+
+Implemented mapping and loss rules:
+
+- `ModelCapabilities.transcoding` is the minimal static/provider/model
+  capability surface. Empty fields are unknown and generic compatible
+  providers receive no native fields.
+- OpenAI `json_schema` → Anthropic `output_config.format` when
+  `native_structured_outputs = ["anthropic"]`; otherwise the existing prompt
+  fallback remains explicitly lossy. Anthropic `json_object` remains prompt
+  based because it has no schema.
+- Anthropic `output_config.format` → OpenAI `response_format` when
+  `native_structured_outputs = ["openai"]`, with deterministic representational
+  name `eggpool_structured_output`.
+- OpenAI/Anthropic strict tool fields map in both directions only when
+  `strict_tools` verifies the target protocol.
+- OpenAI `parallel_tool_calls = false` maps to Anthropic
+  `tool_choice.disable_parallel_tool_use`; the reverse maps to OpenAI
+  `parallel_tool_calls = false`, both capability-gated and contradiction-aware.
+- Anthropic adaptive `thinking.effort` maps to OpenAI `reasoning_effort` only
+  for an explicit target effort capability. Manual Anthropic token budgets are
+  not converted to fabricated OpenAI effort values; OpenAI-to-Anthropic budget
+  conversion continues to use the existing target thinking contract.
+- Tool translation is baseline compatibility. The old
+  `[transcoder.features].tools` setting remains parseable but is a documented
+  no-op.
+
+Verification completed:
+
+- Focused transcoder/tool/streaming/unit suites: 472 passed.
+- Provider contract suite: 141 passed; transcoder contract suite: 13 passed.
+- Smoke suite: 14 passed.
+- `ruff format --check`, `ruff check`, and `pyright src/ scripts/`: passed.
+- `config.example.toml` and `config.sbc.example.toml` check-config: passed.
+- A repository-wide pytest run was started but intentionally stopped after
+  reaching 6% without failures because it is substantially larger than the
+  CI gate; the exact CI smoke gate and all affected suites passed.

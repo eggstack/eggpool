@@ -52,6 +52,16 @@ Transparent request/response format conversion between OpenAI and Anthropic prot
 - **Request preparation hot path**: ASCII-only context strings use the native `str.isascii()` path; translated tool allowance is passed as estimator arithmetic rather than synthetic bytes. Provider IDs and trusted proxies are immutable, generation-owned lookup sets used directly by leased requests.
 - **Provider payload lifecycle**: `ProviderBoundRequest` is the sole provider-payload authority after client parsing. Copy-on-write generation-aware mutations, one final serialization cache, frozen before dispatch. Original client bytes remain separate from the provider-bound payload.
 - The transcoder's `usage` property returns a default; finalization must read usage from the coordinator's observer
+- Tool calling is baseline cross-protocol compatibility; the legacy
+  `TranscoderFeatures.tools` field is a no-op compatibility setting.
+- `ModelCapabilities.transcoding` is the explicit native-control contract:
+  `native_structured_outputs`, `strict_tools`, `parallel_tool_control`, and
+  per-protocol `reasoning_efforts`. Missing facts are unknown and do not emit
+  native fields to generic compatible providers.
+- Native OpenAI JSON schema uses Anthropic `output_config.format` in the
+  verified direction; native strict tools and parallel disabling use the
+  provider-documented fields. Loss-policy warnings remain local preparation
+  failures and do not penalize or retry providers.
 
 ## JSON Backend
 

@@ -560,6 +560,11 @@ class ModelCatalogCache:
             merged_capabilities["thinking"] = thinking_capability
         else:
             merged_capabilities.pop("thinking", None)
+        transcoding_capability = structured_capabilities.get("transcoding")
+        if transcoding_capability is not None:
+            merged_capabilities["transcoding"] = transcoding_capability
+        else:
+            merged_capabilities.pop("transcoding", None)
         model_copy["capabilities"] = merged_capabilities
 
         return model_copy

@@ -301,6 +301,14 @@ def _prepare_transcode_preflight(
         upstream_protocol=upstream_protocol,
     )
     _features = getattr(transcoder_policy, "features", None)
+    _transcoding_capability = None
+    model_info = catalog.cache.get_model_for_provider(model_id, provider_id)
+    if model_info is not None:
+        from eggpool.catalog.capabilities import dict_to_model_capabilities
+
+        _transcoding_capability = dict_to_model_capabilities(
+            cast("dict[str, object]", model_info.get("capabilities", {})),
+        ).transcoding
     # The preflight always runs the transcoder in ``warn`` mode so it
     # can collect the full warning list. The proxy layer below is
     # responsible for enforcing the operator's ``loss_policy`` after
@@ -309,6 +317,7 @@ def _prepare_transcode_preflight(
         payload,
         transcode_context,
         features=_features,
+        transcoding_capability=_transcoding_capability,
         loss_policy="warn",
     )
     return TranscodePreflightResult(

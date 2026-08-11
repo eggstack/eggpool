@@ -24,7 +24,10 @@ from eggpool.transcoder.json_helpers import (
 )
 
 if TYPE_CHECKING:
-    from eggpool.catalog.capabilities import ThinkingCapability
+    from eggpool.catalog.capabilities import (
+        ThinkingCapability,
+        TranscodingCapabilities,
+    )
     from eggpool.transcoder.context import TranscodeContext
     from eggpool.transcoder.policy import TranscoderFeatures
 
@@ -254,6 +257,7 @@ class AnthropicToOpenAI:
         *,
         features: TranscoderFeatures | None = None,
         thinking_capability: ThinkingCapability | None = None,
+        transcoding_capability: TranscodingCapabilities | None = None,
         budget_defaults: dict[str, int] | None = None,
         budget_resolution_policy: str = "lenient",
         loss_policy: str = "warn",
@@ -545,8 +549,23 @@ class AnthropicToOpenAI:
                     "name",
                     "description",
                     "input_schema",
+                    "strict",
                     "cache_control",
                 }
+                if "strict" in tool:
+                    if (
+                        transcoding_capability is not None
+                        and transcoding_capability.supports("strict_tools", "openai")
+                    ):
+                        function["strict"] = bool(tool["strict"])
+                    else:
+                        warnings.append(
+                            {
+                                "kind": "strict_tool_capability_missing",
+                                "field": f"tools[{tool_index}].strict",
+                                "reason": "openai_capability_not_verified",
+                            }
+                        )
                 for extra_field in tool:
                     if extra_field in known_tool_fields:
                         continue
@@ -573,6 +592,64 @@ class AnthropicToOpenAI:
             if translated_choice is not None:
                 out["tool_choice"] = translated_choice
 
+            if (
+                isinstance(tool_choice_raw, dict)
+                and cast("dict[str, Any]", tool_choice_raw).get(
+                    "disable_parallel_tool_use"
+                )
+                is True
+            ):
+                if (
+                    transcoding_capability is not None
+                    and transcoding_capability.supports(
+                        "parallel_tool_control", "openai"
+                    )
+                ):
+                    out["parallel_tool_calls"] = False
+                else:
+                    warnings.append(
+                        {
+                            "kind": "parallel_tool_calls_collapsed",
+                            "field": "tool_choice.disable_parallel_tool_use",
+                            "reason": "openai_capability_not_verified",
+                        }
+                    )
+
+        output_config = as_object(payload.get("output_config"))
+        if output_config is not None:
+            output_format = as_object(output_config.get("format")) or {}
+            if output_format.get("type") == "json_schema":
+                if (
+                    transcoding_capability is not None
+                    and transcoding_capability.supports(
+                        "native_structured_outputs", "openai"
+                    )
+                ):
+                    schema = as_object(output_format.get("schema")) or {}
+                    out["response_format"] = {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "eggpool_structured_output",
+                            "schema": schema,
+                            "strict": True,
+                        },
+                    }
+                    warnings.append(
+                        {
+                            "kind": "structured_output_to_native",
+                            "field": "output_config.format",
+                            "target_field": "response_format",
+                        }
+                    )
+                else:
+                    warnings.append(
+                        {
+                            "kind": "structured_output_capability_missing",
+                            "field": "output_config.format",
+                            "reason": "openai_capability_not_verified",
+                        }
+                    )
+
         # Phase G: Anthropic top-level ``thinking`` is intentionally
         # dropped because no verified OpenAI-compatible control
         # mapping exists. Emit a precise structured warning so
@@ -580,13 +657,22 @@ class AnthropicToOpenAI:
         # ``loss_policy="reject"`` can attribute the rejection
         # accurately.
         if "thinking" in payload:
-            warnings.append(
-                {
-                    "kind": "anthropic_top_level_thinking_dropped",
-                    "field": "thinking",
-                    "reason": "openai_request_no_verified_mapping",
-                }
-            )
+            thinking = as_object(payload.get("thinking")) or {}
+            effort = thinking.get("effort")
+            if (
+                isinstance(effort, str)
+                and transcoding_capability is not None
+                and transcoding_capability.supports_reasoning_effort("openai", effort)
+            ):
+                out["reasoning_effort"] = effort
+            else:
+                warnings.append(
+                    {
+                        "kind": "anthropic_top_level_thinking_dropped",
+                        "field": "thinking",
+                        "reason": "openai_request_no_verified_mapping",
+                    }
+                )
         for field in DROPPED_FIELDS:
             if field == "thinking":
                 # Handled explicitly above with a precise kind; do not

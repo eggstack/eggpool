@@ -1290,6 +1290,7 @@ class RequestCoordinator:
                     payload = provider_bound.provider_payload_copy()
                     if len(payload) >= 0:
                         _thinking_cap: ThinkingCapability | None = None
+                        _transcoding_cap = None
                         _budget_defaults: dict[str, int] | None = None
                         _budget_policy = "lenient"
                         _loss_policy = "warn"
@@ -1319,6 +1320,7 @@ class RequestCoordinator:
                                 )  # type: ignore[assignment]
                                 caps = dict_to_model_capabilities(caps_raw)
                                 _thinking_cap = caps.thinking
+                                _transcoding_cap = caps.transcoding
                         except Exception:  # noqa: BLE001
                             pass  # best-effort; resolver has its own fallbacks
                         translated, warnings = transcoder.encode_request(
@@ -1326,6 +1328,7 @@ class RequestCoordinator:
                             context.transcode_context,
                             features=_features,
                             thinking_capability=_thinking_cap,
+                            transcoding_capability=_transcoding_cap,
                             budget_defaults=_budget_defaults,
                             budget_resolution_policy=_budget_policy,
                             loss_policy=_loss_policy,

@@ -29,6 +29,9 @@ Anthropic Msg  ───────►  Anthropic Msg (passthrough)
 - `encode_request()`: translates OpenAI request body to Anthropic format
 - `decode_response()`: translates Anthropic response back to OpenAI
 - Handles tools, tool_choice, parallel_tool_calls
+- Uses verified target capabilities for native structured output, strict tools,
+  and parallel-tool disabling; unknown compatible providers receive no native
+  extension.
 - Handles reasoning_effort → thinking budget translation
 - Records cache boundary annotations and loss warnings
 
@@ -39,6 +42,9 @@ Anthropic Msg  ───────►  Anthropic Msg (passthrough)
 - `decode_response()`: translates OpenAI response back to Anthropic
 - Drops unsupported `cache_control` annotations
 - Maps thinking blocks to reasoning_content
+- Maps Anthropic `output_config.format`, strict tools, and
+  `disable_parallel_tool_use` to OpenAI fields only when the target capability
+  explicitly permits it.
 
 ### `transcoder/streaming.py`
 
@@ -53,7 +59,8 @@ Phase 9 optimization: one shared bounded decoder, synchronous
 ### `transcoder/policy.py`
 
 `TranscoderPolicy` — configuration and per-request state:
-- Feature flags per transcoding capability
+- Feature flags for optional semantic extensions; tool translation is baseline
+  compatibility and the legacy `tools` field is retained as a no-op.
 - Reasoning field names for OpenAI compatibility
 - Loss policy (warn/reject)
 - Budget resolution settings
@@ -145,6 +152,18 @@ Additional loss-warning kinds (informational):
 - `pause_turn`, `non_text_content_dropped`, `tool_result_inferred`
 
 ## Thinking/Reasoning Transcoding
+
+`ModelCapabilities.transcoding` is the narrow static/provider/model override
+surface for native controls. It contains explicit protocol lists for
+`native_structured_outputs`, `strict_tools`, and `parallel_tool_control`, plus
+per-protocol `reasoning_efforts`. Missing values mean unknown support; no
+native field is emitted merely because the protocol family matches.
+
+OpenAI `reasoning_effort` is mapped to Anthropic `thinking.budget_tokens` only
+through the existing target thinking capability budget mapping. Anthropic
+manual thinking budgets are not converted into fabricated OpenAI effort
+values; only an explicit Anthropic effort value with a verified OpenAI target
+mapping can cross that boundary.
 
 Provider-bound thinking controls are normalized after selection by
 `adapt_thinking_controls()`. Top-level `thinking_budget` and nested

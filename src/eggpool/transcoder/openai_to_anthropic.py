@@ -26,7 +26,10 @@ from eggpool.transcoder.json_helpers import (
 )
 
 if TYPE_CHECKING:
-    from eggpool.catalog.capabilities import ThinkingCapability
+    from eggpool.catalog.capabilities import (
+        ThinkingCapability,
+        TranscodingCapabilities,
+    )
     from eggpool.transcoder.context import TranscodeContext
     from eggpool.transcoder.policy import TranscoderFeatures
 
@@ -239,6 +242,7 @@ class OpenAIToAnthropic:
         *,
         features: TranscoderFeatures | None = None,
         thinking_capability: ThinkingCapability | None = None,
+        transcoding_capability: TranscodingCapabilities | None = None,
         budget_defaults: dict[str, int] | None = None,
         budget_resolution_policy: str = "lenient",
         loss_policy: str = "warn",
@@ -550,13 +554,33 @@ class OpenAIToAnthropic:
                     json_schema = as_object(rf_obj.get("json_schema")) or {}
                     schema_obj = as_object(json_schema.get("schema")) or {}
                     strict = bool(json_schema.get("strict", False))
-                    schema_text = (
-                        "\n\nRespond with a JSON object that matches this schema: "
-                        + dumps_str(schema_obj)
-                        + ". Do not include any text outside the JSON."
-                    )
-                    if strict:
-                        schema_text += " Be precise; do not omit required fields."
+                    if (
+                        transcoding_capability is not None
+                        and transcoding_capability.supports(
+                            "native_structured_outputs", "anthropic"
+                        )
+                    ):
+                        out["output_config"] = {
+                            "format": {
+                                "type": "json_schema",
+                                "schema": schema_obj,
+                            }
+                        }
+                        warnings.append(
+                            {
+                                "kind": "response_format_to_native",
+                                "field": "response_format",
+                                "target_field": "output_config.format",
+                            }
+                        )
+                    else:
+                        schema_text = (
+                            "\n\nRespond with a JSON object that matches this schema: "
+                            + dumps_str(schema_obj)
+                            + ". Do not include any text outside the JSON."
+                        )
+                        if strict:
+                            schema_text += " Be precise; do not omit required fields."
                 if schema_text:
                     system_parts.append(schema_text)
                     warnings.append(
@@ -595,13 +619,21 @@ class OpenAIToAnthropic:
                     if description is not None:
                         translated_tool["description"] = description
                     if function.get("strict") is not None:
-                        warnings.append(
-                            {
-                                "kind": "dropped_field",
-                                "field": "tools[].function.strict",
-                                "reason": "anthropic_unsupported",
-                            }
-                        )
+                        if (
+                            transcoding_capability is not None
+                            and transcoding_capability.supports(
+                                "strict_tools", "anthropic"
+                            )
+                        ):
+                            translated_tool["strict"] = bool(function["strict"])
+                        else:
+                            warnings.append(
+                                {
+                                    "kind": "strict_tool_capability_missing",
+                                    "field": "tools[].function.strict",
+                                    "reason": "anthropic_capability_not_verified",
+                                }
+                            )
                     # Phase 3 — preserve ``cache_control`` annotations
                     # on OpenAI tools when an operator has placed them
                     # there. OpenAI's wire does not define the field,
@@ -663,13 +695,34 @@ class OpenAIToAnthropic:
 
         parallel_raw = payload.get("parallel_tool_calls")
         if parallel_raw is False:
-            warnings.append(
-                {
-                    "kind": "parallel_tool_calls_collapsed",
-                    "field": "parallel_tool_calls",
-                    "reason": "anthropic_unsupported",
-                }
-            )
+            if transcoding_capability is not None and transcoding_capability.supports(
+                "parallel_tool_control", "anthropic"
+            ):
+                choice = out.get("tool_choice")
+                choice_obj = (
+                    cast("dict[str, Any]", choice) if isinstance(choice, dict) else None
+                )
+                if choice_obj is not None and choice_obj.get("type") == "none":
+                    warnings.append(
+                        {
+                            "kind": "parallel_tool_choice_contradiction",
+                            "field": "parallel_tool_calls",
+                        }
+                    )
+                else:
+                    merged_choice: dict[str, Any] = (
+                        dict(choice_obj) if choice_obj is not None else {"type": "auto"}
+                    )
+                    merged_choice["disable_parallel_tool_use"] = True
+                    out["tool_choice"] = merged_choice
+            else:
+                warnings.append(
+                    {
+                        "kind": "parallel_tool_calls_collapsed",
+                        "field": "parallel_tool_calls",
+                        "reason": "anthropic_capability_not_verified",
+                    }
+                )
 
         for field in DROPPED_FIELDS:
             if field in payload:

@@ -200,7 +200,7 @@ Feature flags (`[transcoder.features]`) — all **off** by default:
 - `tools` — bidirectional tool calling translation
 - `vision` — image/document content parts
 - `thinking` — extended thinking ↔ reasoning_content
-- `structured_outputs` — `response_format` / `json_schema` coercion
+- `structured_outputs` — capability-gated native JSON-schema output, with an explicit lossy fallback
 - `anthropic_primitives` — `top_k`, `cache_control`, `context_management`, `container`, `mcp_servers`
 
 The streaming hot path is optimised for sustained concurrent coding-agent loads. A single bounded SSE decoder feeds completion tracking, usage extraction, and frame-level translation; shared frames lazily cache JSON parsing, while native pass-through avoids translation work. See [docs/transcoding.md](docs/transcoding.md) for the full translation table, known limitations, and streaming performance notes.

@@ -40,8 +40,9 @@ loss_policy = "warn"
 prefer_native = true
 
 [transcoder.features]
-# Bidirectional tool calling translation (default: false)
-tools = false
+# Deprecated compatibility field; tool calling is baseline protocol
+# compatibility and is translated regardless of this value.
+tools = true
 # Image / document content parts (default: false)
 vision = false
 # Extended thinking blocks ↔ reasoning_content (default: false)
@@ -90,7 +91,7 @@ When set, EggPool boots with a `WARNING` and reverts to the pre-default behaviou
 | `n` | — | Dropped when > 1, warning emitted |
 | `logprobs` | — | Dropped, warning emitted |
 | `top_logprobs` | — | Dropped, warning emitted |
-| `response_format` | `system` (appended) | Feature-gated: `response_format: json_object` appends JSON instruction to system prompt; `json_schema` appends schema + instruction; `strict: true` adds precision note. Warning `response_format_to_system_prompt` |
+| `response_format` | `output_config.format` or `system` | A verified Anthropic target receives native `json_schema`; otherwise the configured loss policy governs the explicitly lossy prompt fallback. `json_object` remains prompt-based because it has no schema to send. |
 | `reasoning_effort` | `thinking` | Feature-gated: `low` → 1024 tokens, `medium` → 4096, `high` → 16384 budget_tokens |
 | `seed` | — | Dropped, warning emitted |
 | `user` | — | Dropped, warning emitted |
@@ -101,8 +102,8 @@ When set, EggPool boots with a `WARNING` and reverts to the pre-default behaviou
 | `tools` (function-shape) | `tools` (Anthropic-shape) | Translated field-by-field (see Tool-Use Transcoding below) |
 | `tool_choice` | `tool_choice` | Translated between string and object shapes |
 | `parallel_tool_calls: true` | omitted | Anthropic defaults to allowing parallel calls |
-| `parallel_tool_calls: false` | dropped | Warning emitted; Anthropic has no parallel-disable knob |
-| `tools[].function.strict` | — | Dropped, warning emitted (no Anthropic equivalent) |
+| `parallel_tool_calls: false` | `tool_choice.disable_parallel_tool_use` | Emitted only for a target with explicit `parallel_tool_control = ["anthropic"]`; otherwise loss is reported. |
+| `tools[].function.strict` | `tools[].strict` | Emitted only for a target with explicit `strict_tools = ["anthropic"]`; otherwise loss is reported. |
 | `stream_options` | — | Wrapper dropped with warning; `include_usage` lifted onto `TranscodeContext.request_include_usage` |
 | `messages[assistant].tool_calls[]` | `messages[assistant].content[].tool_use` | Translated; id map mints new upstream ids |
 | `messages[tool]` | `messages[user].content[].tool_result` | Translated; `tool_call_id` ↔ `tool_use_id` via id map |
@@ -193,7 +194,7 @@ Tool calling is translated between OpenAI Chat Completions and Anthropic Message
 |---|---|---|
 | `tools[i].type == "function"` | `tools[i]` (Anthropic-shape) | Lifted; `function.name` → `name`, `function.description` → `description`, `function.parameters` → `input_schema` |
 | `tools[i].type` other than `"function"` | dropped | Warning `unsupported_tool_type` |
-| `tools[i].function.strict` | — | Dropped; no Anthropic equivalent |
+| `tools[i].function.strict` | `tools[i].strict` | Capability-gated native mapping; generic compatible providers remain conservative. |
 
 **Anthropic `tools` → OpenAI `tools`**:
 
@@ -223,7 +224,16 @@ Tool calling is translated between OpenAI Chat Completions and Anthropic Message
 **`parallel_tool_calls`**:
 
 - `parallel_tool_calls: true` is omitted on the Anthropic side (Anthropic defaults to allowing parallel calls).
-- `parallel_tool_calls: false` is dropped with a warning — Anthropic has no parallel-disable knob. Each model invocation always permits multiple tool calls.
+- `parallel_tool_calls: false` maps to `tool_choice.disable_parallel_tool_use = true` only when the target model capability explicitly verifies that control; otherwise it produces a loss warning (or a local 400 under `loss_policy = "reject"`).
+
+### Native capability overrides
+
+Provider/model capability overrides use `[model_capabilities.<model>.transcoding]`
+or the provider-scoped equivalent. Supported fields are
+`native_structured_outputs`, `strict_tools`, `parallel_tool_control`, and
+`reasoning_efforts`, each keyed by explicit target protocol names. Empty or
+missing fields mean unknown/unverified support; EggPool never enables native
+fields solely because an account advertises an OpenAI or Anthropic protocol.
 
 #### Tool-call id translation
 
@@ -354,7 +364,7 @@ The following `kind` values may appear on `TranscodeContext.loss_warnings`:
 |---|---|---|
 | `tool_call_id_translated` | The id map mints a fresh id on either side of the translation | `field`, `from`, `to` |
 | `tool_call_id_changed` | A streaming delta re-supplies a non-empty `id` for an existing tool_call slot | `field`, `from`, `to` |
-| `parallel_tool_calls_collapsed` | `parallel_tool_calls: false` is dropped (no Anthropic equivalent) | `field` |
+| `parallel_tool_calls_collapsed` | `parallel_tool_calls: false` cannot be sent because target capability is unverified | `field`, `reason` |
 | `malformed_tool_arguments` | `tool_calls[*].function.arguments` or `content[].tool_use.input` fails to JSON-parse | `field`, `value_type`, `length`, `reason` |
 | `invalid_tool_choice` | A `tool_choice` value cannot be mapped to the target shape | `field`, optional `from` |
 | `unsupported_tool_type` | A `tools[i].type` other than `"function"` is dropped | `field`, `from` |
@@ -537,8 +547,8 @@ The complete catalogue lives in `eggpool.transcoder.LOSS_WARNING_KINDS`.
 | `stop_sequence` → OpenAI `stop` | `lossy_mapping` | Sequence identity lost |
 | `pause_turn` → OpenAI `tool_calls` + `__eggpool_pause_turn__` sentinel | `lossy_mapping` + `pause_turn` | Semantic change; see Tool-Use Transcoding |
 | `model_context_window_exceeded` → OpenAI `length` | `lossy_mapping` | Cause obscured |
-| `parallel_tool_calls: false` → Anthropic | `parallel_tool_calls_collapsed` | Anthropic has no parallel-disable knob |
-| `tools[].function.strict` → Anthropic | `dropped_field` | No Anthropic equivalent |
+| `parallel_tool_calls: false` → Anthropic | `parallel_tool_calls_collapsed` | Target lacks verified parallel-tool control |
+| `tools[].function.strict` → Anthropic | `strict_tool_capability_missing` | Target lacks verified strict-tool support |
 | `tools[].cache_control` → OpenAI | `cache_control_unsupported_by_target_protocol` | OpenAI auto-caches without explicit hints; cache hit-rate will drop on translation |
 | Top-level `cache_control` → OpenAI | `cache_control_feature_disabled` | OpenAI has no equivalent field; loss is policy-driven |
 | `messages[].content[].cache_control` → OpenAI | `cache_control_unsupported_by_target_protocol` | Loss is intentional; cache hit-rate will drop on translation |
@@ -548,7 +558,7 @@ The complete catalogue lives in `eggpool.transcoder.LOSS_WARNING_KINDS`.
 | Tool-call id rewritten (`call_…` ↔ `toolu_…`) | `tool_call_id_translated` | Map is per-request, never collides across requests |
 | `reasoning_effort` → Anthropic `thinking` budget_tokens | `lossy_mapping` | Heuristic mapping (low→1024, medium→4096, high→16384) |
 | Thinking block signature → OpenAI | `thinking_signature_dropped` | Cryptographic receipt cannot be re-fed to OpenAI |
-| `response_format: json_object` → Anthropic system prompt | `response_format_to_system_prompt` | Best-effort coercion; Anthropic does not enforce JSON schema |
+| `response_format: json_object` → Anthropic system prompt | `response_format_to_system_prompt` | Best-effort coercion; no schema is available for native output |
 | Image `input_audio` / `file` → Anthropic | `dropped_field` | No Anthropic equivalent for OpenAI audio/file parts |
 | Anthropic `document` (non-PDF) → OpenAI | `document_unsupported_media` | OpenAI file intake limited to PDF |
 | Anthropic `document` (URL) → OpenAI | `document_url_dropped` | OpenAI has no PDF URL intake |
@@ -673,7 +683,7 @@ Lower `max_entries` to trade catalog completeness for steady-state RSS on memory
 
 8. **`pause_turn` is surfaced as a sentinel tool call.** Anthropic's `pause_turn` stop_reason becomes `finish_reason: "tool_calls"` plus a synthetic `__eggpool_pause_turn__` tool_call entry. OpenAI clients detect the pause by name and resume with the same `tool_use_id`.
 
-9. **Structured outputs are best-effort.** Anthropic does not enforce JSON-schema-constrained generation natively. The transcoder's `response_format` → system-prompt coercion is best-effort. Operators who need strict guarantees should run an Anthropic-native client.
+9. **Structured outputs are capability-gated.** Verified Anthropic targets receive native `output_config.format` JSON-schema output. Unverified targets use the explicitly lossy prompt fallback (or reject under `loss_policy = "reject"`), and `json_object` remains prompt-based because it carries no schema.
 
 ## Troubleshooting
 

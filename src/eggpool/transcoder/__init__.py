@@ -72,6 +72,11 @@ LOSS_WARNING_KINDS: frozenset[str] = frozenset(
         "budget_resolution_no_input",
         # Phase 6.4 (structured outputs)
         "response_format_to_system_prompt",
+        "response_format_to_native",
+        "structured_output_to_native",
+        "structured_output_capability_missing",
+        "strict_tool_capability_missing",
+        "parallel_tool_choice_contradiction",
         # Phase 6.5 (anthropic primitives)
         "top_k_dropped",
         # Phase 3 (cache stability)

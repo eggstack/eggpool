@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 
+from eggpool.catalog.capabilities import TranscodingCapabilities
+from eggpool.transcoder.anthropic_to_openai import AnthropicToOpenAI
 from eggpool.transcoder.context import TranscodeContext
 from eggpool.transcoder.openai_to_anthropic import OpenAIToAnthropic
 from eggpool.transcoder.policy import TranscoderFeatures
@@ -25,6 +27,60 @@ def _features(**kwargs: bool) -> TranscoderFeatures:
 
 
 class TestStructuredOutputsRoundTrip:
+    def test_json_schema_uses_anthropic_native_output_when_verified(self) -> None:
+        ctx = TranscodeContext(
+            request_id="integ-struct-native",
+            client_protocol="openai",
+            upstream_protocol="anthropic",
+        )
+        upstream, warnings = OpenAIToAnthropic().encode_request(
+            {
+                "model": "claude-opus",
+                "messages": [{"role": "user", "content": "Extract it"}],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "person",
+                        "schema": {"type": "object", "properties": {}},
+                        "strict": True,
+                    },
+                },
+            },
+            ctx,
+            features=_features(),
+            transcoding_capability=TranscodingCapabilities(
+                native_structured_outputs=["anthropic"],
+            ),
+        )
+        assert upstream["output_config"]["format"]["type"] == "json_schema"
+        assert "system" not in upstream
+        assert any(w["kind"] == "response_format_to_native" for w in warnings)
+
+    def test_anthropic_native_output_maps_to_openai_when_verified(self) -> None:
+        ctx = TranscodeContext(
+            request_id="integ-struct-reverse",
+            client_protocol="anthropic",
+            upstream_protocol="openai",
+        )
+        upstream, warnings = AnthropicToOpenAI().encode_request(
+            {
+                "model": "gpt-5",
+                "messages": [{"role": "user", "content": "Extract it"}],
+                "output_config": {
+                    "format": {
+                        "type": "json_schema",
+                        "schema": {"type": "object", "properties": {}},
+                    }
+                },
+            },
+            ctx,
+            transcoding_capability=TranscodingCapabilities(
+                native_structured_outputs=["openai"],
+            ),
+        )
+        assert upstream["response_format"]["type"] == "json_schema"
+        assert any(w["kind"] == "structured_output_to_native" for w in warnings)
+
     def test_json_object_round_trip(self) -> None:
         """json_object response_format encodes to system prompt, then
         a JSON response decodes back correctly."""

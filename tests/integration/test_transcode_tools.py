@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from eggpool.catalog.capabilities import TranscodingCapabilities
 from eggpool.transcoder.anthropic_to_openai import AnthropicToOpenAI
 from eggpool.transcoder.context import TranscodeContext
 from eggpool.transcoder.openai_to_anthropic import OpenAIToAnthropic
@@ -66,6 +67,42 @@ async def test_openai_tools_translated_to_anthropic_shape() -> None:
     # No tool-related loss warnings
     tool_warnings = [w for w in warnings if w.get("field") in ("tools", "tool_choice")]
     assert tool_warnings == []
+
+
+def test_verified_strict_and_parallel_tool_controls_map_to_anthropic() -> None:
+    ctx = TranscodeContext(
+        request_id="integ-tools-controls-openai",
+        client_protocol="openai",
+        upstream_protocol="anthropic",
+    )
+    upstream, warnings = OpenAIToAnthropic().encode_request(
+        {
+            "model": "claude-opus",
+            "messages": [{"role": "user", "content": "Use the tool"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "parameters": {"type": "object"},
+                        "strict": True,
+                    },
+                }
+            ],
+            "parallel_tool_calls": False,
+        },
+        ctx,
+        transcoding_capability=TranscodingCapabilities(
+            strict_tools=["anthropic"],
+            parallel_tool_control=["anthropic"],
+        ),
+    )
+    assert upstream["tools"][0]["strict"] is True
+    assert upstream["tool_choice"] == {
+        "type": "auto",
+        "disable_parallel_tool_use": True,
+    }
+    assert not [w for w in warnings if "capability_missing" in w["kind"]]
 
 
 @pytest.mark.asyncio
@@ -158,6 +195,39 @@ async def test_anthropic_tools_translated_to_openai_shape() -> None:
         "type": "function",
         "function": {"name": "get_weather"},
     }
+
+
+def test_verified_anthropic_strict_and_parallel_controls_map_to_openai() -> None:
+    ctx = TranscodeContext(
+        request_id="integ-tools-controls-anthropic",
+        client_protocol="anthropic",
+        upstream_protocol="openai",
+    )
+    upstream, warnings = AnthropicToOpenAI().encode_request(
+        {
+            "model": "gpt-5",
+            "messages": [{"role": "user", "content": "Use the tool"}],
+            "tools": [
+                {
+                    "name": "lookup",
+                    "input_schema": {"type": "object"},
+                    "strict": True,
+                }
+            ],
+            "tool_choice": {
+                "type": "auto",
+                "disable_parallel_tool_use": True,
+            },
+        },
+        ctx,
+        transcoding_capability=TranscodingCapabilities(
+            strict_tools=["openai"],
+            parallel_tool_control=["openai"],
+        ),
+    )
+    assert upstream["tools"][0]["function"]["strict"] is True
+    assert upstream["parallel_tool_calls"] is False
+    assert not [w for w in warnings if "capability_missing" in w["kind"]]
 
 
 @pytest.mark.asyncio

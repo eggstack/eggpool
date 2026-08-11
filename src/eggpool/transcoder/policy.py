@@ -99,20 +99,19 @@ class CapabilityPolicy(BaseModel):
 class TranscoderFeatures(BaseModel):
     """Per-feature opt-in flags for Phase 6 sub-phases.
 
-    Each flag is **off** by default.  Operators enable individual
-    features under ``[transcoder.features]``.  When a feature is off
-    the v1 behaviour (drop with warning) prevails for any input that
-    exercises that feature.
+    Optional semantic extensions are **off** by default. Tool calling is
+    baseline protocol compatibility and is always translated when a
+    cross-protocol request is selected; its legacy ``tools`` switch is kept
+    only so old configuration files continue to parse.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     tools: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "Bidirectional tool calling translation. When enabled, OpenAI "
-            "tools/tool_choice are translated to Anthropic format and vice "
-            "versa, including streaming tool-call deltas."
+            "Deprecated compatibility field; tool translation is baseline "
+            "and this value has no effect."
         ),
     )
     vision: bool = Field(

@@ -183,6 +183,29 @@ class ThinkingCapability(BaseModel):
     notes: str | None = None
 
 
+class TranscodingCapabilities(BaseModel):
+    """Explicit native controls available on a provider/model target.
+
+    Empty lists are intentionally conservative: protocol compatibility does
+    not imply that a compatible provider implements these newer controls.
+    Values are protocol names (``openai`` or ``anthropic``).
+    """
+
+    native_structured_outputs: list[str] = Field(default_factory=list)
+    strict_tools: list[str] = Field(default_factory=list)
+    parallel_tool_control: list[str] = Field(default_factory=list)
+    reasoning_efforts: dict[str, list[str]] = Field(default_factory=dict)
+
+    def supports(self, feature: str, protocol: str) -> bool:
+        """Return whether *protocol* explicitly supports *feature*."""
+        values: object = getattr(self, feature, ())
+        return protocol in values if isinstance(values, list) else False
+
+    def supports_reasoning_effort(self, protocol: str, effort: str) -> bool:
+        """Return whether a target explicitly accepts this effort value."""
+        return effort in self.reasoning_efforts.get(protocol, ())
+
+
 class ModelCapabilities(BaseModel):
     """Top-level capability container for a model.
 
@@ -192,6 +215,9 @@ class ModelCapabilities(BaseModel):
     """
 
     thinking: ThinkingCapability = Field(default_factory=ThinkingCapability)
+    transcoding: TranscodingCapabilities = Field(
+        default_factory=TranscodingCapabilities,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -318,6 +344,11 @@ def merge_model_capabilities(
     """
     return ModelCapabilities(
         thinking=merge_thinking_capabilities(base.thinking, override.thinking),
+        transcoding=(
+            override.transcoding
+            if override.transcoding != TranscodingCapabilities()
+            else base.transcoding.model_copy(deep=True)
+        ),
     )
 
 
@@ -703,7 +734,13 @@ def model_capabilities_override_to_config(
     else:
         thinking = ThinkingCapability()
 
-    return ModelCapabilities(thinking=thinking)
+    transcode_raw = override.get("transcoding")
+    transcoding = (
+        TranscodingCapabilities.model_validate(transcode_raw)
+        if isinstance(transcode_raw, dict)
+        else TranscodingCapabilities()
+    )
+    return ModelCapabilities(thinking=thinking, transcoding=transcoding)
 
 
 def apply_capability_overrides(
@@ -749,9 +786,15 @@ def dict_to_model_capabilities(data: dict[str, object]) -> ModelCapabilities:
     ignored so the function degrades gracefully with future schema
     extensions.
     """
+    transcoding_raw = data.get("transcoding")
+    transcoding = (
+        TranscodingCapabilities.model_validate(transcoding_raw)
+        if isinstance(transcoding_raw, dict)
+        else TranscodingCapabilities()
+    )
     thinking_raw = data.get("thinking")
     if not isinstance(thinking_raw, dict):
-        return ModelCapabilities()
+        return ModelCapabilities(transcoding=transcoding)
 
     tr = cast("dict[str, object]", thinking_raw)
     tc_status = str(tr.get("status", "unknown"))
@@ -887,6 +930,7 @@ def dict_to_model_capabilities(data: dict[str, object]) -> ModelCapabilities:
         )
 
     return ModelCapabilities(
+        transcoding=transcoding,
         thinking=ThinkingCapability(
             status=cast("CapabilityStatus", tc_status),
             source=cast("CapabilitySource", tc_source),
@@ -913,6 +957,8 @@ def model_capabilities_to_dict(capabilities: ModelCapabilities) -> dict[str, obj
     inside this dict would conflate unrelated capability metadata.
     """
     result: dict[str, object] = {}
+    if capabilities.transcoding != TranscodingCapabilities():
+        result["transcoding"] = capabilities.transcoding.model_dump(exclude_none=True)
     tc = capabilities.thinking
 
     thinking_dict: dict[str, object] = {}
