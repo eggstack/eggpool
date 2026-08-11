@@ -140,6 +140,11 @@ release matrices and repeated rehash soak tests are not routine corpus; use the
 focused reload integration suites for lifecycle coverage and the performance
 suite only as a manually invoked diagnostic.
 
+Cache/compression tests should stay focused on segmentation, safe transforms,
+native/provider-bound cache boundaries, routing isolation, and privacy. The
+fixture sanitization check is retained, but broad replay matrices and duplicate
+fixture replays are not routine corpus.
+
 Performance tests under `tests/perf/` remain manually invoked diagnostics. They
 must not become CI gates or imply universal timing/resource thresholds; compare
 fixed request shapes and report local proxy timing separately from upstream

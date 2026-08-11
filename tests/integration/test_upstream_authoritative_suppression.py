@@ -41,6 +41,7 @@ from eggpool.request.coordinator import (
     ProxyRequestContext,
     RequestCoordinator,
 )
+from eggpool.request.finalization_job import RequestFinalizationSupervisor
 from eggpool.routing.router import Router
 
 if TYPE_CHECKING:
@@ -151,6 +152,9 @@ def _build_coordinator(
         account_backoff_repo=backoff_repo,
         quota_estimator=router.quota_estimator,
         max_retry_attempts=3,
+    )
+    coord._finalization_supervisor = RequestFinalizationSupervisor(  # pyright: ignore[reportPrivateUsage]
+        db=db
     )
     return (
         coord,
@@ -290,6 +294,7 @@ async def test_scenario_a_local_overage_does_not_suppress(
         assert response.status_code == 200
         assert response.account_name in {"acct-a", "acct-b", "acct-c", "acct-d"}
     finally:
+        await coord._finalization_supervisor.shutdown()  # pyright: ignore[reportPrivateUsage]
         await httpx_client.aclose()
 
 
@@ -378,6 +383,7 @@ async def test_scenario_b_upstream_429_suppresses_and_fails_over(
             "subsequent request must avoid the suppressed account"
         )
     finally:
+        await coord._finalization_supervisor.shutdown()  # pyright: ignore[reportPrivateUsage]
         await httpx_client.aclose()
 
 
@@ -421,6 +427,7 @@ async def test_scenario_c_single_account_passthrough(
             "single-account 429 must persist a rate_limited backoff"
         )
     finally:
+        await coord._finalization_supervisor.shutdown()  # pyright: ignore[reportPrivateUsage]
         await httpx_client.aclose()
 
 
@@ -474,6 +481,7 @@ async def test_scenario_d_restart_preserves_upstream_backoff_only(
             )
         assert first_response.status_code == 429
     finally:
+        await coord._finalization_supervisor.shutdown()  # pyright: ignore[reportPrivateUsage]
         await httpx_client.aclose()
         await db.disconnect()
 
@@ -547,6 +555,7 @@ async def test_scenario_d_restart_preserves_upstream_backoff_only(
                 )
             assert second_response.status_code == 200
         finally:
+            await second_coord._finalization_supervisor.shutdown()  # pyright: ignore[reportPrivateUsage]
             await second_client.aclose()
     finally:
         await reopened_db.disconnect()

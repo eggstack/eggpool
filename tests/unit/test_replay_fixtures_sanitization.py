@@ -1,4 +1,4 @@
-"""Sanitization rules for Phase 11 cache/compression replay fixtures.
+"""Sanitization rules for cache/compression fixtures.
 
 The replay suite must NEVER leak real secrets, real-looking emails,
 provider request IDs, or natural-language paragraphs that could have

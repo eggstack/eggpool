@@ -4,7 +4,10 @@ Back to [Overview](overview.md)
 
 ## Purpose
 
-A 12-phase cache-preserving deterministic compression stack that observes, analyzes, and optionally mutates request bodies to improve cache hit rates and reduce token costs. All phases are observational by default; mutation requires explicit operator opt-in.
+A cache-preserving deterministic request-shaping stack that observes, analyzes,
+and optionally mutates request bodies to reduce avoidable prompt volume. Native
+provider cache boundaries are preserved; synthetic annotations and safe
+compression remain explicit opt-in surfaces, while tuning is recommendation-only.
 
 ## Architecture
 
@@ -41,13 +44,13 @@ A 12-phase cache-preserving deterministic compression stack that observes, analy
     └──────────┬──────────┘
                │
     ┌──────────▼──────────┐
-    │ Phase 9: Synthetic  │
+    │ Synthetic Cache     │
     │ Cache Controls      │
     │ (opt-in annotation) │
     └──────────┬──────────┘
                │
     ┌──────────▼──────────┐
-    │ Phase 10: Threshold │
+    │ Threshold Tuning    │
     │ Tuning              │
     │ (recommendation)    │
     └─────────────────────┘
@@ -112,7 +115,7 @@ Deterministic compression markers:
 
 ### `transcoder/compression/tuning.py`
 
-Phase 10 closed-loop threshold tuning:
+Recommendation-only threshold tuning:
 - `compute_recommendation()` — advisory suggestions
 - Tuning is recommendation-only; no runtime override registry is constructed.
 

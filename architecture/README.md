@@ -1502,31 +1502,20 @@ Phase 11 is the test-only layer that pins down the high-risk Phase 2/3/5/9 behav
   - `routing/` (2 fixtures): `same_provider_two_accounts_equal_load` (two same-provider accounts with identical load but adversarial cache/compression metrics for routing-guardrails testing), `adversarial_cache_metrics` (per-account skew that pins scoring isolation).
   - `stats/` (1 fixture): `request_rows_phase_1_to_10` (synthetic rows covering Phases 1-10; verifies stats never leak raw prompts).
 - **Sentinel strings** -- every fixture uses one of seven sentinels (`SYSTEM_POLICY_SENTINEL_DO_NOT_COMPRESS`, `TOOL_SCHEMA_SENTINEL_DO_NOT_COMPRESS`, `VOLATILE_LOG_LINE`, `STACK_TRACE_SENTINEL`, `SYNTHETIC_BASE64_BLOB`, `LONG_USER_INSTRUCTION`, `LATEST_USER_SENTINEL`) so the sanitization linter can prove no real prompt text leaked in.
-- **Compact repeat spec** -- `expand_repeats()` lets fixtures declare repeating blocks (e.g., 32 volatile log lines) without writing thousands of lines of JSON.
-- **Deterministic policies** -- `safe_policy`/`observe_policy`/`disabled_policy` mirror the canonical Phase 4-6 configs without the operator config surface.
-- **`ReplayBundle` dataclass** -- summarises the structural outcome (segmentation status, stable-prefix hash pre/post, compression transforms by reason code, synthetic cache status, transcoder cache boundary tracker snapshot, and the replay shape used) without leaking raw payloads.  Failure paths emit fixture name + status delta, never raw prompt text.
-- **Replay shape semantics** -- `run_full_replay()` records which replay shape was used via `ReplayBundle.synthetic_cache_shape` (`disabled` / `client_bound` / `provider_bound` / `provider_bound_unavailable`). When `client_protocol != target_protocol` and a `synthetic_cache` config is supplied, the helper runs transcode first and synthetic cache against the **provider-bound** body -- mirroring production Phase 9 (`_apply_synthetic_cache_controls`) which runs post-route. Provider-bound observability fields (`provider_bound_segmentation_status`, `provider_bound_synthetic_cache_status`, `provider_bound_synthetic_cache_candidate_count`) live alongside the client-shape fields on the bundle.
-- **Helper API** -- `load_fixture`, `expand_repeats`, `run_full_replay`, `run_provider_bound_synthetic_replay` (explicit provider-bound lifecycle for transcode fixtures), `run_segmentation`, `run_compression`, `run_transcode`, `run_synthetic`, `path_keys`, `collect_segment_strings`.
+- **Fixture privacy** -- the sanitization test walks every fixture and rejects
+  credentials, real-looking identifiers, oversized strings, and natural-language
+  prompt paragraphs.
 
 ### Regression suite
 
-`tests/unit/test_replay_fixtures_regression.py` ships with 13 test classes covering:
+Cache/compression behavior is covered by focused unit and integration contracts
+for segmentation, safe transforms, synthetic cache boundaries, transcoding,
+routing non-interference, and privacy. The fixture sanitization test remains a
+small content-privacy check; the former broad replay matrix was removed because
+it duplicated those contracts without adding a distinct production invariant.
 
-1. **TestFixtureTreeStructuralInvariants** -- every fixture loads, segment+compress+transcode+synthetic pipeline runs end-to-end, stable-prefix hash is recomputed and matches.
-2. **TestSegmentationInvariants** -- canonical-segmenter invariants per fixture (paths resolve, stable prefix protected, Anthropic tool_result segments resolve). Runs outside the full mark so it ships in default pytest.
-3. **TestSafeCompressionReplay** -- safe compression never mutates `stable_prefix` content (hash unchanged before/after); OpenAI repeated tool output applies transforms; Anthropic nested tool result compresses; disabled/observe modes never mutate.
-4. **TestSyntheticCacheReplay** -- synthetic cache candidates come from provider-bound segmentation (post-transcode), not client-bound segmentation; native `cache_control` is preserved verbatim; apply mode never duplicates cache_control on the same container.
-5. **TestTranscoderCacheStability** -- openai -> anthropic preserves `cache_control` on tool definitions, anthropic -> openai drops unsupported nested `cache_control`, and transcoder never mutates unintended fields.
-6. **TestReplayStructureInvariants** -- cross-cutting hash invariants and a paths-only contract that bundle fields never expose raw prompt text.
-7. **TestSyntheticCacheCoexistWithCompression** -- synthetic apply mode does not corrupt the post-compression payload.
-8. **TestFailClosedFallback** -- structural-diff mismatch triggers `failed_fallback=True` and preserves the original payload.
-9. **TestRoutingGuardrailsReplay** -- routing fixture has required adversarial fields; `inspect.getsource(QuotaFairScorer.score_accounts)` and `inspect.getsource(RuntimeMetricsService._snapshot_routing_runtime)` prove the scorer signature is the canonical 4-tuple and the guardrails dict still pins `routing_uses_*` to `false`.
-10. **TestStatsReplay** -- compaction summaries exclude prompt text, `CompressionResult.summary_json` is content-private across every fixture, and the stats fixture rows are content-private.
-11. **TestSyntheticCacheFailurePaths** -- apply mode does not bleed `cache_control` into Anthropic message content blocks.
-12. **TestFixtureSuppliedExpectations** -- per-fixture `expectations` block drives assertions against the bundle (segmentation status, stable_prefix_contains, volatile_suffix_contains, compression transforms).
-13. **TestHarnessSurfaceSanity** -- default fixture root, bare-name load, `expand_repeats` immutability, `synthetic_cache_config` defaults.
-
-Phase 12 polish pass adds two more test classes (`TestProviderBoundSyntheticReplay` and `TestReplaySmoke`); see § Phase 12 polish pass (replay-shape and default smoke coverage) below.
+The focused suites cover these invariants directly at their owning boundaries;
+fixture sanitization remains the only retained fixture-tree test.
 
 ### Sanitization linter
 
@@ -1539,35 +1528,17 @@ Phase 12 polish pass adds two more test classes (`TestProviderBoundSyntheticRepl
 
 ### Routing non-interference
 
-Phase 11 is reporting-only.  The harness is invoked from pytest fixtures and never touches the routing layer, the database, or the dashboard.  `QuotaFairScorer.score_accounts` signature is unchanged from Phase 8.  No Phase 11 columns are added to the database and no migrations are required.  Same-provider account fairness (e.g., multiple OpenAI subscriptions) is preserved because cache hit ratios, compression savings, stable-prefix hashes, synthetic-cache status, and tuning state never enter the scorer inputs.
+Cache/compression reporting is isolated from routing, persistence, and the
+dashboard's request path. `QuotaFairScorer.score_accounts` remains load-based:
+cache hit ratios, compression savings, stable-prefix hashes, synthetic-cache
+status, and tuning state never enter scorer inputs.
 
 ### Code references
 
 - `tests/fixtures/cache_compression/` -- 17 sanitized JSON fixtures + `README.md`
-- `tests/helpers/cache_compression_replay.py` -- harness (load_fixture, expand_repeats, ReplayBundle, run_* helpers, safe_policy/observe_policy/disabled_policy, synthetic_cache_config, path_keys, collect_segment_strings, run_provider_bound_synthetic_replay)
-- `tests/unit/test_replay_fixtures_regression.py` -- 13 regression test classes + standalone function
+- `tests/helpers/cache_compression_replay.py` -- fixture enumeration helpers used by the privacy linter
 - `tests/unit/test_replay_fixtures_sanitization.py` -- 8 sanitization linter tests
 - `src/eggpool/transcoder/__init__.py` -- public exports used by the harness
-
-### Phase 12 polish pass (replay-shape and default smoke coverage)
-
-Phase 12 polish pass addresses two quality gaps discovered in the post-Phase-12 review of the harness:
-
-1. **`run_full_replay()` previously ran synthetic cache against the client-shape payload even for transcode fixtures.** Production Phase 9 (`_apply_synthetic_cache_controls`) runs post-route against the provider-bound body using `context.upstream_protocol`. The polish pass aligns the harness:
-   - When `client_protocol != target_protocol`, `run_full_replay()` runs transcode first and synthetic cache against the provider-bound body.
-   - A dedicated `run_provider_bound_synthetic_replay()` helper is exposed for callers that need an explicit provider-bound lifecycle.
-   - `ReplayBundle.synthetic_cache_shape` records the shape used (`disabled` / `client_bound` / `provider_bound` / `provider_bound_unavailable`), and `provider_bound_*` observability fields are populated on the bundle for the transcode path.
-2. **High-value replay invariants were gated behind the `cache_compression_replay_full` mark.** A `TestReplaySmoke` class promotes six cheap invariants outside the marker so default `pytest` exercises the most important cache/compression guarantees on every PR: OpenAI prefix preservation, Anthropic nested-tool-result compression, provider-bound synthetic dry-run, native-cache preserve-apply, scoring guardrails, and a sentinel-linter smoke pass.
-
-A `TestProviderBoundSyntheticReplay` class pins the provider-bound contract: dry-run must not mutate the client or provider body, apply mode only mutates the provider body, native `cache_control` survives apply, and bundle fields never expose the provider-bound payload.
-
-No production request-shaping behavior changes. The `QuotaFairScorer` does not consume any Phase 12 polish pass fields. Routing stays load-based.
-
-### Code references (Phase 12 polish pass)
-
-- `tests/helpers/cache_compression_replay.py` -- `run_full_replay` now exercises provider-bound synthetic cache for transcode fixtures; `run_provider_bound_synthetic_replay` exposes the explicit provider-bound lifecycle; `ReplayBundle` carries `synthetic_cache_shape` + `provider_bound_*` fields
-- `tests/unit/test_replay_fixtures_regression.py` -- `TestProviderBoundSyntheticReplay` and `TestReplaySmoke` test classes
-- `tests/fixtures/cache_compression/README.md` -- Replay shape semantics section
 
 ## Operator Documentation, Profiles, and Rollout (Phase 12)
 
@@ -1617,7 +1588,7 @@ The invariant from Phase 8 holds. `QuotaFairScorer.score_accounts` accepts only 
 
 ### Privacy invariants
 
-No raw prompt, tool output, system message, request body, auth header, or provider API key is ever shown or persisted in any cache, compression, or synthetic-cache surface. The replay harness uses seven sentinel strings (`SYSTEM_POLICY_SENTINEL_DO_NOT_COMPRESS`, `TOOL_SCHEMA_SENTINEL_DO_NOT_COMPRESS`, `VOLATILE_LOG_LINE`, `STACK_TRACE_SENTINEL`, `SYNTHETIC_BASE64_BLOB`, `LONG_USER_INSTRUCTION`, `LATEST_USER_SENTINEL`) so `tests/unit/test_replay_fixtures_sanitization.py` can prove no real prompt text leaked in. Phase 12 documentation re-states this invariant verbatim on every page so operators do not have to reconstruct it from plan files.
+No raw prompt, tool output, system message, request body, auth header, or provider API key is ever shown or persisted in any cache, compression, or synthetic-cache surface. The sanitized fixture set uses seven sentinel strings (`SYSTEM_POLICY_SENTINEL_DO_NOT_COMPRESS`, `TOOL_SCHEMA_SENTINEL_DO_NOT_COMPRESS`, `VOLATILE_LOG_LINE`, `STACK_TRACE_SENTINEL`, `SYNTHETIC_BASE64_BLOB`, `LONG_USER_INSTRUCTION`, `LATEST_USER_SENTINEL`) so `tests/unit/test_replay_fixtures_sanitization.py` can prove no real prompt text leaked in.
 
 ### Config validation notes (documented for operators)
 

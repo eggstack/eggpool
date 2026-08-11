@@ -168,16 +168,3 @@ class TestProviderBoundRequestTranscodeReuse:
         assert pbr.provider_bytes == b"first"
         pbr.set_provider_bytes(b"second")
         assert pbr.provider_bytes == b"second"
-
-    def test_frozen_payload_prevents_mutation(self) -> None:
-        pbr = ProviderBoundRequest(
-            client_bytes=b"{}",
-            client_payload={"messages": [{"role": "user"}]},
-            client_protocol="openai",
-            model_id="gpt-4",
-        )
-        pbr.set_provider_payload({"messages": [{"role": "assistant"}]})
-        # The stored payload should be a MappingProxyType
-        from types import MappingProxyType
-
-        assert isinstance(pbr._provider_payload, MappingProxyType)

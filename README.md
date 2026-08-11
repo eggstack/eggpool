@@ -68,7 +68,9 @@ state, and generation-retirement ownership on the target host.
 The ordinary CI gate runs formatting, Ruff, Pyright, and the smoke suite. Local
 verification should select focused capability tests for changed boundaries;
 the complete retained suite and performance diagnostics remain manual,
-information-only checks rather than CI gates.
+information-only checks rather than CI gates. Cache/compression behavior is
+covered by focused boundary contracts; fixture privacy checks do not imply a
+second replay matrix.
 
 ## Quick Start
 

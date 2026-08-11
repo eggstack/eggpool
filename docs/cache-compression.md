@@ -122,7 +122,7 @@ These features ship behind explicit operator opt-in:
 - `active_requests`
 - `request_estimates`
 
-It returns `RoutingScore` instances with no cache, compression, synthetic-cache, or tuning field. This is pinned by `tests/unit/test_routing_guardrails.py` (19 tests across 7 classes) and by `inspect.getsource` checks in `tests/unit/test_replay_fixtures_regression.py::TestRoutingNonInterference`.
+It returns `RoutingScore` instances with no cache, compression, synthetic-cache, or tuning field. This is pinned by the focused routing guardrail tests; cache/compression behavior does not rely on a replay-matrix test.
 
 `GET /api/stats/runtime` exposes a `guardrails` dict with hardcoded constants. The `/cache` dashboard page renders the operator-facing summary and per-surface drill-down tables, backed by `GET /api/stats/request-shaping` and the per-surface endpoints:
 
@@ -162,7 +162,7 @@ What **is** shown:
 - Policy names and policy source (`global` / `policy:<name>`)
 - Status counters (mode counts, status_counts, warning_counts)
 
-The replay harness (`tests/fixtures/cache_compression/`) uses seven sentinel strings (`SYSTEM_POLICY_SENTINEL_DO_NOT_COMPRESS`, `TOOL_SCHEMA_SENTINEL_DO_NOT_COMPRESS`, `VOLATILE_LOG_LINE`, `STACK_TRACE_SENTINEL`, `SYNTHETIC_BASE64_BLOB`, `LONG_USER_INSTRUCTION`, `LATEST_USER_SENTINEL`) so a sanitization linter can prove no real prompt text leaked in. The harness supports two replay shapes (client-shape and provider-bound) — see `tests/fixtures/cache_compression/README.md` § Replay shape semantics for the contract and `tests/unit/test_replay_fixtures_regression.py::TestProviderBoundSyntheticReplay` for the pin.
+The replay fixtures (`tests/fixtures/cache_compression/`) use sentinel strings so the sanitization linter can prove no real prompt text leaked in. The supported request-shaping contracts are exercised by focused unit tests; the fixture tree is not a second full behavior matrix.
 
 ## Config surface
 

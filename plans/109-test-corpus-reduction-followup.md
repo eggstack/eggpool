@@ -1,7 +1,7 @@
 # Plan 109 — Test Corpus Reduction Follow-up
 
 Date: 2026-08-11
-Status: planned
+Status: complete
 Parent roadmap: `plans/103-sbc-protocol-parity-and-runtime-efficiency-roadmap.md`
 Planning baseline: `de3eeea5936c964ffa33b7939c791e98d35cfcbb`
 Depends on:
@@ -330,31 +330,51 @@ Update `AGENTS.md`/development skill only if test directories, commands, or supp
 
 Do not create a new testing-policy document. Existing planning policy already states that completed plans must not create permanent plan-numbered test suites/evidence formats.
 
+## Closure evidence
+
+- Immediate pre-consolidation collection: **8,370 tests**.
+- Final collection: **8,233 tests** (**137 fewer**); no count floor, ceiling, or
+  future percentage target was introduced.
+- Consolidated clusters: duplicate safe-compression replay/production suites;
+  the broad cache/compression replay matrix and its now-unused harness;
+  retained soak traffic; stale provider-payload representation coverage; and
+  repeated 100-iteration reload schedules.
+- Retained fixture support is limited to the sanitization linter. Focused
+  compression, cache-boundary, transcoder, routing, privacy, streaming,
+  database, and reload contracts remain in their owning suites.
+- A stale upstream-authoritative suppression scaffold was repaired with the
+  generation-owned finalization supervisor. The transcoder warning catalogue
+  was corrected for four Plan 106 cache-loss kinds.
+- Protected union: **1,061 passed**.
+- CI-equivalent checks: Ruff format/check, Pyright, 14 smoke tests, and both
+  example/SBC `check-config` commands passed.
+- Implementation commit: `9ebea44`.
+
 ## Acceptance criteria
 
-- [ ] Immediate pre-consolidation collection count is recorded for information only.
-- [ ] Consolidation is organized around semantic contracts, not arbitrary file size or a target test count.
-- [ ] Final retained collection count is lower than the immediate pre-Plan109 baseline, with no future count gate established.
-- [ ] High-value routing/account failure-isolation coverage remains.
-- [ ] A failed/malformed provider request poisoning subsequent requests remains directly covered.
-- [ ] Pre-handoff retry/post-handoff no-retry and streaming completion/cancellation/EOF coverage remains.
-- [ ] Database transaction ownership, ambiguity/fail-closed, finalization convergence, startup reconciliation, and migration compatibility remain covered.
-- [ ] Valid/invalid rehash generation publication and finalization-supervisor ownership remain covered.
-- [ ] Plan 105 structured-output/strict-tool/parallel-tool/reasoning contracts remain covered.
-- [ ] Plan 106 native prompt-cache mapping and explicit lossy cases remain covered.
-- [ ] Plan 104 auth/non-loopback/redaction regressions remain covered.
-- [ ] Plan 107 request ownership/original-byte/body-limit/buffer-release contracts remain covered.
-- [ ] Tests for removed Plan 108 dormant compression/tuning surfaces are deleted rather than preserving dead production compatibility.
-- [ ] Old recursive freeze/thaw representation tests are removed if those internals are removed; supported ownership invariants remain.
-- [ ] Duplicate protocol/provider permutations are reduced without replacing them with unreadable Cartesian parameter matrices.
-- [ ] Optional dashboard/observability tests are proportionate to their supported external contract.
-- [ ] Repeated race/soak iteration tests are replaced by deterministic schedules or removed where canonical deterministic coverage already exists.
-- [ ] Orphaned fixtures/helpers are deleted.
-- [ ] The 14-test ordinary smoke behaviors remain represented.
-- [ ] `.github/workflows/ci.yml` remains materially unchanged in shape.
-- [ ] No coverage/test-count/shard/soak/benchmark/hardware/release infrastructure is added.
-- [ ] Surviving focused protected-contract suites pass.
-- [ ] Ruff, Pyright, smoke tests, and both config checks pass.
+- [x] Immediate pre-consolidation collection count is recorded for information only.
+- [x] Consolidation is organized around semantic contracts, not arbitrary file size or a target test count.
+- [x] Final retained collection count is lower than the immediate pre-Plan109 baseline, with no future count gate established.
+- [x] High-value routing/account failure-isolation coverage remains.
+- [x] A failed/malformed provider request poisoning subsequent requests remains directly covered.
+- [x] Pre-handoff retry/post-handoff no-retry and streaming completion/cancellation/EOF coverage remains.
+- [x] Database transaction ownership, ambiguity/fail-closed, finalization convergence, startup reconciliation, and migration compatibility remain covered.
+- [x] Valid/invalid rehash generation publication and finalization-supervisor ownership remain covered.
+- [x] Plan 105 structured-output/strict-tool/parallel-tool/reasoning contracts remain covered.
+- [x] Plan 106 native prompt-cache mapping and explicit lossy cases remain covered.
+- [x] Plan 104 auth/non-loopback/redaction regressions remain covered.
+- [x] Plan 107 request ownership/original-byte/body-limit/buffer-release contracts remain covered.
+- [x] Tests for removed Plan 108 dormant compression/tuning surfaces are deleted rather than preserving dead production compatibility.
+- [x] Old recursive freeze/thaw representation tests are removed if those internals are removed; supported ownership invariants remain.
+- [x] Duplicate protocol/provider permutations are reduced without replacing them with unreadable Cartesian parameter matrices.
+- [x] Optional dashboard/observability tests are proportionate to their supported external contract.
+- [x] Repeated race/soak iteration tests are replaced by deterministic schedules or removed where canonical deterministic coverage already exists.
+- [x] Orphaned fixtures/helpers are deleted.
+- [x] The 14-test ordinary smoke behaviors remain represented.
+- [x] `.github/workflows/ci.yml` remains materially unchanged in shape.
+- [x] No coverage/test-count/shard/soak/benchmark/hardware/release infrastructure is added.
+- [x] Surviving focused protected-contract suites pass.
+- [x] Ruff, Pyright, smoke tests, and both config checks pass.
 
 ## Rejection conditions
 

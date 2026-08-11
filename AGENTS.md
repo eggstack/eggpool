@@ -89,6 +89,9 @@ uv run ruff check --fix src/
 - Historical release matrices and repeated rehash soak tests are not retained as
   routine corpus; use the capability-focused integration/reload tests and the
   manually invoked performance diagnostics for those concerns.
+- Cache/compression fixture privacy is retained, but broad replay matrices and
+  duplicate fixture replays are not routine tests; use the focused compression,
+  cache-boundary, transcoder, and routing-guardrail contracts.
 
 ## Release
 

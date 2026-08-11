@@ -200,50 +200,6 @@ async def test_lost_wakeup_impossible_deterministic(
 
 
 # ---------------------------------------------------------------------------
-# Tests: 1000-iteration lease race schedule
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio()
-async def test_100_iteration_lease_race_schedule(
-    reload_harness: ReloadHarness,
-) -> None:
-    """Lost-wakeup test run 100 times in a loop (no pytest-repeat).
-
-    Each iteration stages a swap, spawns a waiter, commits, and
-    verifies the waiter received the lease.
-    """
-    rm = reload_harness.runtime_manager
-
-    for iteration in range(100):
-        gen_id = 3000 + iteration
-        candidate_gen = _build_generation(gen_id=gen_id)
-        swap = PendingGenerationSwap(rm, candidate_gen, drain_timeout_s=5.0)
-        await swap.stage()
-
-        acquired = asyncio.Event()
-        result_id: int | None = None
-
-        async def _waiter(
-            target_id: int = gen_id,
-            _acquired: asyncio.Event = acquired,
-        ) -> None:
-            nonlocal result_id
-            lease = await rm.acquire()
-            result_id = lease.generation_id
-            await lease.release()
-            _acquired.set()
-
-        asyncio.create_task(_waiter())
-        await asyncio.sleep(0.01)
-        await swap.commit()
-        await asyncio.wait_for(acquired.wait(), timeout=1.0)
-        assert result_id == gen_id, (
-            f"iteration {iteration}: expected {gen_id}, got {result_id}"
-        )
-
-
-# ---------------------------------------------------------------------------
 # Tests: waiter count returns to zero
 # ---------------------------------------------------------------------------
 

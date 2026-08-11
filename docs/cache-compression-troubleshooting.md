@@ -308,7 +308,7 @@ These spans measure work inside `RequestCoordinator._select_and_persist_attempt(
 **Action:**
 
 - Treat any growth in `failed_fallback_count` as a bug report. The fail-closed path preserves the original payload and emits a structured warning, so the request still succeeds — but the operator should investigate before continuing in apply mode.
-- File a regression test under `tests/unit/test_replay_fixtures_regression.py` if a new payload shape reproduces the failure.
+- File a focused regression test beside the owning compression, cache-boundary, or transcoder module if a new payload shape reproduces the failure.
 
 ### Symptom: routing seems uneven
 
@@ -404,4 +404,4 @@ curl -s -H "x-api-key: $EGGPOOL_API_KEY" "http://127.0.0.1:11300/api/stats/compr
 - `docs/cache-compression-profiles.md` § Profile combinations and migration
 - `architecture/README.md` § Routing Guardrails and Non-Interference — invariant documentation
 - `tests/unit/test_routing_guardrails.py` — regression tests for the routing invariant
-- `tests/unit/test_replay_fixtures_regression.py` — fail-closed fallback regression
+- `tests/unit/test_compression_fail_closed.py` — fail-closed fallback regression
