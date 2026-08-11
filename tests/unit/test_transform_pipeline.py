@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -12,6 +13,7 @@ from eggpool.request.transform_pipeline import (
     TransformDecision,
     TransformMeta,
     TransformResult,
+    _make_stream_options_adapter,
     run_transform_pipeline,
     serialize_provider_payload,
 )
@@ -20,9 +22,10 @@ from eggpool.request.transform_pipeline import (
 def _make_request(
     payload: dict[str, Any] | None = None,
 ) -> ProviderBoundRequest:
+    payload = payload or {"model": "gpt-4"}
     return ProviderBoundRequest(
-        client_bytes=b'{"model":"gpt-4"}',
-        client_payload=payload or {"model": "gpt-4"},
+        client_bytes=json.dumps(payload, separators=(",", ":")).encode(),
+        client_payload=payload,
         client_protocol="openai",
         model_id="gpt-4",
     )
@@ -203,6 +206,47 @@ class TestRunTransformPipeline:
                 _make_context(),
                 [(TransformMeta(name="dishonest"), dishonest)],
             )
+
+    def test_stream_options_noop_preserves_original_bytes(self) -> None:
+        request = _make_request(
+            {
+                "model": "gpt-4",
+                "messages": [{"role": "user", "content": "large"}],
+                "stream_options": {"include_usage": True},
+            }
+        )
+        context = _make_context(
+            proxy_context=type(
+                "ProxyContext", (), {"streaming": True, "client_metadata": {}}
+            )()
+        )
+        meta, transform = _make_stream_options_adapter()
+
+        result = run_transform_pipeline(request, context, [(meta, transform)])
+
+        assert result.transformed is False
+        assert result.decisions[0].decision == TransformDecision.PASSTHROUGH
+        assert request.payload_generation == 0
+        assert request.serialize_provider_payload() == request.client_bytes
+
+    def test_stream_options_insertion_copies_only_changed_path(self) -> None:
+        messages = [{"role": "user", "content": "large"}]
+        payload = {"model": "gpt-4", "messages": messages}
+        request = _make_request(payload)
+        context = _make_context(
+            proxy_context=type(
+                "ProxyContext", (), {"streaming": True, "client_metadata": {}}
+            )()
+        )
+        meta, transform = _make_stream_options_adapter()
+
+        result = run_transform_pipeline(request, context, [(meta, transform)])
+
+        assert result.transformed is True
+        assert request.payload_generation == 1
+        assert request.provider_payload["messages"] is messages
+        assert payload.get("stream_options") is None
+        assert request.provider_payload["stream_options"] == {"include_usage": True}
 
 
 # ---------------------------------------------------------------------------

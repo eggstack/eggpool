@@ -1,7 +1,7 @@
 # Plan 114 — Provider Payload Copy-on-Write Reduction
 
 Date: 2026-08-11
-Status: ready
+Status: complete
 Parent roadmap: `plans/113-sbc-hotpath-reduction-and-protocol-clarity-roadmap.md`
 Planning baseline: `6f4df9bd42b5ca336d3da5ef458ab1793e515185`
 
@@ -205,25 +205,25 @@ No full retained-suite requirement.
 
 ## Explicit acceptance criteria
 
-- [ ] OpenAI streaming requests with already-correct `stream_options.include_usage` do not call a whole-graph deepcopy/rematerialization path.
-- [ ] Already-correct stream options return a transform decision of passthrough/no-op.
-- [ ] Already-correct stream options do not set `mutated=True` or increment `payload_generation`.
-- [ ] Already-correct stream options preserve original client-byte dispatch when no other transform changes the request.
-- [ ] Missing/partial stream options are changed using path-level/shallow copy-on-write rather than a full `deepcopy()` of `messages`/`tools`.
-- [ ] Canonical client payload is unchanged after stream-options insertion.
-- [ ] The provider-bound API has an explicit distinction between conservative copy/ownership and trusted adoption of EggPool-owned transformed graphs, or an equivalently clear narrow contract.
-- [ ] Safe-compression output is not recursively rematerialized solely to enter provider-bound ownership.
-- [ ] Safe compression continues to preserve stable-prefix/cache-protected behavior.
-- [ ] Any later provider mutation of a shared subtree establishes ownership before mutation, preventing alias leakage into the canonical graph.
-- [ ] Whole-payload equality checks are not introduced on the common path as a substitute for deepcopy.
-- [ ] `payload_generation` changes exactly when provider-visible content changes.
-- [ ] Cached serialized provider bytes correspond to the current generation and are invalidated after real mutation.
-- [ ] Retry/frozen dispatch semantics remain unchanged.
-- [ ] `release_dispatch_buffers()` remains lifecycle-safe.
-- [ ] No routing/finalization/database/rehash behavior is changed.
-- [ ] No new runtime dependency or generalized copy-on-write framework is introduced.
-- [ ] Focused ownership/stream/compression regressions pass.
-- [ ] Ruff, Pyright, 14 smoke tests, and both config checks pass.
+- [x] OpenAI streaming requests with already-correct `stream_options.include_usage` do not call a whole-graph deepcopy/rematerialization path.
+- [x] Already-correct stream options return a transform decision of passthrough/no-op.
+- [x] Already-correct stream options do not set `mutated=True` or increment `payload_generation`.
+- [x] Already-correct stream options preserve original client-byte dispatch when no other transform changes the request.
+- [x] Missing/partial stream options are changed using path-level/shallow copy-on-write rather than a full `deepcopy()` of `messages`/`tools`.
+- [x] Canonical client payload is unchanged after stream-options insertion.
+- [x] The provider-bound API has an explicit distinction between conservative copy/ownership and trusted adoption of EggPool-owned transformed graphs, or an equivalently clear narrow contract.
+- [x] Safe-compression output is not recursively rematerialized solely to enter provider-bound ownership.
+- [x] Safe compression continues to preserve stable-prefix/cache-protected behavior.
+- [x] Any later provider mutation of a shared subtree establishes ownership before mutation, preventing alias leakage into the canonical graph.
+- [x] Whole-payload equality checks are not introduced on the common path as a substitute for deepcopy.
+- [x] `payload_generation` changes exactly when provider-visible content changes.
+- [x] Cached serialized provider bytes correspond to the current generation and are invalidated after real mutation.
+- [x] Retry/frozen dispatch semantics remain unchanged.
+- [x] `release_dispatch_buffers()` remains lifecycle-safe.
+- [x] No routing/finalization/database/rehash behavior is changed.
+- [x] No new runtime dependency or generalized copy-on-write framework is introduced.
+- [x] Focused ownership/stream/compression regressions pass.
+- [x] Ruff, Pyright, 14 smoke tests, and both config checks pass.
 
 ## Rejection conditions
 
@@ -251,3 +251,32 @@ Reject the implementation if:
 8. Run the ordinary gate.
 9. Record implementation SHA, the final ownership API contract, which production paths still intentionally use conservative full ownership, and exact verification results.
 10. Stop. PreparedTranscode physical freeze/rematerialization is Plan 115.
+
+## Implementation closure
+
+Implemented on `main` and verified locally before push.
+
+- `ProviderBoundRequest.mutate_top_level_mapping()` is the narrow path-level
+  copy-on-write API used for OpenAI streaming `stream_options` normalization.
+  It returns `False` without touching generation or serialized bytes when the
+  requested field already has the desired value.
+- `ProviderBoundRequest.adopt_provider_payload()` is the explicit trusted
+  boundary for EggPool-owned path-level transformed graphs. Safe compression
+  and synthetic cache outputs use it; unknown transcode/legacy graphs still
+  use conservative recursive ownership through `set_provider_payload()` or
+  `replace_provider_payload()`.
+- Safe compression retains unchanged subtree identity through provider
+  binding. Canonical client state remains isolated because later narrow
+  mutations copy the affected path before changing it.
+- Retry/freeze behavior and `release_dispatch_buffers()` were unchanged.
+
+Verification:
+
+- Focused ownership/transform/compression/coordinator suites: 74 passed.
+- Additional cache/compression/thinking/prepared-transcode suites: 116 passed.
+- `ruff format --check`: passed.
+- `ruff check`: passed.
+- `pyright src/ scripts/`: 0 errors, 0 warnings, 0 informations.
+- Deterministic smoke suite: 14 passed.
+- `check-config` passed for `config.example.toml` and
+  `config.sbc.example.toml`.

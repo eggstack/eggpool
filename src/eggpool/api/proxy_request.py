@@ -864,9 +864,18 @@ async def _handle_proxy_request_inner(
         if provider_payload.get("model") != model_id:
             provider_payload["model"] = model_id
         if provider_payload != payload:
-            provider_bound.set_provider_payload(
-                provider_payload, increment_generation=False
-            )
+            if compression_result is not None and getattr(
+                compression_result, "applied", False
+            ):
+                provider_bound.adopt_provider_payload(
+                    provider_payload,
+                    reason="compression",
+                    increment_generation=False,
+                )
+            else:
+                provider_bound.set_provider_payload(
+                    provider_payload, increment_generation=False
+                )
 
         context = ProxyRequestContext(
             request_id=request_id,

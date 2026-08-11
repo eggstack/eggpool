@@ -16,11 +16,9 @@ short-circuits on ``rejection``.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping
+from typing import Any, cast
 
 from eggpool.request.provider_bound_request import ProviderBoundRequest
 
@@ -349,22 +347,16 @@ def _make_stream_options_adapter() -> tuple[TransformMeta, TransformFnAny]:
         ):
             return TransformResult(decision=TransformDecision.SKIPPED)
 
+        value = request.provider_payload.get("stream_options")
         include_usage: bool | None = None
+        if isinstance(value, Mapping) and "include_usage" in value:
+            include_usage = bool(cast("Any", value["include_usage"]))
+        elif value is None or isinstance(value, Mapping):
+            include_usage = True
 
-        def mutate(payload: dict[str, Any]) -> None:
-            nonlocal include_usage
-            value = payload.get("stream_options")
-            if isinstance(value, dict):
-                if "include_usage" in value:
-                    include_usage = bool(cast("Any", value["include_usage"]))
-                else:
-                    value["include_usage"] = True
-                    include_usage = True
-            elif value is None:
-                payload["stream_options"] = {"include_usage": True}
-                include_usage = True
-
-        changed = request.mutate_provider_payload(mutate, reason="stream_options")
+        changed = request.mutate_top_level_mapping(
+            "stream_options", "include_usage", True, reason="stream_options"
+        )
         if ctx.proxy_context is not None:
             ctx.proxy_context.client_metadata["upstream_include_usage"] = include_usage
         return TransformResult(

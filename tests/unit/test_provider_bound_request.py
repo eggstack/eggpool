@@ -146,6 +146,51 @@ class TestProviderBoundRequest:
             "messages": [{"role": "user"}],
         }
 
+    def test_adopt_provider_payload_preserves_unchanged_subtrees(self) -> None:
+        messages = [{"role": "user", "content": "large"}]
+        payload = {"messages": messages, "stream_options": {}}
+        pbr = ProviderBoundRequest(
+            client_bytes=b"{}",
+            client_payload=payload,
+            client_protocol="openai",
+            model_id="gpt-4",
+        )
+
+        pbr.adopt_provider_payload(
+            {"messages": messages, "stream_options": {"include_usage": True}},
+            reason="test_adopt",
+        )
+
+        assert pbr.provider_payload["messages"] is messages
+        assert pbr.provider_payload["stream_options"] is not payload["stream_options"]
+        assert payload["stream_options"] == {}
+
+    def test_top_level_mapping_mutation_is_path_local_and_reports_noop(self) -> None:
+        messages = [{"role": "user", "content": "hi"}]
+        stream_options = {"include_usage": True}
+        payload = {"messages": messages, "stream_options": stream_options}
+        pbr = ProviderBoundRequest(
+            client_bytes=b'{"messages":[]}',
+            client_payload=payload,
+            client_protocol="openai",
+            model_id="gpt-4",
+        )
+
+        assert (
+            pbr.mutate_top_level_mapping(
+                "stream_options", "include_usage", True, reason="noop"
+            )
+            is False
+        )
+        assert pbr.payload_generation == 0
+        assert pbr.mutate_top_level_mapping(
+            "stream_options", "include_usage", False, reason="change"
+        )
+        assert pbr.payload_generation == 1
+        assert pbr.provider_payload["messages"] is messages
+        assert stream_options["include_usage"] is True
+        assert pbr.provider_payload["stream_options"] == {"include_usage": False}
+
     def test_set_provider_payload_no_generation_increment(self) -> None:
         pbr = ProviderBoundRequest(
             client_bytes=b"{}",

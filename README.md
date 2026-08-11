@@ -330,6 +330,7 @@ The dashboard `/models` page shows enriched model metadata from provider catalog
 | Model-info OpenRouter debugging | [docs/model-info-openrouter-debug.md](docs/model-info-openrouter-debug.md) |
 | Thinking & reasoning | [docs/thinking.md](docs/thinking.md) |
 | Architecture overview | [architecture/README.md](architecture/README.md) |
+| Provider payload ownership and copy-on-write | [architecture/deep-dive-request-lifecycle.md](architecture/deep-dive-request-lifecycle.md) |
 | Live Configuration Rehash | [docs/live-config-rehash.md](docs/live-config-rehash.md) |
 | Database recovery runbook | [docs/runbooks/database-recovery.md](docs/runbooks/database-recovery.md) |
 

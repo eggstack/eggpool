@@ -12,7 +12,8 @@ Design rules
 - ``client_payload`` is **immutable** — transforms never mutate it.
 - ``provider_payload`` is produced by the transform pipeline; when no
   transform mutates the payload it **aliases** ``client_payload``
-  (zero-copy).
+  (zero-copy). Narrow changes use path-level copy-on-write, while unknown
+  graphs use the conservative deep-owning path.
 - ``provider_bytes`` is serialized **once** after the last transform.
 - A monotonically increasing ``payload_generation`` counter lets
   downstream consumers (segmentation, cache synthesis) invalidate
@@ -126,7 +127,8 @@ class ProviderBoundRequest:
     upstream_protocol: str | None = None
 
     # Decoded provider-bound payload — initially aliases client_payload. Once
-    # a transform needs mutation it becomes one detached ordinary dict.
+    # a transform needs mutation it becomes one detached ordinary dict or an
+    # explicitly adopted EggPool-owned graph.
     _provider_payload: dict[str, Any] | None = field(
         default=None, repr=False, compare=False, hash=False
     )
@@ -196,7 +198,7 @@ class ProviderBoundRequest:
     def replace_provider_payload(
         self, payload: Mapping[str, Any], *, reason: str
     ) -> bool:
-        """Replace the provider payload when its structural content changed."""
+        """Conservatively replace a provider payload with owned content."""
         if dict(self.provider_payload) == dict(payload):
             return False
         if self._frozen:
@@ -209,6 +211,59 @@ class ProviderBoundRequest:
         self.diagnostics.generation_changes += 1
         self.mutation_log.append(PayloadMutation(self.payload_generation, reason))
         del self.mutation_log[: -self.mutation_log_limit]
+        return True
+
+    def adopt_provider_payload(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        reason: str,
+        increment_generation: bool = True,
+    ) -> None:
+        """Adopt an EggPool-owned provider graph without rematerializing it.
+
+        The caller must supply a graph whose changed ancestors are already
+        copied and whose unchanged children are treated as read-only.  This
+        is the ownership boundary for path-level transformations such as
+        safe compression.  Unknown or externally-owned graphs must use
+        :meth:`set_provider_payload` instead.
+        """
+        if self._frozen:
+            raise RuntimeError("provider payload is frozen")
+        object.__setattr__(self, "_provider_payload", dict(payload))
+        object.__setattr__(self, "mutated", True)
+        if increment_generation:
+            object.__setattr__(self, "payload_generation", self.payload_generation + 1)
+            self.diagnostics.generation_changes += 1
+            self.mutation_log.append(PayloadMutation(self.payload_generation, reason))
+            del self.mutation_log[: -self.mutation_log_limit]
+        object.__setattr__(self, "_provider_bytes", None)
+        object.__setattr__(self, "_serialized_generation", None)
+
+    def mutate_top_level_mapping(
+        self,
+        key: str,
+        field: str,
+        value: Any,
+        *,
+        reason: str,
+    ) -> bool:
+        """Set one field in a top-level mapping with path-local copy-on-write."""
+        current = self.provider_payload.get(key)
+        if isinstance(current, Mapping):
+            if field in current and current[field] == value:
+                return False
+            candidate = dict(self.provider_payload)
+            nested: dict[str, Any] = dict(cast("Mapping[str, Any]", current))
+            nested[field] = value
+            candidate[key] = nested
+        elif current is None:
+            candidate = dict(self.provider_payload)
+            candidate[key] = {field: value}
+        else:
+            return False
+
+        self.adopt_provider_payload(candidate, reason=reason)
         return True
 
     def mutate_provider_payload(
@@ -249,7 +304,7 @@ class ProviderBoundRequest:
     def set_provider_payload(
         self, payload: Mapping[str, Any], *, increment_generation: bool = True
     ) -> None:
-        """Replace the provider-bound payload and bump the generation.
+        """Conservatively replace the provider-bound payload and bump generation.
 
         The new payload is stored as an owned ordinary graph. Callers only
         receive it through the provider-bound API. ``payload_generation`` is

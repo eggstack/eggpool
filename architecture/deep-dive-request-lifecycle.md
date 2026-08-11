@@ -180,13 +180,15 @@ Cached JSON parse with derived state (model, tools, messages, etc.) through
 
 `ProxyRequestContext` owns the accepted client bytes and parsed payload until
 the selected attempt is prepared. `ProviderBoundRequest` treats that graph as
-logically immutable, then makes one deep copy on the first provider-bound
-mutation; later transforms mutate the owned ordinary graph and serialization
-does not thaw a recursive frozen structure. If no body semantics change, the
-accepted client bytes are sent unchanged. Once an upstream response is chosen
-and the stream is handed off, dispatch-only bytes, parsed state, and provider
-payload buffers are released; scalar body-size/accounting metadata remains for
-finalization.
+logically immutable. Narrow changes use path-level copy-on-write, while
+unknown mutators use a conservative deep-owning helper. EggPool-owned
+path-level transforms use the explicit `adopt_provider_payload()` boundary;
+safe compression therefore retains unchanged subtree identity instead of
+being recursively rematerialized at provider binding. If no body semantics
+change, the accepted client bytes are sent unchanged. Once an upstream
+response is chosen and the stream is handed off, dispatch-only bytes, parsed
+state, and provider payload buffers are released; scalar body-size/accounting
+metadata remains for finalization.
 
 Prepared transcode results may retain recursively immutable mapping/tuple JSON
 graphs for safe reuse. The provider-bound ownership boundary materializes those

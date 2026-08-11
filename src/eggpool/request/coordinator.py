@@ -5064,9 +5064,10 @@ class RequestCoordinator:
                 result.transformed_payload = None
                 result.cache_boundary_entries = ()
             else:
-                changed = request.replace_provider_payload(
+                request.adopt_provider_payload(
                     result.transformed_payload, reason="synthetic_cache"
                 )
+                changed = True
                 context.synthetic_cache_result = result
                 if legacy_request:
                     request.serialize_provider_payload()

@@ -103,7 +103,10 @@ payload at all -- the original object is forwarded unchanged. When
 transforms do apply, only the dictionaries and lists on the paths to
 mutated leaves are copied; unchanged subtrees are preserved by
 reference. Stable-prefix content hash verification remains exact and
-unchanged.
+unchanged. At provider binding, the transformed graph crosses the trusted
+`adopt_provider_payload()` boundary, so this sharing is not lost to a second
+recursive ownership pass. Later provider transforms still copy shared child
+paths before mutating them.
 
 ## What is experimental
 
