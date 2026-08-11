@@ -1,7 +1,7 @@
 # Plan 115 — Prepared Transcode Ownership Reduction
 
 Date: 2026-08-11
-Status: ready
+Status: complete
 Parent roadmap: `plans/113-sbc-hotpath-reduction-and-protocol-clarity-roadmap.md`
 Planning baseline: `6f4df9bd42b5ca336d3da5ef458ab1793e515185`
 Depends on: `plans/114-provider-payload-copy-on-write.md`
@@ -169,22 +169,22 @@ No full retained-suite requirement.
 
 ## Explicit acceptance criteria
 
-- [ ] `PreparedTranscode` no longer recursively freezes a full translated request graph into `MappingProxyType`/tuple structures solely for request-local immutability.
-- [ ] Prepared-transcode reuse no longer recursively rematerializes that full graph solely to cross into provider-bound ownership.
-- [ ] A valid unchanged prepared transcode dispatches the existing encoded translated body without a second encode.
-- [ ] A valid unchanged prepared transcode performs no full graph copy after preflight solely for dispatch ownership.
-- [ ] Provider-specific post-selection changes use Plan 114's safe ownership/COW boundary.
-- [ ] Provider-specific mutation cannot mutate the prepared source generation or canonical client payload.
-- [ ] A provider-visible mutation after preflight invalidates the prepared bytes for the new generation and serializes the final body exactly once.
-- [ ] Reuse validity still rejects protocol/feature/capability states that require recomputation.
-- [ ] Thinking/budget override semantics remain correct.
-- [ ] Loss-policy and warning semantics remain correct.
-- [ ] Retry/frozen dispatch continues using the exact already-selected provider generation.
-- [ ] Large prepared request references are released by the existing dispatch-buffer lifecycle when no longer needed.
-- [ ] Any feature-fingerprint simplification is smaller and at least as deterministic as the existing contract; otherwise the existing fingerprint is retained.
-- [ ] No cross-request transcode cache, immutable collection dependency, new request class hierarchy, or permanent memory instrumentation is added.
-- [ ] Focused transcode/ownership/retry tests pass.
-- [ ] Ruff, Pyright, 14 smoke tests, and both config checks pass.
+- [x] `PreparedTranscode` no longer recursively freezes a full translated request graph into `MappingProxyType`/tuple structures solely for request-local immutability.
+- [x] Prepared-transcode reuse no longer recursively rematerializes that full graph solely to cross into provider-bound ownership.
+- [x] A valid unchanged prepared transcode dispatches the existing encoded translated body without a second encode.
+- [x] A valid unchanged prepared transcode performs no full graph copy after preflight solely for dispatch ownership.
+- [x] Provider-specific post-selection changes use Plan 114's safe ownership/COW boundary.
+- [x] Provider-specific mutation cannot mutate the prepared source generation or canonical client payload.
+- [x] A provider-visible mutation after preflight invalidates the prepared bytes for the new generation and serializes the final body exactly once.
+- [x] Reuse validity still rejects protocol/feature/capability states that require recomputation.
+- [x] Thinking/budget override semantics remain correct.
+- [x] Loss-policy and warning semantics remain correct.
+- [x] Retry/frozen dispatch continues using the exact already-selected provider generation.
+- [x] Large prepared request references are released by the existing dispatch-buffer lifecycle when no longer needed.
+- [x] The existing deterministic feature fingerprint is retained; no new fingerprint framework was introduced.
+- [x] No cross-request transcode cache, immutable collection dependency, new request class hierarchy, or permanent memory instrumentation is added.
+- [x] Focused transcode/ownership/retry tests pass.
+- [x] Ruff, Pyright, 14 smoke tests, and both config checks pass.
 
 ## Rejection conditions
 
@@ -211,3 +211,37 @@ Reject the implementation if:
 8. Run focused suites and ordinary gate.
 9. Record implementation SHA, final PreparedTranscode semantic contract, any remaining intentional full-copy cases, and exact verification results.
 10. Stop. Do not broaden into provider cache semantics or Responses API work.
+
+## Implementation closure
+
+Implemented in commit `3921442` on `main`.
+
+- `PreparedTranscode` now retains the transcoder-produced request-local
+  translated graph and shallow-copies only bounded warning roots. The
+  deterministic feature fingerprint remains the existing JSON/SHA-256 value;
+  no capability-fingerprint framework was added.
+- Valid unchanged reuse adopts the prepared graph through
+  `ProviderBoundRequest.adopt_provider_payload()` and installs the exact
+  prepared encoded body. The common serializer freezes a current cached
+  generation on cache hit so retry continues to use the same provider bytes.
+- Selected-provider budget normalization now inspects the existing thinking
+  mapping before copying and uses the existing top-level COW path only when a
+  budget field changes. Provider-control adaptation and synthetic cache
+  synthesis intentionally retain one conservative provider-owned full copy for
+  their broad/legacy transforms.
+- Prepared references are cleared by `ProxyRequestContext.release_dispatch_buffers()`;
+  no cross-request cache or new request class was added. Canonical and prepared
+  source graphs remain isolated from supported provider-bound mutations.
+
+Verification completed locally:
+
+- Focused prepared/provider-bound/transform/thinking/cache/transcode suites:
+  230 passed.
+- `uv sync --frozen --extra ci`: passed.
+- `uv run ruff format --check src/ tests/ scripts/`: passed.
+- `uv run ruff check src/ tests/ scripts/`: passed.
+- `uv run pyright src/ scripts/`: 0 errors, 0 warnings, 0 informations.
+- `PYTHONHASHSEED=0 TZ=UTC uv run pytest tests/smoke/ -q --tb=short --maxfail=1`:
+  14 passed.
+- `check-config` passed for `config.example.toml` and
+  `config.sbc.example.toml`.
