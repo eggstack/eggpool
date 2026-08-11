@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import MappingProxyType
+
 import pytest
 
 from eggpool.request.provider_bound_request import (
@@ -127,6 +129,22 @@ class TestProviderBoundRequest:
         assert pbr.provider_payload is not pbr.client_payload
         # Serialized bytes invalidated
         assert pbr.provider_bytes is None
+
+    def test_set_provider_payload_accepts_frozen_json_graph(self) -> None:
+        pbr = ProviderBoundRequest(
+            client_bytes=b"{}",
+            client_payload={"messages": []},
+            client_protocol="openai",
+            model_id="gpt-4",
+        )
+
+        pbr.set_provider_payload(
+            MappingProxyType({"messages": (MappingProxyType({"role": "user"}),)})
+        )
+
+        assert pbr.provider_payload == {
+            "messages": [{"role": "user"}],
+        }
 
     def test_set_provider_payload_no_generation_increment(self) -> None:
         pbr = ProviderBoundRequest(

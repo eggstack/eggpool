@@ -1,7 +1,7 @@
 # Plan 108 — Compression/Cache Surface Simplification
 
 Date: 2026-08-11
-Status: implemented
+Status: complete
 Parent roadmap: `plans/103-sbc-protocol-parity-and-runtime-efficiency-roadmap.md`
 Planning baseline: `de3eeea5936c964ffa33b7939c791e98d35cfcbb`
 Depends on:

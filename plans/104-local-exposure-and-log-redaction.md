@@ -211,23 +211,23 @@ If startup validation changes, explicitly exercise one temporary non-loopback/no
 
 ## Acceptance criteria
 
-- [ ] The selected policy for non-loopback/no-auth startup is explicit, minimal, and documented.
-- [ ] Copying the shipped SBC example cannot accidentally produce an unauthenticated all-interface listener without an explicit operator action.
-- [ ] Loopback/no-auth remains available for local-only use unless existing project policy already requires auth everywhere.
-- [ ] Non-loopback + valid server API key remains supported.
-- [ ] `check-config` and production startup enforce the same auth/bind rule.
-- [ ] Source and bundled SBC examples remain synchronized.
-- [ ] Authorization-shape logging contains zero credential prefix/suffix/token bytes at all log levels.
-- [ ] No new credential digest/stable fingerprint is introduced without demonstrated need.
-- [ ] OpenAI malformed tool-argument warnings contain no raw malformed argument content.
-- [ ] Anthropic malformed tool-input warnings contain no raw malformed input content.
-- [ ] Parser exception messages cannot reintroduce the raw malformed payload into logs.
-- [ ] Safe bounded metadata remains sufficient to identify the warning type/reason and approximate size.
-- [ ] Any observability warning cap does not change translation/loss-policy semantics.
-- [ ] Provider/account failure classification, retry, quarantine, and finalization behavior are unchanged.
-- [ ] No new runtime dependency, DB migration, auth service, logging framework, or CI job is added.
-- [ ] Focused auth/config/redaction/transcoder tests pass.
-- [ ] Ruff, Pyright, smoke tests, and both shipped config checks pass.
+- [x] The selected policy for non-loopback/no-auth startup is explicit, minimal, and documented.
+- [x] Copying the shipped SBC example cannot accidentally produce an unauthenticated all-interface listener without an explicit operator action.
+- [x] Loopback/no-auth remains available for local-only use unless existing project policy already requires auth everywhere.
+- [x] Non-loopback + valid server API key remains supported.
+- [x] `check-config` and production startup enforce the same auth/bind rule.
+- [x] Source and bundled SBC examples remain synchronized.
+- [x] Authorization-shape logging contains zero credential prefix/suffix/token bytes at all log levels.
+- [x] No new credential digest/stable fingerprint is introduced without demonstrated need.
+- [x] OpenAI malformed tool-argument warnings contain no raw malformed argument content.
+- [x] Anthropic malformed tool-input warnings contain no raw malformed input content.
+- [x] Parser exception messages cannot reintroduce the raw malformed payload into logs.
+- [x] Safe bounded metadata remains sufficient to identify the warning type/reason and approximate size.
+- [x] Any observability warning cap does not change translation/loss-policy semantics.
+- [x] Provider/account failure classification, retry, quarantine, and finalization behavior are unchanged.
+- [x] No new runtime dependency, DB migration, auth service, logging framework, or CI job is added.
+- [x] Focused auth/config/redaction/transcoder tests pass.
+- [x] Ruff, Pyright, smoke tests, and both shipped config checks pass.
 
 ## Rejection conditions
 

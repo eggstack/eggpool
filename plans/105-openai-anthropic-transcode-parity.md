@@ -1,7 +1,7 @@
 # Plan 105 — OpenAI/Anthropic Transcode Parity
 
 Date: 2026-08-11
-Status: implemented
+Status: complete
 Parent roadmap: `plans/103-sbc-protocol-parity-and-runtime-efficiency-roadmap.md`
 Planning baseline: `de3eeea5936c964ffa33b7939c791e98d35cfcbb`
 Depends on:
@@ -272,26 +272,26 @@ Use official-provider live calls only as optional manual confidence checks. They
 
 ## Acceptance criteria
 
-- [ ] `TranscoderFeatures.tools` documentation/configuration and actual body/stream behavior agree; stale semantics are removed or corrected.
-- [ ] OpenAI JSON-schema structured-output intent maps to Anthropic native structured-output controls when target capability is verified.
-- [ ] Native structured-output translation does not also inject the old prompt-coercion instruction.
-- [ ] Unsupported schema constructs or target capability absence follow explicit loss policy rather than silent weakening.
-- [ ] Anthropic structured output maps to OpenAI native structured output where the accepted source surface and target capability make that mapping valid.
-- [ ] OpenAI tool/function `strict` maps to Anthropic strict-tool semantics for supported targets.
-- [ ] Anthropic strict-tool semantics map to OpenAI function strictness for supported targets.
-- [ ] OpenAI `parallel_tool_calls=false` maps to Anthropic parallel-tool disable without clobbering compatible tool-choice intent.
-- [ ] Anthropic parallel-tool disable maps to OpenAI `parallel_tool_calls=false` where supported.
-- [ ] Generic compatible providers do not receive native fields solely because their protocol string is `openai` or `anthropic`.
-- [ ] Capability defaults are conservative and existing known/static provider models can opt into verified support without a generic discovery framework.
-- [ ] Reasoning/thinking controls are capability-aware and do not fabricate numeric equivalence across providers.
-- [ ] Current verified higher OpenAI reasoning efforts are not incorrectly rejected solely because legacy defaults know only low/medium/high.
-- [ ] Local transcode/capability failure remains non-retryable and never penalizes provider/account health.
-- [ ] Streaming handoff, tool-call/result adaptation, usage observation, and finalization remain correct.
-- [ ] Golden common-subset round trips are lossless where the protocols genuinely overlap.
-- [ ] Explicit lossy cases are covered under warn/reject policies.
-- [ ] No new JSON-schema library, capability service, DB migration, CI job, or generalized translation framework is added.
-- [ ] Focused transcode/capability/provider contract tests pass.
-- [ ] Ruff, Pyright, smoke tests, and both config checks pass.
+- [x] `TranscoderFeatures.tools` documentation/configuration and actual body/stream behavior agree; stale semantics are removed or corrected.
+- [x] OpenAI JSON-schema structured-output intent maps to Anthropic native structured-output controls when target capability is verified.
+- [x] Native structured-output translation does not also inject the old prompt-coercion instruction.
+- [x] Unsupported schema constructs or target capability absence follow explicit loss policy rather than silent weakening.
+- [x] Anthropic structured output maps to OpenAI native structured output where the accepted source surface and target capability make that mapping valid.
+- [x] OpenAI tool/function `strict` maps to Anthropic strict-tool semantics for supported targets.
+- [x] Anthropic strict-tool semantics map to OpenAI function strictness for supported targets.
+- [x] OpenAI `parallel_tool_calls=false` maps to Anthropic parallel-tool disable without clobbering compatible tool-choice intent.
+- [x] Anthropic parallel-tool disable maps to OpenAI `parallel_tool_calls=false` where supported.
+- [x] Generic compatible providers do not receive native fields solely because their protocol string is `openai` or `anthropic`.
+- [x] Capability defaults are conservative and existing known/static provider models can opt into verified support without a generic discovery framework.
+- [x] Reasoning/thinking controls are capability-aware and do not fabricate numeric equivalence across providers.
+- [x] Current verified higher OpenAI reasoning efforts are not incorrectly rejected solely because legacy defaults know only low/medium/high.
+- [x] Local transcode/capability failure remains non-retryable and never penalizes provider/account health.
+- [x] Streaming handoff, tool-call/result adaptation, usage observation, and finalization remain correct.
+- [x] Golden common-subset round trips are lossless where the protocols genuinely overlap.
+- [x] Explicit lossy cases are covered under warn/reject policies.
+- [x] No new JSON-schema library, capability service, DB migration, CI job, or generalized translation framework is added.
+- [x] Focused transcode/capability/provider contract tests pass.
+- [x] Ruff, Pyright, smoke tests, and both config checks pass.
 
 ## Rejection conditions
 

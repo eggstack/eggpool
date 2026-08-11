@@ -108,6 +108,9 @@ class TestPolicyDefaults:
             "transcoder",
             "compression",
             "cache",
+            # Request ingestion is generation-owned and can be changed by
+            # ``eggpool rehash`` without rebuilding the listener.
+            "server.max_request_body_bytes",
             # Milestone D1: request-path-visible models subset.
             "models.refresh_interval_s",
             "models.expose_mode",
@@ -1178,6 +1181,7 @@ LIVE_FIELD_CONSUMERS: dict[str, tuple[str, ...]] = {
         "RequestCoordinator._compression_tuning_registry",
     ),
     "cache": ("RequestCoordinator._cache_config",),
+    "server.max_request_body_bytes": ("RequestBodyLimitMiddleware", "body_reader"),
     # Milestone D1: request-path-visible models subset.
     "models.refresh_interval_s": ("CatalogService", "TaskSupervisor"),
     "models.expose_mode": ("CatalogService",),

@@ -314,28 +314,28 @@ A complete retained suite is optional, not required.
 
 ## Acceptance criteria
 
-- [ ] `ParsedRequestPayload` central hot-path parsing uses `eggpool.jsonx` rather than direct stdlib `json.loads()`.
-- [ ] Existing stdlib/orjson backend selection remains correct and no new JSON dependency is added.
-- [ ] Canonical request payload remains logically immutable after parse.
-- [ ] Provider transforms cannot mutate canonical/client payload state through shared nested aliases.
-- [ ] Recursive physical freeze/thaw cycles are removed from the normal provider-bound path or are proven unavoidable for a narrowly retained boundary.
-- [ ] Provider-bound mutation requires at most one necessary full canonical→provider copy for a request, rather than repeated deep copies across transforms/serialization.
-- [ ] Serialization operates directly on the final ordinary provider payload without a recursive thaw pass.
-- [ ] Native/no-transform requests reuse original request bytes when the provider-bound body is byte-semantically unchanged.
-- [ ] Any model alias/protocol/cache/compression/reasoning transform that changes body semantics disables original-byte reuse correctly.
-- [ ] Transformed requests serialize only after the final body mutation and do not retain redundant provider-body copies.
-- [ ] Pre-handoff retry paths retain all required request state.
-- [ ] After chosen-attempt downstream handoff makes retry impossible, dispatch-only raw/parsed/provider payload buffers are released when no longer needed.
-- [ ] Streaming completion, cancellation, premature EOF, response adaptation, usage accounting, and finalization remain correct after buffer release.
-- [ ] Default whole-request body limit remains bounded at the current SBC-appropriate value unless existing policy proves another value authoritative.
-- [ ] Whole-request body limit is configurable through one clear existing config surface and validated by `check-config`.
-- [ ] Oversized whole requests are rejected before avoidable parse/transcode work.
-- [ ] Provider document/media limits are documented/enforced as additional constraints subordinate to the whole-request body limit.
-- [ ] Obviously over-limit base64 media is rejected before allocating the full decoded body where encoded length makes rejection certain.
-- [ ] Under-limit malformed base64 remains rejected correctly; size optimization does not weaken validation.
-- [ ] No request spooling subsystem, new worker/process, new dependency, DB migration, SQLite tuning change, memory telemetry service, or CI benchmark is added.
-- [ ] Focused request lifecycle/body/transcoder/JSON tests pass.
-- [ ] Ruff, Pyright, smoke tests, and both config checks pass.
+- [x] `ParsedRequestPayload` central hot-path parsing uses `eggpool.jsonx` rather than direct stdlib `json.loads()`.
+- [x] Existing stdlib/orjson backend selection remains correct and no new JSON dependency is added.
+- [x] Canonical request payload remains logically immutable after parse.
+- [x] Provider transforms cannot mutate canonical/client payload state through shared nested aliases.
+- [x] Recursive physical freeze/thaw cycles are removed from the normal provider-bound path or are proven unavoidable for a narrowly retained boundary.
+- [x] Provider-bound mutation requires at most one necessary full canonical→provider copy for a request, rather than repeated deep copies across transforms/serialization.
+- [x] Serialization operates directly on the final ordinary provider payload without a recursive thaw pass.
+- [x] Native/no-transform requests reuse original request bytes when the provider-bound body is byte-semantically unchanged.
+- [x] Any model alias/protocol/cache/compression/reasoning transform that changes body semantics disables original-byte reuse correctly.
+- [x] Transformed requests serialize only after the final body mutation and do not retain redundant provider-body copies.
+- [x] Pre-handoff retry paths retain all required request state.
+- [x] After chosen-attempt downstream handoff makes retry impossible, dispatch-only raw/parsed/provider payload buffers are released when no longer needed.
+- [x] Streaming completion, cancellation, premature EOF, response adaptation, usage accounting, and finalization remain correct after buffer release.
+- [x] Default whole-request body limit remains bounded at the current SBC-appropriate value unless existing policy proves another value authoritative.
+- [x] Whole-request body limit is configurable through one clear existing config surface and validated by `check-config`.
+- [x] Oversized whole requests are rejected before avoidable parse/transcode work.
+- [x] Provider document/media limits are documented/enforced as additional constraints subordinate to the whole-request body limit.
+- [x] Obviously over-limit base64 media is rejected before allocating the full decoded body where encoded length makes rejection certain.
+- [x] Under-limit malformed base64 remains rejected correctly; size optimization does not weaken validation.
+- [x] No request spooling subsystem, new worker/process, new dependency, DB migration, SQLite tuning change, memory telemetry service, or CI benchmark is added.
+- [x] Focused request lifecycle/body/transcoder/JSON tests pass.
+- [x] Ruff, Pyright, smoke tests, and both config checks pass.
 
 ## Rejection conditions
 

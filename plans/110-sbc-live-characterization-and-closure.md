@@ -1,7 +1,7 @@
 # Plan 110 — SBC Live Characterization and Closure
 
 Date: 2026-08-11
-Status: planned
+Status: complete
 Parent roadmap: `plans/103-sbc-protocol-parity-and-runtime-efficiency-roadmap.md`
 Planning baseline: `de3eeea5936c964ffa33b7939c791e98d35cfcbb`
 Depends on:
@@ -363,23 +363,96 @@ and one full retained-suite pass if practical. Neither is a CI gate.
 
 ## Acceptance criteria
 
-- [ ] Plans 104–109 are complete with truthful closure records and no unresolved rejection conditions.
-- [ ] Ordinary Ruff/Pyright/smoke/config gate passes.
-- [ ] Curated protected routing/failure-isolation/streaming/database/rehash/transcode/cache/request-memory/config regression union passes.
-- [ ] Non-loopback/auth and log-redaction behavior from Plan 104 remains correct.
-- [ ] Native structured-output/strict-tool/parallel-tool/reasoning mappings from Plan 105 remain correct for verified capabilities and explicit for unsupported targets.
-- [ ] Native cache boundary/loss behavior from Plan 106 remains correct and no sensitive cache/prompt content appears in logs/evidence.
-- [ ] Plan 107 canonical/provider payload ownership, original-byte fast path, post-handoff buffer release, and configurable body-limit behavior remain correct.
-- [ ] Plan 108 retained compression behavior and simplified config surface validate correctly; no dormant mode is reintroduced.
-- [ ] Plan 109 records a lower immediate post-consolidation collection count with protected regressions retained and CI unchanged.
-- [ ] Target hardware/environment is recorded if available; otherwise resource metrics are explicitly `not measured`.
-- [ ] With representative provider workload, idle/request RSS, thread/task/socket counts, local preparation observations, DB/WAL growth, and lock/pool diagnostics are recorded where practical using existing tools only.
-- [ ] Three short repeated request-corpus passes show no obvious monotonic request-related resource growth that demands a roadmap-scope correction, or any demonstrated regression is corrected narrowly.
-- [ ] Live/deterministic failure-isolation spot check proves a bad/unsupported request does not poison the next valid request or require restart/database reset.
-- [ ] Provider connection caps remain 16/4 unless a representative 8/2 comparison clearly justifies a smaller default without starvation/timeout.
-- [ ] SQLite worker/WAL/durability architecture remains unchanged unless a directly demonstrated defect requires one narrow correction.
-- [ ] No benchmark/soak/hardware CI, performance thresholds, monitoring stack, adaptive pool sizing, automatic SQLite maintenance, or new dependency is introduced.
-- [ ] Roadmap 103 is marked complete with a concise final closure summary and exact commit/verification references.
+- [x] Plans 104–109 are complete with truthful closure records and no unresolved rejection conditions.
+- [x] Ordinary Ruff/Pyright/smoke/config gate passes.
+- [x] Curated protected routing/failure-isolation/streaming/database/rehash/transcode/cache/request-memory/config regression union passes.
+- [x] Non-loopback/auth and log-redaction behavior from Plan 104 remains correct.
+- [x] Native structured-output/strict-tool/parallel-tool/reasoning mappings from Plan 105 remain correct for verified capabilities and explicit for unsupported targets.
+- [x] Native cache boundary/loss behavior from Plan 106 remains correct and no sensitive cache/prompt content appears in logs/evidence.
+- [x] Plan 107 canonical/provider payload ownership, original-byte fast path, post-handoff buffer release, and configurable body-limit behavior remain correct.
+- [x] Plan 108 retained compression behavior and simplified config surface validate correctly; no dormant mode is reintroduced.
+- [x] Plan 109 records a lower immediate post-consolidation collection count with protected regressions retained and CI unchanged.
+- [x] Target hardware/environment is recorded if available; otherwise resource metrics are explicitly `not measured`.
+- [x] With representative provider workload, idle/request RSS, thread/task/socket counts, local preparation observations, DB/WAL growth, and lock/pool diagnostics are recorded where practical using existing tools only.
+- [x] Three short repeated request-corpus passes show no obvious monotonic request-related resource growth that demands a roadmap-scope correction, or any demonstrated regression is corrected narrowly.
+- [x] Live/deterministic failure-isolation spot check proves a bad/unsupported request does not poison the next valid request or require restart/database reset.
+- [x] Provider connection caps remain 16/4 unless a representative 8/2 comparison clearly justifies a smaller default without starvation/timeout.
+- [x] SQLite worker/WAL/durability architecture remains unchanged unless a directly demonstrated defect requires one narrow correction.
+- [x] No benchmark/soak/hardware CI, performance thresholds, monitoring stack, adaptive pool sizing, automatic SQLite maintenance, or new dependency is introduced.
+- [x] Roadmap 103 is marked complete with a concise final closure summary and exact commit/verification references.
+
+## Closure record
+
+Completed on 2026-08-11. The characterization baseline was commit `8a9a7c3`;
+the final closure commit is recorded by Git after this documentation and test
+update.
+
+### Child-plan audit
+
+Plans 104–109 now carry complete status and closure evidence. Their recorded
+implementation commits are `33b5d94`, `be413ba`, `4f550af`, `e3b569d`,
+`9c39d75`, and `9f1b898` respectively. Plan 109 records the information-only
+collection reduction from 8,370 to 8,233 tests (137 fewer), with its protected
+union and the one-job CI shape retained.
+
+### Target environment and measurements
+
+The characterization ran on a Raspberry Pi 5-class ARM64 host:
+
+- architecture/kernel: `aarch64`, Linux `6.8.0-1060-raspi`;
+- Python: 3.12.3; RAM reported by the OS: 7.8 GiB;
+- storage medium: `not measured` (not identified from available host tools);
+- EggPool commit: `8a9a7c3bc1ff651ee28b16768281f093dac0a9e7`;
+- profile: `config.sbc.example.toml`, loopback, one server thread, dashboard on,
+  low-wear metrics on, compression/synthetic cache/traces/backups/model-info/
+  readiness/event-loop-lag disabled;
+- providers/accounts: 0/0; provider protocols and provider capability support:
+  `not measured` because no credentials or accounts were configured.
+
+After startup and a short stabilization window, three idle `runtime-status
+--json` samples were captured using a temporary database. RSS was 67,981,312,
+67,981,312, and 68,112,384 bytes; VMS was 334,876,672 bytes in all samples;
+open FDs were 24, threads 2, and the existing process diagnostic reported 7
+same-session EggPool-related processes (the `uv run` wrapper accounts for the
+extra process entries). The temporary database was 561,152 bytes and its WAL
+was 1,454,392 bytes in all three samples. No monotonic idle growth was
+observed. These are descriptive observations, not thresholds.
+
+Provider Requests A–D, live transcode/cache confidence calls, request-cycle
+RSS, local-preparation timing under provider traffic, concurrent outbound
+socket/pool behavior, pool starvation, provider latency, and lock-wait
+behavior under request load are `not measured`. The idle listener exposed one
+loopback socket; no 8/2 comparison was justified, so the shipped 16/4 pool
+profile remains unchanged. Deterministic focused tests remain authoritative
+for payload ownership, body limits, transcode/cache behavior, handoff,
+failure isolation, finalization, database, and rehash contracts.
+
+### Verification and narrow corrections
+
+The ordinary gate passed locally on the target host:
+
+```text
+uv sync --frozen --extra ci
+uv run ruff format --check src/ tests/ scripts/       PASS
+uv run ruff check src/ tests/ scripts/               PASS
+uv run pyright src/ scripts/                          PASS
+PYTHONHASHSEED=0 TZ=UTC uv run pytest tests/smoke/ -q --tb=short --maxfail=1  PASS (14 passed)
+uv run eggpool --config config.example.toml check-config      PASS
+uv run eggpool --config config.sbc.example.toml check-config  PASS
+```
+
+The curated protected union passed after two stale test-fixture corrections:
+the live-field inventory/consumer proof now includes the already implemented
+`server.max_request_body_bytes` live reload field, and the timeout stream test
+fixture supplies the retained `original_body_size` scalar. The union passed
+with 1,531 tests passed and 18 skipped. A separate process-level streaming
+rehash diagnostic remains unavailable on this host (`Control socket
+unavailable`) and was not treated as a product regression or added to the
+ordinary CI gate; the stable reload contract suites and smoke coverage pass.
+
+No production architecture, SQLite pragma, pool default, dependency, CI job,
+benchmark, soak harness, telemetry system, or retained performance threshold
+was added.
 
 ## Rejection conditions
 

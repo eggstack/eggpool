@@ -188,6 +188,11 @@ and the stream is handed off, dispatch-only bytes, parsed state, and provider
 payload buffers are released; scalar body-size/accounting metadata remains for
 finalization.
 
+Prepared transcode results may retain recursively immutable mapping/tuple JSON
+graphs for safe reuse. The provider-bound ownership boundary materializes those
+values directly into one ordinary dict/list graph, preserving the same
+copy-on-write rule without attempting to deep-copy immutable mapping proxies.
+
 ### `request/limits.py` — Request Limit Enforcement
 
 Enforces model context and output limits before dispatch. ASCII-heavy decoded

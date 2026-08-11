@@ -1,7 +1,7 @@
 # Plan 103 — SBC Protocol Parity and Runtime Efficiency Roadmap
 
 Date: 2026-08-11
-Status: planned
+Status: complete
 Planning baseline: `de3eeea5936c964ffa33b7939c791e98d35cfcbb`
 
 Implementation plans:
@@ -178,29 +178,29 @@ Provider-protocol plans additionally run the surviving transcoder/capability con
 
 ## Roadmap acceptance criteria
 
-- [ ] Copyable non-loopback deployment can no longer silently expose an unauthenticated EggPool listener without an explicit operator choice.
-- [ ] Authorization diagnostics never include credential substrings.
-- [ ] Malformed tool argument/input transcode diagnostics never include raw request content.
-- [ ] OpenAI structured-output requests map to Anthropic native structured-output controls when supported; fallback/loss behavior is explicit when unsupported.
-- [ ] Strict tool semantics translate in both supported directions.
-- [ ] OpenAI `parallel_tool_calls = false` and Anthropic parallel-tool-disable semantics translate correctly where supported.
-- [ ] Transcoder feature/capability configuration matches actual body and streaming behavior; no stale `tools` contract remains.
-- [ ] Reasoning/thinking controls are capability-aware rather than globally assumed for arbitrary compatible providers.
-- [ ] Provider-native prompt-cache breakpoints translate only where semantically representable, with TTL/location mismatches explicitly surfaced.
-- [ ] Cache translation does not invent false equivalence for Anthropic tool-definition caching or incompatible TTL semantics.
-- [ ] Central request parsing uses the shared hot-path JSON backend.
-- [ ] Provider-bound payload ownership no longer performs recursive freeze/thaw/deepcopy cycles when logical ownership suffices.
-- [ ] Native no-transform dispatch preserves original bytes when safe and behaviorally equivalent.
-- [ ] Heavy request payload references are released after downstream handoff when no longer needed.
-- [ ] Request-body limit is configurable, bounded by default, and document/transcode validation reports the effective proxy/provider limit truthfully.
-- [ ] Compression static-prefix override validation is correct across global and per-policy configuration.
-- [ ] Dormant/ambiguous compression tuning surface is implemented, removed, or rejected explicitly; no configuration mode claims runtime behavior it does not have.
-- [ ] Duplicate cheap token-estimation logic is reduced if compression remains.
-- [ ] No new core runtime dependency, database service, SQLite worker pool, or migration is introduced solely for this roadmap.
-- [ ] Retained tests are materially simpler/smaller without losing high-value routing/failure-isolation/streaming/database/rehash/protocol regressions.
-- [ ] Ordinary CI remains the current one-job Python 3.11 smoke gate with Ruff/Pyright.
-- [ ] Plan 110 records real Raspberry Pi 5 live-provider measurements where available, or `not measured` without extrapolation where unavailable.
-- [ ] Roadmap closes without creating a new benchmark, adaptive tuning, capability-discovery, or security framework.
+- [x] Copyable non-loopback deployment can no longer silently expose an unauthenticated EggPool listener without an explicit operator choice.
+- [x] Authorization diagnostics never include credential substrings.
+- [x] Malformed tool argument/input transcode diagnostics never include raw request content.
+- [x] OpenAI structured-output requests map to Anthropic native structured-output controls when supported; fallback/loss behavior is explicit when unsupported.
+- [x] Strict tool semantics translate in both supported directions.
+- [x] OpenAI `parallel_tool_calls = false` and Anthropic parallel-tool-disable semantics translate correctly where supported.
+- [x] Transcoder feature/capability configuration matches actual body and streaming behavior; no stale `tools` contract remains.
+- [x] Reasoning/thinking controls are capability-aware rather than globally assumed for arbitrary compatible providers.
+- [x] Provider-native prompt-cache breakpoints translate only where semantically representable, with TTL/location mismatches explicitly surfaced.
+- [x] Cache translation does not invent false equivalence for Anthropic tool-definition caching or incompatible TTL semantics.
+- [x] Central request parsing uses the shared hot-path JSON backend.
+- [x] Provider-bound payload ownership no longer performs recursive freeze/thaw/deepcopy cycles when logical ownership suffices.
+- [x] Native no-transform dispatch preserves original bytes when safe and behaviorally equivalent.
+- [x] Heavy request payload references are released after downstream handoff when no longer needed.
+- [x] Request-body limit is configurable, bounded by default, and document/transcode validation reports the effective proxy/provider limit truthfully.
+- [x] Compression static-prefix override validation is correct across global and per-policy configuration.
+- [x] Dormant/ambiguous compression tuning surface is implemented, removed, or rejected explicitly; no configuration mode claims runtime behavior it does not have.
+- [x] Duplicate cheap token-estimation logic is reduced if compression remains.
+- [x] No new core runtime dependency, database service, SQLite worker pool, or migration is introduced solely for this roadmap.
+- [x] Retained tests are materially simpler/smaller without losing high-value routing/failure-isolation/streaming/database/rehash/protocol regressions.
+- [x] Ordinary CI remains the current one-job Python 3.11 smoke gate with Ruff/Pyright.
+- [x] Plan 110 records real Raspberry Pi 5 live-provider measurements where available, or `not measured` without extrapolation where unavailable.
+- [x] Roadmap closes without creating a new benchmark, adaptive tuning, capability-discovery, or security framework.
 
 ## Rejection conditions
 
@@ -217,6 +217,17 @@ Do not close this roadmap if any of the following is true:
 - compression simplification removes user-visible supported behavior without migration/deprecation handling;
 - CI grows a benchmark/full-suite/hardware/coverage/release job;
 - target-device measurements are fabricated or converted into brittle gates.
+
+## Closure
+
+Roadmap 103 closed through Plans 104–110. The final child-plan records document
+the implementation and verification evidence for each production change. Plan
+110 ran on a Raspberry Pi 5-class ARM64 host; no provider credentials or
+configured accounts were available, so provider workload and live transcode
+measurements are explicitly recorded as `not measured`. The shipped 16/4
+provider pool profile, SQLite WAL architecture, and one-job CI gate were
+retained. No benchmark, soak, hardware-CI, telemetry, or performance threshold
+was added.
 
 ## GPT-5.6 Luna execution protocol
 

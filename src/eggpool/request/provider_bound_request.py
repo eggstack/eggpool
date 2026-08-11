@@ -21,14 +21,32 @@ Design rules
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable
 
     from eggpool.request.parsed_payload import ParsedRequestPayload
+
+
+def _owned_json_value(value: Any) -> Any:
+    """Materialize one ordinary mutable graph from JSON-like input.
+
+    Prepared transcode results intentionally use mapping proxies and tuples
+    while cached.  ``copy.deepcopy`` cannot copy those proxy objects, so the
+    provider-bound ownership boundary performs the one required conversion
+    directly and normalizes JSON arrays back to lists.
+    """
+    if isinstance(value, Mapping):
+        source: dict[str, Any] = dict(cast("Mapping[str, Any]", value))
+        return {key: _owned_json_value(item) for key, item in source.items()}
+    if isinstance(value, (list, tuple)):
+        items = cast("list[Any] | tuple[Any, ...]", value)
+        return [_owned_json_value(item) for item in items]
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,7 +201,7 @@ class ProviderBoundRequest:
             return False
         if self._frozen:
             raise RuntimeError("provider payload is frozen")
-        object.__setattr__(self, "_provider_payload", deepcopy(dict(payload)))
+        object.__setattr__(self, "_provider_payload", _owned_json_value(payload))
         object.__setattr__(self, "mutated", True)
         object.__setattr__(self, "payload_generation", self.payload_generation + 1)
         object.__setattr__(self, "_provider_bytes", None)
@@ -241,7 +259,7 @@ class ProviderBoundRequest:
         """
         if not increment_generation and self._frozen:
             raise RuntimeError("provider payload is frozen")
-        object.__setattr__(self, "_provider_payload", deepcopy(dict(payload)))
+        object.__setattr__(self, "_provider_payload", _owned_json_value(payload))
         object.__setattr__(self, "mutated", True)
         if increment_generation:
             object.__setattr__(self, "payload_generation", self.payload_generation + 1)

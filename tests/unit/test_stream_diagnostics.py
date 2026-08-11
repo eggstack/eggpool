@@ -65,6 +65,7 @@ def _timeout_stream_coordinator() -> tuple[Any, Any, Any]:
         protocol="openai",
         upstream_protocol="openai",
         original_body=b"{}",
+        original_body_size=2,
         client_metadata={},
         transcode_context=None,
         thinking_trace=None,
