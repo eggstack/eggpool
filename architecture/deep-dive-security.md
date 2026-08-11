@@ -28,9 +28,10 @@ immediate peer.
 ### `auth.py` — Local API Key Authentication
 
 The copyable SBC configuration binds to loopback by default. A LAN or wildcard
-bind is an explicit configuration change and must be paired with the existing
-server API key (`[server].api_key` or `[server].api_key_env`). Loopback-only
-development may omit the key. This is a deployment guardrail, not a new
+bind is an explicit configuration change and shared startup/`check-config`
+validation rejects it unless paired with the existing server API key
+(`[server].api_key` or `[server].api_key_env`). Loopback-only development may
+omit the key. This is a deployment guardrail, not a new
 identity system; onboarding already generates a key before offering the LAN
 bind choice.
 

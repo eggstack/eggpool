@@ -805,10 +805,9 @@ sudo journalctl -u eggpool -n 50 --no-pager
 2. Check firewall: `ss -tlnp | grep 11300`
 3. See `docs/firewall.md`
 
-The copyable SBC profile stays on loopback by default. LAN binding is an
-explicit operator action and should always be paired with the existing simple
-server API-key authentication; loopback-only development may remain
-unauthenticated.
+The copyable SBC profile stays on loopback by default. Shared startup and
+`check-config` validation reject LAN or wildcard binding without the existing
+simple server API key; loopback-only development may remain unauthenticated.
 
 ### Leaked request detection
 

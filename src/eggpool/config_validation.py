@@ -329,6 +329,7 @@ def compute_runtime_fingerprint(config: AppConfig) -> str:
         {
             "host": config.server.host,
             "port": config.server.port,
+            "max_request_body_bytes": config.server.max_request_body_bytes,
             "api_key_env": config.server.api_key_env,
             "log_level": config.server.log_level,
             "access_log": config.server.access_log,
@@ -634,7 +635,10 @@ def validate_config_file(path: str | Path) -> ConfigValidationResult:
         ) from exc
 
     try:
-        require_auth_at_startup(config.server.resolved_api_key)
+        require_auth_at_startup(
+            config.server.resolved_api_key,
+            host=config.server.host,
+        )
     except RuntimeError as exc:
         raise ConfigStartupAuthError(
             f"{_VALIDATION_ERROR_PREFIX}: server API key rejected: {exc}"

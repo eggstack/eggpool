@@ -72,9 +72,52 @@ class TestBasicRequestTranslation:
         assert result["messages"][0]["content"][0]["cache_control"] == {
             "type": "ephemeral"
         }
+        assert "prompt_cache_breakpoint" not in result["messages"][0]["content"][0]
+        assert "prompt_cache_breakpoint" in payload["messages"][0]["content"][0]
         assert not any(
             w["kind"] == "cache_breakpoint_unsupported_target" for w in warnings
         )
+
+    def test_unsupported_breakpoint_is_consumed_and_reported(self) -> None:
+        payload = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "stable",
+                            "prompt_cache_breakpoint": {"mode": "explicit"},
+                        }
+                    ],
+                }
+            ]
+        }
+        result, warnings = OpenAIToAnthropic().encode_request(payload, _make_context())
+
+        block = result["messages"][0]["content"][0]
+        assert "prompt_cache_breakpoint" not in block
+        assert any(w["kind"] == "cache_breakpoint_unsupported_target" for w in warnings)
+
+    def test_breakpoint_rejects_when_target_cannot_represent_it(self) -> None:
+        payload = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "stable",
+                            "prompt_cache_breakpoint": {"mode": "explicit"},
+                        }
+                    ],
+                }
+            ]
+        }
+        with pytest.raises(TranscodeLossError):
+            OpenAIToAnthropic().encode_request(
+                payload, _make_context(), loss_policy="reject"
+            )
 
     def test_ttl_and_key_loss_is_bounded_and_rejectable(self) -> None:
         payload = {

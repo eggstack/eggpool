@@ -239,7 +239,9 @@ Prompt-cache translation is best-effort across the representable subset. An
 explicit OpenAI content breakpoint can become an Anthropic block
 `cache_control`, and an Anthropic message/system block boundary can become an
 OpenAI `prompt_cache_breakpoint`, only when the target capability explicitly
-lists that protocol. TTLs are not treated as equivalent: Anthropic's 5-minute
+lists that protocol. Source-only breakpoint fields are consumed at the
+translation boundary and never remain on the target wire. TTLs are not treated
+as equivalent: Anthropic's 5-minute
 and 1-hour controls do not silently become OpenAI's 30-minute setting (or
 vice versa). Anthropic tool-definition boundaries remain lossy for OpenAI
 Chat Completions when no native tool breakpoint is available. OpenAI's
@@ -519,6 +521,7 @@ Every loss warning is a structured dict with at minimum `kind` and `field`. The 
 | `cache_control_feature_disabled` | Top-level Anthropic `cache_control` was dropped during Anthropic → OpenAI translation | `{"kind": "cache_control_feature_disabled", "field": "cache_control"}` |
 | `cache_control_unsupported_by_target_protocol` | A nested `cache_control` annotation (system block, message block, tool definition) was dropped because OpenAI cannot carry it | `{"kind": "cache_control_unsupported_by_target_protocol", "field": "tools[0].cache_control"}` |
 | `cache_control_invalid_shape` | A `cache_control` annotation was malformed and could not be carried across | `{"kind": "cache_control_invalid_shape", "field": "tools[0].cache_control"}` |
+| `cache_breakpoint_invalid_shape` | An OpenAI explicit breakpoint marker was malformed and was removed from the Anthropic target body | `{"kind": "cache_breakpoint_invalid_shape", "field": "messages[0].content[0].prompt_cache_breakpoint"}` |
 | `provider_extension_not_preserved` | A non-portable vendor extension on an Anthropic tool was dropped during translation | `{"kind": "provider_extension_not_preserved", "field": "tools[0].defer_loading"}` |
 | `stable_prefix_preserved` | The provider-visible stable prefix round-trips without reordering | `{"kind": "stable_prefix_preserved", "field": "cache_control"}` |
 | `stable_prefix_reordered_canonically` | The stable prefix was reordered to canonical key order before wire serialisation | `{"kind": "stable_prefix_reordered_canonically", "field": "cache_control"}` |
@@ -562,7 +565,7 @@ The complete catalogue lives in `eggpool.transcoder.LOSS_WARNING_KINDS`.
 | `tools[].function.strict` → Anthropic | `strict_tool_capability_missing` | Target lacks verified strict-tool support |
 | `tools[].cache_control` → OpenAI | `cache_control_unsupported_by_target_protocol` | OpenAI auto-caches without explicit hints; cache hit-rate will drop on translation |
 | Top-level `cache_control` → OpenAI | `cache_control_feature_disabled` | OpenAI has no equivalent field; loss is policy-driven |
-| `messages[].content[].cache_control` → OpenAI | `cache_control_unsupported_by_target_protocol` | Loss is intentional; cache hit-rate will drop on translation |
+| `messages[].content[].cache_control` → OpenAI | (preserved when capability is verified) | Otherwise the boundary is reported as `cache_control_unsupported_by_target_protocol`; tool-definition boundaries remain unrepresentable |
 | `tools[].cache_control` (OpenAI-side extension) → Anthropic | (preserved) | Boundary annotated `preserved` on `TranscodeContext.cache_boundary_tracker` |
 | Non-portable Anthropic tool fields (`defer_loading`, etc.) → OpenAI | `provider_extension_not_preserved` | Vendor extensions have no OpenAI equivalent |
 | `function_call` / `functions` (deprecated OpenAI API) | `dropped_field` | Deprecated; clients should migrate to `tools` |

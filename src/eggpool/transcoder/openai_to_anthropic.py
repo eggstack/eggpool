@@ -137,7 +137,7 @@ def _translate_openai_content_to_anthropic(
     dropped with a warning (v1 behaviour).
     """
     blocks: list[dict[str, Any]] = []
-    for part in content:
+    for part_index, part in enumerate(content):
         part_type = part.get("type")
         if part_type == "text":
             text = part.get("text", "")
@@ -148,7 +148,9 @@ def _translate_openai_content_to_anthropic(
                 if context is not None and breakpoint_count is not None:
                     openai_breakpoint_to_anthropic(
                         block,
-                        source_path=f"{source_prefix}.prompt_cache_breakpoint",
+                        source_path=(
+                            f"{source_prefix}[{part_index}].prompt_cache_breakpoint"
+                        ),
                         capability=capability,
                         count=breakpoint_count,
                         context=context,
@@ -320,7 +322,7 @@ class OpenAIToAnthropic:
                 }
             )
 
-        for msg in iter_objects(payload.get("messages", [])):
+        for message_index, msg in enumerate(iter_objects(payload.get("messages", []))):
             role = str(msg.get("role", ""))
             content = msg.get("content", "")
 
@@ -334,7 +336,7 @@ class OpenAIToAnthropic:
                         warnings=warnings,
                         capability=transcoding_capability,
                         context=context,
-                        source_prefix="messages[].content",
+                        source_prefix=f"messages[{message_index}].content",
                         breakpoint_count=breakpoint_count,
                     )
                     if any("cache_control" in block for block in blocks):
@@ -512,16 +514,13 @@ class OpenAIToAnthropic:
                             "reason": "anthropic_unsupported",
                         }
                     )
-                inner_warnings: list[dict[str, Any]] = (
-                    [] if not vision_enabled else warnings
-                )
                 anthropic_blocks = _translate_openai_content_to_anthropic(
                     cast("list[dict[str, Any]]", content),
                     vision_enabled=vision_enabled,
-                    warnings=inner_warnings,
+                    warnings=warnings,
                     capability=transcoding_capability,
                     context=context,
-                    source_prefix=f"messages[{role}].content",
+                    source_prefix=f"messages[{message_index}].content",
                     breakpoint_count=breakpoint_count,
                 )
                 has_non_text = any(b.get("type") != "text" for b in anthropic_blocks)

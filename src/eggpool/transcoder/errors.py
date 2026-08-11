@@ -37,6 +37,7 @@ CACHE_CONTROL_LOSS_KINDS: frozenset[str] = frozenset(
         "stable_prefix_reordered_canonically",
         "cache_breakpoint_unsupported_target",
         "cache_breakpoint_limit_exceeded",
+        "cache_breakpoint_invalid_shape",
         "cache_ttl_mismatch",
         "cache_key_unrepresentable",
     }

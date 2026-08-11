@@ -78,6 +78,39 @@ class TestBasicRequestTranslation:
         assert not any(
             w["kind"] == "cache_breakpoint_unsupported_target" for w in warnings
         )
+        assert not any(
+            w["kind"] == "cache_control_unsupported_by_target_protocol"
+            for w in warnings
+        )
+
+    def test_mapped_message_boundary_is_not_rejected_as_duplicate_loss(self) -> None:
+        payload = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "stable",
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                }
+            ]
+        }
+        result, warnings = AnthropicToOpenAI().encode_request(
+            payload,
+            _make_context(),
+            transcoding_capability=TranscodingCapabilities(
+                prompt_cache_breakpoints=["openai"]
+            ),
+            loss_policy="reject",
+        )
+        assert result["prompt_cache_options"] == {"mode": "explicit"}
+        assert not any(
+            w["kind"] == "cache_control_unsupported_by_target_protocol"
+            for w in warnings
+        )
 
     def test_system_as_list_of_text_blocks_joined(
         self, transcoder: AnthropicToOpenAI

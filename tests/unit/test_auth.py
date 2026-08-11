@@ -195,6 +195,20 @@ class TestRequireAuthAtStartup:
         """Empty api_key disables auth and returns None."""
         assert require_auth_at_startup("") is None
 
+    @pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.20", "example.test"])
+    def test_non_loopback_requires_key(self, host: str) -> None:
+        with pytest.raises(RuntimeError, match="required when binding"):
+            require_auth_at_startup(None, host=host)
+
+    @pytest.mark.parametrize("host", ["127.0.0.1", "127.42.0.9", "::1", "localhost"])
+    def test_loopback_allows_no_key(self, host: str) -> None:
+        assert require_auth_at_startup(None, host=host) is None
+
+    def test_non_loopback_accepts_valid_key(self) -> None:
+        assert require_auth_at_startup("secret-value", host="192.168.1.20") == (
+            "secret-value"
+        )
+
     def test_returns_none_when_key_is_none(self) -> None:
         """None api_key disables auth and returns None."""
         assert require_auth_at_startup(None) is None

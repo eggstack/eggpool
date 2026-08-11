@@ -29,11 +29,35 @@ def openai_breakpoint_to_anthropic(
     warnings: list[dict[str, Any]],
 ) -> bool:
     """Translate one OpenAI explicit content breakpoint in place."""
-    marker_raw = part.get("prompt_cache_breakpoint")
+    marker_raw = part.pop("prompt_cache_breakpoint", None)
     if not isinstance(marker_raw, dict):
+        warnings.append(
+            {"kind": "cache_breakpoint_invalid_shape", "field": source_path}
+        )
+        context.cache_boundary_tracker.record(
+            CacheBoundaryAnnotation(
+                kind="dropped_invalid_shape",
+                source_protocol="openai",
+                target_protocol="anthropic",
+                source_path=source_path,
+                target_path=None,
+            )
+        )
         return False
     marker = cast("dict[str, Any]", marker_raw)
     if marker.get("mode") != "explicit":
+        warnings.append(
+            {"kind": "cache_breakpoint_invalid_shape", "field": source_path}
+        )
+        context.cache_boundary_tracker.record(
+            CacheBoundaryAnnotation(
+                kind="dropped_invalid_shape",
+                source_protocol="openai",
+                target_protocol="anthropic",
+                source_path=source_path,
+                target_path=None,
+            )
+        )
         return False
     if not _supports(capability, "anthropic"):
         kind = "cache_breakpoint_unsupported_target"

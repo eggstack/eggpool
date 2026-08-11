@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import logging
 import re
 from typing import TYPE_CHECKING
@@ -40,13 +41,33 @@ def verify_api_key(request: Request, api_key: str) -> bool:
     return hmac.compare_digest(provided, api_key)
 
 
-def require_auth_at_startup(api_key: str | None) -> str | None:
-    """Validate that the configured API key is set.
+def _is_loopback_host(host: str) -> bool:
+    """Return whether *host* is provably a local-only bind address."""
+    normalized = host.strip().strip("[]").casefold()
+    if normalized == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+
+def require_auth_at_startup(
+    api_key: str | None,
+    *,
+    host: str = "127.0.0.1",
+) -> str | None:
+    """Validate bind exposure and the configured API key.
 
     Returns the API key value if set, None if auth is disabled (no key).
-    Raises RuntimeError if auth is enabled but the key is not set or is a
-    placeholder value.
+    Raises RuntimeError if a non-loopback bind has no key, or if auth is
+    enabled but the key is invalid.
     """
+    if not _is_loopback_host(host) and not api_key:
+        raise RuntimeError(
+            "A server API key is required when binding to a non-loopback host. "
+            "Set api_key in the [server] config section or bind to loopback."
+        )
     if not api_key:
         return None
     expected = api_key.strip()

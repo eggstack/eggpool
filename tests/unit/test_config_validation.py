@@ -68,6 +68,14 @@ class TestValidConfig:
         second = validate_config_file(path)
         assert first.runtime_fingerprint == second.runtime_fingerprint
 
+    def test_body_limit_changes_runtime_fingerprint(self) -> None:
+        from eggpool.models.config import AppConfig
+
+        first = AppConfig()
+        second = AppConfig()
+        second.server.max_request_body_bytes += 1
+        assert compute_runtime_fingerprint(first) != compute_runtime_fingerprint(second)
+
     def test_fingerprint_ignores_blank_account_order(self, tmp_path: Path) -> None:
         body_alpha = (
             f'[server]\napi_key = "{SERVER_API_KEY}"\n\n'
@@ -168,6 +176,15 @@ class TestValidationFailures:
         path = _write_config(tmp_path, body)
         with pytest.raises(ConfigStartupAuthError):
             validate_config_file(path)
+
+    @pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.20"])
+    def test_non_loopback_without_server_key_is_rejected(
+        self, tmp_path: Path, host: str
+    ) -> None:
+        body = f'[server]\nhost = "{host}"\napi_key_env = ""\n'
+        with pytest.raises(ConfigStartupAuthError) as exc_info:
+            validate_config_file(_write_config(tmp_path, body))
+        assert "required when binding" in str(exc_info.value)
 
     def test_account_credential_failure(self, tmp_path: Path, monkeypatch) -> None:
         from eggpool import constants

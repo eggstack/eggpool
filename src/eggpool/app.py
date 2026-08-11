@@ -804,7 +804,10 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     app.state.started_epoch = time.time()
 
     # 1. Validate auth at startup
-    require_auth_at_startup(config.server.resolved_api_key)
+    require_auth_at_startup(
+        config.server.resolved_api_key,
+        host=config.server.host,
+    )
 
     # 1b. Validate account credentials
     config.validate_account_credentials()

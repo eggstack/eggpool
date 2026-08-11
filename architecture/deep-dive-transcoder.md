@@ -117,7 +117,8 @@ Usage canonicalization across protocols (input_tokens ↔ prompt_tokens, cache c
 capability gate for translating provider-native content boundaries. OpenAI
 explicit content breakpoints map to corresponding Anthropic cacheable blocks;
 Anthropic message/system block controls map to corresponding OpenAI content
-parts. The mapping is bounded to four target breakpoints and emits structured
+parts. Source-only breakpoint markers are consumed and do not remain on the
+target wire. The mapping is bounded to four target breakpoints and emits structured
 loss metadata for overflow, unsupported placement, TTL mismatch, and
 unrepresentable cache keys. Tool-definition boundaries are never moved to a
 message boundary. No cache key is synthesized or persisted.

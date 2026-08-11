@@ -278,6 +278,7 @@ class AnthropicToOpenAI:
         id_map = context.id_map
         breakpoint_count = [0]
         mapped_breakpoint = False
+        mapped_source_paths: set[str] = set()
 
         messages: list[dict[str, Any]] = []
 
@@ -302,6 +303,7 @@ class AnthropicToOpenAI:
                     ):
                         mapped_breakpoint = True
                         if "prompt_cache_breakpoint" in block_copy:
+                            mapped_source_paths.add(f"system[{index}].cache_control")
                             part["prompt_cache_breakpoint"] = block_copy[
                                 "prompt_cache_breakpoint"
                             ]
@@ -314,7 +316,7 @@ class AnthropicToOpenAI:
                     )
                     messages.append({"role": "system", "content": content})
 
-        for msg in iter_objects(payload.get("messages", [])):
+        for message_index, msg in enumerate(iter_objects(payload.get("messages", []))):
             role = str(msg.get("role", ""))
             content = msg.get("content", "")
 
@@ -332,7 +334,7 @@ class AnthropicToOpenAI:
                 message_has_breakpoint = False
                 vision_enabled = features is not None and features.vision
 
-                for part in iter_objects(content):
+                for part_index, part in enumerate(iter_objects(content)):
                     part_type = part.get("type")
                     if part_type == "tool_use":
                         upstream_id = str(part.get("id", ""))
@@ -418,7 +420,10 @@ class AnthropicToOpenAI:
                         translated_source = dict(part)
                         if anthropic_boundary_to_openai(
                             translated_source,
-                            source_path="messages[].content[].cache_control",
+                            source_path=(
+                                f"messages[{message_index}].content[{part_index}]"
+                                ".cache_control"
+                            ),
                             capability=transcoding_capability,
                             count=breakpoint_count,
                             context=context,
@@ -427,6 +432,10 @@ class AnthropicToOpenAI:
                             mapped_breakpoint = True
                             message_has_breakpoint = True
                             if "prompt_cache_breakpoint" in translated_source:
+                                mapped_source_paths.add(
+                                    f"messages[{message_index}].content[{part_index}]"
+                                    ".cache_control"
+                                )
                                 translated_part["prompt_cache_breakpoint"] = (
                                     translated_source["prompt_cache_breakpoint"]
                                 )
@@ -777,10 +786,13 @@ class AnthropicToOpenAI:
             in (
                 "cache_control_unsupported_by_target_protocol",
                 "cache_control_feature_disabled",
+                "cache_control_invalid_shape",
+                "cache_breakpoint_unsupported_target",
+                "cache_breakpoint_limit_exceeded",
             )
         }
         for path, cache_type in extract_cache_boundaries(payload):
-            if path in already_warned_paths:
+            if path in already_warned_paths or path in mapped_source_paths:
                 continue
             warnings.append(
                 {
