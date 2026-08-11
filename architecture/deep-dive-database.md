@@ -95,7 +95,7 @@ Schema migration execution. Ordered SQL files in `db/schema/`.
 
 ### `db/schema/`
 
-52 SQL migration files (`0001_initial.sql` through `0052_catalog_refresh_state.sql`), plus `checksums.json`.
+53 SQL migration files (`0001_initial.sql` through `0053_remove_attempt_status_analytics_index.sql`), plus `checksums.json`.
 
 ## Key Tables
 
@@ -123,6 +123,20 @@ Schema migration execution. Ordered SQL files in `db/schema/`.
 | `model_info_overrides` | Operator overrides |
 | `model_info_match_evidence` | Identity matching evidence |
 | `compression_tuning_recommendations` | Tuning recommendations |
+
+### Analytics index write policy
+
+Request and attempt indexes are fixed schema assets; they are not created or
+dropped based on whether the dashboard is enabled. Correctness, recovery,
+identity, reservation-expiry, and retention indexes remain indexed. Optional
+analytics indexes are kept only when their production query shape materially
+benefits from the bounded lookup. The per-attempt `status_code/started_at`
+index was removed in migration 0053 because stats aggregates inspect
+`status_code` inside expressions rather than filtering on it; provider/model
+filtered attempt views and retry time-window scans retain their supporting
+indexes. The partial `retry_category IS NOT NULL` alternative was evaluated
+but rejected because the production `COALESCE` grouping query does not
+naturally use that predicate.
 
 ## Key Invariants
 

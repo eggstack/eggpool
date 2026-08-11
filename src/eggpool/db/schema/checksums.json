@@ -25,7 +25,7 @@
     "0023_deprecated_model_placeholder.sql": "f149d4ac7a1eea10c55e63ba45011b58ef411ba67f3ebc7f0d2e7f7dd5c4b796",
     "0024_account_backoffs.sql": "c4838b862787abffb3adce5d220bb24590e7b62cf1b189fc9a8739dce137e740",
     "0025_stale_request_index.sql": "6f55ea5ea26521a71276a4cc461064bd472c9a0bb9f703873f4c294f9e1914d9",
-    "0026_attempt_observability.sql": "283dfa926ee5279187004dbad85db0e2f908319143497c2dc366954c67e8cc93",
+    "0026_attempt_observability.sql": "a6426ecffaee260f5a04c7caa50414d4daed5b7cb0ba90c1c42afea0220f2151",
     "0027_routing_decisions.sql": "bb115e64f3eff3e119ffc26fad48d1335ce0bafa830c324aa4851cfe447c7067",
     "0028_operational_events.sql": "f1e8490088671b566f80816c7a8694dbf22c1e9c70c2412637883a7c4290caca",
     "0029_latency_phases.sql": "500c1a666bf42a26b20fbaaf91b71a54bf7f527dd31c627f7769703da220ba76",
@@ -51,6 +51,7 @@
     "0049_model_info_match_evidence.sql": "ed87a96750593860c358ef9f47c46bcaf78e51822be9202bf173b4e7905a7507",
     "0050_routing_decisions_retention_index.sql": "840974404c8bf1dca1b5e8db7360814b49be2de087801425382f15ef56412a60",
     "0051_model_quarantine.sql": "e60128ee2006073c9dd54af80facb70f6b3a8edfaf69d6619d0b41e35180a940",
-    "0052_catalog_refresh_state.sql": "3931b8b1ef87b2e6413f8bba2f16f26b1cee899ea4e962ac9e5ff50be590c99d"
+    "0052_catalog_refresh_state.sql": "3931b8b1ef87b2e6413f8bba2f16f26b1cee899ea4e962ac9e5ff50be590c99d",
+    "0053_remove_attempt_status_analytics_index.sql": "0918c57f786dcb953fd5a32238d94060c471e768f245f40aeb37e20fec8ffe99"
   }
 }

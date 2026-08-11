@@ -108,7 +108,7 @@ Supports 27+ upstream providers (OpenCode Go, OpenAI, Anthropic, Groq, DeepInfra
 | **Path** | `src/eggpool/db/` |
 | **Deep Dive** | [deep-dive-database.md](deep-dive-database.md) |
 
-Async SQLite with WAL mode, single-connection serialization, and 51 numbered schema migrations. `db/connection.py` wraps `aiosqlite` with `BEGIN IMMEDIATE` transactions and explicit one-task ownership; inherited child tasks fail before SQL. Runtime invalidation closes admission and exits the worker for systemd restart. Startup integrity checking and crash reconciliation are the only durable recovery boundary. All DML runs inside `async with db.transaction():`. `db/repositories.py` contains `AccountRepository`, `ProviderRepository`, `RequestRepository`, and others. `db/dispatch_repository.py` handles dispatch persistence. `db/rollup_repository.py` manages usage rollups. Schema lives in `db/schema/` with 51 numbered SQL files and a `checksums.json` manifest.
+Async SQLite with WAL mode, single-connection serialization, and 53 numbered schema migrations. `db/connection.py` wraps `aiosqlite` with `BEGIN IMMEDIATE` transactions and explicit one-task ownership; inherited child tasks fail before SQL. Runtime invalidation closes admission and exits the worker for systemd restart. Startup integrity checking and crash reconciliation are the only durable recovery boundary. All DML runs inside `async with db.transaction():`. `db/repositories.py` contains `AccountRepository`, `ProviderRepository`, `RequestRepository`, and others. `db/dispatch_repository.py` handles dispatch persistence. `db/rollup_repository.py` manages usage rollups. Schema lives in `db/schema/` with 53 numbered SQL files and a `checksums.json` manifest.
 
 ### Runtime & Process Management
 

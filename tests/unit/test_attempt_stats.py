@@ -118,6 +118,29 @@ class TestFetchAttemptStats:
     """Tests for fetch_attempt_stats."""
 
     @pytest.mark.asyncio()
+    async def test_analytics_indexes_keep_filtered_attempt_plan_bounded(
+        self, seeded_attempts_db: Database
+    ) -> None:
+        indexes = await seeded_attempts_db.fetch_all(
+            "PRAGMA index_list(request_attempts)"
+        )
+        index_names = {str(row["name"]) for row in indexes}
+        assert "idx_request_attempts_status_started" not in index_names
+        assert "idx_request_attempts_provider_started" in index_names
+        assert "idx_request_attempts_model_started" in index_names
+
+        plan = await seeded_attempts_db.fetch_all(
+            "EXPLAIN QUERY PLAN "
+            "SELECT COUNT(*) FROM request_attempts "
+            "WHERE provider_id = ? AND started_at >= ? AND started_at < ?",
+            ("opencode-go", "2000-01-01 00:00:00", "2099-12-31 23:59:59"),
+        )
+        assert any(
+            "idx_request_attempts_provider_started" in str(row["detail"])
+            for row in plan
+        )
+
+    @pytest.mark.asyncio()
     async def test_empty_db_returns_zeros(self, db: Database) -> None:
         result = await queries.fetch_attempt_stats(
             db, "2000-01-01 00:00:00", "2099-12-31 23:59:59"

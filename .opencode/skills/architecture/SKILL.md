@@ -68,6 +68,8 @@ Transparent request/response format conversion between OpenAI and Anthropic prot
 - `Database.vacuum()` is the only sanctioned path for `VACUUM`
 - Readiness probes use `probe_writable()` with owned transactions
 - Schema migrations in `src/eggpool/db/schema/` (numbered SQL files)
+- Analytics indexes are fixed schema assets, not dashboard feature toggles;
+  migration 0053 removes only the unused per-attempt status aggregate index.
 
 The historical `requests` table is frozen for optional diagnostics. Add columns
 only for durable lifecycle/accounting facts, routing repair, billing/usage truth,

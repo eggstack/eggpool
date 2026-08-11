@@ -52,6 +52,10 @@ unresolved-model, and migration compatibility suites before the smoke gate. The
 focused assertions should inspect durable rows/application DML effects, not
 SQLite page-write counts.
 
+Analytics index changes should run the attempt-stats and migration compatibility
+tests. Query-plan assertions should cover only the critical retained filtered
+index shape; do not turn workstation timing or page counts into CI thresholds.
+
 ```bash
 # Single test file
 uv run pytest tests/unit/test_contract.py -v

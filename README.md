@@ -47,6 +47,11 @@ backup, DNS-cache, or background PyPI task. `eggpool onboard` asks whether to
 bind to the LAN; noninteractive onboarding keeps loopback. Optional features
 remain explicit configuration choices.
 
+Analytics indexes are fixed schema assets rather than dashboard toggles.
+The schema keeps indexes for request lifecycle, recovery, retention, and
+filtered provider/model views; the unused per-attempt status aggregate index
+was removed to avoid maintaining it on every attempt write.
+
 For a copyable SBC profile with an explicit LAN bind and provider discovery
 cadence, see [config.sbc.example.toml](config.sbc.example.toml). Its full
 database backup is disabled by default to keep the low-wear profile truthful;
