@@ -140,6 +140,7 @@ prefer_native = true      # prefer native-protocol accounts in routing
 # native_structured_outputs = ["anthropic"]
 # strict_tools = ["anthropic"]
 # parallel_tool_control = ["anthropic"]
+# prompt_cache_breakpoints = ["anthropic"]
 # reasoning_efforts = { openai = ["low", "medium", "high"] }
 #
 # Provider-scoped overrides take precedence over global:

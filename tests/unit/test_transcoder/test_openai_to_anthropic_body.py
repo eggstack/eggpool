@@ -8,7 +8,9 @@ from typing import Any
 
 import pytest
 
+from eggpool.catalog.capabilities import TranscodingCapabilities
 from eggpool.transcoder.context import TranscodeContext
+from eggpool.transcoder.errors import TranscodeLossError
 from eggpool.transcoder.openai_to_anthropic import OpenAIToAnthropic
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
@@ -43,6 +45,52 @@ class TestBasicRequestTranslation:
         assert result["messages"][1]["content"] == "Hi there!"
         assert result["messages"][2]["role"] == "user"
         assert result["messages"][2]["content"] == "How are you?"
+
+    def test_explicit_breakpoint_maps_to_anthropic_block(self) -> None:
+        payload = {
+            "model": "gpt-5.6",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "stable",
+                            "prompt_cache_breakpoint": {"mode": "explicit"},
+                        }
+                    ],
+                }
+            ],
+        }
+        result, warnings = OpenAIToAnthropic().encode_request(
+            payload,
+            _make_context(),
+            transcoding_capability=TranscodingCapabilities(
+                prompt_cache_breakpoints=["anthropic"]
+            ),
+        )
+        assert result["messages"][0]["content"][0]["cache_control"] == {
+            "type": "ephemeral"
+        }
+        assert not any(
+            w["kind"] == "cache_breakpoint_unsupported_target" for w in warnings
+        )
+
+    def test_ttl_and_key_loss_is_bounded_and_rejectable(self) -> None:
+        payload = {
+            "prompt_cache_key": "secret-cache-key",
+            "prompt_cache_options": {"ttl": "30m"},
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+        with pytest.raises(TranscodeLossError) as exc_info:
+            OpenAIToAnthropic().encode_request(
+                payload, _make_context(), loss_policy="reject"
+            )
+        assert "secret-cache-key" not in str(exc_info.value)
+        assert any(
+            warning["kind"] == "cache_key_unrepresentable"
+            for warning in exc_info.value.loss_warnings
+        )
 
     def test_multiple_system_messages_joined(
         self, transcoder: OpenAIToAnthropic

@@ -111,6 +111,23 @@ Usage canonicalization across protocols (input_tokens ↔ prompt_tokens, cache c
 
 `CacheBoundaryTracker` — records what the transcoder did to `cache_control` annotations during translation. Append-only, bounded (64 annotations/request).
 
+### Native prompt-cache translation
+
+`TranscodingCapabilities.prompt_cache_breakpoints` is the explicit target
+capability gate for translating provider-native content boundaries. OpenAI
+explicit content breakpoints map to corresponding Anthropic cacheable blocks;
+Anthropic message/system block controls map to corresponding OpenAI content
+parts. The mapping is bounded to four target breakpoints and emits structured
+loss metadata for overflow, unsupported placement, TTL mismatch, and
+unrepresentable cache keys. Tool-definition boundaries are never moved to a
+message boundary. No cache key is synthesized or persisted.
+
+TTL labels are provider-specific and are never silently converted. OpenAI
+implicit caching is not source intent for Anthropic automatic caching. Native
+source boundaries also suppress conflicting synthetic insertion through the
+existing native-boundary check; broader synthetic-policy simplification is
+reserved for Plan 108.
+
 ### `transcoder/cache_synthesis.py` / `cache_synthesis_policy.py`
 
 Phase 9 synthetic cache controls: optional provider-bound `cache_control` annotations, disabled by default.

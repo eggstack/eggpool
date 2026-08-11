@@ -506,7 +506,7 @@ annotations per request) carried on
 | Kind | Meaning |
 |---|---|
 | `preserved` | Cache annotation carried across at the same path with the same `cache_control_type`. |
-| `preserved_relocated` | Reserved for future phases that relocate the annotation onto a different target path. |
+| `preserved_relocated` | Native boundary carried to the corresponding target-protocol content block. |
 | `dropped_unsupported_target` | The target protocol cannot carry this annotation (e.g. OpenAI has no `cache_control`). |
 | `dropped_feature_disabled` | The annotation was discarded by policy. |
 | `dropped_invalid_shape` | The annotation failed shape validation (missing or non-string `type`). |
@@ -527,10 +527,9 @@ surface only.
   every `cache_control` annotation in document order as
   `(dot_path, cache_control_type)` pairs. The walk is intentionally
   structural: it inspects Anthropic-style system blocks, tool
-  definitions, and message content blocks; OpenAI-style inputs
-  (which never carry `cache_control` natively) yield an empty list
-  unless a tool definition is annotated via the bridging extension
-  that the Phase 3 contract recognises.
+  definitions, and message content blocks; OpenAI-style explicit
+  `prompt_cache_breakpoint` content markers are also recognised for
+  cross-protocol boundary accounting.
 - `extract_provider_visible_prefix(body)` — returns the body minus
   the volatile suffix (last message, `stream` flag) so callers can
   compute cache keys that ignore the user turn.
@@ -549,13 +548,12 @@ translation:
   `dropped_invalid_shape` for malformed shapes, and emits a
   `stable_prefix_preserved` / `stable_prefix_reordered_canonically`
   summary at the end of the pass.
-- `AnthropicToOpenAI.encode_request` drops every `cache_control`
-  annotation (OpenAI has no equivalent field) and records
-  `dropped_unsupported_target` boundaries with
-  `cache_control_unsupported_by_target_protocol` warnings. Top-level
-  Anthropic `cache_control` is reported as
-  `cache_control_feature_disabled` to distinguish it from
-  protocol-level loss.
+- `AnthropicToOpenAI.encode_request` maps message/system block boundaries to
+  OpenAI `prompt_cache_breakpoint` only when the target capability verifies
+  that field. Tool-definition boundaries remain explicitly unrepresentable.
+  Top-level Anthropic `cache_control` is reported as
+  `cache_control_feature_disabled`; TTL mismatches and four-boundary overflow
+  remain policy-visible losses.
 
 Both transcoders also record `provider_extension_not_preserved` for
 non-portable vendor fields on Anthropic tools (e.g. `defer_loading`,

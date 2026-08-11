@@ -12,6 +12,7 @@ from eggpool.transcoder.cache_stability import (
     extract_cache_boundaries,
     extract_cache_control_type,
 )
+from eggpool.transcoder.cache_translation import openai_breakpoint_to_anthropic
 from eggpool.transcoder.errors import (
     CACHE_CONTROL_LOSS_KINDS,
     TranscodeLossError,
@@ -123,6 +124,10 @@ def _translate_openai_content_to_anthropic(
     *,
     vision_enabled: bool,
     warnings: list[dict[str, Any]],
+    capability: TranscodingCapabilities | None = None,
+    context: TranscodeContext | None = None,
+    source_prefix: str = "content",
+    breakpoint_count: list[int] | None = None,
 ) -> list[dict[str, Any]]:
     """Translate an OpenAI content-parts list to Anthropic content blocks.
 
@@ -136,7 +141,19 @@ def _translate_openai_content_to_anthropic(
         if part_type == "text":
             text = part.get("text", "")
             if text:
-                blocks.append({"type": "text", "text": str(text)})
+                block: dict[str, Any] = {"type": "text", "text": str(text)}
+                if "prompt_cache_breakpoint" in part:
+                    block["prompt_cache_breakpoint"] = part["prompt_cache_breakpoint"]
+                if context is not None and breakpoint_count is not None:
+                    openai_breakpoint_to_anthropic(
+                        block,
+                        source_path=f"{source_prefix}.prompt_cache_breakpoint",
+                        capability=capability,
+                        count=breakpoint_count,
+                        context=context,
+                        warnings=warnings,
+                    )
+                blocks.append(block)
         elif part_type == "image_url":
             if not vision_enabled:
                 # Warning emitted by the caller with role context
@@ -251,8 +268,34 @@ class OpenAIToAnthropic:
         out: dict[str, Any] = {}
 
         system_parts: list[str] = []
+        system_blocks: list[dict[str, Any]] = []
         messages: list[dict[str, Any]] = []
         id_map = context.id_map
+        breakpoint_count = [0]
+
+        if "prompt_cache_key" in payload:
+            warnings.append(
+                {"kind": "cache_key_unrepresentable", "field": "prompt_cache_key"}
+            )
+        cache_options = as_object(payload.get("prompt_cache_options"))
+        if cache_options is not None and cache_options.get("ttl") is not None:
+            warnings.append(
+                {
+                    "kind": "cache_ttl_mismatch",
+                    "field": "prompt_cache_options.ttl",
+                    "source_ttl": str(cache_options["ttl"]),
+                    "target_ttl": "5m or 1h",
+                }
+            )
+        if payload.get("prompt_cache_retention") is not None:
+            warnings.append(
+                {
+                    "kind": "cache_ttl_mismatch",
+                    "field": "prompt_cache_retention",
+                    "source_ttl": str(payload["prompt_cache_retention"]),
+                    "target_ttl": "5m or 1h",
+                }
+            )
 
         stream_options_raw = payload.get("stream_options")
         if isinstance(stream_options_raw, dict):
@@ -275,7 +318,19 @@ class OpenAIToAnthropic:
                 if isinstance(content, str):
                     system_parts.append(content)
                 elif isinstance(content, list):
-                    system_parts.extend(extract_text_blocks(content))
+                    blocks = _translate_openai_content_to_anthropic(
+                        cast("list[dict[str, Any]]", content),
+                        vision_enabled=False,
+                        warnings=warnings,
+                        capability=transcoding_capability,
+                        context=context,
+                        source_prefix="messages[].content",
+                        breakpoint_count=breakpoint_count,
+                    )
+                    if any("cache_control" in block for block in blocks):
+                        system_blocks.extend(blocks)
+                    else:
+                        system_parts.extend(extract_text_blocks(content))
                 continue
 
             if role == "tool":
@@ -356,9 +411,29 @@ class OpenAIToAnthropic:
                     if content:
                         content_blocks.append({"type": "text", "text": content})
                 elif isinstance(content, list):
-                    text_parts = extract_text_blocks(content)
-                    for part in text_parts:
-                        content_blocks.append({"type": "text", "text": part})
+                    for part_index, part in enumerate(iter_objects(content)):
+                        if part.get("type") != "text":
+                            continue
+                        block = {
+                            "type": "text",
+                            "text": str(part.get("text", "")),
+                        }
+                        if "prompt_cache_breakpoint" in part:
+                            block["prompt_cache_breakpoint"] = part[
+                                "prompt_cache_breakpoint"
+                            ]
+                        openai_breakpoint_to_anthropic(
+                            block,
+                            source_path=(
+                                f"messages[assistant].content[{part_index}]"
+                                ".prompt_cache_breakpoint"
+                            ),
+                            capability=transcoding_capability,
+                            count=breakpoint_count,
+                            context=context,
+                            warnings=warnings,
+                        )
+                        content_blocks.append(block)
                     if has_non_text_blocks(content):
                         warnings.append(
                             {
@@ -434,12 +509,19 @@ class OpenAIToAnthropic:
                     cast("list[dict[str, Any]]", content),
                     vision_enabled=vision_enabled,
                     warnings=inner_warnings,
+                    capability=transcoding_capability,
+                    context=context,
+                    source_prefix=f"messages[{role}].content",
+                    breakpoint_count=breakpoint_count,
                 )
                 has_non_text = any(b.get("type") != "text" for b in anthropic_blocks)
+                has_cache_control = any(
+                    "cache_control" in block for block in anthropic_blocks
+                )
                 text_only = [
                     b["text"] for b in anthropic_blocks if b.get("type") == "text"
                 ]
-                if has_non_text:
+                if has_non_text or has_cache_control:
                     messages.append({"role": role, "content": anthropic_blocks or ""})
                 elif text_only:
                     messages.append({"role": role, "content": "\n".join(text_only)})
@@ -599,7 +681,9 @@ class OpenAIToAnthropic:
                     }
                 )
 
-        if system_parts:
+        if system_blocks:
+            out["system"] = system_blocks
+        elif system_parts:
             out["system"] = "\n\n".join(system_parts)
 
         tools_raw = payload.get("tools")

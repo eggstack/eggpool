@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from eggpool.catalog.capabilities import TranscodingCapabilities
 from eggpool.transcoder.anthropic_to_openai import AnthropicToOpenAI
 from eggpool.transcoder.context import TranscodeContext
 
@@ -46,6 +47,37 @@ class TestBasicRequestTranslation:
         assert result["messages"][2]["content"] == "Hi there!"
         assert result["messages"][3]["role"] == "user"
         assert result["messages"][3]["content"] == "How are you?"
+
+    def test_message_boundary_maps_to_openai_content_part(self) -> None:
+        payload = {
+            "model": "claude-opus",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "stable",
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                }
+            ],
+        }
+        result, warnings = AnthropicToOpenAI().encode_request(
+            payload,
+            _make_context(),
+            transcoding_capability=TranscodingCapabilities(
+                prompt_cache_breakpoints=["openai"]
+            ),
+        )
+        assert result["messages"][0]["content"][0]["prompt_cache_breakpoint"] == {
+            "mode": "explicit"
+        }
+        assert result["prompt_cache_options"] == {"mode": "explicit"}
+        assert not any(
+            w["kind"] == "cache_breakpoint_unsupported_target" for w in warnings
+        )
 
     def test_system_as_list_of_text_blocks_joined(
         self, transcoder: AnthropicToOpenAI

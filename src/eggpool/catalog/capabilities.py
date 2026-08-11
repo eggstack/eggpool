@@ -195,6 +195,7 @@ class TranscodingCapabilities(BaseModel):
     strict_tools: list[str] = Field(default_factory=list)
     parallel_tool_control: list[str] = Field(default_factory=list)
     reasoning_efforts: dict[str, list[str]] = Field(default_factory=dict)
+    prompt_cache_breakpoints: list[str] = Field(default_factory=list)
 
     def supports(self, feature: str, protocol: str) -> bool:
         """Return whether *protocol* explicitly supports *feature*."""

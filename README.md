@@ -193,7 +193,14 @@ What gets translated:
 What is dropped with a structured warning log:
 
 - OpenAI fields with no Anthropic equivalent (`logit_bias`, `presence_penalty`, `top_logprobs`, etc.)
-- Anthropic fields with no OpenAI equivalent (`top_k`, `cache_control`)
+- Anthropic fields with no OpenAI equivalent (`top_k`, tool-definition
+  `cache_control` on Chat Completions, and provider-specific TTLs)
+
+Explicit provider-native prompt-cache boundaries are translated across the
+representable content-block subset only when the target model capability
+explicitly verifies `prompt_cache_breakpoints`. TTLs are never assumed
+equivalent, OpenAI implicit caching does not enable Anthropic caching, and
+cache keys are never synthesized or logged.
 
 Feature flags (`[transcoder.features]`) — all **off** by default:
 

@@ -10,6 +10,7 @@ from eggpool.transcoder.cache_stability import (
     extract_cache_boundaries,
     extract_cache_control_type,
 )
+from eggpool.transcoder.cache_translation import anthropic_boundary_to_openai
 from eggpool.transcoder.errors import (
     CACHE_CONTROL_LOSS_KINDS,
     TranscodeLossError,
@@ -265,6 +266,8 @@ class AnthropicToOpenAI:
         warnings: list[dict[str, Any]] = []
         out: dict[str, Any] = {}
         id_map = context.id_map
+        breakpoint_count = [0]
+        mapped_breakpoint = False
 
         messages: list[dict[str, Any]] = []
 
@@ -273,14 +276,33 @@ class AnthropicToOpenAI:
             if isinstance(system, str):
                 messages.append({"role": "system", "content": system})
             elif isinstance(system, list):
-                parts = extract_text_blocks(system)
-                if parts:
-                    messages.append(
-                        {
-                            "role": "system",
-                            "content": "\n\n".join(parts),
-                        }
+                system_parts: list[dict[str, Any]] = []
+                for index, block in enumerate(iter_objects(system)):
+                    if block.get("type") != "text":
+                        continue
+                    part = {"type": "text", "text": str(block.get("text", ""))}
+                    block_copy = dict(block)
+                    if anthropic_boundary_to_openai(
+                        block_copy,
+                        source_path=f"system[{index}].cache_control",
+                        capability=transcoding_capability,
+                        count=breakpoint_count,
+                        context=context,
+                        warnings=warnings,
+                    ):
+                        mapped_breakpoint = True
+                        if "prompt_cache_breakpoint" in block_copy:
+                            part["prompt_cache_breakpoint"] = block_copy[
+                                "prompt_cache_breakpoint"
+                            ]
+                    system_parts.append(part)
+                if system_parts:
+                    content: str | list[dict[str, Any]] = (
+                        system_parts
+                        if mapped_breakpoint
+                        else "\n\n".join(str(part["text"]) for part in system_parts)
                     )
+                    messages.append({"role": "system", "content": content})
 
         for msg in iter_objects(payload.get("messages", [])):
             role = str(msg.get("role", ""))
@@ -290,12 +312,14 @@ class AnthropicToOpenAI:
                 messages.append({"role": role, "content": content})
                 continue
 
-            if isinstance(content, list):
+            if isinstance(content, list):  # pyright: ignore[reportUnnecessaryIsInstance]
                 tool_call_accumulator: list[dict[str, Any]] = []
                 tool_result_messages: list[dict[str, Any]] = []
                 text_parts: list[str] = []
+                openai_text_parts: list[dict[str, Any]] = []
                 vision_parts: list[dict[str, Any]] = []
                 reasoning_content: str | None = None
+                message_has_breakpoint = False
                 vision_enabled = features is not None and features.vision
 
                 for part in iter_objects(content):
@@ -378,7 +402,25 @@ class AnthropicToOpenAI:
                             }
                         )
                     elif part_type == "text":
-                        text_parts.append(str(part.get("text", "")))
+                        text = str(part.get("text", ""))
+                        text_parts.append(text)
+                        translated_part = {"type": "text", "text": text}
+                        translated_source = dict(part)
+                        if anthropic_boundary_to_openai(
+                            translated_source,
+                            source_path="messages[].content[].cache_control",
+                            capability=transcoding_capability,
+                            count=breakpoint_count,
+                            context=context,
+                            warnings=warnings,
+                        ):
+                            mapped_breakpoint = True
+                            message_has_breakpoint = True
+                            if "prompt_cache_breakpoint" in translated_source:
+                                translated_part["prompt_cache_breakpoint"] = (
+                                    translated_source["prompt_cache_breakpoint"]
+                                )
+                        openai_text_parts.append(translated_part)
                     elif part_type in ("image", "document"):
                         if vision_enabled:
                             translated = _translate_anthropic_content_to_openai(
@@ -437,12 +479,21 @@ class AnthropicToOpenAI:
                     assistant_content: str | list[dict[str, Any]]
                     if vision_parts:
                         assistant_content = (
-                            [{"type": "text", "text": "\n".join(text_parts)}]
+                            openai_text_parts
+                            or [{"type": "text", "text": "\n".join(text_parts)}]
                             if text_parts
                             else []
                         ) + vision_parts
                     else:
-                        assistant_content = "\n".join(text_parts) if text_parts else ""
+                        assistant_content = (
+                            (
+                                openai_text_parts
+                                if message_has_breakpoint and text_parts
+                                else "\n".join(text_parts)
+                            )
+                            if text_parts
+                            else ""
+                        )
                     assistant_msg: dict[str, Any] = {
                         "role": "assistant",
                         "content": assistant_content,
@@ -453,7 +504,8 @@ class AnthropicToOpenAI:
                     messages.append(assistant_msg)
                 elif vision_parts:
                     user_content: list[dict[str, Any]] = (
-                        [{"type": "text", "text": "\n".join(text_parts)}]
+                        openai_text_parts
+                        or [{"type": "text", "text": "\n".join(text_parts)}]
                         if text_parts
                         else []
                     ) + vision_parts
@@ -461,7 +513,13 @@ class AnthropicToOpenAI:
                 elif text_parts or reasoning_content is not None:
                     msg_dict: dict[str, Any] = {
                         "role": role,
-                        "content": "\n".join(text_parts) if text_parts else "",
+                        "content": (
+                            openai_text_parts
+                            if message_has_breakpoint
+                            else "\n".join(text_parts)
+                        )
+                        if text_parts
+                        else "",
                     }
                     if reasoning_content is not None and role == "assistant":
                         msg_dict["reasoning_content"] = reasoning_content
@@ -690,6 +748,9 @@ class AnthropicToOpenAI:
         for field, warning in _ANTHROPIC_PRIMITIVE_WARNINGS.items():
             if field in payload:
                 warnings.append(dict(warning))
+
+        if mapped_breakpoint:
+            out["prompt_cache_options"] = {"mode": "explicit"}
 
         # Phase 3 cache-stability sweep. Walk the *source* payload
         # for any ``cache_control`` annotation that the OpenAI wire

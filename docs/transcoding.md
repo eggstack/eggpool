@@ -230,10 +230,21 @@ Tool calling is translated between OpenAI Chat Completions and Anthropic Message
 
 Provider/model capability overrides use `[model_capabilities.<model>.transcoding]`
 or the provider-scoped equivalent. Supported fields are
-`native_structured_outputs`, `strict_tools`, `parallel_tool_control`, and
-`reasoning_efforts`, each keyed by explicit target protocol names. Empty or
+`native_structured_outputs`, `strict_tools`, `parallel_tool_control`,
+`prompt_cache_breakpoints`, and `reasoning_efforts`, each keyed by explicit target protocol names. Empty or
 missing fields mean unknown/unverified support; EggPool never enables native
 fields solely because an account advertises an OpenAI or Anthropic protocol.
+
+Prompt-cache translation is best-effort across the representable subset. An
+explicit OpenAI content breakpoint can become an Anthropic block
+`cache_control`, and an Anthropic message/system block boundary can become an
+OpenAI `prompt_cache_breakpoint`, only when the target capability explicitly
+lists that protocol. TTLs are not treated as equivalent: Anthropic's 5-minute
+and 1-hour controls do not silently become OpenAI's 30-minute setting (or
+vice versa). Anthropic tool-definition boundaries remain lossy for OpenAI
+Chat Completions when no native tool breakpoint is available. OpenAI's
+implicit caching does not opt translated Anthropic requests into caching, and
+explicit source intent takes precedence over synthetic cache insertion.
 
 #### Tool-call id translation
 

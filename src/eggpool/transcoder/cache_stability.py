@@ -184,9 +184,14 @@ def extract_cache_boundaries(body: Any) -> list[tuple[str, str | None]]:
                     continue
                 block_dict = cast("dict[str, Any]", block)
                 cache_control = block_dict.get("cache_control")
-                if cache_control is None:
+                cache_breakpoint = block_dict.get("prompt_cache_breakpoint")
+                if cache_control is None and not isinstance(cache_breakpoint, dict):
                     continue
-                cache_type = extract_cache_control_type(cache_control)
+                cache_type = (
+                    extract_cache_control_type(cache_control)
+                    if cache_control is not None
+                    else "explicit"
+                )
                 found.append(
                     (
                         f"messages[{message_index}].content"

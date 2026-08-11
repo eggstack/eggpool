@@ -1,7 +1,7 @@
 # Plan 106 — Provider-Native Prompt Cache Translation
 
 Date: 2026-08-11
-Status: planned
+Status: implemented
 Parent roadmap: `plans/103-sbc-protocol-parity-and-runtime-efficiency-roadmap.md`
 Planning baseline: `de3eeea5936c964ffa33b7939c791e98d35cfcbb`
 Depends on:
@@ -284,23 +284,45 @@ Live provider requests are optional manual confidence checks only.
 
 ## Acceptance criteria
 
-- [ ] Current official OpenAI/Anthropic cache semantics are re-verified and the closure record names the documentation date/assumptions used.
-- [ ] OpenAI explicit prompt-cache boundaries translate to semantically corresponding Anthropic block cache controls for verified capable targets.
-- [ ] Anthropic eligible content-block cache controls translate to semantically corresponding OpenAI explicit breakpoints for verified capable targets.
-- [ ] Breakpoint count overflow is never silently truncated without loss handling.
-- [ ] TTL values are mapped only when exactly representable; otherwise mismatch follows configured loss policy.
-- [ ] Anthropic tool-definition cache control is not moved to an unrelated OpenAI message boundary when no native equivalent exists.
-- [ ] OpenAI `prompt_cache_key` is never synthesized for cross-protocol translation and source key values are never logged/persisted by new code.
-- [ ] Same-protocol native cache fields remain supported/preserved under existing passthrough rules.
-- [ ] OpenAI implicit/default caching does not cause EggPool to opt every Anthropic translated request into caching.
-- [ ] Explicit source cache intent takes precedence over synthetic EggPool cache insertion.
-- [ ] Native cache boundaries survive supported compression transforms without silent movement/deletion.
-- [ ] Generic compatible providers do not receive unsupported cache fields solely based on protocol family.
-- [ ] Requests with no cache controls retain a cheap path and do not acquire full-payload extra scans merely for cache translation.
-- [ ] Loss observability is bounded and contains no prompt/tool/document/cache-key content.
-- [ ] No local cache store, body hash/key synthesis scheme, DB migration/table, background task, new dependency, or CI job is added.
-- [ ] Focused cache/transcode/compression tests pass.
-- [ ] Ruff, Pyright, smoke tests, and both config checks pass.
+- [x] Current official OpenAI/Anthropic cache semantics are re-verified and the closure record names the documentation date/assumptions used.
+- [x] OpenAI explicit prompt-cache boundaries translate to semantically corresponding Anthropic block cache controls for verified capable targets.
+- [x] Anthropic eligible content-block cache controls translate to semantically corresponding OpenAI explicit breakpoints for verified capable targets.
+- [x] Breakpoint count overflow is never silently truncated without loss handling.
+- [x] TTL values are mapped only when exactly representable; otherwise mismatch follows configured loss policy.
+- [x] Anthropic tool-definition cache control is not moved to an unrelated OpenAI message boundary when no native equivalent exists.
+- [x] OpenAI `prompt_cache_key` is never synthesized for cross-protocol translation and source key values are never logged/persisted by new code.
+- [x] Same-protocol native cache fields remain supported/preserved under existing passthrough rules.
+- [x] OpenAI implicit/default caching does not cause EggPool to opt every Anthropic translated request into caching.
+- [x] Explicit source cache intent takes precedence over synthetic EggPool cache insertion.
+- [x] Native cache boundaries survive supported compression transforms without silent movement/deletion.
+- [x] Generic compatible providers do not receive unsupported cache fields solely based on protocol family.
+- [x] Requests with no cache controls retain a cheap path and do not acquire full-payload extra scans merely for cache translation.
+- [x] Loss observability is bounded and contains no prompt/tool/document/cache-key content.
+- [x] No local cache store, body hash/key synthesis scheme, DB migration/table, background task, new dependency, or CI job is added.
+- [x] Focused cache/transcode/compression tests pass.
+- [x] Ruff, Pyright, smoke tests, and both config checks pass.
+
+## Closure record
+
+Implementation adds a capability-gated native boundary translator. The only
+new capability fact is `transcoding.prompt_cache_breakpoints`, keyed by target
+protocol. OpenAI explicit content markers map to Anthropic `cache_control` on
+eligible translated blocks; Anthropic message/system block controls map to
+OpenAI `prompt_cache_breakpoint`. Both directions cap translated boundaries at
+four and surface overflow through the configured loss policy. Anthropic tool
+definition controls remain unrepresentable on OpenAI Chat Completions and are
+never relocated. `prompt_cache_key` is reported as unrepresentable without
+including its value in diagnostics. The existing synthetic cache policy stays
+secondary and Plan 108 remains responsible for broader simplification.
+
+Provider documentation was re-verified on 2026-08-11 from the official
+[OpenAI prompt caching guide](https://developers.openai.com/api/docs/guides/prompt-caching)
+and [Anthropic prompt caching guide](https://platform.claude.com/docs/en/build-with-claude/prompt-caching).
+The verified assumptions are OpenAI explicit content breakpoints and
+`prompt_cache_options.ttl = "30m"` for GPT-5.6-family models, four new cache
+writes per request, and Anthropic block/top-level `cache_control`, 5-minute or
+1-hour TTLs, and up to four explicit breakpoints. These are provider facts,
+not EggPool TTL equivalence rules.
 
 ## Rejection conditions
 
