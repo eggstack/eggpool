@@ -78,6 +78,79 @@ class TestBasicRequestTranslation:
             w["kind"] == "cache_breakpoint_unsupported_target" for w in warnings
         )
 
+    @pytest.mark.parametrize("role", ["user", "assistant"])
+    def test_content_text_without_breakpoint_is_not_cache_loss(self, role: str) -> None:
+        payload = {
+            "messages": [
+                {
+                    "role": role,
+                    "content": [{"type": "text", "text": "ordinary"}],
+                }
+            ]
+        }
+        original = json.loads(json.dumps(payload))
+        context = _make_context()
+
+        result, warnings = OpenAIToAnthropic().encode_request(
+            payload, context, loss_policy="reject"
+        )
+
+        assert payload == original
+        assert context.cache_boundary_tracker.annotations == []
+        assert not any(
+            warning["kind"] == "cache_breakpoint_invalid_shape" for warning in warnings
+        )
+        assert "cache_control" not in result["messages"][0]["content"][0]
+        assert "prompt_cache_breakpoint" not in result["messages"][0]["content"][0]
+
+    @pytest.mark.parametrize("role", ["system", "developer"])
+    def test_system_text_without_breakpoint_is_not_cache_loss(self, role: str) -> None:
+        payload = {
+            "messages": [
+                {
+                    "role": role,
+                    "content": [{"type": "text", "text": "ordinary"}],
+                }
+            ]
+        }
+
+        result, warnings = OpenAIToAnthropic().encode_request(
+            payload, _make_context(), loss_policy="reject"
+        )
+
+        assert result["system"] == "ordinary"
+        assert not any(
+            warning["kind"] == "cache_breakpoint_invalid_shape" for warning in warnings
+        )
+
+    def test_malformed_breakpoint_remains_a_real_loss(self) -> None:
+        payload = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "stable",
+                            "prompt_cache_breakpoint": "malformed",
+                        }
+                    ],
+                }
+            ]
+        }
+
+        result, warnings = OpenAIToAnthropic().encode_request(payload, _make_context())
+
+        block = result["messages"][0]["content"][0]
+        assert "prompt_cache_breakpoint" not in block
+        assert any(
+            warning["kind"] == "cache_breakpoint_invalid_shape" for warning in warnings
+        )
+        with pytest.raises(TranscodeLossError):
+            OpenAIToAnthropic().encode_request(
+                payload, _make_context(), loss_policy="reject"
+            )
+
     def test_unsupported_breakpoint_is_consumed_and_reported(self) -> None:
         payload = {
             "messages": [

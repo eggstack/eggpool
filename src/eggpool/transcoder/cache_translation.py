@@ -29,7 +29,9 @@ def openai_breakpoint_to_anthropic(
     warnings: list[dict[str, Any]],
 ) -> bool:
     """Translate one OpenAI explicit content breakpoint in place."""
-    marker_raw = part.pop("prompt_cache_breakpoint", None)
+    if "prompt_cache_breakpoint" not in part:
+        return False
+    marker_raw = part.pop("prompt_cache_breakpoint")
     if not isinstance(marker_raw, dict):
         warnings.append(
             {"kind": "cache_breakpoint_invalid_shape", "field": source_path}
@@ -115,17 +117,17 @@ def anthropic_boundary_to_openai(
     context: TranscodeContext,
     warnings: list[dict[str, Any]],
 ) -> bool:
-    """Translate one Anthropic cacheable block boundary in place."""
+    """Translate one boundary, returning true only when it maps natively."""
     if "cache_control" not in part:
         return False
     cache_control_raw = part.get("cache_control")
     if not isinstance(cache_control_raw, dict):
         warnings.append({"kind": "cache_control_invalid_shape", "field": source_path})
-        return True
+        return False
     cache_control = cast("dict[str, Any]", cache_control_raw)
     if not isinstance(cache_control.get("type"), str):
         warnings.append({"kind": "cache_control_invalid_shape", "field": source_path})
-        return True
+        return False
     if cache_control.get("ttl") is not None:
         warnings.append(
             {
@@ -149,7 +151,7 @@ def anthropic_boundary_to_openai(
                 cache_control_type=str(cache_control.get("type")),
             )
         )
-        return True
+        return False
     if count[0] >= MAX_NATIVE_BREAKPOINTS:
         warnings.append(
             {
@@ -169,7 +171,7 @@ def anthropic_boundary_to_openai(
                 cache_control_type=str(cache_control.get("type")),
             )
         )
-        return True
+        return False
     part["prompt_cache_breakpoint"] = {"mode": "explicit"}
     count[0] += 1
     context.cache_boundary_tracker.record(

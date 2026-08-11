@@ -61,6 +61,11 @@ Transparent request/response format conversion between OpenAI and Anthropic prot
   `native_structured_outputs`, `strict_tools`, `parallel_tool_control`, and
   per-protocol `reasoning_efforts`. Missing facts are unknown and do not emit
   native fields to generic compatible providers.
+- Native prompt-cache translation is capability-gated and bounded to four
+  breakpoints. An absent source breakpoint is a no-op; only an actually
+  emitted target breakpoint counts as mapped. Malformed, unsupported, and
+  overflowed boundaries remain visible losses without creating target-native
+  explicit-cache options.
 - Native OpenAI JSON schema uses Anthropic `output_config.format` in the
   verified direction; native strict tools and parallel disabling use the
   provider-documented fields. Loss-policy warnings remain local preparation

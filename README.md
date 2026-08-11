@@ -16,7 +16,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Tracks requests, tokens, latency, errors, and cost provenance in SQLite (`provider_reported`, trusted local `derived`/`partial`, bounded `estimated`; reservation is advisory, not a floor)
 - Multi-page dashboard with 50+ themes, reliability, routing, and runtime views
 - Model metadata enrichment from provider catalogs, OpenRouter, Artificial Analysis, and Hugging Face
-- Provider-neutral request shaping: cache reporting, safe suffix compression, policy-scoped overrides, optional synthetic cache controls, and advisory threshold tuning
+- Provider-neutral request shaping: capability-gated native cache-boundary translation, cache reporting, safe suffix compression, policy-scoped overrides, optional synthetic cache controls, and advisory threshold tuning
 - Single-decode provider payload lifecycle: selected-provider transforms share one immutable client snapshot, generation-aware provider payload, and final serialization cache
 - Request preparation is allocation-conscious: ASCII context estimation uses a native fast path, translated tool allowance is arithmetic-only, and provider/trusted-proxy lookup sets are generation-owned
 - Thinking/reasoning capability-aware routing with configurable budget mapping

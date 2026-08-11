@@ -551,6 +551,8 @@ translation:
 - `AnthropicToOpenAI.encode_request` maps message/system block boundaries to
   OpenAI `prompt_cache_breakpoint` only when the target capability verifies
   that field. Tool-definition boundaries remain explicitly unrepresentable.
+  Only an emitted target breakpoint counts as mapped; absent, malformed,
+  unsupported, and overflowed boundaries do not enable explicit mode.
   Top-level Anthropic `cache_control` is reported as
   `cache_control_feature_disabled`; TTL mismatches and four-boundary overflow
   remain policy-visible losses.

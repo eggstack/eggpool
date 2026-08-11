@@ -121,7 +121,11 @@ parts. Source-only breakpoint markers are consumed and do not remain on the
 target wire. The mapping is bounded to four target breakpoints and emits structured
 loss metadata for overflow, unsupported placement, TTL mismatch, and
 unrepresentable cache keys. Tool-definition boundaries are never moved to a
-message boundary. No cache key is synthesized or persisted.
+message boundary. An absent OpenAI breakpoint is ordinary content and
+produces no warning or tracker annotation; malformed, unsupported, and
+overflowed boundaries return as unmapped, so explicit mode is emitted only
+when a target breakpoint was actually written. No cache key is synthesized or
+persisted.
 
 TTL labels are provider-specific and are never silently converted. OpenAI
 implicit caching is not source intent for Anthropic automatic caching. Native

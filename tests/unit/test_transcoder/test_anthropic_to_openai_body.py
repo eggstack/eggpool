@@ -112,6 +112,90 @@ class TestBasicRequestTranslation:
             for w in warnings
         )
 
+    def test_unsupported_message_boundary_has_no_phantom_native_controls(self) -> None:
+        payload = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "stable",
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                }
+            ]
+        }
+
+        result, warnings = AnthropicToOpenAI().encode_request(payload, _make_context())
+
+        block = result["messages"][0]["content"]
+        assert isinstance(block, str)
+        assert "prompt_cache_options" not in result
+        assert not any("prompt_cache_breakpoint" in item for item in result.values())
+        assert any(
+            warning["kind"] == "cache_breakpoint_unsupported_target"
+            for warning in warnings
+        )
+
+    def test_malformed_boundary_has_no_native_controls(self) -> None:
+        payload = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "stable",
+                            "cache_control": "malformed",
+                        }
+                    ],
+                }
+            ]
+        }
+
+        result, warnings = AnthropicToOpenAI().encode_request(payload, _make_context())
+
+        assert result["messages"][0]["content"] == "stable"
+        assert "prompt_cache_options" not in result
+        assert any(
+            warning["kind"] == "cache_control_invalid_shape" for warning in warnings
+        )
+
+    def test_breakpoint_limit_maps_only_the_first_four_boundaries(self) -> None:
+        payload = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"stable-{index}",
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                        for index in range(5)
+                    ],
+                }
+            ]
+        }
+
+        result, warnings = AnthropicToOpenAI().encode_request(
+            payload,
+            _make_context(),
+            transcoding_capability=TranscodingCapabilities(
+                prompt_cache_breakpoints=["openai"]
+            ),
+        )
+
+        content = result["messages"][0]["content"]
+        assert isinstance(content, list)
+        assert sum("prompt_cache_breakpoint" in part for part in content) == 4
+        assert result["prompt_cache_options"] == {"mode": "explicit"}
+        assert any(
+            warning["kind"] == "cache_breakpoint_limit_exceeded" for warning in warnings
+        )
+
     def test_system_as_list_of_text_blocks_joined(
         self, transcoder: AnthropicToOpenAI
     ) -> None:

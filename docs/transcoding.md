@@ -246,7 +246,11 @@ and 1-hour controls do not silently become OpenAI's 30-minute setting (or
 vice versa). Anthropic tool-definition boundaries remain lossy for OpenAI
 Chat Completions when no native tool breakpoint is available. OpenAI's
 implicit caching does not opt translated Anthropic requests into caching, and
-explicit source intent takes precedence over synthetic cache insertion.
+explicit source intent takes precedence over synthetic cache insertion. An
+absent OpenAI breakpoint is ordinary content, not a cache loss. In the reverse
+direction, only a breakpoint actually emitted on the OpenAI target counts as a
+mapping; malformed, unsupported, and four-boundary overflow cases remain
+loss-visible without causing `prompt_cache_options` to appear by themselves.
 
 #### Tool-call id translation
 
