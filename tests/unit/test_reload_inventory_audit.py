@@ -299,6 +299,7 @@ EXPECTED_INVENTORY_SNAPSHOT: tuple[tuple[str, str, bool], ...] = (
     ("server.api_key_env", "restart_required", True),
     ("server.host", "restart_required", False),
     ("server.log_level", "restart_required", False),
+    ("server.max_request_body_bytes", "live", False),
     ("server.port", "restart_required", False),
     ("server.threads", "restart_required", False),
     ("transcoder", "live", False),

@@ -172,6 +172,12 @@ coarse internal cadence.
 
 Full config reference: [`config.example.toml`](config.example.toml) | [docs/providers.md](docs/providers.md)
 
+Request ingestion is bounded by `[server].max_request_body_bytes`, which
+defaults to 10 MiB and can be changed live with `eggpool rehash`. Provider
+document and image limits remain additional constraints; they never raise the
+whole-request ceiling. Oversized bodies are rejected before JSON parsing or
+transcoding.
+
 Account `weight` is a positive, relative capacity/share hint within an
 eligible priority tier. `1.0` is the baseline; `2.0` approximately doubles an
 account's effective request/token capacity and `0.5` approximately halves it.

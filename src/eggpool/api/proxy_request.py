@@ -22,7 +22,6 @@ from eggpool.api.errors import (
 from eggpool.auth import require_auth
 from eggpool.catalog.capabilities import classify_thinking_request
 from eggpool.catalog.protocols import ProtocolMismatchError, ProtocolName
-from eggpool.constants import MAX_REQUEST_BODY_BYTES
 from eggpool.errors import (
     CapabilityError,
     CatalogUnavailableError,
@@ -481,7 +480,9 @@ async def _handle_proxy_request_inner(
 
     try:
         with _span(span_recorder, SPAN_BODY_READ):
-            body = await read_body_limited(request, MAX_REQUEST_BODY_BYTES)
+            body = await read_body_limited(
+                request, lease.runtime.config.server.max_request_body_bytes
+            )
     except RequestTooLargeError:
         return endpoint.error_response(
             status_code=413,

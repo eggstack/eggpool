@@ -167,11 +167,26 @@ negative count.
 
 ### `request/body.py` — Request Body Reader
 
-Reads and validates incoming request bodies.
+Reads and validates incoming request bodies. The whole JSON body is bounded by
+`[server].max_request_body_bytes` (10 MiB by default) before parsing; provider
+document/media limits are subsequent, narrower constraints.
 
 ### `request/parsed_payload.py` — ParsedRequestPayload
 
-Cached JSON parse with derived state (model, tools, messages, etc.).
+Cached JSON parse with derived state (model, tools, messages, etc.) through
+`eggpool.jsonx`, preserving the selected stdlib/orjson backend.
+
+### Provider payload ownership
+
+`ProxyRequestContext` owns the accepted client bytes and parsed payload until
+the selected attempt is prepared. `ProviderBoundRequest` treats that graph as
+logically immutable, then makes one deep copy on the first provider-bound
+mutation; later transforms mutate the owned ordinary graph and serialization
+does not thaw a recursive frozen structure. If no body semantics change, the
+accepted client bytes are sent unchanged. Once an upstream response is chosen
+and the stream is handed off, dispatch-only bytes, parsed state, and provider
+payload buffers are released; scalar body-size/accounting metadata remains for
+finalization.
 
 ### `request/limits.py` — Request Limit Enforcement
 

@@ -2,53 +2,13 @@
 
 from __future__ import annotations
 
-from types import MappingProxyType
-
 import pytest
 
 from eggpool.request.provider_bound_request import (
     PreparedTranscodeValidityKey,
     ProviderBoundRequest,
     SegmentationValidityKey,
-    _freeze,
 )
-
-# ---------------------------------------------------------------------------
-# _freeze helper
-# ---------------------------------------------------------------------------
-
-
-class TestFreeze:
-    def test_dict_becomes_mapping_proxy(self) -> None:
-        raw: dict[str, object] = {"a": 1, "b": "two"}
-        result = _freeze(raw)
-        assert isinstance(result, MappingProxyType)
-        assert result["a"] == 1
-        assert result["b"] == "two"
-
-    def test_list_becomes_tuple(self) -> None:
-        result = _freeze([1, "two", 3.0])
-        assert isinstance(result, tuple)
-        assert result == (1, "two", 3.0)
-
-    def test_nested_structure(self) -> None:
-        raw: dict[str, object] = {"messages": [{"role": "user", "content": "hi"}]}
-        result = _freeze(raw)
-        assert isinstance(result, MappingProxyType)
-        msgs = result["messages"]
-        assert isinstance(msgs, tuple)
-        assert isinstance(msgs[0], MappingProxyType)
-        assert msgs[0]["role"] == "user"
-
-    def test_string_passthrough(self) -> None:
-        assert _freeze("hello") == "hello"
-
-    def test_int_passthrough(self) -> None:
-        assert _freeze(42) == 42
-
-    def test_none_passthrough(self) -> None:
-        assert _freeze(None) is None
-
 
 # ---------------------------------------------------------------------------
 # SegmentationValidityKey
@@ -219,16 +179,29 @@ class TestProviderBoundRequest:
         pbr.set_provider_payload({"model": "x"})
         assert pbr.segmentation_is_valid("openai", 1) is False
 
-    def test_provider_payload_is_frozen(self) -> None:
+    def test_nested_provider_mutation_isolated_from_client(self) -> None:
         pbr = ProviderBoundRequest(
             client_bytes=b"{}",
             client_payload={"model": "gpt-4"},
             client_protocol="openai",
             model_id="gpt-4",
         )
-        pbr.set_provider_payload({"messages": [{"role": "user", "content": "hi"}]})
-        # The stored payload should be a MappingProxyType
-        assert isinstance(pbr._provider_payload, MappingProxyType)
+        client_payload = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+        pbr = ProviderBoundRequest(
+            client_bytes=b"{}",
+            client_payload=client_payload,
+            client_protocol="openai",
+            model_id="gpt-4",
+        )
+        pbr.mutate_provider_payload(
+            lambda payload: payload["messages"][0].__setitem__("content", "changed"),
+            reason="nested_test",
+        )
+        assert client_payload["messages"][0]["content"] == "hi"
+        assert pbr.provider_payload["messages"][0]["content"] == "changed"
 
     def test_structural_noop_does_not_advance_generation(self) -> None:
         pbr = ProviderBoundRequest(
@@ -241,16 +214,18 @@ class TestProviderBoundRequest:
         assert pbr.payload_generation == 0
 
     def test_serialization_is_cached_and_freezes_dispatch(self) -> None:
+        original = b'{"model":"gpt-4","messages":[]}'
         pbr = ProviderBoundRequest(
-            client_bytes=b"{}",
+            client_bytes=original,
             client_payload={"model": "gpt-4"},
             client_protocol="openai",
             model_id="gpt-4",
         )
         first = pbr.serialize_provider_payload()
         second = pbr.serialize_provider_payload()
-        assert first == second
-        assert pbr.diagnostics.provider_encodes == 1
+        assert first is original
+        assert second is original
+        assert pbr.diagnostics.provider_encodes == 0
         assert pbr.frozen is True
         with pytest.raises(RuntimeError):
             pbr.replace_provider_payload({"model": "claude"}, reason="late")

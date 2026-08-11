@@ -108,6 +108,7 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "server.log_level": ReloadDisposition.RESTART_REQUIRED,
     "server.access_log": ReloadDisposition.RESTART_REQUIRED,
     "server.threads": ReloadDisposition.RESTART_REQUIRED,
+    "server.max_request_body_bytes": ReloadDisposition.LIVE,
     # ---- upstream provider transport (consumed at client-pool build) ----
     # Transport timeouts are generation construction inputs. They are not
     # request lifetime limits and do not drive an active-process stale sweep.

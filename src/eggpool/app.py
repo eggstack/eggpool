@@ -29,7 +29,7 @@ from eggpool.background.cleanup import (
     reconcile_expired_reservations,
 )
 from eggpool.cli_exit_codes import STAGE_RELOAD_IN_PROGRESS
-from eggpool.constants import API_V1_PREFIX, MAX_REQUEST_BODY_BYTES
+from eggpool.constants import API_V1_PREFIX
 from eggpool.control.reload_manager import ReloadInProgressError, ReloadManager
 from eggpool.control.server import (
     PROTOCOL_VERSION,
@@ -70,7 +70,7 @@ from eggpool.runtime_manager import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Callable
 
     from eggpool.catalog.service import CatalogService
     from eggpool.health.health_manager import HealthManager
@@ -111,7 +111,11 @@ class _BodyLimitMiddleware:
     overhead of ``BaseHTTPMiddleware``.
     """
 
-    def __init__(self, app: Any, max_bytes: int) -> None:  # noqa: ANN401
+    def __init__(
+        self,
+        app: Any,
+        max_bytes: int | Callable[[], int] | None = None,
+    ) -> None:  # noqa: ANN401
         self._app = app
         self._max_bytes = max_bytes
 
@@ -119,6 +123,12 @@ class _BodyLimitMiddleware:
         if scope.get("type") != "http":
             await self._app(scope, receive, send)
             return
+
+        max_bytes = self._max_bytes
+        if callable(max_bytes):
+            max_bytes = max_bytes()
+        if max_bytes is None:
+            raise RuntimeError("request body limit is not configured")
 
         content_length: str | None = None
         for name, value in scope.get("headers", []):
@@ -131,7 +141,7 @@ class _BodyLimitMiddleware:
                 declared_size = int(content_length)
             except (TypeError, ValueError):
                 declared_size = None
-            if declared_size is not None and declared_size > self._max_bytes:
+            if declared_size is not None and declared_size > max_bytes:
                 path = scope.get("path", "")
                 if path.endswith("/messages"):
                     error_body = jsonx_dumps_bytes(
@@ -1576,7 +1586,7 @@ def create_app(
         )
     app.add_middleware(
         _BodyLimitMiddleware,
-        max_bytes=MAX_REQUEST_BODY_BYTES,
+        max_bytes=lambda: app.state.config.server.max_request_body_bytes,
     )
 
     # Dashboard and statistics routes (require auth unless dashboard.public = true)

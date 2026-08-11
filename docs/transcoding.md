@@ -133,7 +133,7 @@ When set, EggPool boots with a `WARNING` and reverts to the pre-default behaviou
 | `messages[].content[].cache_control` | — | Dropped with `cache_control_unsupported_by_target_protocol` warning |
 | `messages[assistant].content[thinking]` | `messages[assistant].reasoning_content` | Feature-gated: thinking text mapped; signature dropped with `thinking_signature_dropped` warning |
 | `messages[assistant].content[image]` | `messages[user].content[image_url]` | Feature-gated: base64 → data URI; URL → `image_url.url` |
-| `messages[user].content[document]` | `messages[user].content[file]` | Feature-gated: PDF base64 → `file` with data URI; URL dropped; non-PDF, invalid base64, and PDFs over 32 MB are dropped |
+| `messages[user].content[document]` | `messages[user].content[file]` | Feature-gated: PDF base64 → `file` with data URI; URL dropped; non-PDF, invalid base64, and PDFs over 32 MB are dropped. All requests must also fit `[server].max_request_body_bytes` (10 MiB by default). |
 | `messages[assistant].content[].tool_use` | `messages[assistant].tool_calls[]` | Translated; id map mints new client ids |
 | `messages[user].content[].tool_result` | `messages[tool]` | Translated; `tool_use_id` ↔ `tool_call_id` via id map |
 | `messages[].content[non-text]` | — | Non-text blocks dropped, warning emitted |

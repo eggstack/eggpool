@@ -498,6 +498,7 @@ class ProxyRequestContext:
     streaming: bool
     original_body: bytes
     incoming_headers: dict[str, str]
+    original_body_size: int | None = None
     started_at: float = field(default_factory=time.time)
     started_monotonic: float = field(default_factory=time.monotonic)
     started_monotonic_ns: int = field(default_factory=time.perf_counter_ns)
@@ -547,8 +548,17 @@ class ProxyRequestContext:
     provider_bound: Any | None = None  # ProviderBoundRequest | None
 
     def __post_init__(self) -> None:
+        if self.original_body_size is None:
+            self.original_body_size = len(self.original_body)
         if not self.upstream_protocol:
             self.upstream_protocol = self.protocol
+
+    def release_dispatch_buffers(self) -> None:
+        """Release large request-side buffers once the chosen attempt is handed off."""
+        self.original_body = b""
+        self.parsed_payload = None
+        if self.provider_bound is not None:
+            self.provider_bound.release_dispatch_buffers()
 
     @property
     def body_for_upstream(self) -> bytes:
@@ -900,7 +910,7 @@ class RequestCoordinator:
             retry_category=(
                 error.retry_category.value if error.retry_category is not None else None
             ),
-            bytes_received=len(context.original_body),
+            bytes_received=context.original_body_size or len(context.original_body),
             latency_ms=self._elapsed_ms(context),
             failure_effects=error.failure_effects,
         )
@@ -1066,7 +1076,7 @@ class RequestCoordinator:
                 outcome=FinalizationOutcome.CLIENT_CANCELLED,
                 error_class="CancelledError",
                 upstream_latency_ms=self._elapsed_ms(context),
-                bytes_received=len(context.original_body),
+                bytes_received=context.original_body_size or len(context.original_body),
                 downstream_started=context.response_handoff.started,
                 health_already_applied=health_already_applied,
                 upstream_protocol=context.upstream_protocol,
@@ -1952,7 +1962,7 @@ class RequestCoordinator:
             account_name=claim_identity.account_name,
             estimated_tokens=estimated_tokens,
             estimated_microdollars=claim_identity.estimated_microdollars,
-            bytes_received=len(context.original_body),
+            bytes_received=context.original_body_size or len(context.original_body),
             latency_ms=self._elapsed_ms(context),
             receipt=receipt,
         )
@@ -2880,7 +2890,8 @@ class RequestCoordinator:
                     outcome=FinalizationOutcome.CLIENT_CANCELLED,
                     error_class="CancelledError",
                     upstream_latency_ms=elapsed_ms,
-                    bytes_received=len(context.original_body),
+                    bytes_received=context.original_body_size
+                    or len(context.original_body),
                     downstream_started=context.response_handoff.started,
                     upstream_protocol=context.upstream_protocol,
                     thinking_trace_json=_serialize_thinking_trace(
@@ -3186,7 +3197,8 @@ class RequestCoordinator:
                     upstream_connect_ms=upstream_connect_ms,
                     upstream_read_ms=upstream_read_ms,
                     coordinator_overhead_ms=coordinator_overhead_ms,
-                    bytes_received=len(context.original_body),
+                    bytes_received=context.original_body_size
+                    or len(context.original_body),
                     provider_cost_microdollars=(
                         usage.reported_cost_microdollars if usage else None
                     ),
@@ -3536,6 +3548,9 @@ class RequestCoordinator:
         if response is None:
             raise DatabaseError("Upstream response is None")
 
+        # The chosen response is prepared and no retry or response adapter
+        # needs the request body after this handoff boundary.
+        context.release_dispatch_buffers()
         return PreparedProxyResponse(
             status_code=response.status_code,
             headers=resp_headers,
@@ -3754,7 +3769,8 @@ class RequestCoordinator:
                             thinking_characters=usage_result.thinking_characters,
                             error_class="PrematureStreamEOFError",
                             error_detail=eof_decision.classification,
-                            bytes_received=len(context.original_body),
+                            bytes_received=context.original_body_size
+                            or len(context.original_body),
                             upstream_protocol=context.upstream_protocol,
                             normalized_usage=_build_normalized_usage(
                                 usage=usage_result,
@@ -3857,7 +3873,8 @@ class RequestCoordinator:
                         upstream_request_id=self._get_header_value(
                             resp_headers, _UPSTREAM_REQUEST_ID_HEADERS
                         ),
-                        bytes_received=len(context.original_body),
+                        bytes_received=context.original_body_size
+                        or len(context.original_body),
                         upstream_connect_ms=upstream_connect_ms_value,
                         upstream_read_ms=upstream_read_ms_value,
                         coordinator_overhead_ms=coordinator_overhead_ms_value,
@@ -3948,7 +3965,8 @@ class RequestCoordinator:
                         cache_write_tokens=(usage_result.cache_creation_tokens),
                         reasoning_tokens=usage_result.reasoning_tokens,
                         thinking_characters=(usage_result.thinking_characters),
-                        bytes_received=len(context.original_body),
+                        bytes_received=context.original_body_size
+                        or len(context.original_body),
                         upstream_connect_ms=cancel_connect_ms_value,
                         upstream_read_ms=cancel_read_ms_value,
                         coordinator_overhead_ms=cancel_overhead_ms_value,
@@ -4053,7 +4071,8 @@ class RequestCoordinator:
                         thinking_characters=usage_result.thinking_characters,
                         error_class=type(exc).__name__,
                         error_detail=error_detail_value,
-                        bytes_received=len(context.original_body),
+                        bytes_received=context.original_body_size
+                        or len(context.original_body),
                         upstream_connect_ms=mid_connect_ms_value,
                         upstream_read_ms=mid_read_ms_value,
                         coordinator_overhead_ms=mid_overhead_ms_value,
@@ -5110,7 +5129,8 @@ class RequestCoordinator:
                     error_class=type(err).__name__,
                     error_detail=str(err),
                     upstream_latency_ms=elapsed_ms,
-                    bytes_received=len(context.original_body),
+                    bytes_received=context.original_body_size
+                    or len(context.original_body),
                     upstream_protocol=context.upstream_protocol,
                     thinking_trace_json=_serialize_thinking_trace(
                         context.thinking_trace,
@@ -5523,7 +5543,7 @@ class RequestCoordinator:
                 upstream_request_id=self._get_header_value(
                     resp_headers, _UPSTREAM_REQUEST_ID_HEADERS
                 ),
-                bytes_received=len(context.original_body),
+                bytes_received=context.original_body_size or len(context.original_body),
                 upstream_protocol=context.upstream_protocol,
                 failure_observation=failure_observation,
                 failure_effects=failure_effects,
@@ -5596,7 +5616,8 @@ class RequestCoordinator:
                     upstream_latency_ms=elapsed_ms,
                     downstream_started=context.response_handoff.started,
                     health_already_applied=health_already_applied,
-                    bytes_received=len(context.original_body),
+                    bytes_received=context.original_body_size
+                    or len(context.original_body),
                     upstream_protocol=context.upstream_protocol,
                     failure_observation=(
                         getattr(last_error, "failure_observation", None)
@@ -5676,7 +5697,8 @@ class RequestCoordinator:
                     error_detail=error_detail,
                     upstream_latency_ms=elapsed_ms,
                     downstream_started=context.response_handoff.started,
-                    bytes_received=len(context.original_body),
+                    bytes_received=context.original_body_size
+                    or len(context.original_body),
                     upstream_protocol=context.upstream_protocol,
                     thinking_trace_json=_serialize_thinking_trace(
                         context.thinking_trace

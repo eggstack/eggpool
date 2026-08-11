@@ -17,6 +17,7 @@ analytics, diagnostics, backups, and external metadata probes opt-in.
 [server]
 threads = 1
 access_log = false
+max_request_body_bytes = 10485760
 
 [database]
 worker_threads = 1

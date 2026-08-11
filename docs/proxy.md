@@ -210,6 +210,17 @@ EGGPOOL_ANTHROPIC_MODEL=claude-3-5-sonnet \
 
 ## Troubleshooting
 
+### Request body limits
+
+The proxy rejects bodies larger than `[server].max_request_body_bytes` before
+JSON parsing. The default is `10485760` bytes (10 MiB), appropriate for SBCs;
+the field is live-reloadable with `eggpool rehash`. Provider-specific document
+and image limits are applied after this whole-request limit, so a provider's
+larger native document allowance does not imply that EggPool can ingest a
+request of that size. Base64 media that is certainly over a provider limit is
+rejected before decoded allocation, while malformed values still undergo
+normal strict validation.
+
 ### Connection Refused / Timeout
 
 1. Verify the proxy is running and reachable from the EggPool host

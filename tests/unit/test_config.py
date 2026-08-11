@@ -585,6 +585,17 @@ def test_server_config_rejects_multi_loop_runtime_threads() -> None:
         ServerConfig(threads=2)
 
 
+def test_server_config_body_limit_defaults_and_requires_positive_value() -> None:
+    from pydantic import ValidationError
+
+    from eggpool.models.config import ServerConfig
+
+    assert ServerConfig().max_request_body_bytes == 10 * 1024 * 1024
+    assert ServerConfig(max_request_body_bytes=12_345).max_request_body_bytes == 12_345
+    with pytest.raises(ValidationError):
+        ServerConfig(max_request_body_bytes=0)
+
+
 def test_packaged_config_example_validates() -> None:
     config = AppConfig.from_toml("src/eggpool/_share/config.example.toml")
     assert config.server.port == 11300

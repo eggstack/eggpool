@@ -142,6 +142,10 @@ plane infrastructure (control socket, reload manager, candidate
 generation, persistence reconciliation, atomic publication) is fully
 operational.
 
+`server.max_request_body_bytes` is also live-reloadable. It is the whole JSON
+request ceiling and defaults to 10 MiB; provider-specific document/media
+limits remain additional downstream validation.
+
 ### ReloadManager App Reference
 
 The `ReloadManager` constructor now accepts an optional `app` parameter.

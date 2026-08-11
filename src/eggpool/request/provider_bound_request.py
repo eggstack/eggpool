@@ -21,41 +21,14 @@ Design rules
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping
+
     from eggpool.request.parsed_payload import ParsedRequestPayload
-
-
-def _freeze(value: Any) -> Any:  # noqa: ANN401
-    """Return a deeply frozen copy suitable for use as a mapping value."""
-    if isinstance(value, Mapping):
-        return MappingProxyType(
-            {k: _freeze(v) for k, v in value.items()}  # type: ignore[misc]
-        )
-    if isinstance(value, list):
-        return tuple(_freeze(item) for item in cast("list[Any]", value))
-    if isinstance(value, tuple):
-        return tuple(_freeze(item) for item in cast("tuple[Any, ...]", value))
-    return value
-
-
-def _thaw(value: Any) -> Any:  # noqa: ANN401
-    """Return JSON-native containers for serialization backends."""
-    if isinstance(value, Mapping):
-        result: dict[str, Any] = {}
-        for key, item in cast("Mapping[str, Any]", value).items():
-            result[key] = _thaw(item)
-        return result
-    if isinstance(value, list):
-        return [_thaw(item) for item in cast("list[Any]", value)]
-    if isinstance(value, tuple):
-        return [_thaw(item) for item in cast("tuple[Any, ...]", value)]
-    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,8 +107,9 @@ class ProviderBoundRequest:
     provider_id: str | None = None
     upstream_protocol: str | None = None
 
-    # Decoded provider-bound payload — initially aliases client_payload.
-    _provider_payload: Mapping[str, Any] | None = field(
+    # Decoded provider-bound payload — initially aliases client_payload. Once
+    # a transform needs mutation it becomes one detached ordinary dict.
+    _provider_payload: dict[str, Any] | None = field(
         default=None, repr=False, compare=False, hash=False
     )
     # Serialized provider-bound body — produced once after the last
@@ -209,8 +183,7 @@ class ProviderBoundRequest:
             return False
         if self._frozen:
             raise RuntimeError("provider payload is frozen")
-        frozen = cast("Mapping[str, Any]", _freeze(payload))
-        object.__setattr__(self, "_provider_payload", frozen)
+        object.__setattr__(self, "_provider_payload", deepcopy(dict(payload)))
         object.__setattr__(self, "mutated", True)
         object.__setattr__(self, "payload_generation", self.payload_generation + 1)
         object.__setattr__(self, "_provider_bytes", None)
@@ -224,28 +197,51 @@ class ProviderBoundRequest:
         self, mutator: Callable[[dict[str, Any]], None], *, reason: str
     ) -> bool:
         """Copy the current payload, apply ``mutator``, and replace it safely."""
-        candidate = self.provider_payload_copy()
+        if self._frozen:
+            raise RuntimeError("provider payload is frozen")
+        candidate = (
+            self._provider_payload
+            if self._provider_payload is not None
+            else deepcopy(dict(self.client_payload))
+        )
         mutator(candidate)
-        return self.replace_provider_payload(candidate, reason=reason)
+        object.__setattr__(self, "_provider_payload", candidate)
+        object.__setattr__(self, "mutated", True)
+        object.__setattr__(self, "payload_generation", self.payload_generation + 1)
+        object.__setattr__(self, "_provider_bytes", None)
+        object.__setattr__(self, "_serialized_generation", None)
+        self.diagnostics.generation_changes += 1
+        self.mutation_log.append(PayloadMutation(self.payload_generation, reason))
+        del self.mutation_log[: -self.mutation_log_limit]
+        return True
 
     def provider_payload_copy(self) -> dict[str, Any]:
-        """Return a mutable, detached copy of the provider payload."""
-        return cast("dict[str, Any]", deepcopy(_thaw(self.provider_payload)))
+        """Return a mutable, detached copy for legacy read/transform callers."""
+        return deepcopy(dict(self.provider_payload))
+
+    def release_dispatch_buffers(self) -> None:
+        """Drop request graphs and bytes after dispatch can no longer retry."""
+        if self._frozen:
+            object.__setattr__(self, "_provider_bytes", None)
+        object.__setattr__(self, "_provider_payload", None)
+        object.__setattr__(self, "client_payload", {})
+        object.__setattr__(self, "parsed_payload", None)
+        object.__setattr__(self, "client_bytes", b"")
 
     def set_provider_payload(
         self, payload: Mapping[str, Any], *, increment_generation: bool = True
     ) -> None:
         """Replace the provider-bound payload and bump the generation.
 
-        The new payload is stored as a frozen mapping to prevent
-        accidental mutation.  ``payload_generation`` is incremented so
+        The new payload is stored as an owned ordinary graph. Callers only
+        receive it through the provider-bound API. ``payload_generation`` is
+        incremented so
         downstream caches (segmentation, prepared-transcode) can detect
         staleness.
         """
         if not increment_generation and self._frozen:
             raise RuntimeError("provider payload is frozen")
-        frozen = cast("Mapping[str, Any]", _freeze(payload))
-        object.__setattr__(self, "_provider_payload", frozen)
+        object.__setattr__(self, "_provider_payload", deepcopy(dict(payload)))
         object.__setattr__(self, "mutated", True)
         if increment_generation:
             object.__setattr__(self, "payload_generation", self.payload_generation + 1)
@@ -258,18 +254,25 @@ class ProviderBoundRequest:
         object.__setattr__(self, "_serialized_generation", None)
 
     def serialize_provider_payload(self) -> bytes:
-        """Serialize and cache the current generation, then freeze dispatch."""
+        """Serialize and cache the current generation, then freeze dispatch.
+
+        A body with no provider-bound mutation is already the accepted client
+        body, so dispatch reuses those bytes without decoding/re-encoding.
+        """
         if (
             self._provider_bytes is not None
             and self._serialized_generation == self.payload_generation
         ):
             return self._provider_bytes
-        from eggpool.jsonx import dumps_bytes
+        if not self.mutated:
+            body = self.client_bytes
+        else:
+            from eggpool.jsonx import dumps_bytes
 
-        body = dumps_bytes(_thaw(self.provider_payload))
+            body = dumps_bytes(self.provider_payload)
+            self.diagnostics.provider_encodes += 1
         object.__setattr__(self, "_provider_bytes", body)
         object.__setattr__(self, "_serialized_generation", self.payload_generation)
-        self.diagnostics.provider_encodes += 1
         object.__setattr__(self, "_frozen", True)
         return body
 
@@ -308,8 +311,3 @@ class ProviderBoundRequest:
                 segmentation_policy_version=segmentation_policy_version,
             ),
         )
-
-
-# Cast is needed for the frozen MappingProxyType wrapper but is imported
-# at the bottom to keep the module's public API clean.
-from typing import cast  # noqa: E402

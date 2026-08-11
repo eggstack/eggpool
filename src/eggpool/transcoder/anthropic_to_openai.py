@@ -17,6 +17,7 @@ from eggpool.transcoder.errors import (
 )
 from eggpool.transcoder.json_helpers import (
     as_object,
+    base64_definitely_exceeds,
     decode_base64_payload,
     extract_text_blocks,
     has_non_text_blocks,
@@ -165,6 +166,15 @@ def _translate_anthropic_content_to_openai(
                 )
                 continue
             data = str(source.get("data", ""))
+            if base64_definitely_exceeds(data, _ANTHROPIC_PDF_SIZE_LIMIT):
+                warnings.append(
+                    {
+                        "kind": "pdf_too_large",
+                        "field": "content[document]",
+                        "limit_bytes": _ANTHROPIC_PDF_SIZE_LIMIT,
+                    }
+                )
+                continue
             decoded = decode_base64_payload(data)
             if decoded is None:
                 warnings.append(

@@ -70,6 +70,18 @@ def decode_base64_payload(encoded: str) -> bytes | None:
         return None
 
 
+def base64_definitely_exceeds(encoded: str, limit_bytes: int) -> bool:
+    """Return whether even valid padded base64 exceeds ``limit_bytes``.
+
+    The two-byte uncertainty from the final quantum is conservative, so
+    malformed or merely borderline inputs still go through strict decoding.
+    """
+    if len(encoded) % 4:
+        return False
+    minimum_decoded = max(0, (len(encoded) // 4) * 3 - 2)
+    return minimum_decoded > limit_bytes
+
+
 def split_base64_data_uri(data_uri: str) -> tuple[str, str] | None:
     """Return ``(media_type, encoded_payload)`` for a base64 data URI."""
     if ";base64," not in data_uri:

@@ -1,7 +1,7 @@
 # Plan 107 — Request Memory and Body-Limit Reduction
 
 Date: 2026-08-11
-Status: planned
+Status: complete
 Parent roadmap: `plans/103-sbc-protocol-parity-and-runtime-efficiency-roadmap.md`
 Planning baseline: `de3eeea5936c964ffa33b7939c791e98d35cfcbb`
 
@@ -367,3 +367,43 @@ Reject the implementation if:
 12. Run ordinary repository gate and config checks.
 13. Record implementation SHA, ownership rule, no-transform fast-path rule, buffer-release boundary, body-limit default/config behavior, and exact verification results in this plan.
 14. Stop; leave target-device quantitative observation to Plan 110.
+
+## Implementation closure
+
+Implemented on `main` and verified locally on 2026-08-11.
+
+- `ParsedRequestPayload` now uses `eggpool.jsonx.loads()` for its lazy parse
+  fallback; the endpoint's eager parse remains seeded into the same cache.
+- `ProviderBoundRequest` treats the canonical graph as logically immutable,
+  deep-copies once when provider mutation begins, stores an ordinary owned
+  graph, serializes it directly, and reuses accepted client bytes when no body
+  semantics changed. Recursive freeze/thaw is no longer on the dispatch path.
+- Streaming response preparation releases raw/parsed/provider dispatch buffers
+  after the selected response is prepared, while `original_body_size` retains
+  the scalar needed by finalization and diagnostics. Pre-handoff retry and
+  response adaptation retain their required state.
+- `[server].max_request_body_bytes` defaults to `10485760`, is positive-value
+  validated, is live-reloadable, and is enforced by both early middleware and
+  the leased body reader. Example and bundled configs document the setting.
+- Provider document/media limits are documented as subordinate to the whole
+  request limit. Definitely oversized padded base64 is rejected before decode;
+  malformed or borderline input still follows strict decode validation.
+- No dependency, migration, spooling subsystem, SQLite change, benchmark, or
+  permanent memory threshold was added.
+
+Qualitative evidence: unchanged native dispatch uses the original body with
+zero JSON encode calls; transformed dispatch uses one owned graph and one final
+encode cache; stream handoff clears request dispatch buffers. No quantitative
+RSS claim is made; target-device measurements remain Plan 110 work.
+
+Verification completed:
+
+```text
+uv run ruff format --check src/ tests/ scripts/       PASS
+uv run ruff check src/ tests/ scripts/               PASS
+uv run pyright src/ scripts/                          PASS
+PYTHONHASHSEED=0 TZ=UTC uv run pytest tests/smoke/ -q --tb=short --maxfail=1  PASS (14 passed)
+uv run eggpool --config config.example.toml check-config      PASS
+uv run eggpool --config config.sbc.example.toml check-config  PASS
+focused request/transcoder/lifecycle/config suites            PASS
+```

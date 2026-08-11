@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from typing import Any
+
+from eggpool.jsonx import loads
 
 
 @dataclass(slots=True)
@@ -37,8 +38,8 @@ class ParsedRequestPayload:
         """Parse the original body once, return cached result."""
         if self._parsed_dict is None and not self._parse_failed:
             try:
-                self._parsed_dict = json.loads(self.original_bytes)
-            except (json.JSONDecodeError, ValueError):
+                self._parsed_dict = loads(self.original_bytes)
+            except ValueError:
                 self._parse_failed = True
         return self._parsed_dict
 

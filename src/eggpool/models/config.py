@@ -80,6 +80,7 @@ class ServerConfig(BaseModel):
     # Granian's single worker owns loop-bound asyncio primitives throughout
     # the process. Multiple runtime threads are not a supported topology.
     threads: int = Field(default=1, ge=1, le=1)
+    max_request_body_bytes: int = Field(default=10 * 1024 * 1024, gt=0)
 
     @property
     def resolved_api_key(self) -> str | None:

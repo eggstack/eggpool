@@ -180,6 +180,7 @@ remains available for diagnosing stream-specific regressions.
 - **Local exposure**: the copyable SBC profile binds to loopback. A LAN or wildcard bind is an explicit operator action and must use the existing server API key; do not document or ship an unauthenticated all-interface example.
 - **Diagnostic redaction**: authorization-shape logs contain only header/scheme/length metadata, and transcode loss warnings contain bounded structural metadata—not credential bytes or malformed tool/request content.
 - **Request hot path**: context estimation uses an exact ASCII fast path and translated tool padding is arithmetic-only; provider IDs and trusted proxies come from the leased generation's immutable lookup state.
+- **Request memory/body limits**: `ParsedRequestPayload` parses through `eggpool.jsonx`; `ProviderBoundRequest` uses logical immutability with one copy-on-write provider graph, reuses accepted bytes for unchanged native bodies, and releases dispatch buffers after chosen-response handoff. `[server].max_request_body_bytes` defaults to 10 MiB, is live-reloadable, and bounds provider document/media limits.
 
 ## Error Handling
 
