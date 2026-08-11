@@ -1,7 +1,7 @@
 # Plan 102 — Roadmap 093 Corrective Cleanup
 
 Date: 2026-08-11
-Status: planned
+Status: complete
 Parent roadmap: `plans/093-sbc-runtime-and-maintenance-simplification-roadmap.md`
 Depends on:
 
@@ -21,6 +21,37 @@ The Roadmap 093 implementation is functionally complete. This plan exists only t
 2. `src/eggpool/db/connection.py` retains an orphaned class-level comment describing the production test-injection seam removed by Plan 099.
 
 This is not a new optimization, hardening, database, testing, or documentation initiative. Restore historical migration immutability, remove the stale comment, verify the repository, document completion, and stop.
+
+## Closure record
+
+Implementation commit: `e916bc58ebe55e13a1a28f279beedc6d9622a51b`.
+
+The historical migration `0026_attempt_observability.sql` matches the
+pre-Roadmap-093 baseline commit `adad407dc8fc7e53578c2a659f8183eca5fe752c`
+byte-for-byte and hashes to
+`283dfa926ee5279187004dbad85db0e2f908319143497c2dc366954c67e8cc93`.
+Only its manifest entry was restored; migration `0053` and its checksum were
+not changed. The orphaned production fault-injection comment was deleted from
+`Database`; no production fault-injection field or setter was restored.
+
+Focused verification:
+
+- Migration compatibility/integrity, transaction ownership, commit/rollback
+  ambiguity, migration inventory, attempt stats/index plans, and maintenance:
+  176 passed.
+- `uv run ruff format --check src/ tests/ scripts/`: passed.
+- `uv run ruff check src/ tests/ scripts/`: passed.
+- `uv run pyright src/ scripts/`: 0 errors, 0 warnings, 0 informations.
+- `PYTHONHASHSEED=0 TZ=UTC uv run pytest tests/smoke/ -q --tb=short
+  --maxfail=1`: 14 passed.
+- Both shipped `check-config` commands passed for `config.example.toml` and
+  `config.sbc.example.toml`.
+
+No README, `AGENTS.md`, architecture, deployment, or project-skill guidance
+needed correction: the existing text already reflects the retained migration
+0053 policy and the post-Plan-099 database fault-testing boundary. CI,
+dependencies, lockfiles, runtime behavior, schema behavior, and other
+historical migrations are unchanged.
 
 ## Governing constraints
 
