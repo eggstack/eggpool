@@ -192,10 +192,7 @@ def _redact_auth_shape(auth_headers: dict[str, str]) -> str:
         return "none"
     parts: list[str] = []
     for name, value in auth_headers.items():
-        if len(value) > 10:
-            parts.append(f"{name}: {value[:4]}***{value[-4:]}")
-        else:
-            parts.append(f"{name}: ***")
+        parts.append(f"{name}: present length={len(value)}")
     return ", ".join(parts)
 
 
@@ -1112,13 +1109,17 @@ class RequestCoordinator:
             return
         warnings = context.transcode_context.loss_warnings
         if warnings:
+            max_logged_warnings = 32
+            logged_warnings = warnings[:max_logged_warnings]
+            omitted_warnings = max(0, len(warnings) - len(logged_warnings))
             logger.info(
                 "transcode.loss_warnings request_id=%s "
-                "client=%s upstream=%s warnings=%s",
+                "client=%s upstream=%s warnings=%s omitted=%d",
                 context.request_id,
                 context.protocol,
                 context.upstream_protocol,
-                warnings,
+                logged_warnings,
+                omitted_warnings,
             )
         # Phase 5: per-request structured log for every transcoded request
         if selected is not None:

@@ -208,8 +208,9 @@ def _translate_anthropic_content_to_openai(
 def _parse_tool_input(raw: Any, warnings: list[dict[str, Any]]) -> dict[str, Any]:
     """Parse ``tool_calls[].function.arguments`` into a JSON object.
 
-    Invalid JSON is wrapped as ``{"__raw_arguments__": "<raw>"}`` and a
-    ``malformed_tool_arguments`` warning is appended.
+    Invalid JSON is wrapped in the existing compatibility marker and a
+    ``malformed_tool_arguments`` warning is appended. The warning contains
+    only bounded structural metadata, never the malformed argument bytes.
     """
     if not isinstance(raw, str):
         return {"__raw_arguments__": str(raw)}
@@ -220,7 +221,9 @@ def _parse_tool_input(raw: Any, warnings: list[dict[str, Any]]) -> dict[str, Any
             {
                 "kind": "malformed_tool_arguments",
                 "field": "tool_calls[].function.arguments",
-                "raw": raw,
+                "value_type": type(raw).__name__,
+                "length": len(raw),
+                "reason": "invalid_json",
             }
         )
         return {"__raw_arguments__": raw}
@@ -230,7 +233,8 @@ def _parse_tool_input(raw: Any, warnings: list[dict[str, Any]]) -> dict[str, Any
         {
             "kind": "malformed_tool_arguments",
             "field": "tool_calls[].function.arguments",
-            "raw": raw,
+            "value_type": type(raw).__name__,
+            "length": len(raw),
             "reason": "not_object",
         }
     )

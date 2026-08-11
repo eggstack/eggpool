@@ -52,8 +52,9 @@ The schema keeps indexes for request lifecycle, recovery, retention, and
 filtered provider/model views; the unused per-attempt status aggregate index
 was removed to avoid maintaining it on every attempt write.
 
-For a copyable SBC profile with an explicit LAN bind and provider discovery
-cadence, see [config.sbc.example.toml](config.sbc.example.toml). Its full
+For a copyable SBC profile with a safe loopback bind and provider discovery
+cadence, see [config.sbc.example.toml](config.sbc.example.toml). Set a server
+API key before changing its bind address to a LAN or wildcard address. Its full
 database backup is disabled by default to keep the low-wear profile truthful;
 enable `[backup]` deliberately when local recovery copies are required.
 

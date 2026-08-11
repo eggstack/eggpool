@@ -175,6 +175,8 @@ remains available for diagnosing stream-specific regressions.
 - **SSE diagnostics**: `stream_diagnostics` exposes canonical/compatibility completion, premature EOF, HTTPX transport, and provider-bound first-byte/idle timeout outcomes. Historical lifetime fields remain bounded compatibility metadata but no lifetime timer runs. Each last-event record carries configured limits and bounded timing evidence; stream content and credentials are never persisted.
 - **Router self-healing**: temporary quota, rate, server, transport, protocol, and runtime model suppression is capped at 1,800 seconds. Success clears only matching transient state; authentication and authoritative model withdrawal require explicit credential/operator or catalog recovery. Every acquired half-open probe must end in success, provider failure, or idempotent release.
 - **Client attribution**: `security.trusted_proxies` is an exact peer-IP allowlist. Forwarded client-IP headers are ignored unless the immediate ASGI peer is listed; an empty list is the safe default.
+- **Local exposure**: the copyable SBC profile binds to loopback. A LAN or wildcard bind is an explicit operator action and must use the existing server API key; do not document or ship an unauthenticated all-interface example.
+- **Diagnostic redaction**: authorization-shape logs contain only header/scheme/length metadata, and transcode loss warnings contain bounded structural metadata—not credential bytes or malformed tool/request content.
 - **Request hot path**: context estimation uses an exact ASCII fast path and translated tool padding is arithmetic-only; provider IDs and trusted proxies come from the leased generation's immutable lookup state.
 
 ## Error Handling

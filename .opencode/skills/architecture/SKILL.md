@@ -142,6 +142,11 @@ Plus `ProtocolMismatchError` (from `catalog.protocols`) — endpoint/model-proto
 
 ## Process Model
 
+- The copyable SBC profile binds to loopback by default. LAN or wildcard binds
+  are explicit operator choices and must use the existing server API key;
+  authorization diagnostics and transcode warnings are metadata-only and never
+  contain credential or malformed request-content bytes.
+
 - Supervisor + Granian worker (`workers=1`), daemon mode (`--verbose` for foreground)
 - `[server].threads` default `1`; values greater than `1` fail configuration
   validation because long-lived asyncio primitives are loop-bound
@@ -154,8 +159,9 @@ Plus `ProtocolMismatchError` (from `catalog.protocols`) — endpoint/model-proto
   lag, and the in-process PyPI checker dormant
 - Optional diagnostics are genuinely dormant when disabled: their clients,
   writers, queues, recorders, and tasks are not instantiated. The canonical
-  shipped template is `config.example.toml`; `config.sbc.example.toml` is an
-  explicit LAN/SBC profile.
+  shipped template is `config.example.toml`; `config.sbc.example.toml` is a
+  loopback-by-default SBC profile. Change its bind only deliberately and with
+  server API-key authentication configured.
 
 ## Runtime Generations
 

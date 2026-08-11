@@ -82,7 +82,9 @@ def _parse_tool_arguments(raw: Any, warnings: list[dict[str, Any]]) -> dict[str,
     """Parse a JSON string into a dict, wrapping invalid JSON with a marker.
 
     On failure, appends a ``malformed_tool_arguments`` warning and
-    returns ``{"__raw_arguments__": "<raw string>"}``.
+    returns a marker containing the original value for upstream compatibility.
+    The warning contains only bounded structural metadata; it never contains
+    the malformed argument bytes.
     """
     if not isinstance(raw, str):
         return {"__raw_arguments__": str(raw)}
@@ -93,7 +95,9 @@ def _parse_tool_arguments(raw: Any, warnings: list[dict[str, Any]]) -> dict[str,
             {
                 "kind": "malformed_tool_arguments",
                 "field": "function.arguments",
-                "raw": raw,
+                "value_type": type(raw).__name__,
+                "length": len(raw),
+                "reason": "invalid_json",
             }
         )
         return {"__raw_arguments__": raw}
@@ -103,7 +107,8 @@ def _parse_tool_arguments(raw: Any, warnings: list[dict[str, Any]]) -> dict[str,
         {
             "kind": "malformed_tool_arguments",
             "field": "function.arguments",
-            "raw": raw,
+            "value_type": type(raw).__name__,
+            "length": len(raw),
             "reason": "not_object",
         }
     )

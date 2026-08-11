@@ -527,7 +527,7 @@ sudo nano /etc/eggpool/env
 # Minimal config:
 #
 # [server]
-# host = "0.0.0.0"
+# host = "127.0.0.1"       # use a LAN bind only with a server API key
 # port = 11300
 #
 # [database]
@@ -799,9 +799,16 @@ sudo journalctl -u eggpool -n 50 --no-pager
 
 ### Cannot connect from LAN
 
-1. Verify that onboarding or the explicit config selected `server.host = "0.0.0.0"`
+1. Verify that the explicit config selected `server.host = "0.0.0.0"` (or
+   another non-loopback address) and configured `[server].api_key` or
+   `[server].api_key_env`.
 2. Check firewall: `ss -tlnp | grep 11300`
 3. See `docs/firewall.md`
+
+The copyable SBC profile stays on loopback by default. LAN binding is an
+explicit operator action and should always be paired with the existing simple
+server API-key authentication; loopback-only development may remain
+unauthenticated.
 
 ### Leaked request detection
 

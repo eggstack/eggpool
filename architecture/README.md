@@ -244,7 +244,9 @@ body translation is implemented in `src/eggpool/transcoder/`. The
 coordinator pre-translates the request body before dispatch, decodes the
 response body on success, and re-renders non-retryable errors in the client
 protocol. Loss-of-information warnings are accumulated on
-`TranscodeContext.loss_warnings` and logged at request completion.
+`TranscodeContext.loss_warnings` and logged at request completion. Warning
+metadata is bounded at emission and never contains credential bytes or raw
+malformed tool/request content.
 
 **Phase 3 — Streaming translation**: SSE stream translation in both
 directions for text-only streams. `StreamingTranscoder` implementations

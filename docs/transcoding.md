@@ -355,7 +355,7 @@ The following `kind` values may appear on `TranscodeContext.loss_warnings`:
 | `tool_call_id_translated` | The id map mints a fresh id on either side of the translation | `field`, `from`, `to` |
 | `tool_call_id_changed` | A streaming delta re-supplies a non-empty `id` for an existing tool_call slot | `field`, `from`, `to` |
 | `parallel_tool_calls_collapsed` | `parallel_tool_calls: false` is dropped (no Anthropic equivalent) | `field` |
-| `malformed_tool_arguments` | `tool_calls[*].function.arguments` or `content[].tool_use.input` fails to JSON-parse | `id`, optional `reason` |
+| `malformed_tool_arguments` | `tool_calls[*].function.arguments` or `content[].tool_use.input` fails to JSON-parse | `field`, `value_type`, `length`, `reason` |
 | `invalid_tool_choice` | A `tool_choice` value cannot be mapped to the target shape | `field`, optional `from` |
 | `unsupported_tool_type` | A `tools[i].type` other than `"function"` is dropped | `field`, `from` |
 | `empty_tool_use_block` | Anthropic `stop_reason: tool_use` produced zero tool_use blocks | `field` |
@@ -385,6 +385,10 @@ The following `kind` values may appear on `TranscodeContext.loss_warnings`:
 | `budget_resolution_no_input` | Budget resolution was requested but no input was provided | `policy` |
 
 The complete catalogue lives in `eggpool.transcoder.LOSS_WARNING_KINDS`.
+
+Loss warnings are safe to emit to ordinary logs: malformed tool arguments and
+inputs are represented by structural metadata only. Raw request content is
+never included in warning objects or transcode observability logs.
 
 ### Error Envelopes
 

@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from eggpool.auth import require_auth, require_auth_at_startup, verify_api_key
 from eggpool.models.config import AppConfig
+from eggpool.request.coordinator import _redact_auth_shape
 
 
 @pytest.fixture()
@@ -63,6 +64,14 @@ def test_verify_api_key_rejects_malformed_format(mock_request: MagicMock) -> Non
 
     mock_request.headers = {"x-api-key": "weird\x00chars"}
     assert verify_api_key(mock_request, "weird\x00chars") is False
+
+
+def test_auth_shape_contains_metadata_without_credential_bytes() -> None:
+    token = "sentinel-auth-token-987654"
+    shape = _redact_auth_shape({"Authorization": f"Bearer {token}"})
+
+    assert token not in shape
+    assert f"length={len(token) + len('Bearer ')}" in shape
 
 
 def test_require_auth_no_key() -> None:

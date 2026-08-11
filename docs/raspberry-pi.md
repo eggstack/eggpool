@@ -46,8 +46,10 @@ for the full flow.
 
 For a complete copyable low-wear configuration, use
 [`config.sbc.example.toml`](../config.sbc.example.toml). It intentionally uses
-one database worker, disables optional diagnostics, and keeps correctness-
-critical request state durable while allowing buffered analytics to lag.
+a loopback bind, one database worker, disables optional diagnostics, and keeps
+correctness-critical request state durable while allowing buffered analytics to
+lag. If LAN access is needed, configure a server API key before changing
+`[server].host` to `0.0.0.0` or another non-loopback address.
 
 If you are adapting an existing configuration, increase timeouts for slower
 SD card storage:

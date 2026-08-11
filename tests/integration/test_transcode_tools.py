@@ -344,3 +344,35 @@ async def test_tool_token_padding_computed() -> None:
     # Payload with empty tools → zero padding
     payload_empty_tools: dict[str, Any] = {"tools": []}
     assert _tool_token_padding(payload_empty_tools) == 0
+
+
+@pytest.mark.parametrize(
+    ("parser", "field"),
+    [
+        ("openai", "function.arguments"),
+        ("anthropic", "tool_calls[].function.arguments"),
+    ],
+)
+def test_malformed_tool_warning_has_no_raw_argument(parser: str, field: str) -> None:
+    """Malformed tool diagnostics retain shape/size, never argument content."""
+    sentinel = "SENTINEL-MALFORMED-TOOL-987654"
+    warnings: list[dict[str, Any]] = []
+    if parser == "openai":
+        from eggpool.transcoder.openai_to_anthropic import _parse_tool_arguments
+
+        _parse_tool_arguments(sentinel, warnings)
+    else:
+        from eggpool.transcoder.anthropic_to_openai import _parse_tool_input
+
+        _parse_tool_input(sentinel, warnings)
+
+    assert len(warnings) == 1
+    warning = warnings[0]
+    assert sentinel not in str(warning)
+    assert warning == {
+        "kind": "malformed_tool_arguments",
+        "field": field,
+        "value_type": "str",
+        "length": len(sentinel),
+        "reason": "invalid_json",
+    }

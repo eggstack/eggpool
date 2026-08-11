@@ -7,7 +7,8 @@
 # after abrupt power loss. Correctness-critical request state remains durable.
 
 [server]
-host = "0.0.0.0"
+# Safe local default. Set an API key before changing this to a LAN bind.
+host = "127.0.0.1"
 port = 11300
 log_level = "INFO"
 access_log = false

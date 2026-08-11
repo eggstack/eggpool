@@ -1,7 +1,7 @@
 # Plan 104 — Local Exposure and Log Redaction
 
 Date: 2026-08-11
-Status: planned
+Status: complete
 Parent roadmap: `plans/103-sbc-protocol-parity-and-runtime-efficiency-roadmap.md`
 Planning baseline: `de3eeea5936c964ffa33b7939c791e98d35cfcbb`
 
@@ -253,3 +253,23 @@ Reject the implementation if:
 7. Run focused tests, then the ordinary repository gate and both config checks.
 8. Record implementation SHA, exact policy choice, and verification results in this plan.
 9. Stop; do not broaden into general security hardening.
+
+## Implementation record
+
+Implemented on 2026-08-11.
+
+- Policy: retained Option B. The copyable SBC profile and bundled copy now bind
+  to `127.0.0.1`; changing to a LAN/wildcard bind is an explicit operator
+  action and the existing server API-key mechanism is documented as required.
+  Onboarding continues to generate a key before its explicit LAN prompt, and
+  loopback-only no-auth remains valid.
+- Authorization-shape diagnostics now report header presence and value length
+  only; no credential prefix, suffix, scheme, or digest is produced.
+- Malformed tool warnings in both translation directions report type, length,
+  and a stable parse reason without the malformed value. Emitted warning lists
+  are capped at 32 entries with an omitted count; translation and loss-policy
+  behavior remain unchanged.
+- Regression coverage added for credential-shape logging and both malformed
+  tool warning directions.
+- Local verification passed and the implementation commit is
+  `ce40863` (the final amended SHA is reported in the handoff).
