@@ -1,7 +1,7 @@
 # Plan 111 — Roadmap 103 Corrective Closure
 
 Date: 2026-08-11
-Status: planned
+Status: complete
 Planning baseline: `5da985f9f87eac1809ab62e5608f4a41700ccb39`
 Related roadmap: `plans/103-sbc-protocol-parity-and-runtime-efficiency-roadmap.md`
 Related completed plans:
@@ -291,45 +291,45 @@ No live provider credentials, Raspberry Pi workload replay, full-suite run, benc
 
 ### Cache translation
 
-- [ ] A supported OpenAI explicit `prompt_cache_breakpoint` maps to Anthropic `cache_control` and the source-only `prompt_cache_breakpoint` is absent from the Anthropic provider payload.
-- [ ] An unsupported/unverified OpenAI breakpoint is removed from the Anthropic target payload and follows existing bounded loss-policy behavior.
-- [ ] OpenAI → Anthropic translation does not mutate the caller's source payload while consuming source-only fields from the target representation.
-- [ ] Successfully translated Anthropic message/system cache boundaries are not later reported as `cache_control_unsupported_by_target_protocol`.
-- [ ] `loss_policy = "reject"` does not reject an otherwise representable Anthropic → OpenAI cache boundary merely because the legacy source sweep sees it again.
-- [ ] Exact successfully mapped source paths are distinguished from genuinely unrepresentable paths.
-- [ ] Anthropic tool-definition cache boundaries remain explicit losses on the current OpenAI Chat Completions target and are never relocated to unrelated content.
-- [ ] TTL mismatches remain visible/rejectable when genuinely non-equivalent; the duplicate-loss fix does not hide real TTL loss.
-- [ ] Four-breakpoint bounds remain enforced in both directions.
-- [ ] No cache key is synthesized, and no source cache-key value or prompt/tool content is added to logs/persistence.
-- [ ] Generic compatible providers still require explicit capability facts before native cache controls are emitted.
+- [x] A supported OpenAI explicit `prompt_cache_breakpoint` maps to Anthropic `cache_control` and the source-only `prompt_cache_breakpoint` is absent from the Anthropic provider payload.
+- [x] An unsupported/unverified OpenAI breakpoint is removed from the Anthropic target payload and follows existing bounded loss-policy behavior.
+- [x] OpenAI → Anthropic translation does not mutate the caller's source payload while consuming source-only fields from the target representation.
+- [x] Successfully translated Anthropic message/system cache boundaries are not later reported as `cache_control_unsupported_by_target_protocol`.
+- [x] `loss_policy = "reject"` does not reject an otherwise representable Anthropic → OpenAI cache boundary merely because the legacy source sweep sees it again.
+- [x] Exact successfully mapped source paths are distinguished from genuinely unrepresentable paths.
+- [x] Anthropic tool-definition cache boundaries remain explicit losses on the current OpenAI Chat Completions target and are never relocated to unrelated content.
+- [x] TTL mismatches remain visible/rejectable when genuinely non-equivalent; the duplicate-loss fix does not hide real TTL loss.
+- [x] Four-breakpoint bounds remain enforced in both directions.
+- [x] No cache key is synthesized, and no source cache-key value or prompt/tool content is added to logs/persistence.
+- [x] Generic compatible providers still require explicit capability facts before native cache controls are emitted.
 
 ### Exposure/auth validation
 
-- [ ] Loopback/no-auth remains supported for local-only use.
-- [ ] `0.0.0.0`, `::`, LAN/public addresses, and other non-provably-loopback binds without a resolved API key are rejected before request admission.
-- [ ] Non-loopback + valid existing server API key remains supported.
-- [ ] `check-config`/rehash validation and production startup use the same non-loopback/auth rule and cannot disagree.
-- [ ] A failed rehash candidate cannot publish a non-loopback/no-auth generation.
-- [ ] Existing placeholder/key-shape validation remains intact.
-- [ ] No new auth service, credential storage mechanism, network lookup, role system, or runtime dependency is introduced.
-- [ ] Shipped source/bundled SBC configs remain loopback-safe and pass `check-config`.
+- [x] Loopback/no-auth remains supported for local-only use.
+- [x] `0.0.0.0`, `::`, LAN/public addresses, and other non-provably-loopback binds without a resolved API key are rejected before request admission.
+- [x] Non-loopback + valid existing server API key remains supported.
+- [x] `check-config`/rehash validation and production startup use the same non-loopback/auth rule and cannot disagree.
+- [x] A failed rehash candidate cannot publish a non-loopback/no-auth generation.
+- [x] Existing placeholder/key-shape validation remains intact.
+- [x] No new auth service, credential storage mechanism, network lookup, role system, or runtime dependency is introduced.
+- [x] Shipped source/bundled SBC configs remain loopback-safe and pass `check-config`.
 
 ### Fingerprint/config
 
-- [ ] `server.max_request_body_bytes` participates in the runtime fingerprint.
-- [ ] Changing only `server.max_request_body_bytes` changes the fingerprint deterministically.
-- [ ] Existing secret-safe fingerprint behavior remains intact.
-- [ ] `server.max_request_body_bytes` remains live-reloadable and its existing body-limit behavior is not regressed.
+- [x] `server.max_request_body_bytes` participates in the runtime fingerprint.
+- [x] Changing only `server.max_request_body_bytes` changes the fingerprint deterministically.
+- [x] Existing secret-safe fingerprint behavior remains intact.
+- [x] `server.max_request_body_bytes` remains live-reloadable and its existing body-limit behavior is not regressed.
 
 ### Scope and verification
 
-- [ ] No new core/runtime dependency is added.
-- [ ] No DB migration/table, background task, cache store, benchmark, soak harness, telemetry subsystem, or CI job is added.
-- [ ] Current one-job Python 3.11 CI shape remains unchanged.
-- [ ] Focused transcode/cache/auth/config/rehash tests pass.
-- [ ] Ruff format/check, Pyright, smoke tests, and both shipped config checks pass.
-- [ ] Plan 111 records the implementation commit SHA, exact verification results, and any intentionally retained lossy cache semantics.
-- [ ] No unrelated Roadmap 103 subsystem is redesigned during this pass.
+- [x] No new core/runtime dependency is added.
+- [x] No DB migration/table, background task, cache store, benchmark, soak harness, telemetry subsystem, or CI job is added.
+- [x] Current one-job Python 3.11 CI shape remains unchanged.
+- [x] Focused transcode/cache/auth/config/rehash tests pass.
+- [x] Ruff format/check, Pyright, smoke tests, and both shipped config checks pass.
+- [x] Plan 111 records the implementation commit SHA, exact verification results, and any intentionally retained lossy cache semantics.
+- [x] No unrelated Roadmap 103 subsystem is redesigned during this pass.
 
 ## Rejection conditions
 
@@ -344,6 +344,35 @@ Do not close Plan 111 if any of the following is true:
 - the implementation introduces a new generic capability/cache/auth framework;
 - CI or routine verification grows beyond the current lightweight project policy;
 - closure claims live-provider or target-device evidence that was not actually run.
+
+## Closure record
+
+Implementation commit: `74b4266c2273bcb09bafd4443116a45e8e781f53`
+
+All four corrective workstreams are complete. The implementation consumes
+OpenAI-only breakpoint markers at the Anthropic target boundary, tracks exact
+successfully mapped Anthropic source paths so the later loss sweep does not
+reclassify them, enforces the non-loopback server-key rule through the shared
+startup/`check-config` validator, and includes
+`server.max_request_body_bytes` in the secret-safe runtime fingerprint.
+
+Verification completed locally on 2026-08-11:
+
+- Focused transcode/auth/config/reload/startup/API-key tests: `203 passed`.
+- `uv sync --frozen --extra ci`: passed.
+- `uv run ruff format --check src/ tests/ scripts/`: passed.
+- `uv run ruff check src/ tests/ scripts/`: passed.
+- `uv run pyright src/ scripts/`: `0 errors, 0 warnings, 0 informations`.
+- `PYTHONHASHSEED=0 TZ=UTC uv run pytest tests/smoke/ -q --tb=short --maxfail=1`:
+  `14 passed`.
+- `uv run eggpool --config config.example.toml check-config`: passed.
+- `uv run eggpool --config config.sbc.example.toml check-config`: passed.
+
+No live-provider, Raspberry Pi, workload replay, benchmark, or full-suite
+verification was claimed or required. The intentionally retained lossy
+semantics are provider-specific TTL mismatch reporting, four-breakpoint
+overflow handling, and Anthropic tool-definition cache boundaries on the
+OpenAI Chat Completions surface; none is relocated or silently suppressed.
 
 ## GPT-5.6 Luna implementation sequence
 
