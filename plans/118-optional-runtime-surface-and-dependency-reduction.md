@@ -293,7 +293,7 @@ Reject the implementation if:
 
 ## Implementation closure
 
-Implemented on `main` in the changes following baseline `6f4df9bd42b5ca336d3da5ef458ab1793e515185`.
+Implemented on `main` in commit `038a466`, following baseline `6f4df9bd42b5ca336d3da5ef458ab1793e515185`.
 
 | Surface | Decision | Evidence |
 | --- | --- | --- |
