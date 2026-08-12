@@ -434,6 +434,7 @@ async def _install_test_runtime(app: FastAPI) -> MagicMock:
             account_names=frozenset(),
             hop_by_hop_headers=HOP_BY_HOP_HEADERS,
             local_credential_headers=LOCAL_CREDENTIAL_HEADERS,
+            trusted_proxies=frozenset(config.security.trusted_proxies),
         ),
     )
     manager = RuntimeManager()

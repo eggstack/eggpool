@@ -1,4 +1,4 @@
-"""Phase 3 cache-stability integration tests for the body transcoders."""
+"""Cache-stability integration tests for the body transcoders."""
 
 from __future__ import annotations
 

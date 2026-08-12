@@ -72,6 +72,12 @@ information-only checks rather than CI gates. Cache/compression behavior is
 covered by focused boundary contracts; fixture privacy checks do not imply a
 second replay matrix.
 
+Planning is proportional to change risk: detailed roadmaps and child plans are
+for multi-boundary or high-risk work, one focused plan is enough for a bounded
+multi-file correction, and a small deterministic local fix may use an issue or
+concise notes when existing tests protect the seam. A completed roadmap does
+not automatically require a new closure plan.
+
 ## Quick Start
 
 ```bash

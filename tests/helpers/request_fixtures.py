@@ -317,7 +317,7 @@ def openai_with_tools_and_thinking(model: str = MODEL_MINIMAX_M3) -> dict[str, A
 
 
 def anthropic_with_cache_control(model: str = MODEL_CLAUDE_SONNET) -> dict[str, Any]:
-    """Anthropic request with cache-control markers (synthetic cache reuse)."""
+    """Anthropic request with an explicit native cache-control marker."""
     return {
         "model": model,
         "messages": [

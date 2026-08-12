@@ -250,8 +250,9 @@ target contract rather than a generic TTL literal. Anthropic tool-definition
 boundaries remain lossy for OpenAI Chat Completions when no native tool
 breakpoint is available. OpenAI's automatic caching and `prompt_cache_key`
 grouping do not opt translated Anthropic requests into explicit caching, and
-explicit source intent takes precedence over synthetic cache insertion. An
-absent OpenAI breakpoint is ordinary content, not a cache loss. In the reverse
+explicit source intent can request a mapped target boundary; EggPool does not
+synthesize cache controls. An absent OpenAI breakpoint is ordinary content, not
+a cache loss. In the reverse
 direction, only a breakpoint actually emitted on the OpenAI target counts as a
 mapping; malformed, unsupported, and overflow cases remain loss-visible
 without causing `prompt_cache_options` to appear by themselves.
@@ -671,7 +672,7 @@ When the operator has set `loss_policy = "reject"` on `[transcoder]`, the body t
 | `provider_extension_not_preserved` | A non-portable vendor field (e.g. `defer_loading`) on an Anthropic tool could not be carried into the OpenAI wire. |
 | `stable_prefix_reordered_canonically` | Source and target cache boundary lists diverge — the prefix was canonically reordered. |
 
-The `warn` default preserves the v1 behaviour: the request proceeds and the loss is recorded in `TranscodeContext.loss_warnings` for audit. The transcoder never injects warning text into the translated body — regression-guarded by `tests/unit/test_transcoder/test_phase3_cache_stability.py::TestWarningsNotInModelVisibleContent`.
+The `warn` default preserves the v1 behaviour: the request proceeds and the loss is recorded in `TranscodeContext.loss_warnings` for audit. The transcoder never injects warning text into the translated body — regression-guarded by `tests/unit/test_transcoder/test_cache_stability_integration.py::TestWarningsNotInModelVisibleContent`.
 
 ## Pricing Catalog Cache
 

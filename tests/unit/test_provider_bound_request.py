@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-from types import MappingProxyType
-
 import pytest
 
 from eggpool.request.provider_bound_request import (
-    PreparedTranscodeValidityKey,
     ProviderBoundRequest,
     SegmentationValidityKey,
 )
@@ -42,43 +39,6 @@ class TestSegmentationValidityKey:
         )
         k2 = SegmentationValidityKey(
             payload_generation=1, protocol="anthropic", segmentation_policy_version=3
-        )
-        assert k1 != k2
-
-
-# ---------------------------------------------------------------------------
-# PreparedTranscodeValidityKey
-# ---------------------------------------------------------------------------
-
-
-class TestPreparedTranscodeValidityKey:
-    def test_equal_when_all_fields_match(self) -> None:
-        k1 = PreparedTranscodeValidityKey(
-            client_protocol="openai",
-            upstream_protocol="anthropic",
-            features_fingerprint="abc123",
-            policy_generation=1,
-            capability_generation=2,
-        )
-        k2 = PreparedTranscodeValidityKey(
-            client_protocol="openai",
-            upstream_protocol="anthropic",
-            features_fingerprint="abc123",
-            policy_generation=1,
-            capability_generation=2,
-        )
-        assert k1 == k2
-
-    def test_not_equal_when_fingerprint_differs(self) -> None:
-        k1 = PreparedTranscodeValidityKey(
-            client_protocol="openai",
-            upstream_protocol="anthropic",
-            features_fingerprint="abc",
-        )
-        k2 = PreparedTranscodeValidityKey(
-            client_protocol="openai",
-            upstream_protocol="anthropic",
-            features_fingerprint="def",
         )
         assert k1 != k2
 
@@ -129,22 +89,6 @@ class TestProviderBoundRequest:
         assert pbr.provider_payload is not pbr.client_payload
         # Serialized bytes invalidated
         assert pbr.provider_bytes is None
-
-    def test_set_provider_payload_accepts_frozen_json_graph(self) -> None:
-        pbr = ProviderBoundRequest(
-            client_bytes=b"{}",
-            client_payload={"messages": []},
-            client_protocol="openai",
-            model_id="gpt-4",
-        )
-
-        pbr.set_provider_payload(
-            MappingProxyType({"messages": (MappingProxyType({"role": "user"}),)})
-        )
-
-        assert pbr.provider_payload == {
-            "messages": [{"role": "user"}],
-        }
 
     def test_adopt_provider_payload_preserves_unchanged_subtrees(self) -> None:
         messages = [{"role": "user", "content": "large"}]

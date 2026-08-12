@@ -765,41 +765,6 @@ class TestOptionalDiagnosticsDoNotAffectRouting:
             os.environ.pop("K_ACCT_B", None)
 
     @pytest.mark.asyncio()
-    async def test_tuning_recommendation_does_not_affect_routing(self) -> None:
-        """Phase 10: Tuning recommendation differences on same-provider
-        accounts must not affect rotation fairness."""
-        os.environ["K_ACCT_A"] = "key-a"
-        os.environ["K_ACCT_B"] = "key-b"
-        try:
-            config = _make_config(
-                [
-                    {"name": "acct_a", "api_key_env": "K_ACCT_A"},
-                    {"name": "acct_b", "api_key_env": "K_ACCT_B"},
-                ]
-            )
-            registry = AccountRegistry(config)
-            cache = ModelCatalogCache()
-            for name in ("acct_a", "acct_b"):
-                cache.update_from_account(
-                    name,
-                    "test-provider",
-                    [{"model_id": "m", "protocol": "openai"}],
-                )
-            router = Router(registry, _MockCatalog(cache))  # type: ignore[arg-type]
-
-            counts: dict[str, int] = {"acct_a": 0, "acct_b": 0}
-            for _ in range(40):
-                selected = await router.select_account("m")
-                assert selected is not None
-                counts[selected.name] += 1
-
-            assert counts["acct_a"] > 0
-            assert counts["acct_b"] > 0
-        finally:
-            os.environ.pop("K_ACCT_A", None)
-            os.environ.pop("K_ACCT_B", None)
-
-    @pytest.mark.asyncio()
     async def test_provider_specific_policy_match_does_not_affect_routing(
         self,
     ) -> None:

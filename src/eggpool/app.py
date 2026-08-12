@@ -656,8 +656,8 @@ def _log_operational_profile(
     - ``metrics_write_mode`` / ``metrics_flush_interval_s``: metrics
       coalescer knobs.
     - ``transcoder_enabled`` / ``compression_enabled`` /
-      ``compression_mode`` / ``cache_enabled``: pre-upstream
-      observability / transformation modes.
+      ``compression_mode``: pre-upstream observability /
+      transformation modes.
     - ``task_total`` / ``task_process_owned`` /
       ``task_generation_leased``: background-task ownership counts.
     - ``model_info_enabled``: whether the model-info service is

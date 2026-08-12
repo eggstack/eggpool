@@ -98,11 +98,11 @@ Summary cards:
 - OS load average
 - Dispatch overhead distribution
 - Selection claim diagnostics
-- Cache & request shaping relocation panel
+- Request-shaping relocation panel
 
 ### Cache (`/cache`)
 
-Request shaping surface with 8 cards:
+Request shaping surface with 7 cards:
 1. **Request shaping** — operator summary
 2. **Provider cache counters** — coverage and hit rates
 3. **Request segmentation** — stable/semi-stable/volatile
@@ -130,8 +130,6 @@ SQL query functions for all dashboard/API endpoints:
 - Cache observability
 - Segmentation stats
 - Compression observability + runtime
-- Synthetic cache observability
-- Tuning window metrics
 - Routing decision analysis
 - Provider health
 - Time-series data

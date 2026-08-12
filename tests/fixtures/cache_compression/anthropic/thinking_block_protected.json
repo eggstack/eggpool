@@ -3,7 +3,7 @@
   "category": "anthropic",
   "client_protocol": "anthropic",
   "target_protocol": "anthropic",
-  "description": "Anthropic request with large thinking block that must not be compressed or have synthetic cache applied.",
+  "description": "Anthropic request with large thinking block that must not be compressed.",
   "request": {
     "model": "claude-test",
     "system": [
@@ -52,9 +52,6 @@
   },
   "expectations": {
     "segmentation_status": "segmented",
-    "compression_safe_applies": true,
-    "no_synthetic_cache_at_paths": [
-      "messages.0.content.0"
-    ]
+    "compression_safe_applies": true
   }
 }

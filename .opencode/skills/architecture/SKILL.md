@@ -68,8 +68,8 @@ Transparent request/response format conversion between OpenAI and Anthropic prot
   alone never enable cache fields. An absent source breakpoint is a no-op;
   only an actually emitted target breakpoint counts as mapped. Malformed,
   unsupported, and overflowed boundaries remain visible losses without
-  creating target-native explicit-cache options. Synthetic cache insertion
-  uses the same selected-target contract.
+  creating target-native explicit-cache options. EggPool does not synthesize
+  cache controls or cache keys.
 - Native OpenAI JSON schema uses Anthropic `output_config.format` in the
   verified direction; native strict tools and parallel disabling use the
   provider-documented fields. Loss-policy warnings remain local preparation

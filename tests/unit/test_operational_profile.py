@@ -100,7 +100,6 @@ class TestOperationalProfile:
             "transcoder_enabled",
             "compression_enabled",
             "compression_mode",
-            "cache_enabled",
             "model_info_enabled",
             "task_total",
             "task_process_owned",

@@ -59,7 +59,6 @@
     "stable_prefix_contains": ["SYSTEM_POLICY_SENTINEL_DO_NOT_COMPRESS"],
     "compression_safe_applies": true,
     "stable_prefix_content_hash_unchanged_after_compression": true,
-    "synthetic_cache_status": "disabled",
     "expected_transforms_present": ["fold_repeated_lines"]
   }
 }

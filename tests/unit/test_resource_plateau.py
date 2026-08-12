@@ -2,10 +2,8 @@
 
 Verifies that:
 
-- DNS cache has bounded capacity and reports utilisation.
 - Provider client pool reports provider count.
 - Stream diagnostics ring buffers are bounded.
-- Missing providers degrade gracefully to ``enabled: False``.
 """
 
 from __future__ import annotations

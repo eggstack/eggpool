@@ -213,4 +213,15 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 
 ## Planning Policy
 
-Completed implementation plans must not create permanent CI jobs, markers, evidence formats, or plan-numbered test suites. Regression tests must be merged into capability-based suites before a plan is closed.
+Completed implementation plans must not create permanent CI jobs, markers,
+evidence formats, or plan-numbered test suites. Regression tests must be
+merged into capability-based suites before a plan is closed.
+
+Planning is proportional to risk: use a detailed roadmap and child plans for
+multi-boundary, ordered, durable-state, request/process-ownership, or broad
+protocol/provider work; use one focused plan for a bounded multi-file
+correction; and use a direct issue or concise notes for a small deterministic
+fix local to one or a few helpers when existing tests and gates protect the
+boundary. A completed roadmap does not automatically require a closure plan;
+put closure evidence in the implementing plan unless a genuinely new phase or
+defect is discovered.

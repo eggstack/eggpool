@@ -150,8 +150,8 @@ Anthropic→OpenAI, capability-override, loss-policy, and privacy/redaction
 tests. Verify that generic OpenAI-compatible targets receive
 no explicit breakpoint fields without a provider/model contract, that a
 compatible-extension contract remains distinct from first-party semantics,
-that TTL loss metadata uses the selected contract. Synthetic cache insertion
-is not part of the runtime surface.
+that TTL loss metadata uses the selected contract. Synthetic cache insertion is
+not part of the runtime surface.
 
 Performance tests under `tests/perf/` remain manually invoked diagnostics. They
 must not become CI gates or imply universal timing/resource thresholds; compare
@@ -181,7 +181,7 @@ propagation. Run the focused coordinator/proxy/transcoder suites before the
 repository-wide CI gate.
 
 Prepared-transcode ownership changes should also run the prepared-transcode,
-provider-bound request, transform-pipeline, thinking-budget, cache-synthesis,
+provider-bound request, transform-pipeline, thinking-budget, cache-translation,
 and retry/freeze focused suites. Verify unchanged reuse adopts the translated
 generation without a second encode or recursive ownership walk, while
 provider-specific mutations leave the prepared source unchanged.
@@ -206,6 +206,18 @@ fallback reads.
 Also verify that first-attempt timestamp persistence does not issue a separate
 parent UPDATE and that only terminal request finalization writes
 `last_attempt_id`.
+
+## Planning proportionality
+
+Use a detailed roadmap with child plans when work crosses architectural
+boundaries, has ordering/dependencies across phases, risks durable or
+request/process ownership state, or redesigns broad protocol/provider
+semantics. Use one focused plan for a bounded multi-file corrective pass. A
+small deterministic fix local to one or a few helpers may use a direct issue or
+concise implementation notes when existing tests and gates protect the seam.
+Completing a roadmap does not by itself require a new closure plan; record
+closure evidence in the implementing plan unless a genuinely new phase or
+defect is discovered.
 
 ## Code Style
 

@@ -270,13 +270,6 @@ _CARD_TOOLTIPS: dict[str, str] = {
         "Persisted account backoff rows currently suppressing or delaying "
         "eligible accounts."
     ),
-    "DNS cache": ("Outbound DNS cache state and current entry count."),
-    "DNS hit rate": (
-        "Share of DNS lookups served from the in-memory cache instead of "
-        "triggering a fresh resolver call."
-    ),
-    "DNS misses": "DNS lookups that required a resolver call.",
-    "DNS errors": ("DNS lookup failures and degraded cache hits (stale or negative)."),
     "Outbound builds": (
         "How many times the shared outbound client manager has built a client."
     ),

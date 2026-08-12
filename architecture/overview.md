@@ -414,7 +414,6 @@ Runtime configuration lives in `config.toml` + `.env` (API keys). Key sections:
 | `[providers.<id>]` | Per-provider config (URL, auth, protocols, accounts) |
 | `[transcoder]` | Protocol transcoding features, thinking/reasoning |
 | `[compression]` | Request shaping (observe/safe modes, transforms) |
-| `[cache]` | Synthetic cache controls |
 | `[model_info]` | Source enablement, TTLs, overrides |
 | `[dashboard]` | Theme, auth policy |
 | `[metrics]` | Buffering, flush modes |

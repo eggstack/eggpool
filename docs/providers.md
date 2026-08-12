@@ -553,7 +553,7 @@ read_timeout_s = 300
 stream_timeouts = { first_byte_timeout_s = 1800, idle_timeout_s = 1800 }
 ```
 
-### Tuning warnings
+### Transport sizing guidance
 
 - **Memory:** each `max_connections` slot keeps an open TLS state on
   warm idle. Going from 100 → 256 doubles the long-lived TLS object

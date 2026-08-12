@@ -1,7 +1,7 @@
 # Plan 119 — Retained Test and Planning Surface Reduction
 
 Date: 2026-08-11
-Status: ready
+Status: complete
 Parent roadmap: `plans/113-sbc-hotpath-reduction-and-protocol-clarity-roadmap.md`
 Planning baseline: `6f4df9bd42b5ca336d3da5ef458ab1793e515185`
 Depends on:
@@ -334,30 +334,30 @@ Do not create future count/coverage/runtime thresholds.
 
 ## Explicit acceptance criteria
 
-- [ ] Immediate pre-reduction collection count is recorded for information only.
-- [ ] Final retained corpus is smaller/simpler around touched surfaces unless every candidate is proven to represent a distinct protected behavior; any exception is documented.
-- [ ] No numerical deletion/coverage target is introduced.
-- [ ] Tests asserting obsolete MappingProxyType/tuple/freeze-thaw physical representation are removed after Plan 115.
-- [ ] Behavioral client/provider payload isolation coverage remains.
-- [ ] Native original-byte/no-op streaming normalization coverage remains.
-- [ ] Prepared-transcode reuse/recompute/retry correctness remains covered.
-- [ ] Context-limit/reservation/transcoded-limit coverage remains.
-- [ ] Cache dialect tests distinguish generic unknown versus verified provider extension without duplicate provider-name matrices.
-- [ ] Tests for optional production surfaces deleted in Plan 118 are deleted rather than preserving dead compatibility code.
-- [ ] High-severity routing/provider-error-poisoning regressions remain directly or more strongly covered.
-- [ ] Pre-handoff retry/post-handoff no-retry and streaming EOF/cancellation coverage remain.
-- [ ] Database transaction ownership, ambiguity/fail-closed, finalization convergence, crash recovery, and migration coverage remain.
-- [ ] Rehash generation publication/retirement/finalization ownership coverage remains.
-- [ ] Auth/non-loopback/trusted-proxy/redaction/body-limit basics remain.
-- [ ] Deterministic concurrency tests remain deterministic and do not regress to sleeps/random loops.
-- [ ] Orphaned fixtures/helpers from deleted tests are removed.
-- [ ] The 14 smoke behaviors remain represented.
-- [ ] `.github/workflows/ci.yml` remains materially one Python 3.11 Ruff/Pyright/smoke job.
-- [ ] No coverage, benchmark, soak, hardware, full-suite scheduled, sharding, or release CI is added.
-- [ ] Existing planning/agent guidance contains a concise proportionality rule allowing small corrective fixes to avoid roadmap/closure-plan chains.
-- [ ] Planning simplification does not forbid detailed roadmaps for genuinely multi-phase/high-risk work.
-- [ ] No planning registry/service/template framework is introduced.
-- [ ] Protected focused union and ordinary gate pass.
+- [x] Immediate pre-reduction collection count is recorded for information only.
+- [x] Final retained corpus is smaller/simpler around touched surfaces unless every candidate is proven to represent a distinct protected behavior; any exception is documented.
+- [x] No numerical deletion/coverage target is introduced.
+- [x] Tests asserting obsolete MappingProxyType/tuple/freeze-thaw physical representation are removed after Plan 115.
+- [x] Behavioral client/provider payload isolation coverage remains.
+- [x] Native original-byte/no-op streaming normalization coverage remains.
+- [x] Prepared-transcode reuse/recompute/retry correctness remains covered.
+- [x] Context-limit/reservation/transcoded-limit coverage remains.
+- [x] Cache dialect tests distinguish generic unknown versus verified provider extension without duplicate provider-name matrices.
+- [x] Tests for optional production surfaces deleted in Plan 118 are deleted rather than preserving dead compatibility code.
+- [x] High-severity routing/provider-error-poisoning regressions remain directly or more strongly covered.
+- [x] Pre-handoff retry/post-handoff no-retry and streaming EOF/cancellation coverage remain.
+- [x] Database transaction ownership, ambiguity/fail-closed, finalization convergence, crash recovery, and migration coverage remain.
+- [x] Rehash generation publication/retirement/finalization ownership coverage remains.
+- [x] Auth/non-loopback/trusted-proxy/redaction/body-limit basics remain.
+- [x] Deterministic concurrency tests remain deterministic and do not regress to sleeps/random loops.
+- [x] Orphaned fixtures/helpers from deleted tests are removed.
+- [x] The 14 smoke behaviors remain represented.
+- [x] `.github/workflows/ci.yml` remains materially one Python 3.11 Ruff/Pyright/smoke job.
+- [x] No coverage, benchmark, soak, hardware, full-suite scheduled, sharding, or release CI is added.
+- [x] Existing planning/agent guidance contains a concise proportionality rule allowing small corrective fixes to avoid roadmap/closure-plan chains.
+- [x] Planning simplification does not forbid detailed roadmaps for genuinely multi-phase/high-risk work.
+- [x] No planning registry/service/template framework is introduced.
+- [x] Protected focused union and ordinary gate pass.
 
 ## Rejection conditions
 
@@ -387,3 +387,41 @@ Reject the implementation if:
 9. Run post-collection count, protected union, ordinary gate, and optional full suite only if practical.
 10. Record implementation SHA, before/after information-only counts, clusters removed, protected regressions checked, planning-guidance change, and exact verification results.
 11. Stop. Do not create a recurring test-reduction/planning-governance program.
+
+## Implementation closure
+
+Implemented on `main` on 2026-08-12; the implementation commit is the commit
+containing this closure record. The immediate pre-reduction collection
+baseline was **7,909**
+tests; the post-reduction retained corpus collected **7,858** tests. These are
+information-only counts and no future count target was introduced.
+
+The reduction removed the stale synthetic-cache API test and fixtures, the
+plan-era dashboard phase suite, the standalone hot-path corrective-polish
+suite whose stronger request-path/compression tests remain, obsolete frozen
+JSON-graph representation coverage, a duplicate tuning-only routing case, and
+an orphaned stats fixture. The dashboard API and cache-stability tests were
+renamed to capability-oriented names. Native cache translation, safe
+compression, provider payload isolation, prepared-transcode reuse, request
+estimation, routing isolation, and redaction/privacy fixtures remain covered.
+
+The dashboard architecture index, runtime explanation labels, database checker,
+README, AGENTS guidance, and architecture/development skills now describe the
+retained optional surface and proportional planning convention. Historical
+schema migrations remain unchanged; removed tuning tables are no longer
+treated as required current-runtime tables by the read-only checker.
+
+Verification completed:
+
+- Protected focused union: **597 passed**.
+- `uv sync --frozen --extra ci`: passed.
+- `uv run ruff format --check src/ tests/ scripts/`: passed.
+- `uv run ruff check src/ tests/ scripts/`: passed.
+- `uv run pyright src/ scripts/`: 0 errors, warnings, or informations.
+- Deterministic smoke suite: **14 passed**.
+- Both shipped `check-config` commands: passed.
+
+The final collection check confirms **7,858 tests collected**. The retained
+unit/transcoder tail and the protected focused union passed after correcting
+stale expectations for the baseline compatibility-only `tools` flag and the
+generation-owned finalization fixture.

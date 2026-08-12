@@ -166,8 +166,7 @@ class TestSegmentationGuardWithPolicyResolution:
         assert result is True
 
     def test_all_consumers_disabled_segmentation_skipped(self) -> None:
-        """When compression is disabled, synthetic cache is off, and
-        cache observability is off → segmentation is skipped."""
+        """When compression and cache observability are off, segmentation is skipped."""
         config = _make_app_config()
         result = should_segment_request(
             config,

@@ -82,8 +82,6 @@ REQUIRED_TABLES: frozenset[str] = frozenset(
         "model_info_observations",
         "model_info_aliases",
         "model_info_source_health",
-        "compression_tuning_recommendations",
-        "compression_tuning_overrides",
         "_migrations",
     }
 )

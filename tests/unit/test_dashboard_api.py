@@ -1,8 +1,8 @@
-"""Tests for the Phase 7 dashboard JSON API endpoints.
+"""Tests for the dashboard JSON API endpoints.
 
 These tests verify:
 
-- All six Phase 7 endpoints return JSON 200 with the correct shape.
+- All dashboard JSON endpoints return the expected shape.
 - Auth gating works (rejects unauthenticated requests when API key set).
 - Empty DB returns the stable zero shape (no crashes).
 - Invalid period strings return 400, not 500.

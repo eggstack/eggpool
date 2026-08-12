@@ -88,7 +88,6 @@
     "stable_prefix_content_hash_unchanged_after_compression": true,
     "expected_transforms_present": [
       "fold_repeated_lines"
-    ],
-    "synthetic_cache_status": "disabled"
+    ]
   }
 }

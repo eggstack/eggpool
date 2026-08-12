@@ -257,7 +257,7 @@ class TestGroup1ConfigAndCapabilitySchema:
     def test_transcoder_policy_injects_features(self) -> None:
         policy = TranscoderPolicy(features=TranscoderFeatures(thinking=True))
         assert policy.features.thinking is True
-        assert policy.features.tools is False
+        assert policy.features.tools is True
 
     def test_thinking_budget_defaults(self) -> None:
         defaults = ThinkingBudgetDefaults()
