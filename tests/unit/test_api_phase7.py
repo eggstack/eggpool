@@ -309,23 +309,6 @@ class _FakeRequestShapingStatsService:
         del period
         return {"transcoded_request_count": 0}
 
-    async def get_synthetic_cache_summary(
-        self, period: str | None = None
-    ) -> dict[str, Any]:
-        del period
-        return {
-            "dry_run_count": 0,
-            "applied_count": 0,
-            "candidate_count_total": 0,
-            "warning_count_total": 0,
-        }
-
-    async def get_compression_tuning_window_metrics(
-        self, period: str | None = None
-    ) -> dict[str, Any]:
-        del period
-        return {"recommendations": [], "overrides": [], "windows": {}}
-
 
 # ---------------------------------------------------------------------------
 # Endpoint smoke tests
@@ -500,7 +483,6 @@ class TestRequestShapingEndpoint:
         assert "mode" in data
         assert "compression" in data
         assert "cache" in data
-        assert "synthetic_cache" in data
         assert "guardrails" in data
 
     @pytest.mark.asyncio()

@@ -35,7 +35,6 @@ class TestCompressionPolicyOverrideRoundTrip:
             mode="safe",
             placement="suffix_only",
             respect_cache_boundaries=False,
-            compress_static_prefix=False,
             min_candidate_tokens=512,
             min_savings_tokens=256,
             max_compression_latency_ms=10.0,
@@ -120,34 +119,6 @@ class TestCompressionConfigPolicies:
                 name="test",
                 match_provider_ids="single",  # type: ignore[arg-type]
             )
-
-    def test_static_prefix_validation_uses_resolved_global_policy(self) -> None:
-        override = CompressionPolicyOverride(
-            name="test",
-            match_clients=["a"],
-            compress_static_prefix=True,
-            mode="safe",
-        )
-        with pytest.raises(ValidationError, match="global.*allow_static_prefix"):
-            CompressionConfig(policies=[override])
-        config = CompressionConfig(
-            allow_static_prefix_override=True,
-            policies=[override],
-        )
-        assert config.policies[0].compress_static_prefix is True
-
-    def test_compress_static_prefix_accepted_without_mode(self) -> None:
-        """compress_static_prefix=True with no mode passes the override
-        validator (mode is None).  BUG: overlay validation catches the
-        mismatch with the base config at resolve time, but only when
-        the overlay function does not reject extra fields first."""
-        override = CompressionPolicyOverride(
-            name="test",
-            match_clients=["a"],
-            compress_static_prefix=True,
-        )
-        assert override.compress_static_prefix is True
-        assert override.mode is None
 
     def test_round_trip_config_with_policies(self) -> None:
         override = CompressionPolicyOverride(

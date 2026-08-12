@@ -49,9 +49,6 @@ enabled = true
 [compression]
 enabled = false
 
-[cache]
-enabled = false
-
 [maintenance]
 max_rows_per_batch = 500
 max_batches_per_tick = 4
@@ -69,7 +66,7 @@ retain_count = 14
 - WAL mode with NORMAL synchronous
 - No routing trace persistence
 - Low-wear metrics flush (120s interval)
-- Optional model info, readiness, DNS, backup, and PyPI update probes
+- Optional model info, readiness, backup, and PyPI update probes
 
 ## Minimum-Footprint SBC
 

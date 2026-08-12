@@ -476,15 +476,6 @@ class RequestRepository:
         compression_policy_name: str | None = None,
         compression_policy_source: str | None = None,
         compression_policy_warnings_json: str | None = None,
-        synthetic_cache_status: str | None = None,
-        synthetic_cache_dry_run: int = 1,
-        synthetic_cache_candidate_count: int = 0,
-        synthetic_cache_applied_count: int = 0,
-        synthetic_cache_warning_count: int = 0,
-        synthetic_cache_warnings_json: str | None = None,
-        synthetic_cache_policy_name: str | None = None,
-        synthetic_cache_policy_source: str | None = None,
-        synthetic_cache_summary_json: str | None = None,
         last_attempt_id: int | None = None,
     ) -> RequestFinalizationMutation:
         """Finalize a request only if it is still pending.
@@ -562,16 +553,7 @@ class RequestRepository:
             "compression_applied_summary_json = ?, "
             "compression_policy_name = ?, "
             "compression_policy_source = ?, "
-            "compression_policy_warnings_json = ?, "
-            "synthetic_cache_status = ?, "
-            "synthetic_cache_dry_run = ?, "
-            "synthetic_cache_candidate_count = ?, "
-            "synthetic_cache_applied_count = ?, "
-            "synthetic_cache_warning_count = ?, "
-            "synthetic_cache_warnings_json = ?, "
-            "synthetic_cache_policy_name = ?, "
-            "synthetic_cache_policy_source = ?, "
-            "synthetic_cache_summary_json = ? "
+            "compression_policy_warnings_json = ? "
             "WHERE id = ? AND status = 'pending' "
             "RETURNING status",
             (
@@ -652,15 +634,6 @@ class RequestRepository:
                 compression_policy_name,
                 compression_policy_source,
                 compression_policy_warnings_json,
-                synthetic_cache_status,
-                synthetic_cache_dry_run,
-                synthetic_cache_candidate_count,
-                synthetic_cache_applied_count,
-                synthetic_cache_warning_count,
-                synthetic_cache_warnings_json,
-                synthetic_cache_policy_name,
-                synthetic_cache_policy_source,
-                synthetic_cache_summary_json,
                 request_id,
             ),
         )

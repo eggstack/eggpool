@@ -1,188 +1,51 @@
-# Deep Dive: Cache & Compression
+# Deep Dive: Cache and Compression
 
-Back to [Overview](overview.md)
+## Scope
 
-## Purpose
+This subsystem reports provider cache counters, preserves explicit native cache
+boundaries during transcoding, and optionally performs deterministic compression
+on safe request suffixes. It does not synthesize cache controls, run a tuning
+registry, or maintain a custom DNS cache.
 
-A cache-preserving deterministic request-shaping stack that observes, analyzes,
-and optionally mutates request bodies to reduce avoidable prompt volume. Native
-provider cache boundaries are preserved; synthetic annotations and safe
-compression remain explicit opt-in surfaces, while tuning is recommendation-only.
+## Modules
 
-## Architecture
+- `transcoder/segmentation.py` classifies canonical request content into stable,
+  semi-stable, and volatile regions without retaining request content.
+- `transcoder/cache_stability.py` tracks explicit native cache-boundary mapping
+  and bounded loss metadata.
+- `transcoder/compression/analyzer.py` records bounded observe-mode opportunity
+  metrics.
+- `transcoder/compression/apply.py` applies safe deterministic transforms with
+  path-level copy-on-write.
+- `transcoder/compression/policy.py` defines the `observe`/`safe` policy and
+  `suffix_only` placement. Unknown fields are rejected.
+- `transcoder/compression/policy_resolver.py` applies deterministic,
+  content-private policy overrides.
 
-```
-┌─────────────────────────────────────┐
-│         Request Body                 │
-└──────────────┬──────────────────────┘
-               │
-    ┌──────────▼──────────┐
-    │ Phase 2: Segmentation│
-    │ stable/semi/volatile │
-    └──────────┬──────────┘
-               │
-    ┌──────────▼──────────┐
-    │ Phase 3: Cache      │
-    │ Stability Tracker   │
-    └──────────┬──────────┘
-               │
-    ┌──────────▼──────────┐
-    │ Phase 4: Observe    │
-    │ Compression Analyze │
-    │ (no mutation)       │
-    └──────────┬──────────┘
-               │
-    ┌──────────▼──────────┐
-    │ Phase 5: Safe Mode  │
-    │ Compression Apply   │
-    │ (opt-in mutation)   │
-    └──────────┬──────────┘
-               │
-    ┌──────────▼──────────┐
-    │ Phase 6: Policy     │
-    │ Overrides           │
-    └──────────┬──────────┘
-               │
-    ┌──────────▼──────────┐
-    │ Synthetic Cache     │
-    │ Cache Controls      │
-    │ (opt-in annotation) │
-    └──────────┬──────────┘
-               │
-    ┌──────────▼──────────┐
-    │ Threshold Tuning    │
-    │ Tuning              │
-    │ (recommendation)    │
-    └─────────────────────┘
-```
+## Runtime behavior
 
-## Key Modules
+Compression is disabled by default. Observe mode does not mutate provider
+payloads. Safe mode considers only eligible `volatile_suffix` segments and
+never mutates stable prefixes or protected cache-boundary content. A changed
+stable-prefix integrity hash fails closed and returns the original payload.
 
-### `transcoder/segmentation.py`
+Native cache fields are provider/model contract data. Protocol names alone do
+not authorize cache fields, TTLs, or breakpoint counts. The transcoder preserves
+explicit source boundaries only when the selected target contract supports the
+mapping.
 
-`segment_request()` — structural segmentation into:
-- **`stable_prefix`** — system/developer messages, tool schemas, cache_control (protected)
-- **`semi_stable_context`** — assistant messages, prior turns (conservative default)
-- **`volatile_suffix`** — tool results, command output, latest user turn (compressible)
+## Routing and persistence
 
-Content-private: hashes use structural descriptors, never raw text.
+Cache and compression metrics are reporting-only and are not inputs to
+`QuotaFairScorer`. Request finalization persists bounded compression and cache
+observability fields. Historical synthetic-cache migration columns remain in
+the frozen `requests` schema for compatibility, but current code does not
+populate or expose them.
 
-### `transcoder/cache_stability.py`
+## Invariants
 
-`CacheBoundaryTracker` — records cache_control annotation events during transcoding. Append-only, bounded (64/request).
-
-### `transcoder/compression/analyzer.py`
-
-`analyze_compression()` — observe-mode analysis:
-- Walks every segment, runs enabled transforms
-- Produces `CompressionCandidate` per transform
-- Policy filtering with reason codes
-- Latency budget check
-- Never mutates request body
-
-### `transcoder/compression/apply.py`
-
-`apply_safe_compression()` — safe-mode deterministic mutation:
-- Only mutates eligible `volatile_suffix` segments
-- Path-level copy-on-write (no full deep copy)
-- Pre/post stable-prefix content hash verification
-- Fail-closed on hash mismatch
-- Deterministic markers for each transform
-
-### `transcoder/compression/policy.py`
-
-`CompressionConfig`, `CompressionTransforms` — configuration:
-- `enabled`, `mode` (observe/safe), `placement`
-- `respect_cache_boundaries`, `compress_static_prefix`
-- `min_candidate_tokens`, `min_savings_tokens`
-- `max_compression_latency_ms`
-- Six transform toggles
-
-### `transcoder/compression/policy_resolver.py`
-
-`resolve_compression_policy()` — per-request policy override resolution:
-- Walks `[[compression.policies]]` overrides in file order
-- Match fields: client, protocol, model, provider
-- Merges overlay fields onto base config
-- Never raises; falls back on validation error
-
-### `transcoder/compression/markers.py`
-
-Deterministic compression markers:
-```
-[EggPool compression: <transform> | segment=<id> | lines=<n> | tokens=<n> | sha256=<digest>]
-```
-
-### `transcoder/compression/tuning.py`
-
-Recommendation-only threshold tuning:
-- `compute_recommendation()` — advisory suggestions
-- Tuning is recommendation-only; no runtime override registry is constructed.
-
-### `transcoder/cache_synthesis.py` / `cache_synthesis_policy.py`
-
-Phase 9 synthetic cache controls:
-- Post-route, provider-bound `cache_control` annotations
-- Dry-run by default when enabled
-- Structural-diff safety validation
-- Anthropic-style `ephemeral` TTL only
-
-## Compression Transforms
-
-| Transform | Description |
-|-----------|-------------|
-| `fold_repeated_lines` | Collapse repeated log lines |
-| `compact_logs` | Compact log output |
-| `compact_search_results` | Compact search results |
-| `elide_base64_blobs` | Elide base64 encoded data |
-| `minify_machine_json` | Minify JSON output |
-| `compact_stack_traces` | Compact stack traces |
-
-## Routing Non-Interference
-
-Hardcoded invariant: `QuotaFairScorer` never consumes cache/compression fields. Routing stays load-based:
-- Request count
-- Token count
-- Active count
-- Health
-
-Runtime diagnostic flags (exposed via `/api/stats/runtime`):
-```json
-{
-  "routing_cache_compression_mode": "reporting_only",
-  "routing_uses_cache_metrics": false,
-  "routing_uses_compression_metrics": false,
-  "routing_uses_stable_prefix_hash": false,
-  "routing_uses_compression_policy": false
-}
-```
-
-## What Is Safe by Default
-
-With shipped defaults, the entire stack is observability-only:
-- Phase 1 cache counters recorded, never affects quota scoring
-- Phase 2 segmentation annotates durable columns
-- Phase 3 cache stability records boundary events
-- Phase 4 observe mode runs analyzer, never mutates
-- Phase 5 safe compression defaults to `mode = "observe"`
-- Phase 6 policy overrides default to `policies = []`
-- Phase 9 synthetic cache defaults to `enabled = false`
-- Phase 10 tuning defaults to `enabled = false`
-
-## What Is Experimental
-
-Behind explicit operator opt-in:
-- Phase 5 `mode = "safe"` — mutates eligible volatile-suffix segments
-- Phase 9 synthetic cache `apply` mode — adds cache_control annotations
-- Phase 10 `mode = "recommend"` — advisory threshold suggestions only
-
-## Key Invariants
-
-- Segmentation is observational: never affects request bodies, routing, or eligibility
-- `analyze_compression` is total: never raises on malformed input
-- `apply_safe_compression` is total: never raises; failures surface as `failed_fallback=True`
-- Pre/post stable-prefix content hash MUST match when `compress_static_prefix` is False
-- Context-limit checks happen before compression
-- `QuotaFairScorer` never consumes cache/compression fields
-- Same-provider fairness preserved across adversarial cache/compression profiles
-- No raw prompts in any cache/compression surface
+- Config placement is exactly `suffix_only`.
+- Compression never inspects or logs raw request content.
+- Provider cache capabilities are explicit; no fields are guessed.
+- Local transformation failures never trigger provider retry.
+- Diagnostics contain counts, hashes, and bounded reason codes only.

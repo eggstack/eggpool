@@ -600,15 +600,12 @@ def mirror_generation_on_app_state(
         "router": generation.router,
         "client_pool": generation.client_pool,
         "outbound_manager": generation.outbound_manager,
-        "dns_backend": generation.dns_backend,
         "httpx_client": _default_client(generation),
         "health_manager": generation.health_manager,
         "account_backoff_repo": generation.account_backoff_repo,
         "cost_calculator": generation.cost_calculator,
         "transcoder_policy": generation.transcoder_policy,
         "compression_policy": generation.compression_policy,
-        "cache_config": generation.cache_config,
-        "compression_tuning_registry": generation.compression_tuning_registry,
         "dispatch_overhead_recorder": generation.dispatch_overhead_recorder,
         "dispatch_span_recorder": generation.dispatch_span_recorder,
         "stats": generation.stats_service,
@@ -692,7 +689,6 @@ def _log_operational_profile(
     transcoder_enabled = bool(getattr(config.transcoder, "enabled", True))
     compression_enabled = bool(getattr(config.compression, "enabled", False))
     compression_mode = str(getattr(config.compression, "mode", "off"))
-    cache_enabled = bool(getattr(config.cache, "enabled", False))
 
     # Runtime topology: process identity and asyncio
     # loop identity so operators can verify the single-loop model.
@@ -718,7 +714,6 @@ def _log_operational_profile(
         "transcoder_enabled": transcoder_enabled,
         "compression_enabled": compression_enabled,
         "compression_mode": compression_mode,
-        "cache_enabled": cache_enabled,
         "model_info_enabled": model_info_enabled,
         "task_total": len(gen_tasks) + len(proc_tasks),
         "task_process_owned": proc_owned_count,
@@ -962,8 +957,6 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     app.state.router = gen_result.router
     app.state.client_pool = gen_result.client_pool
     app.state.outbound_manager = gen_result.outbound_manager
-    if gen_result.dns_backend is not None:
-        app.state.dns_backend = gen_result.dns_backend
     # Keep backward-compat alias
     legacy_client = gen_result.client_pool.get_default_client()
     if legacy_client is not None:
@@ -972,8 +965,6 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     app.state.account_backoff_repo = gen_result.account_backoff_repo
     app.state.cost_calculator = gen_result.cost_calculator
     app.state.compression_policy = gen_result.compression_policy
-    app.state.cache_config = gen_result.cache_config
-    app.state.compression_tuning_registry = gen_result.compression_tuning_registry
     app.state.dispatch_overhead_recorder = gen_result.dispatch_overhead_recorder
     app.state.dispatch_span_recorder = gen_result.dispatch_span_recorder
     app.state.stats = gen_result.stats_service
@@ -1109,7 +1100,6 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         started_epoch=app.state.started_epoch,
         metrics_coalescer=metrics_coalescer,
         outbound_manager=outbound_manager,
-        dns_backend=getattr(app.state, "dns_backend", None),
         provider_client_pool=app.state.client_pool,
         dispatch_overhead_recorder=app.state.dispatch_overhead_recorder,
         local_pre_upstream_recorder=getattr(

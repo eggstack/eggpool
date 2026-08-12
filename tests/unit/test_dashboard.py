@@ -273,7 +273,6 @@ class TestRenderOverview:
             request_shaping_summary={
                 "mode": {
                     "compression": "observe",
-                    "synthetic_cache": "dry_run",
                 },
                 "compression": {"estimated_savings_tokens": 5000},
                 "cache": {"cache_counter_reported_rate": 0.72},
@@ -283,7 +282,6 @@ class TestRenderOverview:
         assert "Observe" in html
         assert "Potential 5,000 tokens" in html
         assert "Cache reported 72.0%" in html
-        assert "Synthetic Dry Run" in html
 
     def test_chart_preloads_inlined_timeseries_data(self) -> None:
         """The chart must be seeded from an inlined JSON data island so
@@ -4954,43 +4952,15 @@ class TestRenderRuntimeNetwork:
                 "build_count": 3,
                 "providers": {"openai": 1, "anthropic": 1, "opencode-go": 1},
             },
-            "dns_cache": {
-                "enabled": True,
-                "size": 7,
-                "hits": 500,
-                "misses": 10,
-                "negative_hits": 0,
-                "stale_hits": 0,
-                "evictions": 0,
-                "resolution_errors": {},
-                "hosts": [],
-            },
         }
         html = render_runtime(snapshot)
         assert "enabled" in html
         assert "Outbound builds" in html
         assert "Outbound requests" in html
-        assert "DNS cache" in html
-        assert "DNS suppression" in html
         assert "Provider clients" in html
 
-    def test_renders_dns_disabled(self) -> None:
-        snapshot: dict[str, Any] = {
-            "server": {"pid": 1, "uptime_seconds": 0, "configured_server_threads": 1},
-            "memory": {},
-            "processes": {},
-            "background_tasks": [],
-            "db": {},
-            "routing_runtime": {},
-            "outbound_client": {"build_count": 0, "request_count": 0, "error_count": 0},
-            "provider_client_pool": {"build_count": 0, "providers": {}},
-            "dns_cache": {"enabled": False},
-        }
-        html = render_runtime(snapshot)
-        assert "disabled" in html
-
     def test_renders_empty_network_data(self) -> None:
-        """Runtime page renders without outbound_client/dns_cache keys."""
+        """Runtime page renders without optional network keys."""
         snapshot: dict[str, Any] = {
             "server": {"pid": 1, "uptime_seconds": 0, "configured_server_threads": 1},
             "memory": {},
@@ -5001,48 +4971,6 @@ class TestRenderRuntimeNetwork:
         }
         html = render_runtime(snapshot)
         assert "<html" in html
-
-    def test_dns_hit_rate_calculation(self) -> None:
-        snapshot: dict[str, Any] = {
-            "server": {"pid": 1, "uptime_seconds": 0, "configured_server_threads": 1},
-            "memory": {},
-            "processes": {},
-            "background_tasks": [],
-            "db": {},
-            "routing_runtime": {},
-            "outbound_client": {"build_count": 1, "request_count": 0, "error_count": 0},
-            "provider_client_pool": {"build_count": 0, "providers": {}},
-            "dns_cache": {
-                "enabled": True,
-                "size": 3,
-                "hits": 90,
-                "misses": 10,
-                "dns_suppression_rate": 0.9,
-                "resolver_calls_total": 10,
-            },
-        }
-        html = render_runtime(snapshot)
-        assert "90.0%" in html
-
-    def test_dns_hit_rate_zero_lookups(self) -> None:
-        snapshot: dict[str, Any] = {
-            "server": {"pid": 1, "uptime_seconds": 0, "configured_server_threads": 1},
-            "memory": {},
-            "processes": {},
-            "background_tasks": [],
-            "db": {},
-            "routing_runtime": {},
-            "outbound_client": {"build_count": 1, "request_count": 0, "error_count": 0},
-            "provider_client_pool": {"build_count": 0, "providers": {}},
-            "dns_cache": {
-                "enabled": True,
-                "size": 0,
-                "hits": 0,
-                "misses": 0,
-            },
-        }
-        html = render_runtime(snapshot)
-        assert "—" in html
 
     def test_no_api_keys_in_html(self) -> None:
         """Runtime page does not expose API keys via network metrics."""
@@ -5055,33 +4983,10 @@ class TestRenderRuntimeNetwork:
             "routing_runtime": {},
             "outbound_client": {"build_count": 1, "request_count": 0, "error_count": 0},
             "provider_client_pool": {"build_count": 0, "providers": {}},
-            "dns_cache": {"enabled": True, "size": 0, "hits": 0, "misses": 0},
         }
         html = render_runtime(snapshot)
         assert "test-key" not in html
         assert "OPENCODE" not in html
-
-    def test_dns_max_entries_display(self) -> None:
-        """DNS cache card shows entries / max when max_entries is present."""
-        snapshot: dict[str, Any] = {
-            "server": {"pid": 1, "uptime_seconds": 0, "configured_server_threads": 1},
-            "memory": {},
-            "processes": {},
-            "background_tasks": [],
-            "db": {},
-            "routing_runtime": {},
-            "outbound_client": {"build_count": 1, "request_count": 0, "error_count": 0},
-            "provider_client_pool": {"build_count": 0, "providers": {}},
-            "dns_cache": {
-                "enabled": True,
-                "size": 7,
-                "max_entries": 50,
-                "hits": 0,
-                "misses": 0,
-            },
-        }
-        html = render_runtime(snapshot)
-        assert "7 / 50" in html
 
 
 class TestRenderRuntimeBackgroundTasks:
@@ -5097,7 +5002,6 @@ class TestRenderRuntimeBackgroundTasks:
             "routing_runtime": {},
             "outbound_client": {"build_count": 0, "request_count": 0, "error_count": 0},
             "provider_client_pool": {"build_count": 0, "providers": {}},
-            "dns_cache": {"enabled": False},
         }
 
     def test_table_includes_interval_and_next_run_columns(self) -> None:
@@ -5340,7 +5244,6 @@ class TestRenderRuntimeDispatchAndLoad:
             "routing_runtime": {},
             "outbound_client": {"build_count": 0, "request_count": 0, "error_count": 0},
             "provider_client_pool": {"build_count": 0, "providers": {}},
-            "dns_cache": {"enabled": False},
             "load": {
                 "available": True,
                 "cpu_count": 2,
@@ -5401,14 +5304,6 @@ class TestRenderRuntimeDispatchAndLoad:
         html = render_runtime(snapshot)
         assert "Load average" in html
         assert "load average unavailable" in html
-
-    def test_network_cards_have_tooltips(self) -> None:
-        snapshot = self._base_snapshot()
-        snapshot["dns_cache"] = {"enabled": True, "size": 5, "hits": 2, "misses": 1}
-        html = render_runtime(snapshot)
-        assert (
-            'data-tooltip="Outbound DNS cache state and current entry count."' in html
-        )
 
     def test_dispatch_overhead_no_samples(self) -> None:
         snapshot = self._base_snapshot()

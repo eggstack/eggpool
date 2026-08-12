@@ -81,7 +81,7 @@ The request lifecycle is orchestrated by `RequestCoordinator` in `request/coordi
 | **Path** | `src/eggpool/transcoder/` |
 | **Deep Dive** | [deep-dive-transcoder.md](deep-dive-transcoder.md) |
 
-Transparent request/response format conversion between OpenAI and Anthropic protocols. When a client sends Anthropic Messages but the routed provider only supports OpenAI Chat Completions (or vice versa), the transcoder translates both the request body and the streaming response. `BodyTranscoder` Protocol (`protocol.py`) defines the interface; `OpenAIToAnthropic` and `AnthropicToOpenAI` are the concrete implementations. Streaming translation (`streaming.py`) handles SSE frame-by-frame with synchronous `translate_frame()` and `finish()`. The transcoder also handles tool-use translation (Phase 6.1), thinking/reasoning control normalization (Phase 7), and configurable reasoning field names (Phase 8). A compression sub-package (`transcoder/compression/`) implements the cache-preserving request-shaping stack: segmentation, observe-mode analysis, safe-mode suffix compression, policy overrides, synthetic cache controls, and threshold tuning. The `usage` property returns a default; finalization reads usage from the coordinator's observer.
+Transparent request/response format conversion between OpenAI and Anthropic protocols. When a client sends Anthropic Messages but the routed provider only supports OpenAI Chat Completions (or vice versa), the transcoder translates both the request body and the streaming response. `BodyTranscoder` Protocol (`protocol.py`) defines the interface; `OpenAIToAnthropic` and `AnthropicToOpenAI` are the concrete implementations. Streaming translation (`streaming.py`) handles SSE frame-by-frame with synchronous `translate_frame()` and `finish()`. The transcoder also handles tool-use translation, thinking/reasoning control normalization, and configurable reasoning field names. A compression sub-package (`transcoder/compression/`) implements segmentation, observe-mode analysis, safe-mode suffix compression, and policy overrides. The `usage` property returns a default; finalization reads usage from the coordinator's observer.
 
 ### Routing & Quota
 
@@ -177,10 +177,10 @@ Header redaction middleware (`security/redaction.py`) strips configured sensitiv
 
 | | |
 |---|---|
-| **Path** | `src/eggpool/transcoder/compression/`, `src/eggpool/proxy/normalized_usage.py`, `src/eggpool/transcoder/cache_stability.py`, `src/eggpool/transcoder/cache_synthesis.py` |
+| **Path** | `src/eggpool/transcoder/compression/`, `src/eggpool/proxy/normalized_usage.py`, `src/eggpool/transcoder/cache_stability.py` |
 | **Deep Dive** | [deep-dive-cache-compression.md](deep-dive-cache-compression.md) |
 
-Cache-preserving request-shaping stack spanning 10 phases: cache reporting (Phase 1), canonical request segmentation (Phase 2), transcoder cache stability (Phase 3), observe-mode compression accounting (Phase 4), safe-mode suffix compression (Phase 5), compression policy overrides (Phase 6), dashboard/runtime views (Phase 7), routing guardrails (Phase 8), synthetic cache controls (Phase 9), and closed-loop threshold tuning (Phase 10). The stack is observational by default — no request body, route, or scoring is altered unless the operator explicitly opts in. `transcoder/compression/analyzer.py` analyzes compression opportunities; `transcoder/compression/apply.py` applies safe-mode transforms with fail-closed stable-prefix verification. `proxy/normalized_usage.py` extracts cache counters from provider responses. `transcoder/cache_synthesis.py` annotates stable-prefix containers with synthetic `cache_control` hints. `transcoder/cache_stability.py` tracks cache boundary events during transcoding. Routing is hardcoded to never consume cache/compression fields.
+Cache-preserving request shaping covers cache reporting, canonical segmentation, transcoder cache stability, observe/safe compression, policy overrides, and dashboard/runtime views. The stack is observational by default — no request body, route, or scoring is altered unless the operator explicitly opts in. `transcoder/compression/analyzer.py` analyzes opportunities; `transcoder/compression/apply.py` applies safe-mode transforms with fail-closed stable-prefix verification. `proxy/normalized_usage.py` extracts cache counters from provider responses. `transcoder/cache_stability.py` tracks cache boundary events during transcoding. Routing is hardcoded to never consume cache/compression fields.
 
 ### Failure Effects & Quarantine
 
@@ -283,7 +283,7 @@ Typed configuration diff and reload policy. Classifies every `AppConfig` field a
 | 14 | **Data Models** — Pydantic config, domain, API, database models | [deep-dive-models.md](deep-dive-models.md) |
 | 15 | **External Integrations** — OpenCode, Claude Code, Aider, Codex, 8+ tools | [deep-dive-integrations.md](deep-dive-integrations.md) |
 | 16 | **Security** — Header redaction, API key auth, constant-time compare | [deep-dive-security.md](deep-dive-security.md) |
-| 17 | **Cache & Compression** — Observability, safe compression, synthetic cache, tuning | [deep-dive-cache-compression.md](deep-dive-cache-compression.md) |
+| 17 | **Cache & Compression** — Observability, safe compression, provider contracts | [deep-dive-cache-compression.md](deep-dive-cache-compression.md) |
 | 18 | **Observability** — Routing trace writer, structured diagnostics | [deep-dive-observability.md](deep-dive-observability.md) |
 | 19 | **Retry Classification** — Error categorization, backoff, retry decisions | [deep-dive-retry.md](deep-dive-retry.md) |
 | 20 | **Metrics & Telemetry** — Thinking counters, event-loop lag, dispatch overhead | [deep-dive-metrics.md](deep-dive-metrics.md) |
@@ -344,7 +344,7 @@ src/eggpool/
 ├── security/          # Header redaction, security utilities
 ├── stats/             # Statistics queries and service
 ├── transcoder/        # Protocol transcoding (OpenAI ↔ Anthropic)
-│   └── compression/   # Safe compression, policy, tuning
+│   └── compression/   # Safe compression and policy
 ├── _share/            # Bundled config examples for pipx
 ├── auth.py            # Local API key auth (constant-time)
 ├── cli.py             # CLI bootstrap (tiny)

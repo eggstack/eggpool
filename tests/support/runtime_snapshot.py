@@ -97,7 +97,6 @@ class RuntimeSnapshot:
     # Open generation-owned resources
     open_client_pool_count: int
     open_outbound_manager_count: int
-    open_dns_backend_count: int
 
     # Control socket
     control_socket_path: str | None
@@ -192,11 +191,7 @@ class RuntimeSnapshot:
             rt_mode,
             rt_sample_rate,
         ) = _capture_routing_trace_writer(process)
-        (
-            client_pool_count,
-            outbound_count,
-            dns_count,
-        ) = _capture_resources(runtime_manager, process)
+        client_pool_count, outbound_count = _capture_resources(runtime_manager, process)
         (
             control_path,
             control_inode,
@@ -223,7 +218,6 @@ class RuntimeSnapshot:
             routing_trace_writer_sample_rate=rt_sample_rate,
             open_client_pool_count=client_pool_count,
             open_outbound_manager_count=outbound_count,
-            open_dns_backend_count=dns_count,
             control_socket_path=control_path,
             control_socket_inode=control_inode,
         )
@@ -380,11 +374,6 @@ class RuntimeSnapshot:
             diffs.append(
                 f"open_outbound_manager: {self.open_outbound_manager_count} > "
                 f"baseline {baseline.open_outbound_manager_count}"
-            )
-        if self.open_dns_backend_count > baseline.open_dns_backend_count:
-            diffs.append(
-                f"open_dns_backend: {self.open_dns_backend_count} > "
-                f"baseline {baseline.open_dns_backend_count}"
             )
         if self.supervisor_task_count > baseline.supervisor_task_count + 2:
             # Allow a small slack (≤2 tasks) for candidate registration
@@ -578,12 +567,11 @@ def _capture_routing_trace_writer(
 def _capture_resources(
     runtime_manager: Any,
     process: Any,
-) -> tuple[int, int, int]:
-    """Capture open client pool, outbound manager, and DNS backend counts."""
+) -> tuple[int, int]:
+    """Capture open client-pool and outbound-manager counts."""
 
     client_pool_count = 0
     outbound_count = 0
-    dns_count = 0
 
     with contextlib.suppress(Exception):
         active = runtime_manager.active_snapshot()
@@ -591,8 +579,6 @@ def _capture_resources(
             client_pool_count += 1
         if active.outbound_manager is not None:
             outbound_count += 1
-        if active.dns_backend is not None:
-            dns_count += 1
 
     with contextlib.suppress(Exception):
         retiring = runtime_manager._retiring or []
@@ -602,10 +588,8 @@ def _capture_resources(
                 client_pool_count += 1
             if getattr(gen, "outbound_manager", None) is not None:
                 outbound_count += 1
-            if getattr(gen, "dns_backend", None) is not None:
-                dns_count += 1
 
-    return client_pool_count, outbound_count, dns_count
+    return client_pool_count, outbound_count
 
 
 def _capture_control_socket() -> tuple[str | None, int | None]:

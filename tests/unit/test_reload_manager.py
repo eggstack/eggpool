@@ -747,13 +747,10 @@ def _make_real_generation(
         coordinator=MagicMock(),
         client_pool=MagicMock(),
         outbound_manager=MagicMock(),
-        dns_backend=None,
         health_manager=MagicMock(),
         cost_calculator=MagicMock(),
         transcoder_policy=MagicMock(),
         compression_policy=MagicMock(),
-        cache_config=MagicMock(),
-        compression_tuning_registry=MagicMock(),
         dispatch_overhead_recorder=MagicMock(),
         dispatch_span_recorder=MagicMock(),
         account_backoff_repo=MagicMock(),
@@ -1178,8 +1175,6 @@ def _real_app_config(
     compression_enabled: bool = False,
     compression_mode: str = "observe",
     min_candidate_tokens: int = 2048,
-    synthetic_cache_enabled: bool = False,
-    synthetic_cache_dry_run: bool = True,
     persist_redacted_error_detail: bool = False,
     expose_mode: str = "union",
     collapse_models: bool = False,
@@ -1214,12 +1209,6 @@ def _real_app_config(
                 "enabled": compression_enabled,
                 "mode": compression_mode,
                 "min_candidate_tokens": min_candidate_tokens,
-            },
-            "cache": {
-                "synthetic_cache_controls": {
-                    "enabled": synthetic_cache_enabled,
-                    "dry_run": synthetic_cache_dry_run,
-                }
             },
             "models": {
                 "refresh_interval_s": refresh_interval_s,
@@ -1274,13 +1263,9 @@ class TestMilestoneD1CandidateBuild:
             candidate_config = validation.config
             transcoder_policy = candidate_config.transcoder
             compression_policy = candidate_config.compression
-            cache_config = candidate_config.cache
-            tuning_registry = MagicMock()
             coordinator_kwargs: dict[str, object] = {
                 "transcoder_policy": transcoder_policy,
                 "compression_policy": compression_policy,
-                "cache_config": cache_config,
-                "compression_tuning_registry": tuning_registry,
                 "persist_error_detail": (
                     candidate_config.security.persist_redacted_error_detail
                 ),
@@ -1288,8 +1273,6 @@ class TestMilestoneD1CandidateBuild:
             captured["config"] = candidate_config
             captured["transcoder_policy"] = transcoder_policy
             captured["compression_policy"] = compression_policy
-            captured["cache_config"] = cache_config
-            captured["compression_tuning_registry"] = tuning_registry
             captured["persist_error_detail"] = (
                 candidate_config.security.persist_redacted_error_detail
             )
@@ -1307,13 +1290,10 @@ class TestMilestoneD1CandidateBuild:
                 coordinator=MagicMock(**coordinator_kwargs),
                 client_pool=gen.client_pool,
                 outbound_manager=gen.outbound_manager,
-                dns_backend=None,
                 health_manager=gen.health_manager,
                 cost_calculator=gen.cost_calculator,
                 transcoder_policy=transcoder_policy,
                 compression_policy=compression_policy,
-                cache_config=cache_config,
-                compression_tuning_registry=tuning_registry,
                 dispatch_overhead_recorder=gen.dispatch_overhead_recorder,
                 dispatch_span_recorder=gen.dispatch_span_recorder,
                 account_backoff_repo=gen.account_backoff_repo,
@@ -1416,43 +1396,6 @@ class TestMilestoneD1CandidateBuild:
         assert policy.min_candidate_tokens == 4096
 
     @pytest.mark.asyncio
-    async def test_cache_config_rebuilt_from_candidate(
-        self, monkeypatch: pytest.MonkeyPatch, proc: MagicMock
-    ) -> None:
-        """Candidate ``cache_config`` mirrors candidate synthetic-cache knobs."""
-        rm = RuntimeManager()
-        baseline = _real_app_config()
-        await rm.install_initial(
-            _make_real_generation(generation_id=0, config=baseline)
-        )
-        await rm.install_candidate(
-            _make_real_generation(generation_id=1, config=baseline)
-        )
-
-        candidate_config = _real_app_config(
-            synthetic_cache_enabled=True, synthetic_cache_dry_run=False
-        )
-
-        captured: dict[str, object] = {}
-        mgr = ReloadManager(rm, proc)
-        self._stub_candidate_build(mgr, proc, captured, gen_id=2)
-        change = MagicMock(section="cache", disposition=MagicMock(value="live"))
-        diff = _make_diff(changes=(change,))
-        validation = _make_real_validation(candidate_config)
-        monkeypatch.setattr(mgr, "_compute_reload_diff", AsyncMock(return_value=diff))
-        monkeypatch.setattr(mgr, "_reconcile_persistence", AsyncMock())
-        monkeypatch.setattr(mgr, "_prepare_persistence_delta", MagicMock())
-        monkeypatch.setattr(mgr, "_apply_persistence_delta", AsyncMock())
-        monkeypatch.setattr(mgr, "_record_event", AsyncMock())
-        monkeypatch.setattr(rm, "begin_retirement", AsyncMock())
-
-        result = await mgr.reload(validation)
-        assert result.ok is True
-        captured_cache = captured["cache_config"]
-        assert captured_cache.synthetic_cache_controls.enabled is True
-        assert captured_cache.synthetic_cache_controls.dry_run is False
-
-    @pytest.mark.asyncio
     async def test_models_subset_reaches_candidate_config(
         self, monkeypatch: pytest.MonkeyPatch, proc: MagicMock
     ) -> None:
@@ -1539,7 +1482,7 @@ class TestMilestoneD1CandidateBuild:
     ) -> None:
         """Identity-separation invariant from the D1 plan.
 
-        The candidate transcoder / compression / cache objects surfaced
+        The candidate transcoder / compression objects surfaced
         by :meth:`ReloadManager._build_candidate_generation` MUST be
         distinct references from the active generation's references at
         the moment of construction.  Pydantic ``model_copy(deep=True)``
@@ -1575,11 +1518,10 @@ class TestMilestoneD1CandidateBuild:
         result = await mgr.reload(validation)
         assert result.ok is True
 
-        # The candidate transcoder / compression / cache policy references
+        # The candidate transcoder / compression policy references
         # are distinct from the originals.
         assert id(captured["transcoder_policy"]) != id(baseline.transcoder)
         assert id(captured["compression_policy"]) != id(baseline.compression)
-        assert id(captured["cache_config"]) != id(baseline.cache)
         # And the captured config itself is distinct.
         assert id(captured["config"]) != id(baseline)
 
@@ -1624,13 +1566,10 @@ class TestMilestoneD1CandidateBuild:
             coordinator=baseline_gen.coordinator,
             client_pool=baseline_gen.client_pool,
             outbound_manager=baseline_gen.outbound_manager,
-            dns_backend=None,
             health_manager=baseline_gen.health_manager,
             cost_calculator=baseline_gen.cost_calculator,
             transcoder_policy=baseline.transcoder,
             compression_policy=baseline_gen.compression_policy,
-            cache_config=baseline_gen.cache_config,
-            compression_tuning_registry=baseline_gen.compression_tuning_registry,
             dispatch_overhead_recorder=baseline_gen.dispatch_overhead_recorder,
             dispatch_span_recorder=baseline_gen.dispatch_span_recorder,
             account_backoff_repo=baseline_gen.account_backoff_repo,
@@ -1692,7 +1631,7 @@ class TestMilestoneD1CandidateBuild:
 
 
 # ---------------------------------------------------------------------------
-# Milestone D1 — repeated-reload soak test (no client / task / tuning leak).
+# Milestone D1 — repeated-reload soak test (no client / task leak).
 # ---------------------------------------------------------------------------
 
 
@@ -1700,7 +1639,7 @@ class TestMilestoneD1RepeatedReloadSoak:
     """``eggpool rehash`` can be issued many times back-to-back.
 
     The D1 plan acceptance criterion 5 requires that repeated policy
-    reloads do not leak HTTP clients, tasks, or tuning registries, and
+    reloads do not leak HTTP clients or tasks, and
     that the active generation monotonic id always advances.  This
     test exercises 25 alternating transcoder-loss-policy generations
     with the heavy services stubbed, asserting:
@@ -1738,7 +1677,6 @@ class TestMilestoneD1RepeatedReloadSoak:
             candidate_config = validation.config
             gen_id = next_gen_id["value"]
             next_gen_id["value"] += 1
-            tuning_registry = MagicMock()
             client_pool = MagicMock()
             outbound_manager = MagicMock()
             supervisor = MagicMock()
@@ -1753,19 +1691,14 @@ class TestMilestoneD1RepeatedReloadSoak:
                 coordinator=MagicMock(
                     transcoder_policy=candidate_config.transcoder,
                     compression_policy=candidate_config.compression,
-                    cache_config=candidate_config.cache,
-                    compression_tuning_registry=tuning_registry,
                     persist_error_detail=candidate_config.security.persist_redacted_error_detail,
                 ),
                 client_pool=client_pool,
                 outbound_manager=outbound_manager,
-                dns_backend=None,
                 health_manager=MagicMock(),
                 cost_calculator=MagicMock(),
                 transcoder_policy=candidate_config.transcoder,
                 compression_policy=candidate_config.compression,
-                cache_config=candidate_config.cache,
-                compression_tuning_registry=tuning_registry,
                 dispatch_overhead_recorder=MagicMock(),
                 dispatch_span_recorder=MagicMock(),
                 account_backoff_repo=MagicMock(),
@@ -1777,19 +1710,16 @@ class TestMilestoneD1RepeatedReloadSoak:
                 created_at_epoch=time.time(),
             )
             # Track per-resource identity so the test can prove every
-            # candidate generation gets a fresh pool, supervisor,
-            # routing trace guard, and tuning
-            # registry.  Phase 5 acceptance requires "no leak" across
+            # candidate generation gets a fresh pool, supervisor, and
+            # routing trace guard. Phase 5 acceptance requires "no leak" across
             # 20+ reloads; the simplest signal is that no resource
             # is ever reused.
-            captured.setdefault("tuning_ids", set()).add(id(tuning_registry))
             captured.setdefault("transcoder_ids", set()).add(
                 id(candidate_config.transcoder)
             )
             captured.setdefault("compression_ids", set()).add(
                 id(candidate_config.compression)
             )
-            captured.setdefault("cache_ids", set()).add(id(candidate_config.cache))
             captured.setdefault("client_pool_ids", set()).add(id(client_pool))
             captured.setdefault("outbound_manager_ids", set()).add(id(outbound_manager))
             captured.setdefault("supervisor_ids", set()).add(id(supervisor))
@@ -1828,13 +1758,8 @@ class TestMilestoneD1RepeatedReloadSoak:
                 f"reload #{cycle} (loss={loss}) failed: {result.message}"
             )
 
-        # Every reload observed a candidate config and a distinct
-        # compression_tuning_registry.
+        # Every reload observed a candidate config and fresh resources.
         assert captured["last_gen_id"] == 25  # gen 1..25 issued
-        # Each candidate created a fresh compression_tuning_registry.
-        assert len(captured["tuning_ids"]) == 25, (
-            "expected 25 fresh compression_tuning_registries across 25 reloads"
-        )
         # Transcoder policies seen at build time should be different
         # per reload.
         assert len(captured["transcoder_ids"]) == 25
@@ -1846,7 +1771,6 @@ class TestMilestoneD1RepeatedReloadSoak:
         # collide with the active generation's during the drain window.
         for resource_name, ids_seen in (
             ("compression_ids", captured["compression_ids"]),
-            ("cache_ids", captured["cache_ids"]),
             ("client_pool_ids", captured["client_pool_ids"]),
             ("outbound_manager_ids", captured["outbound_manager_ids"]),
             ("supervisor_ids", captured["supervisor_ids"]),

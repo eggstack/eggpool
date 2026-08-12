@@ -616,97 +616,6 @@ async def handle_compression_observability(
     return JSONResponse(content={"period": time_range.label, **payload})
 
 
-async def handle_synthetic_cache_observability(
-    request: Request, period: str | None = "24h"
-) -> Response:
-    """GET /api/stats/synthetic-cache-observability.
-
-    Phase 9 synthetic cache controls.  Reports status counts,
-    dry-run vs applied totals, candidate/applied/warning counts,
-    and per-policy rollup so operators can see what synthetic
-    cache controls are doing without enabling mutation.
-
-    Output shape:
-
-    - ``period``                              : resolved time-range label
-    - ``total_requests``                      : finalized rows in window
-    - ``status_counts``                       : ``{disabled, dry_run,
-      applied, no_candidates, policy_required,
-      provider_unsupported} -> request_count``
-    - ``dry_run_count``                       : requests in dry-run mode
-    - ``applied_count``                       : requests with status applied
-    - ``candidate_count_total``               : sum of candidate counts
-    - ``applied_count_total``                 : sum of applied counts
-    - ``warning_count_total``                 : sum of warning counts
-    - ``warning_counts``                      : ``{code: count}``
-    - ``by_policy``                           : per resolved-policy
-      rollup with ``<global>`` sentinel first.
-    - ``by_status_timeseries``                : ``None`` (not yet wired)
-    - ``routing_separation_notice``           : static reminder that
-      synthetic cache fields are reporting-only.
-    """
-    from eggpool.stats import resolve_time_range
-
-    time_range = resolve_time_range(period)
-    stats = _get_stats(request)
-    payload = await stats.get_synthetic_cache_summary(time_range)
-    return JSONResponse(
-        content={
-            "period": time_range.label,
-            "routing_separation_notice": (
-                "Phase 9 synthetic cache controls. Reporting only -- "
-                "not consumed by QuotaFairScorer."
-            ),
-            **payload,
-        }
-    )
-
-
-async def handle_compression_tuning(
-    request: Request, period: str | None = "24h"
-) -> Response:
-    """GET /api/stats/compression-tuning.
-
-    Phase 10 closed-loop threshold tuning.  Reports the per-policy
-    window metrics that feed the recommendation engine plus the
-    persisted recommendation and override audit rows.  Tuning is
-    disabled by default; the endpoint returns empty payloads when
-    no requests have been finalized in the window or when no
-    recommendation has been computed yet.
-
-    Output shape:
-
-    - ``period``                              : resolved time-range label
-    - ``windows``                             : ``{policy_name:
-      TuningWindowMetrics-shaped dict}`` (per the plan; the engine
-      consumes the exact fields produced by
-      :func:`eggpool.stats.queries.fetch_compression_tuning_window_metrics`).
-    - ``recommendations``                     : persisted recommendation
-      rows from ``compression_tuning_recommendations``.
-    - ``overrides``                           : persisted runtime
-      override audit rows from ``compression_tuning_overrides``.
-    - ``routing_separation_notice``           : static reminder that
-      tuning fields are reporting-only and never enter
-      ``QuotaFairScorer``.
-    """
-    from eggpool.stats import resolve_time_range
-
-    time_range = resolve_time_range(period)
-    stats = _get_stats(request)
-    payload = await stats.get_compression_tuning_window_metrics(time_range)
-    return JSONResponse(
-        content={
-            "period": time_range.label,
-            "routing_separation_notice": (
-                "Phase 10 closed-loop threshold tuning. Reporting only "
-                "-- not consumed by QuotaFairScorer. Tuning never "
-                "enables stable-prefix compression."
-            ),
-            **payload,
-        }
-    )
-
-
 async def handle_recent_requests(
     request: Request,
     limit: int = 50,
@@ -920,23 +829,6 @@ def register_stats_routes(app: Any, require_auth: bool = False) -> None:
         methods=["GET"],
         dependencies=dependencies,
     )
-    # Phase 9: synthetic cache controls observability.  Same auth
-    # surface as the cache-observability endpoint.
-    app.add_api_route(
-        path="/api/stats/synthetic-cache-observability",
-        endpoint=handle_synthetic_cache_observability,
-        methods=["GET"],
-        dependencies=dependencies,
-    )
-    # Phase 10: closed-loop threshold tuning observability.  Same auth
-    # surface as the cache-observability endpoint.
-    app.add_api_route(
-        path="/api/stats/compression-tuning",
-        endpoint=handle_compression_tuning,
-        methods=["GET"],
-        dependencies=dependencies,
-    )
-
     # Per-request trace endpoint.  Per-request traces expose the
     # selected model, prompt volume, and error detail that operators
     # consider sensitive, so it is ALWAYS auth-gated even when the
@@ -967,7 +859,6 @@ __all__ = [
     "handle_cache_observability",
     "handle_canonical_request_segmentation",
     "handle_compression_observability",
-    "handle_compression_tuning",
     "handle_errors",
     "handle_events",
     "handle_ip_stats",
@@ -986,7 +877,6 @@ __all__ = [
     "handle_routing_selection_breakdown",
     "handle_routing_skew_summary",
     "handle_summary",
-    "handle_synthetic_cache_observability",
     "handle_thinking_stats",
     "handle_timeseries",
     "register_stats_routes",

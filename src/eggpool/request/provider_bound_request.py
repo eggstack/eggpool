@@ -3,8 +3,8 @@
 Workstream A of Plan 028.  A ``ProviderBoundRequest`` owns the decoded
 payload lifecycle for one proxy request from the moment account selection
 completes through to upstream dispatch.  It replaces ad-hoc re-decoding
-of duplicated provider-body state across the coordinator, compression,
-synthetic-cache, and transcoder subsystems with a single authoritative
+of duplicated provider-body state across the coordinator, compression, and
+transcoder subsystems with a single authoritative
 decoded representation.
 
 Design rules
@@ -16,7 +16,7 @@ Design rules
   graphs use the conservative deep-owning path.
 - ``provider_bytes`` is serialized **once** after the last transform.
 - A monotonically increasing ``payload_generation`` counter lets
-  downstream consumers (segmentation, cache synthesis) invalidate
+  downstream consumers (segmentation and compression) invalidate
   stale derived state.
 """
 

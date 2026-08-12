@@ -34,12 +34,8 @@ _ctx = CompressionPolicyContext(
 )
 
 
-def _make_app_config(
-    *,
-    force_segmentation: bool = False,
-) -> MagicMock:
+def _make_app_config() -> MagicMock:
     cfg = MagicMock(spec=AppConfig)
-    cfg.force_segmentation = force_segmentation
     return cfg
 
 
@@ -177,7 +173,6 @@ class TestSegmentationGuardWithPolicyResolution:
             config,
             compression_enabled=False,
             compression_mode="off",
-            synthetic_cache_enabled=False,
             cache_observability_enabled=False,
         )
         assert result is False
@@ -191,37 +186,12 @@ class TestSegmentationGuardWithPolicyResolution:
             config,
             compression_enabled=False,
             compression_mode="off",
-            synthetic_cache_enabled=False,
             cache_observability_enabled=False,
         )
         assert result is False
         # The caller sets segmentation_not_collected=True when
         # should_segment_request returns False, which is distinct
         # from segmentation_result being None after a run.
-
-    def test_force_segmentation_overrides_policy(self) -> None:
-        """``force_segmentation=True`` forces segmentation even with
-        all consumers disabled."""
-        config = _make_app_config(force_segmentation=True)
-        result = should_segment_request(
-            config,
-            compression_enabled=False,
-            compression_mode="off",
-            force_segmentation=True,
-        )
-        assert result is True
-
-    def test_synthetic_cache_enables_segmentation(self) -> None:
-        """Synthetic cache controls enabled triggers segmentation
-        even without compression."""
-        config = _make_app_config()
-        result = should_segment_request(
-            config,
-            compression_enabled=False,
-            compression_mode="off",
-            synthetic_cache_enabled=True,
-        )
-        assert result is True
 
     def test_compression_observe_without_safe_still_segments(self) -> None:
         """Compression observe mode (enabled + mode=observe) triggers

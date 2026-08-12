@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 async def handle_network_diagnostics(request: Request) -> JSONResponse:
     """Return a sanitized network diagnostics snapshot.
 
-    Exposes outbound client lifecycle and DNS cache behavior without
+    Exposes outbound client lifecycle and provider-pool behavior without
     leaking API keys, auth headers, request bodies, or full URLs.
     Always auth-gated regardless of ``dashboard.public``.
     """
@@ -22,7 +22,6 @@ async def handle_network_diagnostics(request: Request) -> JSONResponse:
     snapshot = await runtime_metrics.snapshot()
     outbound = snapshot.get("outbound_client", {})
     provider_pool = snapshot.get("provider_client_pool", {})
-    dns = snapshot.get("dns_cache", {})
 
     total_builds = outbound.get("build_count", 0) + provider_pool.get("build_count", 0)
     scopes: dict[str, int] = {}
@@ -41,39 +40,6 @@ async def handle_network_diagnostics(request: Request) -> JSONResponse:
             "per_host_requests": outbound.get("per_host_requests", {}),
             "per_host_errors": outbound.get("per_host_errors", {}),
         },
-        "dns_cache": {
-            "enabled": dns.get("enabled", False),
-            "max_entries": dns.get("max_entries"),
-            "entries": dns.get("size", 0),
-            # Legacy fields
-            "hits_total": dns.get("hits", 0),
-            "misses_total": dns.get("misses", 0),
-            "negative_hits_total": dns.get("negative_hits", 0),
-            "stale_hits_total": dns.get("stale_hits", 0),
-            "evictions_total": dns.get("evictions", 0),
-            "evictions_by_reason": dns.get("evictions_by_reason", {}),
-            "resolutions_total": dns.get("misses", 0),
-            "errors_total": sum(dns.get("resolution_errors", {}).values())
-            if isinstance(dns.get("resolution_errors"), dict)
-            else 0,
-            "by_host": dns.get("by_host", {}),
-            # New precise counters
-            "cache_hits_total": dns.get("cache_hits_total", 0),
-            "cache_misses_owner_total": dns.get("cache_misses_owner_total", 0),
-            "singleflight_waits_total": dns.get("singleflight_waits_total", 0),
-            "resolver_calls_total": dns.get("resolver_calls_total", 0),
-            "resolver_successes_total": dns.get("resolver_successes_total", 0),
-            "resolver_errors_total": dns.get("resolver_errors_total", 0),
-            # Derived rates
-            "cache_hit_rate": dns.get("cache_hit_rate", 0.0),
-            "dns_suppression_rate": dns.get("dns_suppression_rate", 0.0),
-            "resolver_calls_per_logical_resolve": dns.get(
-                "resolver_calls_per_logical_resolve", 0.0
-            ),
-            # Diagnostics
-            "worst_missers": dns.get("worst_missers", []),
-        },
-        "hosts": dns.get("hosts", []),
     }
     return JSONResponse(content=result)
 

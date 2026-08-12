@@ -34,10 +34,8 @@ class TestFinalizationDiagnosticSnapshot:
         snap = _FinalizationDiagnosticSnapshot()
         assert snap.segmentation_status == "empty_request"
         assert snap.compression_status == "disabled"
-        assert snap.synthetic_cache_status is None
         assert snap.segmentation_summary_json is None
         assert snap.compression_summary_json is None
-        assert snap.synthetic_cache_warnings_json is None
 
     def test_populated_values(self) -> None:
         snap = _FinalizationDiagnosticSnapshot(
@@ -45,13 +43,11 @@ class TestFinalizationDiagnosticSnapshot:
             stable_prefix_hash="abc123",
             compression_status="observed",
             compression_mode="observe",
-            synthetic_cache_status="applied",
         )
         assert snap.segmentation_status == "ok"
         assert snap.stable_prefix_hash == "abc123"
         assert snap.compression_status == "observed"
         assert snap.compression_mode == "observe"
-        assert snap.synthetic_cache_status == "applied"
 
 
 class TestPrecomputeFinalizationDiagnostics:
@@ -81,7 +77,6 @@ class TestPrecomputeFinalizationDiagnostics:
         snap = f._precompute_finalization_diagnostics(data)
         assert snap.segmentation_status == "empty_request"
         assert snap.compression_status == "disabled"
-        assert snap.synthetic_cache_status is None
 
     def test_segmentation_not_collected(self) -> None:
         f = self._make_finalizer()

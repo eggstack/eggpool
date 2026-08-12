@@ -146,12 +146,12 @@ fixture sanitization check is retained, but broad replay matrices and duplicate
 fixture replays are not routine corpus.
 
 Provider-cache dialect changes should also run the focused OpenAI→Anthropic,
-Anthropic→OpenAI, capability-override, synthetic-cache, loss-policy, and
-privacy/redaction tests. Verify that generic OpenAI-compatible targets receive
+Anthropic→OpenAI, capability-override, loss-policy, and privacy/redaction
+tests. Verify that generic OpenAI-compatible targets receive
 no explicit breakpoint fields without a provider/model contract, that a
 compatible-extension contract remains distinct from first-party semantics,
-that TTL loss metadata uses the selected contract, and that synthetic
-`cache_control` insertion is contract-gated.
+that TTL loss metadata uses the selected contract. Synthetic cache insertion
+is not part of the runtime surface.
 
 Performance tests under `tests/perf/` remain manually invoked diagnostics. They
 must not become CI gates or imply universal timing/resource thresholds; compare

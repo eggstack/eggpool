@@ -7,7 +7,7 @@ import json
 import logging
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from eggpool.catalog.pricing import choose_bounded_estimated_cost
 from eggpool.constants import (
@@ -120,16 +120,6 @@ class _FinalizationDiagnosticSnapshot:
     compression_policy_name: str | None = None
     compression_policy_source: str | None = None
     compression_policy_warnings_json: str | None = None
-    # Synthetic cache
-    synthetic_cache_status: str | None = None
-    synthetic_cache_dry_run: int = 1
-    synthetic_cache_candidate_count: int = 0
-    synthetic_cache_applied_count: int = 0
-    synthetic_cache_warning_count: int = 0
-    synthetic_cache_warnings_json: str | None = None
-    synthetic_cache_policy_name: str | None = None
-    synthetic_cache_policy_source: str | None = None
-    synthetic_cache_summary_json: str | None = None
 
 
 @dataclass(slots=True)
@@ -223,18 +213,6 @@ class FinalizationData:
     # resolver.  ``None`` when compression is disabled, when the
     # resolver import / call failed, or on legacy / error paths.
     resolved_compression_policy: Any | None = None
-    # Phase 9 synthetic cache-controls result.  Produced by
-    # :func:`eggpool.transcoder.cache_synthesis.run_synthetic_cache_synthesis`
-    # in :mod:`eggpool.api.proxy_request`.  Carries the selector plan
-    # (status, dry_run, candidate/applied/warning counts, audit policy
-    # name/source), the mutated payload when a supported transform ran, and the
-    # synthetic boundary annotations recorded against the
-    # ``CacheBoundaryTracker``.  ``None`` when synthetic cache
-    # controls are disabled, when the call failed, or on legacy
-    # paths; the finalizer falls back to safe defaults
-    # (``synthetic_cache_status = NULL``,
-    # ``synthetic_cache_dry_run = 1``) for backwards compatibility.
-    synthetic_cache_result: Any | None = None
     # Canonical decision and normalized input from the failure boundary.  The
     # retained finalization owner reuses these exact objects rather than
     # reconstructing a decision from status/error class.
@@ -705,15 +683,6 @@ class RequestFinalizer:
                 compression_policy_name=diag.compression_policy_name,
                 compression_policy_source=diag.compression_policy_source,
                 compression_policy_warnings_json=diag.compression_policy_warnings_json,
-                synthetic_cache_status=diag.synthetic_cache_status,
-                synthetic_cache_dry_run=diag.synthetic_cache_dry_run,
-                synthetic_cache_candidate_count=diag.synthetic_cache_candidate_count,
-                synthetic_cache_applied_count=diag.synthetic_cache_applied_count,
-                synthetic_cache_warning_count=diag.synthetic_cache_warning_count,
-                synthetic_cache_warnings_json=diag.synthetic_cache_warnings_json,
-                synthetic_cache_policy_name=diag.synthetic_cache_policy_name,
-                synthetic_cache_policy_source=diag.synthetic_cache_policy_source,
-                synthetic_cache_summary_json=diag.synthetic_cache_summary_json,
             )
             transitioned = request_mutation.transitioned
 
@@ -1098,8 +1067,8 @@ class RequestFinalizer:
         """Precompute all diagnostic serialization BEFORE the DB transaction.
 
         Plan 028 Workstream G: moves segmentation summary JSON,
-        compression observation/result JSON, synthetic cache JSON, and
-        resolved policy JSON construction outside the ``BEGIN IMMEDIATE``
+        compression observation/result JSON, and resolved policy JSON
+        construction outside the ``BEGIN IMMEDIATE``
         critical section so they do not extend the SQLite write-lock
         duration.
 
@@ -1308,60 +1277,6 @@ class RequestFinalizer:
                 except (TypeError, ValueError):
                     policy_warnings_json = None
 
-        # --- synthetic cache fields ---
-        synthetic_cache_obj = getattr(data, "synthetic_cache_result", None)
-        sc_status: str | None = None
-        sc_dry_run = 1
-        sc_candidate_count = 0
-        sc_applied_count = 0
-        sc_warning_count = 0
-        sc_warnings_json: str | None = None
-        sc_policy_name: str | None = None
-        sc_policy_source: str | None = None
-        sc_summary_json: str | None = None
-        if synthetic_cache_obj is not None:
-            status_attr = getattr(synthetic_cache_obj, "status", None)
-            if isinstance(status_attr, str) and status_attr:
-                sc_status = status_attr
-            dry_run_attr = getattr(synthetic_cache_obj, "dry_run", None)
-            if isinstance(dry_run_attr, bool):
-                sc_dry_run = 1 if dry_run_attr else 0
-            candidate_count_attr = getattr(synthetic_cache_obj, "candidate_count", 0)
-            if isinstance(candidate_count_attr, int):
-                sc_candidate_count = candidate_count_attr
-            applied_count_attr = getattr(synthetic_cache_obj, "applied_count", 0)
-            if isinstance(applied_count_attr, int):
-                sc_applied_count = applied_count_attr
-            warning_count_attr = getattr(synthetic_cache_obj, "warning_count", 0)
-            if isinstance(warning_count_attr, int):
-                sc_warning_count = warning_count_attr
-            warnings_attr = getattr(synthetic_cache_obj, "warnings", None)
-            if isinstance(warnings_attr, (list, tuple)):
-                try:
-                    sc_warnings_json = json.dumps(
-                        [
-                            str(w)
-                            for w in cast(
-                                "list[Any] | tuple[Any, ...]",
-                                warnings_attr,
-                            )
-                        ],
-                        ensure_ascii=False,
-                    )
-                except (TypeError, ValueError):
-                    sc_warnings_json = None
-            plan_attr = getattr(synthetic_cache_obj, "plan", None)
-            if plan_attr is not None:
-                pname_attr = getattr(plan_attr, "policy_name", None)
-                if isinstance(pname_attr, str) and pname_attr:
-                    sc_policy_name = pname_attr
-                psource_attr = getattr(plan_attr, "policy_source", None)
-                if isinstance(psource_attr, str) and psource_attr:
-                    sc_policy_source = psource_attr
-            summary_attr = getattr(synthetic_cache_obj, "summary_json", None)
-            if isinstance(summary_attr, str):
-                sc_summary_json = summary_attr
-
         return _FinalizationDiagnosticSnapshot(
             segmentation_status=seg_status,
             stable_prefix_hash=seg_stable_hash,
@@ -1401,15 +1316,6 @@ class RequestFinalizer:
             compression_policy_name=policy_name,
             compression_policy_source=policy_source,
             compression_policy_warnings_json=policy_warnings_json,
-            synthetic_cache_status=sc_status,
-            synthetic_cache_dry_run=sc_dry_run,
-            synthetic_cache_candidate_count=sc_candidate_count,
-            synthetic_cache_applied_count=sc_applied_count,
-            synthetic_cache_warning_count=sc_warning_count,
-            synthetic_cache_warnings_json=sc_warnings_json,
-            synthetic_cache_policy_name=sc_policy_name,
-            synthetic_cache_policy_source=sc_policy_source,
-            synthetic_cache_summary_json=sc_summary_json,
         )
 
     def _apply_finalizer_failure_effects(

@@ -89,8 +89,6 @@ _DASHBOARD_CACHE_TTL_BY_NAMESPACE: dict[str, float] = {
     "compression_runtime": 60.0,
     "compression_policy_stats": 60.0,
     "cache_stability": 60.0,
-    "synthetic_cache_summary": 60.0,
-    "compression_tuning_window_metrics": 60.0,
     "pending_health": 15.0,
     "model_options": 300.0,
     "account_options": 300.0,
@@ -1995,76 +1993,6 @@ class StatsService:
             time_range.start_str(),
             time_range.end_str(),
         )
-        if use_cache:
-            self._set_dashboard_cache(key, result)
-        return result
-
-    async def get_synthetic_cache_summary(
-        self, period: str | None = None, *, use_cache: bool = False
-    ) -> dict[str, Any]:
-        """Phase 9 synthetic cache controls observability.
-
-        Reads the ``synthetic_cache_*`` columns populated by
-        :mod:`eggpool.transcoder.cache_synthesis` and persisted
-        by :meth:`RequestRepository.finalize_if_pending`.  Returns
-        the same shape as
-        :func:`eggpool.stats.queries.fetch_synthetic_cache_summary`:
-
-        - ``total_requests`` / ``status_counts`` / ``dry_run_count``
-          / ``applied_count``
-        - ``candidate_count_total`` / ``applied_count_total``
-          / ``warning_count_total``
-        - ``warning_counts`` (top warning codes)
-        - ``by_policy`` (per resolved-policy rollup)
-        """
-        time_range = resolve_time_range(period)
-        key = self._dashboard_cache_key("synthetic_cache_summary", time_range)
-        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
-            return cast("dict[str, Any]", cached)
-        result = await queries.fetch_synthetic_cache_summary(
-            self._db,
-            time_range.start_str(),
-            time_range.end_str(),
-        )
-        if use_cache:
-            self._set_dashboard_cache(key, result)
-        return result
-
-    async def get_compression_tuning_window_metrics(
-        self,
-        period: str | None = None,
-        *,
-        window_requests: int = 500,
-        use_cache: bool = False,
-    ) -> dict[str, Any]:
-        """Phase 10 per-policy window metrics for the tuning engine.
-
-        Returns the per-policy window aggregates from
-        :func:`eggpool.stats.queries.fetch_compression_tuning_window_metrics`
-        plus the persisted ``compression_tuning_recommendations``
-        rows so the dashboard can render the recommendation table
-        alongside the live window.  No raw prompts or content are
-        read or persisted by this query path.
-        """
-        time_range = resolve_time_range(period)
-        key = self._dashboard_cache_key("compression_tuning_window_metrics", time_range)
-        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
-            return cast("dict[str, Any]", cached)
-        windows = await queries.fetch_compression_tuning_window_metrics(
-            self._db,
-            time_range.start_str(),
-            time_range.end_str(),
-            window_requests=window_requests,
-        )
-        recommendations = await queries.fetch_compression_tuning_recommendations(
-            self._db,
-        )
-        overrides = await queries.fetch_compression_tuning_overrides(self._db)
-        result = {
-            "windows": windows,
-            "recommendations": recommendations,
-            "overrides": overrides,
-        }
         if use_cache:
             self._set_dashboard_cache(key, result)
         return result

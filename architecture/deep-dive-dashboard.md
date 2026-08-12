@@ -109,10 +109,9 @@ Request shaping surface with 8 cards:
 4. **Compression** — observe/safe mode outcomes
 5. **Compression policy** — per-policy rollup
 6. **Cache stability** — transcoded count
-7. **EggPool cache annotations** — synthetic cache state
-8. **Tuning suggestions** — advisory threshold guidance
+7. **Routing isolation** — guardrail state
 
-Plus routing-separation notice and advanced diagnostics disclosure.
+Plus advanced diagnostics disclosure.
 
 ### Model Detail (`/models/{model_id:path}`)
 
@@ -172,8 +171,6 @@ Transcoding stats aggregation.
 | `/api/stats/compression-observability` | Compression opportunities |
 | `/api/stats/compression-runtime` | Compression outcomes |
 | `/api/stats/compression-policies` | Per-policy rollup |
-| `/api/stats/synthetic-cache-observability` | Synthetic cache state |
-| `/api/stats/compression-tuning` | Tuning recommendations |
 | `/api/stats/request-shaping` | Operator-facing summary |
 | `/api/stats/thinking` | Thinking/reasoning counters |
 | `/api/stats/update` | Update checker state |

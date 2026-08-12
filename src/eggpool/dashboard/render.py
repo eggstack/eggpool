@@ -2177,7 +2177,6 @@ def render_overview(
             "dict[str, Any]",
             request_shaping_summary.get("cache") or {},
         )
-        shaping_synthetic = str(shaping_mode_map.get("synthetic_cache", "off"))
 
         def _display_mode(value: str) -> str:
             return value.replace("_", " ").title()
@@ -2206,10 +2205,7 @@ def render_overview(
         request_shaping_card = _render_metric_card(
             title="Request shaping",
             metric=_display_mode(shaping_mode),
-            sub=(
-                f"{shaping_sub} · Cache reported {cache_reported} · "
-                f"Synthetic {_display_mode(shaping_synthetic)}"
-            ),
+            sub=(f"{shaping_sub} · Cache reported {cache_reported}"),
         )
 
     body = f"""
@@ -4230,11 +4226,6 @@ def render_pings(
     )
 
 
-def _display_request_shaping_mode(value: str) -> str:
-    """Format a request-shaping mode string for display."""
-    return value.replace("_", " ").title()
-
-
 def _display_request_change_mode(mode: str | None) -> str:
     """Return human-readable label for compression mode."""
     mapping = {
@@ -4325,16 +4316,13 @@ def _build_cache_advanced_state(
     """Compute the open/closed state of the advanced diagnostics disclosure.
 
     The disclosure auto-opens whenever any actionable warning or
-    non-default runtime state is present. Quiet installs (zero warnings
-    everywhere, healthy routing, no synthetic-cache mutation, no
-    tuning activity) keep the disclosure collapsed.
+    non-default runtime state is present. Quiet installs keep the
+    disclosure collapsed.
     """
     summary: dict[str, Any] = request_shaping_summary or {}
     shaping_guardrails = cast("dict[str, Any]", summary.get("guardrails") or {})
     shaping_compression = cast("dict[str, Any]", summary.get("compression") or {})
     shaping_segmentation = cast("dict[str, Any]", summary.get("segmentation") or {})
-    shaping_synthetic = cast("dict[str, Any]", summary.get("synthetic_cache") or {})
-    shaping_tuning = cast("dict[str, Any]", summary.get("tuning") or {})
 
     effective_guardrails: dict[str, Any] | None
     if guardrails:
@@ -4368,22 +4356,9 @@ def _build_cache_advanced_state(
         reasons.append("compression policy warnings")
         warning = True
 
-    if int(shaping_synthetic.get("warning_count", 0) or 0) > 0:
-        reasons.append("EggPool annotation warnings")
-        warning = True
-
-    if int(shaping_synthetic.get("applied_count", 0) or 0) > 0:
-        reasons.append("EggPool annotation applied")
-
     if int(shaping_segmentation.get("requests_parse_failure", 0) or 0) > 0:
         reasons.append("segmentation parse failures")
         warning = True
-
-    if int(shaping_tuning.get("recommendation_count", 0) or 0) > 0:
-        reasons.append("tuning recommendations")
-
-    if int(shaping_tuning.get("override_count", 0) or 0) > 0:
-        reasons.append("tuning overrides")
 
     if not _routing_isolation_healthy(effective_guardrails):
         reasons.append("routing guardrail violation")
@@ -4461,19 +4436,6 @@ def _build_request_shaping_segmentation_summary(
     }
 
 
-def _display_synthetic_cache_state(mode: str | None) -> str:
-    """Return a short operator label for the EggPool annotation state."""
-    mapping = {
-        "off": "Off",
-        "dry_run": "Dry run",
-        "apply": "Apply",
-        "mixed": "Mixed",
-    }
-    if not mode:
-        return "Off"
-    return mapping.get(mode, mode)
-
-
 def _render_request_shaping_summary_panel(
     request_shaping_summary: dict[str, Any],
     *,
@@ -4486,26 +4448,12 @@ def _render_request_shaping_summary_panel(
         request_shaping_summary.get("compression") or {},
     )
     shaping_cache = cast("dict[str, Any]", request_shaping_summary.get("cache") or {})
-    shaping_synthetic = cast(
-        "dict[str, Any]",
-        request_shaping_summary.get("synthetic_cache") or {},
-    )
-    shaping_tuning = cast(
-        "dict[str, Any]",
-        request_shaping_summary.get("tuning") or {},
-    )
     shaping_guardrails = cast(
         "dict[str, Any]",
         request_shaping_summary.get("guardrails") or {},
     )
     compression_mode_label = _display_request_change_mode(
         str(shaping_mode.get("compression", "off"))
-    )
-    synthetic_mode_label = _display_synthetic_cache_state(
-        str(shaping_mode.get("synthetic_cache", "off"))
-    )
-    tuning_mode_label = _display_request_shaping_mode(
-        str(shaping_mode.get("tuning", "off"))
     )
     cache_reported_rate = shaping_cache.get("cache_counter_reported_rate")
     cache_reported_label = (
@@ -4517,12 +4465,6 @@ def _render_request_shaping_summary_panel(
     failed_fallback_label = format_int(failed_fallback_count)
     policy_warning_count = int(shaping_guardrails.get("policy_warning_count", 0) or 0)
     policy_warning_label = format_int(policy_warning_count)
-    synthetic_warning_count = int(shaping_synthetic.get("warning_count", 0) or 0)
-    synthetic_warning_label = format_int(synthetic_warning_count)
-    recommendation_count = int(shaping_tuning.get("recommendation_count", 0) or 0)
-    recommendation_label = format_int(recommendation_count)
-    tuning_override_count = int(shaping_tuning.get("override_count", 0) or 0)
-    tuning_override_label = format_int(tuning_override_count)
 
     raw_compression_mode = str(shaping_mode.get("compression", "off"))
     if raw_compression_mode == "safe":
@@ -4551,31 +4493,10 @@ def _render_request_shaping_summary_panel(
         f"{cache_known_rows_label} classified rows"
     )
 
-    safety_has_warning = (
-        failed_fallback_count > 0
-        or policy_warning_count > 0
-        or synthetic_warning_count > 0
-    )
+    safety_has_warning = failed_fallback_count > 0 or policy_warning_count > 0 or False
     safety_metric = "Warnings" if safety_has_warning else "Clean"
     safety_sub = (
-        f"{failed_fallback_label} fallbacks · "
-        f"{policy_warning_label} policy warnings · "
-        f"{synthetic_warning_label} annotation warnings"
-    )
-
-    synthetic_candidate_count = int(shaping_synthetic.get("candidate_count", 0) or 0)
-    synthetic_dry_run_count = int(shaping_synthetic.get("dry_run_count", 0) or 0)
-    synthetic_applied_count = int(shaping_synthetic.get("applied_count", 0) or 0)
-    synthetic_sub = (
-        f"{format_int(synthetic_candidate_count)} candidates · "
-        f"{format_int(synthetic_dry_run_count)} dry run · "
-        f"{format_int(synthetic_applied_count)} applied"
-    )
-    synthetic_has_warning = synthetic_warning_count > 0
-
-    tuning_sub = (
-        f"{recommendation_label} recommendations · "
-        f"{tuning_override_label} runtime overrides (dormant)"
+        f"{failed_fallback_label} fallbacks · {policy_warning_label} policy warnings"
     )
 
     routing_metric = (
@@ -4592,8 +4513,7 @@ def _render_request_shaping_summary_panel(
   <h3>Request shaping ({escape(period)})</h3>
   <p class="sub">
     Operator summary for request changes, provider cache counter
-    coverage, EggPool cache annotation state, safety guardrails, tuning
-    suggestions, and routing isolation. Routing stays load-based and
+    coverage, safety guardrails, and routing isolation. Routing stays load-based and
     reporting-only metrics never enter the scorer.
   </p>
   <section class="cards">
@@ -4612,21 +4532,10 @@ def _render_request_shaping_summary_panel(
                     sub=cache_sub,
                 ),
                 _render_metric_card(
-                    title="EggPool cache annotations",
-                    metric=synthetic_mode_label,
-                    sub=synthetic_sub,
-                    warning=synthetic_has_warning,
-                ),
-                _render_metric_card(
                     title="Safety guardrail",
                     metric=safety_metric,
                     sub=safety_sub,
                     warning=safety_has_warning,
-                ),
-                _render_metric_card(
-                    title="Tuning suggestions",
-                    metric=tuning_mode_label,
-                    sub=tuning_sub,
                 ),
                 _render_metric_card(
                     title="Routing isolation",
@@ -5521,391 +5430,6 @@ def _render_cache_stability_panel(
     return cache_stability_card
 
 
-def _render_synthetic_cache_controls_panel(
-    synthetic_cache_summary: dict[str, Any] | None,
-    *,
-    period: str,
-) -> str:
-    if synthetic_cache_summary is None:
-        return ""
-    sc_total = int(synthetic_cache_summary.get("total_requests", 0))
-    if sc_total == 0:
-        return ""
-    sc_status_counts: Any = synthetic_cache_summary.get("status_counts", {}) or {}
-    sc_dry_run = int(synthetic_cache_summary.get("dry_run_count", 0))
-    sc_applied = int(synthetic_cache_summary.get("applied_count", 0))
-    sc_candidate_total = int(synthetic_cache_summary.get("candidate_count_total", 0))
-    sc_warning_total = int(synthetic_cache_summary.get("warning_count_total", 0))
-    sc_warning_counts: Any = synthetic_cache_summary.get("warning_counts", {}) or {}
-    sc_by_policy: list[Any] = list(synthetic_cache_summary.get("by_policy", []) or [])
-
-    # Status table rows.
-    sc_status_rows_html = ""
-    _sc_s_cells: list[str] = []
-    for s_name in (
-        "disabled",
-        "dry_run",
-        "applied",
-        "no_candidates",
-        "policy_required",
-        "provider_unsupported",
-    ):
-        s_count = int(sc_status_counts.get(s_name, 0))
-        if s_count > 0:
-            _sc_s_cells.append(
-                f"""<tr>
-        <td>{escape(s_name)}</td>
-        <td class='num'>{format_int(s_count)}</td>
-      </tr>"""
-            )
-    sc_status_rows_html = "\n".join(_sc_s_cells)
-
-    sc_status_section = ""
-    if sc_status_rows_html:
-        sc_status_section = f"""
-  <h4>Status breakdown</h4>
-  <div class="table-scroll"><table class="data compact">
-    <thead><tr>
-      {_th("Status")}
-      {_th("Count", priority=2)}
-    </tr></thead>
-    <tbody>
-      {sc_status_rows_html}
-    </tbody>
-  </table></div>"""
-
-    # Warning codes top-N table.
-    sc_warnings_rows_html = ""
-    if sc_warning_counts:
-        _sc_w_cells: list[str] = []
-        for code, count in sorted(
-            sc_warning_counts.items(), key=lambda kv: (-kv[1], kv[0])
-        )[:10]:
-            _sc_w_cells.append(
-                f"""<tr>
-        <td>{escape(str(code))}</td>
-        <td class='num'>{format_int(int(count))}</td>
-      </tr>"""
-            )
-        sc_warnings_rows_html = "\n".join(_sc_w_cells)
-
-    sc_warnings_section = ""
-    if sc_warnings_rows_html:
-        sc_warnings_section = f"""
-  <h4>Warnings (top 10)</h4>
-  <div class="table-scroll"><table class="data compact">
-    <thead><tr>
-      {_th("Warning code")}
-      {_th("Count", priority=2)}
-    </tr></thead>
-    <tbody>
-      {sc_warnings_rows_html}
-    </tbody>
-  </table></div>"""
-
-    # By-policy table (top 5, <global> sentinel first).
-    sc_policy_rows_html = ""
-    if sc_by_policy:
-        _sc_p_cells: list[str] = []
-        sorted_policies = sorted(
-            sc_by_policy,
-            key=lambda p: (
-                0 if p.get("policy_name") == "<global>" else 1,
-                -int(p.get("request_count", 0)),
-            ),
-        )[:5]
-        for pol in sorted_policies:
-            pol_name = str(pol.get("policy_name", "—"))
-            pol_source = str(pol.get("policy_source", "—"))
-            pol_requests = int(pol.get("request_count", 0))
-            pol_applied = int(pol.get("applied_count", 0))
-            pol_candidates = int(pol.get("candidate_count", 0))
-            _sc_p_cells.append(
-                f"""<tr>
-        <td>{escape(pol_name)}</td>
-        <td>{escape(pol_source)}</td>
-        <td class='num'>{format_int(pol_requests)}</td>
-        <td class='num'>{format_int(pol_applied)}</td>
-        <td class='num'>{format_int(pol_candidates)}</td>
-      </tr>"""
-            )
-        sc_policy_rows_html = "\n".join(_sc_p_cells)
-
-    sc_policy_section = ""
-    if sc_policy_rows_html:
-        sc_policy_section = f"""
-  <h4>By policy (top 5)</h4>
-  <div class="table-scroll"><table class="data compact">
-    <thead><tr>
-      {_th("Policy name")}
-      {_th("Source")}
-      {_th("Requests", priority=2)}
-      {_th("Applied", priority=2)}
-      {_th("Candidates", priority=2)}
-    </tr></thead>
-    <tbody>
-      {sc_policy_rows_html}
-    </tbody>
-  </table></div>"""
-
-    synthetic_cache_card = f"""
-<section class="panel">
-  <h3>EggPool cache annotations ({escape(period)})</h3>
-  <p class="sub">
-    Optional provider-bound cache annotations added by EggPool on protected
-    stable-prefix segments. Disabled by default; dry-run is the safe
-    rollout path. This is EggPool-added annotations, NOT provider-reported
-    cache.
-  </p>
-  <section class="cards">
-    {
-        _render_metric_card(
-            title="Total requests",
-            metric=format_int(sc_total),
-            sub="in window",
-        )
-    }
-    {
-        _render_metric_card(
-            title="Dry run",
-            metric=format_int(sc_dry_run),
-            sub="synthesis planned, not applied",
-        )
-    }
-    {
-        _render_metric_card(
-            title="Applied",
-            metric=format_int(sc_applied),
-            sub="payload mutated",
-        )
-    }
-    {
-        _render_metric_card(
-            title="Candidates",
-            metric=format_int(sc_candidate_total),
-            sub="eligible segments",
-        )
-    }
-    {
-        _render_metric_card(
-            title="Warnings",
-            metric=format_int(sc_warning_total),
-            sub="total warning events",
-            warning=sc_warning_total > 0,
-        )
-    }
-  </section>
-  {sc_status_section}
-  {sc_warnings_section}
-  {sc_policy_section}
-  <p class="sub">
-    Reporting only &mdash; synthetic cache signals do not enter
-    QuotaFairScorer.
-  </p>
-</section>
-"""
-    return synthetic_cache_card
-
-
-def _render_advisory_tuning_panel(
-    compression_tuning: dict[str, Any] | None,
-    *,
-    period: str,
-) -> str:
-    if compression_tuning is None:
-        return ""
-    ct_windows: dict[str, Any] = cast(
-        "dict[str, Any]",
-        compression_tuning.get("windows") or {},
-    )
-    ct_recommendations_raw: Any = compression_tuning.get("recommendations") or []
-    ct_recommendations: list[dict[str, Any]] = cast(
-        "list[dict[str, Any]]",
-        ct_recommendations_raw if isinstance(ct_recommendations_raw, list) else [],
-    )
-    ct_overrides_raw: Any = compression_tuning.get("overrides") or []
-    ct_overrides: list[dict[str, Any]] = cast(
-        "list[dict[str, Any]]",
-        ct_overrides_raw if isinstance(ct_overrides_raw, list) else [],
-    )
-
-    # Recommendations table rows.  Each persisted recommendation
-    # carries the engine's last output (status, current, recommended,
-    # reason_codes).  We display the policy name, status, the delta
-    # between current and recommended thresholds, and the primary
-    # reason codes.  No raw prompts or content.
-    ct_rec_rows_html = ""
-    for raw_entry in ct_recommendations:
-        entry = _as_dict(raw_entry)
-        if not entry:
-            continue
-        rec_obj = _as_dict(entry.get("recommendation"))
-        if not rec_obj:
-            continue
-        policy = escape(str(entry.get("policy_name", "")))
-        status = escape(str(entry.get("status", "")))
-        recommended: dict[str, Any] = _as_dict(rec_obj.get("recommended"))
-        current: dict[str, Any] = _as_dict(rec_obj.get("current"))
-        reason_obj: Any = rec_obj.get("reason_codes") or []
-        reason_codes_list: list[Any] = (
-            cast("list[Any]", reason_obj) if isinstance(reason_obj, list) else []
-        )
-        reasons_str = ", ".join(escape(str(c)) for c in reason_codes_list[:4])
-        if len(reason_codes_list) > 4:
-            reasons_str += ", ..."
-        deltas: list[str] = []
-        for key in ("min_candidate_tokens", "min_savings_tokens"):
-            try:
-                cur_v = int(current.get(key, 0) or 0)
-                rec_v = int(recommended.get(key, 0) or 0)
-                if rec_v != cur_v:
-                    deltas.append(
-                        f"{key}: {cur_v} → {rec_v}",
-                    )
-            except (TypeError, ValueError):
-                continue
-        try:
-            cur_lat = float(current.get("max_compression_latency_ms", 0) or 0)
-            rec_lat = float(
-                recommended.get("max_compression_latency_ms", 0) or 0,
-            )
-            if abs(rec_lat - cur_lat) > 1e-6:
-                deltas.append(
-                    f"max_compression_latency_ms: {cur_lat:.1f} → {rec_lat:.1f}",
-                )
-        except (TypeError, ValueError):
-            pass
-        delta_str = "<br>".join(escape(d) for d in deltas) if deltas else "—"
-        ct_rec_rows_html += f"""
-    <tr>
-      <td>{policy}</td>
-      <td>{status}</td>
-      <td>{delta_str}</td>
-      <td>{reasons_str or "—"}</td>
-    </tr>"""
-
-    if not ct_rec_rows_html:
-        ct_rec_rows_html = """
-    <tr><td colspan="4" class="empty">No recommendations persisted yet.</td></tr>"""
-
-    # Overrides table rows (last 5).  Rows are inert audit only;
-    # no production code path registers entries today, so this table
-    # is normally empty.
-    ct_ov_rows_html = ""
-    for raw_entry in ct_overrides[:5]:
-        entry = _as_dict(raw_entry)
-        if not entry:
-            continue
-        policy = escape(str(entry.get("policy_name", "")))
-        fields_dict: dict[str, Any] = _as_dict(entry.get("fields"))
-        if fields_dict:
-            fields_str = ", ".join(
-                f"{escape(str(k))}={escape(str(v))}" for k, v in fields_dict.items()
-            )
-        else:
-            fields_str = "—"
-        expires_obj: Any = entry.get("expires_at", "—")
-        expires_str = str(expires_obj) if expires_obj is not None else "—"
-        expires = escape(expires_str)
-        expired_label = (
-            '<span class="pill">expired</span>'
-            if bool(entry.get("is_expired"))
-            else '<span class="pill ok">active</span>'
-        )
-        ct_ov_rows_html += f"""
-    <tr>
-      <td>{policy}</td>
-      <td>{fields_str or "—"}</td>
-      <td>{expires}</td>
-      <td>{expired_label}</td>
-    </tr>"""
-
-    if not ct_ov_rows_html:
-        ct_ov_rows_html = """
-    <tr><td colspan="4" class="empty">
-        No runtime overrides applied (mode=recommend by default).
-    </td></tr>"""
-
-    # Window rollup (counts only) — operators see how many
-    # policies were observed.
-    ct_window_total = 0
-    for raw_entry in ct_windows.values():
-        entry = _as_dict(raw_entry)
-        if not entry:
-            continue
-        total_raw: Any = entry.get("total_requests", 0)
-        ct_window_total += int(total_raw or 0)
-    ct_window_count = len(ct_windows)
-    compression_tuning_card = f"""
-<section class="panel">
-  <h3>Tuning suggestions ({escape(period)})</h3>
-  <p class="sub">
-    Recommend-only by default. Advisory suggestions for
-    <code>min_candidate_tokens</code>, <code>min_savings_tokens</code>,
-    and <code>max_compression_latency_ms</code> without changing request
-    behaviour. Only <code>mode = "recommend"</code> is supported; runtime
-    policy is never changed.
-    Tuning never inspects raw prompt content and never touches routing.
-  </p>
-  <section class="cards">
-    {
-        "".join(
-            [
-                _render_metric_card(
-                    title="Policies observed",
-                    metric=format_int(ct_window_count),
-                    sub="windows in last 24h",
-                ),
-                _render_metric_card(
-                    title="Requests analysed",
-                    metric=format_int(ct_window_total),
-                    sub="per-policy windows",
-                ),
-                _render_metric_card(
-                    title="Recommendations",
-                    metric=format_int(len(ct_recommendations)),
-                    sub="persisted rows",
-                ),
-                _render_metric_card(
-                    title="Runtime overrides",
-                    metric=format_int(len(ct_overrides)),
-                    sub="audit trail",
-                ),
-            ]
-        )
-    }
-  </section>
-  <h4>Recommendations</h4>
-  <div class="table-scroll"><table class="data compact">
-    <thead><tr>
-      <th>Policy</th>
-      <th>Status</th>
-      <th>Threshold change</th>
-      <th>Why</th>
-    </tr></thead>
-    <tbody>{ct_rec_rows_html}</tbody>
-  </table></div>
-  <h4>Runtime overrides (unsupported)</h4>
-  <div class="table-scroll"><table class="data compact">
-    <thead><tr>
-      <th>Policy</th>
-      <th>Fields</th>
-      <th>Expires at</th>
-      <th>State</th>
-    </tr></thead>
-    <tbody>{ct_ov_rows_html}</tbody>
-  </table></div>
-  <p class="sub">
-    Reporting only and never consumed by QuotaFairScorer. Tunable fields
-    are limited to
-    <code>min_candidate_tokens</code>, <code>min_savings_tokens</code>,
-    and <code>max_compression_latency_ms</code>.
-  </p>
-</section>
-"""
-    return compression_tuning_card
-
-
 def _render_routing_guardrails_panel(routing: dict[str, Any]) -> str:
     guardrails = _as_dict(routing.get("guardrails"))
     guardrails_mode = escape(
@@ -6113,7 +5637,6 @@ def render_runtime(
     probe_errors: list[str] = snapshot.get("probe_errors") or []
     outbound = _as_dict(snapshot.get("outbound_client"))
     provider_pool = _as_dict(snapshot.get("provider_client_pool"))
-    dns_cache = _as_dict(snapshot.get("dns_cache"))
     load = _as_dict(snapshot.get("load"))
     dispatch = _as_dict(snapshot.get("dispatch_overhead"))
     dispatch_spans_payload = _as_dict(snapshot.get("dispatch_spans"))
@@ -6531,26 +6054,6 @@ def render_runtime(
         health_table = '<p class="empty">No health state data.</p>'
 
     # Network diagnostics section
-    dns_enabled = dns_cache.get("enabled", False)
-    dns_entries = dns_cache.get("size", 0)
-    dns_max_entries = dns_cache.get("max_entries")
-    if dns_max_entries is not None:
-        dns_entries_label = (
-            f"entries {format_int(dns_entries)} / {format_int(dns_max_entries)}"
-        )
-    else:
-        dns_entries_label = f"entries {format_int(dns_entries)}"
-    dns_hits = dns_cache.get("hits", 0)
-    dns_misses = dns_cache.get("misses", 0)
-    dns_negative = dns_cache.get("negative_hits", 0)
-    dns_stale = dns_cache.get("stale_hits", 0)
-    # New precise metrics
-    dns_suppression_rate = dns_cache.get("dns_suppression_rate", 0.0)
-    dns_suppression_pct = (
-        f"{dns_suppression_rate * 100:.1f}%" if dns_suppression_rate else "—"
-    )
-    dns_resolver_calls = dns_cache.get("resolver_calls_total", 0)
-    dns_resolver_errors = dns_cache.get("resolver_errors_total", 0)
     ob_builds = format_int(outbound.get("build_count", 0))
     ob_requests = format_int(outbound.get("request_count", 0))
     ob_errors = format_int(outbound.get("error_count", 0))
@@ -6561,29 +6064,6 @@ def render_runtime(
   {
         "".join(
             [
-                _render_metric_card(
-                    title="DNS cache",
-                    metric="enabled" if dns_enabled else "disabled",
-                    sub=dns_entries_label,
-                ),
-                _render_metric_card(
-                    title="DNS suppression",
-                    metric=dns_suppression_pct,
-                    sub=(f"{format_int(dns_resolver_calls)} resolver calls"),
-                ),
-                _render_metric_card(
-                    title="DNS hits",
-                    metric=format_int(dns_hits),
-                    sub=f"{format_int(dns_misses)} owner misses",
-                ),
-                _render_metric_card(
-                    title="DNS errors",
-                    metric=format_int(dns_resolver_errors),
-                    sub=(
-                        f"stale {format_int(dns_stale)} · "
-                        f"neg {format_int(dns_negative)}"
-                    ),
-                ),
                 _render_metric_card(
                     title="Outbound builds",
                     metric=ob_builds,
@@ -6775,14 +6255,12 @@ def render_cache(
     compression_runtime: dict[str, Any] | None = None,
     compression_policy_stats: dict[str, Any] | None = None,
     cache_stability: dict[str, Any] | None = None,
-    synthetic_cache_summary: dict[str, Any] | None = None,
-    compression_tuning: dict[str, Any] | None = None,
     request_shaping_summary: dict[str, Any] | None = None,
 ) -> str:
     """Render the Cache diagnostics page.
 
-    Cache / compression / synthetic cache / advisory tuning / request
-    segmentation / routing guardrails panels live here instead of being
+    Cache / compression / request segmentation / routing guardrail panels
+    live here instead of being
     hidden behind a non-persistent disclosure on /runtime.  This page
     is bookmarkable, refresh-safe, and period-aware via the same
     selector used elsewhere on the dashboard.
@@ -6899,7 +6377,6 @@ def render_cache(
             cache_stability=cache_stability,
             compression_observability=compression_observability,
             compression_runtime=compression_runtime,
-            synthetic_cache_summary=synthetic_cache_summary,
             guardrails=guardrails,
             cache_observability=cache_observability,
         )
@@ -6935,12 +6412,6 @@ def render_cache(
         compression_policy_stats, period=period
     )
     cache_stability_card = _render_cache_stability_panel(cache_stability, period=period)
-    synthetic_cache_card = _render_synthetic_cache_controls_panel(
-        synthetic_cache_summary, period=period
-    )
-    compression_tuning_card = _render_advisory_tuning_panel(
-        compression_tuning, period=period
-    )
     routing_guardrails_panel = _render_routing_guardrails_panel(routing)
 
     # Determine advanced-section state from a single structured helper.
@@ -6962,8 +6433,6 @@ def render_cache(
         or compression_runtime
         or compression_policy_stats
         or cache_stability
-        or synthetic_cache_summary
-        or compression_tuning
         or routing_runtime
     )
     advanced_state = _build_cache_advanced_state(
@@ -6983,7 +6452,6 @@ def render_cache(
                 cache_stability_card,
                 segmentation_card,
                 compression_policy_card,
-                compression_tuning_card,
                 routing_guardrails_panel,
                 tc_card,
             ],
@@ -7010,8 +6478,6 @@ def render_cache(
 {merged_compression_card}
 </div>
 
-<div id="synthetic-cache-controls">{synthetic_cache_card}</div>
-
 {advanced_section}
 """
     return _render_layout(
@@ -7032,7 +6498,6 @@ def _render_cache_request_shaping_fallback(
     cache_stability: dict[str, Any] | None,
     compression_observability: dict[str, Any] | None,
     compression_runtime: dict[str, Any] | None,
-    synthetic_cache_summary: dict[str, Any] | None,
     guardrails: dict[str, Any],
     cache_observability: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -7046,7 +6511,6 @@ def _render_cache_request_shaping_fallback(
         "dict[str, Any]",
         fallback_compression_observability.get("totals") or {},
     )
-    fallback_synthetic_cache_summary = synthetic_cache_summary or {}
     fallback_cache_observability = cache_observability or {}
     fallback_cache_status = cast(
         "dict[str, Any]",
@@ -7071,20 +6535,6 @@ def _render_cache_request_shaping_fallback(
                     else "off"
                 )
             ),
-            "synthetic_cache": (
-                "apply"
-                if int(fallback_synthetic_cache_summary.get("applied_count", 0) or 0)
-                > 0
-                else (
-                    "dry_run"
-                    if int(
-                        fallback_synthetic_cache_summary.get("dry_run_count", 0) or 0
-                    )
-                    > 0
-                    else "off"
-                )
-            ),
-            "tuning": "off",
             "routing": str(
                 guardrails.get("routing_cache_compression_mode", "reporting_only")
             ),
@@ -7114,21 +6564,6 @@ def _render_cache_request_shaping_fallback(
                 (cache_stability or {}).get("transcoded_request_count", 0) or 0
             ),
         },
-        "synthetic_cache": {
-            "dry_run_count": int(
-                (synthetic_cache_summary or {}).get("dry_run_count", 0) or 0
-            ),
-            "applied_count": int(
-                (synthetic_cache_summary or {}).get("applied_count", 0) or 0
-            ),
-            "candidate_count": int(
-                (synthetic_cache_summary or {}).get("candidate_count_total", 0) or 0
-            ),
-            "warning_count": int(
-                (synthetic_cache_summary or {}).get("warning_count_total", 0) or 0
-            ),
-        },
-        "tuning": {"recommendation_count": 0, "override_count": 0},
         "guardrails": {
             "routing_uses_cache_metrics": guardrails.get(
                 "routing_uses_cache_metrics", False

@@ -28,7 +28,6 @@ from eggpool.constants import (
 )
 from eggpool.errors import ConfigError
 from eggpool.providers.auth import has_auth_scheme_prefix
-from eggpool.transcoder.cache_synthesis_policy import CacheConfig
 from eggpool.transcoder.compression.policy import CompressionConfig
 from eggpool.transcoder.policy import TranscoderPolicy
 
@@ -730,10 +729,7 @@ class ProviderConfig(BaseModel):
         min_length=1,
     )
     kind: str | None = None
-    """Provider family (e.g. ``"anthropic"``, ``"openai"``).  Used by
-    Phase 9 synthetic-cache post-route selection as a fallback when
-    the catalog row is missing or has no ``kind`` attribute.  The
-    catalog (live or cached) is authoritative when present."""
+    """Provider family (e.g. ``"anthropic"``, ``"openai"``)."""
     openai_path: str = "/chat/completions"
     anthropic_path: str = "/messages"
     models_method: Literal["GET", "POST"] = "GET"
@@ -1079,25 +1075,6 @@ def _seed_builtin_provider_capabilities(provider: ProviderConfig) -> None:
         provider.model_capabilities.setdefault(model_id, capability)
 
 
-class DnsCacheConfig(BaseModel):
-    """Bounded in-memory DNS cache settings.
-
-    Reduces repeated resolver queries for the small set of
-    hostnames eggpool connects to, with conservative TTL bounds
-    and stale-if-error fallback.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: bool = False
-    max_entries: int = Field(default=50, ge=1)
-    positive_ttl_seconds: int = Field(default=1800, gt=0)
-    negative_ttl_seconds: int = Field(default=30, gt=0)
-    stale_if_error_seconds: int = Field(default=3600, ge=0)
-    prefer_ipv6: bool = False
-    lookup_timeout_seconds: int = Field(default=5, gt=0)
-
-
 class NetworkConfig(BaseModel):
     """Outbound HTTP client transport settings for background/CLI paths.
 
@@ -1114,7 +1091,6 @@ class NetworkConfig(BaseModel):
     max_connections: int = Field(default=8, gt=0)
     max_keepalive: int = Field(default=2, gt=0)
     keepalive_expiry_s: float = Field(default=90.0, ge=0)
-    dns_cache: DnsCacheConfig = Field(default_factory=DnsCacheConfig)
 
     @model_validator(mode="after")
     def validate_keepalive(self) -> NetworkConfig:
@@ -1297,7 +1273,6 @@ class AppConfig(BaseModel):
     readiness_probe: ReadinessProbeConfig = Field(
         default_factory=ReadinessProbeConfig,
     )
-    dns_cache: DnsCacheConfig = Field(default_factory=DnsCacheConfig)
     network: NetworkConfig = Field(default_factory=NetworkConfig)
     proxies: dict[str, ProxyConfig] = Field(default_factory=dict)
     accounts: list[AccountConfig] = Field(default_factory=list[AccountConfig])
@@ -1308,17 +1283,8 @@ class AppConfig(BaseModel):
     )
     transcoder: TranscoderPolicy = Field(default_factory=TranscoderPolicy)
     compression: CompressionConfig = Field(default_factory=CompressionConfig)
-    cache: CacheConfig = Field(default_factory=CacheConfig)
     model_info: ModelInfoConfig = Field(default_factory=ModelInfoConfig)
     update_checker: UpdateCheckerConfig = Field(default_factory=UpdateCheckerConfig)
-    force_segmentation: bool = Field(
-        default=False,
-        description=(
-            "When true, always run request segmentation regardless of "
-            "whether any consumer (compression, synthetic cache) is "
-            "active.  Useful for debugging or compatibility."
-        ),
-    )
 
     @model_validator(mode="after")
     def _normalize_providers(self) -> AppConfig:

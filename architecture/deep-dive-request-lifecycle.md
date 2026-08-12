@@ -105,7 +105,6 @@ The orchestrator. Wires together all lifecycle stages:
 - Persists the request/reservation/attempt bundle in one transaction
 - Builds upstream URL via `_get_upstream_url()` (provider contract)
 - Builds upstream headers via `_build_upstream_headers()` (provider contract)
-- Applies synthetic cache controls (post-route, Phase 9)
 - Manages retry/failover loop
 - Handles streaming via `_build_stream_generator`
 - Finalizes via `RequestFinalizer`

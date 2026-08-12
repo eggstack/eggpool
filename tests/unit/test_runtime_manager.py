@@ -56,13 +56,10 @@ def _fake_generation(
         coordinator=MagicMock(),
         client_pool=MagicMock(),
         outbound_manager=MagicMock(),
-        dns_backend=None,
         health_manager=MagicMock(),
         cost_calculator=MagicMock(),
         transcoder_policy=MagicMock(),
         compression_policy=MagicMock(),
-        cache_config=MagicMock(),
-        compression_tuning_registry=MagicMock(),
         dispatch_overhead_recorder=MagicMock(),
         dispatch_span_recorder=MagicMock(),
         account_backoff_repo=MagicMock(),
@@ -470,10 +467,8 @@ _GENERATION_OWNED_ATTRS_TO_AUDIT = frozenset(
         "dispatch_span_recorder",
         "transcoder_policy",
         "compression_policy",
-        "compression_tuning_registry",
         "client_pool",
         "outbound_manager",
-        "dns_backend",
     }
 )
 
@@ -936,8 +931,6 @@ class TestBuilderBuildInitial:
             cost_calculator=MagicMock(),
             transcoder_policy=MagicMock(),
             compression_policy=MagicMock(),
-            cache_config=MagicMock(),
-            compression_tuning_registry=MagicMock(),
             dispatch_overhead_recorder=MagicMock(),
             dispatch_span_recorder=MagicMock(),
             account_backoff_repo=MagicMock(),

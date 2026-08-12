@@ -274,9 +274,7 @@ def resolve_selected_provider_kind(
        when the catalog row is missing or has no ``kind``)
 
     Returns ``None`` when neither source carries a ``kind`` or when
-    the selected attempt has no ``provider_id``.  Never raises so
-    the synthetic-cache post-route hook always has a deterministic
-    fallback.
+    the selected attempt has no ``provider_id``.  Never raises.
     """
     if not selected or not getattr(selected, "provider_id", None):
         return None
@@ -532,8 +530,6 @@ class ProxyRequestContext:
     compression_observation: Any | None = None
     compression_result: Any | None = None
     resolved_compression_policy: Any | None = None
-    synthetic_cache_result: Any | None = None
-    synthetic_cache_segmentation: Any | None = None
     prepared_transcode: PreparedTranscode | None = None
     # Phase 4.4: precomputed values computed once in handle_proxy_request()
     # so _select_and_persist_attempt() does not reparse original_body.
@@ -669,8 +665,6 @@ class RequestCoordinator:
         local_pre_upstream_recorder: Any | None = None,  # noqa: ANN401
         dispatch_span_recorder: Any | None = None,  # noqa: ANN401
         transcoder_policy: TranscoderPolicy | None = None,
-        cache_config: Any | None = None,  # noqa: ANN401
-        compression_tuning_registry: Any | None = None,  # noqa: ANN401
         compression_policy: Any | None = None,  # noqa: ANN401
         stream_diagnostics: StreamDiagnostics | None = None,
         finalization_supervisor: Any | None = None,  # noqa: ANN401
@@ -727,8 +721,6 @@ class RequestCoordinator:
         self._local_pre_upstream_recorder = local_pre_upstream_recorder
         self._dispatch_span_recorder = dispatch_span_recorder
         self._transcoder_policy = transcoder_policy
-        self._cache_config = cache_config
-        self._compression_tuning_registry = compression_tuning_registry
         self._compression_policy = compression_policy
         self._stream_diagnostics = stream_diagnostics or get_stream_diagnostics()
         self._finalization_supervisor = finalization_supervisor
@@ -2915,7 +2907,6 @@ class RequestCoordinator:
                     compression_observation=context.compression_observation,
                     compression_result=context.compression_result,
                     resolved_compression_policy=context.resolved_compression_policy,
-                    synthetic_cache_result=context.synthetic_cache_result,
                 ),
             )
             self._stream_diagnostics.record_outcome(
@@ -3229,7 +3220,6 @@ class RequestCoordinator:
                     compression_observation=context.compression_observation,
                     compression_result=context.compression_result,
                     resolved_compression_policy=context.resolved_compression_policy,
-                    synthetic_cache_result=context.synthetic_cache_result,
                 ),
             )
 
@@ -3903,7 +3893,6 @@ class RequestCoordinator:
                         compression_observation=context.compression_observation,
                         compression_result=context.compression_result,
                         resolved_compression_policy=context.resolved_compression_policy,
-                        synthetic_cache_result=context.synthetic_cache_result,
                         transcoded=context.transcode_context is not None,
                     ),
                 )
@@ -4005,7 +3994,6 @@ class RequestCoordinator:
                         compression_observation=context.compression_observation,
                         compression_result=context.compression_result,
                         resolved_compression_policy=context.resolved_compression_policy,
-                        synthetic_cache_result=context.synthetic_cache_result,
                     )
                     await self._finalize_terminal(context, selected, fin_data)
                     self._stream_diagnostics.record_outcome(
@@ -4113,7 +4101,6 @@ class RequestCoordinator:
                         compression_observation=context.compression_observation,
                         compression_result=context.compression_result,
                         resolved_compression_policy=context.resolved_compression_policy,
-                        synthetic_cache_result=context.synthetic_cache_result,
                     ),
                 )
                 self._stream_diagnostics.record_outcome(
@@ -4960,163 +4947,6 @@ class RequestCoordinator:
                 reason="thinking_control",  # type: ignore[arg-type]
             )
 
-    def _apply_synthetic_cache_controls(
-        self,
-        *,
-        context: ProxyRequestContext,
-        selected: SelectedAttempt,
-        request: Any | None = None,
-    ) -> bool:
-        """Apply Phase 9 synthetic cache_control annotations on the provider-bound body.
-
-        Runs AFTER ``_apply_selected_provider_transcode_adjustments`` so it
-        operates on the same provider-bound payload the upstream sees.
-        Runs BEFORE ``client.build_request(...)`` so the synthesized
-        annotations are dispatched.
-
-        Provider-specific policy matches (``match_provider_ids``,
-        ``match_provider_kinds``) are evaluated here with full
-        post-route context.  Pre-route resolver matched names are
-        re-resolved against the actual provider/account/protocol;
-        the second pass overrides the pre-route result.
-        """
-        if self._cache_config is None:
-            return False
-        if not getattr(self._cache_config, "synthetic_cache_controls", None):
-            return False
-        legacy_request = request is None and context.provider_bound is None
-        if request is None:
-            request = context.provider_bound
-        if request is None:
-            request = self._legacy_provider_request(context)
-        payload: dict[str, Any] = request.provider_payload_copy()
-
-        target_provider_kind = resolve_selected_provider_kind(
-            self._catalog, selected, config=self._config
-        )
-
-        from eggpool.transcoder.segmentation import segment_request
-
-        try:
-            context.synthetic_cache_segmentation = segment_request(
-                payload, protocol=context.upstream_protocol or "openai"
-            )
-        except Exception:  # noqa: BLE001
-            context.synthetic_cache_segmentation = None
-
-        resolved_policy = context.resolved_compression_policy
-        try:
-            from eggpool.transcoder.compression import (
-                CompressionPolicyContext,
-                resolve_compression_policy,
-            )
-
-            post_route_ctx = CompressionPolicyContext(
-                client_id=context.incoming_headers.get("x-eggpool-client"),
-                client_name=context.incoming_headers.get("user-agent"),
-                source_protocol=context.protocol,
-                target_protocol=context.upstream_protocol,
-                requested_model=context.model_id,
-                resolved_model=context.model_id,
-                provider_id=selected.provider_id,
-                provider_kind=target_provider_kind,
-                transcoded=context.transcode_required,
-            )
-            resolved_policy = resolve_compression_policy(
-                self._compression_policy,  # type: ignore[arg-type]
-                post_route_ctx,
-                overrides=(
-                    self._compression_policy.policies
-                    if self._compression_policy is not None
-                    and hasattr(self._compression_policy, "policies")
-                    else None
-                ),
-                runtime_override_registry=self._compression_tuning_registry,
-            )
-        except Exception:  # noqa: BLE001
-            logger.debug(
-                "synthetic_cache_post_route_policy_resolution_failed",
-                extra={"proxy_request_id": context.request_id},
-                exc_info=True,
-            )
-            resolved_policy = context.resolved_compression_policy
-
-        from eggpool.transcoder.cache_synthesis import (
-            _structural_cache_diff,
-            _validate_synthetic_cache_diff,
-            run_synthetic_cache_synthesis,
-        )
-
-        target_cache_capability = None
-        try:
-            from eggpool.catalog.capabilities import dict_to_model_capabilities
-
-            model_info = self._catalog.cache.get_model_for_provider(
-                context.model_id,
-                selected.provider_id,
-            )
-            if model_info is not None:
-                capabilities = dict_to_model_capabilities(
-                    cast("dict[str, object]", model_info.get("capabilities", {}))
-                )
-                target_cache_capability = (
-                    capabilities.transcoding.prompt_cache_capability(
-                        context.upstream_protocol or "openai"
-                    )
-                )
-        except Exception:  # noqa: BLE001
-            logger.debug(
-                "synthetic_cache_capability_lookup_failed",
-                extra={"proxy_request_id": context.request_id},
-                exc_info=True,
-            )
-
-        result = run_synthetic_cache_synthesis(
-            payload,
-            segmentation=context.synthetic_cache_segmentation,
-            cache_config=self._cache_config,
-            target_protocol=context.upstream_protocol or "openai",
-            target_provider_kind=target_provider_kind,
-            target_cache_capability=target_cache_capability,
-            resolved_policy=resolved_policy,
-            transcode_context=context.transcode_context,
-        )
-
-        if result.transformed_payload is not None:
-            diff = _structural_cache_diff(payload, result.transformed_payload)
-            if not _validate_synthetic_cache_diff(diff, result.plan.candidates):
-                from eggpool.transcoder.cache_synthesis import (
-                    SyntheticCachePlan,
-                )
-
-                warnings = list(result.plan.warnings) + [
-                    "synthetic_cache_control_safety_diff_failed"
-                ]
-                result.plan = SyntheticCachePlan(
-                    status="failed_fallback",
-                    dry_run=result.plan.dry_run,
-                    candidates=result.plan.candidates,
-                    applied_count=0,
-                    warnings=tuple(warnings),
-                    policy_name=result.plan.policy_name,
-                    policy_source=result.plan.policy_source,
-                    effective_ttl=result.plan.effective_ttl,
-                )
-                result.transformed_payload = None
-                result.cache_boundary_entries = ()
-            else:
-                request.adopt_provider_payload(
-                    result.transformed_payload, reason="synthetic_cache"
-                )
-                changed = True
-                context.synthetic_cache_result = result
-                if legacy_request:
-                    request.serialize_provider_payload()
-                return changed
-
-        context.synthetic_cache_result = result
-        return False
-
     async def _finalize_selected_capability_rejection(
         self,
         *,
@@ -5182,7 +5012,6 @@ class RequestCoordinator:
                     compression_observation=context.compression_observation,
                     compression_result=context.compression_result,
                     resolved_compression_policy=context.resolved_compression_policy,
-                    synthetic_cache_result=context.synthetic_cache_result,
                 ),
             )
         except DatabaseError as finalize_err:
@@ -5595,7 +5424,6 @@ class RequestCoordinator:
                 compression_observation=context.compression_observation,
                 compression_result=context.compression_result,
                 resolved_compression_policy=context.resolved_compression_policy,
-                synthetic_cache_result=context.synthetic_cache_result,
             ),
         )
 
@@ -5679,7 +5507,6 @@ class RequestCoordinator:
                     compression_observation=context.compression_observation,
                     compression_result=context.compression_result,
                     resolved_compression_policy=context.resolved_compression_policy,
-                    synthetic_cache_result=context.synthetic_cache_result,
                 ),
             )
             # Record first-class HTTPX transport outcome for streaming
@@ -5750,7 +5577,6 @@ class RequestCoordinator:
                     compression_observation=context.compression_observation,
                     compression_result=context.compression_result,
                     resolved_compression_policy=context.resolved_compression_policy,
-                    synthetic_cache_result=context.synthetic_cache_result,
                 ),
             )
 

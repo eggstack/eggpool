@@ -3,7 +3,6 @@
 Covers the gaps in the plan's synchronization test requirements:
 
 - RuntimeManager acquire/release under concurrent pressure.
-- DNS singleflight cancellation propagation.
 - Telemetry shard bounds (creation/retirement).
 - MetricsWriteCoalescer flush under rapid record/flush cycling.
 """
@@ -15,7 +14,6 @@ import asyncio
 import pytest
 
 from eggpool.event_loop_lag import EventLoopLagMonitor
-from eggpool.providers.dns_cache import DnsCache, DnsCacheKey
 from eggpool.request.stream_diagnostics import (
     STREAM_OUTCOME_COMPLETED,
     StreamDiagnostics,
@@ -28,27 +26,6 @@ from eggpool.runtime_dispatch import (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-class _FakeDnsConfig:
-    def __init__(
-        self,
-        *,
-        max_entries: int = 64,
-        positive_ttl_seconds: int = 300,
-        negative_ttl_seconds: int = 10,
-        stale_if_error_seconds: int = 60,
-        enabled: bool = True,
-        prefer_ipv6: bool = False,
-        lookup_timeout_seconds: float | None = None,
-    ) -> None:
-        self.max_entries = max_entries
-        self.positive_ttl_seconds = positive_ttl_seconds
-        self.negative_ttl_seconds = negative_ttl_seconds
-        self.stale_if_error_seconds = stale_if_error_seconds
-        self.enabled = enabled
-        self.prefer_ipv6 = prefer_ipv6
-        self.lookup_timeout_seconds = lookup_timeout_seconds
 
 
 # ---------------------------------------------------------------------------
@@ -102,72 +79,6 @@ class TestRuntimeManagerConcurrency:
         assert manager._active is None
         assert manager._retiring == []
         assert manager._next_generation_id == 0
-
-
-# ---------------------------------------------------------------------------
-# DNS singleflight cancellation
-# ---------------------------------------------------------------------------
-
-
-class TestDnsSingleflightCancellation:
-    """Singleflight entries are cleaned up when waiters are cancelled."""
-
-    @pytest.mark.asyncio()
-    async def test_singleflight_future_cancelled_cleanly(self) -> None:
-        config = _FakeDnsConfig()
-        cache = DnsCache(config)
-        key = DnsCacheKey(hostname="cancel.example.com", address_family=0)
-        future: asyncio.Future[list[str] | None] = (
-            asyncio.get_event_loop().create_future()
-        )
-        cache._singleflight[key] = future
-
-        # Simulate cancellation cleanup path
-        future.cancel()
-        cache._singleflight.pop(key, None)
-
-        assert key not in cache._singleflight
-        assert future.cancelled()
-
-    @pytest.mark.asyncio()
-    async def test_singleflight_multiple_waiters_one_cancels(self) -> None:
-        """When one waiter cancels, other waiters are unaffected."""
-        config = _FakeDnsConfig()
-        cache = DnsCache(config)
-        key = DnsCacheKey(hostname="multi.example.com", address_family=0)
-
-        # In real code, all waiters share the same future.
-        shared_future: asyncio.Future[list[str] | None] = (
-            asyncio.get_event_loop().create_future()
-        )
-        cache._singleflight[key] = shared_future
-
-        # Cancel via one reference
-        shared_future.cancel()
-
-        # The singleflight entry should be cleaned up
-        cache._singleflight.pop(key, None)
-        assert key not in cache._singleflight
-
-    @pytest.mark.asyncio()
-    async def test_singleflight_map_does_not_leak_on_repeated_cancellations(
-        self,
-    ) -> None:
-        """Repeated cancellation/cleanup cycles do not grow the map."""
-        config = _FakeDnsConfig()
-        cache = DnsCache(config)
-
-        for i in range(100):
-            key = DnsCacheKey(hostname=f"h{i}.com", address_family=0)
-            future: asyncio.Future[list[str] | None] = (
-                asyncio.get_event_loop().create_future()
-            )
-            cache._singleflight[key] = future
-            # Simulate immediate cancellation and cleanup
-            future.cancel()
-            cache._singleflight.pop(key, None)
-
-        assert len(cache._singleflight) == 0
 
 
 # ---------------------------------------------------------------------------

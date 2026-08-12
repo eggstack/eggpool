@@ -381,29 +381,11 @@ class TestRequestShapingSummary:
                 },
             },
             cache_stability={"transcoded_request_count": 0, "notes": ""},
-            compression_tuning={
-                "windows": {},
-                "recommendations": [],
-                "overrides": [],
-            },
-            synthetic_cache_summary={
-                "total_requests": 1,
-                "status_counts": {"applied": 1},
-                "dry_run_count": 0,
-                "applied_count": 1,
-                "candidate_count_total": 1,
-                "applied_count_total": 1,
-                "warning_count_total": 0,
-                "warning_counts": {},
-                "by_policy": [],
-            },
         )
 
         for label in (
             "Provider cache counters",
             "Compression",
-            "EggPool cache annotations",
-            "Tuning suggestions",
             "Routing isolation",
         ):
             assert label in html, f"expected label {label!r} missing from /cache page"
@@ -595,27 +577,6 @@ class TestPhase7CachePageBehavior:
         assert "Compression" in html
         assert "Safe-mode details" in html
 
-    def test_eggpool_cache_annotations_distinguishes_dry_run_vs_applied(
-        self,
-    ) -> None:
-        html = render_cache(
-            period="24h",
-            synthetic_cache_summary={
-                "total_requests": 4,
-                "status_counts": {"dry_run": 3, "applied": 1},
-                "dry_run_count": 3,
-                "applied_count": 1,
-                "candidate_count_total": 5,
-                "applied_count_total": 1,
-                "warning_count_total": 0,
-                "warning_counts": {},
-                "by_policy": [],
-            },
-        )
-        assert "EggPool cache annotations" in html
-        assert "Dry run" in html
-        assert "Applied" in html
-
     def test_advanced_diagnostics_collapsed_by_default(self) -> None:
         html = render_cache(
             period="24h",
@@ -676,50 +637,6 @@ class TestPhase7CachePageBehavior:
             },
         )
         assert "Routing isolation" in html
-
-
-class TestAdvisoryTuningCard:
-    """Advisory tuning panel renders concrete metrics."""
-
-    def test_tuning_metric_cards_render_values_not_template_code(self) -> None:
-        html = render_cache(
-            period="24h",
-            compression_tuning={
-                "windows": {
-                    "global": {
-                        "total_requests": 42,
-                    },
-                },
-                "recommendations": [
-                    {
-                        "policy_name": "<global>",
-                        "status": "recommendation_only",
-                        "recommendation": {
-                            "current": {
-                                "min_candidate_tokens": 2048,
-                                "min_savings_tokens": 512,
-                                "max_compression_latency_ms": 12.0,
-                            },
-                            "recommended": {
-                                "min_candidate_tokens": 4096,
-                                "min_savings_tokens": 768,
-                                "max_compression_latency_ms": 10.0,
-                            },
-                            "reason_codes": ["recommendation_only"],
-                        },
-                    },
-                ],
-                "overrides": [],
-            },
-        )
-
-        assert "Tuning suggestions" in html
-        assert "Policies observed" in html
-        assert "Requests analysed" in html
-        assert "42" in html
-        assert "Recommendations" in html
-        assert "recommendation_only" in html
-        assert "_render_metric_card" not in html
 
 
 class TestRoutingGuardrailsPanel:
@@ -826,192 +743,6 @@ class TestNoRawPayloadLeakage:
             cache_stability={
                 "transcoded_request_count": 0,
                 "notes": "test notes",
-            },
-        )
-        forbidden = [
-            "sk-",
-            "Bearer ",
-            "system prompt",
-            "<tool_use",
-            "<tool_result",
-        ]
-        for needle in forbidden:
-            assert needle not in html, (
-                f"Forbidden substring {needle!r} leaked into cache HTML"
-            )
-
-
-class TestSyntheticCacheCard:
-    """Synthetic cache controls card renders with empty + populated data."""
-
-    def test_empty_data_not_rendered(self) -> None:
-        """When total_requests is 0 the panel is suppressed."""
-        html = render_cache(
-            period="24h",
-            synthetic_cache_summary={
-                "total_requests": 0,
-                "status_counts": {},
-                "dry_run_count": 0,
-                "applied_count": 0,
-                "candidate_count_total": 0,
-                "applied_count_total": 0,
-                "warning_count_total": 0,
-                "warning_counts": {},
-                "by_policy": [],
-            },
-        )
-        import re
-
-        m = re.search(
-            r'<div id="synthetic-cache-controls">(.*?)</div>', html, re.DOTALL
-        )
-        assert m is not None
-        assert m.group(1).strip() == ""
-
-    def test_none_data_not_rendered(self) -> None:
-        """When synthetic_cache_summary is None the panel is suppressed."""
-        html = render_cache(period="24h")
-        import re
-
-        m = re.search(
-            r'<div id="synthetic-cache-controls">(.*?)</div>', html, re.DOTALL
-        )
-        assert m is not None
-        assert m.group(1).strip() == ""
-
-    def test_populated_data_renders_card(self) -> None:
-        """Populated data renders the card with status counts and policy table."""
-        html = render_cache(
-            period="24h",
-            synthetic_cache_summary={
-                "total_requests": 25,
-                "status_counts": {
-                    "disabled": 10,
-                    "dry_run": 8,
-                    "applied": 5,
-                    "no_candidates": 2,
-                    "policy_required": 0,
-                    "provider_unsupported": 0,
-                },
-                "dry_run_count": 8,
-                "applied_count": 5,
-                "candidate_count_total": 30,
-                "applied_count_total": 12,
-                "warning_count_total": 3,
-                "warning_counts": {
-                    "synthetic_cache_control_synthesized": 5,
-                    "synthetic_cache_control_dry_run": 8,
-                },
-                "by_policy": [
-                    {
-                        "policy_name": "<global>",
-                        "policy_source": "global",
-                        "request_count": 10,
-                        "applied_count": 0,
-                        "candidate_count": 0,
-                    },
-                    {
-                        "policy_name": "anthropic-cache",
-                        "policy_source": "policy:anthropic-cache",
-                        "request_count": 15,
-                        "applied_count": 5,
-                        "candidate_count": 30,
-                    },
-                ],
-            },
-        )
-        assert "EggPool cache annotations" in html
-        assert "25" in html  # total requests
-        assert "disabled" in html
-        assert "dry_run" in html
-        assert "applied" in html
-        assert "synthetic_cache_control_synthesized" in html
-        assert "synthetic_cache_control_dry_run" in html
-        assert "&lt;global&gt;" in html
-        assert "anthropic-cache" in html
-        assert "reporting only" in html.lower() or "Reporting only" in html
-        assert "QuotaFairScorer" in html
-
-    def test_reporting_only_reminder_text_present(self) -> None:
-        """The reporting-only reminder appears in the card."""
-        html = render_cache(
-            period="24h",
-            synthetic_cache_summary={
-                "total_requests": 1,
-                "status_counts": {"disabled": 1},
-                "dry_run_count": 0,
-                "applied_count": 0,
-                "candidate_count_total": 0,
-                "applied_count_total": 0,
-                "warning_count_total": 0,
-                "warning_counts": {},
-                "by_policy": [],
-            },
-        )
-        assert "Reporting only" in html
-        assert "QuotaFairScorer" in html
-
-    def test_global_sentinel_appears_before_overrides(self) -> None:
-        """The <global> sentinel renders before override policies."""
-        html = render_cache(
-            period="24h",
-            synthetic_cache_summary={
-                "total_requests": 20,
-                "status_counts": {"disabled": 20},
-                "dry_run_count": 0,
-                "applied_count": 0,
-                "candidate_count_total": 0,
-                "applied_count_total": 0,
-                "warning_count_total": 0,
-                "warning_counts": {},
-                "by_policy": [
-                    {
-                        "policy_name": "<global>",
-                        "policy_source": "global",
-                        "request_count": 20,
-                        "applied_count": 0,
-                        "candidate_count": 0,
-                    },
-                    {
-                        "policy_name": "custom",
-                        "policy_source": "policy:custom",
-                        "request_count": 0,
-                        "applied_count": 0,
-                        "candidate_count": 0,
-                    },
-                ],
-            },
-        )
-        global_idx = html.index("&lt;global&gt;")
-        custom_idx = html.index("custom")
-        assert global_idx < custom_idx
-
-
-class TestNoRawPayloadLeakageSyntheticCache:
-    """Synthetic cache card never leaks raw upstream content."""
-
-    def test_no_prompt_substrings_in_synthetic_cache_card(self) -> None:
-        """Common prompt substrings never appear in the synthetic cache card."""
-        html = render_cache(
-            period="24h",
-            synthetic_cache_summary={
-                "total_requests": 5,
-                "status_counts": {"applied": 5},
-                "dry_run_count": 0,
-                "applied_count": 5,
-                "candidate_count_total": 10,
-                "applied_count_total": 5,
-                "warning_count_total": 0,
-                "warning_counts": {},
-                "by_policy": [
-                    {
-                        "policy_name": "<global>",
-                        "policy_source": "global",
-                        "request_count": 5,
-                        "applied_count": 5,
-                        "candidate_count": 10,
-                    }
-                ],
             },
         )
         forbidden = [

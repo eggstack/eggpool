@@ -462,27 +462,6 @@ def test_print_runtime_status_network_section() -> None:
             "build_count": 3,
             "providers": {"openai": 1, "anthropic": 1, "opencode-go": 1},
         },
-        "dns_cache": {
-            "enabled": True,
-            "size": 7,
-            "hits": 100,
-            "misses": 10,
-            "negative_hits": 0,
-            "stale_hits": 0,
-            "evictions": 0,
-            "resolution_errors": {},
-            "hosts": [],
-            "cache_hits_total": 100,
-            "cache_misses_owner_total": 10,
-            "singleflight_waits_total": 0,
-            "resolver_calls_total": 10,
-            "resolver_successes_total": 10,
-            "resolver_errors_total": 0,
-            "cache_hit_rate": 0.9091,
-            "dns_suppression_rate": 0.9091,
-            "resolver_calls_per_logical_resolve": 0.1,
-            "worst_missers": [],
-        },
         "probe_errors": [],
     }
 
@@ -491,52 +470,13 @@ def test_print_runtime_status_network_section() -> None:
         _print_runtime_status(data)
     output = buf.getvalue()
     assert "Network:" in output
-    assert "enabled" in output
     assert "Outbound builds:" in output
     assert "Outbound requests:" in output
-    assert "DNS cache:" in output
-    assert "DNS suppression:" in output
-    assert "Resolver calls:" in output
-    assert "Cache hits:" in output
-    assert "Owner misses:" in output
     assert "Provider clients:" in output
 
 
-def test_print_runtime_status_network_disabled() -> None:
-    """Network section shows 'disabled' when DNS cache is off."""
-    data: dict[str, Any] = {
-        "server": {"pid": 1, "uptime_seconds": 0, "configured_server_threads": 1},
-        "memory": {},
-        "processes": {},
-        "background_tasks": [],
-        "db": {},
-        "routing_runtime": {},
-        "outbound_client": {"build_count": 0, "request_count": 0, "error_count": 0},
-        "dns_cache": {
-            "enabled": False,
-            "cache_hits_total": 0,
-            "cache_misses_owner_total": 0,
-            "singleflight_waits_total": 0,
-            "resolver_calls_total": 0,
-            "resolver_successes_total": 0,
-            "resolver_errors_total": 0,
-            "cache_hit_rate": 0.0,
-            "dns_suppression_rate": 0.0,
-            "resolver_calls_per_logical_resolve": 0.0,
-            "worst_missers": [],
-        },
-        "probe_errors": [],
-    }
-
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        _print_runtime_status(data)
-    output = buf.getvalue()
-    assert "disabled" in output
-
-
 def test_print_runtime_status_network_empty_data() -> None:
-    """Network section handles missing outbound_client/dns_cache gracefully."""
+    """Network section handles missing outbound client data gracefully."""
     data: dict[str, Any] = {
         "server": {"pid": 1, "uptime_seconds": 0, "configured_server_threads": 1},
         "memory": {},
@@ -555,48 +495,8 @@ def test_print_runtime_status_network_empty_data() -> None:
     assert "0" in output
 
 
-def test_print_runtime_status_dns_hit_rate_calculation() -> None:
-    """DNS hit rate is calculated correctly."""
-    data: dict[str, Any] = {
-        "server": {"pid": 1, "uptime_seconds": 0, "configured_server_threads": 1},
-        "memory": {},
-        "processes": {},
-        "background_tasks": [],
-        "db": {},
-        "routing_runtime": {},
-        "outbound_client": {"build_count": 1, "request_count": 0, "error_count": 0},
-        "dns_cache": {
-            "enabled": True,
-            "size": 3,
-            "hits": 90,
-            "misses": 10,
-            "negative_hits": 0,
-            "stale_hits": 0,
-            "evictions": 0,
-            "resolution_errors": {},
-            "cache_hits_total": 90,
-            "cache_misses_owner_total": 10,
-            "singleflight_waits_total": 0,
-            "resolver_calls_total": 10,
-            "resolver_successes_total": 10,
-            "resolver_errors_total": 0,
-            "cache_hit_rate": 0.9,
-            "dns_suppression_rate": 0.9,
-            "resolver_calls_per_logical_resolve": 0.1,
-            "worst_missers": [],
-        },
-        "probe_errors": [],
-    }
-
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        _print_runtime_status(data)
-    output = buf.getvalue()
-    assert "90.0%" in output
-
-
 def test_runtime_status_includes_network_in_json() -> None:
-    """JSON output includes outbound_client and dns_cache keys."""
+    """JSON output includes outbound client and provider pool keys."""
     from eggpool.cli import cli
 
     response_data = {
@@ -608,22 +508,6 @@ def test_runtime_status_includes_network_in_json() -> None:
         "routing_runtime": {},
         "outbound_client": {"build_count": 1, "request_count": 5, "error_count": 0},
         "provider_client_pool": {"build_count": 2, "providers": {"a": 1, "b": 1}},
-        "dns_cache": {
-            "enabled": True,
-            "hits": 10,
-            "misses": 2,
-            "hosts": [],
-            "cache_hits_total": 10,
-            "cache_misses_owner_total": 2,
-            "singleflight_waits_total": 0,
-            "resolver_calls_total": 2,
-            "resolver_successes_total": 2,
-            "resolver_errors_total": 0,
-            "cache_hit_rate": 0.8333,
-            "dns_suppression_rate": 0.8333,
-            "resolver_calls_per_logical_resolve": 0.1667,
-            "worst_missers": [],
-        },
         "probe_errors": [],
     }
 
@@ -648,58 +532,7 @@ def test_runtime_status_includes_network_in_json() -> None:
             assert result.exit_code == 0
             parsed = json.loads(result.output)
             assert "outbound_client" in parsed
-            assert "dns_cache" in parsed
             assert "provider_client_pool" in parsed
-
-
-def test_print_runtime_status_dns_cache_hosts() -> None:
-    """DNS cache hosts are rendered when present."""
-    data: dict[str, Any] = {
-        "server": {"pid": 1, "uptime_seconds": 0, "configured_server_threads": 1},
-        "memory": {},
-        "processes": {},
-        "background_tasks": [],
-        "db": {},
-        "routing_runtime": {},
-        "outbound_client": {"build_count": 1, "request_count": 0, "error_count": 0},
-        "provider_client_pool": {"build_count": 0, "providers": {}},
-        "dns_cache": {
-            "enabled": True,
-            "size": 2,
-            "hits": 50,
-            "misses": 5,
-            "resolution_errors": {},
-            "hosts": [
-                {
-                    "host": "api.openai.com",
-                    "family": "ipv4",
-                    "state": "positive",
-                    "expires_in_seconds": 241.0,
-                    "stale_available": True,
-                    "last_error_kind": None,
-                },
-                {
-                    "host": "api.anthropic.com",
-                    "family": "ipv4",
-                    "state": "negative",
-                    "expires_in_seconds": 30.0,
-                    "stale_available": False,
-                    "last_error_kind": "ConnectError",
-                },
-            ],
-        },
-        "probe_errors": [],
-    }
-
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        _print_runtime_status(data)
-    output = buf.getvalue()
-    assert "DNS cache entries:" in output
-    assert "api.openai.com (ipv4) state=positive" in output
-    assert "stale_ok" in output
-    assert "api.anthropic.com (ipv4) state=negative" in output
-    assert "error=ConnectError" in output
 
 
 def test_print_runtime_status_provider_clients() -> None:
@@ -716,7 +549,6 @@ def test_print_runtime_status_provider_clients() -> None:
             "build_count": 3,
             "providers": {"anthropic": 1, "openai": 1, "opencode-go": 1},
         },
-        "dns_cache": {"enabled": True, "hosts": []},
         "probe_errors": [],
     }
 

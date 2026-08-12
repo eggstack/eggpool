@@ -407,22 +407,3 @@ class TestShutdownTopology:
         await supervisor.stop_all()
         # Task still exists in registry after stop
         assert supervisor.get_task("restart_test") is not None
-
-    @pytest.mark.asyncio()
-    async def test_dns_cache_snapshot_after_construction(self) -> None:
-        """DNS cache snapshot is clean after construction."""
-        from eggpool.providers.dns_cache import DnsCache
-
-        class _Cfg:
-            max_entries = 32
-            positive_ttl_seconds = 300
-            negative_ttl_seconds = 10
-            stale_if_error_seconds = 60
-            enabled = True
-            prefer_ipv6 = False
-            lookup_timeout_seconds = None
-
-        cache = DnsCache(_Cfg())
-        snap = cache.snapshot()
-        assert snap["max_entries"] == 32
-        assert snap["size"] == 0

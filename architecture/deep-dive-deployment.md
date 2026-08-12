@@ -77,7 +77,6 @@ Runtime configuration. Key sections:
 - `[providers.<id>]` — per-provider config
 - `[transcoder]` — protocol transcoding
 - `[compression]` — request shaping
-- `[cache]` — synthetic cache controls
 - `[model_info]` — source enablement
 - `[dashboard]` — theme, auth policy
 - `[metrics]` — buffering, flush modes

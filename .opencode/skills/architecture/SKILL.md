@@ -177,7 +177,7 @@ Plus `ProtocolMismatchError` (from `catalog.protocols`) — endpoint/model-proto
 - Readiness probe is process-owned (survives generation swaps) and disabled by
   default
 - The lean default binds to loopback, uses low-wear analytics, and leaves
-  model-info, routing traces, detailed spans, backups, DNS caching, event-loop
+  model-info, routing traces, detailed spans, backups, event-loop
   lag, and the in-process PyPI checker dormant
 - Optional diagnostics are genuinely dormant when disabled: their clients,
   writers, queues, recorders, and tasks are not instantiated. The canonical

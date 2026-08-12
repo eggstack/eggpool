@@ -362,8 +362,9 @@ the generated server API key (`dashboard.public = false`).
 
 Optional background features are explicit: set `[model_info].enabled = true`
 for metadata enrichment, `[backup].enabled = true` for in-process archives,
-`[network.dns_cache].enabled = true` for DNS caching, or
-`[update_checker].enabled = true` for the periodic PyPI status probe.
+or `[update_checker].enabled = true` for the periodic PyPI status probe. Host
+DNS behavior is provided by the operating system; EggPool does not add a
+process-local resolver cache.
 
 For a short deployment comparison, use the same host, Python, config shape,
 database state, and stabilization interval for each build. Capture

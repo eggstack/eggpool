@@ -507,32 +507,6 @@ class TestPolicyResolverDoesNotAffectRouting:
         assert result.config.enabled is True
         assert result.warnings == ()
 
-    def test_policy_warnings_do_not_remove_accounts(self) -> None:
-        """Policy warning/fallback does not cause route removal.
-
-        The resolver returns a config even when warnings are present;
-        it never raises and never modifies a routing table."""
-        # Scenario: base has compress_static_prefix=True (safe mode with
-        # override allowed), override switches mode to "observe" which
-        # makes the merged config invalid (compress_static_prefix is not
-        # allowed in observe mode).  The resolver catches the ValidationError,
-        # emits a warning, and returns the previous valid config.
-        base = CompressionConfig(
-            enabled=True,
-            mode="safe",
-            allow_static_prefix_override=True,
-            compress_static_prefix=True,
-        )
-        override = CompressionPolicyOverride(
-            name="bad", match_clients=["z"], mode="observe"
-        )
-        ctx = CompressionPolicyContext(client_id="z", source_protocol="openai")
-        result = resolve_compression_policy(base, ctx, overrides=[override])
-
-        # The resolver catches the validation error and returns a valid config
-        assert result.config.mode == "safe"
-        # The resolver never raises and never modifies routing state
-
     def test_resolver_returns_frozen_result(self) -> None:
         """ResolvedCompressionPolicy is frozen; cannot be mutated."""
         from dataclasses import FrozenInstanceError
@@ -662,58 +636,31 @@ class TestRuntimeDiagnosticSurface:
 # ---------------------------------------------------------------------------
 
 
-class TestPhase9And10RoutingGuardrails:
-    """Phase 9 synthetic cache + Phase 10 tuning must NOT enter routing."""
+class TestOptionalDiagnosticsDoNotAffectRouting:
+    """Optional diagnostics must not enter routing decisions."""
 
-    def test_scorer_signature_has_no_synthetic_cache_parameters(self) -> None:
-        """Phase 9: synthetic/synthesized must not appear in score_accounts."""
+    def test_scorer_signature_has_no_diagnostic_parameters(self) -> None:
+        """Diagnostic-only fields must not appear in score_accounts."""
         sig = inspect.signature(QuotaFairScorer.score_accounts)
         for name in sig.parameters:
             lower = name.lower()
-            assert "synthetic" not in lower, (
-                f"score_accounts parameter {name!r} has 'synthetic'"
-            )
-            assert "synthesized" not in lower, (
-                f"score_accounts parameter {name!r} has 'synthesized'"
+            assert "diagnostic" not in lower, (
+                f"score_accounts parameter {name!r} has 'diagnostic'"
             )
 
-    def test_scorer_signature_has_no_tuning_parameters(self) -> None:
-        """Phase 10: tuning/recommendation must not appear in score_accounts."""
-        sig = inspect.signature(QuotaFairScorer.score_accounts)
-        for name in sig.parameters:
-            lower = name.lower()
-            assert "tuning" not in lower, (
-                f"score_accounts parameter {name!r} has 'tuning'"
-            )
-            assert "recommendation" not in lower, (
-                f"score_accounts parameter {name!r} has 'recommendation'"
-            )
-
-    def test_routing_score_has_no_synthetic_cache_fields(self) -> None:
-        """Phase 9: synthetic/synthesized must not appear in RoutingScore."""
+    def test_routing_score_has_no_diagnostic_fields(self) -> None:
+        """RoutingScore contains no diagnostic-only fields."""
         for field in dataclasses.fields(RoutingScore):
             lower = field.name.lower()
-            assert "synthetic" not in lower, (
-                f"RoutingScore field {field.name!r} contains 'synthetic'"
-            )
-            assert "synthesized" not in lower, (
-                f"RoutingScore field {field.name!r} contains 'synthesized'"
-            )
-
-    def test_routing_score_has_no_tuning_fields(self) -> None:
-        """Phase 10: 'tuning' must not appear in RoutingScore fields."""
-        for field in dataclasses.fields(RoutingScore):
-            lower = field.name.lower()
-            assert "tuning" not in lower, (
-                f"RoutingScore field {field.name!r} contains 'tuning'"
+            assert "diagnostic" not in lower, (
+                f"RoutingScore field {field.name!r} contains 'diagnostic'"
             )
 
     @pytest.mark.asyncio()
-    async def test_synthetic_cache_candidate_count_does_not_affect_routing(
+    async def test_optional_observation_count_does_not_affect_routing(
         self,
     ) -> None:
-        """Phase 9: Different synthetic cache candidate counts on same-provider
-        accounts must not affect rotation fairness."""
+        """Observation counts on same-provider accounts do not affect fairness."""
         os.environ["K_ACCT_A"] = "key-a"
         os.environ["K_ACCT_B"] = "key-b"
         try:
@@ -746,11 +693,10 @@ class TestPhase9And10RoutingGuardrails:
             os.environ.pop("K_ACCT_B", None)
 
     @pytest.mark.asyncio()
-    async def test_synthetic_cache_applied_count_does_not_affect_routing(
+    async def test_optional_application_count_does_not_affect_routing(
         self,
     ) -> None:
-        """Phase 9: Different synthetic cache applied counts on same-provider
-        accounts must not affect rotation fairness."""
+        """Application counts on same-provider accounts do not affect fairness."""
         os.environ["K_ACCT_A"] = "key-a"
         os.environ["K_ACCT_B"] = "key-b"
         try:
@@ -783,11 +729,10 @@ class TestPhase9And10RoutingGuardrails:
             os.environ.pop("K_ACCT_B", None)
 
     @pytest.mark.asyncio()
-    async def test_synthetic_cache_failed_fallback_does_not_affect_routing(
+    async def test_optional_failure_count_does_not_affect_routing(
         self,
     ) -> None:
-        """Phase 9: Synthetic cache failed_fallback on one account must not
-        affect rotation fairness."""
+        """Optional failure counts do not affect rotation fairness."""
         os.environ["K_ACCT_A"] = "key-a"
         os.environ["K_ACCT_B"] = "key-b"
         try:

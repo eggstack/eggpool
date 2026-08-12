@@ -243,26 +243,24 @@ No full retained-suite gate.
 
 ## Explicit acceptance criteria
 
-- [ ] Every compression placement/mode accepted by current config has real production behavior; dormant/reserved values are rejected or removed rather than implemented for completeness.
-- [ ] Compression remains off by default and disabled path performs no request segmentation/compression work solely for compression.
-- [ ] Retained safe compression remains deterministic and protects cache/stable regions.
-- [ ] Recommendation-only tuning is either removed, or retained only with a concrete active operator consumer and materially reduced configuration/state surface.
-- [ ] No automatic/apply tuning controller is introduced.
-- [ ] Synthetic cache controls are either removed as redundant/unjustified, or retained only for explicit provider/model capabilities with native-source precedence.
-- [ ] Synthetic cache cannot emit provider-extension fields without Plan 117 capability verification.
-- [ ] Custom DNS cache is either removed due to lack of demonstrated product value, or retained with a concrete documented deployment justification and reduced bounded diagnostics.
-- [ ] If DNS cache is removed, OS/httpcore resolution and provider/client-pool behavior remain correct.
-- [ ] If DNS cache is retained, default/SBC disabled path creates no custom resolver work.
-- [ ] `granian[pname]` necessity is verified against current package metadata and EggPool usage.
-- [ ] If `pname` is unused, dependency becomes plain Granian and normal install/startup/config checks pass.
-- [ ] If `pname` is retained, closure records the concrete required feature/dependency reason.
-- [ ] `orjson` fast extra and optional `pproxy` support remain available.
-- [ ] No core dependency/framework is replaced and no new runtime dependency is added.
-- [ ] No SQLite/provider-pool/routing/finalization/rehash behavior is changed.
-- [ ] Removed config fields fail clearly rather than silently changing meaning.
-- [ ] Tests/docs for deleted optional surfaces are removed rather than maintaining dead compatibility apparatus.
-- [ ] Focused affected tests pass.
-- [ ] Ruff, Pyright, 14 smoke tests, and both config checks pass.
+- [x] Every compression placement/mode accepted by current config has real production behavior; dormant/reserved values are rejected or removed rather than implemented for completeness.
+- [x] Compression remains off by default and disabled path performs no request segmentation/compression work solely for compression.
+- [x] Retained safe compression remains deterministic and protects cache/stable regions.
+- [x] Recommendation-only tuning is removed; no recommendation-only runtime state or dashboard/API surface remains.
+- [x] No automatic/apply tuning controller is introduced.
+- [x] Synthetic cache controls and insertion are removed; native cache translation/pass-through remains contract-gated.
+- [x] Synthetic cache cannot emit provider-extension fields without Plan 117 capability verification.
+- [x] Custom DNS cache and its custom network backend/diagnostics are removed; transport uses the OS resolver and HTTPX pooling.
+- [x] OS/httpcore resolution and provider/client-pool behavior remain correct.
+- [x] `granian[pname]` necessity is verified against current package metadata and EggPool usage.
+- [x] `granian[pname]` is retained because `cli_full.py` actively sets Granian's `process_name="eggpool"`, and the `pname` extra supplies `setproctitle`.
+- [x] `orjson` fast extra and optional `pproxy` support remain available.
+- [x] No core dependency/framework is replaced and no new runtime dependency is added.
+- [x] No SQLite/provider-pool/routing/finalization behavior is changed; rehash test fixtures only gain isolated safe socket directories.
+- [x] Removed config fields fail clearly rather than silently changing meaning.
+- [x] Tests/docs for deleted optional surfaces are removed rather than maintaining dead compatibility apparatus.
+- [x] Focused affected tests pass.
+- [x] Ruff, Pyright, 14 smoke tests, and both config checks pass.
 
 ## Rejection conditions
 
@@ -292,3 +290,26 @@ Reject the implementation if:
 9. Run focused verification and ordinary gate.
 10. Record implementation SHA, retained/removed feature table, DNS/tuning/dependency decisions and evidence, and exact verification results.
 11. Stop. Broader dependency/framework replacement is explicitly out of scope.
+
+## Implementation closure
+
+Implemented on `main` in the changes following baseline `6f4df9bd42b5ca336d3da5ef458ab1793e515185`.
+
+| Surface | Decision | Evidence |
+| --- | --- | --- |
+| Compression | Retained only `suffix_only` observe/safe behavior; old static-prefix/reserved placement language removed. | Compression policy/analyzer/apply contract tests and config validation. |
+| Tuning | Deleted recommendation state, configuration, queries, dashboard/API exposure, and tuning-only tests. | No production references remain. |
+| Synthetic cache | Deleted controls, insertion modules, runtime wiring, persistence writes, dashboard/API exposure, and tests. | Native cache translation and boundary-preservation tests remain. Historical migrations remain frozen and unwritten. |
+| DNS | Deleted the custom resolver cache, backend, config, metrics, dashboard, and tests. | HTTPX transport/client-pool tests use ordinary OS resolution and connection reuse. |
+| Dependencies | Kept `granian[pname]`, `orjson`, and `pproxy`; added no dependency. | `cli_full.py` uses Granian `process_name`; installed metadata identifies `pname` as `setproctitle`. |
+
+Verification completed:
+
+- `uv sync --frozen --extra ci`
+- `uv run ruff format --check src/ tests/ scripts/`
+- `uv run ruff check src/ tests/ scripts/`
+- `uv run pyright src/ scripts/`
+- `PYTHONHASHSEED=0 TZ=UTC uv run pytest tests/smoke/ -q --tb=short --maxfail=1` — 14 passed
+- `uv run eggpool --config config.example.toml check-config` — passed
+- `uv run eggpool --config config.sbc.example.toml check-config` — passed
+- Focused compression/dashboard/reload/protocol/rehash suites passed, including 44 rehash acceptance/operator tests after isolated socket-fixture corrections.

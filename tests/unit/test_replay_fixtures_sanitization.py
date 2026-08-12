@@ -144,7 +144,7 @@ def test_fixtures_use_synthetic_repeated_ids() -> None:
     """OpenAI tool_call ids and Anthropic tool_use_ids must use the synthetic prefix.
 
     Only strings inside the ``request`` payload are inspected -- fixture-level
-    names like ``synthetic_cache_candidates`` are unrelated.
+    names that describe unrelated fixture content are allowed.
     """
     id_pattern = re.compile(r"^synthetic_(?:call|id|use)_[A-Za-z0-9_]+$")
     offenders: list[str] = []

@@ -116,8 +116,6 @@ class TestRenderCacheFallbackSummary:
             request_shaping_summary={
                 "mode": {
                     "compression": "safe",
-                    "synthetic_cache": "apply",
-                    "tuning": "recommend",
                     "routing": "custom-mode",
                 },
                 "compression": {
@@ -125,13 +123,11 @@ class TestRenderCacheFallbackSummary:
                     "actual_savings_tokens": 42,
                 },
                 "cache": {"cache_counter_reported_rate": 0.75},
-                "synthetic_cache": {"candidate_count": 7},
                 "guardrails": {
                     "stable_prefix_preserved_rate": 0.9,
                     "failed_fallback_count": 2,
                     "policy_warning_count": 1,
                 },
-                "tuning": {"recommendation_count": 4, "override_count": 5},
                 "segmentation": {
                     "requests_segmented": 6,
                     "requests_not_collected": 2,
@@ -143,7 +139,6 @@ class TestRenderCacheFallbackSummary:
         assert "mode custom-mode" in html
         assert "3 requests" in html
         assert "42 tokens saved" in html
-        assert "4 recommendations" in html
         assert "Warnings" in html
         assert "Routing isolation" in html
 
@@ -152,7 +147,6 @@ class TestRenderCacheFallbackSummary:
             cache_stability=None,
             compression_observability=None,
             compression_runtime=None,
-            synthetic_cache_summary=None,
             guardrails={},
         )
         assert isinstance(fallback, dict)
@@ -206,43 +200,6 @@ class TestRenderCacheCacheReporting:
             },
         )
         assert "Provider cache counters" in html
-
-
-class TestRenderCacheSyntheticControls:
-    """render_cache renders synthetic cache controls when data is present."""
-
-    def test_synthetic_cache_controls_rendered(self) -> None:
-        html = render_cache(
-            period="24h",
-            synthetic_cache_summary={
-                "total_requests": 5,
-                "status_counts": {"applied": 3, "disabled": 2},
-                "dry_run_count": 0,
-                "applied_count": 3,
-                "candidate_count_total": 8,
-                "applied_count_total": 3,
-                "warning_count_total": 0,
-                "warning_counts": {},
-                "by_policy": [],
-            },
-        )
-        import re
-
-        m = re.search(
-            r'<div id="synthetic-cache-controls">(.*?)</div>', html, re.DOTALL
-        )
-        assert m is not None
-        assert m.group(1).strip() != ""
-
-    def test_synthetic_cache_controls_not_rendered_when_none(self) -> None:
-        html = render_cache(period="24h")
-        import re
-
-        m = re.search(
-            r'<div id="synthetic-cache-controls">(.*?)</div>', html, re.DOTALL
-        )
-        assert m is not None
-        assert m.group(1).strip() == ""
 
 
 class TestRenderCacheRoutingGuardrails:
@@ -304,8 +261,6 @@ def _base_summary(**overrides: object) -> dict[str, object]:
     base: dict[str, object] = {
         "mode": {
             "compression": "off",
-            "synthetic_cache": "off",
-            "tuning": "off",
             "routing": "reporting_only",
         },
         "compression": {
@@ -333,16 +288,6 @@ def _base_summary(**overrides: object) -> dict[str, object]:
             "protected_requests": 0,
             "compressible_candidate_requests": 0,
         },
-        "synthetic_cache": {
-            "dry_run_count": 0,
-            "applied_count": 0,
-            "candidate_count": 0,
-            "warning_count": 0,
-        },
-        "tuning": {
-            "recommendation_count": 0,
-            "override_count": 0,
-        },
         "guardrails": {
             "routing_uses_cache_metrics": False,
             "routing_uses_compression_metrics": False,
@@ -368,105 +313,6 @@ class TestRenderCacheSummaryCanonicalKeys:
         )
         assert "12 provider-reported rows" in html
         assert "20 classified rows" in html
-
-    def test_synthetic_candidate_count_not_under_provider_cache(self) -> None:
-        """Synthetic candidate count must not appear in the provider cache card."""
-        html = render_cache(
-            period="24h",
-            request_shaping_summary=_base_summary(
-                synthetic_cache={
-                    "dry_run_count": 3,
-                    "applied_count": 0,
-                    "candidate_count": 7,
-                    "warning_count": 0,
-                },
-            ),
-        )
-        provider_idx = html.find("Provider cache counters")
-        annotation_idx = html.find("EggPool cache annotations")
-        assert provider_idx != -1
-        assert annotation_idx != -1
-        provider_block = html[provider_idx:annotation_idx]
-        # Synthetic candidate count is rendered only under the annotation card.
-        assert "7 candidates" not in provider_block
-
-    def test_synthetic_candidate_count_renders_under_annotation_card(self) -> None:
-        html = render_cache(
-            period="24h",
-            request_shaping_summary=_base_summary(
-                synthetic_cache={
-                    "dry_run_count": 3,
-                    "applied_count": 0,
-                    "candidate_count": 7,
-                    "warning_count": 0,
-                },
-            ),
-        )
-        annotation_idx = html.find("EggPool cache annotations")
-        assert annotation_idx != -1
-        annotation_block = html[annotation_idx : annotation_idx + 1500]
-        assert "7 candidates" in annotation_block
-        assert "3 dry run" in annotation_block
-        assert "0 applied" in annotation_block
-
-
-class TestRenderCacheSummaryEggPoolAnnotationCard:
-    """The summary includes a distinct EggPool cache annotations card."""
-
-    def test_eggpool_card_present(self) -> None:
-        html = render_cache(
-            period="24h",
-            request_shaping_summary=_base_summary(),
-        )
-        assert "EggPool cache annotations" in html
-
-    def test_dry_run_distinct_from_apply(self) -> None:
-        dry_run_html = render_cache(
-            period="24h",
-            request_shaping_summary=_base_summary(
-                mode={
-                    "compression": "off",
-                    "synthetic_cache": "dry_run",
-                    "tuning": "off",
-                    "routing": "reporting_only",
-                },
-            ),
-        )
-        apply_html = render_cache(
-            period="24h",
-            request_shaping_summary=_base_summary(
-                mode={
-                    "compression": "off",
-                    "synthetic_cache": "apply",
-                    "tuning": "off",
-                    "routing": "reporting_only",
-                },
-            ),
-        )
-        # The card metric label differs between dry-run and apply.
-        dry_idx = dry_run_html.find("EggPool cache annotations")
-        apply_idx = apply_html.find("EggPool cache annotations")
-        assert dry_idx != -1
-        assert apply_idx != -1
-        # Probe a slice after the card title for the metric text.
-        assert "Dry run" in dry_run_html[dry_idx : dry_idx + 800]
-        assert "Apply" in apply_html[apply_idx : apply_idx + 800]
-
-    def test_synthetic_warning_marks_card_warning(self) -> None:
-        html = render_cache(
-            period="24h",
-            request_shaping_summary=_base_summary(
-                synthetic_cache={
-                    "dry_run_count": 0,
-                    "applied_count": 0,
-                    "candidate_count": 0,
-                    "warning_count": 2,
-                },
-            ),
-        )
-        # The annotation card should be present; the safety card also lights up.
-        assert "EggPool cache annotations" in html
-        assert "Warnings" in html
 
 
 class TestRenderCacheSummaryQuietStates:
@@ -531,8 +377,6 @@ class TestRenderCacheSummaryQuietStates:
             request_shaping_summary=_base_summary(
                 mode={
                     "compression": "off",
-                    "synthetic_cache": "off",
-                    "tuning": "off",
                     "routing": "reporting_only",
                 },
             ),
@@ -568,61 +412,6 @@ class TestRenderCacheAdvancedDiagnosticsState:
                     "requests_parse_failure": 3,
                     "protected_requests": 0,
                     "compressible_candidate_requests": 0,
-                },
-            ),
-        )
-        m = re.search(
-            r'<details[^>]*id="advanced-diagnostics"[^>]*>',
-            html,
-        )
-        assert m is not None
-        assert " open" in m.group(0)
-
-    def test_synthetic_warning_opens_advanced(self) -> None:
-        html = render_cache(
-            period="24h",
-            request_shaping_summary=_base_summary(
-                synthetic_cache={
-                    "dry_run_count": 0,
-                    "applied_count": 0,
-                    "candidate_count": 0,
-                    "warning_count": 1,
-                },
-            ),
-        )
-        m = re.search(
-            r'<details[^>]*id="advanced-diagnostics"[^>]*>',
-            html,
-        )
-        assert m is not None
-        assert " open" in m.group(0)
-
-    def test_synthetic_applied_count_opens_advanced(self) -> None:
-        html = render_cache(
-            period="24h",
-            request_shaping_summary=_base_summary(
-                synthetic_cache={
-                    "dry_run_count": 0,
-                    "applied_count": 4,
-                    "candidate_count": 4,
-                    "warning_count": 0,
-                },
-            ),
-        )
-        m = re.search(
-            r'<details[^>]*id="advanced-diagnostics"[^>]*>',
-            html,
-        )
-        assert m is not None
-        assert " open" in m.group(0)
-
-    def test_tuning_recommendations_open_advanced(self) -> None:
-        html = render_cache(
-            period="24h",
-            request_shaping_summary=_base_summary(
-                tuning={
-                    "recommendation_count": 3,
-                    "override_count": 0,
                 },
             ),
         )
@@ -731,26 +520,6 @@ class TestCacheAdvancedStateBuilder:
         assert state.open_by_default is True
         assert state.warning is True
 
-    def test_synthetic_applied_is_active_not_warning(self) -> None:
-        state = _build_cache_advanced_state(
-            compression_runtime=None,
-            guardrails={},
-            request_shaping_summary=_base_summary(
-                synthetic_cache={
-                    "dry_run_count": 0,
-                    "applied_count": 1,
-                    "candidate_count": 1,
-                    "warning_count": 0,
-                },
-            ),
-            transcoding_loss_warnings=0,
-            has_any_data=True,
-        )
-        assert "EggPool annotation applied" in state.reasons
-        assert state.warning is False
-        assert state.open_by_default is True
-        assert _cache_advanced_state_label(state) == "Advanced diagnostics (1 active)"
-
 
 class TestRenderCacheProviderCacheLabels:
     """Provider cache counter labels are operator-facing."""
@@ -844,14 +613,6 @@ class TestRenderCacheProviderCacheLabels:
 
 class TestRenderCachePanelIsolation:
     """Summary panel helper accepts structured input and renders cards."""
-
-    def test_summary_panel_renders_eggpool_card(self) -> None:
-        html = _render_request_shaping_summary_panel(
-            _base_summary(),
-            period="24h",
-            guardrails_mode="reporting_only",
-        )
-        assert "EggPool cache annotations" in html
 
     def test_summary_panel_quiet_safety_clean(self) -> None:
         html = _render_request_shaping_summary_panel(

@@ -12,7 +12,6 @@ _MINIMAL_SNAPSHOT: dict = {
     "routing_runtime": {},
     "outbound_client": {},
     "provider_client_pool": {},
-    "dns_cache": {},
     "load": {},
     "dispatch_overhead": {},
 }
@@ -45,14 +44,6 @@ class TestRenderRuntimeAbsentCachePanels:
     def test_no_compression_policies_heading(self) -> None:
         html = render_runtime(_MINIMAL_SNAPSHOT)
         assert "Compression policies (" not in html
-
-    def test_no_synthetic_cache_controls_heading(self) -> None:
-        html = render_runtime(_MINIMAL_SNAPSHOT)
-        assert "Synthetic cache controls (" not in html
-
-    def test_no_advisory_tuning_heading(self) -> None:
-        html = render_runtime(_MINIMAL_SNAPSHOT)
-        assert "Advisory tuning (" not in html
 
     def test_no_cache_diagnostics_link_panel(self) -> None:
         html = render_runtime(_MINIMAL_SNAPSHOT)

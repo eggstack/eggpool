@@ -19,6 +19,7 @@ import asyncio
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -28,10 +29,12 @@ from tests.integration.test_rehash_streaming_swap import (
     _make_mock_server,
     _MockState,
     _run_rehash,
-    _spawn_server,
     _terminate_server,
     _wait_healthy,
     _write_config,
+)
+from tests.integration.test_rehash_streaming_swap import (
+    _spawn_server as _canonical_spawn_server,
 )
 
 # Canonical keys every ``--json`` output must contain (from
@@ -54,6 +57,18 @@ _EXPECTED_JSON_KEYS: frozenset[str] = frozenset(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+async def _spawn_server(
+    config_path: str,
+    env: dict[str, str],
+) -> asyncio.subprocess.Process:
+    """Spawn a server with an isolated, safe control-socket directory."""
+    runtime_path = Path(config_path).with_suffix(".runtime")
+    runtime_path.mkdir(parents=True, exist_ok=True)
+    runtime_path.chmod(0o700)
+    env["EGGPOOL_RUNTIME_DIR"] = str(runtime_path)
+    return await _canonical_spawn_server(config_path, env)
 
 
 def _make_env(tmp_path: Any) -> dict[str, str]:

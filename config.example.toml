@@ -278,9 +278,8 @@ ttl_seconds = 86400
 # "canonical-id" = ["alias-1", "alias-2"]
 
 # ─── Network ─────────────────────────────────────────────────────────
-# Outbound client transport tuning and DNS caching. The DNS cache wraps
-# the default httpcore transport to cache resolved DNS entries in memory,
-# reducing latency for repeated connections to the same upstream hosts.
+# Outbound client transport tuning. HTTPX uses the operating-system
+# resolver and its long-lived connection pool.
 # [network]
 # connect_timeout_s = 5
 # read_timeout_s = 300
@@ -288,14 +287,6 @@ ttl_seconds = 86400
 # max_keepalive = 2
 # keepalive_expiry_s = 30
 #
-# [network.dns_cache]
-# enabled = false                  # enable in-memory DNS cache (default: false)
-# max_entries = 50                 # max cached host entries (default: 50)
-# positive_ttl_seconds = 1800      # upper cap for positive DNS answers (default: 1800)
-# negative_ttl_seconds = 30        # how long to cache lookup failures (default: 30)
-# stale_if_error_seconds = 3600    # max age for stale records usable on resolver failure (default: 3600)
-# prefer_ipv6 = false              # prefer IPv6 addresses in DNS resolution (default: false)
-# lookup_timeout_seconds = 5       # timeout for DNS lookups in seconds (default: 5)
 
 [readiness_probe]
 enabled = false
@@ -304,9 +295,6 @@ enabled = false
 enabled = false
 
 [update_checker]
-enabled = false
-
-[network.dns_cache]
 enabled = false
 
 [dashboard]
@@ -959,48 +947,3 @@ protocol = "anthropic"
 # min_candidate_tokens = 1024
 # min_savings_tokens = 512
 #
-# [[compression.policies]]
-# name = "anthropic-cache-dry-run"
-# match_provider_kinds = ["anthropic"]
-# synthetic_cache_controls = true
-# synthetic_cache_dry_run = true
-# synthetic_cache_min_stable_tokens = 1024
-# synthetic_cache_max_breakpoints = 4
-
-# --- EggPool cache annotations (provider-bound, opt-in) ---
-# Drives the **EggPool cache annotations** panel on `/cache`. Disabled
-# by default and dry-run is the safe rollout path. These are annotations
-# added by EggPool — provider-reported cache counters are surfaced
-# separately in Provider cache counters.
-# [cache.synthetic_cache_controls]
-# enabled = false
-# dry_run = true
-# min_stable_tokens = 1024
-
-# --- Tuning suggestions (advisory only) ---
-# Drives the **Tuning suggestions** panel on `/cache`. Recommend-only
-# by default; recommendations never change runtime policy.
-# [compression.tuning]
-# enabled = false
-# mode = "recommend"
-# window_requests = 500
-# min_window_requests = 50
-# update_interval_s = 300
-# max_adjustment_pct = 25.0
-# cooldown_s = 900
-# persist_recommendations = true
-#
-# [compression.tuning.targets]
-# max_latency_budget_warning_rate = 0.01
-# max_failed_fallback_rate = 0.001
-# min_positive_savings_rate = 0.8
-# min_median_savings_tokens = 512
-# max_p95_latency_ms = 25.0
-#
-# [compression.tuning.bounds]
-# min_candidate_tokens_min = 256
-# min_candidate_tokens_max = 16384
-# min_savings_tokens_min = 128
-# min_savings_tokens_max = 8192
-# max_compression_latency_ms_min = 5.0
-# max_compression_latency_ms_max = 100.0

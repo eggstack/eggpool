@@ -23,7 +23,6 @@ def test_defaults() -> None:
     assert policy.mode == "observe"
     assert policy.placement == "suffix_only"
     assert policy.respect_cache_boundaries is True
-    assert policy.compress_static_prefix is False
     assert policy.min_candidate_tokens == 2048
     assert policy.min_savings_tokens == 1024
     assert policy.max_compression_latency_ms == 25.0
@@ -52,40 +51,11 @@ def test_safe_mode_accepted() -> None:
     assert policy.enabled is True
 
 
-def test_compress_static_prefix_blocked_in_observe() -> None:
-    with pytest.raises(ValidationError) as excinfo:
-        CompressionConfig(enabled=True, mode="observe", compress_static_prefix=True)
-    assert "compress_static_prefix" in str(excinfo.value).lower()
-
-
-def test_compress_static_prefix_rejected_in_safe_mode_without_override() -> None:
-    """compress_static_prefix=true requires allow_static_prefix_override
-    in mode='safe'."""
-    with pytest.raises(ValidationError) as excinfo:
-        CompressionConfig(enabled=True, mode="safe", compress_static_prefix=True)
-    assert "compress_static_prefix" in str(excinfo.value).lower()
-    assert "allow_static_prefix_override" in str(excinfo.value).lower()
-
-
-def test_compress_static_prefix_accepted_in_safe_mode_with_override() -> None:
-    """compress_static_prefix=true is accepted when
-    allow_static_prefix_override=true."""
-    policy = CompressionConfig(
-        enabled=True,
-        mode="safe",
-        compress_static_prefix=True,
-        allow_static_prefix_override=True,
-    )
-    assert policy.compress_static_prefix is True
-    assert policy.allow_static_prefix_override is True
-
-
 def test_defaults_include_new_fields() -> None:
     """New Phase 5 fields have correct defaults."""
     policy = CompressionConfig()
     assert policy.header_override is False
     assert policy.header_cache_policy is True
-    assert policy.allow_static_prefix_override is False
 
 
 def test_non_negative_thresholds() -> None:
@@ -130,7 +100,6 @@ enabled = true
 mode = "observe"
 placement = "suffix_only"
 respect_cache_boundaries = true
-compress_static_prefix = false
 min_candidate_tokens = 4096
 min_savings_tokens = 2048
 max_compression_latency_ms = 50.0

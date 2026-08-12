@@ -218,7 +218,7 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     # candidate ``RequestCoordinator`` is constructed with the candidate
     # value, so a rehash toggles the policy live for new generations.
     "security.persist_redacted_error_detail": ReloadDisposition.LIVE,
-    # ---- metrics / backup / dns / network (process-owned) ----
+    # ---- metrics / backup / network (process-owned) ----
     "metrics.write_mode": ReloadDisposition.RESTART_REQUIRED,
     # Milestone D2: ``metrics.flush_interval_s`` is consumed by the
     # ``metrics_flush`` task; the process supervisor reconfigures the
@@ -244,31 +244,6 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "backup.startup_delay_s": ReloadDisposition.LIVE,
     "backup.directory": ReloadDisposition.RESTART_REQUIRED,
     "backup.include_env": ReloadDisposition.RESTART_REQUIRED,
-    # ``dns_cache`` lives at ``NetworkConfig.dns_cache`` (consumed at
-    # client-pool build in app._lifespan_runtime and the candidate
-    # builder). The earlier top-level ``dns_cache.*`` entries with a
-    # ``ttl_seconds`` typo were unreachable dead code; the correct paths
-    # below are reached via the AppConfig schema walk and the
-    # ``dns_cache_enabled`` key in the runtime state.
-    "network.dns_cache.enabled": ReloadDisposition.RESTART_REQUIRED,
-    "network.dns_cache.positive_ttl_seconds": ReloadDisposition.RESTART_REQUIRED,
-    "network.dns_cache.max_entries": ReloadDisposition.RESTART_REQUIRED,
-    "network.dns_cache.negative_ttl_seconds": ReloadDisposition.RESTART_REQUIRED,
-    "network.dns_cache.stale_if_error_seconds": ReloadDisposition.RESTART_REQUIRED,
-    "network.dns_cache.prefer_ipv6": ReloadDisposition.RESTART_REQUIRED,
-    "network.dns_cache.lookup_timeout_seconds": ReloadDisposition.RESTART_REQUIRED,
-    # The top-level ``dns_cache`` field on ``AppConfig`` is vestigial —
-    # it shadows the real ``network.dns_cache`` block used by the
-    # candidate builder. All live access goes through ``network.dns_cache``;
-    # these top-level entries exist only to keep the schema walk in
-    # parity with the policy map.
-    "dns_cache.enabled": ReloadDisposition.RESTART_REQUIRED,
-    "dns_cache.positive_ttl_seconds": ReloadDisposition.RESTART_REQUIRED,
-    "dns_cache.max_entries": ReloadDisposition.RESTART_REQUIRED,
-    "dns_cache.negative_ttl_seconds": ReloadDisposition.RESTART_REQUIRED,
-    "dns_cache.stale_if_error_seconds": ReloadDisposition.RESTART_REQUIRED,
-    "dns_cache.prefer_ipv6": ReloadDisposition.RESTART_REQUIRED,
-    "dns_cache.lookup_timeout_seconds": ReloadDisposition.RESTART_REQUIRED,
     "network.connect_timeout_s": ReloadDisposition.RESTART_REQUIRED,
     "network.read_timeout_s": ReloadDisposition.RESTART_REQUIRED,
     "network.max_connections": ReloadDisposition.RESTART_REQUIRED,
@@ -287,17 +262,11 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     # a fresh policy; no shared module-level singleton survives the
     # swap.
     "transcoder": ReloadDisposition.LIVE,
-    # ``compression`` is consumed via ``coordinator._compression_policy``
-    # and ``coordinator._compression_tuning_registry``; the candidate
-    # builder rebuilds both from ``candidate_config.compression`` so
-    # any knob (mode, thresholds, tuning, policy overrides) takes effect
+    # ``compression`` is consumed via ``coordinator._compression_policy``;
+    # the candidate builder rebuilds it from ``candidate_config.compression``
+    # so policy changes take effect
     # on the next generation.
     "compression": ReloadDisposition.LIVE,
-    # ``cache`` is consumed via ``coordinator._cache_config``; the
-    # candidate builder wires the candidate ``CacheConfig`` directly so
-    # synthetic-cache knobs (enabled, dry_run, breakpoints, TTL, etc.)
-    # take effect on the next generation.
-    "cache": ReloadDisposition.LIVE,
     # Milestone D2: model-info scheduling fields consumed by the
     # ``model_info_refresh`` and ``model_info_canonical_backfill``
     # tasks; the process supervisor reconfigures the tasks with the
@@ -318,7 +287,6 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "model_info.sources": ReloadDisposition.RESTART_REQUIRED,
     "model_info.aliases": ReloadDisposition.RESTART_REQUIRED,
     "model_info.overrides": ReloadDisposition.RESTART_REQUIRED,
-    "force_segmentation": ReloadDisposition.RESTART_REQUIRED,
     # Readiness probe is process-owned and survives generation swaps.
     "readiness_probe.enabled": ReloadDisposition.RESTART_REQUIRED,
     "readiness_probe.freshness_s": ReloadDisposition.RESTART_REQUIRED,
@@ -436,9 +404,9 @@ def _disposition_for(path: str) -> ReloadDisposition:
 
     - ``providers``, ``accounts``, ``model_overrides``,
       ``model_capabilities`` (closure pass).
-    - ``transcoder``, ``compression``, ``cache`` — request-policy blocks
+    - ``transcoder``, ``compression`` — request-policy blocks
       whose entire Pydantic surface is consumed from a generation-owned
-      ``TranscoderPolicy`` / ``CompressionConfig`` / ``CacheConfig``.  The
+      ``TranscoderPolicy`` / ``CompressionConfig``.  The
       candidate builder in :mod:`eggpool.control.reload_manager`
       rebuilds each policy object from the candidate config so sub-path
       changes publish a fresh generation.

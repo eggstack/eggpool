@@ -40,6 +40,7 @@ from eggpool.request.coordinator import (
     ProxyRequestContext,
     RequestCoordinator,
 )
+from eggpool.request.finalization_job import RequestFinalizationSupervisor
 from eggpool.routing.router import Router
 
 UPSTREAM_BASE = "https://test-upstream.example.com"
@@ -153,6 +154,7 @@ async def coordinator(db: Database, config: AppConfig) -> Any:
         usage_window_repo=usage_window_repo,
         health_manager=health_manager,
     )
+    coord._finalization_supervisor = RequestFinalizationSupervisor(db=db)
     yield coord
     await httpx_client.aclose()
 

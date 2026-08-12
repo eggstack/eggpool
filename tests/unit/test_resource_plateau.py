@@ -13,7 +13,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from eggpool.providers.dns_cache import DnsCache, DnsCacheKey, PositiveCacheEntry
 from eggpool.request.stream_diagnostics import (
     STREAM_OUTCOME_COMPLETED,
     StreamDiagnostics,
@@ -23,32 +22,6 @@ from eggpool.runtime_metrics import RuntimeMetricsService
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-class _FakeDnsConfig:
-    def __init__(
-        self,
-        *,
-        max_entries: int = 64,
-        positive_ttl_seconds: int = 300,
-        negative_ttl_seconds: int = 10,
-        stale_if_error_seconds: int = 60,
-        enabled: bool = True,
-        prefer_ipv6: bool = False,
-        lookup_timeout_seconds: float | None = None,
-    ) -> None:
-        self.max_entries = max_entries
-        self.positive_ttl_seconds = positive_ttl_seconds
-        self.negative_ttl_seconds = negative_ttl_seconds
-        self.stale_if_error_seconds = stale_if_error_seconds
-        self.enabled = enabled
-        self.prefer_ipv6 = prefer_ipv6
-        self.lookup_timeout_seconds = lookup_timeout_seconds
-
-
-class _FakeDnsBackend:
-    def __init__(self, cache: DnsCache) -> None:
-        self.cache = cache
 
 
 class _FakeProviderClientPool:
@@ -98,59 +71,6 @@ class _StubDB:
 
     async def fetch_one(self, *a: Any, **kw: Any) -> Any:
         return None
-
-
-# ---------------------------------------------------------------------------
-# DNS cache boundedness
-# ---------------------------------------------------------------------------
-
-
-class TestDnsCacheBoundedness:
-    """DNS cache respects configured max_entries and reports plateau data."""
-
-    def test_cache_never_exceeds_max_entries(self) -> None:
-        config = _FakeDnsConfig(max_entries=4)
-        cache = DnsCache(config)
-        for i in range(10):
-            cache._cache[
-                DnsCacheKey(hostname=f"host{i}.example.com", address_family=0)
-            ] = PositiveCacheEntry(
-                addresses=["127.0.0.1"],
-                expires_at=999999.0,
-                stale_until=999999.0,
-            )
-            if len(cache._cache) > config.max_entries:
-                cache._evict_if_needed()
-        assert len(cache._cache) <= config.max_entries
-
-    def test_snapshot_reports_max_entries_and_size(self) -> None:
-        config = _FakeDnsConfig(max_entries=32)
-        cache = DnsCache(config)
-        cache._cache[DnsCacheKey(hostname="a.example.com", address_family=0)] = (
-            PositiveCacheEntry(
-                addresses=["1.2.3.4"],
-                expires_at=999999.0,
-                stale_until=999999.0,
-            )
-        )
-        snap = cache.snapshot()
-        assert snap["max_entries"] == 32
-        assert snap["size"] == 1
-
-    def test_plateau_utilisation_percentage(self) -> None:
-        config = _FakeDnsConfig(max_entries=100)
-        cache = DnsCache(config)
-        for i in range(25):
-            cache._cache[DnsCacheKey(hostname=f"h{i}.com", address_family=0)] = (
-                PositiveCacheEntry(
-                    addresses=["127.0.0.1"],
-                    expires_at=999999.0,
-                    stale_until=999999.0,
-                )
-            )
-        backend = _FakeDnsBackend(cache)
-        assert backend.cache.snapshot()["size"] == 25
-        assert backend.cache.snapshot()["max_entries"] == 100
 
 
 # ---------------------------------------------------------------------------
@@ -243,36 +163,6 @@ class TestResourcePlateausSnapshot:
         }
         defaults.update(kwargs)
         return RuntimeMetricsService(**defaults)
-
-    def test_plateaus_section_present_with_no_backends(self) -> None:
-        svc = self._make_service()
-        probe_errors: list[str] = []
-        plateaus = svc._snapshot_resource_plateaus(probe_errors)
-        assert "resource_plateaus" not in plateaus  # key is nested
-        assert plateaus["dns_cache"]["enabled"] is False
-        assert plateaus["provider_client_pool"]["enabled"] is False
-        assert plateaus["stream_diagnostics"]["enabled"] is False
-
-    def test_plateaus_with_dns_backend(self) -> None:
-        config = _FakeDnsConfig(max_entries=128)
-        cache = DnsCache(config)
-        cache._cache[DnsCacheKey(hostname="a.com", address_family=0)] = (
-            PositiveCacheEntry(
-                addresses=["1.2.3.4"],
-                expires_at=999999.0,
-                stale_until=999999.0,
-            )
-        )
-        backend = _FakeDnsBackend(cache)
-        svc = self._make_service(dns_backend=backend)
-        probe_errors: list[str] = []
-        plateaus = svc._snapshot_resource_plateaus(probe_errors)
-        dns = plateaus["dns_cache"]
-        assert dns["enabled"] is True
-        assert dns["max_entries"] == 128
-        assert dns["current_size"] == 1
-        assert dns["utilisation_pct"] is not None
-        assert dns["utilisation_pct"] < 1.0
 
     def test_plateaus_with_client_pool(self) -> None:
         pool = _FakeProviderClientPool({"openai": 1, "anthropic": 2})

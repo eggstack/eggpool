@@ -16,7 +16,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Tracks requests, tokens, latency, errors, and cost provenance in SQLite (`provider_reported`, trusted local `derived`/`partial`, bounded `estimated`; reservation is advisory, not a floor)
 - Multi-page dashboard with 50+ themes, reliability, routing, and runtime views
 - Model metadata enrichment from provider catalogs, OpenRouter, Artificial Analysis, and Hugging Face
-- Provider-neutral request shaping: capability-gated native cache-boundary translation, cache reporting, safe suffix compression, policy-scoped overrides, optional synthetic cache controls, and advisory threshold tuning
+- Provider-neutral request shaping: capability-gated native cache-boundary translation, cache reporting, safe suffix compression, and policy-scoped overrides
 - Single-decode provider payload lifecycle: selected-provider transforms share one immutable client snapshot, generation-aware provider payload, and final serialization cache
 - Request preparation is allocation-conscious: canonical decoded context estimates are computed once when model limits are enforced, translated tool allowance reuses the shared structural estimator without per-tool encoding, and provider/trusted-proxy lookup sets are generation-owned
 - Thinking/reasoning capability-aware routing with configurable budget mapping
@@ -43,7 +43,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 The ordinary install is already a lightweight local profile: it binds to
 loopback, uses one SQLite worker, low-wear analytics buffering, 16 provider
 connections with 4 keepalives, and no model-info, routing-trace, readiness,
-backup, DNS-cache, or background PyPI task. `eggpool onboard` asks whether to
+backup, or background PyPI task. `eggpool onboard` asks whether to
 bind to the LAN; noninteractive onboarding keeps loopback. Optional features
 remain explicit configuration choices.
 
@@ -152,7 +152,7 @@ Use `eggpool connect` for interactive provider setup. See [docs/providers.md](do
 | `[routing]` | Routing strategy, retry limits, quota mode, same-tier fairness |
 | `[dashboard]` | Dashboard toggle, theme, refresh interval |
 | `[providers.*]` | Provider configs with accounts and routing priority |
-| `[network]` | Outbound transport, DNS cache |
+| `[network]` | Outbound transport and proxy settings |
 | `[model_info]` | Optional model metadata refresh, aliases, overrides, and external source settings |
 | `[update_checker]` | Optional in-process PyPI release probe for dashboard status |
 | `[transcoder]` | Protocol transcoding between OpenAI and Anthropic formats |
@@ -160,7 +160,6 @@ Use `eggpool connect` for interactive provider setup. See [docs/providers.md](do
 Fatal SQLite uncertainty closes the worker; the supervisor restarts it and
 startup reconciliation repairs durable leftovers.
 | `[compression]` | Request shaping: `observe`/`safe`, stable thresholds, transform toggles, advanced policy overrides |
-| `[cache]` | Synthetic cache controls (post-route, disabled by default, dry-run first) |
 | `[maintenance]` | Bounded maintenance budget, SQLite hygiene, contention guard |
 
 The catalog refresh is **non-destructive by default**: failed, empty, or partial upstream responses never silently de-pool a healthy account. Set `[models].catalog_withdrawal_policy` (`preserve_until_health` default, `confirmed_once`, `confirmed_twice`) to opt into destructive behavior on authoritative refreshes. See `architecture/README.md` § Catalog Refresh Semantics.
@@ -273,9 +272,9 @@ and matching backoff; a durable failure preserves the current suppression.
 
 ## Request shaping
 
-EggPool includes an opt-in, cache-preserving request-shaping stack. With shipped defaults the entire stack is **reporting-only**: no request body, header, or route is altered. Routing remains load-based — cache, compression, synthetic-cache, and tuning fields never enter `QuotaFairScorer`.
+EggPool includes an opt-in, cache-preserving request-shaping stack. With shipped defaults the entire stack is **reporting-only**: no request body, header, or route is altered. Routing remains load-based — cache and compression fields never enter `QuotaFairScorer`.
 
-The stack covers provider cache counters, request segmentation, native cache preservation, optional compression (observe → safe), optional synthetic cache annotations, and advisory tuning (`off`/`recommend` only). Explicit native cache boundaries take precedence over synthetic candidates. The dashboard `/cache` page provides operator summary cards and drill-down tables; advanced diagnostics stay collapsed unless a warning is present.
+The stack covers provider cache counters, request segmentation, native cache preservation, and optional compression (observe → safe). Native cache boundaries are preserved by the transcoder. The dashboard `/cache` page provides operator summary cards and drill-down tables; advanced diagnostics stay collapsed unless a warning is present.
 
 | Operator guide | [docs/cache-compression.md](docs/cache-compression.md) |
 |---|---|
@@ -304,8 +303,6 @@ The stack covers provider cache counters, request segmentation, native cache pre
 | `GET` | `/api/stats/compression-observability` | Observe-mode opportunity, per-policy roll-ups |
 | `GET` | `/api/stats/compression-runtime` | Safe-mode applied/fallback counts and latency |
 | `GET` | `/api/stats/compression-policies` | Per-policy roll-up table |
-| `GET` | `/api/stats/synthetic-cache-observability` | Synthetic cache candidate / applied / native-preserved counts |
-| `GET` | `/api/stats/compression-tuning` | Threshold tuning recommendations |
 | `GET` | `/api/stats/request-shaping` | Operator-facing request-shaping summary |
 | `GET` | `/api/stats/runtime` | Runtime metrics, routing guardrails, background task summaries, stream diagnostics, and the bounded `finalization_supervisor` snapshot |
 | `GET` | `/api/stats/summary` | Aggregate request stats (counts, tokens, cost, latency) |
@@ -314,7 +311,7 @@ The stack covers provider cache counters, request segmentation, native cache pre
 | `GET` | `/api/stats/routing/eligibility` | Per-account routing eligibility diagnostics |
 | `GET` | `/api/events` | Operational event log |
 | `GET` | `/api/model-info/{model_id}/matches` | Match evidence diagnostics for one model |
-| `GET` | `/api/network/diagnostics` | Network and DNS diagnostics |
+| `GET` | `/api/network/diagnostics` | Network and outbound-client diagnostics |
 
 When `[dashboard].enabled = true`, a multi-page dashboard is served at `/` with request stats, latency metrics, provider health, model-info detail pages, and more. Stats API available under `/api/stats/*`.
 

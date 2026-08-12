@@ -43,6 +43,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -265,6 +266,10 @@ async def _spawn_server(
 
     ``--config`` is a *group* option so it must precede the subcommand.
     """
+    runtime_path = Path(config_path).with_suffix(".runtime")
+    runtime_path.mkdir(parents=True, exist_ok=True)
+    runtime_path.chmod(0o700)
+    env["EGGPOOL_RUNTIME_DIR"] = str(runtime_path)
     return await asyncio.create_subprocess_exec(
         sys.executable,
         "-m",
@@ -1610,8 +1615,6 @@ def _write_d1_config(
     compression_enabled: bool = False,
     compression_mode: str = "observe",
     min_candidate_tokens: int = 2048,
-    synthetic_cache_enabled: bool = False,
-    synthetic_cache_dry_run: bool = True,
     collapse_models: bool = False,
     expose_mode: str = "union",
     persist_redacted_error_detail: bool = False,
@@ -1642,10 +1645,6 @@ prefer_native = {str(prefer_native).lower()}
 enabled = {str(compression_enabled).lower()}
 mode = "{compression_mode}"
 min_candidate_tokens = {min_candidate_tokens}
-
-[cache.synthetic_cache_controls]
-enabled = {str(synthetic_cache_enabled).lower()}
-dry_run = {str(synthetic_cache_dry_run).lower()}
 
 [security]
 persist_redacted_error_detail = {str(persist_redacted_error_detail).lower()}
@@ -1857,79 +1856,6 @@ async def test_d1_compression_enabled_live_reload(tmp_path: Any) -> None:
                 timeout=10.0,
             )
             assert r2.status_code == 200
-    finally:
-        await _terminate_server(proc)
-        upstream.shutdown()
-
-
-@pytest.mark.asyncio()
-async def test_d1_cache_synthetic_controls_live_reload(tmp_path: Any) -> None:
-    """``cache.synthetic_cache_controls.enabled`` applies live."""
-    state = _MockState()
-    upstream = _make_mock_server(state)
-    upstream_port = upstream.server_address[1]
-
-    server_port = _free_port()
-    config_path = str(tmp_path / "config.toml")
-    _write_d1_config(
-        config_path,
-        server_port=server_port,
-        upstream_port=upstream_port,
-        synthetic_cache_enabled=False,
-        synthetic_cache_dry_run=True,
-    )
-
-    state_dir = str(tmp_path / "state")
-    os.makedirs(state_dir, exist_ok=True)
-    env = os.environ.copy()
-    env["XDG_STATE_HOME"] = state_dir
-
-    proc = await _spawn_server(config_path, env)
-    try:
-        assert await _wait_healthy(server_port), "server did not become healthy"
-        original_pid = proc.pid
-        auth = {"Authorization": "Bearer test-rehash-key"}
-
-        async with httpx.AsyncClient() as client:
-            r = await client.post(
-                f"http://127.0.0.1:{server_port}/v1/chat/completions",
-                json={
-                    "model": "test-model",
-                    "messages": [{"role": "user", "content": "baseline"}],
-                },
-                headers=auth,
-                timeout=10.0,
-            )
-            assert r.status_code == 200
-
-        # Toggle synthetic cache controls on, with dry-run disabled (apply mode).
-        _write_d1_config(
-            config_path,
-            server_port=server_port,
-            upstream_port=upstream_port,
-            synthetic_cache_enabled=True,
-            synthetic_cache_dry_run=False,
-        )
-        exit_code, stdout, stderr = await _run_rehash(config_path, env)
-        assert exit_code == 0, (
-            f"rehash with synthetic_cache_controls failed: {stdout} {stderr}"
-        )
-        assert proc.pid == original_pid
-
-        # New request still succeeds on the new generation.
-        async with httpx.AsyncClient() as client:
-            r2 = await client.post(
-                f"http://127.0.0.1:{server_port}/v1/chat/completions",
-                json={
-                    "model": "test-model",
-                    "messages": [{"role": "user", "content": "annotated"}],
-                },
-                headers=auth,
-                timeout=10.0,
-            )
-            assert r2.status_code == 200, (
-                f"post-rehash request failed: {r2.status_code} {r2.text}"
-            )
     finally:
         await _terminate_server(proc)
         upstream.shutdown()

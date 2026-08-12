@@ -1561,7 +1561,6 @@ class TestMemoryDbGracefulDegradation:
             started_epoch=0,
             metrics_coalescer=MagicMock(),
             outbound_manager=MagicMock(),
-            dns_backend=MagicMock(),
             provider_client_pool=MagicMock(),
             dispatch_overhead_recorder=MagicMock(),
             local_pre_upstream_recorder=MagicMock(),

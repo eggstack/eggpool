@@ -43,12 +43,8 @@ candidate builder already constructs as generation-owned objects:
   ``transcoder_loss_policy``, ``protocol_safety_mode``, and
   ``http_status_overrides``. A change rebuilds the generation's
   ``TranscoderPolicy`` and rewires the new ``RequestCoordinator``.
-- **Compression policy** (``[compression]``, including
-  ``[compression.synthetic_cache_controls]``) — every field.
-  ``RuntimeCompressionPolicyOverrideRegistry`` is rebuilt per
-  generation so per-provider overrides take effect without restart.
-- **Cache synthesis controls** (``[cache]``,
-  ``[cache.synthetic_cache_controls]``).
+- **Compression policy** (``[compression]``) — every field. The
+  generation rebuild applies policy-scoped observe/safe transforms.
 - **Models subset** (``[models]``) — ``expose_mode``,
   ``collapse_models``, ``refresh_interval_s``, ``stale_after_s``,
   ``allow_stale_catalog``. Startup-only fields
@@ -156,7 +152,7 @@ the top of the named phase.
 | ``tests/integration/test_rehash_d3_acceptance.py`` | 10 | end-to-end acceptance (invalid TOML, server-side validation, digest mismatch, background convergence, provider removal under active stream, mixed diff rejection, concurrent burst, retirement timeout, lease drain, pending-request leak) |
 | ``tests/unit/test_reload_failure_injection.py`` | 12 | build/reconcile/publish failure injection via the three seams |
 | ``tests/unit/test_reload_security.py`` | 35 | secret redaction in events, CLI output, ``<old>``/``<new>`` tokens, raw credential patterns, ``sanitize_text_for_audit`` edge cases |
-| ``tests/unit/test_reload_inventory_audit.py`` | 5 | exhaustive audit of ``_FIELD_DISPOSITION`` coverage — caught and fixed ``dns_cache.ttl_seconds`` → ``network.dns_cache.positive_ttl_seconds`` and added 14 ``pricing.catalogs.*`` entries |
+| ``tests/unit/test_reload_inventory_audit.py`` | 5 | exhaustive audit of ``_FIELD_DISPOSITION`` coverage and provider catalog entries |
 | ``tests/perf/test_rehash_d3_performance.py`` | 3 | reload latency (p50 ≈ 480 ms, p95 ≈ 750 ms), memory-delta (skipped when ``psutil`` absent), concurrent-traffic p95 < 750 ms |
 | ``tests/integration/test_rehash_d3_operator_workflow.py`` | 6 | operator happy-path, restart-required reject, JSON contract, no-op, dead-server exit 3, concurrent busy |
 
@@ -164,10 +160,7 @@ the top of the named phase.
 ``tests/unit/test_reload_inventory_audit.py`` discovered two gaps
 closed in D3:
 
-1. ``dns_cache.ttl_seconds`` was missing from the inventory; the
-   actual config path is ``network.dns_cache.positive_ttl_seconds``
-   (plus six sibling fields under ``network.dns_cache``).
-2. ``pricing.catalogs`` was missing 14 sub-path entries
+1. ``pricing.catalogs`` was missing 14 sub-path entries
    (``pricing.catalogs.<provider>.*`` for ``opencode_zen`` and
    ``openrouter``).  Both are ``RESTART_REQUIRED``.
 
@@ -373,9 +366,8 @@ in `config_reload_policy.py`:
 
 The closure pass enables provider/account/routing/model-override
 families as `LIVE`. The D1 expansion extends the inventory to
-request-policy fields: the entire `[transcoder]`, `[compression]`,
-and `[cache]` blocks (including `[compression.synthetic_cache_controls]`
-and `[cache.synthetic_cache_controls]`), the runtime-tunable subset
+request-policy fields: the entire `[transcoder]` and `[compression]` blocks,
+and the runtime-tunable subset
 of `[models]` (`expose_mode`, `collapse_models`, `refresh_interval_s`,
 `stale_after_s`, `allow_stale_catalog`), and
 `security.persist_redacted_error_detail`. The D2 expansion adds

@@ -101,7 +101,6 @@ def _build_inventory_table() -> list[tuple[str, str, bool, str]]:
         "model_capabilities",
         "transcoder",
         "compression",
-        "cache",
         "models",
     }
 
@@ -168,7 +167,6 @@ EXPECTED_INVENTORY_SNAPSHOT: tuple[tuple[str, str, bool], ...] = (
     ("backup.interval_s", "live", False),
     ("backup.retain_count", "live", False),
     ("backup.startup_delay_s", "live", False),
-    ("cache", "live", False),
     ("compression", "live", False),
     ("dashboard.enabled", "restart_required", False),
     ("dashboard.public", "restart_required", False),
@@ -183,14 +181,6 @@ EXPECTED_INVENTORY_SNAPSHOT: tuple[tuple[str, str, bool], ...] = (
     ("database.synchronous", "restart_required", False),
     ("database.wal", "restart_required", False),
     ("database.worker_threads", "restart_required", False),
-    ("dns_cache.enabled", "restart_required", False),
-    ("dns_cache.lookup_timeout_seconds", "restart_required", False),
-    ("dns_cache.max_entries", "restart_required", False),
-    ("dns_cache.negative_ttl_seconds", "restart_required", False),
-    ("dns_cache.positive_ttl_seconds", "restart_required", False),
-    ("dns_cache.prefer_ipv6", "restart_required", False),
-    ("dns_cache.stale_if_error_seconds", "restart_required", False),
-    ("force_segmentation", "restart_required", False),
     ("limits.five_hour_microdollars", "restart_required", False),
     ("limits.monthly_microdollars", "restart_required", False),
     ("limits.weekly_microdollars", "restart_required", False),
@@ -233,13 +223,6 @@ EXPECTED_INVENTORY_SNAPSHOT: tuple[tuple[str, str, bool], ...] = (
     ("models.stale_after_s", "live", False),
     ("models.startup_refresh", "restart_required", False),
     ("network.connect_timeout_s", "restart_required", False),
-    ("network.dns_cache.enabled", "restart_required", False),
-    ("network.dns_cache.lookup_timeout_seconds", "restart_required", False),
-    ("network.dns_cache.max_entries", "restart_required", False),
-    ("network.dns_cache.negative_ttl_seconds", "restart_required", False),
-    ("network.dns_cache.positive_ttl_seconds", "restart_required", False),
-    ("network.dns_cache.prefer_ipv6", "restart_required", False),
-    ("network.dns_cache.stale_if_error_seconds", "restart_required", False),
     ("network.keepalive_expiry_s", "restart_required", False),
     ("network.max_connections", "restart_required", False),
     ("network.max_keepalive", "restart_required", False),
@@ -439,8 +422,7 @@ def test_schema_walk_matches_policy_inventory() -> None:
         orphan_policy.add(pp)
 
     # Known pre-existing mismatches between the schema and policy map.
-    # The dns_cache and pricing.catalogs gaps were closed in milestone D3;
-    # only the list-of-dict ``pricing.catalogs.aliases`` field remains
+    # Only the list-of-dict ``pricing.catalogs.aliases`` field remains
     # outside the policy map because list-of-dict entries cannot be
     # classified as scalar leaves — operators edit it through the same
     # RESTART_REQUIRED disposition the rest of the catalog inherits.
@@ -642,7 +624,7 @@ def test_inheritable_parent_audit() -> None:
 
     The documented inheritable parents (blanket LIVE for any child) are:
       providers, accounts, model_overrides, model_capabilities,
-      transcoder, compression, cache
+      transcoder, compression
 
     ``models`` is a special case: only registered sub-paths are LIVE.
     Unknown ``models.*`` children must return ``RESTART_REQUIRED``.
@@ -658,7 +640,6 @@ def test_inheritable_parent_audit() -> None:
         "model_capabilities",
         "transcoder",
         "compression",
-        "cache",
     }
 
     # Verify documented parents return LIVE for unknown children.
@@ -690,7 +671,6 @@ def test_inheritable_parent_audit() -> None:
         "security",
         "metrics",
         "backup",
-        "dns_cache",
         "network",
         "routing",
         "model_info",
@@ -758,13 +738,10 @@ _MADE_UP_PATHS: list[str] = [
     "backup.gpg_key",
     "backup.compression",
     "backup.exclude_patterns",
-    "dns_cache.eviction_policy",
-    "dns_cache.warm_on_start",
     "network.proxy_url",
     "network.user_agent",
     "network.tls_ca_bundle",
     "model_info.max_age_days",
-    "force_segmentation.enabled",
     "proxies.my_proxy.url",
     "pricing.catalogs.openrouter.api_key",
     "pricing.catalogs.opencode_zen.enabled",

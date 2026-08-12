@@ -114,7 +114,6 @@ class RuntimeMetricsService:
         started_epoch: float,
         metrics_coalescer: Any | None = None,  # noqa: ANN401
         outbound_manager: Any | None = None,  # noqa: ANN401
-        dns_backend: Any | None = None,  # noqa: ANN401
         provider_client_pool: Any | None = None,  # noqa: ANN401
         dispatch_overhead_recorder: Any | None = None,  # noqa: ANN401
         local_pre_upstream_recorder: Any | None = None,  # noqa: ANN401
@@ -142,7 +141,6 @@ class RuntimeMetricsService:
         self._started_epoch = started_epoch
         self._metrics_coalescer = metrics_coalescer
         self._outbound_manager = outbound_manager
-        self._dns_backend = dns_backend
         self._provider_client_pool = provider_client_pool
         self._dispatch_overhead_recorder = dispatch_overhead_recorder
         self._local_pre_upstream_recorder = local_pre_upstream_recorder
@@ -236,9 +234,6 @@ class RuntimeMetricsService:
         result["provider_client_pool"] = self._snapshot_provider_client_pool(
             probe_errors
         )
-
-        # DNS cache health
-        result["dns_cache"] = self._snapshot_dns_cache(probe_errors)
 
         # Thinking/reasoning observability counters
         result["thinking_metrics"] = await self._snapshot_thinking_metrics(probe_errors)
@@ -750,7 +745,6 @@ class RuntimeMetricsService:
                 "routing_uses_compression_metrics": False,
                 "routing_uses_stable_prefix_hash": False,
                 "routing_uses_compression_policy": False,
-                "routing_uses_compression_tuning": False,
                 "route_scorer_inputs": [
                     "health",
                     "quota",
@@ -785,16 +779,6 @@ class RuntimeMetricsService:
             _append_probe_error(
                 probe_errors, f"Provider client pool snapshot failed: {exc}"
             )
-            return {"error": str(exc)}
-
-    def _snapshot_dns_cache(self, probe_errors: list[str]) -> dict[str, Any]:
-        """Best-effort snapshot of the DNS cache state."""
-        if self._dns_backend is None:
-            return {"enabled": False}
-        try:
-            return {"enabled": True, **self._dns_backend.cache.snapshot()}
-        except Exception as exc:
-            _append_probe_error(probe_errors, f"DNS cache snapshot failed: {exc}")
             return {"error": str(exc)}
 
     async def _snapshot_thinking_metrics(
@@ -1251,38 +1235,12 @@ class RuntimeMetricsService:
     def _snapshot_resource_plateaus(self, probe_errors: list[str]) -> dict[str, Any]:
         """Best-effort boundedness checks for long-lived resources.
 
-        Surfaces DNS cache capacity, client pool provider counts, and
-        stream diagnostic ring-buffer sizes so operators can verify that
+        Surfaces client pool provider counts and stream diagnostic
+        ring-buffer sizes so operators can verify that
         bounded resources remain within expected limits.
         """
-        dns_plateau: dict[str, Any] = {"enabled": False}
         client_pool_plateau: dict[str, Any] = {"enabled": False}
         stream_diag_plateau: dict[str, Any] = {"enabled": False}
-
-        # DNS cache
-        if self._dns_backend is not None:
-            try:
-                cache = self._dns_backend.cache
-                snap = cache.snapshot()
-                max_entries = snap.get("max_entries")
-                current_size = snap.get("size", 0)
-                dns_plateau = {
-                    "enabled": True,
-                    "max_entries": max_entries,
-                    "current_size": current_size,
-                    "utilisation_pct": (
-                        round(current_size / max_entries * 100, 1)
-                        if max_entries
-                        else None
-                    ),
-                    "evictions_total": snap.get("evictions", 0),
-                }
-            except Exception as exc:
-                _append_probe_error(
-                    probe_errors,
-                    f"DNS cache plateau snapshot failed: {exc}",
-                )
-                dns_plateau = {"enabled": True, "error": str(exc)}
 
         # Provider client pool
         if self._provider_client_pool is not None:
@@ -1327,7 +1285,6 @@ class RuntimeMetricsService:
                 stream_diag_plateau = {"enabled": True, "error": str(exc)}
 
         return {
-            "dns_cache": dns_plateau,
             "provider_client_pool": client_pool_plateau,
             "stream_diagnostics": stream_diag_plateau,
         }

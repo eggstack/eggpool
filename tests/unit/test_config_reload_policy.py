@@ -107,7 +107,6 @@ class TestPolicyDefaults:
             # ``RequestCoordinator`` and ``CatalogService``.
             "transcoder",
             "compression",
-            "cache",
             # Request ingestion is generation-owned and can be changed by
             # ``eggpool rehash`` without rebuilding the listener.
             "server.max_request_body_bytes",
@@ -253,7 +252,6 @@ class TestDispositionCoverage:
             "security.cors_origins",
             "dashboard.enabled",
             "dashboard.public",
-            "dns_cache.enabled",
             "proxies",
             "models.startup_refresh",
             "models.catalog_withdrawal_policy",
@@ -314,11 +312,7 @@ class TestDispositionCoverage:
             "compression.min_candidate_tokens",
             "compression.transforms.fold_repeated_lines",
             "compression.header_override",
-            "compression.tuning.mode",
-            # Cache surface consumed via ``coordinator._cache_config``.
-            "cache.synthetic_cache_controls.enabled",
-            "cache.synthetic_cache_controls.dry_run",
-            "cache.synthetic_cache_controls.max_breakpoints",
+            "compression.placement",
             # Models surface consumed by generation-owned catalog + tasks.
             "models.refresh_interval_s",
             "models.expose_mode",
@@ -362,7 +356,6 @@ class TestDispositionCoverage:
         for path in (
             "transcoder.brand_new_field_not_yet_in_pydantic",
             "compression.brand_new_feature",
-            "cache.brand_new_knob",
             "providers.brand_new_subfield",
             "accounts.brand_new_subfield",
         ):
@@ -659,13 +652,10 @@ class TestComputeDiff:
             coordinator=MagicMock(),
             client_pool=MagicMock(),
             outbound_manager=MagicMock(),
-            dns_backend=None,
             health_manager=MagicMock(),
             cost_calculator=MagicMock(),
             transcoder_policy=MagicMock(),
             compression_policy=MagicMock(),
-            cache_config=MagicMock(),
-            compression_tuning_registry=MagicMock(),
             dispatch_overhead_recorder=MagicMock(),
             dispatch_span_recorder=MagicMock(),
             account_backoff_repo=MagicMock(),
@@ -1176,11 +1166,7 @@ LIVE_FIELD_CONSUMERS: dict[str, tuple[str, ...]] = {
     # generation-owned policy objects on the candidate
     # ``RequestCoordinator`` (see ``_build_candidate_generation``).
     "transcoder": ("RequestCoordinator._transcoder_policy",),
-    "compression": (
-        "RequestCoordinator._compression_policy",
-        "RequestCoordinator._compression_tuning_registry",
-    ),
-    "cache": ("RequestCoordinator._cache_config",),
+    "compression": ("RequestCoordinator._compression_policy",),
     "server.max_request_body_bytes": ("RequestBodyLimitMiddleware", "body_reader"),
     # Milestone D1: request-path-visible models subset.
     "models.refresh_interval_s": ("CatalogService", "TaskSupervisor"),
@@ -1281,8 +1267,6 @@ class TestFieldConsumerOwnership:
         for required in (
             "transcoder_policy",
             "compression_policy",
-            "cache_config",
-            "compression_tuning_registry",
         ):
             assert required in names, (
                 f"RuntimeGeneration must expose {required!r} as a generation-owned "

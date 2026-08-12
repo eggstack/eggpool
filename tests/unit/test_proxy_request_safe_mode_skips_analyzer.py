@@ -39,7 +39,6 @@ class _FakeCompressionPolicy:
 
         self.transforms = _Transforms()
         self.respect_cache_boundaries = True
-        self.compress_static_prefix = False
         self.placement = "suffix_only"
 
 
@@ -71,11 +70,10 @@ def _endpoint() -> ProxyEndpointConfig:
 
 
 def _minimal_config() -> Any:
-    """Build an :class:`AppConfig` with no providers / cache / force_segmentation.
+    """Build an :class:`AppConfig` with no providers.
 
     The proxy handler reads ``config.providers`` early (for the
-    provider-suffix parser) and ``config.cache.synthetic_cache_controls``
-    later.  Returning a config that omits both prevents
+    provider-suffix parser). Returning a config that omits providers prevents
     ``AttributeError`` without altering analyzer / applier behavior.
     """
     from eggpool.models.config import AppConfig
@@ -180,7 +178,6 @@ async def _invoke_analyzer_skip_for_mode(
             self.catalog = _FakeCatalog()
             self.transcoder_policy = None
             self.compression_policy = _FakeCompressionPolicy(mode=mode)
-            self.compression_tuning_registry = None
 
     class _FakeLease:
         def __init__(self, runtime: _FakeRuntime) -> None:
@@ -209,7 +206,6 @@ async def _invoke_analyzer_skip_for_mode(
             "runtime_manager": _FakeRuntimeManager(lease),
             "coordinator": coordinator,
             "compression_policy": _FakeCompressionPolicy(mode=mode),
-            "compression_tuning_registry": None,
             "dispatch_span_recorder": None,
             "config": config,
             "catalog": lease.runtime.catalog,

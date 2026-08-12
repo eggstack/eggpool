@@ -40,8 +40,7 @@ A fixture JSON file looks like this:
     "stable_prefix_contains": ["SYSTEM_POLICY_SENTINEL_DO_NOT_COMPRESS"],
     "volatile_suffix_contains": ["VOLATILE_LOG_LINE"],
     "compression_safe_applies": true,
-    "stable_prefix_content_hash_unchanged_after_compression": true,
-    "synthetic_cache_status": "disabled"
+    "stable_prefix_content_hash_unchanged_after_compression": true
   }
 }
 ```
@@ -94,14 +93,10 @@ compression runs. Generated content is byte-deterministic.
 | `compression_safe_does_not_apply` | `apply_safe_compression(...).applied == False` |
 | `stable_prefix_content_hash_unchanged_after_compression` | `pre_stable_prefix_hash == post_stable_prefix_hash` |
 | `stable_prefix_content_hash_known` | `result.stable_prefix_content_hash` is a 64-hex SHA-256 |
-| `synthetic_cache_status` | One of `disabled`, `dry_run`, `applied`, `no_candidates`, `policy_required`, `provider_unsupported`, `failed_fallback` |
-| `synthetic_cache_candidate_count` | Expected `plan.candidate_count` (int) |
 | `cache_stability_status_counts` | Dict of `CacheBoundaryKind -> int` |
-| `no_synthetic_cache_at_paths` | List of (path string) that MUST NOT be mutated by synthesis |
 | `transcoder_preserves_native_cache_control` | `result.transformed_body` carries the same native `cache_control` keys |
 | `transcoder_drops_unsupported_target` | `result.warnings` contains the relevant loss-warning kind |
 | `failed_fallback` | True iff the applier fell back to the original payload |
-| `dry_run_no_mutation` | Synthetic cache applies zero `cache_control` keys |
 | `expected_transforms_present` | Every named transform appears in `transforms_by_reason` |
 
 The test runner ignores any key it does not understand so fixtures can carry

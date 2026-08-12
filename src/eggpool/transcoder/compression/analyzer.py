@@ -90,8 +90,6 @@ REASON_BELOW_MIN_CANDIDATE_TOKENS = "below_min_candidate_tokens"
 REASON_BELOW_MIN_SAVINGS_TOKENS = "below_min_savings_tokens"
 #: Segment is protected and the policy suppresses it.
 REASON_PROTECTED_CACHE_BOUNDARY = "protected_cache_boundary"
-#: Stable-prefix region; not eligible when compress_static_prefix is false.
-REASON_STATIC_PREFIX = "static_prefix"
 #: Segment kind not allowed by ``placement`` policy.
 REASON_PLACEMENT = "placement"
 #: Analyzer latency budget was exhausted; analysis stopped.
@@ -550,27 +548,9 @@ def _filter_segment(
         reasons.append(REASON_PROTECTED_CACHE_BOUNDARY)
         return False, REASON_PROTECTED_CACHE_BOUNDARY, "cache_boundary", reasons
 
-    if segment.kind is SegmentKind.STABLE_PREFIX and not policy.compress_static_prefix:
-        reasons.append(REASON_STATIC_PREFIX)
-        return False, REASON_STATIC_PREFIX, "static_prefix", reasons
-
-    # Placement gating.  ``suffix_only`` is the only mode that
-    # actively classifies candidates; the other two values are
-    # accepted at config time for forward-compatibility and we
-    # conservatively suppress under the active Phase 4 placement.
-    if (
-        policy.placement == "suffix_only"
-        and segment.kind is not SegmentKind.VOLATILE_SUFFIX
-    ):
+    if segment.kind is not SegmentKind.VOLATILE_SUFFIX:
         reasons.append(REASON_PLACEMENT)
         return False, REASON_PLACEMENT, "placement", reasons
-    if (
-        policy.placement == "after_cache_boundary"
-        and segment.kind is SegmentKind.STABLE_PREFIX
-    ):
-        reasons.append(REASON_PLACEMENT)
-        return False, REASON_PLACEMENT, "placement", reasons
-
     return True, None, transform, reasons
 
 
@@ -895,7 +875,6 @@ __all__ = [
     "REASON_REPEATED_LINE_RUN",
     "REASON_SEARCH_COMPACTION",
     "REASON_STACK_TRACE_COMPACTION",
-    "REASON_STATIC_PREFIX",
     "REASON_TRANSFORM_DISABLED",
     "TransformLiteral",
     "analyze_compression",

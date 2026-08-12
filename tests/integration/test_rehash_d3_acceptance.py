@@ -21,6 +21,7 @@ import sys
 import threading
 import time
 from http.server import HTTPServer
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -48,6 +49,11 @@ async def _spawn_and_drain(
     env: dict[str, str],
 ) -> tuple[asyncio.subprocess.Process, asyncio.Task[None]]:
     """Spawn server with output suppressed to avoid pipe-buffer deadlocks."""
+    if not env.get("EGGPOOL_RUNTIME_DIR"):
+        runtime_path = Path(config_path).with_suffix(".runtime")
+        runtime_path.mkdir(parents=True, exist_ok=True)
+        runtime_path.chmod(0o700)
+        env["EGGPOOL_RUNTIME_DIR"] = str(runtime_path)
     proc = await asyncio.create_subprocess_exec(
         sys.executable,
         "-m",
@@ -157,7 +163,9 @@ def _get_control_socket_path(xdg_state_home: str | None = None) -> str:
     return str(runtime_dir() / "eggpool.sock")
 
 
-async def _wait_control_socket(*, timeout: float = 10.0) -> bool:
+async def _wait_control_socket(
+    *, runtime_path: Any = None, timeout: float = 10.0
+) -> bool:
     """Wait for the control socket file to exist on disk.
 
     The server's :class:`ControlServer` binds the socket before
@@ -174,7 +182,7 @@ async def _wait_control_socket(*, timeout: float = 10.0) -> bool:
 
     from eggpool.runtime_paths import runtime_dir
 
-    socket_path = runtime_dir() / "eggpool.sock"
+    socket_path = (runtime_path or runtime_dir()) / "eggpool.sock"
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if socket_path.exists():
@@ -437,7 +445,6 @@ async def test_d3_server_side_validation_rejection(tmp_path: Any) -> None:
 
     state_dir = str(tmp_path / "state")
     os.makedirs(state_dir, exist_ok=True)
-
     env = os.environ.copy()
     env["XDG_STATE_HOME"] = state_dir
 
@@ -543,19 +550,21 @@ async def test_d3_digest_mismatch_rejected_no_generation_change(
 
     state_dir = str(tmp_path / "state")
     os.makedirs(state_dir, exist_ok=True)
-
     env = os.environ.copy()
     env["XDG_STATE_HOME"] = state_dir
 
     proc, drain = await _spawn_and_drain(config_path, env)
     try:
         assert await _wait_healthy(server_port), "server did not become healthy"
+        runtime_path = Path(config_path).with_suffix(".runtime")
 
         async with httpx.AsyncClient() as client:
             gen_before = await _runtime_generation_id(client, server_port)
 
-        socket_path = _get_control_socket_path()
-        assert os.path.exists(socket_path), f"control socket not found at {socket_path}"
+        assert await _wait_control_socket(runtime_path=runtime_path), (
+            "control socket did not appear"
+        )
+        socket_path = str(runtime_path / "eggpool.sock")
 
         # Send a deliberately wrong digest directly to the control socket
         response = await _send_raw_control_message(
@@ -1035,7 +1044,10 @@ async def test_d3_concurrent_reload_burst_stays_healthy(tmp_path: Any) -> None:
     proc, drain = await _spawn_and_drain(config_path, env)
     try:
         assert await _wait_healthy(server_port), "server did not become healthy"
-        assert await _wait_control_socket(), "control socket did not appear"
+        runtime_path = Path(config_path).with_suffix(".runtime")
+        assert await _wait_control_socket(runtime_path=runtime_path), (
+            "control socket did not appear"
+        )
 
         # Warm-up: a single rehash proves the control socket + reload
         # pipeline works end-to-end.

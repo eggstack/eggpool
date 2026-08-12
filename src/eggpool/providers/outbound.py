@@ -20,10 +20,8 @@ import asyncio
 import contextlib
 import logging
 import warnings
-from collections.abc import AsyncIterable, AsyncIterator
 from typing import TYPE_CHECKING, Any
 
-import httpcore
 import httpx
 
 if TYPE_CHECKING:
@@ -53,23 +51,6 @@ def warn_adhoc_client_construction(location: str) -> None:
         )
 
 
-def default_network_backend() -> httpcore.AsyncNetworkBackend:
-    """Return the default httpcore async network backend."""
-    try:
-        from httpcore._backends.anyio import AnyIOBackend
-
-        return AnyIOBackend()
-    except ImportError:
-        pass
-    try:
-        from httpcore._backends.trio import TrioBackend
-
-        return TrioBackend()
-    except ImportError:
-        pass
-    raise RuntimeError("No supported async network backend found")
-
-
 class OutboundClientManager:
     """Manages a shared async HTTP client for non-provider network paths.
 
@@ -87,14 +68,11 @@ class OutboundClientManager:
     def __init__(
         self,
         config: NetworkConfig | None = None,
-        *,
-        network_backend: httpcore.AsyncNetworkBackend | None = None,
     ) -> None:
         global _manager_created
         _manager_created = True
 
         self._config = config
-        self._network_backend = network_backend
         self._client: httpx.AsyncClient | None = None
         self._build_count: int = 0
         self._request_count: int = 0
@@ -156,16 +134,9 @@ class OutboundClientManager:
             write=read_timeout,
             pool=connect_timeout,
         )
-        if self._network_backend is not None:
-            pool = httpcore.AsyncConnectionPool(
-                max_connections=max_connections,
-                max_keepalive_connections=max_keepalive,
-                keepalive_expiry=keepalive_expiry,
-                network_backend=self._network_backend,
-            )
-            base_transport: httpx.AsyncBaseTransport = HttpcoreTransport(pool)
-        else:
-            base_transport = httpx.AsyncHTTPTransport(limits=limits)
+        base_transport: httpx.AsyncBaseTransport = httpx.AsyncHTTPTransport(
+            limits=limits
+        )
         transport = MeteredAsyncTransport(base_transport, self)
         client = httpx.AsyncClient(
             timeout=timeout,
@@ -262,40 +233,6 @@ class OutboundClientManager:
             self._client = None
 
 
-class HttpcoreTransport(httpx.AsyncBaseTransport):
-    """Thin transport adapter wrapping an httpcore connection pool."""
-
-    def __init__(self, pool: httpcore.AsyncConnectionPool) -> None:
-        self._pool = pool
-
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        assert isinstance(request.stream, httpx.AsyncByteStream)
-        req = httpcore.Request(
-            method=request.method,
-            url=httpcore.URL(
-                scheme=request.url.raw_scheme,
-                host=request.url.raw_host,
-                port=request.url.port,
-                target=request.url.raw_path,
-            ),
-            headers=request.headers.raw,
-            content=request.stream,
-            extensions=request.extensions,
-        )
-        resp = await self._pool.handle_async_request(req)
-        assert isinstance(resp.stream, AsyncIterable)
-        extensions: dict[str, Any] = dict(resp.extensions)  # type: ignore[arg-type]
-        return httpx.Response(
-            status_code=resp.status,
-            headers=resp.headers,
-            stream=HttpcoreResponseStream(resp.stream),
-            extensions=extensions,
-        )
-
-    async def aclose(self) -> None:
-        await self._pool.aclose()
-
-
 class MeteredAsyncTransport(httpx.AsyncBaseTransport):
     """Transport wrapper that records shared outbound request diagnostics."""
 
@@ -319,19 +256,3 @@ class MeteredAsyncTransport(httpx.AsyncBaseTransport):
 
     async def aclose(self) -> None:
         await self._inner.aclose()
-
-
-class HttpcoreResponseStream(httpx.AsyncByteStream):
-    """Map httpcore response streams onto HTTPX response streams."""
-
-    def __init__(self, stream: AsyncIterable[bytes]) -> None:
-        self._stream = stream
-
-    async def __aiter__(self) -> AsyncIterator[bytes]:
-        async for part in self._stream:
-            yield part
-
-    async def aclose(self) -> None:
-        aclose = getattr(self._stream, "aclose", None)
-        if aclose is not None:
-            await aclose()

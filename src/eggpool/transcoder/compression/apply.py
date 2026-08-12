@@ -17,8 +17,7 @@ Key design choices:
 
 - **Safe**: transforms apply *only* to eligible ``volatile_suffix``
   segments.  Stable prefixes and cache-protected blocks are never
-  touched.  ``compress_static_prefix = true`` is required for
-  stable-prefix regions and requires explicit operator opt-in.
+  touched.
 - **Fail-closed**: if the post-compression stable-prefix hash
   changes unexpectedly, the original payload is returned unchanged
   with ``failed_fallback = True``.
@@ -254,7 +253,7 @@ def build_safe_mode_observation(result: CompressionResult) -> SafeModeObservatio
     the applier-derived :class:`CompressionResult` fields populated
     during the single safe-mode pass; the observation therefore
     reflects the *real* suppression decisions (transform disabled,
-    protected cache boundary, static-prefix without opt-in,
+    protected cache boundary,
     placement mismatch, empty segment, below min_candidate_tokens,
     below min_savings_tokens, latency budget, fail-closed) without
     paying for a second observe analyzer pass and without silently
@@ -747,7 +746,6 @@ def _filter_segment(
     from eggpool.transcoder.compression.analyzer import (
         REASON_PLACEMENT,
         REASON_PROTECTED_CACHE_BOUNDARY,
-        REASON_STATIC_PREFIX,
         REASON_TRANSFORM_DISABLED,
     )
 
@@ -760,20 +758,7 @@ def _filter_segment(
         reasons.append(REASON_PROTECTED_CACHE_BOUNDARY)
         return False, REASON_PROTECTED_CACHE_BOUNDARY, reasons
 
-    if segment.kind is SegmentKind.STABLE_PREFIX and not policy.compress_static_prefix:
-        reasons.append(REASON_STATIC_PREFIX)
-        return False, REASON_STATIC_PREFIX, reasons
-
-    if (
-        policy.placement == "suffix_only"
-        and segment.kind is not SegmentKind.VOLATILE_SUFFIX
-    ):
-        reasons.append(REASON_PLACEMENT)
-        return False, REASON_PLACEMENT, reasons
-    if (
-        policy.placement == "after_cache_boundary"
-        and segment.kind is SegmentKind.STABLE_PREFIX
-    ):
+    if segment.kind is not SegmentKind.VOLATILE_SUFFIX:
         reasons.append(REASON_PLACEMENT)
         return False, REASON_PLACEMENT, reasons
 
@@ -799,7 +784,7 @@ def apply_safe_compression(
     returns a no-op result (applied=False, transformed_payload=payload,
     all zeros).  When fail-closed triggers — the
     ``stable_prefix_content_hash`` differs between the original and
-    mutated payload (and ``compress_static_prefix`` is False), or any
+    mutated payload, or any
     unexpected exception is raised — returns the ORIGINAL payload with
     applied=False, failed_fallback=True, and a high-severity warning.
 
@@ -1120,7 +1105,7 @@ def _apply_safe_compression_impl(
     )
     stable_prefix_content_preserved = post_content_hash == pre_content_hash
 
-    if not stable_prefix_content_preserved and not policy.compress_static_prefix:
+    if not stable_prefix_content_preserved:
         warnings.append(REASON_PREFIX_HASH_MISMATCH)
         _bump(REASON_PREFIX_HASH_MISMATCH)
         logger.warning(

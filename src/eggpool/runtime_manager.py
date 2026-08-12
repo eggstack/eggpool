@@ -73,7 +73,6 @@ table and ``_RUNTIME_OWNED_APP_STATE_ATTRS``.
 - ``RequestCoordinator`` -- rebuilt; carries generation finalizer.
 - ``ProviderClientPool`` -- closed on retirement.
 - ``OutboundClientManager`` -- closed on retirement.
-- ``DnsNetworkBackend`` -- closed on retirement.
 - ``HealthManager`` -- rebuilt on config change.
 - ``CostCalculator`` -- rebuilt on config change.
 - ``CatalogService`` -- rebuilt on config change.
@@ -81,8 +80,7 @@ table and ``_RUNTIME_OWNED_APP_STATE_ATTRS``.
 - ``StatsService`` -- DB-backed; lifecycle matches gen.
 - ``AccountBackoffRepository`` -- DB-backed; lifecycle matches gen.
 - ``TaskSupervisor`` -- closed on retirement.
-- ``TranscoderPolicy`` / ``CompressionPolicy`` / ``CacheConfig``
-  / ``CompressionTuningRegistry`` -- frozen config snapshots.
+- ``TranscoderPolicy`` / ``CompressionPolicy`` -- frozen config snapshots.
 - ``DispatchOverheadRecorder`` / ``DispatchSpanRecorder``
   / ``StreamDiagnostics`` / ``RoutingTraceGuard`` -- per-generation
   telemetry/guardrails.
@@ -133,7 +131,6 @@ if TYPE_CHECKING:
     from eggpool.health.health_manager import HealthManager
     from eggpool.models.config import AppConfig
     from eggpool.providers.client_pool import ProviderClientPool
-    from eggpool.providers.dns_cache import DnsNetworkBackend
     from eggpool.providers.outbound import OutboundClientManager
     from eggpool.request.coordinator import RequestCoordinator
     from eggpool.request.finalization_job import RequestFinalizationSupervisor
@@ -515,12 +512,11 @@ class RuntimeGeneration:
       ``config`` (mirrors ``ConfigValidationResult.content_digest``).
     - ``registry``/``catalog``/``router``/``coordinator``: the request-path
       services that must be retired together.
-    - ``client_pool``/``outbound_manager``/``dns_backend``: network
+    - ``client_pool``/``outbound_manager``: network
       transport owned by this generation.
     - ``health_manager``/``cost_calculator``: generation-owned state
       containers.
-    - ``transcoder_policy``/``compression_policy``/
-      ``cache_config``/``compression_tuning_registry``: frozen
+    - ``transcoder_policy``/``compression_policy``: frozen
       configuration snapshots consumed during dispatch.
     - ``dispatch_overhead_recorder``/``dispatch_span_recorder``:
       per-generation telemetry recorders (the supervisor and runtime
@@ -543,13 +539,10 @@ class RuntimeGeneration:
     coordinator: RequestCoordinator
     client_pool: ProviderClientPool
     outbound_manager: OutboundClientManager | None
-    dns_backend: DnsNetworkBackend | None
     health_manager: HealthManager
     cost_calculator: CostCalculator
     transcoder_policy: Any
     compression_policy: Any
-    cache_config: Any
-    compression_tuning_registry: Any
     dispatch_overhead_recorder: DispatchOverheadRecorder
     dispatch_span_recorder: DispatchSpanRecorder | None
     account_backoff_repo: Any
@@ -1262,7 +1255,6 @@ class RuntimeManager:
         self._next_generation_id = 0
         self._shutdown_in_progress = False
         self._acquire_id = 0  # monotonic tie-breaker for lease diagnostics
-        self._synthetic_generation_digest: str = ""
         self._retirement_tasks: dict[int, asyncio.Task[None]] = {}  # Phase 3
         self._close_counts: dict[int, dict[str, int]] = {}
         self._pending_swap: PendingGenerationSwap | None = None
@@ -1910,17 +1902,6 @@ class RuntimeManager:
                     "Runtime generation %d outbound_manager.aclose failed",
                     generation.generation_id,
                 )
-        dns_backend = cast("Any | None", generation.dns_backend)
-        if dns_backend is not None:
-            record_close_attempt("dns_backend")
-            try:
-                await _safe_aclose(dns_backend)
-            except Exception as exc:  # noqa: BLE001
-                slot.last_close_error = f"dns_backend.aclose: {exc!r}"
-                logger.exception(
-                    "Runtime generation %d dns_backend.aclose failed",
-                    generation.generation_id,
-                )
 
     # -- shutdown -----------------------------------------------------------
 
@@ -2325,8 +2306,6 @@ class RuntimeGenerationBuilder:
             "cost_calculator",
             "transcoder_policy",
             "compression_policy",
-            "cache_config",
-            "compression_tuning_registry",
             "dispatch_overhead_recorder",
             "dispatch_span_recorder",
             "account_backoff_repo",
@@ -2369,13 +2348,10 @@ class RuntimeGenerationBuilder:
             coordinator=services["coordinator"],
             client_pool=services["client_pool"],
             outbound_manager=services["outbound_manager"],
-            dns_backend=services.get("dns_backend"),
             health_manager=services["health_manager"],
             cost_calculator=services["cost_calculator"],
             transcoder_policy=services["transcoder_policy"],
             compression_policy=services["compression_policy"],
-            cache_config=services["cache_config"],
-            compression_tuning_registry=services["compression_tuning_registry"],
             dispatch_overhead_recorder=services["dispatch_overhead_recorder"],
             dispatch_span_recorder=services["dispatch_span_recorder"],
             account_backoff_repo=services["account_backoff_repo"],
@@ -2484,11 +2460,8 @@ _RUNTIME_OWNED_APP_STATE_ATTRS: frozenset[str] = frozenset(
         "runtime_metrics",
         "transcoder_policy",
         "compression_policy",
-        "cache_config",
-        "compression_tuning_registry",
         "client_pool",
         "outbound_manager",
-        "dns_backend",
         "httpx_client",
     }
 )

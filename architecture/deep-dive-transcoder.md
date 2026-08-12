@@ -134,13 +134,9 @@ actually written. No cache key is synthesized or persisted.
 
 TTL labels are provider-specific and are never silently converted. OpenAI
 automatic caching and `prompt_cache_key` grouping are not source intent for
-Anthropic explicit cache boundaries. Native source boundaries suppress
-conflicting synthetic insertion, and synthetic insertion additionally requires
-the selected provider/model's verified Anthropic cache contract.
-
-### `transcoder/cache_synthesis.py` / `cache_synthesis_policy.py`
-
-Phase 9 synthetic cache controls: optional provider-bound `cache_control` annotations, disabled by default.
+Anthropic explicit cache boundaries. Native boundaries are preserved only when
+the selected target contract supports the mapping; EggPool does not synthesize
+additional cache controls.
 
 ### `transcoder/json_helpers.py`
 

@@ -32,7 +32,6 @@ from eggpool.transcoder.compression import (
     REASON_REPEATED_LINE_RUN,
     REASON_SEARCH_COMPACTION,
     REASON_STACK_TRACE_COMPACTION,
-    REASON_STATIC_PREFIX,
     REASON_TRANSFORM_DISABLED,
     CompressionConfig,
     analyze_compression,
@@ -159,7 +158,6 @@ def enabled_policy() -> CompressionConfig:
         mode="observe",
         placement="suffix_only",
         respect_cache_boundaries=True,
-        compress_static_prefix=False,
         min_candidate_tokens=0,
         min_savings_tokens=0,
         max_compression_latency_ms=100.0,
@@ -648,42 +646,6 @@ def test_end_to_end_observation_via_phase2_segmenter(
     assert observation.candidate_count > 0
     assert observation.reason_code_counts.get(REASON_PROTECTED_CACHE_BOUNDARY, 0) > 0
     assert observation.analyzer_latency_ms >= 0
-
-
-# ---------------------------------------------------------------------------
-# Static prefix flag (validate at config layer, never reachable
-# in observe mode)
-# ---------------------------------------------------------------------------
-
-
-def test_static_prefix_candidates_recorded_when_respect_cache_boundaries_false() -> (
-    None
-):
-    """With ``respect_cache_boundaries = false`` the cache-boundary
-    protection does not fire; ``stable_prefix`` is still suppressed
-    because ``compress_static_prefix`` defaults to ``false`` in
-    observe mode."""
-    policy = CompressionConfig(
-        enabled=True,
-        respect_cache_boundaries=False,
-        placement="suffix_only",
-    )
-    segmentation = _segmentation(
-        [
-            _seg(
-                kind=SegmentKind.STABLE_PREFIX,
-                source=SegmentSource.SYSTEM,
-                protected=True,
-                byte_length=4096,
-                estimated_tokens=1024,
-            )
-        ]
-    )
-    observation = analyze_compression(segmentation, policy=policy)
-    assert observation is not None
-    # Stable prefix is gated by compress_static_prefix (the
-    # cache-boundary flag is disabled by the test policy).
-    assert observation.reason_code_counts.get(REASON_STATIC_PREFIX, 0) > 0
 
 
 def test_end_to_end_observation_via_phase5_anthropic_tool_result(

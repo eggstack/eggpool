@@ -350,11 +350,9 @@ def compute_runtime_fingerprint(config: AppConfig) -> str:
         "security",
         "metrics",
         "backup",
-        "dns_cache",
         "network",
         "transcoder",
         "compression",
-        "cache",
         "model_info",
     ):
         section = getattr(config, section_name)
@@ -390,13 +388,6 @@ def compute_runtime_fingerprint(config: AppConfig) -> str:
     section = _canonical_section(
         "model_capabilities",
         {key: True for key in sorted(config.model_capabilities)},
-    )
-    if section is not None:
-        sections.append((section.name, section.entries))
-
-    section = _canonical_section(
-        "force_segmentation",
-        config.force_segmentation,
     )
     if section is not None:
         sections.append((section.name, section.entries))

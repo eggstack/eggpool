@@ -37,7 +37,6 @@ if TYPE_CHECKING:
     from eggpool.health.health_manager import HealthManager
     from eggpool.models.config import AppConfig
     from eggpool.providers.client_pool import ProviderClientPool
-    from eggpool.providers.dns_cache import DnsNetworkBackend
     from eggpool.providers.outbound import OutboundClientManager
     from eggpool.request.coordinator import RequestCoordinator
     from eggpool.request.finalization_job import RequestFinalizationSupervisor
@@ -79,13 +78,10 @@ class PreparedRuntimeGeneration:
     coordinator: RequestCoordinator
     client_pool: ProviderClientPool
     outbound_manager: OutboundClientManager | None
-    dns_backend: DnsNetworkBackend | None
     health_manager: HealthManager
     cost_calculator: CostCalculator
     transcoder_policy: Any
     compression_policy: Any
-    cache_config: Any
-    compression_tuning_registry: Any
     dispatch_overhead_recorder: DispatchOverheadRecorder
     dispatch_span_recorder: DispatchSpanRecorder | None
     account_backoff_repo: Any
@@ -156,8 +152,6 @@ class RuntimeGenerationFactory:
         PreparedRuntimeGeneration
             All generation-owned services ready for publication.
         """
-        import httpcore  # noqa: PLC0415, TC002
-
         from eggpool.accounts.registry import AccountRegistry  # noqa: PLC0415
         from eggpool.background import TaskSupervisor  # noqa: PLC0415
         from eggpool.catalog.pricing import (  # noqa: PLC0415
@@ -175,11 +169,7 @@ class RuntimeGenerationFactory:
         )
         from eggpool.health.health_manager import HealthManager  # noqa: PLC0415
         from eggpool.providers.client_pool import ProviderClientPool  # noqa: PLC0415
-        from eggpool.providers.dns_cache import DnsNetworkBackend  # noqa: PLC0415
-        from eggpool.providers.outbound import (  # noqa: PLC0415
-            OutboundClientManager,
-            default_network_backend,
-        )
+        from eggpool.providers.outbound import OutboundClientManager  # noqa: PLC0415
         from eggpool.request.coordinator import RequestCoordinator  # noqa: PLC0415
         from eggpool.request.stream_diagnostics import (
             get_stream_diagnostics,  # noqa: PLC0415
@@ -196,23 +186,8 @@ class RuntimeGenerationFactory:
         config.validate_optional_dependencies()
         _register = candidate.register_resource if candidate is not None else None
 
-        # -- DNS backend (generation-owned) --------------------------------
-        dns_backend: httpcore.AsyncNetworkBackend | None = None
-        if config.network.dns_cache.enabled:
-            dns_backend = DnsNetworkBackend(
-                config.network.dns_cache,
-                default_network_backend(),
-            )
-            if _register is not None:
-                _dns_close = getattr(dns_backend, "aclose", None)
-                if _dns_close is not None:
-                    _register("dns_backend", _dns_close)
-
         # -- Client pool (generation-owned) --------------------------------
-        client_pool = ProviderClientPool.from_app_config(
-            config,
-            network_backend=dns_backend,
-        )
+        client_pool = ProviderClientPool.from_app_config(config)
         if _register is not None:
             _register("client_pool", client_pool.close)
 
@@ -235,7 +210,6 @@ class RuntimeGenerationFactory:
         if needs_outbound_manager:
             outbound_manager = OutboundClientManager(
                 config=config.network,
-                network_backend=dns_backend,
             )
             if _register is not None:
                 _register("outbound_manager", outbound_manager.aclose)
@@ -248,17 +222,10 @@ class RuntimeGenerationFactory:
 
         # -- Transcoder / compression policy snapshots ---------------------
         transcoder_policy = config.transcoder
-        synthetic_cache_enabled = bool(config.cache.synthetic_cache_controls.enabled)
         shaping_policy_needed = bool(
-            config.compression.enabled
-            or config.compression.policies
-            or synthetic_cache_enabled
+            config.compression.enabled or config.compression.policies
         )
         compression_policy = config.compression if shaping_policy_needed else None
-        cache_config = config.cache if synthetic_cache_enabled else None
-        # Tuning is recommendation-only and never participates in request
-        # policy resolution; keep the generation slot inert.
-        compression_tuning_registry = None
 
         # -- Health manager (generation-owned) -----------------------------
         health_manager = HealthManager()
@@ -429,8 +396,6 @@ class RuntimeGenerationFactory:
             local_pre_upstream_recorder=local_pre_upstream_recorder,
             dispatch_span_recorder=dispatch_span_recorder,
             transcoder_policy=transcoder_policy,
-            cache_config=cache_config,
-            compression_tuning_registry=compression_tuning_registry,
             compression_policy=compression_policy,
             stream_diagnostics=stream_diagnostics,
             routing_trace_enabled=(
@@ -523,13 +488,10 @@ class RuntimeGenerationFactory:
             coordinator=coordinator,
             client_pool=client_pool,
             outbound_manager=outbound_manager,
-            dns_backend=dns_backend,
             health_manager=health_manager,
             cost_calculator=cost_calculator,
             transcoder_policy=transcoder_policy,
             compression_policy=compression_policy,
-            cache_config=cache_config,
-            compression_tuning_registry=compression_tuning_registry,
             dispatch_overhead_recorder=dispatch_overhead_recorder,
             dispatch_span_recorder=dispatch_span_recorder,
             account_backoff_repo=account_backoff_repo,
@@ -553,13 +515,10 @@ class RuntimeGenerationFactory:
             coordinator=coordinator,
             client_pool=client_pool,
             outbound_manager=outbound_manager,
-            dns_backend=dns_backend,
             health_manager=health_manager,
             cost_calculator=cost_calculator,
             transcoder_policy=transcoder_policy,
             compression_policy=compression_policy,
-            cache_config=cache_config,
-            compression_tuning_registry=compression_tuning_registry,
             dispatch_overhead_recorder=dispatch_overhead_recorder,
             dispatch_span_recorder=dispatch_span_recorder,
             account_backoff_repo=account_backoff_repo,

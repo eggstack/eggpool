@@ -95,10 +95,6 @@ def _service_graph_manifest(
             "supervisor": type(gen.supervisor).__name__,
             "transcoder_policy": type(gen.transcoder_policy).__name__,
             "compression_policy": type(gen.compression_policy).__name__,
-            "cache_config": type(gen.cache_config).__name__,
-            "compression_tuning_registry": type(
-                gen.compression_tuning_registry
-            ).__name__,
             "dispatch_overhead_recorder": type(gen.dispatch_overhead_recorder).__name__,
             "dispatch_span_recorder": type(gen.dispatch_span_recorder).__name__,
             "account_backoff_repo": type(gen.account_backoff_repo).__name__,
@@ -163,8 +159,6 @@ class TestFactoryParity:
             assert result.cost_calculator is not None
             assert result.transcoder_policy is not None
             assert result.compression_policy is None
-            assert result.cache_config is None
-            assert result.compression_tuning_registry is None
             assert result.dispatch_overhead_recorder is not None
             assert result.dispatch_span_recorder is None
             assert result.account_backoff_repo is not None
@@ -207,7 +201,6 @@ class TestFactoryParity:
             assert result.compression_policy is not None
             assert result.dispatch_span_recorder is not None
             assert result.local_pre_upstream_recorder is not None
-            assert result.compression_tuning_registry is None
         finally:
             if result is not None:
                 await result.client_pool.close()

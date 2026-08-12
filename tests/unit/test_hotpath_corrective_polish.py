@@ -51,7 +51,6 @@ def _noop_policy() -> CompressionConfig:
         mode="safe",
         placement="suffix_only",
         respect_cache_boundaries=True,
-        compress_static_prefix=False,
         min_candidate_tokens=0,
         min_savings_tokens=0,
         max_compression_latency_ms=200.0,

@@ -249,20 +249,6 @@ def _configured_compression_mode(config: AppConfig) -> str:
     return str(compression.mode)
 
 
-def _configured_synthetic_cache_mode(config: AppConfig) -> str:
-    synthetic = config.cache.synthetic_cache_controls
-    if not synthetic.enabled:
-        return "off"
-    return "dry_run" if synthetic.dry_run else "apply"
-
-
-def _configured_tuning_mode(config: AppConfig) -> str:
-    tuning = config.compression.tuning
-    if not tuning.enabled or tuning.mode == "off":
-        return "off"
-    return str(tuning.mode)
-
-
 def _observed_mode_from_counts(
     counts: dict[str, Any],
     *,
@@ -293,8 +279,6 @@ def _build_request_shaping_summary(
     compression_runtime: dict[str, Any] | None = None,
     compression_policy_stats: dict[str, Any] | None = None,
     cache_stability: dict[str, Any] | None = None,
-    synthetic_cache_summary: dict[str, Any] | None = None,
-    compression_tuning: dict[str, Any] | None = None,
     period: str = "24h",
 ) -> dict[str, Any]:
     cache_observability = cache_observability or {}
@@ -303,8 +287,6 @@ def _build_request_shaping_summary(
     compression_runtime = compression_runtime or {}
     compression_policy_stats = compression_policy_stats or {}
     cache_stability = cache_stability or {}
-    synthetic_cache_summary = synthetic_cache_summary or {}
-    compression_tuning = compression_tuning or {}
     routing_runtime = routing_runtime or {}
 
     cache_status = cast("dict[str, Any]", cache_observability.get("by_status") or {})
@@ -317,10 +299,6 @@ def _build_request_shaping_summary(
     compression_modes = cast(
         "dict[str, Any]",
         compression_runtime.get("mode_counts") or {},
-    )
-    synthetic_status_counts = cast(
-        "dict[str, Any]",
-        synthetic_cache_summary.get("status_counts") or {},
     )
     guardrails = cast("dict[str, Any]", routing_runtime.get("guardrails") or {})
     cache_safety = cast(
@@ -338,14 +316,6 @@ def _build_request_shaping_summary(
     segmentation_by_status = cast(
         "dict[str, Any]",
         canonical_request_segmentation.get("by_status") or {},
-    )
-    tuning_recommendations = cast(
-        "list[dict[str, Any]]",
-        compression_tuning.get("recommendations") or [],
-    )
-    tuning_overrides = cast(
-        "list[dict[str, Any]]",
-        compression_tuning.get("overrides") or [],
     )
     policy_counts = cast(
         "list[dict[str, Any]]",
@@ -381,12 +351,6 @@ def _build_request_shaping_summary(
                 compression_modes,
                 active_keys=("observe", "safe"),
             ),
-            "synthetic_cache": _configured_synthetic_cache_mode(config),
-            "synthetic_cache_observed": _observed_mode_from_counts(
-                synthetic_status_counts,
-                active_keys=("dry_run", "applied"),
-            ),
-            "tuning": _configured_tuning_mode(config),
             "routing": str(
                 guardrails.get("routing_cache_compression_mode", "reporting_only")
             ),
@@ -446,23 +410,6 @@ def _build_request_shaping_summary(
             "compressible_candidate_requests": int(
                 canonical_request_segmentation.get("compressible_candidate_requests", 0)
                 or 0
-            ),
-        },
-        "synthetic_cache": {
-            "dry_run_count": int(synthetic_cache_summary.get("dry_run_count", 0) or 0),
-            "applied_count": int(synthetic_cache_summary.get("applied_count", 0) or 0),
-            "candidate_count": int(
-                synthetic_cache_summary.get("candidate_count_total", 0) or 0
-            ),
-            "warning_count": int(
-                synthetic_cache_summary.get("warning_count_total", 0) or 0
-            ),
-        },
-        "tuning": {
-            "recommendation_count": len(tuning_recommendations),
-            "override_count": len(tuning_overrides),
-            "policy_window_count": len(
-                cast("dict[str, Any]", compression_tuning.get("windows") or {})
             ),
         },
         "guardrails": {
@@ -779,7 +726,6 @@ async def handle_overview(
         pending_health,
         cache_observability,
         compression_runtime,
-        synthetic_cache_summary,
         model_info_state,
     ) = await asyncio.gather(
         _await_dashboard_stage(
@@ -859,12 +805,6 @@ async def handle_overview(
         _await_dashboard_stage(
             telemetry,
             "overview",
-            "synthetic_cache_summary",
-            stats.get_synthetic_cache_summary(time_range.label, use_cache=True),
-        ),
-        _await_dashboard_stage(
-            telemetry,
-            "overview",
             "model_info_summaries",
             _get_model_info_summary_state(model_info_service),
         ),
@@ -897,7 +837,6 @@ async def handle_overview(
         request.app.state.config,
         cache_observability=cache_observability,
         compression_runtime=compression_runtime,
-        synthetic_cache_summary=synthetic_cache_summary,
         period=time_range.label,
     )
     enabled_count = sum(1 for a in accounts if a.get("account_enabled"))
@@ -2294,8 +2233,6 @@ async def handle_cache(
         compression_runtime,
         compression_policy_stats,
         cache_stability,
-        synthetic_cache_summary,
-        compression_tuning,
         snapshot,
     ) = await asyncio.gather(
         stats_service.get_cache_observability(period, use_cache=True),
@@ -2304,8 +2241,6 @@ async def handle_cache(
         stats_service.get_compression_runtime(period, use_cache=True),
         stats_service.get_compression_policy_stats(period, use_cache=True),
         stats_service.get_cache_stability(period, use_cache=True),
-        stats_service.get_synthetic_cache_summary(period, use_cache=True),
-        stats_service.get_compression_tuning_window_metrics(period, use_cache=True),
         runtime_metrics.snapshot(),
     )
     _gather_ms = (time.perf_counter() - _gather_start) * 1000
@@ -2317,8 +2252,6 @@ async def handle_cache(
             "compression_runtime",
             "compression_policy_stats",
             "cache_stability",
-            "synthetic_cache_summary",
-            "compression_tuning",
             "snapshot",
         ):
             telemetry.record_stage("cache", name, _gather_ms)
@@ -2331,8 +2264,6 @@ async def handle_cache(
         compression_runtime=compression_runtime,
         compression_policy_stats=compression_policy_stats,
         cache_stability=cache_stability,
-        synthetic_cache_summary=synthetic_cache_summary,
-        compression_tuning=compression_tuning,
         period=period or "24h",
     )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
@@ -2353,8 +2284,6 @@ async def handle_cache(
             compression_runtime=compression_runtime,
             compression_policy_stats=compression_policy_stats,
             cache_stability=cache_stability,
-            synthetic_cache_summary=synthetic_cache_summary,
-            compression_tuning=compression_tuning,
             request_shaping_summary=request_shaping_summary,
         )
     )
@@ -2415,53 +2344,6 @@ async def handle_compression_observability_json(request: Request) -> Response:
     return JSONResponse(content=data)
 
 
-async def handle_synthetic_cache_observability_json(request: Request) -> Response:
-    """Return synthetic cache controls aggregates as JSON.
-
-    Includes status counts, dry-run vs applied totals, candidate /
-    applied / warning counts, per-policy rollup, and a static
-    routing-separation notice.
-    """
-    _get_dashboard_config(request)
-    period = request.query_params.get("period", "24h")
-    stats_service = _get_stats(request)
-    data = await stats_service.get_synthetic_cache_summary(period)
-    return JSONResponse(
-        content={
-            "routing_separation_notice": (
-                "Synthetic cache controls. Reporting only -- not "
-                "consumed by QuotaFairScorer."
-            ),
-            **data,
-        }
-    )
-
-
-async def handle_compression_tuning_json(request: Request) -> Response:
-    """Return advisory threshold tuning aggregates as JSON.
-
-    Includes per-policy window metrics, persisted recommendation
-    rows, and the runtime override audit trail.  The static
-    routing-separation notice is appended at the top so dashboards
-    make the non-interference invariant obvious.
-    """
-    _get_dashboard_config(request)
-    period = request.query_params.get("period", "24h")
-    stats_service = _get_stats(request)
-    data = await stats_service.get_compression_tuning_window_metrics(period)
-    return JSONResponse(
-        content={
-            "routing_separation_notice": (
-                "Advisory threshold tuning. Reporting only -- not "
-                "consumed by QuotaFairScorer. Tuning never enables "
-                "stable-prefix compression and never inspects raw "
-                "prompt content."
-            ),
-            **data,
-        }
-    )
-
-
 async def handle_request_shaping_json(request: Request) -> Response:
     """Return the operator-facing request-shaping summary as JSON."""
     _get_dashboard_config(request)
@@ -2476,8 +2358,6 @@ async def handle_request_shaping_json(request: Request) -> Response:
         compression_runtime,
         compression_policy_stats,
         cache_stability,
-        synthetic_cache_summary,
-        compression_tuning,
         snapshot,
     ) = await asyncio.gather(
         stats_service.get_cache_observability(period),
@@ -2486,8 +2366,6 @@ async def handle_request_shaping_json(request: Request) -> Response:
         stats_service.get_compression_runtime(period),
         stats_service.get_compression_policy_stats(period),
         stats_service.get_cache_stability(period),
-        stats_service.get_synthetic_cache_summary(period),
-        stats_service.get_compression_tuning_window_metrics(period),
         runtime_metrics.snapshot(),
     )
     return JSONResponse(
@@ -2502,8 +2380,6 @@ async def handle_request_shaping_json(request: Request) -> Response:
             compression_runtime=compression_runtime,
             compression_policy_stats=compression_policy_stats,
             cache_stability=cache_stability,
-            synthetic_cache_summary=synthetic_cache_summary,
-            compression_tuning=compression_tuning,
             period=period,
         )
     )
@@ -2611,16 +2487,6 @@ def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:
             JSONResponse,
         ),
         ("/api/stats/cache-stability", handle_cache_stability_json, JSONResponse),
-        (
-            "/api/stats/synthetic-cache-observability",
-            handle_synthetic_cache_observability_json,
-            JSONResponse,
-        ),
-        (
-            "/api/stats/compression-tuning",
-            handle_compression_tuning_json,
-            JSONResponse,
-        ),
         ("/api/stats/request-shaping", handle_request_shaping_json, JSONResponse),
     ):
         app.add_api_route(
@@ -2642,7 +2508,6 @@ __all__ = [
     "handle_compression_observability_json",
     "handle_compression_policy_stats_json",
     "handle_compression_runtime_json",
-    "handle_compression_tuning_json",
     "handle_events",
     "handle_grouped_timeseries_json",
     "handle_latency",
@@ -2654,7 +2519,6 @@ __all__ = [
     "handle_reliability",
     "handle_routing",
     "handle_runtime",
-    "handle_synthetic_cache_observability_json",
     "handle_timeseries",
     "handle_timeseries_json",
     "handle_transcoding_stats_json",

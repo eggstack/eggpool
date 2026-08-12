@@ -122,7 +122,8 @@ Schema migration execution. Ordered SQL files in `db/schema/`.
 | `model_info_source_health` | Source health tracking |
 | `model_info_overrides` | Operator overrides |
 | `model_info_match_evidence` | Identity matching evidence |
-| `compression_tuning_recommendations` | Tuning recommendations |
+Historical tuning tables from removed optional features are retained only by
+their existing migrations; current runtime code does not write or expose them.
 
 ### Analytics index write policy
 

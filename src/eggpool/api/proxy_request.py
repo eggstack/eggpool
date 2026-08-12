@@ -634,7 +634,6 @@ async def _handle_proxy_request_inner(
     # effective (possibly policy-overridden) compression enabled/mode
     # instead of the raw global config.
     compression_policy = lease.runtime.compression_policy
-    runtime_override_registry: Any = lease.runtime.compression_tuning_registry
     with _span(span_recorder, SPAN_COMPRESSION_POLICY):
         resolved_compression_policy: Any = None
         if compression_policy is not None:
@@ -658,7 +657,6 @@ async def _handle_proxy_request_inner(
                 resolved_compression_policy = resolve_compression_policy(
                     compression_policy,
                     policy_ctx,
-                    runtime_override_registry=runtime_override_registry,
                 )
             except Exception:  # noqa: BLE001
                 logger.debug(
@@ -679,13 +677,10 @@ async def _handle_proxy_request_inner(
     )
 
     # Phase 2.1 (performance optimization): segmentation is skipped
-    # when no consumer needs it — compression observe/safe, synthetic
-    # cache controls, or cache observability.  The guard checks the
+    # when compression is disabled.  The guard checks the
     # effective compression policy resolved above rather than the
     # raw global config, so a scoped ``[[compression.policies]]``
     # override that enables observe/safe is correctly detected.
-    _cache_cfg = config.cache
-    _synthetic_enabled = _cache_cfg.synthetic_cache_controls.enabled
     _seg_compression_enabled = (
         getattr(effective_compression_policy, "enabled", False)
         if effective_compression_policy is not None
@@ -700,9 +695,7 @@ async def _handle_proxy_request_inner(
         config,
         compression_enabled=_seg_compression_enabled,
         compression_mode=_seg_compression_mode,
-        synthetic_cache_enabled=_synthetic_enabled,
         cache_observability_enabled=False,
-        force_segmentation=config.force_segmentation,
     )
 
     segmentation_result: Any = None
@@ -822,11 +815,6 @@ async def _handle_proxy_request_inner(
         if isinstance(transformed, dict):
             payload_for_rewrite = cast("dict[str, Any]", transformed)
 
-    # Phase 9 synthetic cache control is now applied post-route inside
-    # RequestCoordinator._apply_synthetic_cache_controls() so it operates on
-    # the provider-bound payload with full upstream protocol context.
-    synthetic_cache_result: Any = None
-
     # Phase 5: precompute thinking requirement and reservation tokens so the
     # coordinator does not have to reparse ``original_body`` (and re-classify)
     # inside the selection claim.  The canonical context estimate, when
@@ -900,7 +888,6 @@ async def _handle_proxy_request_inner(
             compression_observation=compression_observation,
             compression_result=compression_result,
             resolved_compression_policy=resolved_compression_policy,
-            synthetic_cache_result=synthetic_cache_result,
             prepared_transcode=prepared_transcode,
             estimated_reservation_tokens=precomputed_reservation_tokens,
             thinking_requirement=precomputed_thinking_req,

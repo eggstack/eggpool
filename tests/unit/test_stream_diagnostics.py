@@ -74,7 +74,6 @@ def _timeout_stream_coordinator() -> tuple[Any, Any, Any]:
         compression_observation=None,
         compression_result=None,
         resolved_compression_policy=None,
-        synthetic_cache_result=None,
         upstream_connect_ms=0,
         upstream_headers_ms=None,
         response_handoff=SimpleNamespace(started=False),

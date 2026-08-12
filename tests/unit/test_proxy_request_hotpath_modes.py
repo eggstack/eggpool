@@ -116,7 +116,6 @@ class _FakeCompressionPolicy:
         self.min_savings_tokens = 0
         self.transforms = _FakeTransforms()
         self.respect_cache_boundaries = True
-        self.compress_static_prefix = False
         self.placement = "suffix_only"
 
 
@@ -192,7 +191,6 @@ class _FakeRuntime:
         config: Any,
         immutable_request_state: Any,
         compression_policy: Any,
-        compression_tuning_registry: Any,
     ) -> None:
         self.coordinator = coordinator
         self.dispatch_span_recorder = recorder
@@ -201,7 +199,6 @@ class _FakeRuntime:
         self.catalog = _FakeCatalog()
         self.transcoder_policy = None
         self.compression_policy = compression_policy
-        self.compression_tuning_registry = compression_tuning_registry
 
 
 class _FakeLease:
@@ -307,7 +304,6 @@ def _build_state(
             local_credential_headers=frozenset(),
         ),
         compression_policy=compression_policy,
-        compression_tuning_registry=None,
     )
     lease = _FakeLease(runtime)
     state = type(
@@ -317,7 +313,6 @@ def _build_state(
             "runtime_manager": _FakeRuntimeManager(lease),
             "coordinator": coordinator,
             "compression_policy": compression_policy,
-            "compression_tuning_registry": None,
             "dispatch_span_recorder": recorder,
             "config": config,
             "catalog": runtime.catalog,

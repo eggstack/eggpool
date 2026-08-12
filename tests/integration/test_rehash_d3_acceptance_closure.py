@@ -37,6 +37,7 @@ import socket
 import sys
 import time
 from http.server import HTTPServer
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -47,9 +48,11 @@ from tests.integration.test_rehash_streaming_swap import (
     _make_mock_server,
     _MockState,
     _run_rehash,
-    _spawn_server,
     _terminate_server,
     _wait_healthy,
+)
+from tests.integration.test_rehash_streaming_swap import (
+    _spawn_server as _canonical_spawn_server,
 )
 
 auth: dict[str, str] = {"Authorization": "Bearer test-rehash-key"}
@@ -58,6 +61,18 @@ auth: dict[str, str] = {"Authorization": "Bearer test-rehash-key"}
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+async def _spawn_server(
+    config_path: str,
+    env: dict[str, str],
+) -> asyncio.subprocess.Process:
+    """Spawn a server with an isolated, safe control-socket directory."""
+    runtime_path = Path(config_path).with_suffix(".runtime")
+    runtime_path.mkdir(parents=True, exist_ok=True)
+    runtime_path.chmod(0o700)
+    env["EGGPOOL_RUNTIME_DIR"] = str(runtime_path)
+    return await _canonical_spawn_server(config_path, env)
 
 
 async def _runtime_generation_id(
@@ -225,10 +240,8 @@ def _make_env(tmp_path: Any) -> dict[str, str]:
     return env
 
 
-def _control_socket_path() -> str:
-    from eggpool.runtime_paths import runtime_dir
-
-    return str(runtime_dir() / "eggpool.sock")
+def _control_socket_path(runtime_path: Path) -> str:
+    return str(runtime_path / "eggpool.sock")
 
 
 # ---------------------------------------------------------------------------
@@ -329,7 +342,7 @@ async def test_d3_stale_candidate_publication_conflict_rejected(
 
         # Send a control-socket reload with a deliberately wrong digest
         # to prove the digest-mismatch path triggers a rejection.
-        socket_path = _control_socket_path()
+        socket_path = _control_socket_path(Path(config_path).with_suffix(".runtime"))
         assert os.path.exists(socket_path), f"control socket missing at {socket_path}"
 
         reader, writer = await asyncio.wait_for(

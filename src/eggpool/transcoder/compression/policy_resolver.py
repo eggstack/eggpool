@@ -12,8 +12,7 @@ match + merge algorithm:
    non-``None`` fields onto the current config.  Scalar fields
    are last-match-wins; ``transforms`` are merged field-by-field.
 4. Re-validate the merged config against the same safety rules
-   as the global config (static-prefix compression only in
-   ``safe`` mode and only with ``allow_static_prefix_override``).
+   as the global config.
 5. If validation fails, fall back to the global config and emit a
    warning.  Resolution never raises; malformed overrides are
    logged and the request is served with the safe default.
@@ -81,14 +80,6 @@ class ResolvedCompressionPolicy:
     records every override that fired (file order).  ``warnings``
     are bounded structured strings suitable for structured logs.
 
-    The ``synthetic_cache_overrides`` field carries the merged
-    Phase 9 synthetic cache-control knobs (``enabled``, ``dry_run``,
-    ``min_stable_tokens``, ``max_breakpoints``) when any policy
-    override provided them; ``None`` when the global
-    ``[cache] synthetic_cache_controls`` config should be honoured
-    unchanged.  This field is informational only — the cache-
-    synthesis module merges it with the global ``CacheConfig``
-    before running the candidate selector.
     """
 
     name: str
@@ -96,8 +87,6 @@ class ResolvedCompressionPolicy:
     config: CompressionConfig
     matched_policy_names: tuple[str, ...] = ()
     warnings: tuple[str, ...] = field(default_factory=tuple)
-    synthetic_cache_overrides: dict[str, Any] | None = None
-    runtime_override_metadata: dict[str, Any] = field(default_factory=dict[str, Any])
 
     def as_dict(self) -> dict[str, Any]:
         """Compact dict for the persistence layer.
@@ -118,19 +107,10 @@ class ResolvedCompressionPolicy:
             "config_respect_cache_boundaries": bool(
                 self.config.respect_cache_boundaries,
             ),
-            "config_compress_static_prefix": bool(
-                self.config.compress_static_prefix,
-            ),
             "config_min_candidate_tokens": int(self.config.min_candidate_tokens),
             "config_min_savings_tokens": int(self.config.min_savings_tokens),
             "config_max_compression_latency_ms": float(
                 self.config.max_compression_latency_ms,
-            ),
-            "runtime_override_active": bool(
-                self.runtime_override_metadata.get("active", False),
-            ),
-            "runtime_override_fields": dict(
-                self.runtime_override_metadata.get("applied_fields", {}),
             ),
         }
 
@@ -228,21 +208,6 @@ _OVERRIDE_ONLY_FIELDS = frozenset(
     },
 )
 
-# Phase 9: synthetic cache-control override fields. They ride on
-# CompressionPolicyOverride so we reuse the same match-and-merge
-# machinery, but they are overlay-only fields that live on a
-# different Pydantic model (SyntheticCacheControlsConfig).  The
-# resolver surfaces them via ``ResolvedCompressionPolicy.cache`` so
-# the cache-synthesis module can read the merged values.
-_SYNTHETIC_CACHE_OVERLAY_FIELDS = frozenset(
-    {
-        "synthetic_cache_controls",
-        "synthetic_cache_dry_run",
-        "synthetic_cache_min_stable_tokens",
-        "synthetic_cache_max_breakpoints",
-    },
-)
-
 
 def _overlay_config(
     base: CompressionConfig,
@@ -251,7 +216,7 @@ def _overlay_config(
     """Apply one override on top of a base config.
 
     Builds a fresh :class:`CompressionConfig` via ``model_validate``
-    so the merged model honours all validators (static-prefix
+    so the merged model honours all validators (cache-boundary
     safety guard, transform defaults, etc.).  ``None`` override
     fields keep the base value; non-``None`` overrides win.
     ``transforms`` is merged field-by-field: a non-``None``
@@ -261,8 +226,6 @@ def _overlay_config(
     Match fields are ``CompressionPolicyOverride``-only and are
     dropped before the dict is re-validated against
     :class:`CompressionConfig` (which uses ``extra='forbid'``).
-    Overlay knobs like ``compress_static_prefix`` are present on
-    both classes and are merged field-by-field.
     """
     base_dict_raw: Any = base.model_dump()
     override_dict_raw: Any = override.model_dump(exclude={"name"})
@@ -276,18 +239,6 @@ def _overlay_config(
     )
     for key, value in override_dict.items():
         if key in _OVERRIDE_ONLY_FIELDS:
-            continue
-        # Phase 9: synthetic cache-control override fields ride on
-        # CompressionPolicyOverride for match-and-merge reuse, but
-        # they live on a different Pydantic model
-        # (SyntheticCacheControlsConfig).  Skip them here so a
-        # policy row that contains ONLY synthetic-cache fields does
-        # not trigger a ValidationError against
-        # :class:`CompressionConfig` (which uses ``extra='forbid'``).
-        # The resolver surfaces them separately via
-        # ``synthetic_cache_overrides`` for the cache-synthesis
-        # module to read.
-        if key in _SYNTHETIC_CACHE_OVERLAY_FIELDS:
             continue
         if value is None:
             continue
@@ -316,7 +267,6 @@ def resolve_compression_policy(
     ctx: CompressionPolicyContext,
     *,
     overrides: list[CompressionPolicyOverride] | None = None,
-    runtime_override_registry: Any | None = None,
 ) -> ResolvedCompressionPolicy:
     """Pick and merge the compression policy for one request.
 
@@ -333,17 +283,11 @@ def resolve_compression_policy(
     site is ``resolve_compression_policy(base, ctx)``.  Tests can
     pass a curated list to exercise the merge order.
 
-    The Phase 9 synthetic cache overrides are extracted as a side
-    effect of the same pass and returned in the
-    ``synthetic_cache_overrides`` field so callers (the cache-
-    synthesis module) can read the merged values without
-    re-walking the override list.
     """
     candidates = overrides if overrides is not None else list(base.policies)
     warnings: list[str] = []
     matched_names: list[str] = []
     merged = base
-    synthetic_cache_overrides: dict[str, Any] = {}
     for override in candidates:
         if not _override_matches(override, ctx):
             continue
@@ -355,83 +299,22 @@ def resolve_compression_policy(
                 f"policy:{override.name}: overlay validation failed: {exc}; "
                 "ignored override and continued with the previous config",
             )
-        override_dict: Any = override.model_dump()
-        if not isinstance(override_dict, dict):
-            continue
-        override_dict_cast: dict[str, Any] = cast("dict[str, Any]", override_dict)
-        for key in _SYNTHETIC_CACHE_OVERLAY_FIELDS:
-            value = override_dict_cast.get(key)
-            if value is None:
-                continue
-            synthetic_cache_overrides[key] = value
-    synthetic_cache_overrides_out: dict[str, Any] | None = (
-        synthetic_cache_overrides or None
-    )
     if not matched_names:
-        runtime_metadata = {"active": False, "applied_fields": {}}
-        if runtime_override_registry is not None:
-            try:
-                from eggpool.transcoder.compression.tuning import (
-                    apply_runtime_override,
-                )
-
-                override = runtime_override_registry.lookup(GLOBAL_POLICY_NAME)
-                if override is not None:
-                    merged, runtime_metadata = apply_runtime_override(merged, override)
-                    if not runtime_metadata.get("active", False):
-                        warnings.append(
-                            f"runtime_override: registry entry for "
-                            f"policy:{GLOBAL_POLICY_NAME} could not be applied; "
-                            "falling back to the previous config",
-                        )
-            except Exception as exc:  # pragma: no cover - safety net
-                warnings.append(
-                    f"runtime_override: registry lookup failed: {exc}; "
-                    "falling back to the previous config",
-                )
         return ResolvedCompressionPolicy(
             name=GLOBAL_POLICY_NAME,
             source=GLOBAL_POLICY_SOURCE,
             config=merged,
             matched_policy_names=(),
             warnings=tuple(warnings),
-            synthetic_cache_overrides=synthetic_cache_overrides_out,
-            runtime_override_metadata=runtime_metadata,
         )
     last = matched_names[-1]
     source = f"policy:{last}"
-    runtime_metadata: dict[str, Any] = {"active": False, "applied_fields": {}}
-    if runtime_override_registry is not None:
-        try:
-            # Lazy import to keep the resolver import graph tiny for
-            # code paths that never use runtime overrides (Phase 6).
-            from eggpool.transcoder.compression.tuning import (
-                apply_runtime_override,
-            )
-
-            policy_name = last if matched_names else GLOBAL_POLICY_NAME
-            override = runtime_override_registry.lookup(policy_name)
-            if override is not None:
-                merged, runtime_metadata = apply_runtime_override(merged, override)
-                if not runtime_metadata.get("active", False):
-                    warnings.append(
-                        f"runtime_override: registry entry for "
-                        f"policy:{policy_name} could not be applied; "
-                        "falling back to the previous config",
-                    )
-        except Exception as exc:  # pragma: no cover - safety net
-            warnings.append(
-                f"runtime_override: registry lookup failed: {exc}; "
-                "falling back to the previous config",
-            )
     return ResolvedCompressionPolicy(
         name=last,
         source=source,
         config=merged,
         matched_policy_names=tuple(matched_names),
         warnings=tuple(warnings),
-        synthetic_cache_overrides=synthetic_cache_overrides_out,
-        runtime_override_metadata=runtime_metadata,
     )
 
 

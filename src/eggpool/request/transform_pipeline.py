@@ -2,7 +2,7 @@
 
 Workstream B of Plan 028.  The pipeline replaces ad-hoc transform
 calls scattered across ``_apply_selected_provider_transcode_adjustments``
-and ``_apply_synthetic_cache_controls`` with a single ordered sequence
+with a single ordered sequence
 of named transforms.  Both streaming and non-streaming paths execute
 the same pipeline so behaviour is guaranteed identical.
 
@@ -92,9 +92,7 @@ class TransformContext:
     thinking_intent: Any | None = None  # ThinkingRequestIntent
     thinking_capability: Any | None = None  # ThinkingCapability
     prepared_transcode: Any | None = None  # PreparedTranscode
-    cache_config: Any | None = None
     compression_policy: Any | None = None
-    compression_tuning_registry: Any | None = None
     resolved_compression_policy: Any | None = None
     selected_provider_id: str | None = None
     selected_provider_kind: str | None = None
@@ -286,42 +284,6 @@ def _make_thinking_control_adapter(
     )
 
 
-def _make_cache_synthesis_adapter(
-    coordinator: Any,
-) -> tuple[TransformMeta, TransformFnAny]:
-    """Return a pipeline transform wrapping synthetic cache controls."""
-
-    def _apply(request: ProviderBoundRequest, ctx: TransformContext) -> TransformResult:
-        selected = ctx.selected
-        context = ctx.proxy_context
-        if selected is None or context is None:
-            return TransformResult()
-        changed = coordinator._apply_synthetic_cache_controls(
-            context=context,
-            selected=selected,
-            request=request,
-        )
-        return TransformResult(
-            decision=(
-                TransformDecision.MUTATED if changed else TransformDecision.PASSTHROUGH
-            ),
-            category="cache_synthesis",
-        )
-
-    return (
-        TransformMeta(
-            name="synthetic_cache_controls",
-            requires_decoded_payload=True,
-            can_return_unchanged=True,
-            invalidates_segmentation=True,
-            changes_token_estimates=False,
-            may_fail_request=False,
-            diagnostic_category="cache_synthesis",
-        ),
-        _apply,
-    )
-
-
 def build_provider_transforms(
     coordinator: Any,
 ) -> list[tuple[TransformMeta, TransformFnAny]]:
@@ -333,7 +295,6 @@ def build_provider_transforms(
     """
     return [
         _make_thinking_control_adapter(coordinator),
-        _make_cache_synthesis_adapter(coordinator),
         _make_stream_options_adapter(),
     ]
 
