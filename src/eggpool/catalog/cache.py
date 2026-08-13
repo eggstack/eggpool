@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import datetime as _dt
 import json
 import logging
 import time
@@ -10,6 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, cast
 
+from eggpool.catalog._time import ts_to_unix
 from eggpool.catalog.capabilities import (
     aggregate_model_capabilities,
     apply_capability_overrides,
@@ -74,34 +74,6 @@ def parse_model_id(
     provider.
     """
     return parse_model_provider(model_id, known_providers)
-
-
-def _ts_to_unix(value: object) -> float:
-    """Convert a DB TIMESTAMP string (or numeric) to a Unix float.
-
-    Returns 0.0 for ``None`` or unparseable values so cache loads never
-    fail on a malformed timestamp. Naive datetime strings are treated
-    as UTC to match SQLite's ``CURRENT_TIMESTAMP`` convention.
-    """
-    if value is None:
-        return 0.0
-    if isinstance(value, (int, float)):
-        return float(value)
-    text = str(value).strip()
-    if not text:
-        return 0.0
-    try:
-        dt = _dt.datetime.fromisoformat(text)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=_dt.UTC)
-        return dt.timestamp()
-    except ValueError:
-        try:
-            dt = _dt.datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
-            dt = dt.replace(tzinfo=_dt.UTC)
-            return dt.timestamp()
-        except ValueError:
-            return 0.0
 
 
 def _parse_metadata_field(
@@ -1258,8 +1230,8 @@ class ModelCatalogCache:
                 capabilities=caps,
                 source_metadata=meta,
                 protocol_source=row["protocol_source"],
-                first_seen_at=_ts_to_unix(row["first_seen_at"]),
-                last_seen_at=_ts_to_unix(row["last_seen_at"]),
+                first_seen_at=ts_to_unix(row["first_seen_at"]),
+                last_seen_at=ts_to_unix(row["last_seen_at"]),
             )
             loaded += 1
 
@@ -1287,8 +1259,8 @@ class ModelCatalogCache:
                     "protocol_source": row["protocol_source"],
                     "capabilities": caps,
                     "source_metadata": meta,
-                    "first_seen_at": _ts_to_unix(row["first_seen_at"]),
-                    "last_seen_at": _ts_to_unix(row["last_seen_at"]),
+                    "first_seen_at": ts_to_unix(row["first_seen_at"]),
+                    "last_seen_at": ts_to_unix(row["last_seen_at"]),
                 },
             )
 
@@ -1320,7 +1292,7 @@ class ModelCatalogCache:
         for row in refresh_rows:
             self.set_account_refresh_time(
                 str(row["name"]),
-                _ts_to_unix(row["last_successful_refresh_at"]),
+                ts_to_unix(row["last_successful_refresh_at"]),
                 durable=True,
             )
 

@@ -18,7 +18,6 @@ from __future__ import annotations
 import json
 import os
 import signal
-import socket
 import subprocess
 import sys
 import time
@@ -27,6 +26,8 @@ from typing import TYPE_CHECKING
 
 import httpx
 import pytest
+
+from tests.integration.test_rehash_streaming_swap import _free_port
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -70,12 +71,6 @@ def _start_mock_upstream() -> HTTPServer:
     thread = __import__("threading").Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server
-
-
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 def _config_body(upstream_port: int, server_port: int, db_path: str) -> str:

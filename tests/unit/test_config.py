@@ -568,6 +568,12 @@ def test_config_example_validates() -> None:
     assert len(config.all_accounts()) == 0
 
 
+def test_minimal_config_fallback_binds_to_loopback() -> None:
+    from eggpool.config import _MINIMAL_CONFIG
+
+    assert 'host = "127.0.0.1"' in _MINIMAL_CONFIG
+
+
 def test_file_backed_config_rejects_ephemeral_server_port(tmp_path: Path) -> None:
     config_file = tmp_path / "ephemeral.toml"
     config_file.write_text("[server]\nport = 0\n", encoding="utf-8")

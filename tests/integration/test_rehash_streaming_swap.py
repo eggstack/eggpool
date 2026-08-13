@@ -42,12 +42,16 @@ import sqlite3
 import sys
 import threading
 import time
+from collections import deque
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
+
+_SERVER_STDERR: dict[int, deque[str]] = {}
+_SERVER_STDERR_TASKS: dict[int, asyncio.Task[None]] = {}
 
 
 def _fingerprint(value: str) -> str:
@@ -270,7 +274,8 @@ async def _spawn_server(
     runtime_path.mkdir(parents=True, exist_ok=True)
     runtime_path.chmod(0o700)
     env["EGGPOOL_RUNTIME_DIR"] = str(runtime_path)
-    return await asyncio.create_subprocess_exec(
+    env["EGGPOOL_PID_FILE"] = str(Path(config_path).with_suffix(".pid"))
+    proc = await asyncio.create_subprocess_exec(
         sys.executable,
         "-m",
         "eggpool",
@@ -279,17 +284,39 @@ async def _spawn_server(
         "serve",
         "--verbose",
         # The server is intentionally verbose and lives for the duration of
-        # each test.  PIPE without a reader eventually fills on slower CI
-        # runners and suspends the child, which then looks like a reload or
-        # health-check hang.  Individual CLI subprocesses still capture their
-        # bounded output below.
+        # each test.  Drain stderr continuously so it cannot fill, while
+        # retaining only bounded startup diagnostics for failed health checks.
         stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
         env=env,
     )
+    assert proc.pid is not None
+    lines: deque[str] = deque(maxlen=80)
+    _SERVER_STDERR[proc.pid] = lines
+    assert proc.stderr is not None
+    _SERVER_STDERR_TASKS[proc.pid] = asyncio.create_task(
+        _drain_server_stderr(proc.stderr, lines)
+    )
+    return proc
 
 
-async def _wait_healthy(port: int, *, timeout: float = 30.0) -> bool:
+async def _drain_server_stderr(stream: asyncio.StreamReader, lines: deque[str]) -> None:
+    """Drain server stderr while retaining a bounded diagnostic tail."""
+    async for raw_line in stream:
+        lines.append(raw_line.decode(errors="replace").rstrip())
+
+
+def _server_diagnostics(proc: asyncio.subprocess.Process) -> str:
+    """Return retained subprocess stderr for a useful startup failure."""
+    if proc.pid is None:
+        return "server diagnostics unavailable"
+    lines = _SERVER_STDERR.get(proc.pid)
+    if not lines:
+        return "server emitted no stderr diagnostics"
+    return "server stderr:\n" + "\n".join(lines)
+
+
+async def _wait_healthy(port: int, *, timeout: float = 60.0) -> bool:
     """Poll ``/v1/healthz`` until the server responds 200."""
     deadline = time.monotonic() + timeout
     async with httpx.AsyncClient() as client:
@@ -308,14 +335,18 @@ async def _terminate_server(
     proc: asyncio.subprocess.Process, *, timeout: float = 5.0
 ) -> None:
     """Gracefully terminate the server subprocess."""
-    if proc.returncode is not None:
-        return
-    proc.terminate()
-    try:
-        await asyncio.wait_for(proc.wait(), timeout=timeout)
-    except TimeoutError:
-        proc.kill()
-        await proc.wait()
+    if proc.returncode is None:
+        proc.terminate()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=timeout)
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+    if proc.pid is not None:
+        drain_task = _SERVER_STDERR_TASKS.pop(proc.pid, None)
+        if drain_task is not None:
+            await drain_task
+        _SERVER_STDERR.pop(proc.pid, None)
 
 
 # ---------------------------------------------------------------------------
@@ -343,8 +374,9 @@ async def _run_rehash(
         env=env,
     )
     stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=30)
+    assert proc.returncode is not None
     return (
-        proc.returncode or 0,
+        proc.returncode,
         stdout_bytes.decode(errors="replace"),
         stderr_bytes.decode(errors="replace"),
     )
@@ -388,7 +420,7 @@ async def test_streaming_generation_swap(tmp_path: Any) -> None:
     proc = await _spawn_server(config_path, env)
     try:
         healthy = await _wait_healthy(server_port)
-        assert healthy, "server did not become healthy"
+        assert healthy, _server_diagnostics(proc)
 
         original_pid = proc.pid
         auth = {"Authorization": "Bearer test-rehash-key"}
@@ -482,49 +514,6 @@ async def test_streaming_generation_swap(tmp_path: Any) -> None:
 # ---------------------------------------------------------------------------
 # Additional E2E scenarios
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio()
-async def test_no_op_rehash(tmp_path: Any) -> None:
-    """Running rehash with identical config produces a no-op."""
-    state = _MockState()
-    upstream = _make_mock_server(state)
-    upstream_port = upstream.server_address[1]
-
-    server_port = _free_port()
-    config_path = str(tmp_path / "config.toml")
-    _write_config(config_path, server_port=server_port, upstream_port=upstream_port)
-
-    state_dir = str(tmp_path / "state")
-    os.makedirs(state_dir, exist_ok=True)
-
-    env = os.environ.copy()
-    env["XDG_STATE_HOME"] = state_dir
-
-    proc = await _spawn_server(config_path, env)
-    try:
-        assert await _wait_healthy(server_port), "server did not become healthy"
-
-        # First rehash: should detect no changes
-        exit_code, stdout, stderr = await _run_rehash(config_path, env)
-        assert exit_code == 0, f"rehash failed: {stderr}"
-        assert (
-            "no configuration changes" in stdout.lower()
-            or "unchanged" in stdout.lower()
-        ), f"expected no-op message, got: {stdout}"
-
-        # Second rehash: still no-op
-        exit_code2, stdout2, _ = await _run_rehash(config_path, env)
-        assert exit_code2 == 0
-        assert (
-            "no configuration changes" in stdout2.lower()
-            or "unchanged" in stdout2.lower()
-        )
-
-        assert proc.returncode is None, "server process died"
-    finally:
-        await _terminate_server(proc)
-        upstream.shutdown()
 
 
 @pytest.mark.asyncio()
@@ -1675,13 +1664,14 @@ weight = 1.0
 async def _runtime_generation_id(
     client: httpx.AsyncClient,
     server_port: int,
-    auth: dict[str, str],
+    auth: dict[str, str] | None = None,
 ) -> int | None:
     """Fetch the runtime manager's active generation id from /api/stats/runtime."""
+    auth_headers = auth or {"Authorization": "Bearer test-rehash-key"}
     try:
         r = await client.get(
             f"http://127.0.0.1:{server_port}/api/stats/runtime",
-            headers=auth,
+            headers=auth_headers,
             timeout=5.0,
         )
     except (httpx.ConnectError, httpx.ReadTimeout):

@@ -10,6 +10,7 @@ about hit rates without ambiguity.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import replace
 
 from eggpool.proxy.normalized_usage import (
@@ -56,6 +57,7 @@ def test_openai_reports_cache_status_when_present() -> None:
     assert result.cache_counter_status is CacheCounterStatus.REPORTED
     assert result.cached_input_tokens == 80
     assert result.input_tokens == 100
+    assert result.total_tokens == 150
     assert result.output_tokens == 50
     assert result.total_tokens == 150
 
@@ -153,6 +155,7 @@ def test_anthropic_reports_cache_read_and_creation() -> None:
     assert result.cache_read_input_tokens == 120
     assert result.cache_creation_input_tokens == 30
     assert result.cache_write_input_tokens == 30
+    assert result.total_tokens == 425
     assert result.input_tokens == 200
     assert result.output_tokens == 75
 
@@ -279,8 +282,9 @@ def test_stream_result_zero_values_with_no_cache_keys_marks_not_reported() -> No
 # ---------------------------------------------------------------------------
 
 
-def test_emit_parse_failure_log_is_safe_to_call() -> None:
+def test_emit_parse_failure_log_is_safe_to_call(caplog) -> None:
     """The logger must never raise even when the payload is malformed."""
+    caplog.set_level(logging.DEBUG)
     diag = UsageParseDiag(
         provider_id="openai",
         model_id="gpt-4",
@@ -311,6 +315,7 @@ def test_emit_parse_failure_log_is_safe_to_call() -> None:
         reason="something_else",
     )
     emit_parse_failure_log(diag_preserved)
+    assert "usage_parse_unknown_reason" in caplog.text
 
 
 # ---------------------------------------------------------------------------

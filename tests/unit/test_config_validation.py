@@ -62,6 +62,25 @@ class TestValidConfig:
         assert len(result.runtime_fingerprint) == 64
         assert result.warnings == ()
 
+    def test_fingerprint_failure_is_logged(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        path = _write_config(tmp_path, _valid_body())
+
+        def fail(_config: object) -> str:
+            raise RuntimeError("fingerprint test failure")
+
+        monkeypatch.setattr(
+            "eggpool.config_validation.compute_runtime_fingerprint", fail
+        )
+        result = validate_config_file(path)
+
+        assert result.runtime_fingerprint == ""
+        assert "runtime fingerprint computation failed" in caplog.text
+
     def test_fingerprint_is_deterministic(self, tmp_path: Path) -> None:
         path = _write_config(tmp_path, _valid_body())
         first = validate_config_file(path)

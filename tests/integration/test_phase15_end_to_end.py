@@ -785,7 +785,7 @@ class TestHealthConsistency:
         assert not state.is_eligible()
 
         # Wait for cooldown to expire
-        time.sleep(0.2)
+        await asyncio.sleep(0.2)
 
         # is_account_healthy calls _refresh_transient_state internally
         assert hm.is_account_healthy("acct-a")
@@ -804,7 +804,7 @@ class TestHealthConsistency:
         state.cooldown_until = time.time() + 0.1
 
         # Wait for cooldown to expire
-        time.sleep(0.2)
+        await asyncio.sleep(0.2)
 
         # Record success
         hm.record_success("acct-a", "gpt-4")

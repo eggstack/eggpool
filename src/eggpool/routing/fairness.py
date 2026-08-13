@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -80,7 +81,7 @@ class FairnessRotor:
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
-        self._positions: dict[str, int] = {}
+        self._positions: OrderedDict[str, int] = OrderedDict()
 
     async def rotate(
         self,
@@ -123,9 +124,9 @@ class FairnessRotor:
         sorted_cands = sorted(candidates, key=lambda pair: pair[0].name)
 
         async with self._lock:
-            position = self._positions.get(key_str, 0)
+            position = self._positions.pop(key_str, 0)
             if len(self._positions) >= _ROTOR_HARD_CAP:
-                self._positions.clear()
+                self._positions.popitem(last=False)
             self._positions[key_str] = (position + 1) % n
 
         start = position % n

@@ -26,6 +26,7 @@ restart-required; the policy lives in
 from __future__ import annotations
 
 import hashlib
+import logging
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -43,6 +44,8 @@ if TYPE_CHECKING:
 
 
 _VALIDATION_ERROR_PREFIX: Final = "configuration validation failed"
+
+logger = logging.getLogger(__name__)
 
 
 class ConfigValidationError(AggregatorError):
@@ -657,7 +660,8 @@ def validate_config_file(path: str | Path) -> ConfigValidationResult:
 
     try:
         runtime_fingerprint = compute_runtime_fingerprint(config)
-    except Exception:
+    except Exception as exc:
+        logger.warning("runtime fingerprint computation failed: %s", type(exc).__name__)
         runtime_fingerprint = ""
 
     return ConfigValidationResult(

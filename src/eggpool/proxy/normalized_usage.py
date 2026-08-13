@@ -423,9 +423,7 @@ def normalize_from_stream_result(
         input_tokens=input_tokens if has_input else None,
         output_tokens=output_tokens if has_output else None,
         total_tokens=(
-            input_tokens + output_tokens + cache_read
-            if (has_input or has_output)
-            else None
+            input_tokens + output_tokens if (has_input or has_output) else None
         ),
         cached_input_tokens=cached_value,
         # OpenAI-compatible stream path surfaces reads under the legacy
@@ -491,7 +489,10 @@ def emit_parse_failure_log(diag: UsageParseDiag) -> None:
     elif diag.reason == "preserved_raw_only":
         logger.debug("usage_parse_preserved_raw_only", extra=log_payload)
     else:
-        logger.debug("usage_parse_preserved_raw_only", extra=log_payload)
+        logger.debug(
+            "usage_parse_unknown_reason",
+            extra={**log_payload, "reason": diag.reason},
+        )
 
 
 # Re-export the protocol-specific extractors so existing callers that

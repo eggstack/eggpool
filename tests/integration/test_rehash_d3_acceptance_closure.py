@@ -48,6 +48,7 @@ from tests.integration.test_rehash_streaming_swap import (
     _make_mock_server,
     _MockState,
     _run_rehash,
+    _runtime_generation_id,
     _terminate_server,
     _wait_healthy,
 )
@@ -73,30 +74,6 @@ async def _spawn_server(
     runtime_path.chmod(0o700)
     env["EGGPOOL_RUNTIME_DIR"] = str(runtime_path)
     return await _canonical_spawn_server(config_path, env)
-
-
-async def _runtime_generation_id(
-    client: httpx.AsyncClient,
-    server_port: int,
-) -> int | None:
-    """Fetch the active generation id from /api/stats/runtime."""
-    try:
-        r = await client.get(
-            f"http://127.0.0.1:{server_port}/api/stats/runtime",
-            headers=auth,
-            timeout=5.0,
-        )
-    except (httpx.ConnectError, httpx.ReadTimeout):
-        return None
-    if r.status_code != 200:
-        return None
-    payload = r.json()
-    runtime = payload.get("runtime_manager") or {}
-    active = runtime.get("active") or {}
-    raw_id = active.get("generation_id")
-    if isinstance(raw_id, int):
-        return raw_id
-    return None
 
 
 async def _runtime_diag(
@@ -655,7 +632,8 @@ async def test_d3_logout_uses_live_rehash_against_running_server(
         stdout_bytes, stderr_bytes = await asyncio.wait_for(
             logout_proc.communicate(), timeout=30.0
         )
-        exit_code = logout_proc.returncode or 0
+        assert logout_proc.returncode is not None
+        exit_code = logout_proc.returncode
         stdout = stdout_bytes.decode(errors="replace")
         stderr = stderr_bytes.decode(errors="replace")
         assert exit_code == 0, (

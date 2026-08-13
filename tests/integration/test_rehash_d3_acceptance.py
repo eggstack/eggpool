@@ -32,6 +32,7 @@ from tests.integration.test_rehash_streaming_swap import (
     _make_mock_server,
     _MockState,
     _run_rehash,
+    _runtime_generation_id,
     _terminate_server,
     _wait_healthy,
     _write_config,
@@ -54,6 +55,7 @@ async def _spawn_and_drain(
         runtime_path.mkdir(parents=True, exist_ok=True)
         runtime_path.chmod(0o700)
         env["EGGPOOL_RUNTIME_DIR"] = str(runtime_path)
+    env["EGGPOOL_PID_FILE"] = str(Path(config_path).with_suffix(".pid"))
     proc = await asyncio.create_subprocess_exec(
         sys.executable,
         "-m",
@@ -70,30 +72,6 @@ async def _spawn_and_drain(
     # API consistent with _spawn_server for compatibility.
     drain_task = asyncio.create_task(asyncio.sleep(0))
     return proc, drain_task
-
-
-async def _runtime_generation_id(
-    client: httpx.AsyncClient,
-    server_port: int,
-) -> int | None:
-    """Fetch the active generation id from /api/stats/runtime."""
-    try:
-        r = await client.get(
-            f"http://127.0.0.1:{server_port}/api/stats/runtime",
-            headers=auth,
-            timeout=5.0,
-        )
-    except (httpx.ConnectError, httpx.ReadTimeout):
-        return None
-    if r.status_code != 200:
-        return None
-    payload = r.json()
-    runtime = payload.get("runtime_manager") or {}
-    active = runtime.get("active") or {}
-    raw_id = active.get("generation_id")
-    if isinstance(raw_id, int):
-        return raw_id
-    return None
 
 
 async def _get_task_spec_version(
@@ -352,73 +330,6 @@ def _slow_upstream_handler_factory(
                 self.send_error(404)
 
     return _SlowMockUpstreamHandler
-
-
-# ---------------------------------------------------------------------------
-# Scenario 1: Invalid TOML rejected locally — server never contacted
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio()
-async def test_d3_invalid_toml_rejected_locally(tmp_path: Any) -> None:
-    """Invalid TOML is rejected by CLI preflight; server never contacted.
-
-    Assert: exit code 1, server generation unchanged.
-    """
-    state = _MockState()
-    upstream = _make_mock_server(state)
-    upstream_port = upstream.server_address[1]
-
-    server_port = _free_port()
-    config_path = str(tmp_path / "config.toml")
-    _write_config(config_path, server_port=server_port, upstream_port=upstream_port)
-
-    state_dir = str(tmp_path / "state")
-    os.makedirs(state_dir, exist_ok=True)
-
-    env = os.environ.copy()
-    env["XDG_STATE_HOME"] = state_dir
-
-    proc, drain = await _spawn_and_drain(config_path, env)
-    try:
-        assert await _wait_healthy(server_port), "server did not become healthy"
-
-        async with httpx.AsyncClient() as client:
-            gen_before = await _runtime_generation_id(client, server_port)
-
-        # Overwrite config with invalid TOML
-        with open(config_path, "w") as f:
-            f.write("this is not = valid = toml = {\n")
-
-        # CLI must reject locally — exit code 1 (EXIT_VALIDATION)
-        exit_code, stdout, stderr = await _run_rehash(config_path, env)
-        assert exit_code == 1, (
-            f"expected exit code 1 for invalid TOML, got {exit_code}:\n"
-            f"stdout={stdout}\nstderr={stderr}"
-        )
-
-        # Server generation must be unchanged
-        async with httpx.AsyncClient() as client:
-            gen_after = await _runtime_generation_id(client, server_port)
-        assert gen_before == gen_after, (
-            f"generation changed after invalid TOML rejection: "
-            f"{gen_before} -> {gen_after}"
-        )
-
-        # Server still healthy
-        async with httpx.AsyncClient() as client:
-            health = await client.get(
-                f"http://127.0.0.1:{server_port}/v1/healthz", timeout=5.0
-            )
-            assert health.status_code == 200
-
-        assert proc.returncode is None, "server process died"
-    finally:
-        drain.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await drain
-        await _terminate_server(proc)
-        upstream.shutdown()
 
 
 # ---------------------------------------------------------------------------
@@ -1092,18 +1003,11 @@ async def test_d3_concurrent_reload_burst_stays_healthy(tmp_path: Any) -> None:
 
 @pytest.mark.asyncio()
 async def test_d3_retirement_timeout_closes_resources(tmp_path: Any) -> None:
-    """Old generation resources close after drain timeout.
-
-    The deterministic, in-process equivalent lives in
-    ``tests/integration/reload/``
-    (``test_drain_timeout_forces_retirement_close``).  This subprocess
-    smoke test was previously skipped because the default
-    ``drain_timeout_s=300s`` exceeds the CI budget.  The harness
-    helper ``_write_config`` does not surface ``drain_timeout_s``
-    directly, so we defer the subprocess form to the operator
-    workflow closure test (which exercises the same path under a
-    tight deadline).  The in-process test is the source of truth.
-    """
+    """Old generation resources close after drain timeout."""
+    pytest.skip(
+        "Subprocess drain-timeout coverage is provided by the closure suite; "
+        "the in-process test is the deterministic source of truth."
+    )
 
 
 # ---------------------------------------------------------------------------

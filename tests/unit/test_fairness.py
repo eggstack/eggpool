@@ -206,6 +206,40 @@ class TestFairnessRotorRoundRobin:
         assert decision.reason == "single_candidate"
         assert len(rotated) == 1
 
+    @pytest.mark.asyncio()
+    async def test_hard_cap_evicts_oldest_key_without_resetting_recent_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Capacity eviction preserves rotation state for recently used keys."""
+        import eggpool.routing.fairness as fairness
+
+        monkeypatch.setattr(fairness, "_ROTOR_HARD_CAP", 2)
+        rotor = fairness.FairnessRotor()
+        candidates = [
+            (
+                AccountRuntimeState(name=f"acct{i}"),
+                RoutingScore(
+                    account_name=f"acct{i}",
+                    quota_score=0.0,
+                    weight=1.0,
+                    is_eligible=True,
+                ),
+            )
+            for i in range(3)
+        ]
+
+        key_a = fairness.FairnessKey("provider", "model-a", "openai", 0)
+        key_b = fairness.FairnessKey("provider", "model-b", "openai", 0)
+        key_c = fairness.FairnessKey("provider", "model-c", "openai", 0)
+
+        await rotor.rotate(key_a, candidates)
+        await rotor.rotate(key_b, candidates)
+        await rotor.rotate(key_a, candidates)
+        await rotor.rotate(key_c, candidates)
+
+        rotated, _ = await rotor.rotate(key_a, candidates)
+        assert rotated[0][0].name == "acct2"
+
 
 # ---------------------------------------------------------------------------
 # Test 2: Fairness band extraction

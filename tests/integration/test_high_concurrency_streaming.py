@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from typing import TYPE_CHECKING, Any
 
@@ -74,6 +75,8 @@ from tests.helpers.stream_stability_harness import (
     scenario_respx_response,
     should_cancel,
 )
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -272,7 +275,10 @@ async def _run_concurrent_burst(
                 return {"outcome": "completed"}
             except asyncio.CancelledError:
                 return {"outcome": "cancelled"}
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "concurrency stream failed: %s: %s", type(exc).__name__, exc
+                )
                 return {"outcome": "failure"}
             finally:
                 _active_count -= 1

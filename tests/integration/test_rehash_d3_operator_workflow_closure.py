@@ -64,8 +64,9 @@ async def _run_eggpool_cli(
     stdout_bytes, stderr_bytes = await asyncio.wait_for(
         proc.communicate(), timeout=timeout
     )
+    assert proc.returncode is not None
     return (
-        proc.returncode or 0,
+        proc.returncode,
         stdout_bytes.decode(errors="replace"),
         stderr_bytes.decode(errors="replace"),
     )

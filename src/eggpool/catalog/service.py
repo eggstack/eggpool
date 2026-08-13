@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
+from eggpool.catalog._time import ts_to_unix
 from eggpool.catalog.cache import (
     AccountCatalogOutcome,
     AccountCatalogUpdateResult,
@@ -87,36 +88,6 @@ class _PendingRefreshState:
     model_count: int
 
 
-def _ts_to_unix(value: object) -> float:
-    """Convert a DB TIMESTAMP string (or numeric) to a Unix float.
-
-    Returns 0.0 for None or unparseable values so cache loads never
-    fail on a malformed timestamp.
-
-    Naive datetime strings are treated as UTC (matching SQLite's
-    CURRENT_TIMESTAMP convention).
-    """
-    if value is None:
-        return 0.0
-    if isinstance(value, (int, float)):
-        return float(value)
-    text = str(value).strip()
-    if not text:
-        return 0.0
-    try:
-        dt = _dt.datetime.fromisoformat(text)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=_dt.UTC)
-        return dt.timestamp()
-    except ValueError:
-        try:
-            dt = _dt.datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
-            dt = dt.replace(tzinfo=_dt.UTC)
-            return dt.timestamp()
-        except ValueError:
-            return 0.0
-
-
 def _unix_to_db_timestamp(value: object, *, fallback: float) -> str:
     """Render an in-memory Unix timestamp for SQLite persistence.
 
@@ -124,7 +95,7 @@ def _unix_to_db_timestamp(value: object, *, fallback: float) -> str:
     conversion at the persistence boundary prevents an unrelated catalog write
     from marking entries that were not refreshed as newly seen.
     """
-    timestamp = _ts_to_unix(value)
+    timestamp = ts_to_unix(value)
     if timestamp <= 0:
         timestamp = fallback
     return _dt.datetime.fromtimestamp(timestamp, tz=_dt.UTC).strftime(
@@ -1182,8 +1153,8 @@ class CatalogService:
                     capabilities=caps,
                     source_metadata=meta,
                     protocol_source=row["protocol_source"],
-                    first_seen_at=_ts_to_unix(row["first_seen_at"]),
-                    last_seen_at=_ts_to_unix(row["last_seen_at"]),
+                    first_seen_at=ts_to_unix(row["first_seen_at"]),
+                    last_seen_at=ts_to_unix(row["last_seen_at"]),
                 )
 
             provider_rows = await self._db.fetch_all(
@@ -1224,8 +1195,8 @@ class CatalogService:
                         "protocol_source": row["protocol_source"],
                         "capabilities": caps,
                         "source_metadata": meta,
-                        "first_seen_at": _ts_to_unix(row["first_seen_at"]),
-                        "last_seen_at": _ts_to_unix(row["last_seen_at"]),
+                        "first_seen_at": ts_to_unix(row["first_seen_at"]),
+                        "last_seen_at": ts_to_unix(row["last_seen_at"]),
                         "discovered_limits": {
                             "context_tokens": disc_ctx,
                             "input_tokens": disc_inp,
@@ -1300,7 +1271,7 @@ class CatalogService:
             for row in refresh_rows:
                 self._cache.set_account_refresh_time(
                     str(row["name"]),
-                    _ts_to_unix(row["last_successful_refresh_at"]),
+                    ts_to_unix(row["last_successful_refresh_at"]),
                     durable=True,
                 )
 

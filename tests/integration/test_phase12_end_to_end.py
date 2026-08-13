@@ -905,7 +905,12 @@ async def test_h_midstream_failure(
         try:
             async for _chunk in resp.stream_iterator:
                 pass
-        except Exception:
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "midstream response consumption failed: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
             pass
 
     await asyncio.sleep(0.1)

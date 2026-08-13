@@ -104,8 +104,9 @@ async def _run_rehash_json(
         env=env,
     )
     stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=30)
+    assert proc.returncode is not None
     return (
-        proc.returncode or 0,
+        proc.returncode,
         stdout_bytes.decode(errors="replace"),
         stderr_bytes.decode(errors="replace"),
     )
