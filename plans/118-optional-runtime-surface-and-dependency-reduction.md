@@ -1,7 +1,7 @@
 # Plan 118 — Optional Runtime Surface and Dependency Reduction
 
 Date: 2026-08-11
-Status: ready
+Status: complete
 Parent roadmap: `plans/113-sbc-hotpath-reduction-and-protocol-clarity-roadmap.md`
 Planning baseline: `6f4df9bd42b5ca336d3da5ef458ab1793e515185`
 Depends on:

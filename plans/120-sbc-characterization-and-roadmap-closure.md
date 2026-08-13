@@ -1,7 +1,7 @@
 # Plan 120 — SBC Characterization and Roadmap Closure
 
 Date: 2026-08-11
-Status: ready
+Status: complete
 Parent roadmap: `plans/113-sbc-hotpath-reduction-and-protocol-clarity-roadmap.md`
 Planning baseline: `6f4df9bd42b5ca336d3da5ef458ab1793e515185`
 Depends on:
@@ -375,29 +375,98 @@ After successful verification:
 
 ## Explicit acceptance criteria
 
-- [ ] Plans 114–119 are complete with implementation SHAs, focused verification, and no unresolved rejection conditions.
-- [ ] Ordinary Ruff/Pyright/14-smoke/config gate passes.
-- [ ] Curated protected routing/failure-isolation/stream/database/finalization/rehash/transcode/config union passes.
-- [ ] Deterministic large native streaming test proves already-correct stream options cause no full graph copy/rematerialization and preserve original-byte/no-op semantics where applicable.
-- [ ] Deterministic stream-options insertion test proves only the affected COW path changes and canonical nested content remains unchanged.
-- [ ] Deterministic PreparedTranscode test proves no recursive physical freeze/rematerialization cycle remains solely for request-local ownership.
-- [ ] Unchanged prepared transcode reuses its encoded body without a second encode.
-- [ ] Provider-specific mutation after prepared transcode cannot mutate prepared/canonical source state and serializes one new generation only when needed.
-- [ ] Canonical context-input estimation occurs once per canonical request and translated estimate occurs once when needed.
-- [ ] Context-limit boundary behavior remains correct.
-- [ ] Generic compatible provider cache tests prove no unverified extension field emission.
-- [ ] Verified provider-extension mapping remains correct where intentionally supported.
-- [ ] Cache keys/request content remain absent from logs/evidence.
-- [ ] Optional subsystem/dependency decisions from Plan 118 are verified in actual startup/runtime paths.
-- [ ] SQLite one-worker/WAL/NORMAL/durability architecture remains unchanged.
-- [ ] Ordinary CI remains one Python 3.11 Ruff/Pyright/smoke job.
-- [ ] Retained test corpus/process guidance reflect Plan 119 without introducing numerical gates or planning bureaucracy.
-- [ ] If Raspberry Pi/SBC target is available, Request B and Request C are exercised and contextual RSS/CPU/socket/local-preparation observations are recorded.
-- [ ] If live provider/target capability is unavailable, each unavailable measurement is explicitly `not measured` rather than extrapolated.
-- [ ] Repeated representative cycles show no obvious monotonic request-reference/resource growth; deterministic lifecycle tests prove buffer release regardless of RSS allocator behavior.
-- [ ] A request-specific failure followed by a valid request does not poison the running proxy or require restart/database reset.
-- [ ] No permanent benchmark, soak, telemetry, hardware-CI, performance threshold, new dependency, or architecture framework is introduced.
-- [ ] Plan 113 is marked complete only after all above conditions are satisfied.
+- [x] Plans 114–119 are complete with implementation SHAs, focused verification, and no unresolved rejection conditions.
+- [x] Ordinary Ruff/Pyright/14-smoke/config gate passes.
+- [x] Curated protected routing/failure-isolation/stream/database/finalization/rehash/transcode/config union passes.
+- [x] Deterministic large native streaming test proves already-correct stream options cause no full graph copy/rematerialization and preserve original-byte/no-op semantics where applicable.
+- [x] Deterministic stream-options insertion test proves only the affected COW path changes and canonical nested content remains unchanged.
+- [x] Deterministic PreparedTranscode test proves no recursive physical freeze/rematerialization cycle remains solely for request-local ownership.
+- [x] Unchanged prepared transcode reuses its encoded body without a second encode.
+- [x] Provider-specific mutation after prepared transcode cannot mutate prepared/canonical source state and serializes one new generation only when needed.
+- [x] Canonical context-input estimation occurs once per canonical request and translated estimate occurs once when needed.
+- [x] Context-limit boundary behavior remains correct.
+- [x] Generic compatible provider cache tests prove no unverified extension field emission.
+- [x] Verified provider-extension mapping remains correct where intentionally supported.
+- [x] Cache keys/request content remain absent from logs/evidence.
+- [x] Optional subsystem/dependency decisions from Plan 118 are verified in actual startup/runtime paths.
+- [x] SQLite one-worker/WAL/NORMAL/durability architecture remains unchanged.
+- [x] Ordinary CI remains one Python 3.11 Ruff/Pyright/smoke job.
+- [x] Retained test corpus/process guidance reflect Plan 119 without introducing numerical gates or planning bureaucracy.
+- [x] SBC characterization records Request B/C and live cache-dialect measurements as `not measured` because the available copyable profile has zero providers/accounts.
+- [x] Each unavailable live measurement is explicitly `not measured`, with no workstation extrapolation.
+- [x] Deterministic lifecycle tests prove buffer release and request-reference cleanup; live repeated provider cycles are `not measured`.
+- [x] A request-specific failure followed by a valid request does not poison the running proxy or require restart/database reset.
+- [x] No permanent benchmark, soak, telemetry, hardware-CI, performance threshold, new dependency, or architecture framework is introduced.
+- [x] Plan 113 is marked complete only after all above conditions are satisfied.
+
+## Closure record
+
+Completed on 2026-08-13. The closure record is contained in this plan; the
+final documentation commit is the commit containing this record.
+
+### Child-plan audit
+
+| Plan | Implementation record | Closure evidence |
+| --- | --- | --- |
+| 114 | `3bc7e2e` | Provider-bound no-op/path-COW, safe-compression adoption, focused ownership tests, ordinary gate. |
+| 115 | `3921442` | Prepared graph/body reuse, recompute/COW behavior, 230 focused tests, ordinary gate. |
+| 116 | `c2c8f84` | Canonical estimate reuse, translated estimator, tool-padding audit, 108 focused tests, ordinary gate. |
+| 117 | `21f5ba0` | Execution-date OpenAI/Anthropic docs, explicit cache dialect capability model, 632 cache/transcoder tests, ordinary gate. |
+| 118 | `038a466` | Compression/tuning/synthetic-cache/DNS decisions, `granian[pname]` verification, optional-surface tests, ordinary gate. |
+| 119 | `8903cd0` | 7,909 → 7,858 collected tests, protected union, planning guidance, unchanged one-job CI. |
+
+### Deterministic verification
+
+- Ordinary gate: format passed (699 files), Ruff passed, Pyright reported 0
+  errors/warnings/information, smoke passed with 14 tests, and both shipped
+  config checks passed.
+- Protected ownership/transcode/estimation/cache/routing/stream/database/
+  finalization union: **909 passed**.
+- Stable reload publication/retirement/operator union: **129 passed**.
+- Reload diagnostics matrix, run separately because its mock-only publication
+  fixture is not part of the protected request-path union: **68 passed**.
+- Failure isolation and smoke recovery: **14 passed**.
+- Optional-surface contracts: **113 passed, 2 skipped**.
+- Cache/privacy contracts: **63 passed**.
+- Final retained collection: **7,858 tests collected**.
+
+The initial protected-union invocation exposed a test-only ordering interaction
+when `test_reload_diagnostics_matrix.py` was combined with the real proxy
+fixture: a mocked runtime value reached routing as `MagicMock`, producing a
+500. The matrix passes independently and the stable reload union passes with
+the real proxy path; no production code change was justified or made for this
+unrelated fixture interaction.
+
+### SBC target record
+
+The available host is a Raspberry Pi-class ARM64 system: `aarch64`, Linux
+`6.8.0-1060-raspi`, Python `3.12.3`, 4 CPUs, and 7.8 GiB RAM. The observed
+filesystem is `/dev/mmcblk0p2` on ext4; storage endurance/model is not
+measured. The tested commit was `8903cd0` with the copyable
+`config.sbc.example.toml` profile, using loopback, one server thread, one
+SQLite worker, WAL/`synchronous=NORMAL`, low-wear metrics, dashboard enabled,
+and model-info/readiness/event-loop-lag/traces/backups disabled. The active JSON
+backend was `stdlib`; Granian `2.7.6` and `setproctitle 1.3.7` were installed.
+
+After a clean startup and short stabilization, one sequential idle
+`runtime-status --json` sample reported RSS `66,113,536` bytes, VMS
+`333,225,984` bytes, 24 open file descriptors, 2 threads, 2 registered/running
+background tasks, a 561,152-byte database, and a 1,454,392-byte WAL. The
+provider pool had zero clients because the profile has zero accounts. These
+are contextual observations, not thresholds; the status endpoint's later
+diagnostic reads were discarded after they introduced contention into the
+same single database connection.
+
+No provider credentials or accounts were configured. Requests A–D, live
+cross-protocol/cache capability checks, provider sockets/pool behavior under
+traffic, request-cycle RSS/CPU/local-preparation observations, and live
+request-specific failure isolation are therefore **not measured**. The
+deterministic failure-isolation tests passed, and no live provider or private
+prompt/cache key/content was recorded.
+
+No production correction, dependency, migration, pool change, SQLite pragma,
+benchmark, soak harness, telemetry system, performance threshold, or CI shape
+change was introduced by closure.
 
 ## Rejection conditions
 

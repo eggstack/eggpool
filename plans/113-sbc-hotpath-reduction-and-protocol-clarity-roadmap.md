@@ -1,7 +1,7 @@
 # Plan 113 — SBC Hot-Path Reduction and Protocol Clarity Roadmap
 
 Date: 2026-08-11
-Status: ready
+Status: complete
 Planning baseline: `6f4df9bd42b5ca336d3da5ef458ab1793e515185`
 
 Implementation plans:
@@ -190,30 +190,43 @@ For Plan 117, implementation must re-check official provider documentation on th
 
 ## Roadmap acceptance criteria
 
-- [ ] Ordinary OpenAI streaming requests that already contain the desired `stream_options.include_usage` do not mutate provider payload state, bump generation, deep-copy the request graph, or force reserialization.
-- [ ] When EggPool must inject/modify `stream_options`, only the root and affected path are copied; large unchanged `messages`/`tools` subtrees remain shared read-only with the canonical graph.
-- [ ] Safe compression output can be adopted without recursively rematerializing all unchanged subtrees.
-- [ ] Provider transforms cannot mutate the canonical client payload after the ownership simplification.
-- [ ] Prepared transcode no longer recursively freezes the translated graph and later recursively rebuilds it solely to cross an ownership boundary.
-- [ ] Prepared transcode still reuses the already encoded translated body when no later provider-specific mutation is needed.
-- [ ] Later provider-specific mutation after prepared transcode uses a bounded copy-on-write/owned path and preserves retry/freeze semantics.
-- [ ] Decoded context-input estimation is computed at most once per request generation unless a provider-visible transform changes the semantics requiring recomputation.
-- [ ] Context-limit enforcement and reservation/admission behavior remain correct.
-- [ ] Tool-token padding no longer serializes every tool independently if the shared structural estimator can provide equivalent guardrail behavior.
-- [ ] Generic first-party OpenAI Chat Completions semantics are not conflated with provider-specific explicit cache-breakpoint extensions.
-- [ ] `prompt_cache_key`/retention and any extension breakpoint fields have explicit capability/dialect treatment based on current official/provider documentation.
-- [ ] Anthropic cache-control mapping remains capability-gated with explicit unrepresentable TTL/placement loss.
-- [ ] No provider-native cache extension is emitted solely because an upstream is labeled `openai` or `anthropic` compatible.
-- [ ] Compression/cache/DNS/observability configuration no longer accepts dormant/future behavior that production does not actually implement unless the retained behavior is explicitly documented as intentional.
-- [ ] Any removal of custom DNS cache or recommendation tuning is evidence-based and leaves default/SBC behavior correct.
-- [ ] `granian[pname]` is either verified necessary and retained, or removed in favor of plain Granian with install/startup verification.
-- [ ] No core runtime dependency is added; no core framework is replaced.
-- [ ] SQLite architecture and durability semantics remain unchanged.
-- [ ] Retained tests are materially smaller/simpler around touched surfaces while all protected high-severity regressions survive.
-- [ ] Ordinary CI remains one Python 3.11 Ruff/Pyright/smoke job.
-- [ ] Repository planning guidance explicitly permits small corrective changes to use one focused plan/issue or direct implementation without mandatory roadmap/closure chains.
-- [ ] Final SBC characterization exercises a large native streaming request and a cross-protocol request when suitable hardware/provider credentials are available, or records those measurements as `not measured` without extrapolation.
-- [ ] No permanent benchmark/soak/hardware-CI framework is created.
+- [x] Ordinary OpenAI streaming requests that already contain the desired `stream_options.include_usage` do not mutate provider payload state, bump generation, deep-copy the request graph, or force reserialization.
+- [x] When EggPool must inject/modify `stream_options`, only the root and affected path is copied; large unchanged `messages`/`tools` subtrees remain shared read-only with the canonical graph.
+- [x] Safe compression output can be adopted without recursively rematerializing all unchanged subtrees.
+- [x] Provider transforms cannot mutate the canonical client payload after the ownership simplification.
+- [x] Prepared transcode no longer recursively freezes the translated graph and later recursively rebuilds it solely to cross an ownership boundary.
+- [x] Prepared transcode still reuses the already encoded translated body when no later provider-specific mutation is needed.
+- [x] Later provider-specific mutation after prepared transcode uses a bounded copy-on-write/owned path and preserves retry/freeze semantics.
+- [x] Decoded context-input estimation is computed at most once per request generation unless a provider-visible transform changes the semantics requiring recomputation.
+- [x] Context-limit enforcement and reservation/admission behavior remain correct.
+- [x] Tool-token padding no longer serializes every tool independently if the shared structural estimator can provide equivalent guardrail behavior.
+- [x] Generic first-party OpenAI Chat Completions semantics are not conflated with provider-specific explicit cache-breakpoint extensions.
+- [x] `prompt_cache_key`/retention and any extension breakpoint fields have explicit capability/dialect treatment based on current official/provider documentation.
+- [x] Anthropic cache-control mapping remains capability-gated with explicit unrepresentable TTL/placement loss.
+- [x] No provider-native cache extension is emitted solely because an upstream is labeled `openai` or `anthropic` compatible.
+- [x] Compression/cache/DNS/observability configuration no longer accepts dormant/future behavior that production does not actually implement unless the retained behavior is explicitly documented as intentional.
+- [x] Any removal of custom DNS cache or recommendation tuning is evidence-based and leaves default/SBC behavior correct.
+- [x] `granian[pname]` is verified necessary and retained because EggPool sets Granian's `process_name`.
+- [x] No core runtime dependency is added; no core framework is replaced.
+- [x] SQLite architecture and durability semantics remain unchanged.
+- [x] Retained tests are materially smaller/simpler around touched surfaces while all protected high-severity regressions survive.
+- [x] Ordinary CI remains one Python 3.11 Ruff/Pyright/smoke job.
+- [x] Repository planning guidance explicitly permits small corrective changes to use one focused plan/issue or direct implementation without mandatory roadmap/closure chains.
+- [x] Final SBC characterization records live request measurements as `not measured` because the available SBC profile has no configured providers or credentials.
+- [x] No permanent benchmark/soak/hardware-CI framework is created.
+
+## Closure record
+
+Completed on 2026-08-13. Plans 114–119 are complete with implementation
+records and focused verification; Plan 118's status was reconciled from
+`ready` to `complete` without changing its implementation.
+
+The final closure verification and target record are in Plan 120. No
+production correction was required: deterministic ownership, estimation,
+cache-dialect, optional-surface, failure-isolation, database, finalization,
+streaming, routing, and rehash contracts passed, and the available SBC
+profile had zero configured accounts so live provider workloads remain
+`not measured`.
 
 ## Rejection conditions
 
