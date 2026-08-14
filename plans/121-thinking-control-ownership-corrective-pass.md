@@ -1,7 +1,7 @@
 # Plan 121 — Thinking-Control Ownership Corrective Pass
 
 Date: 2026-08-13
-Status: ready
+Status: complete (verified 2026-08-14)
 Planning baseline: `fa530408157ff4ebb76b47c8ba914659133b7fe6`
 Scope: standalone corrective pass following completed Roadmap 113
 
@@ -575,3 +575,13 @@ Cache-dialect production behavior is unchanged.
   config checks pass.
 - [x] Implementation evidence is appended to this plan; no separate
   closure plan is created solely to close Plan 121.
+
+### Final verification
+
+The completed implementation was independently reverified on 2026-08-14:
+
+- focused ownership, adaptation, prepared-transcode, rejection, integration,
+  and contract suites: 430 passed;
+- Ruff format check, Ruff lint, and Pyright: passed (0 type errors);
+- deterministic smoke suite: 14 passed;
+- `config.example.toml` and `config.sbc.example.toml` `check-config`: passed.
