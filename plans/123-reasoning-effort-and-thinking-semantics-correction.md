@@ -1,7 +1,7 @@
 # Plan 123 — Reasoning-Effort and Thinking-Semantics Correction
 
 Date: 2026-08-14
-Status: ready
+Status: complete
 Parent roadmap: `plans/122-post-audit-correctness-and-sbc-simplification-roadmap.md`
 Planning baseline: `c17bb84af6d737a8408cbcce4d2746caedee36e8`
 Priority: P0 correctness
@@ -270,14 +270,96 @@ acceptance gate.
 
 ## Explicit acceptance criteria
 
-- [ ] Current official OpenAI/Anthropic reasoning-control semantics are checked at
+- [x] Current official OpenAI/Anthropic reasoning-control semantics are checked at
   implementation time and the verification date/source is recorded.
-- [ ] `reasoning_effort="none"` cannot become an enabled Anthropic thinking
+- [x] `reasoning_effort="none"` cannot become an enabled Anthropic thinking
   budget.
-- [ ] Unknown/unmapped valid effort labels cannot silently fall back to 4096 or
+- [x] Unknown/unmapped valid effort labels cannot silently fall back to 4096 or
   any other guessed medium budget.
-- [ ] Explicit provider/model `effort_to_budget_tokens` mappings remain
+- [x] Explicit provider/model `effort_to_budget_tokens` mappings remain
   authoritative.
+
+## Closure record
+
+Status: complete.
+
+Implementation commit: `408fc194543ec3ad40cba05ac76777c1acf3f408`
+
+Verification date: 2026-08-14.
+
+### Provider semantics verified
+
+The current provider documentation was checked during implementation:
+
+- OpenAI reasoning guide: <https://developers.openai.com/api/docs/guides/reasoning>
+  (verified 2026-08-14). Reasoning effort values are model-dependent; `none`
+  means no reasoning, while other supported values depend on the model.
+- Anthropic extended thinking guide:
+  <https://platform.claude.com/docs/en/build-with-claude/extended-thinking>
+  (verified 2026-08-14). Manual thinking is enabled with an explicit
+  `thinking` control and `budget_tokens`; omission does not enable it.
+
+### Inventory findings
+
+- OpenAI `reasoning_effort` is resolved during OpenAI-to-Anthropic preflight
+  using the collapsed best-effort capability. After account selection, the
+  coordinator re-resolves the original client control against the selected
+  provider/model capability.
+- The same request can therefore encounter different capability facts at
+  those two stages; the selected capability is authoritative for the final
+  payload. The resolver uses original client intent rather than the interim
+  translated budget, so provider-specific mappings are not lost.
+- Routing classifies the request before final provider selection. Disabled-only
+  `reasoning_effort="none"` is not a thinking requirement, while a request
+  needing target thinking remains capability-eligible only under the existing
+  routing policy. Local post-selection mapping failures remain client/local
+  failures and do not penalize provider health or trigger upstream retry.
+- Built-in contracts retain the legacy `low`/`medium`/`high` mappings. Catalog
+  normalization and development metadata provide explicit model/provider maps
+  where verified, including current `xhigh`/`max` mappings such as the
+  OpenCode-compatible metadata; no new reasoning registry was added.
+
+### Final semantic disposition
+
+- `none` produces no budget and no enabled Anthropic thinking block. It does
+  not exclude an otherwise eligible account, and native same-protocol requests
+  preserve it unchanged unless an explicit provider contract adapts it.
+- Explicit `effort_to_budget_tokens` mappings remain authoritative and retain
+  existing min/max and strict/lenient clamping behavior.
+- The legacy `low`/`medium`/`high` compatibility defaults remain available.
+  `xhigh`, `max`, and future values require a verified capability or configured
+  mapping; no lexical or medium-budget guess is introduced.
+- An unmapped effort is rejected before dispatch under strict policy. Under
+  lenient policy the target thinking control is omitted and a bounded
+  `unknown_effort` warning records `field="reasoning_effort"` and
+  `reason="target_mapping_unknown"`.
+- No dependency, database migration, CI job, request-hot-path network call, or
+  persisted observability surface was added.
+
+### Verification evidence
+
+Focused reasoning/transcoding/routing/provider-contract tests:
+
+```text
+493 passed in 3.33s
+```
+
+The ordinary CI-equivalent gate passed:
+
+```text
+ruff format --check src/ tests/ scripts/  -> 700 files already formatted
+ruff check src/ tests/ scripts/            -> All checks passed
+pyright src/ scripts/                      -> 0 errors, 0 warnings, 0 informations
+pytest tests/smoke/                        -> 14 passed
+check-config config.example.toml           -> passed
+check-config config.sbc.example.toml       -> passed
+```
+
+A retained full-suite run reached `1075 passed, 3 skipped` and one failure in
+`tests/perf/test_comprehensive_baseline.py::TestComprehensiveBaseline::test_all_metrics_baseline`.
+That manual performance fixture requires a generation finalization supervisor
+that its fixture does not construct; it is outside the ordinary CI smoke gate
+and unrelated to this correction. No live-provider traffic was required.
 - [ ] Existing low/medium/high compatibility behavior remains where intentionally
   supported.
 - [ ] Native same-protocol effort values remain pass-through unless a verified
