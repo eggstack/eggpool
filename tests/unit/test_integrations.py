@@ -789,12 +789,14 @@ class TestResolveServerApiKey:
         assert result.env_var == "TEST_EGGPOOL_KEY"
         assert result.config_mutated is False
 
-    def test_env_key_absent_exits(self, tmp_path: Path) -> None:
+    def test_env_key_absent_raises_typed_error(self, tmp_path: Path) -> None:
         config_file = tmp_path / "config.toml"
         config_file.write_text(ENV_KEY_CONFIG, encoding="utf-8")
+        from eggpool.config_validation import ConfigStartupAuthError
+
         with (
             patch.dict(os.environ, {}, clear=True),
-            pytest.raises(SystemExit, match="api_key_env is set to"),
+            pytest.raises(ConfigStartupAuthError, match="api_key_env is set to"),
         ):
             resolve_server_api_key(str(config_file))
 

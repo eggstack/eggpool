@@ -318,6 +318,10 @@ class TestStartServerDaemonSpawn:
         config_path.write_text("[server]\n", encoding="utf-8")
 
         # No PID file exists in tmp_path; the helper must return False.
+        monkeypatch.setattr(
+            "eggpool.runtime_paths.default_pid_file",
+            lambda: tmp_path / "nonexistent.pid",
+        )
         assert runtime_module._wait_for_pid_file(0.05) is False
 
     def test_start_server_raises_on_spawn_failure(self, tmp_path: Path) -> None:

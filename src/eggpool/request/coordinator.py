@@ -860,6 +860,8 @@ class RequestCoordinator:
                     step="finalization_capacity",
                     request_id=context.request_id,
                 ) from exc
+            if self._health_manager is not None:
+                self._health_manager.release_request(selected.account_name)
             return
         job.set_dependencies(
             finalizer=self._finalizer,
@@ -1676,16 +1678,13 @@ class RequestCoordinator:
                         f"{observation.proxy_request_id or selected.account_name}:"
                         f"{observation.attempt_id or err.status_code or 'unselected'}"
                     )
-                    if (
-                        self._effects_applier.apply_once(
-                            attempt_key=attempt_key,
-                            observation=observation,
-                            effects=effects,
-                            progress=FailureEffectProgress(attempt_key=attempt_key),
-                        )
-                        is not None
-                    ):
-                        health_applied = True
+                    self._effects_applier.apply_once(
+                        attempt_key=attempt_key,
+                        observation=observation,
+                        effects=effects,
+                        progress=FailureEffectProgress(attempt_key=attempt_key),
+                    )
+                    health_applied = True
                     if effects.persist_backoff and effects.backoff_reason:
                         await self._persist_backoff(
                             account_name=selected.account_name,
@@ -5024,6 +5023,8 @@ class RequestCoordinator:
                     resolved_compression_policy=context.resolved_compression_policy,
                 ),
             )
+        except AcceptedFinalizationInvariantError as finalize_err:
+            raise finalize_err from err
         except DatabaseError as finalize_err:
             logger.warning(
                 "capability rejection finalize failed request_id=%s attempt_id=%s: %s",
@@ -5413,6 +5414,8 @@ class RequestCoordinator:
     ) -> None:
         """Finalize a non-retryable client error (4xx)."""
         elapsed_ms = self._elapsed_ms(context)
+        upstream_connect_ms = context.upstream_connect_ms
+        upstream_read_ms = self._upstream_read_ms(context, elapsed_ms)
         await self._finalize_terminal(
             context,
             selected,
@@ -5426,6 +5429,14 @@ class RequestCoordinator:
                 ),
                 bytes_received=context.original_body_size or len(context.original_body),
                 upstream_protocol=context.upstream_protocol,
+                first_byte_ms=self._upstream_header_ms(context),
+                upstream_connect_ms=upstream_connect_ms,
+                upstream_read_ms=upstream_read_ms,
+                coordinator_overhead_ms=self._coordinator_overhead_ms(
+                    total_ms=elapsed_ms,
+                    connect_ms=upstream_connect_ms,
+                    read_ms=upstream_read_ms,
+                ),
                 failure_observation=failure_observation,
                 failure_effects=failure_effects,
                 thinking_trace_json=_serialize_thinking_trace(context.thinking_trace),
@@ -5481,9 +5492,32 @@ class RequestCoordinator:
                 )
                 if isinstance(last_error, _NonRetryableUpstreamError):
                     outcome = FinalizationOutcome.CLIENT_ERROR
+                    health_already_applied = health_applied
                 elif isinstance(last_error, _RetryableUpstreamError):
                     outcome = FinalizationOutcome.UPSTREAM_ERROR
                     health_already_applied = health_applied
+
+            upstream_connect_ms = None
+            upstream_read_ms = None
+            coordinator_overhead_ms = None
+            first_byte_ms = None
+            bytes_emitted = 0
+            upstream_request_id = None
+            if isinstance(last_error, _NonRetryableUpstreamError):
+                first_byte_ms = self._upstream_header_ms(context)
+                upstream_connect_ms = context.upstream_connect_ms
+                upstream_read_ms = self._upstream_read_ms(context, elapsed_ms)
+                coordinator_overhead_ms = self._coordinator_overhead_ms(
+                    total_ms=elapsed_ms,
+                    connect_ms=upstream_connect_ms,
+                    read_ms=upstream_read_ms,
+                )
+                if last_upstream_response is not None:
+                    _, response_headers, response_body = last_upstream_response
+                    upstream_request_id = self._get_header_value(
+                        response_headers, _UPSTREAM_REQUEST_ID_HEADERS
+                    )
+                    bytes_emitted = len(response_body)
 
             await self._finalize_terminal(
                 context,
@@ -5494,11 +5528,17 @@ class RequestCoordinator:
                     error_class=error_class,
                     error_detail=error_detail,
                     upstream_latency_ms=elapsed_ms,
+                    first_byte_ms=first_byte_ms,
+                    bytes_emitted=bytes_emitted,
                     downstream_started=context.response_handoff.started,
                     health_already_applied=health_already_applied,
                     bytes_received=context.original_body_size
                     or len(context.original_body),
                     upstream_protocol=context.upstream_protocol,
+                    upstream_request_id=upstream_request_id,
+                    upstream_connect_ms=upstream_connect_ms,
+                    upstream_read_ms=upstream_read_ms,
+                    coordinator_overhead_ms=coordinator_overhead_ms,
                     failure_observation=(
                         getattr(last_error, "failure_observation", None)
                         if last_error is not None

@@ -217,7 +217,8 @@ def _overlay_config(
 
     Builds a fresh :class:`CompressionConfig` via ``model_validate``
     so the merged model honours all validators (cache-boundary
-    safety guard, transform defaults, etc.).  ``None`` override
+    safety guard, transform defaults, etc.).  Validation failures
+    are raised for the caller to handle.  ``None`` override
     fields keep the base value; non-``None`` overrides win.
     ``transforms`` is merged field-by-field: a non-``None``
     override transforms replaces each base field that is also

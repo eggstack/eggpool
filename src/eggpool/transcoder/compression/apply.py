@@ -156,36 +156,6 @@ def result_to_summary(result: CompressionResult) -> str:
     return result.summary_json
 
 
-# ---------------------------------------------------------------------------
-# No-op result
-# ---------------------------------------------------------------------------
-
-
-_NO_OP_RESULT: CompressionResult = CompressionResult(
-    applied=False,
-    mode="safe",
-    transformed_payload=None,  # type: ignore[arg-type]
-    transform_count=0,
-    transforms_by_reason={},
-    original_tokens=0,
-    compressed_tokens=0,
-    savings_tokens=0,
-    pre_stable_prefix_hash="",
-    post_stable_prefix_hash="",
-    stable_prefix_preserved=True,
-    stable_prefix_shape_hash="",
-    stable_prefix_content_hash="",
-    warnings=(),
-    latency_ms=0.0,
-    reason_code_counts={},
-    failed_fallback=False,
-    candidate_count=0,
-    eligible_candidate_count=0,
-    suppressed_candidate_count=0,
-    applied_transform_count=0,
-)
-
-
 @dataclass(frozen=True, slots=True)
 class SafeModeObservation:
     """Adapter that exposes a safe-applied run as a CompressionObservation.
@@ -1130,31 +1100,6 @@ def _apply_safe_compression_impl(
             latency_ms=elapsed_ms,
             reason_code_counts=dict(all_reason_counts),
             failed_fallback=True,
-            candidate_count=candidate_count,
-            eligible_candidate_count=eligible_candidate_count,
-            suppressed_candidate_count=suppressed_candidate_count,
-            applied_transform_count=0,
-        )
-
-    if not planned:
-        return CompressionResult(
-            applied=False,
-            mode="safe",
-            transformed_payload=payload,
-            transform_count=0,
-            transforms_by_reason={},
-            original_tokens=0,
-            compressed_tokens=0,
-            savings_tokens=0,
-            pre_stable_prefix_hash=pre_content_hash,
-            post_stable_prefix_hash=pre_content_hash,
-            stable_prefix_preserved=True,
-            stable_prefix_shape_hash=pre_shape_hash,
-            stable_prefix_content_hash=pre_content_hash,
-            warnings=tuple(warnings),
-            latency_ms=elapsed_ms,
-            reason_code_counts=dict(all_reason_counts),
-            failed_fallback=False,
             candidate_count=candidate_count,
             eligible_candidate_count=eligible_candidate_count,
             suppressed_candidate_count=suppressed_candidate_count,

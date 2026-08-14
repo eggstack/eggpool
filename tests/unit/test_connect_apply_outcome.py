@@ -103,6 +103,28 @@ class TestResolveApplyOutcome:
         assert "restarted" in message.lower()
         mock_restart.assert_called_once_with(str(config))
 
+    def test_health_probe_receives_selected_config_path(self, tmp_path: Path) -> None:
+        """The healthz fallback probes the same config selected by the CLI."""
+        config = tmp_path / "custom.toml"
+        _write_config(config)
+        with (
+            patch(
+                "eggpool.cli_rehash_helper.try_live_rehash",
+                return_value=(False, "Control socket unavailable (OSError)."),
+            ),
+            patch(
+                "eggpool.providers.connect._is_server_healthy",
+                return_value=False,
+            ) as health_probe,
+            patch(
+                "eggpool.providers.connect.restart_server",
+                return_value=False,
+            ),
+        ):
+            resolve_apply_outcome(str(config))
+
+        health_probe.assert_called_once_with(None, str(config))
+
     def test_validation_failure_returns_false_without_restart(
         self, tmp_path: Path
     ) -> None:

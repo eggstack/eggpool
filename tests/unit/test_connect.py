@@ -6,11 +6,13 @@ import io
 import os
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
 
 from eggpool.cli import cli
+from eggpool.cli_full import _chown
 from eggpool.providers.connect import (
     ConfiguredAccount,
     TerminalMenu,
@@ -75,6 +77,37 @@ class TestRestartServer:
             "--verbose",
         ]
         assert not pid_file.exists()
+
+
+def test_chown_resolves_explicit_group_gid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit group name is resolved through the group database."""
+    import grp
+    import pwd
+
+    lookups: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        pwd,
+        "getpwnam",
+        lambda name: lookups.append(("user", name)) or SimpleNamespace(pw_uid=11),
+    )
+    monkeypatch.setattr(
+        grp,
+        "getgrnam",
+        lambda name: lookups.append(("group", name)) or SimpleNamespace(gr_gid=22),
+    )
+    chown_calls: list[tuple[Path, int, int]] = []
+    monkeypatch.setattr(
+        "eggpool.cli_full.os.chown",
+        lambda path, uid, gid: chown_calls.append((Path(path), uid, gid)),
+    )
+
+    path = tmp_path / "owned"
+    _chown(path, "eggpool:wheel")
+
+    assert lookups == [("user", "eggpool"), ("group", "wheel")]
+    assert chown_calls == [(path, 11, 22)]
 
 
 def test_connect_none_auth_provider_does_not_prompt_for_api_key(

@@ -88,7 +88,7 @@ def resolve_apply_outcome(
 
     # Check whether the server is actually alive so we can distinguish
     # "server healthy + socket gone" from "server dead + socket gone".
-    server_healthy = _is_server_healthy(health_check)
+    server_healthy = _is_server_healthy(health_check, config_path)
 
     if server_healthy:
         # The server is running but we could not reach the control
@@ -102,7 +102,10 @@ def resolve_apply_outcome(
     return False, "Server is not running."
 
 
-def _is_server_healthy(health_check: Callable[[], bool] | None) -> bool:
+def _is_server_healthy(
+    health_check: Callable[[], bool] | None,
+    config_path: str = "config.toml",
+) -> bool:
     """Return True if the server process is alive and responding.
 
     When *health_check* is provided (typically a test double) it is
@@ -125,7 +128,7 @@ def _is_server_healthy(health_check: Callable[[], bool] | None) -> bool:
     from eggpool.models.config import AppConfig
 
     try:
-        config = AppConfig.from_toml("config.toml")
+        config = AppConfig.from_toml(config_path)
         host, port = config.server.host, config.server.port
     except Exception:  # noqa: BLE001
         host, port = "127.0.0.1", 11300

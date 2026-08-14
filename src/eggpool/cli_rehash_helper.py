@@ -84,17 +84,17 @@ def try_live_rehash(
     CLI commands keep their usual formatting.
     """
 
-    async def _send() -> ControlResponse:
+    async def _send(content_digest: str) -> ControlResponse:
         from eggpool.control.client import (  # noqa: PLC0415
             ControlClient,
         )
 
         client = ControlClient()
-        return await client.reload(validation.content_digest)
+        return await client.reload(content_digest)
 
     validation = validate_config_or_exit(config_path, echo_failure=echo_err)
     try:
-        result: ControlResponse = asyncio.run(_send())
+        result: ControlResponse = asyncio.run(_send(validation.content_digest))
     except Exception as exc:  # noqa: BLE001 - all control failures are non-fatal
         message = (
             f"Control socket unavailable ({exc!r}). "

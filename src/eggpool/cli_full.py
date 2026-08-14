@@ -453,7 +453,7 @@ def connect_list(ctx: click.Context) -> None:
         priorities = {
             pid: pcfg.routing_priority for pid, pcfg in config.providers.items()
         }
-    except (FileNotFoundError, AggregatorError, Exception):
+    except (FileNotFoundError, AggregatorError):
         pass
 
     click.echo("Available providers:")
@@ -941,7 +941,7 @@ def configsetup_opencode(ctx: click.Context) -> None:
 
     try:
         ctx_data = build_integration_context(config_path=config_path)
-    except OSError as exc:
+    except (AggregatorError, OSError) as exc:
         click.echo(
             f"Error: {exc}",
             err=True,
@@ -990,11 +990,14 @@ def configsetup_claude_code(ctx: click.Context) -> None:
     config_path: str = ctx.obj["config_path"]
 
     # Resolve the effective server API key (inline / env / generated).
-    # ``resolve_server_api_key`` raises SystemExit when ``api_key_env`` is
-    # set but the env var is missing, so an env-backed auth can't silently
-    # fall through to a generated key here.
+    # ``resolve_server_api_key`` raises a typed validation error when
+    # ``api_key_env`` is set but the env var is missing, so an env-backed
+    # auth can't silently fall through to a generated key here.
     try:
         key_resolution = resolve_server_api_key(config_path)
+    except AggregatorError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
     except OSError as exc:
         click.echo(
             f"Error: cannot persist new API key to {config_path}: {exc}. "
@@ -1082,7 +1085,7 @@ def _build_ctx_with_overrides(
 
     try:
         ctx_data = build_integration_context(config_path=config_path)
-    except OSError as exc:
+    except (AggregatorError, OSError) as exc:
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
 
@@ -2051,17 +2054,18 @@ def _chown_to_user(path: Path, deploy_user: DeployUser) -> None:
 
 def _chown(path: Path, owner: str) -> None:
     """Best-effort chown by ``owner:owner`` (POSIX) or fallback."""
+    import grp  # noqa: PLC0415
     import pwd  # noqa: PLC0415
 
     try:
         user_name, _, group_name = owner.partition(":")
         user_pw = pwd.getpwnam(user_name)
-        group_pw = pwd.getpwnam(group_name or user_name)
+        group_pw = grp.getgrnam(group_name or user_name)
     except KeyError:
         return
 
     with suppress(OSError, PermissionError):
-        os.chown(path, user_pw.pw_uid, group_pw.pw_gid)
+        os.chown(path, user_pw.pw_uid, group_pw.gr_gid)
 
 
 def _chmod(path: Path, mode: str) -> None:

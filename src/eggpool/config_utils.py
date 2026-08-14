@@ -140,7 +140,9 @@ def resolve_server_api_key(config_path: str) -> ServerKeyResolution:
         if env_value:
             return ServerKeyResolution(api_key=env_value, source="env", env_var=env_var)
         # Env var configured but not present — abort
-        raise SystemExit(
+        from eggpool.config_validation import ConfigStartupAuthError
+
+        raise ConfigStartupAuthError(
             f"[server].api_key_env is set to {env_var}, but that environment "
             f"variable is not available to this process. Export it before "
             f"running configsetup, or run eggpool newkey to switch to an "

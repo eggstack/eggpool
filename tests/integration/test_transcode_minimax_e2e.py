@@ -236,3 +236,16 @@ async def test_minimax_streaming_prestream_400_transcodes_error(
     assert body["error"]["message"] == "messages: too few tokens"
     assert body["error"]["type"] == "invalid_request_error"
     assert body["error"].get("code") == "invalid_request_error", body
+
+    request_row = await minimax_coordinator._db.fetch_one(  # pyright: ignore[reportPrivateUsage]
+        "SELECT first_byte_ms, upstream_connect_ms, upstream_read_ms, "
+        "coordinator_overhead_ms, bytes_emitted "
+        "FROM requests WHERE proxy_request_id = ?",
+        (context.request_id,),
+    )
+    assert request_row is not None
+    assert request_row["first_byte_ms"] is not None
+    assert request_row["upstream_connect_ms"] is not None
+    assert request_row["upstream_read_ms"] is not None
+    assert request_row["coordinator_overhead_ms"] is not None
+    assert request_row["bytes_emitted"] > 0
