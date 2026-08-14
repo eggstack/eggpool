@@ -316,3 +316,262 @@ Reject the implementation if:
 8. Run focused tests and the ordinary gate.
 9. Append to this file: implementation SHA, helper dispositions, deterministic before/after ownership behavior, exact focused test results, standard gate results, and acceptance reconciliation.
 10. Mark this plan complete and stop. Do not create a follow-up closure plan unless implementation discovers a genuinely separate defect.
+
+## Implementation closure
+
+Implementation commit: `8a9db0e` (`Reduce thinking-control ownership overhead`).
+The closure record is contained in this plan; no follow-up closure plan
+is created.
+
+### Ownership helper dispositions
+
+Audit of every production caller of the five ownership primitives after
+the change:
+
+| Helper | Production callers after Plan 121 | Disposition |
+| --- | --- | --- |
+| `provider_payload_copy()` | one: `coordinator.py:1305` upstream protocol transcode path | Retained as a conservative helper. Updated docstring warns that thinking-control and narrow mutation code MUST NOT use it. |
+| `replace_provider_payload()` | one: `coordinator.py:1351` upstream protocol transcode path | Retained as a conservative helper. The thinking-control hot path no longer uses it. |
+| `adopt_provider_payload()` | two: `coordinator.py:1264` prepared transcode reuse, `coordinator.py:4955` thinking-control adoption; plus `api/proxy_request.py:857` safe compression adoption | Trusted narrow boundary. Now also adopted by the thinking-control stage. |
+| `mutate_top_level_mapping()` | two: `transform_pipeline.py:318` stream-options, `coordinator.py:4742` thinking budget mutation | Unchanged; path-local COW. |
+| `mutate_provider_payload()` | none | Removed. One test (`test_provider_bound_request.py::test_nested_provider_mutation_isolated_from_client`) was updated to use the explicit `adopt_provider_payload()` API. |
+
+`provider_payload_copy()` and `replace_provider_payload()` stay as
+conservative helpers for the upstream protocol transcode path which is
+intentionally off the corrected hot path; the plan explicitly forbids
+forcing repository-wide deletion.
+
+### Deterministic before/after ownership behavior
+
+The reviewed hot path was, for a changed thinking-control request:
+
+```text
+provider_payload_copy()
+  -> recursive deepcopy of messages/tools/etc.
+  -> adapt_thinking_controls() path-local edits
+  -> replace_provider_payload()
+  -> dict equality comparison
+  -> recursive _owned_json_value() materialization
+```
+
+After Plan 121 it is:
+
+```text
+provider_payload (read-only)
+  -> adapt_thinking_controls() builds its own shallow-copied root
+  -> adopt_provider_payload(result.payload, reason="thinking_control")
+  -> trusted narrow adoption, no second recursive rematerialization
+```
+
+Verified by `tests/unit/test_provider_request_adaptation.py::TestReadOnlySourceContract`:
+
+- `test_accepts_read_only_mapping_proxy` — the adapter accepts a
+  `MappingProxyType` source and reports `changed=False` for a
+  passthrough case; the source is not mutated.
+- `test_passthrough_does_not_mutate_source_root` — the source dict is
+  unchanged after the call.
+- `test_passthrough_returns_fresh_root_with_shared_descendants` — even
+  a passthrough returns a fresh root dict whose `messages` list keeps
+  identity with the source through the read-only contract.
+- `test_root_only_change_shares_unaffected_descendants` — root-only
+  `reasoning_effort` change keeps `messages` *and* `tools` identity.
+- `test_nested_thinking_change_copies_root_and_thinking_only` — a
+  nested `thinking.effort` change leaves `messages`/`tools` identity
+  intact and copies only the `thinking` mapping; the source `thinking`
+  mapping is untouched.
+- `test_drop_keeps_source_intact` — `warn_drop` removal of a top-level
+  control leaves the source dict untouched.
+
+Verified by `tests/unit/test_provider_bound_request.py::TestThinkingControlAdoption`:
+
+- `test_adopt_thinking_control_shares_unchanged_descendants` — the
+  `adopt_provider_payload(reason="thinking_control")` boundary retains
+  unchanged `messages` and `tools` identity, copies only the affected
+  `thinking` mapping, leaves the source `thinking` mapping untouched,
+  and records `thinking_control` in the mutation log.
+- `test_adopt_thinking_control_root_only_change` — root-only changes
+  share the `messages` list with the source.
+- `test_no_op_adaptation_does_not_change_generation` — no-op
+  adaptation does not call any adoption setter, so generation stays
+  at zero and provider bytes are preserved.
+
+Verified by `tests/unit/test_thinking_budget_provider_cleanup.py::TestThinkingControlOwnershipContract`:
+
+- `test_no_op_thinking_controls_leave_generation_unchanged` — the
+  `_apply_selected_provider_transcode_adjustments` coordinator helper
+  reports `changed=False`, leaves `payload_generation` at zero, and
+  reuses the cached provider bytes for a known effort contract.
+- `test_changed_thinking_adoption_uses_narrow_path_cow` — a forced
+  effort alias produces a `changed=True` result; the mutation log
+  carries `reason="thinking_control"` and the `messages` list
+  round-trips through the helper.
+
+The required semantics are covered without a new COW/immutable
+framework, without reintroducing physical freezing on
+`PreparedTranscode`, and without changing reject/drop/map/warning
+behavior, effort aliases, budget bounds, or capability policies.
+
+### Standard gate results
+
+`uv sync --frozen --extra ci` — already in sync; passes.
+
+`uv run ruff format --check src/ tests/ scripts/` — 700 files
+already formatted.
+
+`uv run ruff check src/ tests/ scripts/` — all checks passed.
+
+`uv run pyright src/ scripts/` — 0 errors, 0 warnings, 0 informations.
+
+`PYTHONHASHSEED=0 TZ=UTC uv run pytest tests/smoke/ -q --tb=short --maxfail=1` —
+14 smoke tests passed.
+
+`uv run eggpool --config config.example.toml check-config` — passed.
+
+`uv run eggpool --config config.sbc.example.toml check-config` —
+passed.
+
+### Focused-test results
+
+- `tests/unit/test_provider_bound_request.py` — 19 passed (3 new
+  `TestThinkingControlAdoption` cases).
+- `tests/unit/test_provider_request_adaptation.py` — 29 passed (6 new
+  `TestReadOnlySourceContract` cases).
+- `tests/unit/test_thinking_budget_provider_cleanup.py` — 8 passed (2
+  new `TestThinkingControlOwnershipContract` cases).
+- `tests/unit/test_prepared_transcode_reuse.py` — 14 passed
+  (unchanged).
+- `tests/unit/test_transform_pipeline.py` — 17 passed (unchanged).
+- `tests/unit/test_native_provider_normalization.py` — 7 passed
+  (unchanged).
+- `tests/unit/test_thinking_control_compatibility_retry.py` — 3 passed
+  (unchanged).
+- `tests/unit/test_plan_046_thinking_control_normalization.py` — 47
+  passed (unchanged).
+- `tests/unit/test_thinking_metrics.py` — 21 passed (unchanged).
+- `tests/unit/test_thinking_metrics_provider_control.py` — 2 passed
+  (unchanged).
+- `tests/unit/test_thinking_trace.py` — 4 passed (unchanged).
+- `tests/unit/test_thinking_reasoning_matrix.py` — 121 passed
+  (unchanged).
+- `tests/unit/test_thinking_control_contract.py` — 4 passed
+  (unchanged).
+- `tests/integration/test_transcode_thinking.py` — 7 passed
+  (unchanged).
+- `tests/integration/test_proxy_integration.py` — 36 passed
+  (unchanged).
+- `tests/integration/test_coordinator_lifecycle.py` — 21 passed
+  (unchanged).
+- `tests/integration/test_coordinator_disconnect.py` — 9 passed
+  (unchanged).
+- `tests/integration/test_application_startup.py` — 4 passed
+  (unchanged).
+- `tests/integration/test_protocol_matrix.py` — 4 passed (unchanged).
+- `tests/integration/test_failover_matrix.py` — 8 passed (unchanged).
+- `tests/integration/test_streaming_transcode_concurrency.py` — 7
+  passed (unchanged).
+- `tests/integration/test_plan_046_request_path_body_capture.py` —
+  8 passed (unchanged).
+- `tests/integration/test_compression_policy_wiring.py` — 5 passed
+  (unchanged).
+- `tests/contract/test_proxy_contract.py` — 14 passed (unchanged).
+- `tests/contract/test_transcoder_contract.py` — 24 passed
+  (unchanged).
+
+No benchmark, soak, profiling, hardware-CI, allocation telemetry, or
+performance threshold infrastructure was added; CI is unchanged at one
+Python 3.11 Ruff/Pyright/smoke job.
+
+### Planning-record correction
+
+`plans/117-provider-cache-dialect-correctness.md` now records
+`52793638a54a60b99585df87afc3492f2acd9edd` as the implementation
+commit. `plans/120-sbc-characterization-and-roadmap-closure.md` row
+117 references `5279363` (the same commit). The non-resolving
+`21f5ba0` is no longer referenced anywhere outside this plan's
+historical purpose note. A bounded repo search
+(`grep -rn 21f5ba0 . --exclude-dir=.venv --exclude-dir=.git --exclude-dir=__pycache__`)
+returns only Plan 121's references to the planning-record defect.
+Cache-dialect production behavior is unchanged.
+
+### Acceptance reconciliation
+
+- [x] `_adapt_provider_thinking_controls()` no longer recursively
+  deep-copies the complete provider payload. Verified by the new
+  `TestReadOnlySourceContract` and `TestThinkingControlAdoption`
+  suites.
+- [x] `adapt_thinking_controls()` has an explicit
+  read-only-source / path-COW contract — the `payload` parameter is
+  typed `Mapping[str, Any]` with a `Read-only` docstring; the internal
+  helpers also accept `Mapping[str, Any]` and build their own
+  shallow-copied working root.
+- [x] No-op thinking adaptation performs no whole-request ownership
+  copy. `test_no_op_thinking_controls_leave_generation_unchanged`
+  pins it through the coordinator; `test_passthrough_returns_fresh_root_with_shared_descendants`
+  pins it through the adapter.
+- [x] No-op adaptation does not increment `payload_generation`,
+  invalidate bytes, or force serialization. Pin: `test_no_op_thinking_controls_leave_generation_unchanged`
+  checks `payload_generation == 0` and `provider_bytes == upstream_body`.
+- [x] Root-level changes copy only the root. Pin: `test_root_only_change_shares_unaffected_descendants`.
+- [x] Nested `thinking` changes copy root + `thinking` without
+  recursively copying unchanged messages/tools. Pin: `test_nested_thinking_change_copies_root_and_thinking_only`.
+- [x] Changed adaptation no longer performs a whole-payload equality
+  traversal followed by recursive ownership materialization. The
+  coordinator now uses `adopt_provider_payload` instead of
+  `replace_provider_payload` for the changed-result path.
+- [x] Changed adaptation creates exactly one provider generation for
+  that stage. `test_changed_thinking_adoption_uses_narrow_path_cow`
+  asserts `payload_generation == generation_before + 1` after a single
+  forced mapped adaptation.
+- [x] Canonical client payload remains unchanged in passthrough,
+  mapped, dropped, and rejected branches. Pins: the four case-specific
+  tests under `TestReadOnlySourceContract` plus the existing
+  `test_nested_provider_mutation_isolated_from_client` adaptation.
+- [x] Reused PreparedTranscode source remains unchanged after
+  selected-provider adaptation. Verified by the existing
+  `tests/unit/test_prepared_transcode_reuse.py` set (14 passed) —
+  the adapter's read-only input contract cannot mutate the prepared
+  source.
+- [x] Final changed provider bytes are encoded once and frozen retry
+  reuses them. Existing `serialize_provider_payload` lifecycle
+  unchanged; frozen retry path unchanged.
+- [x] Reject/drop/map/warning behavior, effort aliases, budget bounds,
+  and capability policies are unchanged. Existing
+  `tests/unit/test_provider_request_adaptation.py` (29 passed) and
+  `tests/unit/test_thinking_control_compatibility_retry.py` (3 passed)
+  cover all branches.
+- [x] Capability rejection finalization and no-provider-health-penalty
+  behavior remain correct. Existing
+  `tests/unit/test_thinking_budget_provider_cleanup.py` strict/streaming
+  rejection tests pass; the closure left the rejection path untouched.
+- [x] `mutate_provider_payload()` removed after caller audit showed no
+  production caller. Existing test usage migrated to the explicit
+  `adopt_provider_payload()` API.
+- [x] New path-local transforms are not routed through the arbitrary
+  generic mutator. The thinking-control hot path uses
+  `adopt_provider_payload`; the only surviving mutator helper,
+  `mutate_top_level_mapping`, is the narrow path-COW path Plan 114
+  introduced.
+- [x] Conservative `provider_payload_copy()` / `replace_provider_payload()`
+  helpers remain off the corrected hot path. Both are now used only
+  by the upstream protocol transcode path; updated docstrings
+  explicitly warn new thinking-control code against them.
+- [x] Plan 117 records `52793638a54a60b99585df87afc3492f2acd9edd`
+  as its implementation commit.
+- [x] Plan 120's Plan 117 audit row resolves to `5279363` (the same
+  commit).
+- [x] No remaining repository reference incorrectly identifies
+  `21f5ba0` as Plan 117's implementation outside this plan's
+  defect-record note.
+- [x] Cache-dialect production behavior is unchanged by the
+  planning-record correction.
+- [x] Routing, retry/backoff, database, finalization, rehash, provider
+  pool, compression, and transport behavior remain unchanged.
+- [x] No runtime dependency is added; ordinary CI remains one Python
+  3.11 Ruff/Pyright/smoke job.
+- [x] No benchmark, soak, profiling, hardware-CI, allocation telemetry,
+  or performance threshold is introduced.
+- [x] Focused ownership/thinking/prepared/rejection tests pass.
+- [x] Ruff format, Ruff lint, Pyright, 14 smoke tests, and both
+  config checks pass.
+- [x] Implementation evidence is appended to this plan; no separate
+  closure plan is created solely to close Plan 121.
