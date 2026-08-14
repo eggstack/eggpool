@@ -1092,6 +1092,7 @@ class ThinkingRequestRequirement:
     fields: list[str]
     requested_effort: str | None = None
     requested_budget_tokens: int | None = None
+    reasoning_disabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1111,6 +1112,14 @@ class ThinkingRequestIntent:
     has_historical_reasoning_content: bool = False
     client_requests_new_reasoning: bool = False
     client_protocol: str = ""
+
+
+_REASONING_DISABLED_EFFORTS: frozenset[str] = frozenset({"none"})
+
+
+def is_reasoning_disabled_effort(effort: str | None) -> bool:
+    """Return whether an effort label explicitly disables reasoning."""
+    return effort is not None and effort.strip().lower() in _REASONING_DISABLED_EFFORTS
 
 
 def classify_thinking_request(
@@ -1197,11 +1206,19 @@ def classify_thinking_request(
                     fields.append("reasoning_content")
 
     return ThinkingRequestRequirement(
-        required=len(fields) > 0,
+        required=bool(fields)
+        and not (
+            is_reasoning_disabled_effort(effort)
+            and not any(
+                field in {"reasoning", "thinking", "thinking_budget"}
+                for field in fields
+            )
+        ),
         client_protocol=client_protocol,
         fields=fields,
         requested_effort=effort,
         requested_budget_tokens=budget,
+        reasoning_disabled=is_reasoning_disabled_effort(effort),
     )
 
 

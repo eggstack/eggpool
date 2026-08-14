@@ -16,9 +16,10 @@ Resolution order:
 2. If the client supplies a ``reasoning_effort`` string (OpenAI style),
    look up the budget in the capability's ``effort_to_budget_tokens``
    mapping first, then fall back to the global defaults.
-3. If the effort is unknown and no default applies, either use a
-   conservative middle budget (4096) with a warning or reject the
-   request — depending on the ``budget_resolution_policy``.
+3. If the effort is unknown and no default applies, reject it in strict
+   mode or omit the target thinking control with a bounded warning in
+   lenient mode. Never invent a target budget for an effort that has no
+   verified mapping.
 4. Clamp to capability min/max when known.
 5. Reject if ``budget_resolution_policy = "strict"`` and the resolved
    budget was clamped or the effort was unknown.
@@ -30,14 +31,17 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from eggpool.catalog.capabilities import ThinkingCapability
+from eggpool.catalog.capabilities import (
+    ThinkingCapability,
+    is_reasoning_disabled_effort,
+)
 from eggpool.errors import CapabilityError
 
 logger = logging.getLogger(__name__)
 
-# Hard-coded fallback when *no* default is configured at all and the
-# capability does not carry an effort mapping.  Intentionally matches
-# the previous hard-coded "medium" value.
+# Defensive fallback for the no-input path. Callers should only invoke the
+# resolver when a thinking control is present; it is never used for an
+# unknown effort.
 _DEFAULT_BUDGET = 4096
 
 # Canonical effort levels recognised by the resolver.
@@ -48,9 +52,10 @@ _KNOWN_EFFORTS: frozenset[str] = frozenset({"low", "medium", "high"})
 class ThinkingBudgetResolution:
     """Result of :func:`resolve_thinking_budget`."""
 
-    budget_tokens: int
+    budget_tokens: int | None
     source: str
     clamped: bool = False
+    thinking_enabled: bool = True
     warnings: list[dict[str, Any]] = field(  # pyright: ignore[reportUnknownVariableType]
         default_factory=list
     )
@@ -75,9 +80,9 @@ def resolve_thinking_budget(
         requested_budget_tokens: Anthropic-style explicit ``budget_tokens``.
         capability: the resolved ``ThinkingCapability`` for the model.
         budget_defaults: global effort→budget defaults from config.
-        budget_resolution_policy: ``"lenient"`` (default, use fallback
-            budget for unknown efforts) or ``"strict"`` (reject unknown
-            efforts and clamped budgets).
+        budget_resolution_policy: ``"lenient"`` (default, omit an
+            unrepresentable target control with a warning) or ``"strict"``
+            (reject unknown efforts and clamped budgets).
 
     Returns:
         A :class:`ThinkingBudgetResolution` with the resolved budget,
@@ -126,6 +131,15 @@ def resolve_thinking_budget(
     # --- Step 2: OpenAI-style reasoning_effort -----------------------
     if requested_effort is not None:
         effort = requested_effort.lower()
+        # OpenAI's verified ``none`` effort explicitly disables reasoning. It
+        # is not a low budget and must never enable Anthropic thinking as a
+        # side effect of protocol translation.
+        if is_reasoning_disabled_effort(effort):
+            return ThinkingBudgetResolution(
+                budget_tokens=None,
+                source="reasoning_disabled",
+                thinking_enabled=False,
+            )
         return _resolve_effort(
             effort=effort,
             model_id=model_id,
@@ -279,11 +293,17 @@ def _resolve_effort(
             warnings=warnings,
         )
 
-    # 2d: unknown effort level
+    # 2d: unmapped effort level. A current provider may support a value such
+    # as ``xhigh`` or ``max`` without EggPool having a verified Anthropic
+    # budget mapping. In lenient mode preserve the request safely by omitting
+    # the target control and reporting bounded structural loss. A guessed
+    # medium budget would silently change client intent.
     warnings.append(
         {
             "kind": "unknown_effort",
+            "field": "reasoning_effort",
             "effort": effort,
+            "reason": "target_mapping_unknown",
             "model_id": model_id,
             "provider_id": provider_id,
         }
@@ -308,17 +328,10 @@ def _resolve_effort(
             provider_id=provider_id,
         )
 
-    # Lenient: use medium as conservative fallback
-    raw = _DEFAULT_BUDGET
-    budget, clamped, clamp_warnings = _clamp_budget(
-        raw, capability, model_id, provider_label
-    )
-    warnings.extend(clamp_warnings)
-
     return ThinkingBudgetResolution(
-        budget_tokens=budget,
-        source="unknown_effort_fallback",
-        clamped=clamped,
+        budget_tokens=None,
+        source="unmapped_effort_dropped",
+        thinking_enabled=False,
         warnings=warnings,
     )
 

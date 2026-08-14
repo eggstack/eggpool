@@ -89,7 +89,13 @@ changes create a new provider-owned generation.
 3. `[transcoder.thinking_budget_defaults]`
 4. Hard-coded fallback (low=1024, medium=4096, high=16384)
 
-Budgets clamped to `budget_tokens_min`/`budget_tokens_max`. `strict` policy rejects unknown efforts.
+The hard-coded fallback is only for the legacy `low`/`medium`/`high` values.
+`none` is an explicit disable signal and emits no Anthropic thinking block.
+Other effort labels, including current provider values such as `xhigh` or
+`max`, require an explicit verified capability mapping. With no mapping,
+`strict` rejects locally; `lenient` omits the target control and emits a
+bounded `unknown_effort` warning rather than guessing a budget. Budgets are
+clamped to `budget_tokens_min`/`budget_tokens_max`.
 
 ### `transcoder/ids.py`
 
@@ -183,8 +189,12 @@ per-protocol `reasoning_efforts`. Missing values mean unknown support; no
 native field is emitted merely because the protocol family matches.
 
 OpenAI `reasoning_effort` is mapped to Anthropic `thinking.budget_tokens` only
-through the existing target thinking capability budget mapping. Anthropic
-manual thinking budgets are not converted into fabricated OpenAI effort
+through the existing target thinking capability budget mapping or the legacy
+low/medium/high compatibility defaults. OpenAI's effort values are
+model-dependent; `none` disables reasoning and is never converted into a
+positive Anthropic budget. Unmapped values are rejected or dropped according
+to policy, never assigned a guessed medium budget. Anthropic manual thinking
+budgets are not converted into fabricated OpenAI effort
 values; only an explicit Anthropic effort value with a verified OpenAI target
 mapping can cross that boundary.
 

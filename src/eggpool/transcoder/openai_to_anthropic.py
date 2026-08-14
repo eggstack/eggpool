@@ -613,10 +613,11 @@ class OpenAIToAnthropic:
                     budget_defaults=budget_defaults,
                     budget_resolution_policy=budget_resolution_policy,
                 )
-                out["thinking"] = {
-                    "type": "enabled",
-                    "budget_tokens": resolution.budget_tokens,
-                }
+                if resolution.thinking_enabled and resolution.budget_tokens is not None:
+                    out["thinking"] = {
+                        "type": "enabled",
+                        "budget_tokens": resolution.budget_tokens,
+                    }
                 warnings.extend(resolution.warnings)
             except Exception as exc:
                 # BudgetResolutionError (strict policy) inherits from

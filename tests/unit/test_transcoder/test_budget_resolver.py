@@ -151,15 +151,39 @@ class TestResolveThinkingBudget:
         assert result.budget_tokens == 32768
         assert result.source == "capability_effort_mapping"
 
-    def test_effort_unknown_lenient_falls_back(self) -> None:
+    def test_effort_unknown_lenient_drops_target_control(self) -> None:
         result = resolve_thinking_budget(
             model_id="claude-3",
             provider_id="anthropic",
             requested_effort="ultra",
         )
-        assert result.budget_tokens == 4096
-        assert result.source == "unknown_effort_fallback"
+        assert result.budget_tokens is None
+        assert result.thinking_enabled is False
+        assert result.source == "unmapped_effort_dropped"
         assert any(w["kind"] == "unknown_effort" for w in result.warnings)
+        assert result.warnings[0]["reason"] == "target_mapping_unknown"
+
+    def test_none_disables_target_thinking(self) -> None:
+        result = resolve_thinking_budget(
+            model_id="claude-3",
+            provider_id="anthropic",
+            requested_effort="none",
+        )
+        assert result.budget_tokens is None
+        assert result.thinking_enabled is False
+        assert result.source == "reasoning_disabled"
+        assert result.warnings == []
+
+    def test_new_effort_uses_only_explicit_capability_mapping(self) -> None:
+        result = resolve_thinking_budget(
+            model_id="gpt-5.6",
+            provider_id="anthropic",
+            requested_effort="xhigh",
+            capability=ThinkingCapability(effort_to_budget_tokens={"xhigh": 24000}),
+            budget_defaults={"medium": 4096},
+        )
+        assert result.budget_tokens == 24000
+        assert result.source == "capability_effort_mapping"
 
     def test_effort_unknown_strict_rejects(self) -> None:
         with pytest.raises(BudgetResolutionError, match="Unknown effort"):
@@ -318,8 +342,11 @@ class TestBudgetResolutionViaTranscoder:
             _make_context(),
             features=_features(),
         )
-        assert result["thinking"] == {"type": "enabled", "budget_tokens": 4096}
-        assert any(w["kind"] == "unknown_effort" for w in warnings)
+        assert "thinking" not in result
+        assert any(
+            w["kind"] == "unknown_effort" and w["reason"] == "target_mapping_unknown"
+            for w in warnings
+        )
 
     def test_backward_compat_no_capability(self) -> None:
         payload = {

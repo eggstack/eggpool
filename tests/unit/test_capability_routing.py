@@ -43,6 +43,12 @@ class TestClassifyThinkingRequest:
         assert req.requested_effort == "high"
         assert req.client_protocol == "openai"
 
+    def test_openai_none_does_not_require_thinking_capability(self) -> None:
+        req = classify_thinking_request({"reasoning_effort": "none"}, "openai")
+        assert req.required is False
+        assert req.reasoning_disabled is True
+        assert req.requested_effort == "none"
+
     def test_openai_reasoning(self) -> None:
         req = classify_thinking_request({"reasoning": {"effort": "low"}}, "openai")
         assert req.required is True
@@ -327,6 +333,18 @@ class TestEligibilityWithThinking:
         req = ThinkingRequestRequirement(
             required=False, client_protocol="openai", fields=[]
         )
+        eligible = get_eligible_accounts(states, "m1", cache, thinking_requirement=req)
+        assert len(eligible) == 1
+
+    def test_reasoning_disabled_effort_passes_unsupported_account(self) -> None:
+        cache = self._make_cache_with_thinking("acct1", "p1", "m1", "unsupported")
+        states = [
+            __import__(
+                "eggpool.accounts.state", fromlist=["AccountRuntimeState"]
+            ).AccountRuntimeState(name="acct1", enabled=True)
+        ]
+        req = classify_thinking_request({"reasoning_effort": "none"}, "openai")
+        assert req.required is False
         eligible = get_eligible_accounts(states, "m1", cache, thinking_requirement=req)
         assert len(eligible) == 1
 

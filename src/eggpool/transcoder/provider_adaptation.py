@@ -467,6 +467,40 @@ def _handle_effort_budget_contract(
                     intent,
                 )
 
+    # OpenAI → Anthropic translation consumes the source
+    # ``reasoning_effort`` field and may emit a target ``thinking`` block.
+    # Validate that generated block against the selected provider contract as
+    # well; otherwise a fixed or incompatible target could receive a control
+    # that is no longer present under its original field name.
+    if (
+        client_protocol == "openai"
+        and "thinking" in new_payload
+        and "thinking" not in requested
+    ):
+        result = _adapt_thinking_block(
+            new_payload=new_payload,
+            contract=contract,
+            model_id=model_id,
+            provider_id=provider_id,
+            intent=intent,
+            policy=policy,
+        )
+        if result.disposition == "rejected":
+            return _reject(
+                new_payload,
+                model_id,
+                provider_id,
+                "unsupported_generated_thinking_control",
+                intent,
+            )
+        if result.disposition in ("mapped", "dropped"):
+            new_payload = result.payload
+            changed = True
+            if result.warning:
+                warnings.append(result.warning)
+            if "thinking" in new_payload:
+                emitted.append("thinking")
+
     decision: Literal["passthrough", "mapped", "dropped", "rejected"] = "passthrough"
     if changed:
         if any(w.kind == "thinking_control_dropped" for w in warnings):

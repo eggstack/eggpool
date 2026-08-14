@@ -113,7 +113,7 @@ prefer_native = true      # prefer native-protocol accounts in routing
 # high = 16384
 
 # How to handle budget resolution edge cases.
-# "lenient" (default): use conservative fallback for unknown efforts, allow clamping.
+# "lenient" (default): omit unmapped efforts with a warning, allow clamping.
 # "strict": reject unknown efforts and clamped budgets before dispatch.
 # budget_resolution_policy = "lenient"
 

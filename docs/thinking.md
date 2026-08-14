@@ -86,8 +86,14 @@ All values must be > 0. See [Budget Mapping](#7-budget-mapping) for resolution o
 budget_resolution_policy = "lenient"   # default
 ```
 
-- `"lenient"`: uses a conservative fallback (4096 tokens) for unknown effort levels and allows budget clamping.
+- `"lenient"`: preserves an unmapped effort safely by omitting the target thinking control and emitting a bounded warning; it allows budget clamping.
 - `"strict"`: rejects unknown effort levels and clamped budgets with `BudgetResolutionError` (HTTP 400) before dispatch.
+
+OpenAI effort values are model-dependent. A verified `reasoning_effort =
+"none"` explicitly disables reasoning and never creates an Anthropic thinking
+block. Current or future values such as `xhigh` and `max` are translated only
+when the selected capability provides an explicit mapping; otherwise lenient
+mode drops the target control rather than guessing a 4096-token budget.
 
 ### OpenAI-Compatible Reasoning Fields
 
@@ -343,9 +349,14 @@ The resolver evaluates these sources in order, stopping at the first match:
 2. **`reasoning_effort` via capability mapping** — looks up the effort in `ThinkingCapability.effort_to_budget_tokens`.
 3. **Global config defaults** — `[transcoder.thinking_budget_defaults]`.
 4. **Hard-coded fallback** — `low=1024, medium=4096, high=16384`.
-5. **Unknown effort** — if the effort string is not recognized:
-   - `"lenient"` mode: uses 4096 as a conservative fallback.
+5. **Unmapped effort** — if no verified target mapping exists:
+   - `"lenient"` mode: omits target thinking and emits an `unknown_effort`
+     warning with `reason = "target_mapping_unknown"`.
    - `"strict"` mode: raises `BudgetResolutionError` (HTTP 400).
+
+The legacy hard-coded compatibility values apply only to `low`, `medium`, and
+`high`. The explicit `none` disable value produces no budget and no enabled
+thinking block.
 
 ### Clamping
 

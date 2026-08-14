@@ -2282,6 +2282,11 @@ class RequestCoordinator:
                     f in ("reasoning_effort", "thinking", "thinking_budget")
                     for f in thinking_req.fields
                 )
+                if thinking_req.reasoning_disabled and not any(
+                    f in ("reasoning", "thinking", "thinking_budget")
+                    for f in thinking_req.fields
+                ):
+                    _has_new_reasoning = False
                 context.thinking_intent = ThinkingRequestIntent(
                     requested_effort=thinking_req.requested_effort,
                     requested_effort_original=thinking_req.requested_effort,
@@ -4708,13 +4713,11 @@ class RequestCoordinator:
 
         if not context.transcode_required:
             return
+        if self._transcoder_policy is not None and not getattr(
+            self._transcoder_policy.features, "thinking", False
+        ):
+            return
         thinking_block_obj: object = request.provider_payload.get("thinking")
-        if not isinstance(thinking_block_obj, dict):
-            return
-        thinking_block = cast("dict[str, object]", thinking_block_obj)
-        budget_value_obj: object = thinking_block.get("budget_tokens")
-        if not isinstance(budget_value_obj, (int, float)):
-            return
         budget_defaults: dict[str, int] | None = None
         policy = "lenient"
         if self._transcoder_policy is not None:
@@ -4723,6 +4726,12 @@ class RequestCoordinator:
         original_effort, original_budget = _extract_original_thinking_budget_inputs(
             context,
         )
+        if (
+            original_effort is None
+            and original_budget is None
+            and not isinstance(thinking_block_obj, dict)
+        ):
+            return
         resolution = resolve_thinking_budget(
             model_id=context.model_id,
             provider_id=selected.provider_id,
@@ -4734,16 +4743,43 @@ class RequestCoordinator:
         )
         if context.thinking_trace is not None:
             context.thinking_trace["resolved_budget_tokens"] = resolution.budget_tokens
+            context.thinking_trace["budget_resolution_source"] = resolution.source
             context.thinking_trace["capability_status"] = thinking_capability.status
             context.thinking_trace["capability_source"] = thinking_capability.source
-            if not context.thinking_trace.get("upstream_fields"):
+        if resolution.thinking_enabled and resolution.budget_tokens is not None:
+            if context.thinking_trace is not None and not context.thinking_trace.get(
+                "upstream_fields"
+            ):
                 context.thinking_trace["upstream_fields"] = ["thinking"]
-        request.mutate_top_level_mapping(
-            "thinking",
-            "budget_tokens",
-            resolution.budget_tokens,
-            reason="thinking_budget",
-        )
+            if isinstance(thinking_block_obj, dict):
+                request.mutate_top_level_mapping(
+                    "thinking",
+                    "budget_tokens",
+                    resolution.budget_tokens,
+                    reason="thinking_budget",
+                )
+            else:
+                provider_payload = dict(request.provider_payload)
+                provider_payload["thinking"] = {
+                    "type": "enabled",
+                    "budget_tokens": resolution.budget_tokens,
+                }
+                request.adopt_provider_payload(
+                    provider_payload,
+                    reason="thinking_budget",
+                )
+        elif "thinking" in request.provider_payload:
+            if context.thinking_trace is not None and resolution.source in {
+                "reasoning_disabled",
+                "unmapped_effort_dropped",
+            }:
+                context.thinking_trace["upstream_fields"] = []
+            provider_payload = dict(request.provider_payload)
+            del provider_payload["thinking"]
+            request.adopt_provider_payload(
+                provider_payload,
+                reason="thinking_budget_disabled",
+            )
         if context.transcode_context is not None:
             context.transcode_context.loss_warnings.extend(resolution.warnings)
             if resolution.clamped:

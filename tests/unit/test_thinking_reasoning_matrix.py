@@ -828,7 +828,7 @@ class TestGroup5OpenAIToAnthropicRequestTranscoding:
         )
         assert result["thinking"] == {"type": "enabled", "budget_tokens": 16384}
 
-    def test_unknown_effort_uses_fallback(self) -> None:
+    def test_unknown_effort_drops_target_control(self) -> None:
         payload = {
             "model": "claude-3",
             "messages": [{"role": "user", "content": "Think"}],
@@ -837,8 +837,43 @@ class TestGroup5OpenAIToAnthropicRequestTranscoding:
         result, warnings = self.transcoder.encode_request(
             payload, _make_context(), features=_features()
         )
-        assert result["thinking"]["type"] == "enabled"
-        assert result["thinking"]["budget_tokens"] == 4096
+        assert "thinking" not in result
+        assert any(
+            warning.get("kind") == "unknown_effort"
+            and warning.get("reason") == "target_mapping_unknown"
+            for warning in warnings
+        )
+
+    def test_none_does_not_enable_anthropic_thinking(self) -> None:
+        payload = {
+            "model": "claude-3",
+            "messages": [{"role": "user", "content": "No hidden reasoning"}],
+            "reasoning_effort": "none",
+        }
+        result, warnings = self.transcoder.encode_request(
+            payload, _make_context(), features=_features()
+        )
+        assert "thinking" not in result
+        assert result["messages"] == payload["messages"]
+        assert not any(warning.get("kind") == "unknown_effort" for warning in warnings)
+
+    def test_new_effort_uses_explicit_capability_mapping(self) -> None:
+        payload = {
+            "model": "claude-3",
+            "messages": [{"role": "user", "content": "Think deeply"}],
+            "reasoning_effort": "xhigh",
+        }
+        result, warnings = self.transcoder.encode_request(
+            payload,
+            _make_context(),
+            features=_features(),
+            thinking_capability=_capability(
+                "supported",
+                effort_to_budget_tokens={"xhigh": 24000},
+            ),
+        )
+        assert result["thinking"] == {"type": "enabled", "budget_tokens": 24000}
+        assert not any(warning.get("kind") == "unknown_effort" for warning in warnings)
 
     def test_assistant_reasoning_content_to_thinking_block(self) -> None:
         payload = {

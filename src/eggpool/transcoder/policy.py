@@ -153,7 +153,9 @@ class ThinkingBudgetDefaults(BaseModel):
 
     These defaults are used when the resolved model's
     ``ThinkingCapability.effort_to_budget_tokens`` does not contain the
-    requested effort level.  Values must be > 0.
+    requested effort level. Only the legacy ``low``/``medium``/``high``
+    compatibility defaults are global; other labels require an explicit
+    capability mapping. Values must be > 0.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -300,10 +302,10 @@ class TranscoderPolicy(BaseModel):
     budget_resolution_policy: Literal["lenient", "strict"] = Field(
         default="lenient",
         description=(
-            "How to handle budget resolution edge cases. 'lenient' uses "
-            "a conservative fallback for unknown effort levels and allows "
-            "clamping. 'strict' rejects unknown efforts and clamped "
-            "budgets before dispatch."
+            "How to handle budget resolution edge cases. 'lenient' omits "
+            "an unmapped effort target with a warning and allows clamping. "
+            "'strict' rejects unknown efforts and clamped budgets before "
+            "dispatch."
         ),
     )
 

@@ -62,6 +62,11 @@ Transparent request/response format conversion between OpenAI and Anthropic prot
   `native_structured_outputs`, `strict_tools`, `parallel_tool_control`, and
   per-protocol `reasoning_efforts`. Missing facts are unknown and do not emit
   native fields to generic compatible providers.
+- OpenAI reasoning efforts are model-dependent. The verified `none` value
+  disables reasoning; OpenAI → Anthropic translation omits target thinking for
+  it. `xhigh`, `max`, and future labels require an explicit capability mapping
+  before a target budget is emitted; otherwise strict policy rejects and
+  lenient policy drops the target control with a bounded warning.
 - Native prompt-cache translation is capability-gated and bounded to four
   breakpoints. `TranscodingCapabilities.prompt_cache_breakpoints` is a
   provider/model contract map with an explicit first-party or compatible-

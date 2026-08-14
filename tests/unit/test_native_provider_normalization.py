@@ -81,6 +81,22 @@ class TestNativeKnownContract:
         assert result.decision in ("passthrough", "mapped")
         assert "reasoning_effort" in result.emitted_controls
 
+    def test_native_effort_contract_preserves_explicit_new_effort(self) -> None:
+        """A provider-declared current effort value remains native pass-through."""
+        cap = _capability(mode="effort", accepted_efforts=["xhigh"])
+        intent = _intent(effort="xhigh", fields=("reasoning_effort",))
+        result = adapt_thinking_controls(
+            payload={"model": "test", "reasoning_effort": "xhigh"},
+            client_protocol="openai",
+            model_id="test-model",
+            provider_id="test-provider",
+            capability=cap,
+            intent=intent,
+            policy=ProviderControlPolicy(),
+        )
+        assert result.changed is False
+        assert result.payload["reasoning_effort"] == "xhigh"
+
     def test_native_fixed_contract_rejects_effort(self) -> None:
         """Native path + fixed contract + effort sent → rejected."""
         cap = _capability(mode="fixed")
