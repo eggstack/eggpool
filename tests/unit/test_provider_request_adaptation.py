@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import MappingProxyType
+
 import pytest
 
 from eggpool.catalog.capabilities import (
@@ -495,3 +497,183 @@ class TestThinkingBudgetFieldAdaptation:
         assert result.decision == "mapped"
         assert result.payload["reasoning_effort"] == "high"
         assert "thinking_budget" not in result.payload
+
+
+# ---------------------------------------------------------------------------
+# Plan 121 — read-only / path-COW contract regression coverage
+# ---------------------------------------------------------------------------
+
+
+class TestReadOnlySourceContract:
+    """``adapt_thinking_controls`` accepts a read-only ``Mapping`` source.
+
+    Plan 121: the adapter input is treated as read-only.  It builds its
+    own shallow-copied working root and returns a fresh dict payload
+    whose unchanged descendants share identity with the source through
+    the read-only contract — no recursive ``deepcopy`` is performed by
+    callers, and the source ``Mapping`` is never mutated in place.
+    """
+
+    def test_accepts_read_only_mapping_proxy(self) -> None:
+        cap = _capability(mode="effort", accepted_efforts=["low", "high"])
+        intent = _intent(effort="high", fields=("reasoning_effort",))
+        source = MappingProxyType(
+            {"model": "test", "reasoning_effort": "high"},
+        )
+        result = adapt_thinking_controls(
+            payload=source,
+            client_protocol="openai",
+            model_id="test-model",
+            provider_id="test-provider",
+            capability=cap,
+            intent=intent,
+            policy=ProviderControlPolicy(),
+        )
+        assert result.changed is False
+        assert result.decision == "passthrough"
+        assert dict(source) == {"model": "test", "reasoning_effort": "high"}
+
+    def test_passthrough_does_not_mutate_source_root(self) -> None:
+        cap = _capability(mode="effort", accepted_efforts=["low", "high"])
+        intent = _intent(effort="high", fields=("reasoning_effort",))
+        source = {"model": "test", "reasoning_effort": "high"}
+        original = dict(source)
+        adapt_thinking_controls(
+            payload=source,
+            client_protocol="openai",
+            model_id="test-model",
+            provider_id="test-provider",
+            capability=cap,
+            intent=intent,
+            policy=ProviderControlPolicy(),
+        )
+        assert source == original
+
+    def test_passthrough_returns_fresh_root_with_shared_descendants(
+        self,
+    ) -> None:
+        """Even on passthrough the returned root is a fresh dict so callers
+        can adopt it without aliasing the source MappingProxyType."""
+        cap = _capability(mode="effort", accepted_efforts=["low", "high"])
+        intent = _intent(effort="high", fields=("reasoning_effort",))
+        messages = [{"role": "user", "content": "large"}]
+        source = {
+            "model": "test",
+            "messages": messages,
+            "reasoning_effort": "high",
+        }
+        result = adapt_thinking_controls(
+            payload=source,
+            client_protocol="openai",
+            model_id="test-model",
+            provider_id="test-provider",
+            capability=cap,
+            intent=intent,
+            policy=ProviderControlPolicy(),
+        )
+        assert result.payload is not source
+        # The unchanged ``messages`` list keeps identity with the source
+        # through the read-only contract.
+        assert result.payload["messages"] is messages
+
+    def test_root_only_change_shares_unaffected_descendants(self) -> None:
+        """Changing/dropping ``reasoning_effort`` copies the root only.
+
+        The ``messages`` and ``tools`` lists retain their source identity
+        so downstream adoption can share them through the trusted
+        ``adopt_provider_payload`` boundary without a recursive walk.
+        """
+        cap = _capability(
+            mode="effort",
+            accepted_efforts=["low", "medium", "high"],
+            effort_aliases={"med": "medium"},
+        )
+        intent = _intent(effort="med", fields=("reasoning_effort",))
+        messages = [{"role": "user", "content": "large"}]
+        tools = [{"type": "function", "function": {"name": "tool"}}]
+        source = {
+            "model": "test",
+            "messages": messages,
+            "tools": tools,
+            "reasoning_effort": "med",
+        }
+        result = adapt_thinking_controls(
+            payload=source,
+            client_protocol="openai",
+            model_id="test-model",
+            provider_id="test-provider",
+            capability=cap,
+            intent=intent,
+            policy=ProviderControlPolicy(),
+        )
+        assert result.decision == "mapped"
+        assert result.payload["reasoning_effort"] == "medium"
+        assert result.payload["messages"] is messages
+        assert result.payload["tools"] is tools
+
+    def test_nested_thinking_change_copies_root_and_thinking_only(self) -> None:
+        """Changing ``thinking.effort`` copies the root and the nested
+        ``thinking`` mapping; ``messages`` and ``tools`` keep their
+        source identity, and the source ``thinking`` mapping is not
+        mutated.
+        """
+        cap = _capability(
+            mode="effort",
+            accepted_efforts=["low", "medium", "high"],
+            effort_aliases={"med": "medium"},
+        )
+        intent = _intent(effort="med", fields=("thinking",))
+        messages = [{"role": "user", "content": "large"}]
+        tools = [{"type": "function", "function": {"name": "tool"}}]
+        source_thinking = {"type": "enabled", "effort": "med"}
+        source = {
+            "model": "test",
+            "messages": messages,
+            "tools": tools,
+            "thinking": source_thinking,
+        }
+        result = adapt_thinking_controls(
+            payload=source,
+            client_protocol="anthropic",
+            model_id="test-model",
+            provider_id="test-provider",
+            capability=cap,
+            intent=intent,
+            policy=ProviderControlPolicy(),
+        )
+        assert result.changed is True
+        assert result.payload["messages"] is messages
+        assert result.payload["tools"] is tools
+        # The nested ``thinking`` mapping is shallow-copied, so its
+        # identity differs from the source while the source itself is
+        # untouched.
+        assert result.payload["thinking"] is not source_thinking
+        assert source_thinking == {"type": "enabled", "effort": "med"}
+        assert result.payload["thinking"]["effort"] == "medium"
+
+    def test_drop_keeps_source_intact(self) -> None:
+        """The ``warn_drop`` policy removes a top-level control while
+        leaving the source dict untouched.
+        """
+        cap = _capability(mode="none")
+        intent = _intent(effort="high", fields=("reasoning_effort",))
+        messages = [{"role": "user", "content": "large"}]
+        source = {
+            "model": "test",
+            "messages": messages,
+            "reasoning_effort": "high",
+        }
+        result = adapt_thinking_controls(
+            payload=source,
+            client_protocol="openai",
+            model_id="test-model",
+            provider_id="test-provider",
+            capability=cap,
+            intent=intent,
+            policy=ProviderControlPolicy(unsupported_control="warn_drop"),
+        )
+        assert result.decision == "dropped"
+        assert result.payload["messages"] is messages
+        assert "reasoning_effort" not in result.payload
+        # Source untouched.
+        assert source["reasoning_effort"] == "high"

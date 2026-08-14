@@ -189,6 +189,20 @@ response is chosen and the stream is handed off, dispatch-only bytes, parsed
 state, and provider payload buffers are released; scalar body-size/accounting
 metadata remains for finalization.
 
+Selected-provider thinking-control adaptation (`adapt_thinking_controls`) is
+called with the current provider-bound payload as a read-only `Mapping` and
+adopts changed results through `adopt_provider_payload(reason="thinking_control")`.
+The adapter builds its own shallow-copied working root, so the source graph
+is never mutated and unchanged descendants (`messages`, `tools`, etc.) retain
+their identity. No-op adaptation leaves `payload_generation` unchanged and
+preserves the cached provider bytes. The `mutate_provider_payload()` arbitrary
+mutator was removed (Plan 121) because no production caller remained; the
+explicit narrow ownership primitives (`mutate_top_level_mapping`,
+`adopt_provider_payload`, `set_provider_payload`) cover the narrowed surface.
+`provider_payload_copy()` and `replace_provider_payload()` remain as
+conservative helpers for the upstream protocol transcode path, which is
+intentionally off the corrected hot path.
+
 Prepared transcode results retain one request-local translated JSON generation
 without recursively freezing or rematerializing it. Valid unchanged reuse
 adopts that generation through `adopt_provider_payload()` and attaches the

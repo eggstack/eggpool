@@ -245,7 +245,7 @@ No full retained-suite requirement and no live provider requirement for determin
 
 ## Closure record
 
-Implementation commit: `21f5ba0`.
+Implementation commit: `52793638a54a60b99585df87afc3492f2acd9edd`.
 
 Implementation introduces `PromptCacheCapability` entries under
 `TranscodingCapabilities.prompt_cache_breakpoints`. Each selected

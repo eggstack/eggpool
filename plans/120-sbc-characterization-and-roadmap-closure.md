@@ -411,7 +411,7 @@ final documentation commit is the commit containing this record.
 | 114 | `3bc7e2e` | Provider-bound no-op/path-COW, safe-compression adoption, focused ownership tests, ordinary gate. |
 | 115 | `3921442` | Prepared graph/body reuse, recompute/COW behavior, 230 focused tests, ordinary gate. |
 | 116 | `c2c8f84` | Canonical estimate reuse, translated estimator, tool-padding audit, 108 focused tests, ordinary gate. |
-| 117 | `21f5ba0` | Execution-date OpenAI/Anthropic docs, explicit cache dialect capability model, 632 cache/transcoder tests, ordinary gate. |
+| 117 | `5279363` | Execution-date OpenAI/Anthropic docs, explicit cache dialect capability model, 632 cache/transcoder tests, ordinary gate. |
 | 118 | `038a466` | Compression/tuning/synthetic-cache/DNS decisions, `granian[pname]` verification, optional-surface tests, ordinary gate. |
 | 119 | `8903cd0` | 7,909 → 7,858 collected tests, protected union, planning guidance, unchanged one-job CI. |
 

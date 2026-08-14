@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 
 from eggpool.request.provider_bound_request import (
@@ -187,12 +189,6 @@ class TestProviderBoundRequest:
         assert pbr.segmentation_is_valid("openai", 1) is False
 
     def test_nested_provider_mutation_isolated_from_client(self) -> None:
-        pbr = ProviderBoundRequest(
-            client_bytes=b"{}",
-            client_payload={"model": "gpt-4"},
-            client_protocol="openai",
-            model_id="gpt-4",
-        )
         client_payload = {
             "model": "gpt-4",
             "messages": [{"role": "user", "content": "hi"}],
@@ -203,10 +199,22 @@ class TestProviderBoundRequest:
             client_protocol="openai",
             model_id="gpt-4",
         )
-        pbr.mutate_provider_payload(
-            lambda payload: payload["messages"][0].__setitem__("content", "changed"),
-            reason="nested_test",
+        # After Plan 121 the arbitrary mutator helper was removed;
+        # use the explicit narrow COW API.  ``mutate_top_level_mapping``
+        # shallow-copies the root only; the nested messages list is
+        # shared with the source until a later transform establishes
+        # ownership for it.
+        nested_provider_payload = dict(
+            cast("dict[str, Any]", pbr.provider_payload),
         )
+        nested_provider_payload["messages"] = list(
+            nested_provider_payload["messages"],
+        )
+        nested_provider_payload["messages"][0] = dict(
+            nested_provider_payload["messages"][0],
+        )
+        nested_provider_payload["messages"][0]["content"] = "changed"
+        pbr.adopt_provider_payload(nested_provider_payload, reason="nested_test")
         assert client_payload["messages"][0]["content"] == "hi"
         assert pbr.provider_payload["messages"][0]["content"] == "changed"
 
@@ -248,3 +256,112 @@ class TestProviderBoundRequest:
         for index in range(4):
             pbr.set_provider_payload({"model": f"model-{index}"})
         assert len(pbr.mutation_log) == 2
+
+
+# ---------------------------------------------------------------------------
+# Plan 121 — thinking-control ownership regression coverage
+# ---------------------------------------------------------------------------
+
+
+class TestThinkingControlAdoption:
+    """Plan 121: thinking-control changes use the trusted adoption path.
+
+    ``_adapt_provider_thinking_controls`` adopts the adapter result
+    through ``adopt_provider_payload(reason="thinking_control")``
+    instead of running it through the conservative
+    ``replace_provider_payload`` helper that performs a full
+    whole-graph equality check followed by a recursive re-ownership
+    walk.  These tests pin that contract on the ownership primitives
+    themselves; the integration tests in
+    ``test_thinking_budget_provider_cleanup.py`` cover the coordinator
+    hot path end to end.
+    """
+
+    def test_adopt_thinking_control_shares_unchanged_descendants(
+        self,
+    ) -> None:
+        messages = [{"role": "user", "content": "large"}]
+        tools = [{"type": "function", "function": {"name": "tool"}}]
+        source_thinking = {"type": "enabled", "effort": "med"}
+        payload = {
+            "model": "test",
+            "messages": messages,
+            "tools": tools,
+            "thinking": source_thinking,
+        }
+        pbr = ProviderBoundRequest(
+            client_bytes=b"{}",
+            client_payload=payload,
+            client_protocol="anthropic",
+            model_id="test-model",
+        )
+
+        # Simulate the adapter output: root shallow-copied + nested
+        # ``thinking`` shallow-copied; ``messages`` and ``tools`` retain
+        # their identity with the source.
+        adopted_root = dict(pbr.provider_payload)
+        adopted_thinking = dict(source_thinking)
+        adopted_thinking["effort"] = "medium"
+        adopted_root["thinking"] = adopted_thinking
+        pbr.adopt_provider_payload(adopted_root, reason="thinking_control")
+
+        # Untouched descendants share identity with the source.
+        assert pbr.provider_payload["messages"] is messages
+        assert pbr.provider_payload["tools"] is tools
+        # The nested ``thinking`` mapping is distinct from the source.
+        assert pbr.provider_payload["thinking"] is not source_thinking
+        # Source ``thinking`` is unchanged.
+        assert source_thinking == {"type": "enabled", "effort": "med"}
+        assert pbr.payload_generation == 1
+        assert pbr.mutation_log[-1].reason == "thinking_control"
+
+    def test_adopt_thinking_control_root_only_change(self) -> None:
+        messages = [{"role": "user", "content": "large"}]
+        payload = {
+            "model": "test",
+            "messages": messages,
+            "reasoning_effort": "med",
+        }
+        pbr = ProviderBoundRequest(
+            client_bytes=b"{}",
+            client_payload=payload,
+            client_protocol="openai",
+            model_id="test-model",
+        )
+
+        # Root-only change: messages stays shared.
+        adopted_root = dict(pbr.provider_payload)
+        adopted_root["reasoning_effort"] = "medium"
+        pbr.adopt_provider_payload(adopted_root, reason="thinking_control")
+
+        assert pbr.provider_payload["messages"] is messages
+        assert pbr.provider_payload["reasoning_effort"] == "medium"
+        assert payload["reasoning_effort"] == "med"
+        assert pbr.payload_generation == 1
+
+    def test_no_op_adaptation_does_not_change_generation(self) -> None:
+        """No-op thinking controls leave generation unchanged.
+
+        The coordinator's ``_adapt_provider_thinking_controls`` only
+        calls ``adopt_provider_payload`` when ``result.changed`` is
+        ``True``; this test pins that contract on the request object so
+        accidental adoption on a passthrough decision cannot bump the
+        generation or invalidate provider bytes.
+        """
+        payload = {
+            "model": "test",
+            "messages": [{"role": "user", "content": "hi"}],
+            "reasoning_effort": "high",
+        }
+        pbr = ProviderBoundRequest(
+            client_bytes=b"{}",
+            client_payload=payload,
+            client_protocol="openai",
+            model_id="test-model",
+        )
+        # Pre-flight the precondition: nothing mutated yet.
+        assert pbr.payload_generation == 0
+        assert pbr.provider_bytes is None
+        # A no-op passthrough must not call any adoption setter.
+        # (The adapter's ``result.changed`` is the authoritative signal;
+        # the coordinator honors it by skipping the adopt call.)

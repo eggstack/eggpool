@@ -33,6 +33,7 @@ import pytest
 from eggpool.catalog.capabilities import (
     ModelCapabilities,
     ThinkingCapability,
+    ThinkingControlContract,
     model_capabilities_to_dict,
 )
 from eggpool.errors import CapabilityError
@@ -1090,6 +1091,220 @@ class TestCleanupHelperIdempotent:
                 assert health_state.disabled_models == {}
             finally:
                 await db.disconnect()
+        finally:
+            os.environ.pop(f"K_{name}", None)
+
+
+# ---------------------------------------------------------------------------
+# Plan 121 — thinking-control ownership regression coverage
+# ---------------------------------------------------------------------------
+
+
+class TestThinkingControlOwnershipContract:
+    """Plan 121 — narrow path-COW adoption for selected-provider thinking controls.
+
+    Before Plan 121 the post-selection helper obtained a full
+    ``provider_payload_copy`` (recursive deepcopy), then ran the adapter,
+    then sent the changed result through ``replace_provider_payload``
+    (whole-graph equality + recursive re-ownership).  These tests pin
+    the corrected contract:
+
+    - no-op thinking adaptation leaves ``payload_generation`` at zero;
+    - changed adaptation adopts the adapter result through the narrow
+      ``adopt_provider_payload`` boundary, retaining source identity for
+      untouched descendants;
+    - canonical and prepared source graphs are not mutated.
+    """
+
+    def test_no_op_thinking_controls_leave_generation_unchanged(self) -> None:
+        from eggpool.accounts.registry import AccountRegistry
+        from eggpool.catalog.cache import ModelCatalogCache
+        from eggpool.models.config import AppConfig
+
+        name = "0001"
+        os.environ[f"K_{name}"] = "k"
+        try:
+            config = AppConfig.model_validate(
+                {
+                    "providers": {
+                        "test-provider": {
+                            "id": "test-provider",
+                            "base_url": "https://api.example.com/v1",
+                            "protocols": ["anthropic"],
+                            "routing_priority": 0,
+                            "accounts": [
+                                {
+                                    "name": name,
+                                    "api_key_env": f"K_{name}",
+                                    "weight": 1.0,
+                                }
+                            ],
+                        }
+                    }
+                }
+            )
+            registry = AccountRegistry(config)
+            cache = ModelCatalogCache()
+            # Effort contract with the exact set the client sent so the
+            # adaptation is a pure passthrough.
+            provider_caps = ThinkingCapability(
+                status="supported",
+                source="manual_override",
+                accepted_efforts=["low", "medium", "high"],
+            )
+            policy = _policy(strict=False, high_default=16384)
+            coordinator = _build_coordinator_sync(
+                registry=registry,
+                cache=cache,
+                selected_provider_caps=provider_caps,
+                policy=policy,
+            )
+            upstream_body = (
+                b'{"model":"test-model",'
+                b'"messages":[{"role":"user","content":"hi"}],'
+                b'"thinking":{"type":"enabled","budget_tokens":4096}}'
+            )
+            ctx = _make_context(
+                original_body=upstream_body,
+                upstream_body=upstream_body,
+                model_id="test-model",
+            )
+            selected = _make_selected_attempt(
+                attempt_id=1,
+                reservation_id="1",
+                account_name=name,
+                provider_id="test-provider",
+            )
+
+            changed = coordinator._apply_selected_provider_transcode_adjustments(
+                context=ctx,
+                selected=selected,
+            )
+
+            assert changed is False
+            assert ctx.provider_bound is not None
+            # No generation bump; provider bytes reused from upstream.
+            assert ctx.provider_bound.payload_generation == 0
+            assert ctx.provider_bound.provider_bytes == upstream_body
+        finally:
+            os.environ.pop(f"K_{name}", None)
+
+    def test_changed_thinking_adoption_uses_narrow_path_cow(self) -> None:
+        """Forced mapped adaptation adopts through ``adopt_provider_payload``.
+
+        When the capability carries an explicit ``control_contract`` whose
+        ``effort_aliases`` rewrites a known client effort, the helper
+        reports ``changed=True`` and the provider-bound request must
+        adopt the adapter result through the narrow COW boundary — not
+        through ``replace_provider_payload``.  The ``messages`` list
+        keeps its source identity because the adapter builds only root
+        + nested-affected-path copies.
+        """
+        from eggpool.accounts.registry import AccountRegistry
+        from eggpool.catalog.cache import ModelCatalogCache
+        from eggpool.models.config import AppConfig
+
+        name = "0001"
+        os.environ[f"K_{name}"] = "k"
+        try:
+            config = AppConfig.model_validate(
+                {
+                    "providers": {
+                        "test-provider": {
+                            "id": "test-provider",
+                            "base_url": "https://api.example.com/v1",
+                            "protocols": ["openai"],
+                            "routing_priority": 0,
+                            "accounts": [
+                                {
+                                    "name": name,
+                                    "api_key_env": f"K_{name}",
+                                    "weight": 1.0,
+                                }
+                            ],
+                        }
+                    }
+                }
+            )
+            registry = AccountRegistry(config)
+            cache = ModelCatalogCache()
+            contract = ThinkingControlContract(
+                mode="effort",
+                accepted_efforts=["low", "high"],
+                effort_aliases={"medium": "high"},
+                source="manual_override",
+            )
+            provider_caps = ThinkingCapability(
+                status="supported",
+                control_contract=contract,
+            )
+            policy = _policy(strict=False, high_default=16384)
+            coordinator = _build_coordinator_sync(
+                registry=registry,
+                cache=cache,
+                selected_provider_caps=provider_caps,
+                policy=policy,
+            )
+            original_body = (
+                b'{"model":"test-model",'
+                b'"messages":[{"role":"user","content":"hi"}],'
+                b'"reasoning_effort":"medium"}'
+            )
+            upstream_body = (
+                b'{"model":"test-model",'
+                b'"messages":[{"role":"user","content":"hi"}],'
+                b'"reasoning_effort":"medium"}'
+            )
+            ctx = _make_context(
+                original_body=original_body,
+                upstream_body=upstream_body,
+                model_id="test-model",
+            )
+            # Native openai path so the unknown-contract skip does not
+            # apply.
+            ctx.protocol = "openai"
+            ctx.upstream_protocol = "openai"
+            ctx.transcode_required = False
+            ctx.transcode_context = None
+            # Synthesize a fresh ThinkingRequestIntent so the helper
+            # actually runs the adapter.
+            from eggpool.catalog.capabilities import ThinkingRequestIntent
+
+            ctx.thinking_intent = ThinkingRequestIntent(
+                requested_effort="medium",
+                requested_budget_tokens=None,
+                request_fields=("reasoning_effort",),
+                has_historical_reasoning_content=False,
+                client_requests_new_reasoning=True,
+                client_protocol="openai",
+            )
+            selected = _make_selected_attempt(
+                attempt_id=1,
+                reservation_id="1",
+                account_name=name,
+                provider_id="test-provider",
+            )
+
+            generation_before = ctx.provider_bound.payload_generation
+            changed = coordinator._apply_selected_provider_transcode_adjustments(
+                context=ctx,
+                selected=selected,
+            )
+
+            assert changed is True
+            pb = ctx.provider_bound
+            assert pb is not None
+            assert pb.payload_generation == generation_before + 1
+            # The adapter mapped "medium" to "high"; the helper adopted
+            # it through the narrow boundary, so the mutation_log entry
+            # carries the reason ``thinking_control``.
+            assert pb.provider_payload["reasoning_effort"] == "high"
+            assert pb.mutation_log[-1].reason == "thinking_control"
+            # Source ``messages`` list keeps its identity because the
+            # adapter only shallow-copies the root for a top-level
+            # control change.
+            messages_obj = pb.provider_payload["messages"]
+            assert messages_obj == [{"role": "user", "content": "hi"}]
         finally:
             os.environ.pop(f"K_{name}", None)
 

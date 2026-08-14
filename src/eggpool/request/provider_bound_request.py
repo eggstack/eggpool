@@ -28,8 +28,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from eggpool.request.parsed_payload import ParsedRequestPayload
 
 
@@ -271,30 +269,17 @@ class ProviderBoundRequest:
         self.adopt_provider_payload(candidate, reason=reason)
         return True
 
-    def mutate_provider_payload(
-        self, mutator: Callable[[dict[str, Any]], None], *, reason: str
-    ) -> bool:
-        """Copy the current payload, apply ``mutator``, and replace it safely."""
-        if self._frozen:
-            raise RuntimeError("provider payload is frozen")
-        candidate = (
-            self._provider_payload
-            if self._provider_payload is not None
-            else deepcopy(dict(self.client_payload))
-        )
-        mutator(candidate)
-        object.__setattr__(self, "_provider_payload", candidate)
-        object.__setattr__(self, "mutated", True)
-        object.__setattr__(self, "payload_generation", self.payload_generation + 1)
-        object.__setattr__(self, "_provider_bytes", None)
-        object.__setattr__(self, "_serialized_generation", None)
-        self.diagnostics.generation_changes += 1
-        self.mutation_log.append(PayloadMutation(self.payload_generation, reason))
-        del self.mutation_log[: -self.mutation_log_limit]
-        return True
-
     def provider_payload_copy(self) -> dict[str, Any]:
-        """Return a mutable, detached copy for legacy read/transform callers."""
+        """Return a mutable, detached copy for legacy read/transform callers.
+
+        Retained for the upstream protocol transcode path which hands a
+        detached graph to ``BodyTranscoder.encode_request``.  New
+        thinking-control and narrow mutation code MUST NOT use this
+        helper — the explicit ownership primitives
+        :meth:`mutate_top_level_mapping`,
+        :meth:`adopt_provider_payload`, and :meth:`set_provider_payload`
+        cover the narrowed post-Plan 113 surface.
+        """
         return deepcopy(dict(self.provider_payload))
 
     def release_dispatch_buffers(self) -> None:

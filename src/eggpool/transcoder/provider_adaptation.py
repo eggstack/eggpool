@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from eggpool.catalog.capabilities import (
     ThinkingCapability,
@@ -23,6 +23,9 @@ from eggpool.catalog.capabilities import (
     infer_control_contract,
 )
 from eggpool.errors import CapabilityError
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +60,7 @@ class ControlFieldAdaptation:
         "rejected",
         "not_present",
     ]
-    payload: dict[str, Any]
+    payload: Mapping[str, Any]
     requested_field: str | None = None
     emitted_field: str | None = None
     warning: AdaptationWarning | None = None
@@ -72,7 +75,7 @@ class ProviderRequestAdaptation:
     appropriate observability and trace actions.
     """
 
-    payload: dict[str, Any]
+    payload: Mapping[str, Any]
     changed: bool
     decision: Literal["passthrough", "mapped", "dropped", "rejected"]
     requested_controls: tuple[str, ...] = ()
@@ -108,7 +111,7 @@ class ProviderControlPolicy:
 
 def adapt_thinking_controls(
     *,
-    payload: dict[str, Any],
+    payload: Mapping[str, Any],
     client_protocol: str,
     model_id: str,
     provider_id: str,
@@ -123,7 +126,13 @@ def adapt_thinking_controls(
     provider-bound payload and returns an adaptation result.
 
     Parameters:
-        payload: the decoded request body (may have been transcoded).
+        payload: the decoded request body.  **Read-only.**  The adapter
+            builds its own shallow-copied working root so the source
+            graph (canonical client, prepared transcode, or already
+            adapted provider-bound payload) is never mutated.  The
+            returned ``ProviderRequestAdaptation.payload`` is a fresh
+            dict that shares unaffected descendants with the input only
+            through the normal read-only contract.
         client_protocol: the original client protocol (``"openai"`` or
             ``"anthropic"``).
         model_id: the resolved model id.
@@ -210,7 +219,7 @@ def adapt_thinking_controls(
 
 
 def _reject(
-    payload: dict[str, Any],
+    payload: Mapping[str, Any],
     model_id: str,
     provider_id: str,
     reason: str,
@@ -230,7 +239,7 @@ def _reject(
 
 def _handle_none_contract(
     *,
-    payload: dict[str, Any],
+    payload: Mapping[str, Any],
     model_id: str,
     provider_id: str,
     contract: ThinkingControlContract,
@@ -272,7 +281,7 @@ def _handle_none_contract(
 
 def _handle_fixed_contract(
     *,
-    payload: dict[str, Any],
+    payload: Mapping[str, Any],
     model_id: str,
     provider_id: str,
     contract: ThinkingControlContract,
@@ -347,7 +356,7 @@ def _handle_fixed_contract(
 
 def _handle_effort_budget_contract(
     *,
-    payload: dict[str, Any],
+    payload: Mapping[str, Any],
     client_protocol: str,
     model_id: str,
     provider_id: str,
@@ -477,7 +486,7 @@ def _handle_effort_budget_contract(
 
 def _adapt_reasoning_effort(
     *,
-    new_payload: dict[str, Any],
+    new_payload: Mapping[str, Any],
     contract: ThinkingControlContract,
     model_id: str,
     provider_id: str,
@@ -546,7 +555,7 @@ def _adapt_reasoning_effort(
 
 def _adapt_thinking_block(
     *,
-    new_payload: dict[str, Any],
+    new_payload: Mapping[str, Any],
     contract: ThinkingControlContract,
     model_id: str,
     provider_id: str,
@@ -690,7 +699,7 @@ def _adapt_thinking_block(
 
 def _adapt_thinking_budget(
     *,
-    new_payload: dict[str, Any],
+    new_payload: Mapping[str, Any],
     contract: ThinkingControlContract,
     model_id: str,
     provider_id: str,

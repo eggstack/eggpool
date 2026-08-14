@@ -4911,15 +4911,20 @@ class RequestCoordinator:
                 allow_compatibility_retry=pcp.allow_compatibility_retry,
             )
 
-        # Decode the current upstream body for adaptation.
-        payload_obj = request.provider_payload_copy()
+        # Pass the current provider-bound payload read-only.  The adapter
+        # builds its own shallow-copied working root and returns a fresh
+        # dict that shares unaffected descendants (messages/tools/etc.)
+        # with the source.  This avoids the previously-reviewed
+        # ``provider_payload_copy`` full deepcopy followed by a second
+        # whole-graph rematerialization in ``replace_provider_payload``.
+        payload_obj = request.provider_payload
 
         # Override the capability's control_contract with the resolved one.
         adapted_capability = thinking_capability.model_copy(deep=True)
         adapted_capability.control_contract = contract
 
         result = adapt_thinking_controls(
-            payload=payload_obj,  # type: ignore[arg-type]
+            payload=payload_obj,
             client_protocol=context.protocol,
             model_id=context.model_id,
             provider_id=selected.provider_id or "",
@@ -4940,11 +4945,16 @@ class RequestCoordinator:
                     result.emitted_controls,
                 )
 
-        # If the adaptation changed the payload, re-serialize.
+        # If the adaptation changed the payload, adopt the result
+        # through the trusted narrow boundary.  ``result.payload`` is a
+        # fresh shallow-copied root with only the affected ``thinking``
+        # subtree copied; ``adopt_provider_payload`` retains that
+        # read-only descendant sharing rather than recursively
+        # rematerializing the entire graph.
         if result.changed:
-            request.replace_provider_payload(
+            request.adopt_provider_payload(
                 result.payload,
-                reason="thinking_control",  # type: ignore[arg-type]
+                reason="thinking_control",
             )
 
     async def _finalize_selected_capability_rejection(
