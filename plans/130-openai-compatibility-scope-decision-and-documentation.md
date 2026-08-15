@@ -306,6 +306,8 @@ Reject implementation if it:
 
 Status: complete.
 
+Implementation commit: `8d9e25c`
+
 Decision:
 
 ```text
