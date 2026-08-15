@@ -78,6 +78,11 @@ def _make_diff(changes: tuple = ()) -> MagicMock:
     return d
 
 
+async def _ignore_event(*args: object, **kwargs: object) -> None:
+    """No-op event sink for failure paths that do not record an event."""
+    del args, kwargs
+
+
 def _make_generation(generation_id: int = 0, digest: str = "a" * 64) -> MagicMock:
     gen = MagicMock()
     gen.generation_id = generation_id
@@ -193,7 +198,7 @@ class TestProcessTransitionApplyFailure:
         )
         validation = _make_validation()
 
-        monkeypatch.setattr(mgr, "_record_event", AsyncMock())
+        monkeypatch.setattr(mgr, "_record_event", _ignore_event)
 
         with (
             patch.object(
@@ -212,7 +217,7 @@ class TestProcessTransitionApplyFailure:
                 new_callable=AsyncMock,
                 return_value=[],
             ),
-            patch.object(rm, "begin_retirement", new_callable=AsyncMock()),
+            patch.object(rm, "begin_retirement", new_callable=AsyncMock),
         ):
             mgr.TEST_INJECT_TRANSITION_APPLY_FAILURE = RuntimeError(
                 "process transition apply failed"
@@ -265,7 +270,7 @@ class TestProcessTransitionApplyFailure:
         )
         validation = _make_validation()
 
-        monkeypatch.setattr(mgr, "_record_event", AsyncMock())
+        monkeypatch.setattr(mgr, "_record_event", _ignore_event)
 
         with (
             patch.object(
@@ -284,7 +289,7 @@ class TestProcessTransitionApplyFailure:
                 new_callable=AsyncMock,
                 return_value=[],
             ),
-            patch.object(rm, "begin_retirement", new_callable=AsyncMock()),
+            patch.object(rm, "begin_retirement", new_callable=AsyncMock),
         ):
             mgr.TEST_INJECT_TRANSITION_APPLY_FAILURE = RuntimeError(
                 "process transition always fails"
@@ -327,7 +332,7 @@ class TestShutdownDuringTransaction:
         diff = _make_diff(changes=(change,))
         validation = _make_validation()
 
-        monkeypatch.setattr(mgr, "_record_event", AsyncMock())
+        monkeypatch.setattr(mgr, "_record_event", _ignore_event)
 
         async def _set_shutdown(*args: Any, **kwargs: Any) -> None:
             # Simulate shutdown starting during candidate build
@@ -386,15 +391,10 @@ class TestShutdownDuringTransaction:
         candidate = _make_candidate(generation_id=5)
         validation = _make_validation()
 
-        monkeypatch.setattr(mgr, "_record_event", AsyncMock())
+        monkeypatch.setattr(mgr, "_record_event", _ignore_event)
 
-        async def _publish_and_install(c: Any, d: Any) -> None:
-            gen = c._built_generation
-            await rm.install_candidate(
-                gen,
-                drain_timeout_s=300.0,
-                expected_active_generation_id=rm.active_snapshot().generation_id,
-            )
+        async def _publish_and_install(c: Any, d: Any, **kwargs: Any) -> None:
+            del c, d, kwargs
 
         with (
             patch.object(
@@ -414,7 +414,7 @@ class TestShutdownDuringTransaction:
                 new_callable=AsyncMock,
                 side_effect=_publish_and_install,
             ),
-            patch.object(rm, "begin_retirement", new_callable=AsyncMock()),
+            patch.object(rm, "begin_retirement", new_callable=AsyncMock),
         ):
             # Start reload and wait concurrently
             async def _reload() -> ReloadResult:

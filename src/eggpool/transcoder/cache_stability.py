@@ -17,9 +17,10 @@ invariant is asserted by ``tests/unit/test_routing.py``.
 from __future__ import annotations
 
 import hashlib
-import json
 from dataclasses import asdict, dataclass, field
 from typing import Any, cast
+
+from eggpool.jsonx import dumps_str as jsonx_dumps_str
 
 # Public annotation kinds emitted by the transcoder.
 #
@@ -212,12 +213,10 @@ def stable_dumps(payload: Any) -> str:
     structural descriptor produce the same hash regardless of dict
     ordering on the wire.
     """
-    return json.dumps(
+    return jsonx_dumps_str(
         payload,
         sort_keys=True,
-        ensure_ascii=False,
         default=str,
-        separators=(",", ":"),
     )
 
 

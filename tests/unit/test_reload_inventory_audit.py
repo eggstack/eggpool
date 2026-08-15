@@ -184,6 +184,14 @@ EXPECTED_INVENTORY_SNAPSHOT: tuple[tuple[str, str, bool], ...] = (
     ("limits.five_hour_microdollars", "restart_required", False),
     ("limits.monthly_microdollars", "restart_required", False),
     ("limits.weekly_microdollars", "restart_required", False),
+    ("maintenance.contention_defer_above_lock_wait_p95_ms", "live", False),
+    ("maintenance.max_batches_per_tick", "live", False),
+    ("maintenance.max_deferral_age_s", "live", False),
+    ("maintenance.max_rows_per_batch", "live", False),
+    ("maintenance.max_tick_duration_ms", "live", False),
+    ("maintenance.p0_max_batches_per_tick", "live", False),
+    ("maintenance.p0_max_rows_per_batch", "live", False),
+    ("maintenance.p0_max_tick_duration_ms", "live", False),
     ("metrics.aggregate_only", "restart_required", False),
     ("metrics.cleanup_interval_s", "restart_required", False),
     ("metrics.cleanup_max_rows_per_pass", "restart_required", False),
@@ -227,6 +235,7 @@ EXPECTED_INVENTORY_SNAPSHOT: tuple[tuple[str, str, bool], ...] = (
     ("network.max_connections", "restart_required", False),
     ("network.max_keepalive", "restart_required", False),
     ("network.read_timeout_s", "restart_required", False),
+    ("pricing.catalogs.aliases", "restart_required", False),
     ("pricing.catalogs.opencode_zen.api_key", "restart_required", True),
     ("pricing.catalogs.opencode_zen.base_url", "restart_required", False),
     ("pricing.catalogs.opencode_zen.enabled", "restart_required", False),
@@ -422,24 +431,8 @@ def test_schema_walk_matches_policy_inventory() -> None:
         orphan_policy.add(pp)
 
     # Known pre-existing mismatches between the schema and policy map.
-    # Only the list-of-dict ``pricing.catalogs.aliases`` field remains
-    # outside the policy map because list-of-dict entries cannot be
-    # classified as scalar leaves — operators edit it through the same
-    # RESTART_REQUIRED disposition the rest of the catalog inherits.
     known_orphans: frozenset[str] = frozenset()
-    known_unresolved: frozenset[str] = frozenset(
-        {
-            "pricing.catalogs.aliases",
-            "maintenance.contention_defer_above_lock_wait_p95_ms",
-            "maintenance.max_batches_per_tick",
-            "maintenance.max_deferral_age_s",
-            "maintenance.max_rows_per_batch",
-            "maintenance.max_tick_duration_ms",
-            "maintenance.p0_max_batches_per_tick",
-            "maintenance.p0_max_rows_per_batch",
-            "maintenance.p0_max_tick_duration_ms",
-        }
-    )
+    known_unresolved: frozenset[str] = frozenset()
 
     unexpected_orphans = orphan_policy - known_orphans
     unexpected_unresolved = unresolved_schema - known_unresolved

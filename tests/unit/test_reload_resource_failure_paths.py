@@ -501,13 +501,10 @@ class TestRetirementTimeoutHeldLease:
         # Patch _publish_generation to install and then acquire a lease
         # on the *previous* slot so retirement must drain.
 
-        async def _patched_publish(candidate: CandidateGeneration, diff: Any) -> None:
-            active = rm.active_snapshot()
-            await rm.install_candidate(
-                candidate.generation,
-                drain_timeout_s=0.5,
-                expected_active_generation_id=active.generation_id,
-            )
+        async def _patched_publish(
+            candidate: CandidateGeneration, diff: Any, **kwargs: Any
+        ) -> None:
+            del candidate, diff, kwargs
 
         with (
             patch.object(

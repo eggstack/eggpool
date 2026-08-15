@@ -294,7 +294,8 @@ class Database:
             raise DatabaseConnectionInvalidatedError(
                 "Database lifecycle is terminal; create a fresh connection"
             )
-        self._connection_lock = asyncio.Lock()
+        if self._connection_lock.locked():
+            raise DatabaseError("Database connection lock is still held")
         self._transition_state(DatabaseLifecycleState.CONNECTING)
         self._invalidated_reason = None
         self._invalidated_reason_class = None

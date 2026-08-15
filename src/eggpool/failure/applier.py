@@ -19,6 +19,7 @@ counter never blocks the shared-state effect application.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections import OrderedDict
@@ -96,6 +97,8 @@ class EffectsApplier:
     without recreating the logic.
     """
 
+    _MAX_METRICS_TASKS = 256
+
     def __init__(
         self,
         *,
@@ -114,6 +117,7 @@ class EffectsApplier:
         # this cache as their idempotency boundary.
         self._compat_progress: OrderedDict[str, FailureEffectProgress] = OrderedDict()
         self._compat_capacity = 128
+        self._metrics_tasks: set[asyncio.Task[None]] = set()
 
     def apply_once(
         self,
@@ -338,8 +342,6 @@ class EffectsApplier:
         quarantine, and terminal withdrawal — the plan requires
         observable distinction without re-scoring raw status codes.
         """
-        import asyncio
-
         from eggpool.metrics.failure_effects import (
             FailureEffectsEvent,
             record_failure_effects,
@@ -371,7 +373,22 @@ class EffectsApplier:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        loop.create_task(record_failure_effects(event))
+        if len(self._metrics_tasks) >= self._MAX_METRICS_TASKS:
+            logger.debug("Skipping failure-effects metric at task capacity")
+            return
+        task = loop.create_task(record_failure_effects(event))
+        self._metrics_tasks.add(task)
+        task.add_done_callback(self._metrics_task_done)
+
+    def _metrics_task_done(self, task: asyncio.Task[None]) -> None:
+        """Release completed metric work and observe unexpected failures."""
+        self._metrics_tasks.discard(task)
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.debug("Failure-effects metric emission failed", exc_info=True)
 
     def clear_on_success(
         self,

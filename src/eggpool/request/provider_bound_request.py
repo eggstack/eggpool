@@ -201,7 +201,7 @@ class ProviderBoundRequest:
         self, payload: Mapping[str, Any], *, reason: str
     ) -> bool:
         """Conservatively replace a provider payload with owned content."""
-        if dict(self.provider_payload) == dict(payload):
+        if payload is self.provider_payload or self.provider_payload == payload:
             return False
         if self._frozen:
             raise RuntimeError("provider payload is frozen")

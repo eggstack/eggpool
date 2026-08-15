@@ -138,7 +138,8 @@ def filter_response_headers(
     )
     filtered: list[tuple[str, str]] = []
     for raw_name, raw_value in headers.raw:
-        lower_name = raw_name.decode("latin-1").lower()
+        name = raw_name.decode("latin-1")
+        lower_name = name.lower()
         if lower_name in HOP_BY_HOP_HEADERS:
             continue
         if lower_name in connection_headers:
@@ -150,7 +151,7 @@ def filter_response_headers(
             # Starlette computes Content-Length for non-streaming
             # responses; streaming uses chunked transfer.
             continue
-        filtered.append((raw_name.decode("latin-1"), raw_value.decode("latin-1")))
+        filtered.append((name, raw_value.decode("latin-1")))
     return filtered
 
 

@@ -136,6 +136,16 @@ class TestPolicyDefaults:
             "backup.interval_s",
             "backup.retain_count",
             "backup.startup_delay_s",
+            # Maintenance budgets and contention thresholds are read from
+            # the active generation on each cleanup tick.
+            "maintenance.max_rows_per_batch",
+            "maintenance.max_batches_per_tick",
+            "maintenance.max_tick_duration_ms",
+            "maintenance.contention_defer_above_lock_wait_p95_ms",
+            "maintenance.max_deferral_age_s",
+            "maintenance.p0_max_rows_per_batch",
+            "maintenance.p0_max_batches_per_tick",
+            "maintenance.p0_max_tick_duration_ms",
             # Model-info enablement and cadence are applied by the
             # generation-owned service; catalog refresh is the event source.
             "model_info.enabled",
@@ -1206,6 +1216,18 @@ LIVE_FIELD_CONSUMERS: dict[str, tuple[str, ...]] = {
     "backup.interval_s": ("automatic_backup (process supervisor reconfigure)",),
     "backup.retain_count": ("automatic_backup (process supervisor reconfigure)",),
     "backup.startup_delay_s": ("automatic_backup (process supervisor reconfigure)",),
+    # Maintenance budgets and contention thresholds are read from the
+    # active generation by the retention cleanup task on each tick.
+    "maintenance.max_rows_per_batch": ("retention_cleanup (gen config per tick)",),
+    "maintenance.max_batches_per_tick": ("retention_cleanup (gen config per tick)",),
+    "maintenance.max_tick_duration_ms": ("retention_cleanup (gen config per tick)",),
+    "maintenance.contention_defer_above_lock_wait_p95_ms": (
+        "retention_cleanup (gen config per tick)",
+    ),
+    "maintenance.max_deferral_age_s": ("retention_cleanup (gen config per tick)",),
+    "maintenance.p0_max_rows_per_batch": ("retention_cleanup (gen config per tick)",),
+    "maintenance.p0_max_batches_per_tick": ("retention_cleanup (gen config per tick)",),
+    "maintenance.p0_max_tick_duration_ms": ("retention_cleanup (gen config per tick)",),
 }
 
 

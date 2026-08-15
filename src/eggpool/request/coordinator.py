@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hashlib
 import logging
 import sys
 import time
 import typing
+import zlib
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, cast
@@ -76,6 +76,7 @@ from eggpool.proxy.client import filter_response_headers
 from eggpool.proxy.normalized_usage import (
     CacheCounterStatus,
     NormalizedUsage,
+    UsageParseDiag,
     emit_parse_failure_log,
     normalize_from_stream_result,
     normalize_usage,
@@ -475,8 +476,6 @@ def _diag_for(
     reason: str,
 ) -> Any:
     """Construct a :class:`UsageParseDiag` for a failure-mode log line."""
-    from eggpool.proxy.normalized_usage import UsageParseDiag
-
     return UsageParseDiag(
         provider_id=provider_id,
         model_id=model_id,
@@ -725,11 +724,9 @@ class RequestCoordinator:
         self._stream_diagnostics = stream_diagnostics or get_stream_diagnostics()
         self._finalization_supervisor = finalization_supervisor
         if routing_trace_guard is None and routing_trace_enabled:
-            from eggpool.request.routing_trace_guard import (
-                get_routing_trace_guard,
-            )
+            from eggpool.request.routing_trace_guard import RoutingTraceGuard
 
-            routing_trace_guard = get_routing_trace_guard()
+            routing_trace_guard = RoutingTraceGuard()
         self._routing_trace_guard = routing_trace_guard
         self._routing_trace_writer = routing_trace_writer
 
@@ -1310,7 +1307,8 @@ class RequestCoordinator:
                     # translation or rematerializing the translated graph
                     # afterward.
                     payload = provider_bound.provider_payload
-                    if len(payload) >= 0:
+                    if isinstance(payload, dict):
+                        payload = cast("dict[str, Any]", payload)
                         _thinking_cap: ThinkingCapability | None = None
                         _transcoding_cap = None
                         _budget_defaults: dict[str, int] | None = None
@@ -2877,8 +2875,8 @@ class RequestCoordinator:
             return True
         if trace_cfg.mode == "off":
             return False
-        digest = hashlib.sha256(request_id.encode("utf-8")).digest()
-        return int.from_bytes(digest[:8], "big") / (2**64) < trace_cfg.sample_rate
+        bucket = zlib.crc32(request_id.encode("utf-8"))
+        return bucket / (2**32) < trace_cfg.sample_rate
 
     async def _execute_upstream(
         self,

@@ -12,6 +12,7 @@ database close.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import enum
 import logging
 import time
@@ -102,6 +103,7 @@ class DatabaseWritableProbe:
         self._timeout_s = timeout_s
         self._initial_probe = initial_probe
         self._task: asyncio.Task[None] | None = None
+        self._forced_probe_task: asyncio.Task[None] | None = None
         self._running = False
 
         # Cached state (guarded by _lock for cross-task safety)
@@ -135,6 +137,11 @@ class DatabaseWritableProbe:
     async def stop(self) -> None:
         """Stop the background probe worker with bounded cleanup."""
         self._running = False
+        if self._forced_probe_task is not None and not self._forced_probe_task.done():
+            self._forced_probe_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._forced_probe_task
+        self._forced_probe_task = None
         if self._task is not None and not self._task.done():
             self._task.cancel()
             try:
@@ -279,4 +286,21 @@ class DatabaseWritableProbe:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        loop.create_task(self._do_probe(), name="eggpool:db_writable_probe_forced")
+        if self._forced_probe_task is not None and not self._forced_probe_task.done():
+            return
+        task = loop.create_task(
+            self._do_probe(), name="eggpool:db_writable_probe_forced"
+        )
+        self._forced_probe_task = task
+        task.add_done_callback(self._forced_probe_done)
+
+    def _forced_probe_done(self, task: asyncio.Task[None]) -> None:
+        """Observe forced-probe failures and release the task reference."""
+        if self._forced_probe_task is task:
+            self._forced_probe_task = None
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.exception("Forced database writable probe failed")

@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from eggpool.jsonx import dumps_str as jsonx_dumps_str
 from eggpool.quota.estimation import QuotaEstimator
 from eggpool.quota.scorer import QuotaFairScorer, RoutingScore
 from eggpool.routing.eligibility import get_eligible_accounts
@@ -153,9 +154,7 @@ class RoutingDecisionTrace:
 
     def to_exclude_reasons_json(self) -> str:
         """Serialize exclusions to a JSON array string for persistence."""
-        import json
-
-        return json.dumps(
+        return jsonx_dumps_str(
             [
                 {"account": ex.account_name, "reason": ex.reason}
                 for ex in self.exclusions
@@ -170,10 +169,8 @@ class RoutingDecisionTrace:
         plus the top near-tie candidates.  Used by the dashboard to
         answer "why account A?" without rescoring from quota tables.
         """
-        import json
-
         payload: dict[str, Any] = dict(self.score_components or {})
-        return json.dumps(payload)
+        return jsonx_dumps_str(payload)
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,7 +220,7 @@ class Router:
         self._fairness_rotor = FairnessRotor()
         self._last_fairness_decision: FairnessDecision | None = None
         self._last_fairness_band_names: frozenset[str] = frozenset()
-        self._active_count_lock = asyncio.Lock()
+        self._active_count_lock: asyncio.Lock | None = None
         self._scorer = QuotaFairScorer(
             quota_estimator=self._quota_estimator,
             health_manager=self._health_manager,
@@ -241,7 +238,12 @@ class Router:
             missing_account_recovery_min_interval_s
         )
         self._missing_account_recovery_attempt_at: dict[str, float] = {}
-        self._missing_account_recovery_lock = asyncio.Lock()
+
+    def _get_active_count_lock(self) -> asyncio.Lock:
+        """Create the active-count lock on the event loop that uses it."""
+        if self._active_count_lock is None:
+            self._active_count_lock = asyncio.Lock()
+        return self._active_count_lock
 
     def _fairness_effective_epsilon(self) -> float:
         """Return fairness epsilon, falling back to scorer tiebreaker_range."""
@@ -324,7 +326,7 @@ class Router:
         for _priority, tier_states in tiers:
             tier_candidates = RoutingCandidates(
                 states=tier_states,
-                by_name={state.name: state for state in tier_states},
+                by_name=candidates.by_name,
             )
             scores = await self._score_eligible_accounts(
                 tier_candidates,
@@ -397,7 +399,7 @@ class Router:
         for _priority, tier_states in tiers:
             tier_candidates = RoutingCandidates(
                 states=tier_states,
-                by_name={s.name: s for s in tier_states},
+                by_name=candidates.by_name,
             )
             scores = await self._score_eligible_accounts(
                 tier_candidates,
@@ -895,7 +897,7 @@ class Router:
         for _priority, tier_states in tiers:
             tier_candidates = RoutingCandidates(
                 states=tier_states,
-                by_name={state.name: state for state in tier_states},
+                by_name=candidates.by_name,
             )
             scores = await self._score_eligible_accounts(
                 tier_candidates,
@@ -1047,7 +1049,7 @@ class Router:
         for _priority, tier_states in tiers:
             tier_candidates = RoutingCandidates(
                 states=tier_states,
-                by_name={state.name: state for state in tier_states},
+                by_name=candidates.by_name,
             )
             scores = await self._score_eligible_accounts(
                 tier_candidates,
@@ -1444,7 +1446,7 @@ class Router:
         """Increment the active request count for an account."""
         state = self._registry.get_state(account_name)
         if state is not None:
-            async with self._active_count_lock:
+            async with self._get_active_count_lock():
                 state.active_request_count += 1
 
     async def decrement_active_request_count(self, account_name: str) -> None:
@@ -1471,7 +1473,7 @@ class Router:
             raise ValueError("active request decrement must be positive")
         state = self._registry.get_state(account_name)
         if state is not None:
-            async with self._active_count_lock:
+            async with self._get_active_count_lock():
                 current = state.active_request_count
                 if count > current:
                     logger.warning(

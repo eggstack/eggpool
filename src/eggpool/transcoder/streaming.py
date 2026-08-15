@@ -196,12 +196,14 @@ class _BaseStreamingTranscoder:
         event: str,
         data: dict[str, Any],
     ) -> bytes:
-        return (
-            b"event: "
-            + event.encode("ascii")
-            + b"\ndata: "
-            + dumps_bytes(data)
-            + b"\n\n"
+        return b"".join(
+            (
+                b"event: ",
+                event.encode("ascii"),
+                b"\ndata: ",
+                dumps_bytes(data),
+                b"\n\n",
+            )
         )
 
     @staticmethod

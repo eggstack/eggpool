@@ -43,7 +43,6 @@ Key design choices:
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import re
 import time
@@ -51,6 +50,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
+from eggpool.jsonx import dumps_str as jsonx_dumps_str
+from eggpool.jsonx import loads as jsonx_loads
 from eggpool.request.limits import estimate_text_tokens
 from eggpool.transcoder.compression.markers import build_marker
 from eggpool.transcoder.segmentation import (
@@ -148,7 +149,7 @@ class CompressionResult:
             "suppressed_candidate_count": self.suppressed_candidate_count,
             "applied_transform_count": self.applied_transform_count,
         }
-        return json.dumps(payload, sort_keys=True, default=str, ensure_ascii=False)
+        return jsonx_dumps_str(payload, sort_keys=True, default=str)
 
 
 def result_to_summary(result: CompressionResult) -> str:
@@ -197,7 +198,7 @@ class SafeModeObservation:
             "candidates": [],
             "source": "safe_apply",
         }
-        return json.dumps(payload, sort_keys=True, default=str, ensure_ascii=False)
+        return jsonx_dumps_str(payload, sort_keys=True, default=str)
 
     def candidate_summary(self) -> dict[str, int]:
         """Return applier-derived candidate counts for dashboards / tests.
@@ -570,12 +571,12 @@ def _transform_minify_machine_json(
     if len(text) > _JSON_MINIFY_PARSE_LIMIT:
         return None
     try:
-        parsed: Any = json.loads(text)
+        parsed: Any = jsonx_loads(text)
     except (TypeError, ValueError):
         return None
     if not isinstance(parsed, (Mapping, list)):
         return None
-    compact = json.dumps(parsed, separators=(",", ":"), ensure_ascii=False)
+    compact = jsonx_dumps_str(parsed)
     if len(compact) >= len(text):
         return None
     orig_tokens = _cheap_tokens(text)

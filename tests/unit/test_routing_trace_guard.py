@@ -104,6 +104,17 @@ def test_guard_configure_updates_threshold() -> None:
     assert guard.snapshot()["threshold_ms"] == 500.0
 
 
+@pytest.mark.parametrize("value", ["not-a-number", -1.0, float("inf")])
+def test_guard_rejects_invalid_thresholds(value: object) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        RoutingTraceGuard(threshold_ms=value)  # type: ignore[arg-type]
+
+    guard = RoutingTraceGuard(threshold_ms=10.0)
+    with pytest.raises((TypeError, ValueError)):
+        guard.configure(threshold_ms=value)  # type: ignore[arg-type]
+    assert guard.snapshot()["threshold_ms"] == 10.0
+
+
 def test_get_routing_trace_guard_returns_singleton() -> None:
     g1 = get_routing_trace_guard()
     g2 = get_routing_trace_guard()

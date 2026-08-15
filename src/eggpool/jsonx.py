@@ -31,7 +31,10 @@ import importlib
 import json
 import logging
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -85,20 +88,33 @@ if _ACTIVE_BACKEND == "orjson":
             )
         return _orjson.loads(bytes(data))
 
-    def dumps_bytes(obj: Any) -> bytes:
+    def dumps_bytes(
+        obj: Any,
+        *,
+        sort_keys: bool = False,
+        default: Callable[[Any], Any] | None = None,
+    ) -> bytes:
         """Encode ``obj`` as compact UTF-8 JSON bytes."""
         # ``orjson`` returns ``bytes``; ``OPT_NON_STR_KEYS`` mirrors stdlib
         # ``json`` for dicts with non-string keys so callers do not see a
         # new failure mode after switching backends.
-        return _orjson.dumps(obj, option=_orjson.OPT_NON_STR_KEYS)
+        options = _orjson.OPT_NON_STR_KEYS
+        if sort_keys:
+            options |= _orjson.OPT_SORT_KEYS
+        return _orjson.dumps(obj, option=options, default=default)
 
-    def dumps_str(obj: Any) -> str:
+    def dumps_str(
+        obj: Any,
+        *,
+        sort_keys: bool = False,
+        default: Callable[[Any], Any] | None = None,
+    ) -> str:
         """Encode ``obj`` as a compact JSON string.
 
         ``orjson`` always returns bytes; decode UTF-8 for DB / log fields
         that still require a Python ``str``.
         """
-        return dumps_bytes(obj).decode("utf-8")
+        return dumps_bytes(obj, sort_keys=sort_keys, default=default).decode("utf-8")
 
 else:
 
@@ -108,20 +124,34 @@ else:
             return json.loads(bytes(data))
         return json.loads(data)
 
-    def dumps_bytes(obj: Any) -> bytes:
+    def dumps_bytes(
+        obj: Any,
+        *,
+        sort_keys: bool = False,
+        default: Callable[[Any], Any] | None = None,
+    ) -> bytes:
         """Encode ``obj`` as compact UTF-8 JSON bytes."""
         return json.dumps(
             obj,
+            default=default,
             ensure_ascii=False,
             separators=(",", ":"),
+            sort_keys=sort_keys,
         ).encode("utf-8")
 
-    def dumps_str(obj: Any) -> str:
+    def dumps_str(
+        obj: Any,
+        *,
+        sort_keys: bool = False,
+        default: Callable[[Any], Any] | None = None,
+    ) -> str:
         """Encode ``obj`` as a compact JSON string."""
         return json.dumps(
             obj,
+            default=default,
             ensure_ascii=False,
             separators=(",", ":"),
+            sort_keys=sort_keys,
         )
 
 

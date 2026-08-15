@@ -183,7 +183,10 @@ def _positive_limit(value: Any) -> int | None:
     return None
 
 
-def _estimate_json_value_tokens(value: object) -> int:
+_MAX_ESTIMATE_DEPTH = 64
+
+
+def _estimate_json_value_tokens(value: object, *, depth: int = 0) -> int:
     """Estimate tokens represented by a decoded JSON-compatible value.
 
     The tokenizer for chat-format requests renders messages as a flat string
@@ -194,6 +197,8 @@ def _estimate_json_value_tokens(value: object) -> int:
     small per-key-value separator cost is added to approximate the role
     label and colon that the model actually sees.
     """
+    if depth >= _MAX_ESTIMATE_DEPTH:
+        return max(1, _estimate_string_tokens(str(value)))
     if isinstance(value, str):
         return _estimate_string_tokens(value)
     if isinstance(value, Mapping):
@@ -201,13 +206,13 @@ def _estimate_json_value_tokens(value: object) -> int:
         total = 1
         for key, child in mapping.items():
             total += _estimate_string_tokens(str(key)) + _estimate_json_value_tokens(
-                child
+                child, depth=depth + 1
             )
             total += 1
         return total
     if isinstance(value, list):
         items = cast("list[object]", value)
-        return sum(_estimate_json_value_tokens(item) for item in items)
+        return sum(_estimate_json_value_tokens(item, depth=depth + 1) for item in items)
     if value is None or isinstance(value, bool):
         return 1
     if isinstance(value, (int, float)):
@@ -226,13 +231,8 @@ def estimate_text_tokens(value: str) -> int:
         return 0
     if value.isascii():
         return _ceil_div(len(value), ESTIMATED_TEXT_CHARS_PER_TOKEN)
-    ascii_chars = 0
-    non_ascii_bytes = 0
-    for char in value:
-        if ord(char) < 128:
-            ascii_chars += 1
-        else:
-            non_ascii_bytes += len(char.encode("utf-8"))
+    ascii_chars = len(value.encode("ascii", "ignore"))
+    non_ascii_bytes = len(value.encode("utf-8")) - ascii_chars
     return _ceil_div(
         ascii_chars,
         ESTIMATED_TEXT_CHARS_PER_TOKEN,

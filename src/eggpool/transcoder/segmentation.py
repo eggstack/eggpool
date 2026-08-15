@@ -42,12 +42,13 @@ accounting) will read.
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, cast
+
+from eggpool.jsonx import dumps_str as jsonx_dumps_str
 
 logger = logging.getLogger(__name__)
 
@@ -422,7 +423,7 @@ def _serialize_for_hash(value: Any) -> str:
     the existing model_info pattern so non-JSON-native values do not
     raise.
     """
-    return json.dumps(value, sort_keys=True, default=str, ensure_ascii=False)
+    return jsonx_dumps_str(value, sort_keys=True, default=str)
 
 
 def _hash_payload(value: Any) -> str:
@@ -1919,7 +1920,7 @@ def segmentation_summary_json(result: SegmentationResult) -> str:
             for s in result.segments
         ],
     }
-    return json.dumps(payload, sort_keys=True, default=str, ensure_ascii=False)
+    return jsonx_dumps_str(payload, sort_keys=True, default=str)
 
 
 __all__ = [

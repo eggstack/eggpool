@@ -17,7 +17,6 @@ transport policy.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import warnings
 from typing import TYPE_CHECKING, Any
@@ -227,9 +226,16 @@ class OutboundClientManager:
 
     async def aclose(self) -> None:
         """Close the shared client if one was built."""
-        if self._client is not None:
-            with contextlib.suppress(Exception):
-                await self._client.aclose()
+        client = self._client
+        if client is None:
+            return
+        try:
+            await client.aclose()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.debug("Error closing outbound client", exc_info=True)
+        else:
             self._client = None
 
 

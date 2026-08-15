@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from dataclasses import dataclass
 from enum import StrEnum
@@ -30,6 +29,7 @@ from eggpool.failure import (
 from eggpool.failure.classifier import classify_failure_effects
 from eggpool.failure.signal import FailureSignal
 from eggpool.health.health_manager import classify_failure_category
+from eggpool.jsonx import dumps_str as jsonx_dumps_str
 from eggpool.request.finalization_job import AttemptRuntimeLease
 from eggpool.request.terminal_status import REQUEST_TERMINAL_STATUSES
 from eggpool.security.redaction import (
@@ -587,7 +587,7 @@ class RequestFinalizer:
             raw_usage = getattr(normalized, "raw_usage", None)
             if raw_usage is not None:
                 try:
-                    raw_usage_json_value = json.dumps(raw_usage, default=str)
+                    raw_usage_json_value = jsonx_dumps_str(raw_usage, default=str)
                 except (TypeError, ValueError):
                     raw_usage_json_value = None
 
@@ -779,7 +779,7 @@ class RequestFinalizer:
                         await event_repo.record(
                             account_id=account_id,
                             event_type=data.outcome.value,
-                            details=json.dumps(
+                            details=jsonx_dumps_str(
                                 {
                                     "error_class": data.error_class,
                                     "status_code": data.status_code,
@@ -1159,7 +1159,7 @@ class RequestFinalizer:
             try:
                 reason_counts = getattr(compression_obj, "reason_code_counts", None)
                 if reason_counts is not None:
-                    comp_reason_counts_json = json.dumps(
+                    comp_reason_counts_json = jsonx_dumps_str(
                         dict(reason_counts), default=str, sort_keys=True
                     )
             except (TypeError, ValueError):
@@ -1198,11 +1198,10 @@ class RequestFinalizer:
             )
             if transforms_by_reason is not None:
                 try:
-                    comp_transforms_by_reason_json = json.dumps(
+                    comp_transforms_by_reason_json = jsonx_dumps_str(
                         dict(transforms_by_reason),
                         default=str,
                         sort_keys=True,
-                        ensure_ascii=False,
                     )
                 except (TypeError, ValueError):
                     comp_transforms_by_reason_json = None
@@ -1235,10 +1234,9 @@ class RequestFinalizer:
             warnings_raw = getattr(compression_result_obj, "warnings", None)
             if isinstance(warnings_raw, (list, tuple)):
                 try:
-                    comp_warnings_json = json.dumps(
+                    comp_warnings_json = jsonx_dumps_str(
                         list(warnings_raw),  # type: ignore[arg-type]
                         default=str,
-                        ensure_ascii=False,
                     )
                 except (TypeError, ValueError):
                     comp_warnings_json = None
@@ -1270,9 +1268,8 @@ class RequestFinalizer:
             warnings_attr = getattr(resolved_policy_obj, "warnings", None)
             if isinstance(warnings_attr, (list, tuple)):
                 try:
-                    policy_warnings_json = json.dumps(
+                    policy_warnings_json = jsonx_dumps_str(
                         [str(w) for w in warnings_attr],  # type: ignore[arg-type]
-                        ensure_ascii=False,
                     )
                 except (TypeError, ValueError):
                     policy_warnings_json = None

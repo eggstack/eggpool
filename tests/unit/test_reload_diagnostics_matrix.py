@@ -1569,11 +1569,6 @@ class TestFailedProcessTransitionApplyCategory:
             patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
             patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
             patch.object(mgr, "_pre_commit_verification", new_callable=AsyncMock),
-            patch.object(
-                mgr,
-                "_publish_generation",
-                new_callable=AsyncMock,
-            ),
         ):
             mgr.TEST_INJECT_TRANSITION_APPLY_FAILURE = RuntimeError(
                 "process transition failed"
@@ -1754,11 +1749,6 @@ class TestCompensationFailedCategory:
             ),
             patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
             patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
-            patch.object(
-                mgr,
-                "_publish_generation",
-                new_callable=AsyncMock,
-            ),
         ):
             mgr.TEST_INJECT_TRANSITION_APPLY_FAILURE = RuntimeError(
                 "process transition failed"

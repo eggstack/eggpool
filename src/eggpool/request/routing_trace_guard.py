@@ -21,8 +21,10 @@ be imported from the coordinator hot path with no overhead.
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time
+from numbers import Real
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -43,11 +45,15 @@ class RoutingTraceGuard:
         oldest_event_age_s: float = 30.0,
         cooldown_s: float = 5.0,
     ) -> None:
-        self._threshold_ms = threshold_ms
+        self._threshold_ms = _validate_threshold("threshold_ms", threshold_ms)
         self._enabled = enabled
-        self._queue_occupancy_threshold = queue_occupancy_threshold
-        self._oldest_event_age_s = oldest_event_age_s
-        self._cooldown_s = cooldown_s
+        self._queue_occupancy_threshold = _validate_threshold(
+            "queue_occupancy_threshold", queue_occupancy_threshold
+        )
+        self._oldest_event_age_s = _validate_threshold(
+            "oldest_event_age_s", oldest_event_age_s
+        )
+        self._cooldown_s = _validate_threshold("cooldown_s", cooldown_s)
         self._lock = threading.Lock()
         self._written = 0
         self._skipped_db_pressure = 0
@@ -74,15 +80,22 @@ class RoutingTraceGuard:
         cooldown_s: float | None = None,
     ) -> None:
         """Update guard thresholds (used by tests/runtime config reload)."""
+        updates: dict[str, float] = {}
+        if threshold_ms is not None:
+            updates["_threshold_ms"] = _validate_threshold("threshold_ms", threshold_ms)
+        if queue_occupancy_threshold is not None:
+            updates["_queue_occupancy_threshold"] = _validate_threshold(
+                "queue_occupancy_threshold", queue_occupancy_threshold
+            )
+        if oldest_event_age_s is not None:
+            updates["_oldest_event_age_s"] = _validate_threshold(
+                "oldest_event_age_s", oldest_event_age_s
+            )
+        if cooldown_s is not None:
+            updates["_cooldown_s"] = _validate_threshold("cooldown_s", cooldown_s)
         with self._lock:
-            if threshold_ms is not None:
-                self._threshold_ms = threshold_ms
-            if queue_occupancy_threshold is not None:
-                self._queue_occupancy_threshold = queue_occupancy_threshold
-            if oldest_event_age_s is not None:
-                self._oldest_event_age_s = oldest_event_age_s
-            if cooldown_s is not None:
-                self._cooldown_s = cooldown_s
+            for name, value in updates.items():
+                setattr(self, name, value)
 
     def should_skip(
         self,
@@ -214,6 +227,19 @@ class RoutingTraceGuard:
 
 _global_guard: RoutingTraceGuard | None = None
 _global_guard_lock = threading.Lock()
+
+
+def _validate_threshold(name: str, value: float) -> float:
+    """Return a finite, non-negative numeric guard threshold."""
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise TypeError(f"{name} must be a finite non-negative number")
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{name} must be a finite non-negative number") from exc
+    if not math.isfinite(normalized) or normalized < 0:
+        raise ValueError(f"{name} must be a finite non-negative number")
+    return normalized
 
 
 def get_routing_trace_guard() -> RoutingTraceGuard:

@@ -42,7 +42,6 @@ Key design choices:
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 import time
@@ -50,6 +49,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
+from eggpool.jsonx import dumps_str as jsonx_dumps_str
+from eggpool.jsonx import loads as jsonx_loads
 from eggpool.request.limits import (
     ESTIMATED_TEXT_CHARS_PER_TOKEN,
     estimate_text_tokens,
@@ -230,7 +231,7 @@ class CompressionObservation:
                 for c in self.candidates
             ],
         }
-        return json.dumps(payload, sort_keys=True, default=str, ensure_ascii=False)
+        return jsonx_dumps_str(payload, sort_keys=True, default=str)
 
 
 # ---------------------------------------------------------------------------
@@ -450,12 +451,12 @@ def _detect_json_minify(segment: RequestSegment, text_hint: str) -> int:
         if not stripped or stripped[0] not in ("{", "["):
             return 0
         try:
-            parsed: Any = json.loads(text_hint)
+            parsed: Any = jsonx_loads(text_hint)
         except (TypeError, ValueError):
             return 0
         if not isinstance(parsed, (Mapping, list)):
             return 0
-        compact = json.dumps(parsed, separators=(",", ":"), ensure_ascii=False)
+        compact = jsonx_dumps_str(parsed)
         original_tokens = _cheap_tokens(text_hint)
         compact_tokens = _cheap_tokens(compact)
         saved = original_tokens - compact_tokens

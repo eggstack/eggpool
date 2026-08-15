@@ -176,6 +176,16 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "limits.five_hour_microdollars": ReloadDisposition.RESTART_REQUIRED,
     "limits.weekly_microdollars": ReloadDisposition.RESTART_REQUIRED,
     "limits.monthly_microdollars": ReloadDisposition.RESTART_REQUIRED,
+    # Maintenance task budgets and contention thresholds are read from the
+    # active generation on each tick.
+    "maintenance.max_rows_per_batch": ReloadDisposition.LIVE,
+    "maintenance.max_batches_per_tick": ReloadDisposition.LIVE,
+    "maintenance.max_tick_duration_ms": ReloadDisposition.LIVE,
+    "maintenance.contention_defer_above_lock_wait_p95_ms": ReloadDisposition.LIVE,
+    "maintenance.max_deferral_age_s": ReloadDisposition.LIVE,
+    "maintenance.p0_max_rows_per_batch": ReloadDisposition.LIVE,
+    "maintenance.p0_max_batches_per_tick": ReloadDisposition.LIVE,
+    "maintenance.p0_max_tick_duration_ms": ReloadDisposition.LIVE,
     "pricing.fallback": ReloadDisposition.RESTART_REQUIRED,
     # ``pricing.catalogs`` is built at startup by the pricing catalog
     # registry and read once during lifespan construction; the
@@ -198,6 +208,7 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "pricing.catalogs.opencode_zen.base_url": ReloadDisposition.RESTART_REQUIRED,
     "pricing.catalogs.opencode_zen.api_key": ReloadDisposition.RESTART_REQUIRED,
     "pricing.catalogs.opencode_zen.options": ReloadDisposition.RESTART_REQUIRED,
+    "pricing.catalogs.aliases": ReloadDisposition.RESTART_REQUIRED,
     "dashboard.enabled": ReloadDisposition.RESTART_REQUIRED,
     "dashboard.public": ReloadDisposition.RESTART_REQUIRED,
     "dashboard.theme": ReloadDisposition.RESTART_REQUIRED,

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+
+from eggpool.jsonx import dumps_str as jsonx_dumps_str
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -126,7 +127,7 @@ def _features_fingerprint(features: TranscoderFeatures | None) -> str:
     """
     if features is None:
         return "none"
-    raw = json.dumps(
+    raw = jsonx_dumps_str(
         {
             "tools": features.tools,
             "vision": features.vision,
@@ -135,6 +136,5 @@ def _features_fingerprint(features: TranscoderFeatures | None) -> str:
             "anthropic_primitives": features.anthropic_primitives,
         },
         sort_keys=True,
-        separators=(",", ":"),
     )
     return hashlib.sha256(raw.encode()).hexdigest()[:16]

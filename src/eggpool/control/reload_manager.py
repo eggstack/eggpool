@@ -1966,6 +1966,11 @@ class ReloadManager:
                 runtime_manager=self._runtime_manager,
                 generation_id=generation_id,
                 config_digest=validation.content_digest or "",
+                routing_trace_guard=(
+                    getattr(_gen, "routing_trace_guard", None)
+                    if _gen is not None
+                    else None
+                ),
             )
             txn.mark_process_transitions_prepared(process_transition_plan)
 
@@ -2045,20 +2050,17 @@ class ReloadManager:
                     await pending_swap.stage()
                     txn.mark_runtime_staged(pending_swap)
 
-                    # Test seam: inject publish failure after staging
-                    # but before the transaction commits.
-                    if self.TEST_INJECT_PUBLISH_FAILURE is not None:
-                        raise self.TEST_INJECT_PUBLISH_FAILURE
-
                     # 9d: Apply process transitions inside the transaction
                     # so they roll back atomically on failure.
                     # Plan 018 Workstream A1: caller creates the result
                     # so ownership is explicit before apply_all().
                     transition_result = TransitionApplyResult(process_transition_plan)
-                    # Test seam: inject transition apply failure
-                    if self.TEST_INJECT_TRANSITION_APPLY_FAILURE is not None:
-                        raise self.TEST_INJECT_TRANSITION_APPLY_FAILURE
-                    await transition_result.apply_all()
+                    await self._publish_generation(
+                        candidate,
+                        diff,
+                        pending_swap=pending_swap,
+                        transition_result=transition_result,
+                    )
                 # SQLite committed successfully — mark the narrow boundary
                 # between persistence commit and runtime swap commit.
                 txn.mark_persistence_committed_runtime_pending()
@@ -2072,7 +2074,7 @@ class ReloadManager:
                     old_gen_id,
                     new_generation_id=published_gen.generation_id,
                 )
-            except asyncio.CancelledError:
+            except asyncio.CancelledError as exc:
                 # Plan 017 Workstream D: pre-acceptance cancellation.
                 # Route through the shared precommit abort helper.
                 await self._abort_precommit_reload(
@@ -2080,7 +2082,7 @@ class ReloadManager:
                     pending_swap=pending_swap,
                     transition_result=transition_result,
                     candidate=candidate,
-                    cause=asyncio.CancelledError(),
+                    cause=exc,
                     error_stage=error_stage,
                 )
                 raise
@@ -3295,6 +3297,7 @@ class ReloadManager:
         runtime_manager: RuntimeManager | None = None,
         generation_id: int = 0,
         config_digest: str = "",
+        routing_trace_guard: Any | None = None,
     ) -> ProcessTransitionPlan:
         """Calculate process-supervisor task specs without applying them.
 
@@ -3358,27 +3361,25 @@ class ReloadManager:
                 )
             )
 
-        # Routing-trace guard transition
-        from eggpool.request.routing_trace_guard import (  # noqa: PLC0415
-            get_routing_trace_guard,
-        )
-
-        guard = get_routing_trace_guard()
-        transitions.append(
-            RoutingTraceGuardTransition(
-                guard=guard,
-                threshold_ms=(
-                    candidate_config.routing.trace.skip_above_lock_wait_p95_ms
-                ),
-                queue_occupancy_threshold=(
-                    candidate_config.routing.trace.guard_queue_occupancy_threshold
-                ),
-                oldest_event_age_s=(
-                    candidate_config.routing.trace.guard_oldest_event_age_s
-                ),
-                cooldown_s=candidate_config.routing.trace.guard_cooldown_s,
+        # Routing-trace guard transition. The guard belongs to the candidate
+        # generation, so applying this transition cannot mutate the active
+        # generation or a process-global singleton.
+        if routing_trace_guard is not None:
+            transitions.append(
+                RoutingTraceGuardTransition(
+                    guard=routing_trace_guard,
+                    threshold_ms=(
+                        candidate_config.routing.trace.skip_above_lock_wait_p95_ms
+                    ),
+                    queue_occupancy_threshold=(
+                        candidate_config.routing.trace.guard_queue_occupancy_threshold
+                    ),
+                    oldest_event_age_s=(
+                        candidate_config.routing.trace.guard_oldest_event_age_s
+                    ),
+                    cooldown_s=candidate_config.routing.trace.guard_cooldown_s,
+                )
             )
-        )
 
         # Effective state transition (app.state mirrors)
         if self._app is not None:
@@ -3835,10 +3836,13 @@ class ReloadManager:
         self,
         candidate: CandidateGeneration | RuntimeGenerationCandidate,
         diff: ConfigDiff,
+        *,
+        pending_swap: Any | None = None,
+        transition_result: TransitionApplyResult | None = None,
     ) -> None:
         """Atomically publish the candidate generation.
 
-        The publication is split into three explicit phases:
+        The normal compatibility path is split into three explicit phases:
 
         1. ``_prepare_swap`` — capture the active generation identity
            and the candidate generation object.  Failures here abort
@@ -3857,9 +3861,20 @@ class ReloadManager:
         record publication facts as soon as each step succeeds, even
         if a later step fails.  See the ``prepared-swap protocol``
         section of :mod:`architecture.reload`.
+
+        The live reload path supplies a staged swap and transition result;
+        in that mode this seam applies process transitions inside the
+        transaction and the caller commits the staged swap afterward.
         """
         if self.TEST_INJECT_PUBLISH_FAILURE is not None:
             raise self.TEST_INJECT_PUBLISH_FAILURE
+        if pending_swap is not None:
+            if transition_result is None:
+                raise ReloadCommitError("A pending swap requires a transition result")
+            if self.TEST_INJECT_TRANSITION_APPLY_FAILURE is not None:
+                raise self.TEST_INJECT_TRANSITION_APPLY_FAILURE
+            await transition_result.apply_all()
+            return
         swap = self._prepare_swap(candidate)
         # At this point the active generation identity and the
         # candidate generation are captured but no pointer swap has

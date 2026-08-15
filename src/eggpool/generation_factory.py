@@ -411,15 +411,23 @@ class RuntimeGenerationFactory:
             finalization_supervisor=finalization_supervisor,
         )
 
-        # -- Routing trace guard (NOT configured during preparation) ---------
-        # Configuration is deferred to RoutingTraceGuardTransition at commit
-        # time so candidate preparation has no process-owned side effects.
+        # -- Routing trace guard --------------------------------------------
+        # The guard is generation-owned. Constructing and configuring a new
+        # guard during candidate preparation cannot mutate the active
+        # generation or leak state across a reload.
         from eggpool.request.routing_trace_guard import (  # noqa: PLC0415
-            get_routing_trace_guard,
+            RoutingTraceGuard,
         )
 
         routing_trace_guard = (
-            get_routing_trace_guard()
+            RoutingTraceGuard(
+                threshold_ms=(config.routing.trace.skip_above_lock_wait_p95_ms),
+                queue_occupancy_threshold=(
+                    config.routing.trace.guard_queue_occupancy_threshold
+                ),
+                oldest_event_age_s=config.routing.trace.guard_oldest_event_age_s,
+                cooldown_s=config.routing.trace.guard_cooldown_s,
+            )
             if config.routing.trace.mode != "off"
             and (
                 config.routing.trace.mode == "all"

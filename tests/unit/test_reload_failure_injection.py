@@ -101,6 +101,10 @@ def _make_real_config() -> object:
     return AppConfig(server=ServerConfig(host="0.0.0.0", port=8080))
 
 
+async def _ignore_event(*args: object, **kwargs: object) -> None:
+    return None
+
+
 def _make_real_generation(
     *,
     generation_id: int = 0,
@@ -177,9 +181,6 @@ class TestDigestMismatchInjection:
         gen_before = rm.active_snapshot().generation_id
 
         validation = _make_validation(content_digest="a" * 64)
-
-        async def _ignore_event(*args: object, **kwargs: object) -> None:
-            return None
 
         monkeypatch.setattr(mgr, "_record_event", _ignore_event)
 
@@ -473,7 +474,7 @@ class TestEventRecorderFailure:
             patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
             patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
             patch.object(mgr, "_publish_generation", new_callable=AsyncMock),
-            patch.object(rm, "begin_retirement", new_callable=AsyncMock()),
+            patch.object(rm, "begin_retirement", new_callable=AsyncMock),
         ):
             result = await mgr.reload(validation)
 
@@ -683,7 +684,7 @@ class TestPrePublicationNoNewTasks:
             patch.object(mgr, "_prepare_persistence_delta", return_value=MagicMock()),
             patch.object(mgr, "_apply_persistence_delta", new_callable=AsyncMock),
             patch.object(mgr, "_publish_generation", new_callable=AsyncMock),
-            patch.object(mgr, "_record_event", AsyncMock()),
+            patch.object(mgr, "_record_event", _ignore_event),
             patch.object(rm, "install_candidate", new_callable=AsyncMock) as ic_mock,
         ):
             build_mock.side_effect = ReloadPreparationError("build failed")
@@ -736,7 +737,7 @@ class TestPrePublicationNoNewTasks:
                 side_effect=Exception("reconciliation failed"),
             ),
             patch.object(mgr, "_publish_generation", new_callable=AsyncMock),
-            patch.object(mgr, "_record_event", AsyncMock()),
+            patch.object(mgr, "_record_event", _ignore_event),
             patch.object(rm, "install_candidate", new_callable=AsyncMock) as ic_mock,
         ):
             await mgr.reload(validation)
@@ -775,7 +776,7 @@ class TestPostPublicationFailureVisible:
         candidate = _make_candidate(generation_id=5)
         validation = _make_validation()
 
-        monkeypatch.setattr(mgr, "_record_event", AsyncMock())
+        monkeypatch.setattr(mgr, "_record_event", _ignore_event)
 
         # Patch begin_retirement on the RuntimeManager to raise.
         # install_candidate calls begin_retirement AFTER the slot swap,
@@ -841,7 +842,7 @@ class TestPrePublicationTaskCountCrossCutting:
         )
 
         validation = _make_validation()
-        monkeypatch.setattr(mgr, "_record_event", AsyncMock())
+        monkeypatch.setattr(mgr, "_record_event", _ignore_event)
 
         with (
             patch.object(

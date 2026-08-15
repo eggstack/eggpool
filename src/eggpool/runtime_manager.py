@@ -701,7 +701,7 @@ class PendingGenerationSwap:
         ownership check so existing tests are not broken.
         """
         rm = self._runtime_manager
-        async with rm._lock:  # pyright: ignore[reportPrivateUsage]
+        async with rm._get_lock():  # pyright: ignore[reportPrivateUsage]
             if self._state is PendingSwapState.STAGED:
                 return  # idempotent
             if self._state is not PendingSwapState.PREPARED:
@@ -769,7 +769,7 @@ class PendingGenerationSwap:
         already been rolled back.
         """
         rm = self._runtime_manager
-        async with rm._lock:  # pyright: ignore[reportPrivateUsage]
+        async with rm._get_lock():  # pyright: ignore[reportPrivateUsage]
             if self._state is PendingSwapState.COMMITTED:
                 return self._old_gen_id()  # idempotent re-commit
             if self._state is PendingSwapState.FINALIZED:
@@ -806,7 +806,7 @@ class PendingGenerationSwap:
             # blocked acquire() waiters via the manager-level state
             # change condition.
             rm._publication_epoch += 1  # pyright: ignore[reportPrivateUsage]
-            rm._lease_condition.notify_all()  # pyright: ignore[reportPrivateUsage]
+            rm._get_lease_condition().notify_all()  # pyright: ignore[reportPrivateUsage]
 
             self._state = PendingSwapState.COMMITTED
 
@@ -831,7 +831,7 @@ class PendingGenerationSwap:
         already been committed.
         """
         rm = self._runtime_manager
-        async with rm._lock:  # pyright: ignore[reportPrivateUsage]
+        async with rm._get_lock():  # pyright: ignore[reportPrivateUsage]
             if self._state is PendingSwapState.ROLLED_BACK:
                 return self._candidate_generation  # idempotent
             if self._state in (
@@ -856,7 +856,7 @@ class PendingGenerationSwap:
 
             # Plan 016 Workstream B: wake blocked acquire() waiters
             # so they re-evaluate against the restored active slot.
-            rm._lease_condition.notify_all()  # pyright: ignore[reportPrivateUsage]
+            rm._get_lease_condition().notify_all()  # pyright: ignore[reportPrivateUsage]
 
             # Drop the staged candidate slot reference.
             self._new_slot = None
@@ -887,7 +887,7 @@ class PendingGenerationSwap:
         manager is shutting down.
         """
         rm = self._runtime_manager
-        async with rm._lock:  # pyright: ignore[reportPrivateUsage]
+        async with rm._get_lock():  # pyright: ignore[reportPrivateUsage]
             if self._state is PendingSwapState.FINALIZED:
                 return self._old_gen_id()  # idempotent
             if self._state is not PendingSwapState.COMMITTED:
@@ -1249,7 +1249,7 @@ class RuntimeManager:
         *,
         fatal_handler: Callable[[str], Any] | None = None,
     ) -> None:
-        self._lock = asyncio.Lock()
+        self._lock: asyncio.Lock | None = None
         self._active: _GenerationSlot | None = None
         self._retiring: list[_GenerationSlot] = []
         self._next_generation_id = 0
@@ -1262,9 +1262,7 @@ class RuntimeManager:
         # admission.  Replaces the event-based clear/set pattern that
         # had a lost-wakeup race.  All waiters block on the condition
         # and re-evaluate the predicate under the shared lock.
-        self._lease_condition: asyncio.Condition = asyncio.Condition(
-            self._lock,
-        )
+        self._lease_condition: asyncio.Condition | None = None
         self._lease_admission_gated: bool = False  # authoritative gate state
         # Plan 016 Workstream B: monotonic publication epoch.  Incremented
         # only on committed publication so an acquire() that snapshotted
@@ -1277,6 +1275,19 @@ class RuntimeManager:
         self._lease_gate_waiters: int = 0
         self._fatal_handler = fatal_handler
 
+    def _get_lock(self) -> asyncio.Lock:
+        """Create manager synchronization primitives on first async use."""
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+            self._lease_condition = asyncio.Condition(self._lock)
+        return self._lock
+
+    def _get_lease_condition(self) -> asyncio.Condition:
+        """Return the condition sharing the manager's loop-bound lock."""
+        self._get_lock()
+        assert self._lease_condition is not None
+        return self._lease_condition
+
     # -- publication --------------------------------------------------------
 
     async def install_initial(self, generation: RuntimeGeneration) -> None:
@@ -1288,7 +1299,7 @@ class RuntimeManager:
         not allow replacing the active slot outside the publication
         staged publication path.
         """
-        async with self._lock:
+        async with self._get_lock():
             if self._shutdown_in_progress:
                 raise RuntimeManagerShutdownError(
                     "Cannot install initial generation after shutdown"
@@ -1309,7 +1320,7 @@ class RuntimeManager:
             # any pending acquire() waiters.
             self._publication_epoch += 1
             self._lease_admission_gated = False
-            self._lease_condition.notify_all()
+            self._get_lease_condition().notify_all()
             logger.info(
                 "Runtime generation %d published (initial install; digest=%s)",
                 generation.generation_id,
@@ -1339,7 +1350,7 @@ class RuntimeManager:
         already active, this is a no-op.  After shutdown begins the
         call raises :class:`RuntimeManagerShutdownError`.
         """
-        async with self._lock:
+        async with self._get_lock():
             if self._shutdown_in_progress:
                 raise RuntimeManagerShutdownError(
                     "Cannot install candidate generation after shutdown"
@@ -1367,7 +1378,7 @@ class RuntimeManager:
             # Plan 016 Workstream B: bump the publication epoch and
             # wake blocked acquire() callers.
             self._publication_epoch += 1
-            self._lease_condition.notify_all()
+            self._get_lease_condition().notify_all()
             logger.info(
                 "Runtime generation %d published (candidate swap; digest=%s)",
                 generation.generation_id,
@@ -1397,7 +1408,7 @@ class RuntimeManager:
         ``_pending_swap`` slot — terminal-state calls clear it under
         the same lock that transitions the swap.
         """
-        async with self._lock:
+        async with self._get_lock():
             if self._shutdown_in_progress:
                 raise RuntimeManagerShutdownError(
                     "Cannot prepare candidate swap after shutdown"
@@ -1468,7 +1479,8 @@ class RuntimeManager:
         blocking the worker.
         """
         deadline = time.monotonic() + GENERATION_LEASE_TIMEOUT_S
-        async with self._lease_condition:
+        condition = self._get_lease_condition()
+        async with condition:
             if self._active is None and not self._shutdown_in_progress:
                 raise RuntimeManagerLeaseExhaustedError(
                     "No active runtime generation is installed"
@@ -1483,7 +1495,7 @@ class RuntimeManager:
                     )
                 try:
                     await asyncio.wait_for(
-                        self._lease_condition.wait_for(
+                        condition.wait_for(
                             self._lease_claim_available_locked,
                         ),
                         timeout=remaining,
@@ -1759,7 +1771,7 @@ class RuntimeManager:
         )
         # Move the slot into the retiring list under the manager lock
         # so a subsequent diagnostics snapshot sees consistent state.
-        async with self._lock:
+        async with self._get_lock():
             if self._active is slot:
                 self._active = None
             if slot not in self._retiring:
@@ -1810,7 +1822,7 @@ class RuntimeManager:
         await self._close_slot_resources(slot, drain_timeout_s=drain_timeout_s)
         slot.close_complete_time = time.monotonic()
         slot.retirement_complete.set()
-        async with self._lock:
+        async with self._get_lock():
             slot.state = SlotState.CLOSED
             with contextlib.suppress(ValueError):
                 self._retiring.remove(slot)
@@ -1918,13 +1930,13 @@ class RuntimeManager:
         drain times out.
         """
         shutdown_deadline_s = 10.0
-        async with self._lock:
+        async with self._get_lock():
             if self._shutdown_in_progress:
                 return
             self._shutdown_in_progress = True
             # Plan 016 Workstream B: wake blocked acquire() waiters so
             # they observe the shutdown flag and raise immediately.
-            self._lease_condition.notify_all()
+            self._get_lease_condition().notify_all()
             active = self._active
             # Plan 019 Workstream E2: adopt the old slot from any
             # committed pending swap that was not finalized during
@@ -1997,7 +2009,8 @@ class RuntimeManager:
           not bypassed by a defensive repair.
         - Is a no-op when the gate is already clear.
         """
-        async with self._lease_condition:
+        condition = self._get_lease_condition()
+        async with condition:
             if not self._lease_admission_gated:
                 return  # No gate active, no-op.
 
@@ -2017,7 +2030,7 @@ class RuntimeManager:
             # Clear the gate — do NOT increment publication_epoch.
             self._lease_admission_gated = False
             logger.warning("Repaired inconsistent lease gate state in finally block")
-            self._lease_condition.notify_all()
+            condition.notify_all()
 
     # -- diagnostics --------------------------------------------------------
 
