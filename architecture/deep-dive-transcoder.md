@@ -27,6 +27,7 @@ Anthropic Msg  ───────►  Anthropic Msg (passthrough)
 
 `OpenAIToAnthropic` — body transcoder (OpenAI → Anthropic):
 - `encode_request()`: translates OpenAI request body to Anthropic format
+- accepts the provider-bound request as a read-only `Mapping` and returns a fresh target graph
 - `decode_response()`: translates Anthropic response back to OpenAI
 - Handles tools, tool_choice, parallel_tool_calls
 - Uses verified target capabilities for native structured output, strict tools,
@@ -39,6 +40,7 @@ Anthropic Msg  ───────►  Anthropic Msg (passthrough)
 
 `AnthropicToOpenAI` — body transcoder (Anthropic → OpenAI):
 - `encode_request()`: translates Anthropic request body to OpenAI format
+- accepts the provider-bound request as a read-only `Mapping` and returns a fresh target graph
 - `decode_response()`: translates OpenAI response back to Anthropic
 - Drops unsupported `cache_control` annotations
 - Maps thinking blocks to reasoning_content
@@ -79,7 +81,17 @@ Protocol-required static headers for cross-protocol transcoding (e.g. `anthropic
 diagnostics. It retains the translated payload and encoded body without a
 recursive physical freeze; unchanged provider reuse adopts the payload through
 `ProviderBoundRequest` and sends the existing bytes, while later provider
-changes create a new provider-owned generation.
+changes create a new provider-owned generation. Coordinator recompute uses the
+same direct adoption boundary and does not make a defensive source deepcopy.
+
+### Media validation memory contract
+
+Image and PDF data-URI paths retain the original encoded string for translated
+output. They use encoded-length arithmetic to reject obvious oversize inputs
+before strict base64 decoding; when strict decoding is required, its temporary
+decoded buffer is released after validation and before the translated output
+container is constructed. URL-source behavior and provider media limits are
+unchanged.
 
 ### `transcoder/budget_resolver.py`
 

@@ -199,9 +199,13 @@ preserves the cached provider bytes. The `mutate_provider_payload()` arbitrary
 mutator was removed (Plan 121) because no production caller remained; the
 explicit narrow ownership primitives (`mutate_top_level_mapping`,
 `adopt_provider_payload`, `set_provider_payload`) cover the narrowed surface.
-`provider_payload_copy()` and `replace_provider_payload()` remain as
-conservative helpers for the upstream protocol transcode path, which is
-intentionally off the corrected hot path.
+Cross-protocol body encoders receive the provider-bound payload directly as a
+read-only `Mapping` and construct a fresh target graph. The coordinator adopts
+that graph through `adopt_provider_payload(reason="protocol_transcode")`; it
+does not recursively copy the source first or rematerialize the translated
+graph afterward. `replace_provider_payload()` remains as a conservative
+conditional ownership primitive for compatibility callers; the former
+`provider_payload_copy()` transcode helper was removed in Plan 124.
 
 Prepared transcode results retain one request-local translated JSON generation
 without recursively freezing or rematerializing it. Valid unchanged reuse

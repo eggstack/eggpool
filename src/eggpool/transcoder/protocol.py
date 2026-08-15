@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Any, Protocol
 from eggpool.errors import ConfigError
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from eggpool.catalog.capabilities import (
         ThinkingCapability,
         TranscodingCapabilities,
@@ -23,7 +25,7 @@ class BodyTranscoder(Protocol):
 
     def encode_request(
         self,
-        payload: dict[str, Any],
+        payload: Mapping[str, Any],
         context: TranscodeContext,
         *,
         features: TranscoderFeatures | None = None,

@@ -43,10 +43,15 @@ See [deep-dive-providers.md](deep-dive-providers.md).
 ## Protocol transcoding
 
 OpenAI and Anthropic requests/responses are converted through the transcoder
-package. Native prompt-cache fields are capability-gated by provider/model
-contract. TTLs are never silently converted, tool-definition boundaries are
-not moved to message boundaries, and cache keys are never synthesized or
-logged. Loss policy determines whether unsupported fields warn or reject.
+package. Request encoders receive the provider-bound payload as a read-only
+`Mapping`, build a fresh target graph, and hand that graph across the trusted
+`adopt_provider_payload()` boundary. Native prompt-cache fields are
+capability-gated by provider/model contract. TTLs are never silently converted,
+tool-definition boundaries are not moved to message boundaries, and cache keys
+are never synthesized or logged. Loss policy determines whether unsupported
+fields warn or reject. Strict image/PDF base64 validation rejects obvious
+encoded-size overflow before decoding and releases the temporary validation
+buffer before translated output is built.
 
 See [deep-dive-transcoder.md](deep-dive-transcoder.md).
 
@@ -104,4 +109,3 @@ diagnostics use existing bounded fields or narrowly scoped sidecars; cosmetic
 migrations and generic EAV storage are prohibited. Historical synthetic-cache
 columns from earlier migrations remain for compatibility but are no longer
 written or exposed.
-

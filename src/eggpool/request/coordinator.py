@@ -1304,7 +1304,12 @@ class RequestCoordinator:
                         context.request_id,
                         _recompute_reason,
                     )
-                    payload = provider_bound.provider_payload_copy()
+                    # Body transcoders treat this provider payload as a
+                    # read-only Mapping and construct a fresh target graph.
+                    # Avoid recursively detaching the source request before
+                    # translation or rematerializing the translated graph
+                    # afterward.
+                    payload = provider_bound.provider_payload
                     if len(payload) >= 0:
                         _thinking_cap: ThinkingCapability | None = None
                         _transcoding_cap = None
@@ -1341,7 +1346,7 @@ class RequestCoordinator:
                         except Exception:  # noqa: BLE001
                             pass  # best-effort; resolver has its own fallbacks
                         translated, warnings = transcoder.encode_request(
-                            cast("dict[str, Any]", payload),
+                            payload,
                             context.transcode_context,
                             features=_features,
                             thinking_capability=_thinking_cap,
@@ -1350,8 +1355,13 @@ class RequestCoordinator:
                             budget_resolution_policy=_budget_policy,
                             loss_policy=_loss_policy,
                         )
-                        provider_bound.replace_provider_payload(
-                            translated, reason="protocol_transcode"
+                        # The encoder owns the fresh target graph. Adopt it
+                        # directly so this changed protocol generation does
+                        # not incur a second equality walk or recursive
+                        # ownership pass.
+                        provider_bound.adopt_provider_payload(
+                            translated,
+                            reason="protocol_transcode",
                         )
                         context.transcode_context.loss_warnings.extend(warnings)
 
@@ -4950,8 +4960,8 @@ class RequestCoordinator:
         # builds its own shallow-copied working root and returns a fresh
         # dict that shares unaffected descendants (messages/tools/etc.)
         # with the source.  This avoids the previously-reviewed
-        # ``provider_payload_copy`` full deepcopy followed by a second
-        # whole-graph rematerialization in ``replace_provider_payload``.
+        # a full defensive payload copy followed by a second whole-graph
+        # rematerialization in ``replace_provider_payload``.
         payload_obj = request.provider_payload
 
         # Override the capability's control_contract with the resolved one.

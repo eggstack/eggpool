@@ -17,7 +17,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Multi-page dashboard with 50+ themes, reliability, routing, and runtime views
 - Model metadata enrichment from provider catalogs, OpenRouter, Artificial Analysis, and Hugging Face
 - Provider-neutral request shaping: capability-gated native cache-boundary translation, cache reporting, safe suffix compression, and policy-scoped overrides
-- Single-decode provider payload lifecycle: selected-provider transforms share one immutable client snapshot, generation-aware provider payload, and final serialization cache
+- Single-decode provider payload lifecycle: selected-provider transforms share one immutable client snapshot, generation-aware provider payload, and final serialization cache; cross-protocol encoders read that payload as a `Mapping` and adopt their fresh target graph directly
 - Request preparation is allocation-conscious: canonical decoded context estimates are computed once when model limits are enforced, translated tool allowance reuses the shared structural estimator without per-tool encoding, and provider/trusted-proxy lookup sets are generation-owned
 - Thinking/reasoning capability-aware routing with configurable budget mapping
 - High-concurrency stream stability: bounded terminal-finalization supervision, lock-contention diagnostics, and an OpenCode-specific operator playbook for sustained coding-agent streaming loads
@@ -243,7 +243,12 @@ Request transcoding is prepared once during preflight. A valid selected-provider
 reuse adopts that request-local translated generation and sends its already
 encoded bytes; provider-specific thinking or cache changes use the normal
 provider-bound copy-on-write/ownership boundary and serialize only the changed
-generation. Prepared transcodes are never shared across requests.
+generation. Recomputed cross-protocol requests use the same trusted adoption
+boundary without a defensive source deepcopy. Prepared transcodes are never
+shared across requests. Image/PDF validation rejects obvious encoded-size
+overflow before strict decoding and releases the temporary validation buffer
+before translated output is built; provider media limits and URL behavior are
+unchanged.
 
 Streaming completion is determined by the upstream protocol, not by the absence
 of a transport exception. OpenAI streams require `data: [DONE]` and Anthropic

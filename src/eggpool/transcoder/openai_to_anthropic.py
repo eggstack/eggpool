@@ -32,6 +32,8 @@ from eggpool.transcoder.json_helpers import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from eggpool.catalog.capabilities import (
         ThinkingCapability,
         TranscodingCapabilities,
@@ -198,6 +200,7 @@ def _translate_openai_content_to_anthropic(
                     continue
                 size = len(decoded)
                 if size > _ANTHROPIC_IMAGE_SIZE_LIMIT:
+                    del decoded
                     warnings.append(
                         {
                             "kind": "image_too_large",
@@ -207,6 +210,9 @@ def _translate_openai_content_to_anthropic(
                         }
                     )
                     continue
+                # The translated block retains the original encoded string;
+                # the decoded validation buffer is no longer needed.
+                del decoded
                 blocks.append(
                     {
                         "type": "image",
@@ -270,7 +276,7 @@ class OpenAIToAnthropic:
 
     def encode_request(
         self,
-        payload: dict[str, Any],
+        payload: Mapping[str, Any],
         context: TranscodeContext,
         *,
         features: TranscoderFeatures | None = None,

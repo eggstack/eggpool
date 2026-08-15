@@ -26,6 +26,8 @@ from eggpool.transcoder.json_helpers import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from eggpool.catalog.capabilities import (
         ThinkingCapability,
         TranscodingCapabilities,
@@ -186,16 +188,21 @@ def _translate_anthropic_content_to_openai(
                     }
                 )
                 continue
-            if len(decoded) > _ANTHROPIC_PDF_SIZE_LIMIT:
+            decoded_size = len(decoded)
+            if decoded_size > _ANTHROPIC_PDF_SIZE_LIMIT:
+                del decoded
                 warnings.append(
                     {
                         "kind": "pdf_too_large",
                         "field": "content[document]",
-                        "size_bytes": len(decoded),
+                        "size_bytes": decoded_size,
                         "limit_bytes": _ANTHROPIC_PDF_SIZE_LIMIT,
                     }
                 )
                 continue
+            # The translated file part retains the original encoded string;
+            # the decoded validation buffer is no longer needed.
+            del decoded
             url = f"data:application/pdf;base64,{data}"
             parts.append(
                 {
@@ -263,7 +270,7 @@ class AnthropicToOpenAI:
 
     def encode_request(
         self,
-        payload: dict[str, Any],
+        payload: Mapping[str, Any],
         context: TranscodeContext,
         *,
         features: TranscoderFeatures | None = None,

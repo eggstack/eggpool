@@ -23,7 +23,6 @@ Design rules
 from __future__ import annotations
 
 from collections.abc import Mapping
-from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
@@ -268,19 +267,6 @@ class ProviderBoundRequest:
 
         self.adopt_provider_payload(candidate, reason=reason)
         return True
-
-    def provider_payload_copy(self) -> dict[str, Any]:
-        """Return a mutable, detached copy for legacy read/transform callers.
-
-        Retained for the upstream protocol transcode path which hands a
-        detached graph to ``BodyTranscoder.encode_request``.  New
-        thinking-control and narrow mutation code MUST NOT use this
-        helper — the explicit ownership primitives
-        :meth:`mutate_top_level_mapping`,
-        :meth:`adopt_provider_payload`, and :meth:`set_provider_payload`
-        cover the narrowed post-Plan 113 surface.
-        """
-        return deepcopy(dict(self.provider_payload))
 
     def release_dispatch_buffers(self) -> None:
         """Drop request graphs and bytes after dispatch can no longer retry."""

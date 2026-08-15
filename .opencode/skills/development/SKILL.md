@@ -184,7 +184,12 @@ Prepared-transcode ownership changes should also run the prepared-transcode,
 provider-bound request, transform-pipeline, thinking-budget, cache-translation,
 and retry/freeze focused suites. Verify unchanged reuse adopts the translated
 generation without a second encode or recursive ownership walk, while
-provider-specific mutations leave the prepared source unchanged.
+provider-specific mutations leave the prepared source unchanged. Cross-protocol
+recompute should pass the provider payload as a read-only `Mapping`, adopt the
+fresh translated graph directly, and prove both encoder directions leave the
+source message/tool graph unchanged. Media tests should cover strict invalid
+base64, URL sources, size boundaries, and obvious encoded-size rejection before
+decode; do not add permanent memory thresholds.
 
 Request-estimation changes should run the request-limit, proxy-admission,
 prepared-transcode/tool-padding, and body-limit suites. Verify that an

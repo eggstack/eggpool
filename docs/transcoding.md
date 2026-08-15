@@ -15,6 +15,20 @@ The transcoder sits in the request path and:
 3. **Re-renders non-retryable errors** in the client protocol so error handling stays uniform.
 4. **Translates streaming SSE events** from one shared bounded frame stream in real time.
 
+### Request ownership and media validation
+
+Request encoders receive the provider-bound payload as a read-only `Mapping` and
+construct a fresh target graph. The coordinator adopts that graph as the new
+request-local provider generation; it does not recursively copy the source
+request first or rematerialize the translated graph afterward. Prepared
+transcodes remain request-local and reuse their encoded bytes when valid.
+
+Image and PDF data-URI validation first uses encoded-length arithmetic to reject
+obvious provider-limit overflow. Inputs that remain possible candidates still
+use strict base64 decoding; the temporary decoded validation buffer is released
+before the translated output container is built. Media limits, invalid-base64
+behavior, and URL-source behavior are unchanged.
+
 ### Streaming hot path
 
 `RequestCoordinator` creates one `SSEDecoder` for each upstream stream. It owns
