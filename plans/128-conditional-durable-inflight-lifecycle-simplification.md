@@ -25,8 +25,9 @@ change durability semantics.
 ## Disposition — 2026-08-15
 
 Plan 127 records `decision: retain` at audit baseline
-`612f68d42dec09564a61a343a1f44c381c371d0c`. This plan is not applicable and
-is closed without production, schema, runtime-mode, dependency, or CI changes.
+`612f68d42dec09564a61a343a1f44c381c371d0c`; the decision record is committed
+in `f7d001c`. This plan is not applicable and is closed without production,
+schema, runtime-mode, dependency, or CI changes.
 
 ## Purpose
 
