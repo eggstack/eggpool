@@ -12,7 +12,9 @@ EggPool supports multiple upstream AI providers behind a unified API. This docum
 
 ## Verified Providers
 
-These providers have clean API-key auth and OpenAI/Anthropic-compatible endpoints. They are safe to configure with real API keys.
+These providers have clean API-key auth and implement one or both of EggPool's
+supported upstream wire protocols: OpenAI Chat Completions or Anthropic
+Messages. They are safe to configure with real API keys.
 
 | Provider | ID | Base URL | Protocols | Auth | API Key Env |
 |----------|----|----------|-----------|------|-------------|
@@ -47,7 +49,7 @@ uv run python scripts/verify_upstream_auth.py --config config.toml --provider <p
 | Novita AI | `novita` | `https://api.novita.ai/openai` | OpenAI | Base URL may need correction |
 | MiniMax International | `minimax` | `https://api.minimax.io/anthropic` | Anthropic | Anthropic-compatible endpoint for token-plan keys; live model discovery via `/v1/models` |
 | MiniMax China | `minimax-cn` | `https://api.minimaxi.com/v1` | OpenAI | Live verification required before production use |
-| GeneralCompute | `generalcompute` | `https://api.generalcompute.com/v1` | OpenAI | Plain OpenAI-compatible PAYG; verify `/models` and chat live |
+| GeneralCompute | `generalcompute` | `https://api.generalcompute.com/v1` | OpenAI | Plain OpenAI Chat Completions-compatible PAYG; verify `/models` and chat live |
 | NeuralWatt | `neuralwatt` | `https://api.neuralwatt.com/v1` | OpenAI | Energy-based pricing; verify endpoints |
 | Ollama (cloud) | `ollama-cloud` | `https://ollama.com/v1` | OpenAI | Confirm cloud auth and model listing |
 | Cerebras | `cerebras` | `https://api.cerebras.ai/v1` | OpenAI | Fast inference; verify model listing |
@@ -134,7 +136,8 @@ value = "2023-06-01"
 ### MiniMax International (Anthropic-Compatible Token-Plan Endpoint)
 
 Token-plan API keys from `minimax.io` are valid for the MiniMax
-Anthropic-compatible surface, **not** the OpenAI-compatible
+Anthropic Messages-compatible surface, **not** the OpenAI Chat
+Completions-compatible
 `/v1/chat/completions` endpoint. The bundled `minimax` template configures
 the Anthropic-compatible contract by default and uses Anthropic-style
 model discovery (`GET /v1/models`):
@@ -176,7 +179,7 @@ the anthropic value produced by the family mapping, and live discovery is
 the source of truth.
 
 `minimax-cn` (China console) is intentionally configured as plain
-OpenAI-compatible in the bundled template because the China endpoint
+OpenAI Chat Completions-compatible in the bundled template because the China endpoint
 family and auth shape have not been confirmed against `api.minimaxi.com`.
 Do not assume parity with the international Anthropic-compatible
 template without live testing. `minimax-cn` ships with
@@ -198,9 +201,9 @@ Requests that hit the wrong endpoint receive a `400 ProtocolMismatchError`
 ("Model 'MiniMax-M3' uses the X protocol. Use /v1/..."). Hit the row
 that matches the provider you configured.
 
-### GeneralCompute PAYG (Plain OpenAI-Compatible)
+### GeneralCompute PAYG (Plain OpenAI Chat Completions-Compatible)
 
-GeneralCompute PAYG is treated as a standard OpenAI-compatible provider.
+GeneralCompute PAYG is treated as a standard OpenAI Chat Completions-compatible provider.
 The bundled `generalcompute` template uses `GET /models` and
 `POST /chat/completions` with Bearer auth:
 
@@ -400,7 +403,7 @@ uv run python scripts/verify_upstream_auth.py --config config.toml --provider gr
 
 ### Groq
 
-- Mostly OpenAI-compatible, but some OpenAI parameters are unsupported (e.g., `logprobs`, `logit_bias`, `n != 1`).
+- Mostly OpenAI Chat Completions-compatible, but some OpenAI parameters are unsupported (e.g., `logprobs`, `logit_bias`, `n != 1`).
 - 400s from unsupported optional fields are non-retryable user errors, not transient failures.
 - Model IDs may use `org/model` format (e.g., `openai/gpt-oss-20b`).
 
@@ -457,7 +460,7 @@ only a fallback if live discovery is unavailable.
 
 A 404 against `https://api.generalcompute.com/v1/models/list` means the
 non-default `POST /models/list` catalog endpoint was configured. PAYG
-should be tested first as plain OpenAI-compatible with `GET /models`
+should be tested first as plain OpenAI Chat Completions-compatible with `GET /models`
 and `POST /chat/completions` (the bundled template's default).
 
 ## OAuth / Consumer Subscription Exclusion

@@ -1,4 +1,4 @@
-"""Phase 3 streaming translation between OpenAI and Anthropic protocols.
+"""Phase 3 streaming translation between Chat Completions and Messages protocols.
 
 The coordinator owns byte framing in ``eggpool.proxy.sse.SSEDecoder`` and
 passes shared decoded frames here. Raw-byte ``feed``/``flush`` methods are

@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 def build_kilo_openai_compatible_snippet(
     ctx: IntegrationContext, model: str | None = None
 ) -> str:
-    """Build a JSON/OpenAI-compatible provider block for Kilo."""
+    """Build a JSON/OpenAI Chat Completions-compatible provider block for Kilo."""
     provider: dict[str, Any] = {
         "name": "EggPool",
         "apiBase": ctx.base_url,

@@ -3,6 +3,12 @@
 This directory is the current design index. Historical implementation plans
 remain under `plans/`; this index describes the runtime that is shipped today.
 
+EggPool's public protocol scope is OpenAI Chat Completions at
+`POST /v1/chat/completions`, Anthropic Messages at `POST /v1/messages`, and
+OpenAI-style model listing at `GET /v1/models`. The service does not claim full
+OpenAI API or `/v1/responses` parity; upstream provider protocol labels do not
+expand this public surface.
+
 For repository work, start here and follow the relevant deep dive. Active
 plans provide scope and sequencing when needed; completed plans are historical
 records and should not be traversed as a chain for ordinary changes. Regression
@@ -55,7 +61,8 @@ See [deep-dive-providers.md](deep-dive-providers.md).
 
 ## Protocol transcoding
 
-OpenAI and Anthropic requests/responses are converted through the transcoder
+OpenAI Chat Completions and Anthropic Messages requests/responses are converted
+through the transcoder
 package. Request encoders receive the provider-bound payload as a read-only
 `Mapping`, build a fresh target graph, and hand that graph across the trusted
 `adopt_provider_payload()` boundary. Native prompt-cache fields are

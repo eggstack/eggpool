@@ -117,7 +117,7 @@ prefer_native = true      # prefer native-protocol accounts in routing
 # "strict": reject unknown efforts and clamped budgets before dispatch.
 # budget_resolution_policy = "lenient"
 
-# Configurable OpenAI-compatible reasoning field names.
+# Configurable OpenAI Chat Completions-compatible reasoning field names.
 # Controls which JSON field names EggPool uses when exposing
 # upstream thinking/reasoning content in responses.
 # [transcoder.openai_reasoning_fields]
@@ -458,7 +458,7 @@ enabled = false
 # mode = "bearer"
 
 # OpenRouter — 400+ models through one API key
-# Status: verified (official docs confirm OpenAI-compatible endpoint)
+# Status: verified (official docs confirm OpenAI Chat Completions-compatible endpoint)
 # [providers.openrouter]
 # id = "openrouter"
 # base_url = "https://openrouter.ai/api/v1"
@@ -480,7 +480,7 @@ enabled = false
 # # value = "EggPool"
 
 # Together AI — popular inference provider
-# Status: verified (official docs confirm OpenAI-compatible endpoint)
+# Status: verified (official docs confirm OpenAI Chat Completions-compatible endpoint)
 # [providers.together]
 # id = "together"
 # base_url = "https://api.together.ai/v1"
@@ -494,7 +494,7 @@ enabled = false
 # mode = "bearer"
 
 # Fireworks AI — fast inference for open-source models
-# Status: verified (official docs confirm Bearer auth + OpenAI-compatible endpoint)
+# Status: verified (official docs confirm Bearer auth + OpenAI Chat Completions-compatible endpoint)
 # [providers.fireworks]
 # id = "fireworks"
 # base_url = "https://api.fireworks.ai/inference/v1"
@@ -508,7 +508,7 @@ enabled = false
 # mode = "bearer"
 
 # OpenAI — direct OpenAI API
-# Status: verified — reference OpenAI-compatible provider
+# Status: verified — reference OpenAI Chat Completions-compatible provider
 # [providers.openai]
 # id = "openai"
 # base_url = "https://api.openai.com/v1"
@@ -551,8 +551,8 @@ enabled = false
 # # probe_protocol = "anthropic"
 # # require_models = false
 
-# Groq — low-latency OpenAI-compatible inference
-# Status: verified — official docs use https://api.groq.com/openai/v1 with OpenAI clients
+# Groq — low-latency OpenAI Chat Completions-compatible inference
+# Status: verified — official docs use https://api.groq.com/openai/v1 with OpenAI Chat Completions clients
 # [providers.groq]
 # id = "groq"
 # base_url = "https://api.groq.com/openai/v1"
@@ -570,7 +570,7 @@ enabled = false
 # # probe_protocol = "openai"
 # # require_models = true
 
-# DeepInfra — OpenAI-compatible open-model inference
+# DeepInfra — OpenAI Chat Completions-compatible open-model inference
 # Status: verified — official docs use https://api.deepinfra.com/v1/openai
 # [providers.deepinfra]
 # id = "deepinfra"
@@ -589,8 +589,8 @@ enabled = false
 # # probe_protocol = "openai"
 # # require_models = true
 
-# Google Gemini — OpenAI-compatible Gemini API surface
-# Status: verified — official docs use OpenAI clients with Gemini API keys
+# Google Gemini — OpenAI Chat Completions-compatible Gemini API surface
+# Status: verified — official docs use OpenAI Chat Completions clients with Gemini API keys
 # [providers.gemini]
 # id = "gemini"
 # base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
@@ -609,7 +609,7 @@ enabled = false
 # # require_models = true
 
 # xAI — direct Grok API
-# Status: verified — API-key OpenAI client usage with https://api.x.ai/v1
+# Status: verified — API-key OpenAI Chat Completions client usage with https://api.x.ai/v1
 # [providers.xai]
 # id = "xai"
 # base_url = "https://api.x.ai/v1"
@@ -646,7 +646,7 @@ enabled = false
 # # probe_protocol = "openai"
 # # require_models = true
 
-# SiliconFlow — OpenAI-compatible Chinese model aggregator
+# SiliconFlow — OpenAI Chat Completions-compatible Chinese model aggregator
 # Status: verified — /v1/chat/completions with Bearer auth; verify model listing live
 # [providers.siliconflow]
 # id = "siliconflow"
@@ -681,7 +681,7 @@ enabled = false
 # mode = "bearer"
 
 # Alibaba Qwen — popular Chinese provider
-# Status: verified (official docs confirm OpenAI-compatible endpoint; use regional base_url)
+# Status: verified (official docs confirm OpenAI Chat Completions-compatible endpoint; use regional base_url)
 # [providers.alibaba]
 # id = "alibaba"
 # base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -715,7 +715,7 @@ enabled = false
 # MiniMax International — Anthropic-compatible endpoint for token-plan keys.
 # minimax.io token-plan keys use the Anthropic-compatible transport
 # (x-api-key + anthropic-version) at /anthropic/v1/messages, NOT the
-# OpenAI-compatible /v1/chat/completions surface. Live model discovery
+# OpenAI Chat Completions-compatible /v1/chat/completions surface. Live model discovery
 # is supported via the documented /v1/models endpoint.
 # Status: live-verification-required; use for keys from minimax.io
 # [providers.minimax]
@@ -770,8 +770,8 @@ enabled = false
 # [providers.minimax-cn.auth]
 # mode = "bearer"
 
-# GeneralCompute — plain OpenAI-compatible PAYG.
-# Default to the standard OpenAI surface (GET /models, POST /chat/completions,
+# GeneralCompute — plain OpenAI Chat Completions-compatible PAYG.
+# Default to the standard OpenAI Chat Completions surface (GET /models, POST /chat/completions,
 # Bearer auth). The previously-suspected POST /models/list endpoint is not
 # required for the known-working PAYG flow.
 # Status: live-verification-required; run verifier before production use
@@ -830,7 +830,7 @@ enabled = false
 # [providers.ollama-cloud.auth]
 # mode = "bearer"
 
-# Cerebras — fast OpenAI-compatible inference
+# Cerebras — fast OpenAI Chat Completions-compatible inference
 # Status: live-verification-required — confirm base_url and model listing
 # [providers.cerebras]
 # id = "cerebras"
@@ -841,7 +841,7 @@ enabled = false
 # name = "default"
 # api_key = "sk-your-cerebras-key"
 
-# SambaNova Cloud — OpenAI-compatible hosted open models
+# SambaNova Cloud — OpenAI Chat Completions-compatible hosted open models
 # Status: live-verification-required — confirm base_url and model listing
 # [providers.sambanova]
 # id = "sambanova"
@@ -852,7 +852,7 @@ enabled = false
 # name = "default"
 # api_key = "sk-your-sambanova-key"
 
-# Hyperbolic — OpenAI-compatible open-model inference
+# Hyperbolic — OpenAI Chat Completions-compatible open-model inference
 # Status: live-verification-required — confirm base_url and model listing
 # [providers.hyperbolic]
 # id = "hyperbolic"
@@ -863,7 +863,7 @@ enabled = false
 # name = "default"
 # api_key = "sk-your-hyperbolic-key"
 
-# Featherless AI — OpenAI-compatible serverless open-model API
+# Featherless AI — OpenAI Chat Completions-compatible serverless open-model API
 # Status: live-verification-required — confirm base_url and model listing
 # [providers.featherless]
 # id = "featherless"
@@ -874,7 +874,7 @@ enabled = false
 # name = "default"
 # api_key = "sk-your-featherless-key"
 
-# Moonshot AI / Kimi — direct OpenAI-compatible API
+# Moonshot AI / Kimi — direct OpenAI Chat Completions-compatible API
 # Status: live-verification-required — confirm base_url and model listing
 # [providers.moonshot]
 # id = "moonshot"

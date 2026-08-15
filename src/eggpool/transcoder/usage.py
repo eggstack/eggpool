@@ -96,11 +96,12 @@ def _canonicalise_anthropic(raw: dict[str, Any]) -> CanonicalUsage:
 def openai_usage_from_anthropic_usage(
     raw: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Render Anthropic usage as an OpenAI-compatible usage envelope.
+    """Render Anthropic usage as an OpenAI Chat Completions-compatible envelope.
 
     Anthropic separates fresh input, cache-read input, and cache-write
-    input. OpenAI-compatible clients generally treat ``prompt_tokens`` as
-    total prompt context, with cache details as a breakdown. Preserve that
+    input. OpenAI Chat Completions-compatible clients generally treat
+    ``prompt_tokens`` as total prompt context, with cache details as a
+    breakdown. Preserve that
     convention so clients display long cached-context sessions correctly.
     """
     input_tokens = token_count_from(raw, "input_tokens")

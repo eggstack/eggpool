@@ -5,12 +5,17 @@
 
 # EggPool
 
-A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts behind one OpenAI/Anthropic-compatible endpoint.
+A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts behind OpenAI Chat Completions- and Anthropic Messages-compatible paths.
+
+EggPool's public OpenAI surface is intentionally limited to Chat Completions
+(`POST /v1/chat/completions`) and model listing (`GET /v1/models`). It also
+exposes Anthropic Messages at `POST /v1/messages`. EggPool does not currently
+implement `/v1/responses` or claim full OpenAI API parity.
 
 ## Features
 
 - Proxies model requests across multiple providers and accounts behind a single endpoint
-- OpenAI- and Anthropic-compatible upstream request paths, with transparent bidirectional protocol transcoding
+- OpenAI Chat Completions- and Anthropic Messages-compatible request paths, with transparent bidirectional protocol transcoding
 - Dynamically discovers available models; routes by quota utilization (load-based, never cost-based)
 - Optional per-account outbound proxy support ([pproxy](https://pypi.org/project/pproxy/) — install with `uv sync --extra proxy`; SOCKS5, HTTP, Shadowsocks)
 - Tracks requests, tokens, latency, errors, and cost provenance in SQLite (`provider_reported`, trusted local `derived`/`partial`, bounded `estimated`; reservation is advisory, not a floor)
@@ -179,7 +184,7 @@ Use `eggpool connect` for interactive provider setup. See [docs/providers.md](do
 | `[network]` | Outbound transport and proxy settings |
 | `[model_info]` | Optional model metadata refresh, aliases, overrides, and external source settings |
 | `[update_checker]` | Optional in-process PyPI release probe for dashboard status |
-| `[transcoder]` | Protocol transcoding between OpenAI and Anthropic formats |
+| `[transcoder]` | Protocol transcoding between OpenAI Chat Completions and Anthropic Messages |
 
 Fatal SQLite uncertainty closes the worker; the supervisor restarts it and
 startup reconciliation repairs durable leftovers.
@@ -212,7 +217,7 @@ provider capacity histories differ. See [Provider configuration](docs/providers.
 
 ## Protocol transcoding
 
-When `[transcoder] enabled = true`, EggPool bridges OpenAI Chat Completions and Anthropic Messages bidirectionally so a single client ecosystem (e.g. OpenCode, which speaks only OpenAI) can reach Anthropic-only upstreams and vice versa.
+When `[transcoder] enabled = true`, EggPool bridges OpenAI Chat Completions and Anthropic Messages bidirectionally so a single client ecosystem (e.g. OpenCode, which speaks OpenAI Chat Completions) can reach Anthropic-only upstreams and vice versa.
 
 What gets translated:
 
@@ -321,8 +326,8 @@ The stack covers provider cache counters, request segmentation, native cache pre
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/v1/models` | List available models |
-| `POST` | `/v1/chat/completions` | OpenAI-compatible chat completions |
-| `POST` | `/v1/messages` | Anthropic-compatible messages |
+| `POST` | `/v1/chat/completions` | OpenAI Chat Completions-compatible requests |
+| `POST` | `/v1/messages` | Anthropic Messages-compatible requests |
 | `GET` | `/v1/healthz` | Liveness check |
 | `GET` | `/v1/readyz` | Readiness check |
 | `GET` | `/api/backoffs` | Active upstream-derived account backoffs (`?now=<epoch>` for reproducible snapshots) |

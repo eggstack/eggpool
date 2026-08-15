@@ -348,7 +348,7 @@ def _apply_limits(
 
 
 def _openai_client_needs_transcoder(config: AppConfig) -> bool:
-    """Check if any enabled provider requires transcoding for OpenAI clients."""
+    """Check if any enabled provider requires transcoding for Chat clients."""
     for _provider_id, provider_cfg in config.providers.items():
         if not any(account.enabled for account in provider_cfg.accounts):
             continue

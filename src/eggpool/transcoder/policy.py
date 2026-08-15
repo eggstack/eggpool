@@ -2,7 +2,7 @@
 
 Transcoding is **on by default**. EggPool's data plane normalises every
 client request to the appropriate upstream wire format automatically:
-an OpenAI client posting to ``/v1/chat/completions`` reaches Anthropic
+an OpenAI Chat Completions client posting to ``/v1/chat/completions`` reaches Anthropic
 upstreams (and vice versa) without any operator configuration.
 
 The ``enabled`` flag is preserved as a deprecated escape hatch for
@@ -182,10 +182,11 @@ class ThinkingBudgetDefaults(BaseModel):
 
 
 class OpenAIReasoningFields(BaseModel):
-    """Configurable OpenAI-compatible reasoning field names.
+    """Configurable OpenAI Chat Completions-compatible reasoning field names.
 
     Controls which JSON field names EggPool uses when exposing
-    upstream thinking/reasoning content in OpenAI-compatible responses.
+    upstream thinking/reasoning content in OpenAI Chat Completions-compatible
+    responses.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -312,7 +313,7 @@ class TranscoderPolicy(BaseModel):
     openai_reasoning_fields: OpenAIReasoningFields = Field(
         default_factory=OpenAIReasoningFields,
         description=(
-            "Configurable field names for OpenAI-compatible reasoning "
+            "Configurable field names for OpenAI Chat Completions-compatible reasoning "
             "content output. Controls non-streaming and streaming field "
             "emission."
         ),

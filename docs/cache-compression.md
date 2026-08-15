@@ -3,7 +3,8 @@
 EggPool keeps provider cache behavior explicit and provider-bound. Native
 cache boundaries are translated only when the selected provider/model contract
 declares the target field, supported TTL, and boundary limit. Generic
-OpenAI-compatible endpoints do not receive guessed cache fields.
+OpenAI Chat Completions-compatible upstreams do not receive guessed cache
+fields.
 
 Compression is optional and has two modes:
 

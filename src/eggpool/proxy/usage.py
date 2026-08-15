@@ -1,4 +1,4 @@
-"""Stream usage extraction for OpenAI and Anthropic protocols."""
+"""Stream usage extraction for Chat Completions and Messages protocols."""
 
 from __future__ import annotations
 
@@ -103,7 +103,7 @@ def extract_openai_response_usage(
     *,
     provider_id: str | None = None,
 ) -> StreamUsageResult | None:
-    """Extract usage from an OpenAI-compatible response JSON object."""
+    """Extract usage from an OpenAI Chat Completions response JSON object."""
     usage_data = safe_dict(data.get("usage"))
     if not usage_data:
         return None

@@ -26,7 +26,7 @@ def serialize_openai_model(
     providers: list[str] | None = None,
     model_info: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Serialize a catalog model entry to OpenAI-compatible model dict.
+    """Serialize a catalog model entry to an OpenAI ``/v1/models`` dict.
 
     Includes the namespaced ``eggpool`` extension with base model ID,
     provider ID, routing priority (when supplied), effective limits

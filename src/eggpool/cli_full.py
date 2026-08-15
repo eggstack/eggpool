@@ -1048,7 +1048,9 @@ def _common_configsetup_options(f: Any) -> Any:
         "--host", default=None, help="Override detected LAN host in generated URLs."
     )(f)
     f = click.option(
-        "--base-url", default=None, help="Override the full OpenAI-compatible base URL."
+        "--base-url",
+        default=None,
+        help="Override the OpenAI Chat Completions-compatible base URL.",
     )(f)
     f = click.option("--model", default=None, help="Default model to place in config.")(
         f

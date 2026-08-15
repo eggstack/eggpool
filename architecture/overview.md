@@ -1,12 +1,17 @@
 # EggPool Architecture Overview
 
-EggPool is a lightweight, LAN-hosted proxy that aggregates multiple LLM provider accounts behind one OpenAI/Anthropic-compatible endpoint. Designed for Raspberry Pi and SBC deployments, it provides protocol transcoding, quota-aware routing, and a self-updating dashboard.
+EggPool is a lightweight, LAN-hosted proxy that aggregates multiple LLM provider accounts behind OpenAI Chat Completions- and Anthropic Messages-compatible paths. Designed for Raspberry Pi and SBC deployments, it provides protocol transcoding, quota-aware routing, and a self-updating dashboard.
+
+The public OpenAI contract is intentionally limited to Chat Completions
+(`POST /v1/chat/completions`) and model listing (`GET /v1/models`), alongside
+Anthropic Messages (`POST /v1/messages`). EggPool does not currently implement
+the OpenAI Responses API or claim full OpenAI API parity.
 
 ## System Architecture at a Glance
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        Client (OpenAI/Anthropic SDK)                │
+│              Client (OpenAI Chat / Anthropic Messages SDK)          │
 └───────────────────────────────┬─────────────────────────────────────┘
                                 │ HTTP
 ┌───────────────────────────────▼─────────────────────────────────────┐
@@ -81,7 +86,7 @@ The request lifecycle is orchestrated by `RequestCoordinator` in `request/coordi
 | **Path** | `src/eggpool/transcoder/` |
 | **Deep Dive** | [deep-dive-transcoder.md](deep-dive-transcoder.md) |
 
-Transparent request/response format conversion between OpenAI and Anthropic protocols. When a client sends Anthropic Messages but the routed provider only supports OpenAI Chat Completions (or vice versa), the transcoder translates both the request body and the streaming response. `BodyTranscoder` Protocol (`protocol.py`) defines the interface; `OpenAIToAnthropic` and `AnthropicToOpenAI` are the concrete implementations. Streaming translation (`streaming.py`) handles SSE frame-by-frame with synchronous `translate_frame()` and `finish()`. The transcoder also handles tool-use translation, thinking/reasoning control normalization, and configurable reasoning field names. A compression sub-package (`transcoder/compression/`) implements segmentation, observe-mode analysis, safe-mode suffix compression, and policy overrides. The `usage` property returns a default; finalization reads usage from the coordinator's observer.
+Transparent request/response format conversion between OpenAI Chat Completions and Anthropic Messages protocols. When a client sends Anthropic Messages but the routed provider only supports OpenAI Chat Completions (or vice versa), the transcoder translates both the request body and the streaming response. `BodyTranscoder` Protocol (`protocol.py`) defines the interface; `OpenAIToAnthropic` and `AnthropicToOpenAI` are the concrete implementations. Streaming translation (`streaming.py`) handles SSE frame-by-frame with synchronous `translate_frame()` and `finish()`. The transcoder also handles tool-use translation, thinking/reasoning control normalization, and configurable reasoning field names. A compression sub-package (`transcoder/compression/`) implements segmentation, observe-mode analysis, safe-mode suffix compression, and policy overrides. The `usage` property returns a default; finalization reads usage from the coordinator's observer.
 
 ### Routing & Quota
 

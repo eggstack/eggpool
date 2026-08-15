@@ -4,7 +4,7 @@ Back to [Overview](overview.md)
 
 ## Purpose
 
-Transparently translates request/response bodies between OpenAI and Anthropic protocols. When a client sends Anthropic-format requests but the routed provider only speaks OpenAI (or vice versa), the transcoder bridges the gap.
+Transparently translates request/response bodies between OpenAI Chat Completions and Anthropic Messages protocols. When a client sends Anthropic-format requests but the routed provider only speaks OpenAI Chat Completions (or vice versa), the transcoder bridges the gap.
 
 ## Architecture
 
@@ -63,7 +63,7 @@ Phase 9 optimization: one shared bounded decoder, synchronous
 `TranscoderPolicy` — configuration and per-request state:
 - Feature flags for optional semantic extensions; tool translation is baseline
   compatibility and the legacy `tools` field is retained as a no-op.
-- Reasoning field names for OpenAI compatibility
+- Reasoning field names for OpenAI Chat Completions-compatible responses
 - Loss policy (warn/reject)
 - Budget resolution settings
 

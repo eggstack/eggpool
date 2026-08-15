@@ -1,7 +1,7 @@
 # Plan 130 — OpenAI Compatibility Scope Decision and Documentation
 
 Date: 2026-08-14
-Status: ready
+Status: complete
 Parent roadmap: `plans/122-post-audit-correctness-and-sbc-simplification-roadmap.md`
 Planning baseline: `c17bb84af6d737a8408cbcce4d2746caedee36e8`
 Depends on: Plan 123 semantics correction before final docs
@@ -254,25 +254,26 @@ No new API compatibility CI matrix.
 
 ## Explicit acceptance criteria
 
-- [ ] Actual EggPool public routes/protocol surface is inventoried.
-- [ ] Intended consumers are searched for in current repository evidence.
-- [ ] Current official OpenAI Chat Completions/Responses distinction is verified
+- [x] Actual EggPool public routes/protocol surface is inventoried.
+- [x] Intended consumers are searched for in current repository evidence.
+- [x] Current official OpenAI Chat Completions/Responses distinction is verified
   at implementation time and verification date/source is recorded.
-- [ ] Closure records exactly one `openai_scope: chat_completions` or
+- [x] Closure records exactly one `openai_scope: chat_completions` or
   `openai_scope: broader_responses_required`.
-- [ ] Ambiguous evidence defaults to the narrower truthful Chat Completions scope.
-- [ ] If Chat Completions scope is selected, package/README/docs/AGENTS wording is
+- [x] Ambiguous evidence defaults to the narrower truthful Chat Completions scope.
+- [x] If Chat Completions scope is selected, package/README/docs/AGENTS wording is
   precise and no longer implies full OpenAI API parity.
-- [ ] If broader Responses scope is selected, this plan records only bounded
-  future requirements and does not implement `/v1/responses`.
-- [ ] Existing Chat Completions, Models, Anthropic Messages, transcoding,
+- [x] If broader Responses scope is selected, this plan records only bounded
+  future requirements and does not implement `/v1/responses` (not applicable;
+  `chat_completions` was selected).
+- [x] Existing Chat Completions, Models, Anthropic Messages, transcoding,
   streaming, and Plan 123 reasoning behavior remain unchanged.
-- [ ] No embeddings/audio/images/batches/assistants/files/fine-tuning or unrelated
+- [x] No embeddings/audio/images/batches/assistants/files/fine-tuning or unrelated
   endpoint work is introduced.
-- [ ] No protocol registry/framework, SDK dependency, DB migration, or CI
+- [x] No protocol registry/framework, SDK dependency, DB migration, or CI
   expansion is introduced.
-- [ ] Relevant config/ordinary checks pass for any code touched.
-- [ ] Decision, evidence, changed wording, and exact verification are appended to
+- [x] Relevant config/ordinary checks pass for any code touched.
+- [x] Decision, evidence, changed wording, and exact verification are appended to
   this plan; no separate closure plan is created.
 
 ## Rejection conditions
@@ -300,3 +301,99 @@ Reject implementation if it:
    requirements if genuinely required.
 6. Run relevant config/ordinary checks.
 7. Append decision/evidence/verification to this file and stop.
+
+## Closure record
+
+Status: complete.
+
+Decision:
+
+```text
+openai_scope: chat_completions
+```
+
+### Public surface inventory
+
+| Surface | Route or behavior | Disposition |
+|---|---|---|
+| OpenAI Chat Completions | `POST /v1/chat/completions`, including SSE streaming | Supported public client surface; translated to Anthropic Messages when required |
+| OpenAI model listing | `GET /v1/models` | Supported model discovery surface with EggPool metadata |
+| Anthropic Messages | `POST /v1/messages`, including SSE streaming | Supported public client surface; translated to OpenAI Chat Completions when required |
+| Health/readiness | `/v1/healthz`, `/v1/readyz` | Operational endpoints, not OpenAI compatibility claims |
+| Dashboard/operator APIs | `/`, `/api/*` | Operational endpoints, not protocol compatibility claims |
+| OpenAI Responses | `/v1/responses` | No route, stub, translator, or compatibility claim |
+
+The route registration in `src/eggpool/app.py` confirms the supported data-plane
+routes are `/v1/models`, `/v1/chat/completions`, and `/v1/messages`; no
+`/v1/responses` route exists. The request and streaming contracts remain the
+existing Chat Completions/Messages implementations.
+
+### Consumer evidence
+
+Repository examples and integration generators target OpenAI-style Chat
+Completions base URLs: OpenCode, Aider, Cline, Continue, Codex, Qwen Code,
+Kilo, Roo Code, Goose, OpenHands, and related coding-agent configuration
+snippets. `src/eggpool/integrations/common.py` explicitly enables transcoding
+for OpenAI Chat Completions clients when only Anthropic upstreams are available. No repository
+example, test, integration generator, or active project guidance requires
+`/v1/responses`, `responses.create`, `previous_response_id`, or Responses
+conversation state. The only Responses references are scope-boundary notes and
+provider documentation noting that EggPool supports chat completions only.
+
+This evidence does not establish a broader supported consumer requirement, so
+the plan selects the narrower truthful contract. Existing OpenAI-compatible
+provider wording is retained only where it describes an upstream wire contract
+or a third-party integration identifier; public EggPool wording now names Chat
+Completions explicitly.
+
+### Official OpenAI verification
+
+Verified: 2026-08-15 against official OpenAI documentation.
+
+- [Migrate to the Responses API](https://developers.openai.com/api/docs/guides/migrate-to-responses)
+  states that Chat Completions remains supported while Responses is recommended
+  for new projects. It describes Responses as an evolution with distinct Items,
+  output objects, streaming events, tool/function-calling shapes, and optional
+  response/conversation state.
+- [Chat API reference](https://developers.openai.com/api/reference/resources/chat)
+  documents the separate Chat Completions request, response, and streaming
+  contracts used by EggPool.
+
+These differences make Responses compatibility a future product milestone, not
+a wording-only synonym for Chat Completions compatibility. This plan therefore
+does not implement `/v1/responses` or record a broader-scope requirements
+milestone.
+
+### Documentation changes
+
+Public and technical wording was narrowed consistently in `pyproject.toml`,
+`README.md`, `AGENTS.md`, the architecture index/overview/transcoder deep dive,
+the architecture/development skills, provider/transcoding/cache/thinking docs,
+packaged config examples, provider templates, CLI help, and API docstrings.
+The wording now identifies OpenAI Chat Completions and Anthropic Messages as
+the supported protocol surfaces and explicitly excludes full OpenAI/Responses
+parity where a scope statement is useful. No runtime behavior, route, SDK
+dependency, migration, CI job, or unrelated OpenAI endpoint was added.
+
+### Verification evidence
+
+Exact local commands and results after the final documentation and metadata diff
+were checked:
+
+```text
+uv sync --frozen --extra ci                         -> passed
+uv run eggpool --config config.example.toml check-config
+  -> passed
+uv run eggpool --config config.sbc.example.toml check-config
+  -> passed
+uv run eggpool --help                               -> passed
+uv run eggpool configsetup aider --help             -> passed; Chat Completions-compatible base URL help shown
+uv run pytest tests/unit/test_contract.py tests/unit/test_contract_urls.py -q --tb=short --maxfail=1
+  -> 141 passed in 0.49s
+uv run ruff format --check src/ tests/ scripts/     -> 686 files already formatted
+uv run ruff check src/ tests/ scripts/              -> All checks passed
+uv run pyright src/ scripts/                        -> 0 errors, 0 warnings, 0 informations
+PYTHONHASHSEED=0 TZ=UTC uv run pytest tests/smoke/ -q --tb=short --maxfail=1
+  -> 14 passed in 2.06s
+git diff --check                                      -> passed
+```

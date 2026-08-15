@@ -62,7 +62,7 @@ def build_opencode_provider_config(
         Models whose ``capabilities.thinking.status`` is ``"supported"``
         receive OpenCode-compatible ``reasoning`` metadata. When
         ``supported_efforts`` is known, per-effort variants are generated
-        using the OpenAI-compatible ``reasoningEffort`` option.
+        using the OpenAI Chat Completions-compatible ``reasoningEffort`` option.
     """
     model_map: dict[str, Any] = {}
     for m in models:

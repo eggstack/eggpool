@@ -51,7 +51,13 @@ All data-plane requests flow through `RequestCoordinator`:
 
 ## Protocol Transcoding
 
-Transparent request/response format conversion between OpenAI and Anthropic protocols in `src/eggpool/transcoder/`. `select_transcoder()` in `protocol.py` is the dispatch source of truth. Controlled by `[transcoder]` config; on by default.
+EggPool's public protocol scope is OpenAI Chat Completions at
+`/v1/chat/completions`, Anthropic Messages at `/v1/messages`, and model listing
+at `/v1/models`; it does not claim full OpenAI API or `/v1/responses` parity.
+Transparent request/response format conversion between OpenAI Chat Completions
+and Anthropic Messages protocols lives in `src/eggpool/transcoder/`.
+`select_transcoder()` in `protocol.py` is the dispatch source of truth.
+Controlled by `[transcoder]` config; on by default.
 
 - **Streaming hot path**: one bounded `SSEDecoder` per upstream stream, synchronous `translate_frame()`/`finish()`, compact JSON separators `(",",":")`, lazy JSON-object parse cache
 - **Request preparation hot path**: ASCII-only context strings use the native `str.isascii()` path; enforced canonical context estimates are returned by limit checking and reused in `ProxyRequestContext`, while unbounded models avoid that walk. Translated tool allowance is passed as estimator arithmetic, with rough padding using the shared decoded structural estimator rather than per-tool JSON encoding. Provider IDs and trusted proxies are immutable, generation-owned lookup sets used directly by leased requests.

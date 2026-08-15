@@ -40,7 +40,7 @@ notes = "OpenCode Go exposes low/medium/high thinking controls."
 # MiniMax International — Anthropic-compatible endpoint for token-plan keys.
 # Token-plan keys from minimax.io use the Anthropic-compatible transport
 # (x-api-key + anthropic-version) at /anthropic/v1/messages, not the
-# legacy OpenAI-compatible /v1/chat/completions surface. Live model
+# legacy OpenAI Chat Completions-compatible /v1/chat/completions surface. Live model
 # discovery is supported via the documented /v1/models endpoint.
 id = "minimax"
 base_url = "https://api.minimax.io/anthropic"
@@ -112,7 +112,7 @@ probe_protocol = "openai"
 require_models = false
 
 # MiniMax China serves the same model IDs as MiniMax International but
-# via an OpenAI-compatible surface. Pin the protocol here so the global
+# via an OpenAI Chat Completions-compatible surface. Pin the protocol here so the global
 # FAMILY_PROTOCOLS["minimax-"] = "anthropic" mapping does not clear the
 # protocol during the provider protocol constraint check (see
 # CatalogService._fetch_and_process_account). Without these seeds
@@ -140,8 +140,8 @@ supports_tools = true
 supports_vision = false
 
 [providers.generalcompute]
-# GeneralCompute — plain OpenAI-compatible PAYG.
-# Treat as standard OpenAI surface (GET /models, POST /chat/completions,
+# GeneralCompute — plain OpenAI Chat Completions-compatible PAYG.
+# Treat as standard OpenAI Chat Completions surface (GET /models, POST /chat/completions,
 # Bearer auth). Codegg's known-working construction matches this contract.
 id = "generalcompute"
 base_url = "https://api.generalcompute.com/v1"
@@ -155,7 +155,7 @@ status = "experimental"
 category = "direct"
 region = "US"
 recommended = false
-notes = "Plain OpenAI-compatible PAYG endpoint; verify /models and chat completions live"
+notes = "Plain OpenAI Chat Completions-compatible PAYG endpoint; verify /models and chat completions live"
 
 [providers.generalcompute.auth]
 mode = "bearer"
@@ -277,7 +277,7 @@ status = "verified"
 category = "direct"
 region = "US"
 recommended = true
-notes = "Reference OpenAI-compatible provider"
+notes = "Reference OpenAI Chat Completions-compatible provider"
 
 [providers.openai.auth]
 mode = "bearer"
@@ -311,7 +311,7 @@ probe_protocol = "anthropic"
 require_models = false
 
 [providers.groq]
-# Groq — low-latency OpenAI-compatible inference
+# Groq — low-latency OpenAI Chat Completions-compatible inference
 id = "groq"
 base_url = "https://api.groq.com/openai/v1"
 protocols = ["openai"]
@@ -332,7 +332,7 @@ probe_protocol = "openai"
 require_models = true
 
 [providers.deepinfra]
-# DeepInfra — OpenAI-compatible open-model inference
+# DeepInfra — OpenAI Chat Completions-compatible open-model inference
 id = "deepinfra"
 base_url = "https://api.deepinfra.com/v1/openai"
 protocols = ["openai"]
@@ -353,7 +353,7 @@ probe_protocol = "openai"
 require_models = true
 
 [providers.gemini]
-# Google Gemini — OpenAI-compatible Gemini API surface
+# Google Gemini — OpenAI Chat Completions-compatible Gemini API surface
 id = "gemini"
 base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
 protocols = ["openai"]
@@ -363,7 +363,7 @@ status = "verified"
 category = "direct"
 region = "US"
 recommended = true
-notes = "OpenAI-compatible surface; long-context models"
+notes = "OpenAI Chat Completions-compatible surface; long-context models"
 
 [providers.gemini.auth]
 mode = "bearer"
@@ -416,7 +416,7 @@ probe_protocol = "openai"
 require_models = true
 
 [providers.siliconflow]
-# SiliconFlow — OpenAI-compatible Chinese model aggregator
+# SiliconFlow — OpenAI Chat Completions-compatible Chinese model aggregator
 id = "siliconflow"
 base_url = "https://api.siliconflow.cn/v1"
 protocols = ["openai"]
@@ -437,7 +437,7 @@ probe_protocol = "openai"
 require_models = true
 
 [providers.cerebras]
-# Cerebras — fast OpenAI-compatible inference
+# Cerebras — fast OpenAI Chat Completions-compatible inference
 id = "cerebras"
 base_url = "https://api.cerebras.ai/v1"
 protocols = ["openai"]
@@ -457,7 +457,7 @@ probe_protocol = "openai"
 require_models = false
 
 [providers.sambanova]
-# SambaNova Cloud — OpenAI-compatible hosted open models
+# SambaNova Cloud — OpenAI Chat Completions-compatible hosted open models
 id = "sambanova"
 base_url = "https://api.sambanova.ai/v1"
 protocols = ["openai"]
@@ -477,7 +477,7 @@ probe_protocol = "openai"
 require_models = false
 
 [providers.hyperbolic]
-# Hyperbolic — OpenAI-compatible open-model inference
+# Hyperbolic — OpenAI Chat Completions-compatible open-model inference
 id = "hyperbolic"
 base_url = "https://api.hyperbolic.xyz/v1"
 protocols = ["openai"]
@@ -497,7 +497,7 @@ probe_protocol = "openai"
 require_models = false
 
 [providers.featherless]
-# Featherless AI — OpenAI-compatible serverless open-model API
+# Featherless AI — OpenAI Chat Completions-compatible serverless open-model API
 id = "featherless"
 base_url = "https://api.featherless.ai/v1"
 protocols = ["openai"]
@@ -517,7 +517,7 @@ probe_protocol = "openai"
 require_models = false
 
 [providers.moonshot]
-# Moonshot AI / Kimi — direct OpenAI-compatible API
+# Moonshot AI / Kimi — direct OpenAI Chat Completions-compatible API
 id = "moonshot"
 base_url = "https://api.moonshot.ai/v1"
 protocols = ["openai"]
@@ -537,7 +537,7 @@ probe_protocol = "openai"
 require_models = false
 
 [providers.deepseek]
-# DeepSeek — direct OpenAI-compatible API
+# DeepSeek — direct OpenAI Chat Completions-compatible API
 id = "deepseek"
 base_url = "https://api.deepseek.com"
 protocols = ["openai"]
@@ -547,7 +547,7 @@ status = "verified"
 category = "direct"
 region = "CN"
 recommended = true
-notes = "Direct API; OpenAI-compatible chat completions"
+notes = "Direct API; OpenAI Chat Completions-compatible chat completions"
 
 [providers.deepseek.auth]
 mode = "bearer"
@@ -558,7 +558,7 @@ probe_protocol = "openai"
 require_models = true
 
 [providers.together]
-# Together AI — OpenAI-compatible open-model inference
+# Together AI — OpenAI Chat Completions-compatible open-model inference
 id = "together"
 base_url = "https://api.together.ai/v1"
 protocols = ["openai"]
@@ -579,7 +579,7 @@ probe_protocol = "openai"
 require_models = true
 
 [providers.fireworks]
-# Fireworks AI — OpenAI-compatible open-model inference
+# Fireworks AI — OpenAI Chat Completions-compatible open-model inference
 id = "fireworks"
 base_url = "https://api.fireworks.ai/inference/v1"
 protocols = ["openai"]
@@ -600,7 +600,7 @@ probe_protocol = "openai"
 require_models = true
 
 [providers.alibaba]
-# Alibaba Qwen — OpenAI-compatible Model Studio API (Beijing)
+# Alibaba Qwen — OpenAI Chat Completions-compatible Model Studio API (Beijing)
 id = "alibaba"
 base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 protocols = ["openai"]
@@ -621,7 +621,7 @@ probe_protocol = "openai"
 require_models = true
 
 [providers.novita]
-# Novita AI — OpenAI-compatible open-model inference
+# Novita AI — OpenAI Chat Completions-compatible open-model inference
 id = "novita"
 base_url = "https://api.novita.ai/openai"
 protocols = ["openai"]

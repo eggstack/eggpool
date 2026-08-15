@@ -129,6 +129,12 @@ remains available for diagnosing stream-specific regressions.
 
 > Full design details are in `architecture/README.md` and the `architecture` skill.
 
+**Public protocol scope:** EggPool exposes OpenAI Chat Completions at
+`/v1/chat/completions`, Anthropic Messages at `/v1/messages`, and OpenAI-style
+model listing at `/v1/models`. It does not claim full OpenAI API or Responses
+API parity. Provider protocol labels describe the upstream wire contract and
+do not expand this public surface.
+
 Start subsystem work with the current architecture index and the relevant deep
 dive. Read an active roadmap or focused plan only when the change is in its
 scope; completed plans preserve provenance but are not implementation

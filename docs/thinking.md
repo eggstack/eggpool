@@ -14,7 +14,7 @@ Key invariants:
 
 - **Unknown ≠ unsupported.** A status of `"unknown"` means no capability data has been observed. It is explicitly *not* a claim that thinking is unsupported. This avoids false negatives when catalog or model-info data has not yet been populated.
 - **No fabrication.** EggPool does not generate hidden reasoning. It only forwards provider-exposed content. If the upstream does not return thinking blocks, the client does not receive them.
-- **Protocol compatibility alone does not imply thinking support.** A model reachable via the OpenAI-compatible protocol may still lack thinking support. Capability status is independent of protocol compatibility.
+- **Protocol compatibility alone does not imply thinking support.** A model reachable via the OpenAI Chat Completions-compatible protocol may still lack thinking support. Capability status is independent of protocol compatibility.
 
 Status values (`CapabilityStatus`):
 
@@ -95,9 +95,9 @@ block. Current or future values such as `xhigh` and `max` are translated only
 when the selected capability provides an explicit mapping; otherwise lenient
 mode drops the target control rather than guessing a 4096-token budget.
 
-### OpenAI-Compatible Reasoning Fields
+### OpenAI Chat Completions Reasoning Fields
 
-Controls which JSON field names EggPool emits for reasoning content in OpenAI-compatible responses:
+Controls which JSON field names EggPool emits for reasoning content in OpenAI Chat Completions-compatible responses:
 
 ```toml
 [transcoder.openai_reasoning_fields]

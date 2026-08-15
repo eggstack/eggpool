@@ -14,7 +14,7 @@ def openai_error_response(
     message: str,
     error_type: str = "invalid_request_error",
 ) -> JSONResponse:
-    """Return an OpenAI-compatible error response."""
+    """Return an OpenAI Chat Completions-style error response."""
     return JSONResponse(
         status_code=status_code,
         content={
@@ -53,7 +53,7 @@ def openai_capability_error_response(
     requested_fields: list[str],
     model: str,
 ) -> JSONResponse:
-    """Return an OpenAI-compatible error response with capability detail.
+    """Return an OpenAI Chat Completions-style error with capability detail.
 
     Capability errors carry debugging context (the requested capability,
     the fields the client used to signal it, and the model id) that

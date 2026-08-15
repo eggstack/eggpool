@@ -1,4 +1,4 @@
-"""OpenAI-compatible ``/v1/chat/completions`` endpoint."""
+"""OpenAI Chat Completions-compatible ``/v1/chat/completions`` endpoint."""
 
 from __future__ import annotations
 

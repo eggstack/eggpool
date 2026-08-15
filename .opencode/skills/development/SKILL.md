@@ -152,7 +152,7 @@ fixture replays are not routine corpus.
 
 Provider-cache dialect changes should also run the focused OpenAI→Anthropic,
 Anthropic→OpenAI, capability-override, loss-policy, and privacy/redaction
-tests. Verify that generic OpenAI-compatible targets receive
+tests. Verify that generic OpenAI Chat Completions-compatible targets receive
 no explicit breakpoint fields without a provider/model contract, that a
 compatible-extension contract remains distinct from first-party semantics,
 that TTL loss metadata uses the selected contract. Synthetic cache insertion is

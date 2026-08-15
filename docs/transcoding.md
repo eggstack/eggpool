@@ -4,9 +4,9 @@ EggPool transparently translates between OpenAI Chat Completions and Anthropic M
 
 ## Overview
 
-Protocol transcoding exists because the AI ecosystem has settled on two incompatible wire formats — OpenAI's Chat Completions API and Anthropic's Messages API. Most providers serve only one. Without transcoding, an OpenAI client can only reach OpenAI-compatible providers, and an Anthropic client can only reach Anthropic-compatible providers, even when the underlying model is the same.
+Protocol transcoding exists because the AI ecosystem has settled on two incompatible wire formats — OpenAI's Chat Completions API and Anthropic's Messages API. Most providers serve only one. Without transcoding, an OpenAI Chat Completions client can only reach OpenAI Chat Completions-compatible providers, and an Anthropic Messages client can only reach Anthropic Messages-compatible providers, even when the underlying model is the same.
 
-**Transcoding is on by default.** Every EggPool data plane normalises the client request to the appropriate upstream wire format automatically: an OpenAI client posting to `/v1/chat/completions` reaches Anthropic upstreams (and vice versa) without any operator configuration. This is the primary behaviour of the router — clients should always see their expected protocol, regardless of the upstream provider's protocol.
+**Transcoding is on by default.** Every EggPool data plane normalises the client request to the appropriate upstream wire format automatically: an OpenAI Chat Completions client posting to `/v1/chat/completions` reaches Anthropic upstreams (and vice versa) without any operator configuration. This is the primary behaviour of the router — clients should always see their expected protocol, regardless of the upstream provider's protocol.
 
 The transcoder sits in the request path and:
 
@@ -198,7 +198,7 @@ When set, EggPool boots with a `WARNING` and reverts to the pre-default behaviou
 
 ### Tool-Use Transcoding
 
-Tool calling is translated between OpenAI Chat Completions and Anthropic Messages in both directions, for streaming and non-streaming requests. The OpenAI client's `tools` and `tool_choice` reach Anthropic-only upstreams (e.g. MiniMax International) intact, and tool calls emitted by an Anthropic upstream are reconstructed as OpenAI `tool_calls` on the response. Anthropic clients driving OpenAI-only upstreams see the same round trip in reverse.
+Tool calling is translated between OpenAI Chat Completions and Anthropic Messages in both directions, for streaming and non-streaming requests. The OpenAI Chat Completions client's `tools` and `tool_choice` reach Anthropic-only upstreams (e.g. MiniMax International) intact, and tool calls emitted by an Anthropic upstream are reconstructed as OpenAI `tool_calls` on the response. Anthropic clients driving OpenAI Chat Completions-only upstreams see the same round trip in reverse.
 
 #### Field translation
 
