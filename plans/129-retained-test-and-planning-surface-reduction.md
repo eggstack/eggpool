@@ -390,7 +390,7 @@ Reject implementation if it:
 
 ## Closure — 2026-08-15
 
-Implementation commit: `e580a989c864ef11dd5e3572875e7bf573175838`.
+Implementation commit: `7736a4804f61859eb70d01b29e572d5e53f22c61`.
 
 ### Information-only collection baseline
 
