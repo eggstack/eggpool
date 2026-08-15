@@ -319,7 +319,12 @@ For deployment comparison, use the existing runtime snapshot after a fixed
 short stabilization window and keep local proxy timings separate from upstream
 latency. Record the host, Python, config shape, database state, and optional
 feature flags. These are descriptive manual observations, not thresholds or a
-benchmark gate; workstation data must not be labeled as SBC data.
+benchmark gate; workstation data must not be labeled as SBC data. A
+provider-backed characterization uses only a real configured account, short
+synthetic requests, and existing runtime/OS tools. If an account or target
+dimension is unavailable, record it as `not measured`; do not add a benchmark,
+soak harness, hardware CI, or performance threshold. Plan 126 is the retained
+example of this evidence boundary.
 
 ## Database Recovery
 

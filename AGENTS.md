@@ -102,6 +102,14 @@ the existing `eggpool runtime-status --json`, OS process/socket tools, and
 startup operational-profile log. Record host, Python, config profile, and
 whether optional features are enabled; never present workstation measurements
 as Raspberry Pi results and never turn a numeric observation into a CI gate.
+When doing the provider-backed characterization described by Plan 126, use
+only synthetic non-sensitive requests and real configured provider accounts;
+never commit credentials, account identities, prompts, responses, cache keys,
+or private topology. Keep Requests A–E short and bounded, separate upstream
+latency from `local_pre_upstream`/`dispatch_overhead`, and record unavailable
+provider dimensions as `not measured` instead of creating benchmark, soak, or
+hardware-CI infrastructure. Deterministic lifecycle and failure-isolation
+tests remain authoritative when live accounts are unavailable.
 The high-concurrency reproducer in `scripts/repro_high_concurrency_streams.py`
 remains available for diagnosing stream-specific regressions.
 

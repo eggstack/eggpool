@@ -63,6 +63,16 @@ universal RSS threshold. Use `eggpool runtime-status --json` after startup to
 inspect the bounded task inventory, local dispatch timings, database/WAL
 state, and generation-retirement ownership on the target host.
 
+For a short manual SBC characterization, use a real target host and a
+secret-safe normal/SBC configuration with configured providers when available.
+Use only the existing runtime snapshot and OS process/socket tools, keep
+provider/network latency separate from EggPool-local timings, and treat the
+observations as descriptive rather than thresholds or CI gates. If suitable
+hardware or safe provider credentials are unavailable, record the affected
+dimensions as `not measured`; do not substitute workstation results or a
+benchmark/soak harness. The completed evidence for this workflow is retained
+in [Plan 126](plans/126-provider-backed-sbc-characterization.md).
+
 ## Testing
 
 The ordinary CI gate runs formatting, Ruff, Pyright, and the smoke suite. Local

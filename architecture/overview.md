@@ -391,7 +391,6 @@ tests/
 ├── perf/              # Optional local performance checks
 ├── live/              # Opt-in live external-source tests
 ├── smoke/             # Small canonical CI correctness floor
-├── soak/              # Long-running stability checks
 ├── helpers/           # Shared test utilities
 └── fixtures/          # Test fixtures (cache_compression, streaming, etc.)
 

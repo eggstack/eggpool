@@ -116,6 +116,17 @@ Comprehensive stats endpoints under `/api/stats/`.
 - `eggpool stats` — statistics commands
 - `eggpool runtime-status` — runtime metrics
 
+### Manual SBC characterization
+
+Use the existing runtime snapshot after a short fixed stabilization window and
+pair it with standard process/socket tools. A provider-backed run requires a
+representative SBC and real configured accounts, uses synthetic non-sensitive
+requests, and keeps upstream latency separate from EggPool-local timing. It is
+descriptive and non-gating; unavailable dimensions are recorded as `not
+measured`, with no benchmark, soak, hardware-CI, or performance-threshold
+infrastructure. See [Plan 126](../plans/126-provider-backed-sbc-characterization.md)
+for the completed closure record.
+
 ## Backup
 
 Automatic backup task (zip archives):

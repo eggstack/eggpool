@@ -409,8 +409,12 @@ For a short resource comparison, wait the same stabilization interval after
 readiness, then capture `runtime-status --json`, the startup operational
 profile, and host process/socket counts. Keep `local_pre_upstream` and
 `dispatch_overhead` separate from upstream connect, header, TTFT, and total
-latency. Results are descriptive and host-specific; do not turn them into a
-universal RSS threshold or claim SBC behavior from a workstation run.
+latency. For provider-backed SBC characterization, use only a representative
+target, real configured accounts, and short synthetic requests; never record
+credentials, prompts, responses, cache keys, or private topology. Results are
+descriptive and host-specific; record unavailable dimensions as `not measured`
+and do not turn them into a universal RSS threshold, benchmark/soak harness,
+or hardware-CI gate. Plan 126 contains the retained evidence format.
 
 ### Database locked errors
 

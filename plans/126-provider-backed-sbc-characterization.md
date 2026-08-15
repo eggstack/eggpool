@@ -1,7 +1,7 @@
 # Plan 126 — Provider-Backed SBC Characterization
 
 Date: 2026-08-14
-Status: ready
+Status: complete
 Parent roadmap: `plans/122-post-audit-correctness-and-sbc-simplification-roadmap.md`
 Planning baseline: `c17bb84af6d737a8408cbcce4d2746caedee36e8`
 Depends on: Plans 123–125 complete or explicitly no-op
@@ -287,31 +287,31 @@ If production code changed, run the full ordinary gate from Roadmap 122.
 
 ## Explicit acceptance criteria
 
-- [ ] Representative SBC environment and exact EggPool commit are recorded
+- [x] Representative SBC environment and exact EggPool commit are recorded
   without secrets.
-- [ ] Clean stabilized idle RSS/threads/FDs/sockets/DB/WAL baseline is recorded.
-- [ ] Request A native non-streaming is exercised with a real provider when
+- [x] Clean stabilized idle RSS/threads/FDs/sockets/DB/WAL baseline is recorded.
+- [x] Request A native non-streaming is exercised with a real provider when
   hardware/credentials permit.
-- [ ] Request B large native streaming is exercised and before/during/after
+- [x] Request B large native streaming is exercised and before/during/after
   observations are recorded when a suitable native provider exists.
-- [ ] Request C large cross-protocol streaming is exercised and observations are
+- [x] Request C large cross-protocol streaming is exercised and observations are
   recorded when suitable providers exist.
-- [ ] Request D media is exercised only if relevant/supported; otherwise marked
+- [x] Request D media is exercised only if relevant/supported; otherwise marked
   not measured/not applicable.
-- [ ] Request E uses only 2–4 concurrent streams and does not become a load test.
-- [ ] Up to three repeated B/C cycles show no obvious monotonic retained
+- [x] Request E uses only 2–4 concurrent streams and does not become a load test.
+- [x] Up to three repeated B/C cycles show no obvious monotonic retained
   task/socket/resource growth, or a concrete defect is recorded.
-- [ ] One safe request-specific failure followed by a valid request demonstrates
+- [x] One safe request-specific failure followed by a valid request demonstrates
   live failure isolation, or the live dimension is explicitly unavailable and
   deterministic coverage is referenced.
-- [ ] Write/WAL observations sufficient to inform Plan 127 are recorded without
+- [x] Write/WAL observations sufficient to inform Plan 127 are recorded without
   flash-endurance extrapolation.
-- [ ] Provider/network latency is not presented as EggPool local overhead.
-- [ ] No benchmark/soak/profiling/hardware-CI/performance-threshold infrastructure
+- [x] Provider/network latency is not presented as EggPool local overhead.
+- [x] No benchmark/soak/profiling/hardware-CI/performance-threshold infrastructure
   is added.
-- [ ] Unavailable dimensions are explicitly `not measured`; no workstation
+- [x] Unavailable dimensions are explicitly `not measured`; no workstation
   extrapolation is presented as SBC data.
-- [ ] Results are appended to this plan and the plan is marked complete; no
+- [x] Results are appended to this plan and the plan is marked complete; no
   separate closure plan is created.
 
 ## Rejection conditions
@@ -339,3 +339,95 @@ Reject execution if it:
 7. Record DB/WAL/write-path context for Plan 127.
 8. Append concise results/not-measured dimensions to this file.
 9. Stop; do not create performance infrastructure or a closure-plan chain.
+
+## Closure — 2026-08-15
+
+The execution target was available: this checkout ran on `rasp10`, a
+Raspberry Pi-class ARM64 host. A secret-safe provider-backed configuration was
+not available. The copyable `config.sbc.example.toml` profile passed
+`check-config`, but intentionally contained zero provider accounts, so no
+provider credentials, account names, prompts, completions, or private network
+details were used or recorded. The ignored local deployment config was not
+used because it contained the removed `[dispatch_writer]` setting and failed
+current schema validation; it was not modified.
+
+### Environment record
+
+- Host/board: `rasp10`; Raspberry Pi-class host, ARM64/aarch64, 4 CPUs, 8 GiB
+  RAM.
+- Kernel: Linux `6.8.0-1060-raspi #64-Ubuntu`.
+- Storage class/endurance: not measured; no endurance claim is made.
+- Python: 3.12.3. EggPool version: 0.6.5.
+- EggPool commit: `93bd1bb0e1f223680f7c9ee6af0fce1423b63ff7`.
+- Profile: `config.sbc.example.toml`; `check-config` passed.
+- JSON backend: `stdlib`.
+- Process profile: Granian supervisor plus one worker, one runtime thread,
+  one SQLite worker, configured provider pool 16 connections/4 keepalives.
+- Providers/accounts: 0/0; provider protocols exercised: none.
+- Dashboard: enabled but unauthenticated local-only profile. Compression was
+  disabled in the effective runtime profile. Model-info, readiness writes,
+  routing traces, backups, and outbound provider clients were disabled or
+  absent. Metrics used `low_wear`, 120-second flushing, and aggregate-only
+  mode.
+
+### Idle and local-failure observations
+
+The clean current-code process was started with the SBC profile, allowed a
+short startup/background stabilization window, and inspected with
+`runtime-status --json` plus standard process and socket tools. Values are
+descriptive observations, not thresholds or a performance result.
+
+| Observation point | RSS | VMS | FDs | Threads | Provider sockets | Tasks | DB / WAL |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Idle, ~22 s after startup | 65,597,440 B | 332,046,336 B | 25 | 2 | 0 | 2 running (4 in startup operational profile) | 561,152 / 16,512 B |
+| Synthetic invalid-model request, then health check | 66,007,040 B | 333,164,544 B | 24 | 2 | 0 | 2 | 561,152 / 16,512 B |
+| Repeat idle confirmation, ~22 s after fresh startup | 65,597,440 B | 332,046,336 B | 25 | 2 | 0 | 2 | 561,152 / 16,512 B |
+
+The invalid request returned HTTP 404 and the subsequent `/v1/healthz` check
+returned HTTP 200. After the request, active requests, active reservations,
+finalization jobs, and provider clients were all zero. No provider upload,
+stream, local-pre-upstream timing sample, CPU sample, or provider socket was
+available to measure. The host already contained unrelated orphaned EggPool
+processes, so the global process-count warning from runtime status was not
+used for a growth conclusion; the characterized instance itself had the
+expected supervisor/worker pair.
+
+### Request coverage
+
+- Request A: **not measured** — no safe configured provider account.
+- Request B: **not measured** — no native streaming provider/account.
+- Request C: **not measured** — no cross-protocol provider/account.
+- Request D: **not applicable / not measured** — no provider/model supporting
+  safe media translation was configured.
+- Request E: **not measured** — no supported streams to run concurrently.
+- Repeated B/C cleanup cycles: **not measured** for the same reason.
+- Storage class, CPU during provider preparation, provider latency, TTFT,
+  stream-active RSS, provider pool reuse under traffic, and WAL behavior after
+  provider requests: **not measured**.
+
+The available live failure-isolation sequence was local-only: a bounded
+invalid-model request failed without provider dispatch, then health remained
+200 and runtime ownership returned to zero. Deterministic coverage remains
+authoritative in `tests/smoke/test_failure_recovery_smoke.py` and
+`tests/integration/test_request_error_isolation.py`; no provider health
+isolation claim is made because there were no configured accounts.
+
+### Durable write and WAL context for Plan 127
+
+Source inspection of the current request path shows one normal first attempt
+creates three core durable rows before dispatch: one request, one reservation,
+and one attempt, in one transaction. A completed terminal path updates those
+three lifecycle components (request, attempt, reservation) in its correctness
+transaction; retry paths add one attempt/reservation pair per distinct
+attempt. Routing-trace rows are absent with `routing.trace.mode = "off"`.
+This is architecture context, not a measured provider request count.
+
+The existing database was 561,152 bytes with a 16,512-byte WAL at both the
+idle and local-failure observations. The profile retained WAL with
+`synchronous = "NORMAL"`, one database worker, and low-wear metrics. These
+short observations do not estimate flash endurance or lifetime.
+
+No production code, benchmark harness, load/soak infrastructure, hardware CI,
+performance threshold, or permanent evidence artifact was added. The
+provider-backed dimensions remain explicitly unavailable rather than being
+filled with workstation or zero-account extrapolation.

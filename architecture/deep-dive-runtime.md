@@ -104,7 +104,13 @@ counts are needed. Compare baseline and final runs only on the same host,
 Python, config shape, database state, and measurement window; upstream latency
 must remain separate from `local_pre_upstream` and `dispatch_overhead`. These
 observations are descriptive and non-gating. A workstation cannot stand in for
-an ARM64 SBC result.
+an ARM64 SBC result. When provider accounts are available, a short
+provider-backed characterization may add one native request, one supported
+cross-protocol request, and a bounded 2–4 stream set using synthetic content.
+It must remain a manual observation with no benchmark/soak harness or numeric
+threshold. If accounts or a request dimension are unavailable, record it as
+`not measured`; deterministic lifecycle tests remain the authority for
+ownership and cleanup behavior.
 
 ### `fastcli.py` — Fast-Path CLI (stdlib-only)
 

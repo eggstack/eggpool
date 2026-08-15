@@ -108,6 +108,20 @@ Live-reloadable settings are explicitly listed in
 See [deep-dive-deployment.md](deep-dive-deployment.md), `docs/deployment.md`,
 and `docs/live-config-rehash.md`.
 
+## Manual SBC characterization
+
+Resource characterization is an operational confidence check, not a product
+benchmark. On a representative SBC, use a fixed short stabilization window,
+`eggpool runtime-status --json`, the startup operational-profile line, and
+standard process/socket tools. Provider-backed requests must use real
+configured accounts and synthetic, non-sensitive request shapes. Keep
+provider/network latency separate from EggPool-local preparation and dispatch
+timings. If hardware, safe credentials, or a request dimension is unavailable,
+record it as `not measured`; do not extrapolate from a workstation or create a
+load/soak harness, performance threshold, or hardware CI gate. See
+[Plan 126](../plans/126-provider-backed-sbc-characterization.md) for the
+completed evidence record.
+
 ## Schema policy
 
 The historical `requests` table is frozen. New persistence must justify durable
