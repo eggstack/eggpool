@@ -1,10 +1,8 @@
-"""Phase 18 regression matrix.
+"""Schema and operational contract regression tests.
 
-This file is the cross-cutting release gate described in Section 9
-of the Phase 18 plan. Each test class corresponds to one letter
-in the matrix (A through H) and ensures the high-level invariant
-without re-running the detailed unit-level coverage already
-exercised elsewhere in the test suite.
+These checks cover durable schema, maintenance, privacy, streaming
+diagnostics, and CI configuration seams without recreating the detailed
+unit-level coverage exercised elsewhere in the test suite.
 """
 
 from __future__ import annotations

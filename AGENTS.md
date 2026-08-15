@@ -123,11 +123,17 @@ remains available for diagnosing stream-specific regressions.
 - Deployment: `deploy/`
 - Shared assets: `src/eggpool/_share/` (bundled config examples for pipx installs)
 - Architecture docs: `architecture/` (deep-dive per subsystem)
-- Plans: `plans/` (completed implementation plans, historical reference)
+- Plans: `plans/` (active work and historical reference; not a required reading list)
 
 ## Architecture Index
 
 > Full design details are in `architecture/README.md` and the `architecture` skill.
+
+Start subsystem work with the current architecture index and the relevant deep
+dive. Read an active roadmap or focused plan only when the change is in its
+scope; completed plans preserve provenance but are not implementation
+requirements. Record closure evidence in the implementing plan—do not create a
+new closure plan solely because a roadmap finished.
 
 - **Request lifecycle**: `RequestCoordinator` orchestrates endpoint → routing → persistence → dispatch → finalization.
 - **Dispatch isolation**: local preparation and response adaptation failures are terminal local errors with no provider retry. Only typed HTTPX transport failures may retry, only across distinct accounts before `downstream_started`.
@@ -147,6 +153,12 @@ remains available for diagnosing stream-specific regressions.
 - **Background tasks**: `src/eggpool/background/` — `TaskSupervisor`, fixed-delay scheduler. Process-owned tasks survive generation swaps; generation-leased tasks retire with their generation.
 - **Database teardown**: generation-owned request/finalization/background tasks are joined before process- or fixture-owned databases disconnect; database fixtures must use `try/finally` cleanup on the canonical event loop.
 - **Database recovery**: startup integrity is fail-closed. Indeterminate outcomes exit the worker; systemd restarts, then startup integrity and crash reconciliation run before readiness.
+
+Retained tests are organized by capability contract. Historical phase/release
+matrices and performance baselines are not routine corpus; use the focused
+unit/integration seams for regression work and invoke `tests/perf/` diagnostics
+manually when a measurement is genuinely useful. Do not add plan-numbered test
+suites or resurrect deleted closure matrices.
 
 ## Gotchas
 

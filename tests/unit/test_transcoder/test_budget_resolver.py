@@ -1,4 +1,4 @@
-"""Tests for Phase 7 — Thinking budget resolution."""
+"""Capability tests for thinking-budget resolution and translation."""
 
 from __future__ import annotations
 
@@ -347,6 +347,38 @@ class TestBudgetResolutionViaTranscoder:
             w["kind"] == "unknown_effort" and w["reason"] == "target_mapping_unknown"
             for w in warnings
         )
+
+    def test_none_does_not_enable_target_thinking(self) -> None:
+        payload = {
+            "model": "claude-3",
+            "messages": [{"role": "user", "content": "No hidden reasoning"}],
+            "reasoning_effort": "none",
+        }
+        result, warnings = self.transcoder.encode_request(
+            payload,
+            _make_context(),
+            features=_features(),
+        )
+        assert "thinking" not in result
+        assert result["messages"] == payload["messages"]
+        assert not any(w["kind"] == "unknown_effort" for w in warnings)
+
+    def test_new_effort_requires_and_uses_explicit_mapping(self) -> None:
+        payload = {
+            "model": "claude-3",
+            "messages": [{"role": "user", "content": "Think deeply"}],
+            "reasoning_effort": "xhigh",
+        }
+        result, warnings = self.transcoder.encode_request(
+            payload,
+            _make_context(),
+            features=_features(),
+            thinking_capability=ThinkingCapability(
+                effort_to_budget_tokens={"xhigh": 24_000}
+            ),
+        )
+        assert result["thinking"] == {"type": "enabled", "budget_tokens": 24_000}
+        assert not any(w["kind"] == "unknown_effort" for w in warnings)
 
     def test_backward_compat_no_capability(self) -> None:
         payload = {

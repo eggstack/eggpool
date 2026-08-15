@@ -3,6 +3,12 @@
 This directory is the current design index. Historical implementation plans
 remain under `plans/`; this index describes the runtime that is shipped today.
 
+For repository work, start here and follow the relevant deep dive. Active
+plans provide scope and sequencing when needed; completed plans are historical
+records and should not be traversed as a chain for ordinary changes. Regression
+tests follow capability contracts, while historical phase matrices and manual
+performance diagnostics are intentionally outside the routine CI surface.
+
 ## Runtime shape
 
 `src/eggpool/cli.py` bootstraps the fast stdlib-only commands and delegates

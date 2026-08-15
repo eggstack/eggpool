@@ -82,6 +82,10 @@ information-only checks rather than CI gates. Cache/compression behavior is
 covered by focused boundary contracts; fixture privacy checks do not imply a
 second replay matrix.
 
+Tests are organized around current capability seams. Historical phase/closure
+matrices and benchmark baselines are not routine navigation or CI inputs; use
+the architecture index and the focused tests for the subsystem being changed.
+
 Database fixtures must disconnect on every teardown path. Generation-owned
 tasks and finalization supervisors are joined before their database is closed;
 the canonical asyncio event loop is then allowed to tear down.
@@ -114,7 +118,7 @@ See [Deployment](docs/deployment.md) for alternative install methods (pipx, manu
 | `eggpool serve` | Start the proxy server (daemon mode; `--verbose` for foreground) |
 | `eggpool stop` | Stop the running server |
 | `eggpool restart` | Fully restart the server (stop then start) |
-| `eggpool rehash` | Apply supported config changes live (provider/account/routing/model-override changes apply without restart; `--json` for standardized 9-key output; D3 release validation enforces redaction of secret-shaped strings in event payloads and CLI output) |
+| `eggpool rehash` | Apply supported config changes live (provider/account/routing/model-override changes apply without restart; `--json` for standardized output; secret-shaped strings are redacted in event payloads and CLI output) |
 | `eggpool onboard` | Interactive onboarding wizard |
 | `eggpool connect` | Add a provider account interactively |
 | `eggpool connect list` | List supported providers |

@@ -1,7 +1,7 @@
 # Plan 129 — Retained Test and Planning Surface Reduction
 
 Date: 2026-08-14
-Status: ready
+Status: complete
 Parent roadmap: `plans/122-post-audit-correctness-and-sbc-simplification-roadmap.md`
 Planning baseline: `c17bb84af6d737a8408cbcce4d2746caedee36e8`
 Depends on: Plans 123–128 final dispositions
@@ -387,3 +387,82 @@ Reject implementation if it:
 7. Simplify active planning/navigation guidance without rewriting history.
 8. Record post collection count, run protected union and ordinary gate.
 9. Append closure evidence to this file and stop.
+
+## Closure — 2026-08-15
+
+Implementation commit: `e580a989c864ef11dd5e3572875e7bf573175838`.
+
+### Information-only collection baseline
+
+The pre-change collection baseline was **7,883 tests** from
+`uv run pytest --collect-only -q`:
+
+| Cluster | Collected |
+|---|---:|
+| `tests/unit` | 6,728 |
+| `tests/integration` | 1,038 |
+| `tests/contract` | 38 |
+| `tests/perf` | 64 |
+| `tests/soak` | 0 |
+| `tests/live` | 1 |
+| `tests/smoke` | 14 |
+
+The post-change collection is **7,630 tests**; smoke remains 14. These counts
+are recorded for context only and are not a target or gate.
+
+### Reduction and protected coverage
+
+The removed surface was selected by contract overlap, not by a numerical
+target:
+
+- deleted the Phase 12–17 end-to-end release matrices (119 tests) whose
+  routing, streaming, durability, privacy, and accounting contracts remain in
+  current capability/integration suites;
+- deleted seven closed performance/baseline/threshold files (46 tests), while
+  retaining concise manual hot-path, transcoder, and regression diagnostics;
+- deleted the 90-case historical reasoning matrix after retaining its Plan 123
+  semantic branches in the focused budget resolver suite (two focused encoder
+  cases were added);
+- renamed surviving phase/plan/closure-named tests to capability-oriented
+  names and removed stale active documentation references. No historical plan
+  files were renamed, rewritten, or deleted.
+
+The protected union passed in focused commands:
+
+```text
+tests/unit/...routing/failure... + integration failover/error isolation: 307 passed
+stream completion/transcoding + streaming lifecycle: 106 passed
+transcoding/ownership/thinking/cache/media: 311 passed
+database/finalization/recovery: 165 passed
+runtime/reload unit suites: 214 passed
+rehash acceptance: 8 passed, 1 skipped
+rehash retirement edge cases: 5 passed
+rehash operator/CLI edge cases: 11 passed
+security/config/limits/privacy: 355 passed
+API-key teardown warning check: 13 passed with thread warnings promoted to errors
+```
+
+The runtime/reload unit command retained four pre-existing `AsyncMock`
+coroutine warnings; it did not produce a failure. No timing-based concurrency
+test or provider-backed live test was added.
+
+### Ordinary gate and navigation closure
+
+The CI-equivalent local gate passed:
+
+```text
+uv sync --frozen --extra ci                         -> passed
+ruff format --check src/ tests/ scripts/            -> 686 files formatted
+ruff check src/ tests/ scripts/                     -> passed
+pyright src/ scripts/                               -> 0 errors, 0 warnings, 0 informations
+PYTHONHASHSEED=0 TZ=UTC pytest tests/smoke/         -> 14 passed
+check-config config.example.toml                    -> passed
+check-config config.sbc.example.toml                -> passed
+```
+
+`.github/workflows/ci.yml` remains one Python 3.11 Ruff/Pyright/smoke job and
+was not changed. Active README, AGENTS, architecture, development-skill, and
+live-rehash guidance now points implementers to current architecture and
+capability seams; completed plans remain historical records rather than an
+ordinary navigation chain. No closure plan, registry, benchmark gate, soak
+suite, hardware CI, or full-suite CI was added.

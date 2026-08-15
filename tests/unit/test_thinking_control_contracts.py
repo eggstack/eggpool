@@ -1,4 +1,4 @@
-"""Plan 046: Provider thinking-control normalization and contract resolution.
+"""Provider thinking-control normalization and contract resolution.
 
 Closes six confirmed defects:
 1. Type-only thinking block not marked changed in fixed contract

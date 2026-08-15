@@ -1,6 +1,6 @@
-"""Phase 7 — Operator workflow closure tests.
+"""Operator workflow edge-case tests.
 
-Adds to the existing ``tests/integration/test_rehash_d3_operator_workflow.py``
+Adds to the main rehash operator-workflow suite
 file with scenarios specifically targeting the operator-facing flow
 end-to-end via the CLI rather than the asyncio control socket:
 

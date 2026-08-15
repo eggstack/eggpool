@@ -140,6 +140,11 @@ release matrices and repeated rehash soak tests are not routine corpus; use the
 focused reload integration suites for lifecycle coverage and the performance
 suite only as a manually invoked diagnostic.
 
+Completed phase/closure matrices are historical maintenance surface, not a
+required preflight for ordinary changes. Prefer the current capability-named
+tests and the smallest seam that proves the invariant; do not add plan-numbered
+test files or permanent benchmark baselines.
+
 Cache/compression tests should stay focused on segmentation, safe transforms,
 native/provider-bound cache boundaries, routing isolation, and privacy. The
 fixture sanitization check is retained, but broad replay matrices and duplicate

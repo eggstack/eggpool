@@ -130,12 +130,12 @@ Documentation in `architecture/README.md`, `docs/live-config-rehash.md`,
   `httpx.AsyncClient.send()`; distinct from the existing
   `DispatchOverheadRecorder`, which covers only the coordinator-internal
   slice from `ProxyRequestContext.started_monotonic_ns`. Exposed via
-  `runtime_metrics.local_pre_upstream`. (A5) New deterministic baseline
-  harness `tests/perf/test_dispatch_baseline.py` exercises serial and
+  `runtime_metrics.local_pre_upstream`. (A5) A deterministic manual dispatch
+  diagnostic exercises serial and
   concurrent native dispatches, cancellation under load, database
   contention snapshot shape, background-task cadence drift, and runtime
-  metrics surface — pinned under the `performance` marker so the harness
-  can be re-run from CI without slowing the unit suite. (A6) New
+  metrics surface — pinned under the `performance` marker so it can be
+  re-run without slowing the ordinary suite. (A6) New
   `_log_operational_profile()` in `src/eggpool/app.py` emits a single
   structured startup log (`Operational profile: ...`) with workers,
   runtime_threads, database_worker_threads, stats_db_separate,

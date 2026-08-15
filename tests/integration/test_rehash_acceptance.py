@@ -1005,7 +1005,8 @@ async def test_d3_concurrent_reload_burst_stays_healthy(tmp_path: Any) -> None:
 async def test_d3_retirement_timeout_closes_resources(tmp_path: Any) -> None:
     """Old generation resources close after drain timeout."""
     pytest.skip(
-        "Subprocess drain-timeout coverage is provided by the closure suite; "
+        "Subprocess drain-timeout coverage is provided by the retirement edge "
+        "case suite; "
         "the in-process test is the deterministic source of truth."
     )
 

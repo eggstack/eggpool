@@ -1,6 +1,6 @@
-"""D3 closure-pass acceptance tests — supplemental scenarios.
+"""Supplemental rehash retirement and process-identity scenarios.
 
-The main ``test_rehash_d3_acceptance.py`` covers scenarios 1, 2, 3, 9,
+The main rehash acceptance suite covers scenarios 1, 2, 3, 9,
 10, 11, 12, 14, 18 from the D3 plan.  This file covers the remaining
 acceptance scenarios that depend on either a custom server drain
 timeout (15) or external CLI flows (16) and the process-identity

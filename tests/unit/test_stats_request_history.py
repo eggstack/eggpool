@@ -1,5 +1,4 @@
-"""Tests for Phase 5 (cost/cache/reasoning exactness) and Phase 6
-(recent request metadata) of the metrics-core-api plan.
+"""Tests for request-history exactness and recent-request metadata.
 
 Verifies that ``fetch_account_stats`` and ``fetch_model_stats``
 expose the new exactness counters, ratios, and avg-cost fields, and

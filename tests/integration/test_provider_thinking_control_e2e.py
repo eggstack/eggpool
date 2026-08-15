@@ -1,4 +1,4 @@
-"""Plan 046 request-path body capture tests.
+"""Provider thinking-control request-path body capture tests.
 
 Proves through the real Eggpool ASGI endpoint that:
 1. OpenCode Go MiniMax-M3 warn-drop mode sends a sanitized body

@@ -1,7 +1,6 @@
-"""Phase 3 — Asynchronous runtime-generation retirement tests.
+"""Runtime-generation retirement tests.
 
-Covers the acceptance criteria from
-plans/004-phase-03-asynchronous-generation-retirement.md:
+Covers the supported generation-retirement contract:
 
 - Prompt reload completion (publication not blocked by drain)
 - Natural drainage (lease release triggers retirement completion)

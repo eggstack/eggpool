@@ -1,8 +1,7 @@
-"""Phase 6 fault-injection matrix — post-publication and compensation.
+"""Reload post-publication and compensation failure paths.
 
-Covers the failure stages that the initial
-``test_reload_failure_injection.py`` and
-``test_rehash_d3_failure_injection_closure.py`` did not exercise:
+Covers failure stages that the focused reload failure-injection suite does not
+exercise:
 
 Post-publication:
 - process transition apply failure (compensation retries)

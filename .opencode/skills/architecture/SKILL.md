@@ -7,6 +7,10 @@ description: Architecture principles and design decisions for the EggPool projec
 
 **Full design details**: `architecture/README.md` and the per-subsystem deep dives in `architecture/`.
 
+Use the architecture index and the relevant deep dive as the starting point
+for implementation. Completed plans are historical provenance, not a required
+navigation chain; consult only the active plan that scopes the change.
+
 ## Core Principles
 
 - Database transactions use one shared connection and one asyncio-task owner; rollback is private to the owning transaction path.
@@ -336,6 +340,10 @@ final recovery boundary. There is no same-process replacement-connection
 recovery path, recovery wait gate, or cross-loop lock rebinding.
 
 ## Gotchas
+
+- Retained tests prove capability contracts at focused seams. Historical phase
+  and closure matrices are not part of routine navigation, and performance
+  diagnostics are manual rather than CI gates.
 
 - **Update targeting**: `eggpool update` without an argument follows the live latest-release path. An explicit version must be normalized, verified through PyPI's exact release endpoint, installed with a pinned requirement/tag, and verified before restart; source checkouts refuse exact targeting.
 

@@ -1204,7 +1204,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # 23a. Operational profile. Single structured log
     # line summarizing the runtime knobs that influence timing /
     # database / observability measurements so operators can interpret
-    # any captured baseline (see tests/perf/test_dispatch_baseline.py).
+    # any captured dispatch baseline from a manual diagnostic run.
     # The log is intentionally free of secrets, request content, and
     # provider keys.  Counts come from the live registries so the
     # numbers always reflect the post-startup state.

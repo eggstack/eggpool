@@ -1,8 +1,7 @@
-"""D3 Phase 3 closure — extended failure-injection matrix.
+"""Extended reload resource-failure and retirement paths.
 
-Covers the pre-publication and post-publication failure cases from
-the D3 plan that the initial ``test_reload_failure_injection.py``
-did not cover directly:
+Covers pre-publication and post-publication failure cases that the
+focused reload failure-injection suite does not exercise:
 
 Pre-publication:
 - provider client construction failure

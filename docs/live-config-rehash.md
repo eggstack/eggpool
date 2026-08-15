@@ -105,92 +105,22 @@ Process-bound storage/deployment fields remain ``RESTART_REQUIRED``
 (database path, backup destination paths that cross permission
 boundaries, control socket).
 
-Tests: ``tests/unit/test_runtime_task_inventory.py`` (35 tests),
-``tests/unit/test_d2_transitions.py`` (15 tests), and
-``tests/unit/test_runtime_tasks.py`` extended with
-``TestProcessSupervisorRouting`` and
-``TestProcessSupervisorSurvival``.
+The task-inventory, transition, and runtime-task unit suites cover these
+ownership rules.
 
-### Closure pass D3 — release validation and closure
+Reload failures are fail-closed and diagnostic output is metadata-only:
+candidate construction, persistence reconciliation, publication, and
+retirement failures leave the active generation intact or report a pending
+retirement for operator action. Operational events and CLI messages redact
+secret-shaped values. The focused reload integration, failure-injection,
+security, and inventory suites cover these contracts; manual performance
+measurements are not a reload acceptance gate.
 
-D3 is a release-hardening milestone with no new LIVE fields.  It
-closes security gaps in operational-event and CLI output redaction,
-adds failure-injection and inventory-audit tests, and establishes
-performance baselines.
-
-**Security hardening** — ``_record_event`` (``src/eggpool/control/reload_manager.py:547``)
-now passes the ``error`` payload through
-``sanitize_text_for_audit()`` (``src/eggpool/config_reload_policy.py:348``)
-before persisting to ``operational_events``.  The helper scrubs
-secret-shaped substrings (``sk-*``, ``Bearer *``, ``key-*``, etc.)
-via a compiled regex.  ``_redact_message``
-(``src/eggpool/cli_rehash_format.py:65``) calls the same helper on
-CLI output so human-readable messages never leak raw credential
-values.  Previously only ``<old>``/``<new>`` placeholder tokens
-were redacted; raw secret-shaped error text passed through.
-
-**Test-only seams** — three instance attributes on
-``ReloadManager`` (``src/eggpool/control/reload_manager.py:178-184``)
-allow tests to inject deterministic failures at the start of a
-named phase:
-
-- ``TEST_INJECT_BUILD_FAILURE`` — raised at the start of
-  ``_build_candidate_generation`` (line 635).
-- ``TEST_INJECT_RECONCILE_FAILURE`` — raised at the start of
-  ``_reconcile_persistence`` (line 1094).
-- ``TEST_INJECT_PUBLISH_FAILURE`` — raised at the start of
-  ``_publish_generation`` (line 1138).
-
-Set the attribute on the ``ReloadManager`` instance before
-triggering a reload; the exception is raised unconditionally at
-the top of the named phase.
-
-**Release-validation tests**:
-
-| File | Count | Scope |
-|------|-------|-------|
-| ``tests/integration/test_rehash_d3_acceptance.py`` | 10 | end-to-end acceptance (invalid TOML, server-side validation, digest mismatch, background convergence, provider removal under active stream, mixed diff rejection, concurrent burst, retirement timeout, lease drain, pending-request leak) |
-| ``tests/unit/test_reload_failure_injection.py`` | 12 | build/reconcile/publish failure injection via the three seams |
-| ``tests/unit/test_reload_security.py`` | 35 | secret redaction in events, CLI output, ``<old>``/``<new>`` tokens, raw credential patterns, ``sanitize_text_for_audit`` edge cases |
-| ``tests/unit/test_reload_inventory_audit.py`` | 5 | exhaustive audit of ``_FIELD_DISPOSITION`` coverage and provider catalog entries |
-| ``tests/perf/test_rehash_d3_performance.py`` | 3 | reload latency (p50 ≈ 480 ms, p95 ≈ 750 ms), memory-delta (skipped when ``psutil`` absent), concurrent-traffic p95 < 750 ms |
-| ``tests/integration/test_rehash_d3_operator_workflow.py`` | 6 | operator happy-path, restart-required reject, JSON contract, no-op, dead-server exit 3, concurrent busy |
-
-**Policy inventory audit** — the exhaustive field-by-field audit in
-``tests/unit/test_reload_inventory_audit.py`` discovered two gaps
-closed in D3:
-
-1. ``pricing.catalogs`` was missing 14 sub-path entries
-   (``pricing.catalogs.<provider>.*`` for ``opencode_zen`` and
-   ``openrouter``).  Both are ``RESTART_REQUIRED``.
-
-The ``--json`` contract remains pinned at 9 keys (no new keys added
-in D3); ``tests/unit/test_cli_rehash_format.py`` continues to lock
-the contract.
-
-Fields that stay ``RESTART_REQUIRED``:
-
-- ``[upstream]`` — vestigial; only consulted at runtime-task
-  startup. A future milestone would need to migrate the upstream
-  registry into a generation-owned object.
-- ``[model_info]`` — ``ModelInfoService`` is constructed in the
-  FastAPI lifespan and is not rebuilt by the candidate manager.
-  A future milestone must refactor the service to read from
-  ``self._config``.
-
-Mixed live + restart-required changes still reject entirely with
-exit code `2`. Identity separation between active and candidate
-policy objects is pinned by `TestMilestoneD1CandidateBuild` in
-`tests/unit/test_reload_manager.py`. End-to-end behavioral reload
-for each family is pinned by the `test_d1_*` tests in
-`tests/integration/test_rehash_streaming_swap.py`.
-
-All other fields remain ``RESTART_REQUIRED``: server binding
-(host/port), Granian construction (threads, access log), database
-path and topology, middleware (CORS, trusted hosts), metrics
-storage topology, security header construction, and process-owned
-background-task cadences. These need a full restart because the
-runtime builds them once at startup.
+Fields that stay ``RESTART_REQUIRED`` include server binding and Granian
+construction, database path and topology, middleware, metrics storage
+topology, security header construction, the ``[upstream]`` registry, and the
+``[model_info]`` service. These resources are built by the supervisor or
+startup lifespan and require a full restart.
 
 When a `rehash` includes a mix of LIVE and RESTART_REQUIRED changes
 the entire reload is rejected (no partial application), and the CLI
