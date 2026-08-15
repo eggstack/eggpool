@@ -1,7 +1,7 @@
 # Plan 128 — Conditional Durable In-Flight Lifecycle Simplification
 
 Date: 2026-08-14
-Status: blocked pending Plan 127
+Status: not applicable — Plan 127 retained durable in-flight ownership
 Parent roadmap: `plans/122-post-audit-correctness-and-sbc-simplification-roadmap.md`
 Planning baseline: `c17bb84af6d737a8408cbcce4d2746caedee36e8`
 Hard dependency: `plans/127-durable-inflight-lifecycle-necessity-decision.md`
@@ -21,6 +21,12 @@ Plan 127 implementation/decision SHA, and stop without production changes.
 
 This gate is mandatory. The existence of this file is not authorization to
 change durability semantics.
+
+## Disposition — 2026-08-15
+
+Plan 127 records `decision: retain` at audit baseline
+`612f68d42dec09564a61a343a1f44c381c371d0c`. This plan is not applicable and
+is closed without production, schema, runtime-mode, dependency, or CI changes.
 
 ## Purpose
 

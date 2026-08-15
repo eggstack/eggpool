@@ -1,7 +1,7 @@
 # Plan 127 — Durable In-Flight Lifecycle Necessity Decision
 
 Date: 2026-08-14
-Status: ready
+Status: complete
 Parent roadmap: `plans/122-post-audit-correctness-and-sbc-simplification-roadmap.md`
 Planning baseline: `c17bb84af6d737a8408cbcce4d2746caedee36e8`
 Depends on: Plan 126 evidence when available
@@ -331,3 +331,174 @@ Reject execution if it:
 7. Mark Plan 128 unblocked or not applicable.
 8. Stop. Do not implement durability changes here or create another decision
    plan.
+
+## Closure — 2026-08-15
+
+Audit baseline: `612f68d42dec09564a61a343a1f44c381c371d0c`.
+
+decision: retain
+
+The evidence is affirmative for retaining durable in-flight ownership. The
+decision is based on the current product contract and concrete consumers, not
+on a generic expectation that every service must recover requests after a
+crash. The audit found no need for a second durability mode, schema rewrite,
+or distributed/multi-process requirement.
+
+### Current invariant map
+
+The current request path is:
+
+```text
+accepted and parsed client request
+ -> in-memory routing plan and provisional request/token claim
+ -> one DB transaction creates the pending request, active reservation,
+    and incomplete attempt identities
+ -> commit
+ -> second claim-lock phase converts provisional runtime load to canonical
+    active-count/quota ownership and retains the health probe lease
+ -> optional routing trace submission (diagnostic only)
+ -> upstream dispatch and downstream handoff
+ -> generation-owned terminal command/finalization job
+ -> one correctness transaction terminalizes request, attempt, and reservation
+ -> usage/account-runtime/health convergence and exactly-once runtime release
+```
+
+The first-attempt transaction is implemented by
+`RequestCoordinator._persist_dispatch_bundle()` in
+`src/eggpool/request/coordinator.py:1777-1849`, and its caller owns the
+transaction at `src/eggpool/request/coordinator.py:2613-2647`. A retry keeps
+the parent request identity and adds a distinct attempt/reservation pair. A
+routing trace, when enabled and accepted by its guard, is an asynchronous
+observability write after the durable lifecycle bundle; trace-off and skipped
+paths do not participate in correctness.
+
+`AttemptRuntimeLease` separately owns active-request count, quota reservation,
+and health-probe obligations (`src/eggpool/request/finalization_job.py:221-248`).
+The retained finalization path persists terminal facts and then converges
+those runtime obligations (`src/eggpool/request/finalizer.py:869-935`). This
+separation means generation leases and live-stream ownership remain correct
+even though the durable lifecycle decision is retained.
+
+At process start, `_crash_recovery()` transitions every prior pending request
+to `interrupted`, releases every prior active reservation with
+`release_reason = 'crash_recovery'`, terminalizes incomplete attempts as
+`process_interrupted`, and records recovery events in one transaction
+(`src/eggpool/app.py:210-288`). Database commit/rollback ambiguity remains a
+fail-closed worker boundary; startup integrity, migrations, and recovery are
+not interchangeable with ordinary provider failure handling.
+
+### Product and consumer audit
+
+The following explicit promises and consumers were found:
+
+| Evidence | Finding | Decision impact |
+|---|---|---|
+| `README.md:33-38` | Publicly promises restart-safe crash recovery for durable requests/reservations and fail-closed restart handling. | The weaker simplify contract would be a product change, not an internal optimization. |
+| `docs/runbooks/database-recovery.md:18-22` | Operator contract says pending work from the previous process is repaired from durable request/attempt/reservation identities and is not retried across restart. | Operators are instructed to rely on this behavior. |
+| `docs/deployment.md:816-830` | Runbook directs operators to inspect pending requests and active reservations, explains finalization failures, and says startup crash reconciliation repairs work left by an exited process. | Pending identities are an operator-facing lifecycle diagnostic. |
+| `src/eggpool/api/stats.py:440-449,793-794` and `src/eggpool/stats/service.py:1751-1813` | Authenticated pending-health API reports pending count/age, stale pending count, and active reservation pressure. | The state is externally observable through a supported local API. |
+| `src/eggpool/cli_full.py:4511-4520` and `src/eggpool/dashboard/render.py:1464-1525` | `runtime-status` and the dashboard render pending requests, active reservations, and crash-recovery activity. | Operators can diagnose leaked or recovered in-flight work without direct DB access. |
+| `src/eggpool/stats/queries.py:1595-1668` and `src/eggpool/api/stats.py:294-315` | Authenticated request traces expose the parent request and complete attempt chain. | Retaining attempt identities preserves supported retry/failure history. |
+| `tests/unit/test_db.py:154-229`, `tests/integration/test_phase12_end_to_end.py:1090-1128`, `tests/integration/test_phase13_end_to_end.py:1682-1715` | Tests assert restart transition, reservation release, attempt interruption, and recovery events. | The behavior is a maintained capability contract, not dead implementation detail. |
+| `AGENTS.md:142,166` and `architecture/README.md:10-18` | Product is explicitly one-worker/local, with process-local routing pressure and startup repair of durable leftovers. | No speculative distributed requirement was used; retention is justified within the intended appliance scope. |
+
+No third-party integration was found that requires a pending numeric identity,
+and no multi-process writer/reader contract was found. That absence removes a
+possible additional reason to retain, but does not override the explicit
+restart/recovery and operator-facing product promises above.
+
+### Classification of lifecycle elements
+
+| Element | Actual value | In-flight crash value |
+|---|---|---|
+| `requests` row/status | Completed usage, latency, error, cost, cache, bandwidth, and request history; parent for attempt traces. | Preserves an accepted request as `interrupted` after process death instead of silently erasing it. |
+| `request_attempts` rows | Retry exclusion/history, provider/account outcome, status, bytes, latency, and request trace. | Identifies attempts that did not reach local terminalization so startup can close them. |
+| `reservations` rows | Durable reservation lifecycle and accounting audit; active rows mirror quota pressure. | Releases exact active ownership after restart and prevents stale pressure from starving routing. |
+| Runtime claim receipt / `AttemptRuntimeLease` | Required for live routing correctness, health probe ownership, stream lifetime, and exactly-once release while the process is alive. | Naturally disappears on process death, but its durable counterpart is needed to reconcile DB state with that disappearance. |
+| Routing decisions | Optional sampled diagnostic/operator history; never authoritative for routing or accounting. | None; it is not a retention driver and remains optional. |
+| Account backoff/suppression rows | Provider-authoritative health state that should survive restart independently of request ownership. | Not request recovery; retain independently. |
+| Finalization supervisor/jobs | Required while alive for bounded terminal work, retry/compensation convergence, stream generation ownership, and exactly-once terminal obligations. | Its durable identities provide the startup repair anchor; its in-memory job state itself is not restart durable. |
+| Operational/account recovery events | Bounded operator/audit diagnostics for what startup repaired. | Makes restart disposition visible; not a substitute for lifecycle rows. |
+
+The audit found no relevant element whose only value is historical
+implementation coupling. Some finalizer progress and stale-sweep machinery is
+implementation detail, but it is coupled to the retained terminal ownership
+and durable convergence invariant and therefore cannot be classified as
+removable under this decision.
+
+### Request-path cost attributable to the invariant
+
+For a normal first attempt, the mandatory durable pre-dispatch work is one
+caller-owned SQLite transaction containing three inserts: one pending
+`requests` row, one active `reservations` row, and one incomplete
+`request_attempts` row. This is the source-inventory result also recorded by
+Plan 126, not a benchmark or a write-count threshold. A retry reuses the
+parent request and adds one attempt/reservation pair. With routing traces off,
+there is no routing-decision write on the normal path; enabled traces are
+asynchronous and diagnostic.
+
+The request also constructs a selected-attempt identity, a runtime publication
+receipt, and an `AttemptRuntimeLease`. Terminal work is submitted to the
+generation-owned finalization supervisor, whose progress covers request,
+attempt, reservation, runtime release, usage, health, and bounded retry state.
+The durable pre-dispatch invariant additionally requires post-commit claim
+compensation, failed-attempt cleanup before retry, expired-reservation
+reconciliation, startup crash recovery, and the associated indexes, recovery
+events, dashboard/API queries, and regression tests. These are meaningful
+complexity and SQLite activity, but they are the cost of an explicitly
+supported lifecycle contract rather than a sufficient reason by themselves to
+delete it.
+
+Plan 126 is contextual only: its Raspberry Pi-class run had no safe configured
+provider account, so provider-backed request, stream, cross-protocol, and
+post-request WAL dimensions were not measured. It observed an unchanged
+16,512-byte WAL across idle and local invalid-model checks and recorded the
+same three-row pre-dispatch source inventory. No flash-endurance, throughput,
+or workstation-to-SBC inference is made.
+
+### Failure-contract comparison
+
+| Scenario | Retain contract | Simplify candidate | Required conclusion |
+|---|---|---|---|
+| Successful non-stream | Durable bundle exists before dispatch; terminal usage/history and runtime release converge. | Could persist only at terminal completion while alive. | Both preserve response and completed accounting while alive; retain additionally preserves accepted-work identity. |
+| Successful stream | Pending rows and generation/runtime lease remain until canonical stream completion or cancellation; no retry after handoff. | In-memory ownership could protect the live stream. | Generation lease and handoff rules are independent and remain mandatory either way. |
+| Upstream failure before handoff | Failed attempt and reservation converge before distinct-account retry; provider effects remain scoped. | In-memory attempt pressure could theoretically preserve this live behavior. | No simplification is authorized to weaken retry exclusion, cleanup ordering, or health isolation. |
+| Failure after handoff | No retry; retained terminal owner converges bounded durable accounting and runtime state. | Same live-process behavior is possible. | Post-handoff no-retry and terminal accounting remain mandatory. |
+| Client cancellation | Retained terminal command releases runtime ownership once and records terminal lifecycle facts. | Process-local release plus terminal history could work while alive. | Live cancellation correctness does not prove crash simplification is acceptable. |
+| Crash before upstream dispatch | Startup marks request/attempt interrupted and releases reservation. | Accepted work would be forgotten. | Forgetting violates the documented restart-repair contract. |
+| Crash after upstream acceptance before local terminalization | Startup closes the known local lifecycle and releases ownership; an upstream charge that never reached EggPool before death may still lack exact provider usage, but the local request is represented as interrupted. | The request, attempt, reservation, and any local terminal facts would disappear; any provider charge would be wholly unrepresented locally. | The retained contract materially reduces silent accounting/history loss in the hardest window. It does not claim impossible recovery of an unobserved provider response. |
+| SQLite commit/rollback ambiguity | Fail closed; durable identities and startup integrity/recovery remain the repair boundary. | Surviving completed/backoff/config writes would still require the same fail-closed treatment. | Simplifying this invariant would not remove SQLite ambiguity architecture generally. |
+| Rehash during active stream | Generation lease and generation-owned finalizer keep the old generation alive until terminal convergence. | Still required independently. | Do not conflate generation safety with durable request persistence. |
+
+### Decision and dispositions
+
+All `simplify` affirmative criteria are therefore not met: the weaker
+process-death contract is not compatible with the explicit restart-safe
+operator/product promise, and the repository already treats pending lifecycle
+state as a supported API/dashboard/runbook capability. The evidence is not
+ambiguous enough to justify weakening that contract merely to reduce request
+path writes and implementation surface.
+
+Plan 128 is **not applicable**. Its status has been updated to
+`not applicable — Plan 127 retained durable in-flight ownership`; no
+production, schema, runtime-mode, dependency, or CI changes from Plan 128 are
+authorized.
+
+Plan 129 is already `ready` and is now unblocked because Plans 123–127 have
+final dispositions and Plan 128 has an explicit not-applicable disposition.
+Plan 130 is already `ready` and was unblocked by Plan 123 independently. No
+other future plan status required changing.
+
+### Acceptance record
+
+- [x] Current durable request/attempt/reservation lifecycle is traced end to end.
+- [x] Persistent and in-memory elements are classified by product value and crash value.
+- [x] External/API/dashboard/operator consumers of pending identities were searched and recorded.
+- [x] Normal success, stream, failure, cancellation, crash, ambiguity, and rehash scenarios are compared under both contracts.
+- [x] Request-path SQLite/finalization complexity attributable to in-flight ownership is identified without an arbitrary threshold.
+- [x] Plan 126 observations are incorporated as contextual evidence and unavailable dimensions remain explicit.
+- [x] The closure records exactly one operative decision: `decision: retain`.
+- [x] Simplification was rejected because its affirmative criteria are not all met.
+- [x] No durability production code, DB schema, runtime mode, dependency, or CI change occurred.
+- [x] Plan 128 is explicitly marked not applicable.
+- [x] Decision evidence is appended here; no separate decision/closure plan was created.
