@@ -1,7 +1,7 @@
 # Plan 125 — aiosqlite Teardown and Warning-Suppression Correction
 
 Date: 2026-08-14
-Status: ready
+Status: completed
 Parent roadmap: `plans/122-post-audit-correctness-and-sbc-simplification-roadmap.md`
 Planning baseline: `c17bb84af6d737a8408cbcce4d2746caedee36e8`
 Priority: P1 lifecycle/test correctness
@@ -226,25 +226,25 @@ with no substitute suppression.
 
 ## Explicit acceptance criteria
 
-- [ ] The current global aiosqlite warning suppression is disabled during root
+- [x] The current global aiosqlite warning suppression is disabled during root
   cause investigation and a smallest practical reproducer is identified, or a
   bounded search establishes it is no longer reproducible.
-- [ ] Database-using task/resource ownership at teardown is documented in this
+- [x] Database-using task/resource ownership at teardown is documented in this
   plan's closure record.
-- [ ] Any EggPool-owned task/fixture/lifespan ordering defect is corrected at its
+- [x] Any EggPool-owned task/fixture/lifespan ordering defect is corrected at its
   owner without sleeps/random retries.
-- [ ] Database transaction ownership, cancellation, commit/rollback ambiguity,
+- [x] Database transaction ownership, cancellation, commit/rollback ambiguity,
   and fail-closed behavior remain intact.
-- [ ] `bugs.md item #7` stale reference is removed.
-- [ ] The global filter is removed when EggPool ordering fixes eliminate the
+- [x] `bugs.md item #7` stale reference is removed.
+- [x] The global filter is removed when EggPool ordering fixes eliminate the
   warning.
-- [ ] If suppression must remain for a confirmed upstream-only condition, it is
-  narrowed to the exact warning and carries a current justification/reference.
-- [ ] No detached DB work remains solely because a fixture/event loop is closing.
-- [ ] No new DB driver, worker framework, connection pool, runtime dependency,
+- [x] No upstream-only suppression was required; the global filter was removed
+  after the fixture ownership defect was corrected.
+- [x] No detached DB work remains solely because a fixture/event loop is closing.
+- [x] No new DB driver, worker framework, connection pool, runtime dependency,
   migration, telemetry, or CI job is added.
-- [ ] Focused tests and ordinary gate pass.
-- [ ] Implementation SHA, reproducer/root-cause classification, final warning
+- [x] Focused tests and ordinary gate pass.
+- [x] Implementation SHA, reproducer/root-cause classification, final warning
   disposition, and exact verification are appended to this plan.
 
 ## Rejection conditions
@@ -271,3 +271,68 @@ Reject implementation if it:
 6. Run focused lifecycle/DB tests and ordinary gate.
 7. Perform one short clean startup/shutdown smoke if production code changed.
 8. Append closure evidence to this file and stop.
+
+## Implementation closure
+
+Implementation commit: `84ffa60cf8b3177ed4c2f270bacfc7a1ab9bccc7`
+
+Root-cause classification: **Class 3 — test fixture/event-loop ordering
+defect**.
+
+The production lifespan already followed the required ownership sequence:
+
+```text
+request/worker tasks
+ -> generation-owned finalization/background tasks
+ -> process-owned probes/writers
+ -> statistics and primary database users
+ -> Database.disconnect()/aiosqlite close
+ -> event loop teardown
+```
+
+The direct database lifecycle fixture in
+`tests/unit/test_database_lifecycle.py` connected an in-memory aiosqlite
+connection, returned it from an async fixture, and never disconnected it.
+That left the worker resource owned by the closing pytest event loop. The
+fixture now yields from `try/finally` and always awaits `Database.disconnect()`.
+The shared real-runtime fixture now uses the same `try/finally` ownership
+boundary, joins `RuntimeManager` retirement first, asserts that no retirement
+slot remains, then asserts that the database connection is detached after
+disconnect. No sleeps, retries, global task drain, cancellation swallowing, or
+production database changes were added.
+
+Reproducer and warning disposition:
+
+- The smallest ownership defect was the unclosed `test_db` fixture; it was
+  identified by inventorying direct database fixtures and comparing them with
+  the production lifespan ordering.
+- The global `PytestUnhandledThreadExceptionWarning` filter and its stale
+  `bugs.md item #7` reference were removed from `pyproject.toml`. The orphaned
+  `bugs.md` exclude glob was removed as well.
+- The affected DB/lifecycle/fail-closed union was run with
+  `-W error::pytest.PytestUnhandledThreadExceptionWarning`: **80 passed** with
+  no aiosqlite worker-thread warning. The application startup/lifespan and
+  direct database teardown cases are included in that union.
+- A repository-wide exploratory run reached **1075 passed, 3 skipped** before
+  the unrelated manual performance fixture
+  `tests/perf/test_comprehensive_baseline.py::TestComprehensiveBaseline::test_all_metrics_baseline`
+  failed because its coordinator has no generation finalization supervisor.
+  That fixture is outside the ordinary CI gate; its captured warning was an
+  unrelated Starlette deprecation warning, not an aiosqlite warning.
+
+Verification:
+
+- `uv sync --frozen --extra ci`: passed.
+- `uv run ruff format --check src/ tests/ scripts/`: **701 files already
+  formatted**.
+- `uv run ruff check src/ tests/ scripts/`: passed.
+- `uv run pyright src/ scripts/`: **0 errors, 0 warnings, 0 informations**.
+- `PYTHONHASHSEED=0 TZ=UTC uv run pytest tests/smoke/ -q --tb=short --maxfail=1`:
+  **14 passed**.
+- `uv run eggpool --config config.example.toml check-config`: passed.
+- `uv run eggpool --config config.sbc.example.toml check-config`: passed.
+
+No production source changed, so the plan's one-off production lifecycle smoke
+was not applicable. Transaction ownership, cancellation, commit/rollback
+ambiguity, and fail-closed behavior remain covered by the focused regression
+union.
