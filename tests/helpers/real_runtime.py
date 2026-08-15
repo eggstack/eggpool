@@ -391,7 +391,14 @@ async def real_runtime_app(
     """Provide an actual Eggpool ASGI application with real components."""
     monkeypatch.setenv("REAL_RUNTIME_KEY", "rt-test-key")
     result = await build_runtime_app(tmp_path=tmp_path)
-    yield result.application
-    await result.runtime_manager.shutdown()
-    await result.db.disconnect()
-    await result.httpx_client.aclose()
+    try:
+        yield result.application
+    finally:
+        # The runtime manager owns all generation tasks that can use the
+        # database.  Join those tasks before closing the fixture-owned
+        # connection, matching the production lifespan boundary.
+        await result.runtime_manager.shutdown()
+        assert result.runtime_manager.retirement_snapshot() == ()
+        await result.db.disconnect()
+        assert result.db._conn is None  # noqa: SLF001
+        await result.httpx_client.aclose()

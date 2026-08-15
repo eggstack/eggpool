@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING
 
 import pytest
 import pytest_asyncio
@@ -11,16 +12,22 @@ from eggpool.db.connection import Database, DatabaseLifecycleState, _classify_er
 from eggpool.db.migrations import EXPECTED_SCHEMA_VERSION, MigrationRunner
 from eggpool.errors import DatabaseConnectionInvalidatedError, DatabaseError
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
 pytestmark = pytest.mark.asyncio
 
 
 @pytest_asyncio.fixture()
-async def test_db() -> Database:
+async def test_db() -> AsyncGenerator[Database, None]:
     """Provide a fresh in-memory database with migrations applied."""
     db = Database(path=":memory:")
     await db.connect()
-    await MigrationRunner(db).run()
-    return db
+    try:
+        await MigrationRunner(db).run()
+        yield db
+    finally:
+        await db.disconnect()
 
 
 async def test_initial_lifecycle_state_is_ready(test_db: Database) -> None:

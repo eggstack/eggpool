@@ -72,6 +72,10 @@ information-only checks rather than CI gates. Cache/compression behavior is
 covered by focused boundary contracts; fixture privacy checks do not imply a
 second replay matrix.
 
+Database fixtures must disconnect on every teardown path. Generation-owned
+tasks and finalization supervisors are joined before their database is closed;
+the canonical asyncio event loop is then allowed to tear down.
+
 Planning is proportional to change risk: detailed roadmaps and child plans are
 for multi-boundary or high-risk work, one focused plan is enough for a bounded
 multi-file correction, and a small deterministic local fix may use an issue or

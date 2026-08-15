@@ -168,10 +168,14 @@ direct ASGI send collector. `downstream_started` is marked at
 `http.response.start`, before the first body iteration; an empty started stream
 therefore remains post-handoff with zero emitted bytes.
 
-Database fixtures are bound to the canonical asyncio event loop. Tests that
-exercise an ASGI app with a migrated database should use an async ASGI client
-on that loop; do not reuse the database through synchronous `TestClient` or
-rebind its lock for convenience.
+Database fixtures are bound to the canonical asyncio event loop. Fixtures that
+connect a database must yield it from a `try/finally` block and await
+`disconnect()` on every teardown path. Tests that exercise an ASGI app with a
+migrated database should use an async ASGI client on that loop; do not reuse the
+database through synchronous `TestClient` or rebind its lock for convenience.
+When investigating worker-thread teardown warnings, promote the exact
+`PytestUnhandledThreadExceptionWarning` to an error in the focused suite rather
+than adding a repository-wide suppression.
 
 Dispatch-boundary regressions should cover distinct-account failover, the
 configured attempt ceiling, cleanup-before-reselection, local request

@@ -11,6 +11,7 @@ description: Architecture principles and design decisions for the EggPool projec
 
 - Database transactions use one shared connection and one asyncio-task owner; rollback is private to the owning transaction path.
 - Database failure tests patch private commit/rollback callables; production database objects do not expose test-only injection state.
+- Database shutdown joins generation-owned DB users before `Database.disconnect()`; direct-test fixtures must disconnect in `finally` on the canonical event loop.
 
 - Package boundaries must remain explicit
 - Request proxying, routing, accounting, and dashboard concerns must not be combined in endpoint handlers
@@ -96,6 +97,7 @@ Transparent request/response format conversion between OpenAI and Anthropic prot
 - Busy/locked SQLite errors are classified as bounded local contention. Disk, corruption, and indeterminate connection errors close admission and terminate the worker for supervisor restart.
 - `Database.vacuum()` is the only sanctioned path for `VACUUM`
 - Readiness probes use `probe_writable()` with owned transactions
+- Shutdown closes generation-owned request/finalization/background work, then process-owned DB users, then the primary/statistics connections; never mask an outliving task with a warning filter.
 - Schema migrations in `src/eggpool/db/schema/` (numbered SQL files)
 - Analytics indexes are fixed schema assets, not dashboard feature toggles;
   migration 0053 removes only the unused per-attempt status aggregate index.

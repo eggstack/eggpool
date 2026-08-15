@@ -138,6 +138,17 @@ quota, health, or client dependencies. When the final reference releases,
 normal close resumes. Process shutdown may abandon references because startup
 repair owns unresolved durable work after process death.
 
+### Shutdown order
+
+The application lifespan stops control-plane admission, prepares reload
+ownership, and retires the active generation before closing process-owned
+database users. Generation supervisors and retained finalization work are
+joined within their existing bounded shutdown contracts. Readiness probes and
+routing-trace writers stop before the statistics and primary `Database`
+connections disconnect; the event loop closes only after those awaits return.
+Direct-runtime test fixtures follow the same ownership boundary and always
+disconnect their database in `finally` blocks.
+
 Quarantine hydration is part of candidate preparation, before publication.
 `RuntimeGenerationFactory.prepare()` never catches a quarantine read or row
 conversion failure to start with an empty state. Startup consequently remains

@@ -30,6 +30,13 @@ The database uses SQLite WAL, one serialized primary connection, and caller-owne
 before ambiguous commit boundaries; indeterminate outcomes fail closed and are
 repaired on startup.
 
+Shutdown ownership is ordered: request work and generation-owned finalization /
+background tasks are joined first, process-owned database users are stopped
+next, and only then does `Database.disconnect()` close the aiosqlite connection.
+The event loop is the final owner to tear down. Tests that create databases
+directly must mirror this with `try/finally` fixture cleanup; no warning filter
+is used to hide a worker thread publishing after loop teardown.
+
 ## Providers and network
 
 Provider/model contracts define URLs, protocols, capabilities, authentication,

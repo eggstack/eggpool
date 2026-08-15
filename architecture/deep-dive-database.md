@@ -58,6 +58,16 @@ probe must all succeed before readiness. Runtime invalidation closes admission,
 detaches the connection, invokes the fatal worker handler once, and never
 reopens or replaces the connection in process.
 
+### Connection shutdown ownership
+
+`Database.disconnect()` is the final database-user boundary. Production lifespan
+shutdown first stops admission and joins generation-owned request,
+finalization, and background tasks; it then stops process-owned database users
+such as readiness and routing-trace writers before disconnecting statistics and
+primary connections. Direct-test fixtures must use `try/finally` to await their
+own disconnect on the same canonical event loop. A closed-loop worker warning is
+therefore a fixture or task-ownership failure to fix, not a warning to suppress.
+
 ### `db/repositories.py`
 
 All repositories in one module:

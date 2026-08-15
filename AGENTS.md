@@ -137,6 +137,7 @@ remains available for diagnosing stream-specific regressions.
 - **Live rehash**: `eggpool rehash` applies changes without restart. Control socket at `~/.local/state/eggpool/eggpool.sock`.
 - **Health management**: `src/eggpool/health/` — circuit breaker, per-account tracking, bounded 1,800s backoff, scoped model quarantine, `DatabaseWritableProbe` for `/readyz`.
 - **Background tasks**: `src/eggpool/background/` — `TaskSupervisor`, fixed-delay scheduler. Process-owned tasks survive generation swaps; generation-leased tasks retire with their generation.
+- **Database teardown**: generation-owned request/finalization/background tasks are joined before process- or fixture-owned databases disconnect; database fixtures must use `try/finally` cleanup on the canonical event loop.
 - **Database recovery**: startup integrity is fail-closed. Indeterminate outcomes exit the worker; systemd restarts, then startup integrity and crash reconciliation run before readiness.
 
 ## Gotchas

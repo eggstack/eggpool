@@ -101,7 +101,6 @@ exclude = [
     ".coverage.*",
     "htmlcov",
     "*.log",
-    "bugs.md",
     "/var",
     "plans",
     "tests",
@@ -130,15 +129,6 @@ asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
 xfail_strict = true
 addopts = "--strict-markers"
-filterwarnings = [
-    # aiosqlite's worker thread attempts to publish a result back to the
-    # event loop after the loop has already closed (typically at end of
-    # test when the lifespan teardown is followed by another async task
-    # still in flight).  This is not a production defect — production
-    # keeps the same event loop alive for the process lifetime — but
-    # the warning floods test logs.  See bugs.md item #7.
-    "ignore:Exception in thread.*_connection_worker_thread.*:pytest.PytestUnhandledThreadExceptionWarning",
-]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "performance: manually invoked real-runtime performance checks",
