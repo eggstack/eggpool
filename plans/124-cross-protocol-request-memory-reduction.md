@@ -1,7 +1,7 @@
 # Plan 124 — Cross-Protocol Request-Memory Reduction
 
 Date: 2026-08-14
-Status: ready
+Status: completed
 Parent roadmap: `plans/122-post-audit-correctness-and-sbc-simplification-roadmap.md`
 Planning baseline: `c17bb84af6d737a8408cbcce4d2746caedee36e8`
 Priority: P1 performance/resource proportionality
@@ -274,27 +274,27 @@ uv run eggpool --config config.sbc.example.toml check-config
 
 ## Explicit acceptance criteria
 
-- [ ] Remaining production callers of `provider_payload_copy()` and
+- [x] Remaining production callers of `provider_payload_copy()` and
   `replace_provider_payload()` are inventoried before edits.
-- [ ] Cross-protocol recompute no longer recursively deep-copies the full source
+- [x] Cross-protocol recompute no longer recursively deep-copies the full source
   request when the translator's read-only contract makes that copy redundant,
   or concrete evidence for retaining the copy is recorded.
-- [ ] Translator input is explicitly treated as read-only; successful and failed
+- [x] Translator input is explicitly treated as read-only; successful and failed
   transcodes cannot mutate canonical/prepared source state.
-- [ ] Fresh translator-owned output is adopted without an unnecessary second
+- [x] Fresh translator-owned output is adopted without an unnecessary second
   whole-graph ownership pass when caller knowledge makes that safe.
-- [ ] PreparedTranscode reuse, provider mutation, generation, serialization,
+- [x] PreparedTranscode reuse, provider mutation, generation, serialization,
   freeze, retry, and buffer-release contracts remain unchanged.
-- [ ] Multimodal validation rejects obvious oversize before full decode where
+- [x] Multimodal validation rejects obvious oversize before full decode where
   simple and safe.
-- [ ] Any exact-validation memory reduction is implemented only with small,
+- [x] Any exact-validation memory reduction is implemented only with small,
   auditable stdlib code; otherwise current bounded decoding is explicitly
   retained.
-- [ ] Media size/invalid-base64/URL behavior remains protocol-correct.
-- [ ] No new parser framework, dependency, runtime telemetry, database change,
+- [x] Media size/invalid-base64/URL behavior remains protocol-correct.
+- [x] No new parser framework, dependency, runtime telemetry, database change,
   pool change, or CI expansion is introduced.
-- [ ] Focused tests and ordinary gate pass.
-- [ ] Implementation SHA, caller disposition, media-memory disposition, and exact
+- [x] Focused tests and ordinary gate pass.
+- [x] Implementation SHA, caller disposition, media-memory disposition, and exact
   verification are appended to this plan; no separate closure plan is created.
 
 ## Rejection conditions
@@ -322,3 +322,46 @@ Reject implementation if it:
 6. Run focused media/transcode/ownership tests and ordinary gate.
 7. Update narrow ownership documentation if needed.
 8. Append closure evidence to this file and stop.
+
+## Implementation closure
+
+Implementation commit: `78fe549833f9ee180da36627578232b2472a80c7`
+
+Caller disposition:
+
+- `ProviderBoundRequest.provider_payload_copy()` had one production caller in
+  protocol-transcode recompute. The audit confirmed both body encoders only
+  read their source graph, construct fresh target roots/messages/tools, and
+  copy source mappings before helper-side mutation. The helper and its
+  recursive `deepcopy` were removed.
+- `replace_provider_payload()` has no remaining production caller after the
+  recompute change. It remains as a conservative conditional ownership
+  primitive because its no-op/equality behavior is covered by existing unit
+  tests and it remains a compatibility-safe boundary for unknown callers.
+- Protocol-transcode recompute now passes `provider_payload` as a read-only
+  `Mapping` and adopts the fresh encoder result with
+  `adopt_provider_payload(reason="protocol_transcode")`. Prepared reuse,
+  provider-specific adaptation, serialization, freeze, retry, and dispatch
+  buffer release were not otherwise changed.
+
+Media-memory disposition:
+
+- Existing encoded-length arithmetic remains the early rejection path for
+  obviously oversized, correctly padded base64 inputs; strict decoding still
+  validates candidates at the existing provider limits.
+- Image and PDF paths now release the temporary decoded validation buffer
+  immediately after size validation and before constructing translated output.
+  No streaming parser, new dependency, changed limit, changed media type, or
+  URL behavior was introduced.
+
+Verification:
+
+- Focused ownership/transcoder/prepared/vision suites: 50 passed.
+- Broader transcoder/ownership/coordinator suites: 572 passed.
+- `uv sync --frozen --extra ci`: passed.
+- `uv run ruff format --check src/ tests/ scripts/`: passed (701 files).
+- `uv run ruff check src/ tests/ scripts/`: passed.
+- `uv run pyright src/ scripts/`: passed with 0 errors, 0 warnings, 0 informations.
+- `PYTHONHASHSEED=0 TZ=UTC uv run pytest tests/smoke/ -q --tb=short --maxfail=1`: 14 passed.
+- `uv run eggpool --config config.example.toml check-config`: passed.
+- `uv run eggpool --config config.sbc.example.toml check-config`: passed.
