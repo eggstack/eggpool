@@ -639,6 +639,36 @@ class RequestCoordinator:
             raise RuntimeError("provider-bound request is required for serialization")
         return request.serialize_provider_payload()
 
+    def _validate_serialized_request_size(
+        self,
+        context: ProxyRequestContext,
+        serialized_body: bytes,
+    ) -> None:
+        """Reject locally oversized serialized payloads before upstream dispatch.
+
+        Uses ``max_serialized_request_bytes`` from the resolved multimodal
+        capabilities when available.  This is a local-only validation that
+        returns ``RequestTooLargeError`` (HTTP 413) and must never penalize
+        or quarantine the provider account.
+        """
+        from eggpool.catalog.capabilities import dict_to_model_capabilities
+        from eggpool.errors import RequestTooLargeError
+
+        max_bytes: int | None = None
+        try:
+            model_info = self._catalog.cache.get_model(context.model_id)
+            if model_info is not None:
+                caps_raw: dict[str, Any] = model_info.get("capabilities", {})  # type: ignore[assignment]
+                caps = dict_to_model_capabilities(caps_raw)
+                max_bytes = caps.multimodal.max_serialized_request_bytes
+        except Exception:  # noqa: BLE001
+            pass
+        if max_bytes is not None and len(serialized_body) > max_bytes:
+            raise RequestTooLargeError(
+                f"Serialized request body ({len(serialized_body)} bytes) "
+                f"exceeds provider limit ({max_bytes} bytes)"
+            )
+
     def __init__(
         self,
         registry: AccountRegistry,
@@ -1311,6 +1341,7 @@ class RequestCoordinator:
                         payload = cast("dict[str, Any]", payload)
                         _thinking_cap: ThinkingCapability | None = None
                         _transcoding_cap = None
+                        _multimodal_cap = None
                         _budget_defaults: dict[str, int] | None = None
                         _budget_policy = "lenient"
                         _loss_policy = "warn"
@@ -1341,6 +1372,7 @@ class RequestCoordinator:
                                 caps = dict_to_model_capabilities(caps_raw)
                                 _thinking_cap = caps.thinking
                                 _transcoding_cap = caps.transcoding
+                                _multimodal_cap = caps.multimodal
                         except Exception:  # noqa: BLE001
                             pass  # best-effort; resolver has its own fallbacks
                         translated, warnings = transcoder.encode_request(
@@ -1349,6 +1381,7 @@ class RequestCoordinator:
                             features=_features,
                             thinking_capability=_thinking_cap,
                             transcoding_capability=_transcoding_cap,
+                            multimodal_capability=_multimodal_cap,
                             budget_defaults=_budget_defaults,
                             budget_resolution_policy=_budget_policy,
                             loss_policy=_loss_policy,
@@ -2980,6 +3013,9 @@ class RequestCoordinator:
                 error=err,
             ) from err
 
+        # Validate serialized body size against provider limits.
+        self._validate_serialized_request_size(context, context.body_for_upstream)
+
         try:
             client = self._get_client(selected.provider_id, selected.account_name)
             upstream_request = client.build_request(
@@ -3303,6 +3339,8 @@ class RequestCoordinator:
                 stage="request_serialization",
                 error=err,
             ) from err
+        # Validate serialized body size against provider limits.
+        self._validate_serialized_request_size(context, context.body_for_upstream)
         body_to_send = context.body_for_upstream
         upstream_include_usage = context.client_metadata.get("upstream_include_usage")
 

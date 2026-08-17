@@ -294,7 +294,7 @@ Whenever the map mints a new id, the transcoder appends a `tool_call_id_translat
 | `messages[i].role == "assistant"`, `tool_calls[j].function.name`, `function.arguments` | `tool_use.name`, `tool_use.input` | `arguments` JSON-parsed into an object; on parse failure the raw string is preserved as `{"__raw_arguments__": "<string>"}` and a `malformed_tool_arguments` warning is emitted |
 | `messages[i].role == "assistant"`, mixed text + `tool_calls` | `content: [{type: "text", ...}, {type: "tool_use", ...}, ...]` | Anthropic permits mixed text + tool_use in one assistant turn |
 | `messages[i].role == "tool"`, `content: str`, `tool_call_id` | `messages[i].role == "user"`, `content: [{type: "tool_result", tool_use_id, content: <str>, is_error: <bool>}]` | `tool_use_id` resolved via `id_map.to_upstream(call_id)` |
-| `messages[i].role == "tool"`, `content: list` (mixed text/image) | `tool_result` with joined text; image parts dropped | Warning `tool_result_image_dropped` |
+| `messages[i].role == "tool"`, `content: list` (mixed text/image) | `tool_result` with joined text; image parts dropped | Warning `media_tool_result_flattened` |
 | `messages[i].role == "tool"`, `is_error: true` | `tool_result.is_error: true` | Forwarded verbatim |
 
 | Anthropic input | OpenAI output | Notes |
@@ -405,7 +405,7 @@ The following `kind` values may appear on `TranscodeContext.loss_warnings`:
 | `invalid_tool_choice` | A `tool_choice` value cannot be mapped to the target shape | `field`, optional `from` |
 | `unsupported_tool_type` | A `tools[i].type` other than `"function"` is dropped | `field`, `from` |
 | `empty_tool_use_block` | Anthropic `stop_reason: tool_use` produced zero tool_use blocks | `field` |
-| `tool_result_image_dropped` | Image content inside a `tool_result` block was dropped | `field` |
+| `media_tool_result_flattened` | Non-text media inside a `tool_result` block was flattened to text because the target does not support media-bearing tool results | `field` |
 | `tool_result_error_passthrough` | Anthropic `tool_result.is_error` was forwarded as OpenAI `tool` content + warning (no `is_error` field in OpenAI shape) | `field` |
 | `cache_control_feature_disabled` | Top-level Anthropic `cache_control` was dropped because OpenAI has no equivalent field | `field` |
 | `cache_control_unsupported_by_target_protocol` | A nested `cache_control` annotation (system block, message block, tool definition) was dropped because the target protocol cannot carry it | `field` |
@@ -539,7 +539,7 @@ Every loss warning is a structured dict with at minimum `kind` and `field`. The 
 | `invalid_tool_choice` | A `tool_choice` value could not be mapped to the target shape | `{"kind": "invalid_tool_choice", "field": "tool_choice"}` |
 | `unsupported_tool_type` | A `tools[i].type` other than `"function"` was dropped | `{"kind": "unsupported_tool_type", "field": "tools[].type"}` |
 | `empty_tool_use_block` | Anthropic `stop_reason: tool_use` produced zero tool_use blocks | `{"kind": "empty_tool_use_block", "field": "content[].tool_use"}` |
-| `tool_result_image_dropped` | Image content inside a `tool_result` block was dropped | `{"kind": "tool_result_image_dropped", "field": "messages[tool].content"}` |
+| `media_tool_result_flattened` | Non-text media inside a `tool_result` block was flattened to text | `{"kind": "media_tool_result_flattened", "field": "messages[tool].content"}` |
 | `tool_result_error_passthrough` | Anthropic `tool_result.is_error` was forwarded as OpenAI `tool` content + warning | `{"kind": "tool_result_error_passthrough", "field": "tool_result.is_error"}` |
 | `cache_control_feature_disabled` | Top-level Anthropic `cache_control` was dropped during Anthropic → OpenAI translation | `{"kind": "cache_control_feature_disabled", "field": "cache_control"}` |
 | `cache_control_unsupported_by_target_protocol` | A nested `cache_control` annotation (system block, message block, tool definition) was dropped because OpenAI cannot carry it | `{"kind": "cache_control_unsupported_by_target_protocol", "field": "tools[0].cache_control"}` |
@@ -554,7 +554,9 @@ Every loss warning is a structured dict with at minimum `kind` and `field`. The 
 | `image_too_large` | An image exceeded the 5 MB size limit | `{"kind": "image_too_large", "field": "...", "size": 6291456}` |
 | `pdf_too_large` | A PDF document exceeded the 32 MB size limit | `{"kind": "pdf_too_large", "field": "...", "size": 33554432}` |
 | `document_url_dropped` | An Anthropic document with a URL source was dropped (OpenAI has no PDF URL intake) | `{"kind": "document_url_dropped", "field": "messages[user].content[document]"}` |
-| `document_unsupported_media` | An Anthropic document had a non-PDF media type and was dropped | `{"kind": "document_unsupported_media", "field": "...", "media_type": "text/html"}` |
+| `document_media_type_unsupported` | An Anthropic document had a non-PDF media type and was dropped | `{"kind": "document_media_type_unsupported", "field": "...", "media_type": "text/html"}` |
+| `unsupported_modality` | An entire modality (e.g. audio) is not representable by the target protocol | `{"kind": "unsupported_modality", "field": "content[audio]", "modality": "audio"}` |
+| `unsupported_source_form` | A specific source form (base64 or URL) is not supported for the given media type | `{"kind": "unsupported_source_form", "field": "content[image_url]", "source_form": "url"}` |
 | `thinking_signature_dropped` | An Anthropic thinking block's cryptographic signature was dropped during translation | `{"kind": "thinking_signature_dropped", "field": "content[].thinking"}` |
 | `reasoning_content_dropped` | A thinking/reasoning content block was dropped because the feature was disabled | `{"kind": "reasoning_content_dropped", "field": "content[].thinking"}` |
 | `response_format_to_system_prompt` | An OpenAI `response_format` was coerced to a system-prompt instruction | `{"kind": "response_format_to_system_prompt", "field": "response_format"}` |
@@ -676,7 +678,7 @@ Operators can read the boundary tracker through the structured loss warnings (`s
 
 ### Loss-policy enforcement
 
-When the operator has set `loss_policy = "reject"` on `[transcoder]`, the body transcoder raises `eggpool.transcoder.errors.TranscodeLossError` (rendered as HTTP 400 with `invalid_request_error`) before upstream dispatch whenever any of the protected cache-control loss kinds is recorded:
+When the operator has set `loss_policy = "reject"` on `[transcoder]`, the body transcoder raises `eggpool.transcoder.errors.TranscodeLossError` (rendered as HTTP 400 with `invalid_request_error`) before upstream dispatch whenever any of the protected loss kinds is recorded:
 
 | Kind | When fired |
 |---|---|
@@ -685,6 +687,10 @@ When the operator has set `loss_policy = "reject"` on `[transcoder]`, the body t
 | `cache_control_invalid_shape` | The annotation lacked a string `type` field and was rejected by shape validation. |
 | `provider_extension_not_preserved` | A non-portable vendor field (e.g. `defer_loading`) on an Anthropic tool could not be carried into the OpenAI wire. |
 | `stable_prefix_reordered_canonically` | Source and target cache boundary lists diverge — the prefix was canonically reordered. |
+| `unsupported_modality` | An entire modality (e.g. audio) is not representable by the target protocol. |
+| `unsupported_source_form` | A specific source form (base64 or URL) is not supported for the given media type by the target provider. |
+| `media_tool_result_flattened` | Non-text media inside a tool result was flattened to text because the target does not support media-bearing tool results. |
+| `document_media_type_unsupported` | A document media type (e.g. non-PDF) is not supported by the target provider. |
 
 The `warn` default preserves the v1 behaviour: the request proceeds and the loss is recorded in `TranscodeContext.loss_warnings` for audit. The transcoder never injects warning text into the translated body — regression-guarded by `tests/unit/test_transcoder/test_cache_stability_integration.py::TestWarningsNotInModelVisibleContent`.
 

@@ -85,6 +85,8 @@ uv run ruff check --fix src/
 - Tests in `tests/unit/`, `tests/integration/`, `tests/smoke/`, `tests/perf/`, `tests/live/`, `tests/contract/`
 - Smoke suite (`tests/smoke/`): package import, config parsing, invalid config rejection, check-config validation, DB migration, one non-stream request, one streaming request, one upstream failure followed by recovery, one premature EOF, one Anthropic request, and CLI help
 - Provider contract tests: `uv run pytest tests/unit/test_contract.py tests/unit/test_contract_urls.py -v`
+- Transcoder/proxy contract tests: `uv run pytest tests/contract/ -v`
+- Multimodal transcoder tests: `uv run pytest tests/unit/test_transcoder/test_multimodal.py -v`
 - Performance, live, and diagnostic reproducer tests are manually invoked, not run in CI
 - Database fixtures must disconnect on every teardown path; use `try/finally` on the canonical event loop
 

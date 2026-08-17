@@ -19,6 +19,7 @@ from eggpool.transcoder.cache_translation import (
 )
 from eggpool.transcoder.errors import (
     CACHE_CONTROL_LOSS_KINDS,
+    MULTIMODAL_LOSS_KINDS,
     TranscodeLossError,
 )
 from eggpool.transcoder.json_helpers import (
@@ -35,6 +36,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from eggpool.catalog.capabilities import (
+        MultimodalCapabilities,
         ThinkingCapability,
         TranscodingCapabilities,
     )
@@ -132,6 +134,7 @@ def _translate_openai_content_to_anthropic(
     vision_enabled: bool,
     warnings: list[dict[str, Any]],
     capability: TranscodingCapabilities | None = None,
+    multimodal_capability: MultimodalCapabilities | None = None,
     context: TranscodeContext | None = None,
     source_prefix: str = "content",
     breakpoint_count: list[int] | None = None,
@@ -141,7 +144,12 @@ def _translate_openai_content_to_anthropic(
     When ``vision_enabled`` is ``True``, ``image_url`` parts are
     translated to Anthropic ``image`` blocks.  Otherwise they are
     dropped with a warning (v1 behaviour).
+
+    When ``multimodal_capability`` is provided, source forms are gated
+    against the target provider's capability contract (``base64``/``url``
+    support) so non-representable forms produce explicit loss warnings.
     """
+    mm = multimodal_capability
     blocks: list[dict[str, Any]] = []
     for part_index, part in enumerate(content):
         part_type = part.get("type")
@@ -180,6 +188,17 @@ def _translate_openai_content_to_anthropic(
                     )
                     continue
                 media_type, encoded = data_uri
+                # Capability gate: target must support base64 images
+                if mm is not None and not mm.image_input.base64:
+                    warnings.append(
+                        {
+                            "kind": "unsupported_source_form",
+                            "field": "content[image_url]",
+                            "source_form": "base64",
+                            "reason": "target_does_not_support_base64_images",
+                        }
+                    )
+                    continue
                 if base64_definitely_exceeds(encoded, _ANTHROPIC_IMAGE_SIZE_LIMIT):
                     warnings.append(
                         {
@@ -224,6 +243,17 @@ def _translate_openai_content_to_anthropic(
                     }
                 )
             elif url.startswith("http://") or url.startswith("https://"):
+                # Capability gate: target must support URL images
+                if mm is not None and not mm.image_input.url:
+                    warnings.append(
+                        {
+                            "kind": "unsupported_source_form",
+                            "field": "content[image_url]",
+                            "source_form": "url",
+                            "reason": "target_does_not_support_url_images",
+                        }
+                    )
+                    continue
                 blocks.append(
                     {
                         "type": "image",
@@ -244,16 +274,18 @@ def _translate_openai_content_to_anthropic(
         elif part_type == "input_audio":
             warnings.append(
                 {
-                    "kind": "dropped_field",
+                    "kind": "unsupported_modality",
                     "field": "content[input_audio]",
+                    "modality": "audio",
                     "reason": "anthropic_unsupported",
                 }
             )
         elif part_type == "file":
             warnings.append(
                 {
-                    "kind": "dropped_field",
+                    "kind": "unsupported_modality",
                     "field": "content[file]",
+                    "modality": "document",
                     "reason": "anthropic_unsupported",
                 }
             )
@@ -282,6 +314,7 @@ class OpenAIToAnthropic:
         features: TranscoderFeatures | None = None,
         thinking_capability: ThinkingCapability | None = None,
         transcoding_capability: TranscodingCapabilities | None = None,
+        multimodal_capability: MultimodalCapabilities | None = None,
         budget_defaults: dict[str, int] | None = None,
         budget_resolution_policy: str = "lenient",
         loss_policy: str = "warn",
@@ -379,18 +412,71 @@ class OpenAIToAnthropic:
                             }
                         )
 
+                supports_media_tool_result = (
+                    multimodal_capability is not None
+                    and multimodal_capability.non_text_tool_result
+                )
                 if isinstance(content, str):
                     tool_result_content: Any = content
                 elif isinstance(content, list):
-                    text_parts = extract_text_blocks(content)
-                    if has_non_text_blocks(content):
-                        warnings.append(
-                            {
-                                "kind": "tool_result_image_dropped",
-                                "field": "messages[tool].content",
-                            }
-                        )
-                    tool_result_content = "\n".join(text_parts)
+                    if supports_media_tool_result:
+                        # Preserve media-bearing tool results when the
+                        # target protocol supports them.
+                        translated_content: list[dict[str, Any]] = []
+                        for tr_part in iter_objects(content):
+                            tr_type = tr_part.get("type")
+                            if tr_type == "text":
+                                text_val = str(tr_part.get("text", ""))
+                                if text_val:
+                                    translated_content.append(
+                                        {"type": "text", "text": text_val}
+                                    )
+                            elif tr_type == "image_url":
+                                vision_on = features is not None and features.vision
+                                if vision_on:
+                                    img_blocks = _translate_openai_content_to_anthropic(
+                                        [tr_part],
+                                        vision_enabled=True,
+                                        warnings=warnings,
+                                        multimodal_capability=multimodal_capability,
+                                    )
+                                    translated_content.extend(img_blocks)
+                                else:
+                                    warnings.append(
+                                        {
+                                            "kind": "media_tool_result_flattened",
+                                            "field": "messages[tool].content[image]",
+                                            "reason": "vision_disabled",
+                                        }
+                                    )
+                            elif tr_type == "file":
+                                warnings.append(
+                                    {
+                                        "kind": "media_tool_result_flattened",
+                                        "field": "messages[tool].content[file]",
+                                        "reason": "anthropic_no_document_tool_result",
+                                    }
+                                )
+                            else:
+                                warnings.append(
+                                    {
+                                        "kind": "media_tool_result_flattened",
+                                        "field": f"messages[tool].content[{tr_type}]",
+                                        "reason": "unsupported_type",
+                                    }
+                                )
+                        tool_result_content = translated_content or ""
+                    else:
+                        text_parts = extract_text_blocks(content)
+                        if has_non_text_blocks(content):
+                            warnings.append(
+                                {
+                                    "kind": "media_tool_result_flattened",
+                                    "field": "messages[tool].content",
+                                    "reason": "target_no_media_tool_result",
+                                }
+                            )
+                        tool_result_content = "\n".join(text_parts)
                 else:
                     tool_result_content = str(content)
 
@@ -537,6 +623,7 @@ class OpenAIToAnthropic:
                     vision_enabled=vision_enabled,
                     warnings=warnings,
                     capability=transcoding_capability,
+                    multimodal_capability=multimodal_capability,
                     context=context,
                     source_prefix=f"messages[{message_index}].content",
                     breakpoint_count=breakpoint_count,
@@ -887,9 +974,9 @@ class OpenAIToAnthropic:
             )
 
         # Phase 3 loss-policy enforcement. When the operator has
-        # configured ``loss_policy="reject"``, any cache-control
-        # loss warning recorded above causes the request to be
-        # rejected with HTTP 400 before upstream dispatch. The
+        # configured ``loss_policy="reject"``, any cache-control or
+        # multimodal loss warning recorded above causes the request to
+        # be rejected with HTTP 400 before upstream dispatch. The
         # ``warn`` default preserves the v1 behaviour where the
         # request proceeds and the loss is reported in the
         # ``loss_warnings`` audit log.
@@ -898,12 +985,12 @@ class OpenAIToAnthropic:
                 w
                 for w in warnings
                 if isinstance(w.get("kind"), str)
-                and w["kind"] in CACHE_CONTROL_LOSS_KINDS
+                and w["kind"] in CACHE_CONTROL_LOSS_KINDS | MULTIMODAL_LOSS_KINDS
             ]
             if protected:
                 raise TranscodeLossError(
                     "Request rejected by loss_policy=reject: "
-                    "cache_control boundary would be lost",
+                    "protected boundary would be lost during transcoding",
                     protected,
                 )
 

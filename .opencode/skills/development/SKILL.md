@@ -133,6 +133,12 @@ uv run pytest tests/unit/test_contract.py tests/unit/test_contract_urls.py -v
 uv run pytest tests/contract/ -v
 ```
 
+### Multimodal Transcoder Tests
+
+```bash
+uv run pytest tests/unit/test_transcoder/test_multimodal.py -v
+```
+
 ### Smoke Suite
 
 ```bash

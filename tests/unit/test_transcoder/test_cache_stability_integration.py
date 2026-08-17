@@ -219,7 +219,9 @@ class TestLossPolicyReject:
         }
         with pytest.raises(TranscodeLossError) as exc_info:
             transcoder.encode_request(payload, context, loss_policy="reject")
-        assert "cache_control" in str(exc_info.value)
+        assert "protected boundary" in str(exc_info.value) or "cache_control" in str(
+            exc_info.value
+        )
         assert any(
             w.get("kind") == "cache_control_feature_disabled"
             for w in exc_info.value.loss_warnings

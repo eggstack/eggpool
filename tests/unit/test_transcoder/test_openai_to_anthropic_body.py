@@ -874,7 +874,7 @@ class TestToolTranslation:
         _, warnings = transcoder.encode_request(payload, context)
 
         image_warnings = [
-            w for w in warnings if w.get("kind") == "tool_result_image_dropped"
+            w for w in warnings if w.get("kind") == "media_tool_result_flattened"
         ]
         assert len(image_warnings) == 1
 

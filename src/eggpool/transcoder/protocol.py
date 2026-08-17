@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from eggpool.catalog.capabilities import (
+        MultimodalCapabilities,
         ThinkingCapability,
         TranscodingCapabilities,
     )
@@ -31,6 +32,7 @@ class BodyTranscoder(Protocol):
         features: TranscoderFeatures | None = None,
         thinking_capability: ThinkingCapability | None = None,
         transcoding_capability: TranscodingCapabilities | None = None,
+        multimodal_capability: MultimodalCapabilities | None = None,
         budget_defaults: dict[str, int] | None = None,
         budget_resolution_policy: str = "lenient",
         loss_policy: str = "warn",

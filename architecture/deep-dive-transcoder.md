@@ -102,8 +102,7 @@ without inspecting the data. `ToolResultContent.content` is a
 `list[ContentBlock]`, allowing nested media (images, audio) inside tool
 results without flattening at the IR boundary.
 
-The IR is not yet wired into the pairwise transcoders (Plan 134 scope);
-same-protocol passthrough does not canonicalize content.
+Same-protocol passthrough does not canonicalize content through the IR.
 
 ### `catalog/capabilities.py` — MultimodalCapabilities
 
@@ -113,6 +112,12 @@ transcoding decisions. `MediaCapability` indicates supported source forms
 groups `image_input`, `document_input`, `audio_input`, `non_text_tool_result`,
 and `max_serialized_request_bytes`. Capabilities are provider/model/protocol
 scoped; unknown remains unknown and must never authorize a native field.
+
+Source forms are capability-gated: the transcoder consults `MediaCapability`
+flags before translating images and documents, emitting `unsupported_source_form`
+loss warnings when the target provider cannot represent the source form.
+Tool-result media is preserved when the target supports `non_text_tool_result`;
+otherwise it is flattened to text with a `media_tool_result_flattened` warning.
 
 Serialized via `model_capabilities_to_dict` / `dict_to_model_capabilities`
 for the catalog cache round-trip. Merge via `merge_model_capabilities` uses
@@ -153,7 +158,7 @@ Usage canonicalization across protocols (input_tokens ↔ prompt_tokens, cache c
 
 ### `transcoder/errors.py`
 
-`TranscodeLossError` — raised when `loss_policy = "reject"` and protected cache-control loss kinds are detected.
+`TranscodeLossError` — raised when `loss_policy = "reject"` and protected loss kinds are detected. Protected kinds include both cache-control boundary losses (`CACHE_CONTROL_LOSS_KINDS`) and multimodal boundary losses (`MULTIMODAL_LOSS_KINDS`): `unsupported_modality`, `unsupported_source_form`, `media_tool_result_flattened`, and `document_media_type_unsupported`.
 
 ### `transcoder/segmentation.py`
 
@@ -209,6 +214,7 @@ JSON frame helpers with compact separators for SSE frame construction.
 | 9 | Streaming hot-path | Shared decoder, frame fan-out, synchronous translation |
 | 10 | JSON backend | `eggpool.jsonx` abstraction (orjson/stdlib) |
 | 11 | Content IR | Narrow content-block representation, `MultimodalCapabilities` |
+| 134 | Multimodal transcode | Capability-aware source form gating, tool-result media preservation, multimodal loss-policy enforcement, serialized request-size validation |
 
 ## Loss Warning Kinds
 
@@ -219,13 +225,21 @@ Protected cache-control loss kinds (can trigger `TranscodeLossError` in reject m
 - `provider_extension_not_preserved`
 - `stable_prefix_reordered_canonically`
 
+Protected multimodal loss kinds (can trigger `TranscodeLossError` in reject mode):
+- `unsupported_modality` — entire modality not representable by target
+- `unsupported_source_form` — specific source form (base64/url) not supported
+- `media_tool_result_flattened` — tool-result media flattened to text
+- `document_media_type_unsupported` — document media type not supported
+
 Additional loss-warning kinds (informational):
 - `tool_call_id_translated`, `tool_call_id_changed`
 - `parallel_tool_calls_collapsed`
 - `malformed_tool_arguments`, `invalid_tool_choice`
 - `unsupported_tool_type`, `empty_tool_use_block`
-- `tool_result_image_dropped`, `tool_result_error_passthrough`
+- `tool_result_error_passthrough`
 - `pause_turn`, `non_text_content_dropped`, `tool_result_inferred`
+- `image_unsupported_format`, `image_too_large`, `pdf_too_large`
+- `document_url_dropped`
 
 ## Thinking/Reasoning Transcoding
 

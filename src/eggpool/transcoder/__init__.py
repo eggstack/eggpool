@@ -44,7 +44,7 @@ LOSS_WARNING_KINDS: frozenset[str] = frozenset(
         # Phase 6.1 (tools)
         "tool_call_id_translated",
         "parallel_tool_calls_collapsed",
-        "tool_result_image_dropped",
+        "media_tool_result_flattened",
         "malformed_tool_arguments",
         "invalid_tool_choice",
         "unsupported_tool_type",
@@ -59,7 +59,7 @@ LOSS_WARNING_KINDS: frozenset[str] = frozenset(
         "image_too_large",
         "pdf_too_large",
         "document_url_dropped",
-        "document_unsupported_media",
+        "document_media_type_unsupported",
         # Phase 6.3 (thinking)
         "thinking_signature_dropped",
         "reasoning_content_dropped",
@@ -90,6 +90,9 @@ LOSS_WARNING_KINDS: frozenset[str] = frozenset(
         "cache_breakpoint_limit_exceeded",
         "cache_ttl_mismatch",
         "cache_key_unrepresentable",
+        # Phase 3 multimodal (plan 134)
+        "unsupported_modality",
+        "unsupported_source_form",
     }
 )
 

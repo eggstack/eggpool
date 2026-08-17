@@ -181,7 +181,7 @@ class TestOpenAIToAnthropicVision:
         _, warnings = self.transcoder.encode_request(
             payload, _make_context(), features=_features()
         )
-        assert any(w.get("kind") == "dropped_field" for w in warnings)
+        assert any(w.get("kind") == "unsupported_modality" for w in warnings)
 
     def test_file_type_dropped(self) -> None:
         payload = {
@@ -201,7 +201,7 @@ class TestOpenAIToAnthropicVision:
         _, warnings = self.transcoder.encode_request(
             payload, _make_context(), features=_features()
         )
-        assert any(w.get("kind") == "dropped_field" for w in warnings)
+        assert any(w.get("kind") == "unsupported_modality" for w in warnings)
 
     def test_multiple_images(self) -> None:
         payload = {
@@ -387,7 +387,7 @@ class TestAnthropicToOpenVision:
         _, warnings = self.transcoder.encode_request(
             payload, _make_context("anthropic", "openai"), features=_features()
         )
-        assert any(w.get("kind") == "document_unsupported_media" for w in warnings)
+        assert any(w.get("kind") == "document_media_type_unsupported" for w in warnings)
 
     def test_text_only_content_preserved(self) -> None:
         payload = {
@@ -493,7 +493,7 @@ class TestAnthropicToOpenVision:
 
         assert result["messages"][0]["content"] == "Read this"
         assert any(
-            w.get("kind") == "document_unsupported_media"
+            w.get("kind") == "document_media_type_unsupported"
             and w.get("reason") == "invalid_base64"
             for w in warnings
         )
