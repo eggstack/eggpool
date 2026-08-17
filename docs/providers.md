@@ -33,6 +33,11 @@ Messages. They are safe to configure with real API keys.
 | SiliconFlow | `siliconflow` | `https://api.siliconflow.cn/v1` | OpenAI | Bearer | `SILICONFLOW_API_KEY` |
 | Alibaba Qwen | `alibaba` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | OpenAI | Bearer | `ALIBABA_API_KEY` |
 | Ollama (local) | `ollama-local` | `http://localhost:11434/v1` | OpenAI | None | N/A |
+| LM Studio (local) | `lmstudio-local` | `http://localhost:1234/v1` | OpenAI | None | N/A |
+| llama.cpp (local) | `llamacpp-local` | `http://localhost:8080/v1` | OpenAI | None | N/A |
+| vLLM (local) | `vllm-local` | `http://localhost:8000/v1` | OpenAI | None | N/A |
+| LocalAI (local) | `localai-local` | `http://localhost:8080/v1` | OpenAI | None | N/A |
+| Custom compatible | `custom-compatible` | operator-configured | operator-configured | None | N/A |
 
 ## Experimental Providers
 
@@ -45,18 +50,14 @@ uv run python scripts/verify_upstream_auth.py --config config.toml --provider <p
 
 | Provider | ID | Base URL | Protocols | Notes |
 |----------|----|----------|-----------|-------|
-| Z.AI (ZhipuAI) | `zai` | `https://api.z.ai/api/paas/v4` | OpenAI | Confirm base URL and model listing |
-| Novita AI | `novita` | `https://api.novita.ai/openai` | OpenAI | Base URL may need correction |
 | MiniMax International | `minimax` | `https://api.minimax.io/anthropic` | Anthropic | Anthropic-compatible endpoint for token-plan keys; live model discovery via `/v1/models` |
 | MiniMax China | `minimax-cn` | `https://api.minimaxi.com/v1` | OpenAI | Live verification required before production use |
-| GeneralCompute | `generalcompute` | `https://api.generalcompute.com/v1` | OpenAI | Plain OpenAI Chat Completions-compatible PAYG; verify `/models` and chat live |
-| NeuralWatt | `neuralwatt` | `https://api.neuralwatt.com/v1` | OpenAI | Energy-based pricing; verify endpoints |
-| Ollama (cloud) | `ollama-cloud` | `https://ollama.com/v1` | OpenAI | Confirm cloud auth and model listing |
-| Cerebras | `cerebras` | `https://api.cerebras.ai/v1` | OpenAI | Fast inference; verify model listing |
-| SambaNova Cloud | `sambanova` | `https://api.sambanova.ai/v1` | OpenAI | Enterprise hosted models |
-| Hyperbolic | `hyperbolic` | `https://api.hyperbolic.xyz/v1` | OpenAI | Open-model inference |
-| Featherless AI | `featherless` | `https://api.featherless.ai/v1` | OpenAI | Serverless open-model API |
-| Moonshot / Kimi | `moonshot` | `https://api.moonshot.ai/v1` | OpenAI | Direct Kimi models |
+
+Providers without a bundled template can still be added via the
+"Custom compatible endpoint" option in `eggpool connect`. A generic base URL
+alone does not justify a template; bundled entries are reserved for providers
+with nontrivial contracts (custom auth, headers, paths, or protocol quirks)
+or well-known local runtimes.
 
 ## Configuration
 
@@ -201,34 +202,42 @@ Requests that hit the wrong endpoint receive a `400 ProtocolMismatchError`
 ("Model 'MiniMax-M3' uses the X protocol. Use /v1/..."). Hit the row
 that matches the provider you configured.
 
-### GeneralCompute PAYG (Plain OpenAI Chat Completions-Compatible)
+### Local Runtime Providers
 
-GeneralCompute PAYG is treated as a standard OpenAI Chat Completions-compatible provider.
-The bundled `generalcompute` template uses `GET /models` and
-`POST /chat/completions` with Bearer auth:
+Local OpenAI/Anthropic-compatible servers (Ollama, LM Studio, llama.cpp,
+vLLM, LocalAI) are first-class provider instances. Each template uses
+discovery-based verification — no hardcoded probe model. The connect flow
+lets you choose a preset, assign a custom provider instance ID, and
+optionally override the default base URL for LAN hosts.
 
 ```toml
-[providers.generalcompute]
-id = "generalcompute"
-base_url = "https://api.generalcompute.com/v1"
+# Example: LM Studio on a LAN host
+[providers.lmstudio-office]
+id = "lmstudio-office"
+base_url = "http://192.168.1.42:1234/v1"
 protocols = ["openai"]
-openai_path = "/chat/completions"
-models_method = "GET"
-models_path = "/models"
 
-[[providers.generalcompute.accounts]]
+[[providers.lmstudio-office.accounts]]
 name = "default"
-api_key = "sk-your-generalcompute-key"
+api_key_env = "LMSTUDIO_API_KEY"
 
-[providers.generalcompute.auth]
-mode = "bearer"
+[providers.lmstudio-office.auth]
+mode = "none"
+
+[providers.lmstudio-office.models_endpoint]
+method = "GET"
+path = "/models"
+required = true
+
+[providers.lmstudio-office.verify]
+probe_protocol = "openai"
+require_models = true
 ```
 
-A previous default of `POST /models/list` was suspected of causing
-catalog 404s and is no longer wired into the bundled template. If live
-provider docs later prove `POST /models/list` is required for some
-account type, implement it as an opt-in alternate template (for example
-`generalcompute-models-list`) rather than as the default PAYG behavior.
+Local providers use `auth.mode = "none"` by default. The `custom-compatible`
+template supports any OpenAI Chat Completions- or Anthropic
+Messages-compatible endpoint with operator-configured base URL, protocols,
+and auth.
 
 ### Static Model Seeds
 
@@ -273,8 +282,8 @@ the model appears in `/v1/models`:
   load-balanced by the existing `QuotaFairScorer`.
 - **`collapse_models`** — top-level `[models]` flag (default `false`). When
   `false`, the catalog exposes one provider-suffixed entry per
-  `(model_id, provider_id)` (e.g. `minimax-m2.7/generalcompute`,
-  `minimax-m2.7/minimax`, `minimax-m2.7/opencode-go`). When `true`, the same
+  `(model_id, provider_id)` (e.g. `minimax-m2.7/minimax`,
+  `minimax-m2.7/openrouter`, `minimax-m2.7/opencode-go`). When `true`, the same
   base model collapses to a single unsuffixed `minimax-m2.7` ID.
 
 The two knobs are independent. `collapse_models` changes the *catalog shape*;
@@ -317,7 +326,7 @@ weight = 1.0
 ### Worked example
 
 Three providers all expose `minimax-m2.7`. The desired order is
-`generalcompute` first, `minimax` second, `opencode-go` last, with three
+`minimax` first, `openrouter` second, `opencode-go` last, with three
 `opencode-go` API keys load-balancing within their tier:
 
 ```toml
@@ -327,23 +336,23 @@ Three providers all expose `minimax-m2.7`. The desired order is
 [providers.opencode-go]
 routing_priority = 0  # 3 API keys load balance within this tier
 
-[providers.minimax]
-routing_priority = 2  # tried after generalcompute, before opencode-go
+[providers.openrouter]
+routing_priority = 2  # tried after minimax, before opencode-go
 
-[providers.generalcompute]
+[providers.minimax]
 routing_priority = 3  # tried first
 ```
 
 With `collapse_models = false` and the priorities above, `/v1/models` emits:
 
-- `minimax-m2.7/generalcompute` — `routing_priority = 3`
-- `minimax-m2.7/minimax` — `routing_priority = 2`
+- `minimax-m2.7/minimax` — `routing_priority = 3`
+- `minimax-m2.7/openrouter` — `routing_priority = 2`
 - `minimax-m2.7/opencode-go` — `routing_priority = 0`
 
-A request for `minimax-m2.7/generalcompute` first hits the `generalcompute`
+A request for `minimax-m2.7/minimax` first hits the `minimax`
 accounts (load balanced by `QuotaFairScorer` inside the tier). If every
-`generalcompute` account is unhealthy, exhausted, or fails pre-body, the
-coordinator retries against `minimax` accounts, then `opencode-go` accounts.
+`minimax` account is unhealthy, exhausted, or fails pre-body, the
+coordinator retries against `openrouter` accounts, then `opencode-go` accounts.
 
 A request for `minimax-m2.7/opencode-go` only ever routes against
 `opencode-go` accounts, regardless of priority. Priority only orders the
@@ -455,13 +464,6 @@ to `["anthropic"]`, `auth.mode` to `api_key`, `auth.header` to
 discovery via `GET /v1/models`, so the bundled template uses
 `models_endpoint.method = "GET"` by default. Static model seeds are
 only a fallback if live discovery is unavailable.
-
-### GeneralCompute 404 on `/models/list`
-
-A 404 against `https://api.generalcompute.com/v1/models/list` means the
-non-default `POST /models/list` catalog endpoint was configured. PAYG
-should be tested first as plain OpenAI Chat Completions-compatible with `GET /models`
-and `POST /chat/completions` (the bundled template's default).
 
 ## OAuth / Consumer Subscription Exclusion
 
