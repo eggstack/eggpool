@@ -117,24 +117,24 @@ Start subsystem work with the current architecture index and the relevant deep
 dive. Read an active roadmap or focused plan only when the change is in its
 scope.
 
-- **Request lifecycle**: `RequestCoordinator` orchestrates endpoint → routing → persistence → dispatch → finalization
+- **Request lifecycle**: `RequestCoordinator` orchestrates endpoint → routing → persistence → dispatch → finalization. Deep dive: `architecture/deep-dive-request-lifecycle.md`
 - **Dispatch isolation**: local preparation and response adaptation failures are terminal local errors with no provider retry. Only typed HTTPX transport failures may retry, only across distinct accounts before `downstream_started`
-- **Multi-provider architecture**: provider-suffixed model IDs (`model-id/provider-id`), `ProviderClientPool`, `OutboundClientManager`
+- **Multi-provider architecture**: provider-suffixed model IDs (`model-id/provider-id`), `ProviderClientPool`, `OutboundClientManager`. Deep dive: `architecture/deep-dive-providers.md`
 - **Provider contracts**: `compose_provider_url()` is the single source of truth for upstream URLs
-- **Protocol transcoding**: `src/eggpool/transcoder/` — OpenAI ↔ Anthropic conversion. The transcoder's `usage` property returns a default; finalization reads usage from the coordinator's observer
+- **Protocol transcoding**: `src/eggpool/transcoder/` — OpenAI ↔ Anthropic conversion. Deep dive: `architecture/deep-dive-transcoder.md`. Operator guide: `docs/transcoding.md`
 - **JSON backend (`eggpool.jsonx`)**: preferred `orjson` (`eggpool[fast]`), falls back to stdlib. Override with `EGGPOOL_JSON_BACKEND=orjson|stdlib|auto`. Off the request path, stdlib `json` allowed for deterministic hashing
-- **Database invariants**: SQLite WAL, single-connection serialization, and task-owned `async with db.transaction():` boundaries for all DML; rollback is private to the owning transaction path and ambiguous outcomes fail closed
+- **Database invariants**: SQLite WAL, single-connection serialization, and task-owned `async with db.transaction():` boundaries for all DML; rollback is private to the owning transaction path and ambiguous outcomes fail closed. Deep dive: `architecture/deep-dive-database.md`
 - **Request schema freeze**: the historical `requests` table is frozen for optional diagnostics. New columns require durable lifecycle/accounting or externally visible compatibility justification; feature-specific diagnostics use sparse/event or narrowly scoped sidecar storage. Do not add cosmetic migrations or a generic EAV store
-- **Quota and routing**: tier-based via `routing_priority`, `QuotaFairScorer`, upstream-authoritative suppression, same-tier fairness rotor. Load-based (request count + token count + active count + health), never cost-based. Positive account `weight` scales effective request/token capacity within an eligible tier (`1.0` baseline, `2.0` approximately double, `0.5` approximately half)
+- **Quota and routing**: tier-based via `routing_priority`, `QuotaFairScorer`, upstream-authoritative suppression, same-tier fairness rotor. Load-based (request count + token count + active count + health), never cost-based. Positive account `weight` scales effective request/token capacity within an eligible tier (`1.0` baseline, `2.0` approximately double, `0.5` approximately half). Deep dive: `architecture/deep-dive-routing.md`
 - **Error hierarchy**: `AggregatorError` → `UpstreamError` → specific subclasses. See `errors.py`
-- **Process model**: supervisor + Granian worker (`workers=1`), daemon mode (`--verbose` for foreground). `runtime_threads=1` is required. Readiness probe is process-owned and disabled by default
+- **Process model**: supervisor + Granian worker (`workers=1`), daemon mode (`--verbose` for foreground). `runtime_threads=1` is required. Readiness probe is process-owned and disabled by default. Deep dive: `architecture/deep-dive-deployment.md`
 - **Lean defaults**: loopback binding, low-wear analytics, provider pools of 16/4, background outbound pools of 8/2. Model-info, routing traces, readiness writes, automatic backups, dispatch writing are opt-in. The copyable SBC profile also leaves full-database backups off by default
-- **Runtime generations**: `RuntimeManager` owns active/retiring generation slots. `RuntimeGenerationFactory.prepare()` is the shared startup/rehash construction boundary. `RequestFinalizationSupervisor` is generation-owned
-- **Live rehash**: `eggpool rehash` applies changes without restart. Control socket at `~/.local/state/eggpool/eggpool.sock`
-- **Health management**: `src/eggpool/health/` — circuit breaker, per-account tracking, bounded 1,800s backoff, scoped model quarantine, `DatabaseWritableProbe` for `/readyz`
-- **Background tasks**: `src/eggpool/background/` — `TaskSupervisor`, fixed-delay scheduler. Process-owned tasks survive generation swaps; generation-leased tasks retire with their generation
+- **Runtime generations**: `RuntimeManager` owns active/retiring generation slots. `RuntimeGenerationFactory.prepare()` is the shared startup/rehash construction boundary. `RequestFinalizationSupervisor` is generation-owned. Deep dive: `architecture/deep-dive-runtime.md`
+- **Live rehash**: `eggpool rehash` applies changes without restart. Control socket at `~/.local/state/eggpool/eggpool.sock`. Operator guide: `docs/live-config-rehash.md`
+- **Health management**: `src/eggpool/health/` — circuit breaker, per-account tracking, bounded 1,800s backoff, scoped model quarantine, `DatabaseWritableProbe` for `/readyz`. Deep dive: `architecture/deep-dive-health.md`
+- **Background tasks**: `src/eggpool/background/` — `TaskSupervisor`, fixed-delay scheduler. Process-owned tasks survive generation swaps; generation-leased tasks retire with their generation. Deep dive: `architecture/deep-dive-background.md`
 - **Database teardown**: generation-owned request/finalization/background tasks are joined before process- or fixture-owned databases disconnect; database fixtures must use `try/finally` cleanup on the canonical event loop
-- **Database recovery**: startup integrity is fail-closed. Indeterminate outcomes exit the worker; systemd restarts, then startup integrity and crash reconciliation run before readiness
+- **Database recovery**: startup integrity is fail-closed. Indeterminate outcomes exit the worker; systemd restarts, then startup integrity and crash reconciliation run before readiness. Runbook: `docs/runbooks/database-recovery.md`
 
 ## Gotchas
 
@@ -186,6 +186,4 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 
 ## Planning Policy
 
-Completed implementation plans must not create permanent CI jobs, markers, evidence formats, or plan-numbered test suites. Regression tests must be merged into capability-based suites before a plan is closed.
-
-Planning is proportional to risk: use a detailed roadmap and child plans for multi-boundary, ordered, durable-state, request/process-ownership, or broad protocol/provider work; use one focused plan for a bounded multi-file correction; and use a direct issue or concise notes for a small deterministic fix local to one or a few helpers when existing tests and gates protect the boundary. A completed roadmap does not automatically require a closure plan; put closure evidence in the implementing plan unless a genuinely new phase or defect is discovered.
+Planning is proportional to risk. Use the development skill's "Planning proportionality" section for guidance.

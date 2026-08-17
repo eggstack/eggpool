@@ -108,7 +108,7 @@ uv run pyright src/ scripts/
 
 - **pytest** with pytest-asyncio (strict mode), `xfail_strict = true`, `--strict-markers`
 - **respx** for HTTPX upstream mocking
-- Tests in `tests/unit/`, `tests/integration/`, `tests/smoke/`, `tests/perf/`, `tests/live/`, `tests/contract/`
+- Tests in `tests/unit/`, `tests/integration/`, `tests/smoke/`, `tests/perf/`, `tests/live/`, `tests/contract/` (note: `tests/soak/` exists but is empty — do not populate with plan-numbered or historical soak tests)
 
 ### Test Markers
 
@@ -125,6 +125,12 @@ Defined in `pyproject.toml`:
 
 ```bash
 uv run pytest tests/unit/test_contract.py tests/unit/test_contract_urls.py -v
+```
+
+### Transcoder/Proxy Contract Tests
+
+```bash
+uv run pytest tests/contract/ -v
 ```
 
 ### Smoke Suite
@@ -240,6 +246,13 @@ defect is discovered.
 - Use `NoReturn` for functions that never return (e.g., `sys.exit`)
 - Move type-only imports into `TYPE_CHECKING` blocks
 - Follow ruff TCH rules for import organization
+
+## Architecture Reference
+
+For design details beyond code style, see the `architecture` skill and
+`architecture/README.md`. Start subsystem work with the architecture index
+and the relevant deep dive; consult active plans only when the change is
+in their scope.
 
 ## Error Handling
 
