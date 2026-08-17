@@ -43,6 +43,19 @@ CACHE_CONTROL_LOSS_KINDS: frozenset[str] = frozenset(
     }
 )
 
+# Multimodal loss kinds that the transcoder recognises as ``protected``
+# content-block losses.  When ``loss_policy="reject"`` is active and
+# any of these fire, the transcoder raises :class:`TranscodeLossError`
+# instead of dispatching the request upstream.
+MULTIMODAL_LOSS_KINDS: frozenset[str] = frozenset(
+    {
+        "unsupported_modality",
+        "unsupported_source_form",
+        "media_tool_result_flattened",
+        "document_media_type_unsupported",
+    }
+)
+
 
 class TranscodeLossError(AggregatorError):
     """Raised when ``loss_policy="reject"`` and a protected cache field was lost.

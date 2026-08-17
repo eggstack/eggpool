@@ -863,13 +863,50 @@ def thinking_override_to_capability(
     )
 
 
+def _parse_media_capability_override(raw: object) -> MediaCapability:
+    """Parse a media capability override dict into a :class:`MediaCapability`.
+
+    ``None`` or missing fields are left as their conservative defaults
+    (``False``).  Only ``True`` values enable a source form.
+    """
+    if not isinstance(raw, dict):
+        return MediaCapability()
+    data = cast("Mapping[str, object]", raw)
+    max_src = data.get("max_source_bytes")
+    return MediaCapability(
+        base64=bool(data.get("base64", False)),
+        url=bool(data.get("url", False)),
+        max_source_bytes=int(max_src) if isinstance(max_src, int) else None,
+    )
+
+
+def _parse_multimodal_capability_override(
+    raw: object,
+) -> MultimodalCapabilities:
+    """Parse a multimodal capability override dict into MultimodalCapabilities."""
+    if not isinstance(raw, dict):
+        return MultimodalCapabilities()
+    data = cast("Mapping[str, object]", raw)
+    max_req = data.get("max_serialized_request_bytes")
+    return MultimodalCapabilities(
+        image_input=_parse_media_capability_override(data.get("image_input")),
+        document_input=_parse_media_capability_override(data.get("document_input")),
+        audio_input=_parse_media_capability_override(data.get("audio_input")),
+        non_text_tool_result=bool(data.get("non_text_tool_result", False)),
+        max_serialized_request_bytes=(
+            int(max_req) if isinstance(max_req, int) else None
+        ),
+    )
+
+
 def model_capabilities_override_to_config(
     override: dict[str, object] | None,
 ) -> ModelCapabilities:
     """Convert a ``ModelCapabilitiesOverrideConfig`` dict into ModelCapabilities.
 
-    The *override* dict may contain a ``thinking`` key whose value is a
-    dict compatible with :func:`thinking_override_to_capability`.
+    The *override* dict may contain ``thinking``, ``transcoding``, and
+    ``multimodal`` keys whose values are dicts compatible with their
+    respective parsers.
     """
     if override is None:
         return ModelCapabilities()
@@ -885,7 +922,10 @@ def model_capabilities_override_to_config(
 
     transcode_raw = override.get("transcoding")
     transcoding = _parse_transcoding_capabilities(transcode_raw)
-    return ModelCapabilities(thinking=thinking, transcoding=transcoding)
+    multimodal = _parse_multimodal_capability_override(override.get("multimodal"))
+    return ModelCapabilities(
+        thinking=thinking, transcoding=transcoding, multimodal=multimodal
+    )
 
 
 def apply_capability_overrides(

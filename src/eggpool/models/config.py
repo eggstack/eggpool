@@ -1022,6 +1022,59 @@ class ThinkingCapabilityOverrideConfig(BaseModel):
         return self
 
 
+class MediaCapabilityOverrideConfig(BaseModel):
+    """Override fields for a single media modality (image, document, audio).
+
+    When every field is ``None`` the override is a no-op.  Boolean fields
+    set to ``True`` enable the corresponding source form; ``False`` is
+    treated as unknown/conservative and ignored.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    base64: bool | None = None
+    url: bool | None = None
+    max_source_bytes: int | None = None
+
+    @model_validator(mode="after")
+    def validate_media_overrides(self) -> MediaCapabilityOverrideConfig:
+        """Clear ``False`` booleans (they mean unknown, not disabled)."""
+        if self.base64 is False:
+            self.base64 = None
+        if self.url is False:
+            self.url = None
+        if self.max_source_bytes is not None and self.max_source_bytes <= 0:
+            raise ConfigError("max_source_bytes must be > 0")
+        return self
+
+
+class MultimodalCapabilityOverrideConfig(BaseModel):
+    """Override fields for multimodal capabilities.
+
+    When every field is ``None`` the override is a no-op.  Only
+    explicitly-set non-``None`` values are merged into the base
+    capabilities.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    image_input: MediaCapabilityOverrideConfig | None = None
+    document_input: MediaCapabilityOverrideConfig | None = None
+    audio_input: MediaCapabilityOverrideConfig | None = None
+    non_text_tool_result: bool | None = None
+    max_serialized_request_bytes: int | None = None
+
+    @model_validator(mode="after")
+    def validate_multimodal_overrides(self) -> MultimodalCapabilityOverrideConfig:
+        """Enforce cross-field constraints for multimodal overrides."""
+        if (
+            self.max_serialized_request_bytes is not None
+            and self.max_serialized_request_bytes <= 0
+        ):
+            raise ConfigError("max_serialized_request_bytes must be > 0")
+        return self
+
+
 class ModelCapabilitiesOverrideConfig(BaseModel):
     """Per-model capability overrides.
 
@@ -1032,6 +1085,7 @@ class ModelCapabilitiesOverrideConfig(BaseModel):
 
     thinking: ThinkingCapabilityOverrideConfig | None = None
     transcoding: TranscodingCapabilities | None = None
+    multimodal: MultimodalCapabilityOverrideConfig | None = None
 
 
 _OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"

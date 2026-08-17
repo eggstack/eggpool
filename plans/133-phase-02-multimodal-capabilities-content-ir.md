@@ -2,8 +2,9 @@
 
 ## Status
 
-Complete. Content IR types and MultimodalCapabilities are implemented, tested,
-and documented. Decode/encode helpers remain for Plan 134.
+Complete. Content IR types, MultimodalCapabilities, config overrides, and loss
+reason constants are implemented, tested, and documented. Decode/encode helpers
+remain for Plan 134.
 
 ## Objective
 

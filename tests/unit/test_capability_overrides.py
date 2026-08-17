@@ -23,7 +23,9 @@ from eggpool.catalog.capabilities import (
 from eggpool.errors import ConfigError
 from eggpool.models.config import (
     AppConfig,
+    MediaCapabilityOverrideConfig,
     ModelCapabilitiesOverrideConfig,
+    MultimodalCapabilityOverrideConfig,
     ThinkingCapabilityOverrideConfig,
 )
 
@@ -843,3 +845,328 @@ class TestConfigToOverrideIntegration:
         assert restored.thinking.status == "supported"
         assert restored.thinking.budget_tokens_min == 256
         assert restored.thinking.notes == "integration"
+
+
+# ---------------------------------------------------------------------------
+# MediaCapabilityOverrideConfig validation
+# ---------------------------------------------------------------------------
+
+
+class TestMediaCapabilityOverrideConfig:
+    def test_default_construction(self) -> None:
+        cfg = MediaCapabilityOverrideConfig()
+        assert cfg.base64 is None
+        assert cfg.url is None
+        assert cfg.max_source_bytes is None
+
+    def test_enable_base64(self) -> None:
+        cfg = MediaCapabilityOverrideConfig(base64=True)
+        assert cfg.base64 is True
+
+    def test_enable_url(self) -> None:
+        cfg = MediaCapabilityOverrideConfig(url=True)
+        assert cfg.url is True
+
+    def test_false_treated_as_none(self) -> None:
+        cfg = MediaCapabilityOverrideConfig(base64=False, url=False)
+        assert cfg.base64 is None
+        assert cfg.url is None
+
+    def test_max_source_bytes_positive(self) -> None:
+        cfg = MediaCapabilityOverrideConfig(max_source_bytes=1024)
+        assert cfg.max_source_bytes == 1024
+
+    def test_max_source_bytes_zero_rejected(self) -> None:
+        with pytest.raises(ConfigError, match="max_source_bytes must be > 0"):
+            MediaCapabilityOverrideConfig(max_source_bytes=0)
+
+    def test_max_source_bytes_negative_rejected(self) -> None:
+        with pytest.raises(ConfigError, match="max_source_bytes must be > 0"):
+            MediaCapabilityOverrideConfig(max_source_bytes=-1)
+
+    def test_extra_fields_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            MediaCapabilityOverrideConfig.model_validate(
+                {"base64": True, "unknown_field": "value"}
+            )
+
+
+# ---------------------------------------------------------------------------
+# MultimodalCapabilityOverrideConfig validation
+# ---------------------------------------------------------------------------
+
+
+class TestMultimodalCapabilityOverrideConfig:
+    def test_default_construction(self) -> None:
+        cfg = MultimodalCapabilityOverrideConfig()
+        assert cfg.image_input is None
+        assert cfg.document_input is None
+        assert cfg.audio_input is None
+        assert cfg.non_text_tool_result is None
+        assert cfg.max_serialized_request_bytes is None
+
+    def test_image_input(self) -> None:
+        img = MediaCapabilityOverrideConfig(base64=True, url=True)
+        cfg = MultimodalCapabilityOverrideConfig(image_input=img)
+        assert cfg.image_input is not None
+        assert cfg.image_input.base64 is True
+        assert cfg.image_input.url is True
+
+    def test_document_input(self) -> None:
+        doc = MediaCapabilityOverrideConfig(url=True)
+        cfg = MultimodalCapabilityOverrideConfig(document_input=doc)
+        assert cfg.document_input is not None
+        assert cfg.document_input.url is True
+
+    def test_audio_input(self) -> None:
+        aud = MediaCapabilityOverrideConfig(base64=True)
+        cfg = MultimodalCapabilityOverrideConfig(audio_input=aud)
+        assert cfg.audio_input is not None
+        assert cfg.audio_input.base64 is True
+
+    def test_non_text_tool_result(self) -> None:
+        cfg = MultimodalCapabilityOverrideConfig(non_text_tool_result=True)
+        assert cfg.non_text_tool_result is True
+
+    def test_max_serialized_request_bytes(self) -> None:
+        cfg = MultimodalCapabilityOverrideConfig(max_serialized_request_bytes=1048576)
+        assert cfg.max_serialized_request_bytes == 1048576
+
+    def test_max_serialized_request_bytes_zero_rejected(self) -> None:
+        with pytest.raises(
+            ConfigError, match="max_serialized_request_bytes must be > 0"
+        ):
+            MultimodalCapabilityOverrideConfig(max_serialized_request_bytes=0)
+
+    def test_max_serialized_request_bytes_negative_rejected(self) -> None:
+        with pytest.raises(
+            ConfigError, match="max_serialized_request_bytes must be > 0"
+        ):
+            MultimodalCapabilityOverrideConfig(max_serialized_request_bytes=-1)
+
+    def test_extra_fields_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            MultimodalCapabilityOverrideConfig.model_validate(
+                {"non_text_tool_result": True, "unknown_field": "value"}
+            )
+
+
+# ---------------------------------------------------------------------------
+# Multimodal override conversion
+# ---------------------------------------------------------------------------
+
+
+class TestMultimodalOverrideToCapability:
+    def test_none_input(self) -> None:
+        cap = model_capabilities_override_to_config(None)
+        assert cap.multimodal.image_input.base64 is False
+        assert cap.multimodal.image_input.url is False
+        assert cap.multimodal.document_input.base64 is False
+
+    def test_empty_dict(self) -> None:
+        cap = model_capabilities_override_to_config({})
+        assert cap.multimodal.image_input.base64 is False
+
+    def test_multimodal_image_base64(self) -> None:
+        override = {"multimodal": {"image_input": {"base64": True}}}
+        cap = model_capabilities_override_to_config(override)
+        assert cap.multimodal.image_input.base64 is True
+        assert cap.multimodal.image_input.url is False
+
+    def test_multimodal_image_url(self) -> None:
+        override = {"multimodal": {"image_input": {"url": True}}}
+        cap = model_capabilities_override_to_config(override)
+        assert cap.multimodal.image_input.url is True
+        assert cap.multimodal.image_input.base64 is False
+
+    def test_multimodal_both_modalities(self) -> None:
+        override = {
+            "multimodal": {
+                "image_input": {"base64": True, "url": True},
+                "document_input": {"url": True},
+            }
+        }
+        cap = model_capabilities_override_to_config(override)
+        assert cap.multimodal.image_input.base64 is True
+        assert cap.multimodal.image_input.url is True
+        assert cap.multimodal.document_input.url is True
+
+    def test_multimodal_non_text_tool_result(self) -> None:
+        override = {"multimodal": {"non_text_tool_result": True}}
+        cap = model_capabilities_override_to_config(override)
+        assert cap.multimodal.non_text_tool_result is True
+
+    def test_multimodal_max_serialized_request_bytes(self) -> None:
+        override = {"multimodal": {"max_serialized_request_bytes": 2097152}}
+        cap = model_capabilities_override_to_config(override)
+        assert cap.multimodal.max_serialized_request_bytes == 2097152
+
+    def test_multimodal_with_max_source_bytes(self) -> None:
+        override = {
+            "multimodal": {"image_input": {"base64": True, "max_source_bytes": 5242880}}
+        }
+        cap = model_capabilities_override_to_config(override)
+        assert cap.multimodal.image_input.base64 is True
+        assert cap.multimodal.image_input.max_source_bytes == 5242880
+
+    def test_multimodal_mixed_with_thinking(self) -> None:
+        override = {
+            "thinking": {"status": "supported"},
+            "multimodal": {"image_input": {"url": True}},
+        }
+        cap = model_capabilities_override_to_config(override)
+        assert cap.thinking.status == "supported"
+        assert cap.multimodal.image_input.url is True
+
+    def test_unknown_multimodal_key_ignored(self) -> None:
+        override = {"multimodal": {"unknown_modality": True}}
+        cap = model_capabilities_override_to_config(override)
+        assert cap.multimodal.image_input.base64 is False
+
+    def test_invalid_multimodal_dict_ignored(self) -> None:
+        override = {"multimodal": "not_a_dict"}
+        cap = model_capabilities_override_to_config(override)
+        assert cap.multimodal.image_input.base64 is False
+
+
+# ---------------------------------------------------------------------------
+# Multimodal config → dict → ModelCapabilities roundtrip
+# ---------------------------------------------------------------------------
+
+
+class TestMultimodalConfigRoundtrip:
+    def test_roundtrip_image_base64(self) -> None:
+        override = {"multimodal": {"image_input": {"base64": True}}}
+        cap = model_capabilities_override_to_config(override)
+        d = model_capabilities_to_dict(cap)
+        restored = dict_to_model_capabilities(d)
+        assert restored.multimodal.image_input.base64 is True
+        assert restored.multimodal.image_input.url is False
+
+    def test_roundtrip_full_multimodal(self) -> None:
+        override = {
+            "multimodal": {
+                "image_input": {"base64": True, "url": True},
+                "document_input": {"url": True, "max_source_bytes": 1048576},
+                "audio_input": {"base64": True},
+                "non_text_tool_result": True,
+                "max_serialized_request_bytes": 2097152,
+            }
+        }
+        cap = model_capabilities_override_to_config(override)
+        d = model_capabilities_to_dict(cap)
+        restored = dict_to_model_capabilities(d)
+        assert restored.multimodal.image_input.base64 is True
+        assert restored.multimodal.image_input.url is True
+        assert restored.multimodal.document_input.url is True
+        assert restored.multimodal.document_input.max_source_bytes == 1048576
+        assert restored.multimodal.audio_input.base64 is True
+        assert restored.multimodal.non_text_tool_result is True
+        assert restored.multimodal.max_serialized_request_bytes == 2097152
+
+    def test_roundtrip_thinking_and_multimodal(self) -> None:
+        override = {
+            "thinking": {"status": "supported", "budget_tokens_min": 1024},
+            "multimodal": {"image_input": {"url": True}},
+        }
+        cap = model_capabilities_override_to_config(override)
+        d = model_capabilities_to_dict(cap)
+        restored = dict_to_model_capabilities(d)
+        assert restored.thinking.status == "supported"
+        assert restored.thinking.budget_tokens_min == 1024
+        assert restored.multimodal.image_input.url is True
+
+
+# ---------------------------------------------------------------------------
+# ModelCapabilitiesOverrideConfig with multimodal
+# ---------------------------------------------------------------------------
+
+
+class TestModelCapabilitiesOverrideConfigMultimodal:
+    def test_default_construction(self) -> None:
+        cfg = ModelCapabilitiesOverrideConfig()
+        assert cfg.multimodal is None
+
+    def test_wraps_multimodal(self) -> None:
+        inner = MultimodalCapabilityOverrideConfig(
+            image_input=MediaCapabilityOverrideConfig(base64=True)
+        )
+        cfg = ModelCapabilitiesOverrideConfig(multimodal=inner)
+        assert cfg.multimodal is not None
+        assert cfg.multimodal.image_input is not None
+        assert cfg.multimodal.image_input.base64 is True
+
+    def test_model_dump_roundtrip(self) -> None:
+        cfg = ModelCapabilitiesOverrideConfig(
+            multimodal=MultimodalCapabilityOverrideConfig(
+                image_input=MediaCapabilityOverrideConfig(base64=True, url=True),
+                non_text_tool_result=True,
+            )
+        )
+        d = cfg.model_dump(exclude_none=True)
+        assert "multimodal" in d
+        assert d["multimodal"]["image_input"]["base64"] is True
+        assert d["multimodal"]["image_input"]["url"] is True
+        assert d["multimodal"]["non_text_tool_result"] is True
+
+    def test_model_validate_roundtrip(self) -> None:
+        data = {
+            "multimodal": {
+                "image_input": {"base64": True},
+                "non_text_tool_result": True,
+            }
+        }
+        cfg = ModelCapabilitiesOverrideConfig.model_validate(data)
+        assert cfg.multimodal is not None
+        assert cfg.multimodal.image_input is not None
+        assert cfg.multimodal.image_input.base64 is True
+        assert cfg.multimodal.non_text_tool_result is True
+
+    def test_model_validate_invalid_multimodal_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            ModelCapabilitiesOverrideConfig.model_validate(
+                {"multimodal": {"image_input": {"base64": "not_bool"}}}
+            )
+
+
+# ---------------------------------------------------------------------------
+# MULTIMODAL_LOSS_KINDS constants
+# ---------------------------------------------------------------------------
+
+
+class TestMultimodalLossKinds:
+    def test_loss_kinds_defined(self) -> None:
+        from eggpool.transcoder.errors import MULTIMODAL_LOSS_KINDS
+
+        assert len(MULTIMODAL_LOSS_KINDS) == 4
+
+    def test_unsupported_modality(self) -> None:
+        from eggpool.transcoder.errors import MULTIMODAL_LOSS_KINDS
+
+        assert "unsupported_modality" in MULTIMODAL_LOSS_KINDS
+
+    def test_unsupported_source_form(self) -> None:
+        from eggpool.transcoder.errors import MULTIMODAL_LOSS_KINDS
+
+        assert "unsupported_source_form" in MULTIMODAL_LOSS_KINDS
+
+    def test_media_tool_result_flattened(self) -> None:
+        from eggpool.transcoder.errors import MULTIMODAL_LOSS_KINDS
+
+        assert "media_tool_result_flattened" in MULTIMODAL_LOSS_KINDS
+
+    def test_document_media_type_unsupported(self) -> None:
+        from eggpool.transcoder.errors import MULTIMODAL_LOSS_KINDS
+
+        assert "document_media_type_unsupported" in MULTIMODAL_LOSS_KINDS
+
+    def test_distinct_from_cache_control_kinds(self) -> None:
+        from eggpool.transcoder.errors import (
+            CACHE_CONTROL_LOSS_KINDS,
+            MULTIMODAL_LOSS_KINDS,
+        )
+
+        overlap = MULTIMODAL_LOSS_KINDS & CACHE_CONTROL_LOSS_KINDS
+        assert overlap == set(), (
+            f"Multimodal and cache-control kinds overlap: {overlap}"
+        )
