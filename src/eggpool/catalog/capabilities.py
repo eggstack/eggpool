@@ -932,9 +932,10 @@ def dict_to_model_capabilities(data: dict[str, object]) -> ModelCapabilities:
     extensions.
     """
     transcoding = _parse_transcoding_capabilities(data.get("transcoding"))
+    multimodal = _parse_multimodal_capabilities(data.get("multimodal"))
     thinking_raw = data.get("thinking")
     if not isinstance(thinking_raw, dict):
-        return ModelCapabilities(transcoding=transcoding)
+        return ModelCapabilities(transcoding=transcoding, multimodal=multimodal)
 
     tr = cast("dict[str, object]", thinking_raw)
     tc_status = str(tr.get("status", "unknown"))
@@ -1083,7 +1084,7 @@ def dict_to_model_capabilities(data: dict[str, object]) -> ModelCapabilities:
             control_contract=control_contract,
             notes=str(notes_raw) if notes_raw is not None else None,
         ),
-        multimodal=_parse_multimodal_capabilities(data.get("multimodal")),
+        multimodal=multimodal,
     )
 
 

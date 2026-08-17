@@ -84,6 +84,40 @@ recursive physical freeze; unchanged provider reuse adopts the payload through
 changes create a new provider-owned generation. Coordinator recompute uses the
 same direct adoption boundary and does not make a defensive source deepcopy.
 
+### `transcoder/content.py` — Content IR
+
+Narrow content-block representation for cross-protocol translation. The IR
+covers content blocks only; sampling, reasoning controls, caching, tool-choice
+semantics, structured output, and provider extensions remain in their existing
+protocol-specific paths.
+
+Types: `TextContent`, `ImageContent`, `DocumentContent`, `AudioContent`,
+`ToolUseContent`, `ToolResultContent`, `ThinkingContent`,
+`RedactedThinkingContent`. All are frozen dataclasses. `ContentBlock` is the
+union of all eight.
+
+`ImageContent` and `DocumentContent` carry a `source_type` literal
+(`"base64"` or `"url"`) so capability checks can distinguish source forms
+without inspecting the data. `ToolResultContent.content` is a
+`list[ContentBlock]`, allowing nested media (images, audio) inside tool
+results without flattening at the IR boundary.
+
+The IR is not yet wired into the pairwise transcoders (Plan 134 scope);
+same-protocol passthrough does not canonicalize content.
+
+### `catalog/capabilities.py` — MultimodalCapabilities
+
+Granular per-model media support, replacing coarse `supports_vision` for
+transcoding decisions. `MediaCapability` indicates supported source forms
+(`base64`, `url`) and optional `max_source_bytes`. `MultimodalCapabilities`
+groups `image_input`, `document_input`, `audio_input`, `non_text_tool_result`,
+and `max_serialized_request_bytes`. Capabilities are provider/model/protocol
+scoped; unknown remains unknown and must never authorize a native field.
+
+Serialized via `model_capabilities_to_dict` / `dict_to_model_capabilities`
+for the catalog cache round-trip. Merge via `merge_model_capabilities` uses
+override-wins semantics.
+
 ### Media validation memory contract
 
 Image and PDF data-URI paths retain the original encoded string for translated
@@ -174,6 +208,7 @@ JSON frame helpers with compact separators for SSE frame construction.
 | 8 | Response-field compat | Configurable OpenAI reasoning field names |
 | 9 | Streaming hot-path | Shared decoder, frame fan-out, synchronous translation |
 | 10 | JSON backend | `eggpool.jsonx` abstraction (orjson/stdlib) |
+| 11 | Content IR | Narrow content-block representation, `MultimodalCapabilities` |
 
 ## Loss Warning Kinds
 
