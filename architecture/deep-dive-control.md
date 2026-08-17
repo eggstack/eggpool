@@ -1,5 +1,9 @@
 # Deep Dive: Control Plane
 
+Back to [Overview](overview.md)
+
+## Purpose
+
 The control plane provides live configuration reload (rehash) via a Unix-domain socket, enabling zero-downtime config changes without process restart.
 
 ## Module Structure

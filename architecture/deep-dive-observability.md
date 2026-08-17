@@ -1,5 +1,9 @@
 # Deep Dive: Observability
 
+Back to [Overview](overview.md)
+
+## Purpose
+
 The observability module provides routing trace persistence for debugging and dashboard drill-down.
 
 ## Module Structure

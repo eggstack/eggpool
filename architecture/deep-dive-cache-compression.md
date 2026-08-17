@@ -1,6 +1,8 @@
 # Deep Dive: Cache and Compression
 
-## Scope
+Back to [Overview](overview.md)
+
+## Purpose
 
 This subsystem reports provider cache counters, preserves explicit native cache
 boundaries during transcoding, and optionally performs deterministic compression

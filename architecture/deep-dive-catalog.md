@@ -1,5 +1,9 @@
 # Deep Dive: Model Catalog
 
+Back to [Overview](overview.md)
+
+## Purpose
+
 The model catalog is responsible for discovering, normalizing, pricing, and tracking capabilities of models across all configured providers.
 
 ## Module Structure

@@ -1,5 +1,9 @@
 # Deep Dive: Lifecycle Management
 
+Back to [Overview](overview.md)
+
+## Purpose
+
 Backup, restore, and uninstall orchestration for EggPool installations.
 
 ## Module Structure

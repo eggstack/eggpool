@@ -1,5 +1,9 @@
 # Deep Dive: Metrics & Telemetry
 
+Back to [Overview](overview.md)
+
+## Purpose
+
 Structured observability across three subsystems: metrics buffering, thinking/reasoning counters, and runtime process diagnostics.
 
 ## Module Structure

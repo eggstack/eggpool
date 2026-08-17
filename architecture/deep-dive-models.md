@@ -1,5 +1,9 @@
 # Deep Dive: Data Models
 
+Back to [Overview](overview.md)
+
+## Purpose
+
 Pydantic v2 models for configuration, domain objects, API payloads, and database rows. These models are the single source of truth for schema validation and serialization boundaries.
 
 ## Module Structure

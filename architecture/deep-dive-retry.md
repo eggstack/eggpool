@@ -1,5 +1,9 @@
 # Deep Dive: Retry Classification
 
+Back to [Overview](overview.md)
+
+## Purpose
+
 Upstream failure classification and retry decision logic. Determines whether a failed attempt should retry, which accounts to exclude, and how long to backoff.
 
 ## Module Structure
