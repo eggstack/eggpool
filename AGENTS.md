@@ -86,32 +86,11 @@ uv run ruff check --fix src/
 - Smoke suite (`tests/smoke/`): package import, config parsing, invalid config rejection, check-config validation, DB migration, one non-stream request, one streaming request, one upstream failure followed by recovery, one premature EOF, one Anthropic request, and CLI help
 - Provider contract tests: `uv run pytest tests/unit/test_contract.py tests/unit/test_contract_urls.py -v`
 - Performance, live, and diagnostic reproducer tests are manually invoked, not run in CI
+- Database fixtures must disconnect on every teardown path; use `try/finally` on the canonical event loop
 
 ## Release
 
 Manual release procedure — no automated release workflow. See `docs/releasing.md`.
-
-## Runtime Validation
-
-Target-device validation is optional and risk-based. For request lifecycle,
-streaming, database, reload, or dependency changes, run the short manual
-smoke described in `docs/releasing.md` when representative hardware is
-available. It is a confidence check, not a CI gate or a retained evidence
-format. For SBC resource checks, use a fixed short stabilization window and
-the existing `eggpool runtime-status --json`, OS process/socket tools, and
-startup operational-profile log. Record host, Python, config profile, and
-whether optional features are enabled; never present workstation measurements
-as Raspberry Pi results and never turn a numeric observation into a CI gate.
-When doing the provider-backed characterization described by Plan 126, use
-only synthetic non-sensitive requests and real configured provider accounts;
-never commit credentials, account identities, prompts, responses, cache keys,
-or private topology. Keep Requests A–E short and bounded, separate upstream
-latency from `local_pre_upstream`/`dispatch_overhead`, and record unavailable
-provider dimensions as `not measured` instead of creating benchmark, soak, or
-hardware-CI infrastructure. Deterministic lifecycle and failure-isolation
-tests remain authoritative when live accounts are unavailable.
-The high-concurrency reproducer in `scripts/repro_high_concurrency_streams.py`
-remains available for diagnosing stream-specific regressions.
 
 ## File Organization
 
@@ -132,83 +111,48 @@ remains available for diagnosing stream-specific regressions.
 **Public protocol scope:** EggPool exposes OpenAI Chat Completions at
 `/v1/chat/completions`, Anthropic Messages at `/v1/messages`, and OpenAI-style
 model listing at `/v1/models`. It does not claim full OpenAI API or Responses
-API parity. Provider protocol labels describe the upstream wire contract and
-do not expand this public surface.
+API parity.
 
 Start subsystem work with the current architecture index and the relevant deep
 dive. Read an active roadmap or focused plan only when the change is in its
-scope; completed plans preserve provenance but are not implementation
-requirements. Record closure evidence in the implementing plan—do not create a
-new closure plan solely because a roadmap finished.
+scope.
 
-- **Request lifecycle**: `RequestCoordinator` orchestrates endpoint → routing → persistence → dispatch → finalization.
-- **Dispatch isolation**: local preparation and response adaptation failures are terminal local errors with no provider retry. Only typed HTTPX transport failures may retry, only across distinct accounts before `downstream_started`.
-- **Multi-provider architecture**: provider-suffixed model IDs (`model-id/provider-id`), `ProviderClientPool`, `OutboundClientManager`.
-- **Provider contracts**: `compose_provider_url()` is the single source of truth for upstream URLs.
-- **Protocol transcoding**: `src/eggpool/transcoder/` — OpenAI ↔ Anthropic conversion. The transcoder's `usage` property returns a default; finalization reads usage from the coordinator's observer.
-- **JSON backend (`eggpool.jsonx`)**: preferred `orjson` (`eggpool[fast]`), falls back to stdlib. Override with `EGGPOOL_JSON_BACKEND=orjson|stdlib|auto`. Off the request path, stdlib `json` allowed for deterministic hashing.
-- **Database invariants**: SQLite WAL, single-connection serialization, and task-owned `async with db.transaction():` boundaries for all DML; rollback is private to the owning transaction path and ambiguous outcomes fail closed.
-- **Request schema freeze**: the historical `requests` table is frozen for optional diagnostics. New columns require durable lifecycle/accounting or externally visible compatibility justification; feature-specific diagnostics use sparse/event or narrowly scoped sidecar storage with existing retention/redaction rules. Do not add cosmetic migrations or a generic EAV store.
-- **Quota and routing**: tier-based via `routing_priority`, `QuotaFairScorer`, upstream-authoritative suppression, same-tier fairness rotor. Load-based (request count + token count + active count + health), never cost-based. Positive account `weight` scales effective request/token capacity within an eligible tier (`1.0` baseline, `2.0` approximately double, `0.5` approximately half); priority and health eligibility remain authoritative.
-- **Error hierarchy**: `AggregatorError` → `UpstreamError` → specific subclasses. See `errors.py`.
-- **Process model**: supervisor + Granian worker (`workers=1`), daemon mode (`--verbose` for foreground). `runtime_threads=1` is required. Readiness probe is process-owned and disabled by default.
-- **Lean defaults**: loopback binding, low-wear analytics, provider pools of 16/4, background outbound pools of 8/2. Model-info, routing traces, readiness writes, automatic backups, dispatch writing are opt-in. The copyable SBC profile also leaves full-database backups off by default. Disabled features are `None` and construct no clients/tasks.
-- **Runtime generations**: `RuntimeManager` owns active/retiring generation slots. `RuntimeGenerationFactory.prepare()` is the shared startup/rehash construction boundary. `RequestFinalizationSupervisor` is generation-owned.
-- **Live rehash**: `eggpool rehash` applies changes without restart. Control socket at `~/.local/state/eggpool/eggpool.sock`.
-- **Health management**: `src/eggpool/health/` — circuit breaker, per-account tracking, bounded 1,800s backoff, scoped model quarantine, `DatabaseWritableProbe` for `/readyz`.
-- **Background tasks**: `src/eggpool/background/` — `TaskSupervisor`, fixed-delay scheduler. Process-owned tasks survive generation swaps; generation-leased tasks retire with their generation.
-- **Database teardown**: generation-owned request/finalization/background tasks are joined before process- or fixture-owned databases disconnect; database fixtures must use `try/finally` cleanup on the canonical event loop.
-- **Database recovery**: startup integrity is fail-closed. Indeterminate outcomes exit the worker; systemd restarts, then startup integrity and crash reconciliation run before readiness.
-
-Retained tests are organized by capability contract. Historical phase/release
-matrices and performance baselines are not routine corpus; use the focused
-unit/integration seams for regression work and invoke `tests/perf/` diagnostics
-manually when a measurement is genuinely useful. Do not add plan-numbered test
-suites or resurrect deleted closure matrices.
+- **Request lifecycle**: `RequestCoordinator` orchestrates endpoint → routing → persistence → dispatch → finalization
+- **Dispatch isolation**: local preparation and response adaptation failures are terminal local errors with no provider retry. Only typed HTTPX transport failures may retry, only across distinct accounts before `downstream_started`
+- **Multi-provider architecture**: provider-suffixed model IDs (`model-id/provider-id`), `ProviderClientPool`, `OutboundClientManager`
+- **Provider contracts**: `compose_provider_url()` is the single source of truth for upstream URLs
+- **Protocol transcoding**: `src/eggpool/transcoder/` — OpenAI ↔ Anthropic conversion. The transcoder's `usage` property returns a default; finalization reads usage from the coordinator's observer
+- **JSON backend (`eggpool.jsonx`)**: preferred `orjson` (`eggpool[fast]`), falls back to stdlib. Override with `EGGPOOL_JSON_BACKEND=orjson|stdlib|auto`. Off the request path, stdlib `json` allowed for deterministic hashing
+- **Database invariants**: SQLite WAL, single-connection serialization, and task-owned `async with db.transaction():` boundaries for all DML; rollback is private to the owning transaction path and ambiguous outcomes fail closed
+- **Request schema freeze**: the historical `requests` table is frozen for optional diagnostics. New columns require durable lifecycle/accounting or externally visible compatibility justification; feature-specific diagnostics use sparse/event or narrowly scoped sidecar storage. Do not add cosmetic migrations or a generic EAV store
+- **Quota and routing**: tier-based via `routing_priority`, `QuotaFairScorer`, upstream-authoritative suppression, same-tier fairness rotor. Load-based (request count + token count + active count + health), never cost-based. Positive account `weight` scales effective request/token capacity within an eligible tier (`1.0` baseline, `2.0` approximately double, `0.5` approximately half)
+- **Error hierarchy**: `AggregatorError` → `UpstreamError` → specific subclasses. See `errors.py`
+- **Process model**: supervisor + Granian worker (`workers=1`), daemon mode (`--verbose` for foreground). `runtime_threads=1` is required. Readiness probe is process-owned and disabled by default
+- **Lean defaults**: loopback binding, low-wear analytics, provider pools of 16/4, background outbound pools of 8/2. Model-info, routing traces, readiness writes, automatic backups, dispatch writing are opt-in. The copyable SBC profile also leaves full-database backups off by default
+- **Runtime generations**: `RuntimeManager` owns active/retiring generation slots. `RuntimeGenerationFactory.prepare()` is the shared startup/rehash construction boundary. `RequestFinalizationSupervisor` is generation-owned
+- **Live rehash**: `eggpool rehash` applies changes without restart. Control socket at `~/.local/state/eggpool/eggpool.sock`
+- **Health management**: `src/eggpool/health/` — circuit breaker, per-account tracking, bounded 1,800s backoff, scoped model quarantine, `DatabaseWritableProbe` for `/readyz`
+- **Background tasks**: `src/eggpool/background/` — `TaskSupervisor`, fixed-delay scheduler. Process-owned tasks survive generation swaps; generation-leased tasks retire with their generation
+- **Database teardown**: generation-owned request/finalization/background tasks are joined before process- or fixture-owned databases disconnect; database fixtures must use `try/finally` cleanup on the canonical event loop
+- **Database recovery**: startup integrity is fail-closed. Indeterminate outcomes exit the worker; systemd restarts, then startup integrity and crash reconciliation run before readiness
 
 ## Gotchas
 
-- **`fastcli` and `runtime_paths` are stdlib-only**: no transitive imports. Raspberry Pi watchdog contract.
-- **`eggpool rehash` serializes reload transactions**: only one reload in progress at a time. Concurrent rejections with `reload_in_progress`.
-- **`ReloadObserver` is inert in production**: the observer protocol has no-op defaults.
-- **`eggpool connect`/`logout` don't silently restart**: if the server is healthy but control socket is missing, they return `(False, "control unavailable (server healthy)")`.
-- **`eggpool update` must make a live PyPI lookup**: bare updates use `is_newer_version()` and retain the freshness-aware latest path; an explicit `VERSION` uses the exact PyPI release endpoint, permits deliberate downgrades, and verifies the installed version before restart.
-- **No pre-commit hooks configured**: CI runs ruff, pyright, and pytest via GitHub Actions.
-- **`static_models` is source of truth for provider-specific protocol**: providers serving non-default protocol must ship `[[providers.<id>.static_models]]` rows.
-- **Native transcode capabilities are explicit**: `ModelCapabilities.transcoding` lists verified target protocols for structured output, strict tools, parallel-tool control, and reasoning efforts; `prompt_cache_breakpoints` is a provider/model contract map whose entries declare `first_party` or verified `compatible_extension` semantics, supported TTLs, and the boundary limit. Protocol strings alone never authorize native fields; missing facts are unknown. Prompt-cache TTLs are never silently converted, tool-definition boundaries are never moved to message boundaries, and cache keys are never synthesized or logged. An absent source breakpoint is ordinary content with no loss annotation; a mapped-boundary signal is true only when the target-native field was emitted, so malformed, unsupported, and overflowed boundaries cannot enable explicit mode. Synthetic cache insertion is not a runtime feature; only explicit native boundaries are translated when the selected target contract permits.
-- **Reasoning effort semantics are capability-bound**: OpenAI effort values are model-dependent; verified `none` disables reasoning and must not become an Anthropic thinking budget. `low`/`medium`/`high` retain only the legacy compatibility defaults, while `xhigh`, `max`, and future values require an explicit `effort_to_budget_tokens` mapping. Unmapped values are rejected in strict mode or omitted with a bounded loss warning in lenient mode; no guessed medium budget is allowed. Native same-protocol effort values pass through unless the selected provider contract explicitly adapts them.
-- **Compression/cache surface**: compression is limited to safe `suffix_only` placement and optional policy-scoped observe/safe transforms. Static-prefix and synthetic-cache configuration is rejected. Native cache boundaries remain provider-contract metadata and are preserved by transcoding.
-- **Tool translation is baseline compatibility**: `[transcoder.features].tools` is retained only as a no-op compatibility field. Do not add behavior that makes body/stream tool translation depend on it.
-- **Upstream-authoritative suppression**: local quota estimates are advisory. Only upstream-observed failures suppress routing.
-- **Routing is load-based, not cost-based**: `QuotaFairScorer` uses request count and token count, never `cost_microdollars`.
-- **Selection claim visibility**: `QuotaEstimator` folds pending request/token claims into the same scorer reservation-load snapshot. There is no pending-claim table, sweeper, background task, or cross-process coordination.
-- **Routing trace persistence**: `RoutingDecisionRepository.create_many()` uses one `executemany` operation inside the caller-owned transaction and propagates database failures; trace-off and unsampled paths do not call it.
-- **Catalog write reduction**: the default discovery cadence is not a full catalog rewrite. `_persist_catalog()` compares stable semantic model/provider fields outside the write transaction, persists only deltas, stores successful freshness in `catalog_refresh_state`, and coarsens steady successful pings to an internal 30-minute sample while failures and state transitions remain immediate.
-- **Analytics index policy**: request/attempt analytics indexes are fixed schema assets, never toggled with dashboard configuration. Migration 0053 removes only the unused `request_attempts(status_code, started_at)` aggregate index; provider/model/retry, startup, identity, expiry, and retention support remains explicit and query-plan tested.
-- **Account weight semantics**: weight is a relative capacity/share hint only among otherwise eligible accounts in the selected priority tier. It affects request/token utilization, not cost, and does not promise exact request ratios across different request sizes or provider histories.
-- **`app.state` generation-owned attributes are mirrors, not authority**: New code should use `get_active_generation(request)` or acquire a lease.
-- **When constructing `RequestCoordinator` in tests**: pass an explicit `transcoder_policy` or assert the desired default.
-- **`CapabilityError` (400) is distinct from `ModelNotFoundError` (404) and `ModelUnavailableError` (503)**.
-- **DB migrations are numbered SQL files** in `src/eggpool/db/schema/`.
-- **`reload_in_progress` exits with code 4** (`EXIT_RELOAD_BUSY`). Use the constant from `cli_exit_codes.py`.
-- **Single event-loop thread is canonical**: all `asyncio.Lock` objects are loop-bound.
-- **`/readyz` never performs a write**: reads a cached probe snapshot.
-- **Readiness probe is process-owned**: survives generation swaps.
-- **Process transitions execute inside `db.transaction()`**: atomic rollback on any failure.
-- **Database ambiguity ownership**: durable request, attempt, and reservation identities are created before the commit boundary; an indeterminate outcome fails the worker closed and startup reconciliation is the only repair boundary.
-- **Database fault tests**: commit/rollback failure tests patch private callable boundaries in test support; `Database` carries no test-only injection state or setter API.
-- **Finalization round trips**: first request/attempt/reservation terminal transitions use SQLite `RETURNING` results inside one correctness transaction; `first_attempt_at` is supplied on the first request INSERT at the durable-attempt boundary, and terminal `last_attempt_id` is folded into that request mutation. No-transition/idempotent components still perform focused durable reads.
-- **Terminal lifecycle**: streaming 4xx paths defer terminal work to `_handle_exhausted()`; they must not finalize and then raise into a second finalizer. Capability rejection is a client error with no provider penalty and uses the same retained terminal job as normal completion and cancellation.
-- **Finalization saturation**: supervisor capacity rejection is a local overload invariant. Before downstream handoff it raises a typed local terminal-invariant error; after handoff it records a bounded diagnostic and leaves durable pending state for startup repair. It never spawns detached cleanup or penalizes a provider.
-- **SSE diagnostics**: `stream_diagnostics` exposes canonical/compatibility completion, premature EOF, HTTPX transport, and provider-bound first-byte/idle timeout outcomes. Historical lifetime fields remain bounded compatibility metadata but no lifetime timer runs. Each last-event record carries configured limits and bounded timing evidence; stream content and credentials are never persisted.
-- **Router self-healing**: temporary quota, rate, server, transport, protocol, and runtime model suppression is capped at 1,800 seconds. Success clears only matching transient state; authentication and authoritative model withdrawal require explicit credential/operator or catalog recovery. Every acquired half-open probe must end in success, provider failure, or idempotent release.
-- **Client attribution**: `security.trusted_proxies` is an exact peer-IP allowlist. Forwarded client-IP headers are ignored unless the immediate ASGI peer is listed; an empty list is the safe default.
-- **Local exposure**: the copyable SBC profile binds to loopback. Shared startup and `check-config` validation reject LAN or wildcard binds without the existing server API key; do not document or ship an unauthenticated all-interface example.
-- **Diagnostic redaction**: authorization-shape logs contain only header/scheme/length metadata, and transcode loss warnings contain bounded structural metadata—not credential bytes or malformed tool/request content.
-- **Request hot path**: context-limit enforcement returns the canonical decoded estimate for reuse in `ProxyRequestContext`; unbounded models skip that extra walk, translated tool padding uses the shared structural estimator without per-tool encoding, and provider IDs/trusted proxies come from the leased generation's immutable lookup state.
-- **Request memory/body limits**: `ParsedRequestPayload` parses through `eggpool.jsonx`; `ProviderBoundRequest` keeps canonical state logically immutable, uses path-level copy-on-write for narrow provider mutations, and reuses accepted bytes for unchanged native bodies. Trusted EggPool-owned transformed graphs use `adopt_provider_payload()`; unknown graphs use the conservative owning setters. Cross-protocol body encoders receive the provider payload as a read-only `Mapping`, construct a fresh target graph, and are adopted directly without a second whole-graph ownership pass. Strict base64 validation rejects obviously oversized media before decode and releases the bounded validation buffer before constructing translated output. Dispatch buffers are released after chosen-response handoff. `[server].max_request_body_bytes` defaults to 10 MiB, is live-reloadable, and bounds provider document/media limits.
-- **Prepared transcode ownership**: preflight stores one request-local translated generation without recursively freezing it. Unchanged reuse uses `ProviderBoundRequest.adopt_provider_payload()` plus the prepared encoded bytes; recompute uses the same direct adoption boundary, and later provider-specific changes use the existing COW or conservative ownership APIs. Never share prepared graphs across requests.
-- **Thinking-control adaptation ownership**: `adapt_thinking_controls()` accepts a read-only `Mapping[str, Any]` source and builds its own shallow-copied working root. The coordinator's `_adapt_provider_thinking_controls()` passes the provider-bound payload read-only and adopts changed results through `adopt_provider_payload(reason="thinking_control")` — never through the conservative `replace_provider_payload()` path. No-op adaptation does not change `payload_generation` or invalidate bytes. `mutate_provider_payload()` was removed in Plan 121 (no production callers); use the explicit narrow APIs instead.
+- **`fastcli` and `runtime_paths` are stdlib-only**: no transitive imports. Raspberry Pi watchdog contract
+- **`eggpool rehash` serializes reload transactions**: only one reload in progress at a time. Concurrent rejections with `reload_in_progress`
+- **`ReloadObserver` is inert in production**: the observer protocol has no-op defaults
+- **`eggpool connect`/`logout` don't silently restart**: if the server is healthy but control socket is missing, they return `(False, "control unavailable (server healthy)")`
+- **`eggpool update` must make a live PyPI lookup**: bare updates use `is_newer_version()` and retain the freshness-aware latest path; an explicit `VERSION` uses the exact PyPI release endpoint, permits deliberate downgrades, and verifies the installed version before restart
+- **No pre-commit hooks configured**: CI runs ruff, pyright, and pytest via GitHub Actions
+- **`static_models` is source of truth for provider-specific protocol**: providers serving non-default protocol must ship `[[providers.<id>.static_models]]` rows
+- **`CapabilityError` (400) is distinct from `ModelNotFoundError` (404) and `ModelUnavailableError` (503)**
+- **DB migrations are numbered SQL files** in `src/eggpool/db/schema/`
+- **`reload_in_progress` exits with code 4** (`EXIT_RELOAD_BUSY`). Use the constant from `cli_exit_codes.py`
+- **Single event-loop thread is canonical**: all `asyncio.Lock` objects are loop-bound
+- **`/readyz` never performs a write**: reads a cached probe snapshot
+- **Process transitions execute inside `db.transaction()`**: atomic rollback on any failure
+- **When constructing `RequestCoordinator` in tests**: pass an explicit `transcoder_policy` or assert the desired default
+- **`app.state` generation-owned attributes are mirrors, not authority**: new code should use `get_active_generation(request)` or acquire a lease
 
 ## Error Handling
 
@@ -225,7 +169,7 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 - `RuntimeManagerLeaseExhaustedError` (RuntimeError) — mapped to HTTP 503 in `proxy_request.py`
 - `TranscodeLossError` (from `transcoder.errors`) — HTTP 400 when `loss_policy = "reject"`
 - `ProtocolMismatchError` (from `catalog.protocols`) — endpoint/model-protocol mismatch
-- `ConfigValidationError(ConfigError)` and its subclasses are raised by `eggpool.config_validation.validate_config_file()`. They chain from the underlying failure and never raise `SystemExit`.
+- `ConfigValidationError(ConfigError)` and its subclasses are raised by `eggpool.config_validation.validate_config_file()`. They chain from the underlying failure and never raise `SystemExit`
 
 ## Fast-Path CLI
 
@@ -242,15 +186,6 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 
 ## Planning Policy
 
-Completed implementation plans must not create permanent CI jobs, markers,
-evidence formats, or plan-numbered test suites. Regression tests must be
-merged into capability-based suites before a plan is closed.
+Completed implementation plans must not create permanent CI jobs, markers, evidence formats, or plan-numbered test suites. Regression tests must be merged into capability-based suites before a plan is closed.
 
-Planning is proportional to risk: use a detailed roadmap and child plans for
-multi-boundary, ordered, durable-state, request/process-ownership, or broad
-protocol/provider work; use one focused plan for a bounded multi-file
-correction; and use a direct issue or concise notes for a small deterministic
-fix local to one or a few helpers when existing tests and gates protect the
-boundary. A completed roadmap does not automatically require a closure plan;
-put closure evidence in the implementing plan unless a genuinely new phase or
-defect is discovered.
+Planning is proportional to risk: use a detailed roadmap and child plans for multi-boundary, ordered, durable-state, request/process-ownership, or broad protocol/provider work; use one focused plan for a bounded multi-file correction; and use a direct issue or concise notes for a small deterministic fix local to one or a few helpers when existing tests and gates protect the boundary. A completed roadmap does not automatically require a closure plan; put closure evidence in the implementing plan unless a genuinely new phase or defect is discovered.
