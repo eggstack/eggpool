@@ -84,14 +84,14 @@ def test_unsuffixed_model_with_limits() -> None:
 
 def test_routing_priority_emitted_when_supplied() -> None:
     model = {
-        "model_id": "minimax-m2.7/generalcompute",
+        "model_id": "minimax-m2.7/deepseek",
         "base_model_id": "minimax-m2.7",
-        "provider_id": "generalcompute",
+        "provider_id": "deepseek",
         "display_name": "MiniMax M2.7",
     }
     result = serialize_openai_model(model, routing_priority=3)
     assert result["eggpool"]["routing_priority"] == 3
-    assert result["eggpool"]["provider_id"] == "generalcompute"
+    assert result["eggpool"]["provider_id"] == "deepseek"
 
 
 def test_routing_priority_omitted_when_none() -> None:
@@ -115,11 +115,11 @@ def test_collapsed_entry_emits_providers_and_routing_priority_max() -> None:
     result = serialize_openai_model(
         model,
         routing_priority_max=3,
-        providers=["generalcompute", "minimax", "opencode-go"],
+        providers=["deepseek", "minimax", "opencode-go"],
     )
     assert result["id"] == "minimax-m2.7"
     assert result["eggpool"]["providers"] == [
-        "generalcompute",
+        "deepseek",
         "minimax",
         "opencode-go",
     ]
@@ -138,15 +138,15 @@ def test_collapsed_entry_omits_providers_when_none() -> None:
 def test_suffixed_entry_omits_collapsed_fields() -> None:
     """Provider-suffixed entries do not emit providers / routing_priority_max."""
     model = {
-        "model_id": "minimax-m2.7/generalcompute",
+        "model_id": "minimax-m2.7/deepseek",
         "base_model_id": "minimax-m2.7",
-        "provider_id": "generalcompute",
+        "provider_id": "deepseek",
     }
     result = serialize_openai_model(
         model,
         routing_priority=3,
         routing_priority_max=99,
-        providers=["generalcompute", "minimax", "opencode-go"],
+        providers=["deepseek", "minimax", "opencode-go"],
     )
     assert result["eggpool"]["routing_priority"] == 3
     assert "routing_priority_max" not in result["eggpool"]

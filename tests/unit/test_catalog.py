@@ -931,13 +931,13 @@ def test_collapsed_entry_includes_providers_list() -> None:
     )
     cache.update_from_account(
         "c1",
-        "generalcompute",
+        "deepseek",
         [{"model_id": "gpt-4", "protocol": "openai"}],
     )
     result = cache.get_models_for_exposure("union", {"a1", "b1", "c1"})
     assert len(result) == 1
     # Providers list is sorted lexicographically for stable output.
-    assert result[0]["providers"] == ["generalcompute", "minimax", "opencode-go"]
+    assert result[0]["providers"] == ["deepseek", "minimax", "opencode-go"]
 
 
 def test_collapsed_single_provider_applies_provider_capability_overrides() -> None:

@@ -2,7 +2,7 @@
 
 ## Status
 
-Planned. This roadmap follows the August 2026 repository audit and is intentionally reductive. It should improve EggPool's usefulness as a LAN/SBC LLM router without growing a second routing stack, a provider-SDK layer, or a larger mandatory CI system.
+In progress. Phases 1, 2, and 7 are complete. Phases 3–6 and 8 remain.
 
 ## Goal
 

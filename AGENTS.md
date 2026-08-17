@@ -122,6 +122,8 @@ scope.
 - **Multi-provider architecture**: provider-suffixed model IDs (`model-id/provider-id`), `ProviderClientPool`, `OutboundClientManager`. Deep dive: `architecture/deep-dive-providers.md`
 - **Provider contracts**: `compose_provider_url()` is the single source of truth for upstream URLs
 - **Protocol transcoding**: `src/eggpool/transcoder/` — OpenAI ↔ Anthropic conversion. Deep dive: `architecture/deep-dive-transcoder.md`. Operator guide: `docs/transcoding.md`
+- **Content IR**: `src/eggpool/transcoder/content.py` — narrow content-block representation for cross-protocol translation. `MultimodalCapabilities` in `catalog/capabilities.py` provides granular media support per provider/model/protocol
+- **Local provider templates**: `_templates.toml` includes presets for Ollama, LM Studio, llama.cpp, vLLM, LocalAI, and a generic custom-compatible endpoint. Local providers use discovery-based verification (no fixed probe models)
 - **JSON backend (`eggpool.jsonx`)**: preferred `orjson` (`eggpool[fast]`), falls back to stdlib. Override with `EGGPOOL_JSON_BACKEND=orjson|stdlib|auto`. Off the request path, stdlib `json` allowed for deterministic hashing
 - **Database invariants**: SQLite WAL, single-connection serialization, and task-owned `async with db.transaction():` boundaries for all DML; rollback is private to the owning transaction path and ambiguous outcomes fail closed. Deep dive: `architecture/deep-dive-database.md`
 - **Request schema freeze**: the historical `requests` table is frozen for optional diagnostics. New columns require durable lifecycle/accounting or externally visible compatibility justification; feature-specific diagnostics use sparse/event or narrowly scoped sidecar storage. Do not add cosmetic migrations or a generic EAV store

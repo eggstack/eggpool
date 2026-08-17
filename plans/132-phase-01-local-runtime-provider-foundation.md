@@ -1,5 +1,9 @@
 # Plan 132 — Phase 1: Local Runtime Provider Foundation
 
+## Status
+
+Complete.
+
 ## Objective
 
 Make local OpenAI/Anthropic-compatible servers first-class provider instances using the existing provider, catalog, and routing architecture.

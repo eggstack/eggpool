@@ -77,15 +77,15 @@ class TestProviderUrlComposition:
             "https://api.fireworks.ai/inference/v1/chat/completions"
         )
 
-    def test_generalcompute_models_url_no_duplicate_v1(self):
+    def test_custom_compatible_models_url_no_duplicate_v1(self):
         cfg = ProviderConfig(
-            id="generalcompute",
-            base_url="https://api.generalcompute.com/v1",
+            id="custom-compatible",
+            base_url="https://api.example.com/v1",
             openai_path="/chat/completions",
             models_path="/models",
         )
         url = compose_provider_url(cfg, cfg.models_path)
-        assert url == "https://api.generalcompute.com/v1/models"
+        assert url == "https://api.example.com/v1/models"
         assert url.count("/v1/") == 1, f"Duplicate /v1 in URL: {url}"
 
     def test_minimax_anthropic_messages_url(self):
@@ -314,25 +314,9 @@ _TEMPLATE_PROVIDERS: dict[str, dict] = {
         "models_path": "/models",
         "auth": {"mode": "bearer"},
     },
-    "zai": {
-        "id": "zai",
-        "base_url": "https://api.z.ai/api/paas/v4",
-        "protocols": ["openai"],
-        "openai_path": "/chat/completions",
-        "models_path": "/models",
-        "auth": {"mode": "bearer"},
-    },
     "alibaba": {
         "id": "alibaba",
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "protocols": ["openai"],
-        "openai_path": "/chat/completions",
-        "models_path": "/models",
-        "auth": {"mode": "bearer"},
-    },
-    "novita": {
-        "id": "novita",
-        "base_url": "https://api.novita.ai/openai",
         "protocols": ["openai"],
         "openai_path": "/chat/completions",
         "models_path": "/models",
@@ -371,23 +355,6 @@ _TEMPLATE_PROVIDERS: dict[str, dict] = {
         "models_path": "/models",
         "auth": {"mode": "bearer"},
     },
-    "generalcompute": {
-        "id": "generalcompute",
-        "base_url": "https://api.generalcompute.com/v1",
-        "protocols": ["openai"],
-        "openai_path": "/chat/completions",
-        "models_method": "GET",
-        "models_path": "/models",
-        "auth": {"mode": "bearer"},
-    },
-    "neuralwatt": {
-        "id": "neuralwatt",
-        "base_url": "https://api.neuralwatt.com/v1",
-        "protocols": ["openai"],
-        "openai_path": "/chat/completions",
-        "models_path": "/models",
-        "auth": {"mode": "bearer"},
-    },
     "ollama-local": {
         "id": "ollama-local",
         "base_url": "http://localhost:11434/v1",
@@ -395,14 +362,6 @@ _TEMPLATE_PROVIDERS: dict[str, dict] = {
         "openai_path": "/chat/completions",
         "models_path": "/models",
         "auth": {"mode": "none"},
-    },
-    "ollama-cloud": {
-        "id": "ollama-cloud",
-        "base_url": "https://ollama.com/v1",
-        "protocols": ["openai"],
-        "openai_path": "/chat/completions",
-        "models_path": "/models",
-        "auth": {"mode": "bearer"},
     },
     "openai": {
         "id": "openai",
@@ -469,46 +428,6 @@ _TEMPLATE_PROVIDERS: dict[str, dict] = {
         "models_path": "/models",
         "auth": {"mode": "bearer"},
     },
-    "cerebras": {
-        "id": "cerebras",
-        "base_url": "https://api.cerebras.ai/v1",
-        "protocols": ["openai"],
-        "openai_path": "/chat/completions",
-        "models_path": "/models",
-        "auth": {"mode": "bearer"},
-    },
-    "sambanova": {
-        "id": "sambanova",
-        "base_url": "https://api.sambanova.ai/v1",
-        "protocols": ["openai"],
-        "openai_path": "/chat/completions",
-        "models_path": "/models",
-        "auth": {"mode": "bearer"},
-    },
-    "hyperbolic": {
-        "id": "hyperbolic",
-        "base_url": "https://api.hyperbolic.xyz/v1",
-        "protocols": ["openai"],
-        "openai_path": "/chat/completions",
-        "models_path": "/models",
-        "auth": {"mode": "bearer"},
-    },
-    "featherless": {
-        "id": "featherless",
-        "base_url": "https://api.featherless.ai/v1",
-        "protocols": ["openai"],
-        "openai_path": "/chat/completions",
-        "models_path": "/models",
-        "auth": {"mode": "bearer"},
-    },
-    "moonshot": {
-        "id": "moonshot",
-        "base_url": "https://api.moonshot.ai/v1",
-        "protocols": ["openai"],
-        "openai_path": "/chat/completions",
-        "models_path": "/models",
-        "auth": {"mode": "bearer"},
-    },
 }
 
 
@@ -534,7 +453,7 @@ class TestTemplateLinter:
 
     def test_all_providers_parse(self):
         configs = _get_provider_configs()
-        assert len(configs) >= 20, f"Expected at least 20 providers, got {len(configs)}"
+        assert len(configs) >= 15, f"Expected at least 15 providers, got {len(configs)}"
 
     @pytest.mark.parametrize(
         "provider_id",
@@ -544,15 +463,10 @@ class TestTemplateLinter:
             "openrouter",
             "together",
             "fireworks",
-            "zai",
             "alibaba",
-            "novita",
             "minimax",
             "minimax-cn",
-            "generalcompute",
-            "neuralwatt",
             "ollama-local",
-            "ollama-cloud",
             "openai",
             "anthropic",
             "groq",
@@ -561,11 +475,6 @@ class TestTemplateLinter:
             "xai",
             "mistral",
             "siliconflow",
-            "cerebras",
-            "sambanova",
-            "hyperbolic",
-            "featherless",
-            "moonshot",
         ],
     )
     def test_no_duplicate_version_in_chat_url(self, provider_id):
@@ -599,15 +508,10 @@ class TestTemplateLinter:
             "openrouter",
             "together",
             "fireworks",
-            "zai",
             "alibaba",
-            "novita",
             "minimax",
             "minimax-cn",
-            "generalcompute",
-            "neuralwatt",
             "ollama-local",
-            "ollama-cloud",
             "openai",
             "anthropic",
             "groq",
@@ -616,11 +520,6 @@ class TestTemplateLinter:
             "xai",
             "mistral",
             "siliconflow",
-            "cerebras",
-            "sambanova",
-            "hyperbolic",
-            "featherless",
-            "moonshot",
         ],
     )
     def test_no_duplicate_version_in_models_url(self, provider_id):
@@ -631,10 +530,10 @@ class TestTemplateLinter:
             f"{provider_id}: models URL contains duplicate /v1/v1: {url}"
         )
 
-    def test_generalcompute_models_url_single_v1(self):
-        cfg = _get_provider_configs()["generalcompute"]
+    def test_deepseek_models_url_single_v1(self):
+        cfg = _get_provider_configs()["deepseek"]
         url = compose_provider_url(cfg, cfg.models_path or "/models")
-        assert url == "https://api.generalcompute.com/v1/models"
+        assert url == "https://api.deepseek.com/models"
 
     def test_minimax_international_default_url(self):
         cfg = _get_provider_configs()["minimax"]

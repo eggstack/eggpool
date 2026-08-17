@@ -980,6 +980,90 @@ def _check_duplicate_api_key(
     return None
 
 
+_CATEGORY_ORDER: list[str] = ["local", "direct", "aggregator"]
+_CATEGORY_LABELS: dict[str, str] = {
+    "local": "Local / SBC",
+    "direct": "Hosted Direct",
+    "aggregator": "Aggregator",
+}
+
+
+def _group_templates_by_category(
+    templates: dict[str, dict[str, Any]],
+) -> list[tuple[str, list[str], list[str]]]:
+    """Group templates by category, returning ordered groups.
+
+    Each group is (category_label, provider_ids, display_options).
+    """
+    grouped: dict[str, list[str]] = {cat: [] for cat in _CATEGORY_ORDER}
+    grouped["custom"] = []
+    for pid, tmpl in templates.items():
+        cat = tmpl.get("category", "direct")
+        if cat not in grouped:
+            grouped.setdefault(cat, []).append(pid)
+        else:
+            grouped[cat].append(pid)
+
+    result: list[tuple[str, list[str], list[str]]] = []
+    for cat in _CATEGORY_ORDER:
+        pids = grouped.get(cat, [])
+        if not pids:
+            continue
+        label = _CATEGORY_LABELS.get(cat, cat.title())
+        options: list[str] = []
+        for pid in pids:
+            tmpl = templates[pid]
+            status = tmpl.get("status", "unverified")
+            status_label = PROVIDER_STATUS_SYMBOLS.get(status, "?")
+            options.append(f"[{status_label}] {tmpl['display']}  ({tmpl['url']})")
+        result.append((label, pids, options))
+
+    return result
+
+
+def _prompt_custom_instance(
+    default_id: str,
+    default_url: str,
+) -> tuple[str, str] | None:
+    """Optionally prompt for a custom provider instance ID and base URL.
+
+    For local providers, the operator can press Enter to accept the defaults
+    or type a custom ID/URL to create a named instance (e.g. ``ollama-mac``
+    for a remote Ollama host).
+
+    Returns ``(provider_id, base_url)`` or None if the operator quit.
+    """
+    sys.stdout.write(f"\n  Provider instance ID [{default_id}]: ")
+    sys.stdout.flush()
+    raw_id = sys.stdin.readline().strip()
+
+    if raw_id.lower() in ("q", "quit", "exit"):
+        return None
+
+    provider_id = raw_id if raw_id else default_id
+    if provider_id != default_id:
+        import re
+
+        if (
+            re.fullmatch(r"[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?", provider_id)
+            is None
+        ):
+            sys.stdout.write(
+                "  Invalid ID: must be alphanumeric with optional hyphens.\n"
+            )
+            return None
+
+    sys.stdout.write(f"  Base URL [{default_url}]: ")
+    sys.stdout.flush()
+    raw_url = sys.stdin.readline().strip()
+
+    if raw_url.lower() in ("q", "quit", "exit"):
+        return None
+
+    base_url = raw_url if raw_url else default_url
+    return provider_id, base_url
+
+
 def connect(
     config_path: str,
     providers_path: str | None = None,
@@ -993,24 +1077,31 @@ def connect(
         sys.stdout.write("No provider templates found\n")
         return False
 
-    # Build display options
-    options: list[str] = []
-    provider_ids: list[str] = []
-    for pid, tmpl in templates.items():
-        status = tmpl.get("status", "unverified")
-        status_label = PROVIDER_STATUS_SYMBOLS.get(status, "?")
-        options.append(f"[{status_label}] {tmpl['display']}  ({tmpl['url']})")
-        provider_ids.append(pid)
+    # Group templates by category for coherent display
+    groups = _group_templates_by_category(templates)
+
+    # Build a flat option list with category headers
+    all_options: list[str] = []
+    all_provider_ids: list[str] = []
+    for label, pids, options in groups:
+        all_options.append(f"── {label} ──")
+        all_provider_ids.append("")
+        for i, pid in enumerate(pids):
+            all_options.append(f"  {options[i]}")
+            all_provider_ids.append(pid)
 
     # Show interactive selector
-    menu = TerminalMenu("Select a provider to connect:", options)
+    menu = TerminalMenu("Select a provider to connect:", all_options)
     result = menu.run()
 
     if result is None:
         return False
 
-    idx = options.index(result)
-    provider_id = provider_ids[idx]
+    idx = all_options.index(result)
+    provider_id = all_provider_ids[idx]
+    if not provider_id:
+        # Selected a category header — re-prompt or just return
+        return False
     tmpl = templates[provider_id]
 
     # Determine env var name
@@ -1029,6 +1120,25 @@ def connect(
             for acct in provider_cfg.accounts:
                 all_existing_names.append(acct.name)
                 total_account_count += 1
+
+    # For local/custom providers, optionally allow custom instance ID and base URL
+    category = tmpl.get("category", "direct")
+    if category == "local":
+        default_id = provider_id
+        default_url = tmpl.get("url", "http://localhost:8000/v1")
+        result = _prompt_custom_instance(default_id, default_url)
+        if result is None:
+            return False
+
+        custom_id, custom_url = result
+        if custom_id != default_id or custom_url != default_url:
+            # Update template data with custom values
+            provider_id = custom_id
+            tmpl = dict(tmpl)
+            tmpl["url"] = custom_url
+            tmpl["data"] = dict(cast("dict[str, Any]", tmpl["data"]))
+            tmpl["data"]["id"] = custom_id
+            tmpl["data"]["base_url"] = custom_url
 
     account_name = _unique_account_name(
         provider_id, all_existing_names, total_account_count

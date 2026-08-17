@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -266,6 +266,42 @@ class TranscodingCapabilities(BaseModel):
         return effort in self.reasoning_efforts.get(protocol, ())
 
 
+# ---------------------------------------------------------------------------
+# Multimodal capability model
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class MediaCapability:
+    """Granular media support for a provider/model/protocol.
+
+    Each field indicates a supported source form.  ``False`` means
+    unknown (conservative: never authorize a field).
+    """
+
+    base64: bool = False
+    url: bool = False
+    max_source_bytes: int | None = None
+    """Maximum decoded source bytes when provider docs define them."""
+
+
+@dataclass(frozen=True)
+class MultimodalCapabilities:
+    """Per-model multimodal capabilities.
+
+    These are provider/model/protocol scoped.  Unknown remains unknown
+    and must never authorize a field.
+    """
+
+    image_input: MediaCapability = field(default_factory=MediaCapability)
+    document_input: MediaCapability = field(default_factory=MediaCapability)
+    audio_input: MediaCapability = field(default_factory=MediaCapability)
+    non_text_tool_result: bool = False
+    """Whether the provider supports media inside tool results."""
+    max_serialized_request_bytes: int | None = None
+    """Maximum serialized upstream request bytes when known."""
+
+
 class ModelCapabilities(BaseModel):
     """Top-level capability container for a model.
 
@@ -277,6 +313,9 @@ class ModelCapabilities(BaseModel):
     thinking: ThinkingCapability = Field(default_factory=ThinkingCapability)
     transcoding: TranscodingCapabilities = Field(
         default_factory=TranscodingCapabilities,
+    )
+    multimodal: MultimodalCapabilities = Field(
+        default_factory=MultimodalCapabilities,
     )
 
 
@@ -408,6 +447,11 @@ def merge_model_capabilities(
             override.transcoding
             if override.transcoding != TranscodingCapabilities()
             else base.transcoding.model_copy(deep=True)
+        ),
+        multimodal=(
+            override.multimodal
+            if override.multimodal != MultimodalCapabilities()
+            else base.multimodal
         ),
     )
 
@@ -654,6 +698,36 @@ def _parse_transcoding_capabilities(raw: object) -> TranscodingCapabilities:
     if isinstance(data.get("prompt_cache_breakpoints"), list):
         data["prompt_cache_breakpoints"] = {}
     return TranscodingCapabilities.model_validate(data)
+
+
+def _parse_media_capability(raw: object) -> MediaCapability:
+    """Parse a cached media capability dict conservatively."""
+    if not isinstance(raw, dict):
+        return MediaCapability()
+    data = cast("Mapping[str, object]", raw)
+    max_src = data.get("max_source_bytes")
+    return MediaCapability(
+        base64=bool(data.get("base64", False)),
+        url=bool(data.get("url", False)),
+        max_source_bytes=int(max_src) if isinstance(max_src, int) else None,
+    )
+
+
+def _parse_multimodal_capabilities(raw: object) -> MultimodalCapabilities:
+    """Parse cached multimodal capability data conservatively."""
+    if not isinstance(raw, dict):
+        return MultimodalCapabilities()
+    data = cast("Mapping[str, object]", raw)
+    max_req = data.get("max_serialized_request_bytes")
+    return MultimodalCapabilities(
+        image_input=_parse_media_capability(data.get("image_input")),
+        document_input=_parse_media_capability(data.get("document_input")),
+        audio_input=_parse_media_capability(data.get("audio_input")),
+        non_text_tool_result=bool(data.get("non_text_tool_result", False)),
+        max_serialized_request_bytes=(
+            int(max_req) if isinstance(max_req, int) else None
+        ),
+    )
 
 
 def thinking_override_to_capability(
@@ -1009,6 +1083,7 @@ def dict_to_model_capabilities(data: dict[str, object]) -> ModelCapabilities:
             control_contract=control_contract,
             notes=str(notes_raw) if notes_raw is not None else None,
         ),
+        multimodal=_parse_multimodal_capabilities(data.get("multimodal")),
     )
 
 
@@ -1025,6 +1100,36 @@ def model_capabilities_to_dict(capabilities: ModelCapabilities) -> dict[str, obj
     result: dict[str, object] = {}
     if capabilities.transcoding != TranscodingCapabilities():
         result["transcoding"] = capabilities.transcoding.model_dump(exclude_none=True)
+    if capabilities.multimodal != MultimodalCapabilities():
+        mm = capabilities.multimodal
+        mm_dict: dict[str, object] = {}
+
+        def _media_to_dict(mc: MediaCapability) -> dict[str, object]:
+            d: dict[str, object] = {}
+            if mc.base64:
+                d["base64"] = True
+            if mc.url:
+                d["url"] = True
+            if mc.max_source_bytes is not None:
+                d["max_source_bytes"] = mc.max_source_bytes
+            return d
+
+        img = _media_to_dict(mm.image_input)
+        if img:
+            mm_dict["image_input"] = img
+        doc = _media_to_dict(mm.document_input)
+        if doc:
+            mm_dict["document_input"] = doc
+        aud = _media_to_dict(mm.audio_input)
+        if aud:
+            mm_dict["audio_input"] = aud
+        if mm.non_text_tool_result:
+            mm_dict["non_text_tool_result"] = True
+        if mm.max_serialized_request_bytes is not None:
+            mm_dict["max_serialized_request_bytes"] = mm.max_serialized_request_bytes
+        if mm_dict:
+            result["multimodal"] = mm_dict
+
     tc = capabilities.thinking
 
     thinking_dict: dict[str, object] = {}

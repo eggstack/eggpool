@@ -45,14 +45,14 @@ class TestComposeProviderUrl:
             "https://api.minimaxi.com/v1/chat/completions"
         )
 
-    def test_generalcompute_single_v1(self):
+    def test_deepseek_single_v1(self):
         cfg = ProviderConfig(
-            id="generalcompute",
-            base_url="https://api.generalcompute.com/v1",
+            id="deepseek",
+            base_url="https://api.deepseek.com/v1",
             models_path="/models/list",
         )
         assert compose_provider_url(cfg, cfg.models_path) == (
-            "https://api.generalcompute.com/v1/models/list"
+            "https://api.deepseek.com/v1/models/list"
         )
 
     def test_ollama_local(self):

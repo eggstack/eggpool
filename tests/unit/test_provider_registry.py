@@ -39,31 +39,26 @@ class TestRegistryStructure:
         expected = {
             "alibaba",
             "anthropic",
-            "cerebras",
+            "custom-compatible",
             "deepinfra",
             "deepseek",
-            "featherless",
             "fireworks",
             "gemini",
-            "generalcompute",
             "groq",
-            "hyperbolic",
+            "llamacpp-local",
+            "lmstudio-local",
+            "localai-local",
             "minimax",
             "minimax-cn",
             "mistral",
-            "moonshot",
-            "neuralwatt",
-            "novita",
-            "ollama-cloud",
             "ollama-local",
             "openai",
             "opencode-go",
             "openrouter",
-            "sambanova",
             "siliconflow",
             "together",
+            "vllm-local",
             "xai",
-            "zai",
         }
         assert set(provider_entries) == expected
 
@@ -163,13 +158,14 @@ class TestRegistryPydanticParsing:
         auth = entry.get("auth", {})
         assert auth.get("mode") == "none"
 
-    def test_generalcompute_uses_plain_openai_model_listing(
+    def test_ollama_local_uses_models_endpoint(
         self, provider_entries: dict[str, dict[str, Any]]
     ) -> None:
-        entry = provider_entries["generalcompute"]
-        assert entry.get("models_method") == "GET"
-        assert entry.get("models_path") == "/models"
-        assert entry.get("openai_path") == "/chat/completions"
+        entry = provider_entries["ollama-local"]
+        models_endpoint = entry.get("models_endpoint")
+        assert models_endpoint is not None
+        assert models_endpoint.get("method") == "GET"
+        assert models_endpoint.get("path") == "/api/tags"
 
     def test_minimax_uses_anthropic_compatible_contract(
         self, provider_entries: dict[str, dict[str, Any]]
@@ -204,9 +200,13 @@ class TestRegistryPydanticParsing:
     def test_verified_providers_have_probe_models(
         self, provider_entries: dict[str, dict[str, Any]]
     ) -> None:
-        """Verified providers should have a probe_model for live verification."""
+        """Verified providers should have a probe_model for live verification.
+
+        Local providers are excluded: they use discovery-based verification
+        (require_models=true with no fixed probe_model).
+        """
         for pid, entry in provider_entries.items():
-            if entry.get("status") == "verified" and pid != "ollama-local":
+            if entry.get("status") == "verified" and entry.get("category") != "local":
                 verify = entry.get("verify", {})
                 assert verify.get("probe_model"), (
                     f"Verified provider {pid!r} should have a probe_model"
@@ -248,6 +248,173 @@ class TestRegistryPydanticParsing:
             assert url.startswith("http"), (
                 f"Provider {pid!r} base_url {url!r} is not absolute"
             )
+
+
+class TestLocalProviderTemplates:
+    """Tests for local runtime provider templates."""
+
+    LOCAL_PROVIDERS = {
+        "ollama-local",
+        "lmstudio-local",
+        "llamacpp-local",
+        "vllm-local",
+        "localai-local",
+        "custom-compatible",
+    }
+
+    def test_local_providers_are_verified_or_unverified(
+        self, provider_entries: dict[str, dict[str, Any]]
+    ) -> None:
+        for pid in self.LOCAL_PROVIDERS:
+            entry = provider_entries[pid]
+            assert entry.get("status") in ("verified", "unverified"), (
+                f"Local provider {pid!r} has unexpected status: {entry.get('status')}"
+            )
+
+    def test_local_providers_have_no_auth(
+        self, provider_entries: dict[str, dict[str, Any]]
+    ) -> None:
+        for pid in self.LOCAL_PROVIDERS:
+            entry = provider_entries[pid]
+            auth = entry.get("auth", {})
+            assert auth.get("mode") == "none", (
+                f"Local provider {pid!r} should have auth.mode=none"
+            )
+
+    def test_local_providers_use_openai_protocol(
+        self, provider_entries: dict[str, dict[str, Any]]
+    ) -> None:
+        for pid in self.LOCAL_PROVIDERS:
+            entry = provider_entries[pid]
+            assert "openai" in entry.get("protocols", []), (
+                f"Local provider {pid!r} should support OpenAI protocol"
+            )
+
+    def test_local_providers_have_models_endpoint(
+        self, provider_entries: dict[str, dict[str, Any]]
+    ) -> None:
+        for pid in self.LOCAL_PROVIDERS:
+            entry = provider_entries[pid]
+            models_endpoint = entry.get("models_endpoint")
+            assert models_endpoint is not None, (
+                f"Local provider {pid!r} should have a models_endpoint"
+            )
+            assert models_endpoint.get("required") is True, (
+                f"Local provider {pid!r} models_endpoint should be required"
+            )
+
+    def test_local_providers_use_discovery_verification(
+        self, provider_entries: dict[str, dict[str, Any]]
+    ) -> None:
+        """Local providers use discovery verification, no fixed probe models."""
+        for pid in self.LOCAL_PROVIDERS:
+            entry = provider_entries[pid]
+            verify = entry.get("verify", {})
+            assert verify.get("require_models") is True, (
+                f"Local provider {pid!r} should require_models=true"
+            )
+            # No fixed probe_model — verification discovers installed models
+            assert not verify.get("probe_model"), (
+                f"Local provider {pid!r} should not have a fixed probe_model"
+            )
+
+    def test_local_providers_are_not_recommended(
+        self, provider_entries: dict[str, dict[str, Any]]
+    ) -> None:
+        for pid in self.LOCAL_PROVIDERS:
+            entry = provider_entries[pid]
+            assert entry.get("recommended") is not True, (
+                f"Local provider {pid!r} should not be recommended"
+            )
+
+    def test_local_providers_parse_as_provider_config(
+        self, provider_entries: dict[str, dict[str, Any]]
+    ) -> None:
+        for pid in self.LOCAL_PROVIDERS:
+            config_data = dict(provider_entries[pid])
+            for key in (
+                "display_name",
+                "status",
+                "category",
+                "region",
+                "recommended",
+                "notes",
+                "api_key_env",
+            ):
+                config_data.pop(key, None)
+            config_data["accounts"] = [{"name": "test"}]
+            cfg = ProviderConfig.model_validate(config_data)
+            assert cfg.id == pid
+            assert cfg.base_url
+
+    def test_custom_compatible_is_unverified(
+        self, provider_entries: dict[str, dict[str, Any]]
+    ) -> None:
+        entry = provider_entries["custom-compatible"]
+        assert entry.get("status") == "unverified"
+
+    def test_all_local_providers_are_local_category(
+        self, provider_entries: dict[str, dict[str, Any]]
+    ) -> None:
+        for pid in self.LOCAL_PROVIDERS:
+            entry = provider_entries[pid]
+            assert entry.get("category") == "local", (
+                f"Provider {pid!r} should have category=local"
+            )
+
+
+class TestConnectCategoryGrouping:
+    """Tests for the category-based grouping in the connect flow."""
+
+    def test_group_templates_by_category(self) -> None:
+        from eggpool.providers.connect import _group_templates_by_category
+
+        templates = {
+            "ollama-local": {
+                "category": "local",
+                "status": "verified",
+                "display": "Ollama",
+                "url": "http://localhost:11434/v1",
+            },
+            "openai": {
+                "category": "direct",
+                "status": "verified",
+                "display": "OpenAI",
+                "url": "https://api.openai.com/v1",
+            },
+            "openrouter": {
+                "category": "aggregator",
+                "status": "verified",
+                "display": "OpenRouter",
+                "url": "https://openrouter.ai/api/v1",
+            },
+        }
+        groups = _group_templates_by_category(templates)
+        assert len(groups) == 3
+        assert groups[0][0] == "Local / SBC"
+        assert groups[1][0] == "Hosted Direct"
+        assert groups[2][0] == "Aggregator"
+
+    def test_group_templates_preserves_order(self) -> None:
+        from eggpool.providers.connect import _group_templates_by_category
+
+        templates = {
+            "openai": {
+                "category": "direct",
+                "status": "verified",
+                "display": "OpenAI",
+                "url": "https://api.openai.com/v1",
+            },
+            "ollama-local": {
+                "category": "local",
+                "status": "verified",
+                "display": "Ollama",
+                "url": "http://localhost:11434/v1",
+            },
+        }
+        groups = _group_templates_by_category(templates)
+        assert groups[0][0] == "Local / SBC"
+        assert groups[1][0] == "Hosted Direct"
 
 
 class TestAccountRegistryRoutingPriority:

@@ -6,6 +6,13 @@
 # The api_key_env value is a placeholder. When you connect, the
 # actual environment variable name is derived from the provider id
 # (e.g. MINIMAX_API_KEY for minimax).
+#
+# Providers not listed here can still be added via the
+# "Custom compatible endpoint" option. Bundled templates are
+# curated shortcuts for providers with nontrivial contracts
+# (custom auth, headers, paths, or protocol quirks) or well-known
+# local runtimes. A generic base URL alone does not justify a
+# template.
 
 [providers.opencode-go]
 # OpenCode Go — primary provider
@@ -139,71 +146,6 @@ protocol = "openai"
 supports_tools = true
 supports_vision = false
 
-[providers.generalcompute]
-# GeneralCompute — plain OpenAI Chat Completions-compatible PAYG.
-# Treat as standard OpenAI Chat Completions surface (GET /models, POST /chat/completions,
-# Bearer auth). Codegg's known-working construction matches this contract.
-id = "generalcompute"
-base_url = "https://api.generalcompute.com/v1"
-protocols = ["openai"]
-openai_path = "/chat/completions"
-models_method = "GET"
-models_path = "/models"
-api_key_env = "API_KEY"
-display_name = "GeneralCompute"
-status = "experimental"
-category = "direct"
-region = "US"
-recommended = false
-notes = "Plain OpenAI Chat Completions-compatible PAYG endpoint; verify /models and chat completions live"
-
-[providers.generalcompute.auth]
-mode = "bearer"
-
-[providers.generalcompute.verify]
-probe_protocol = "openai"
-require_models = true
-
-[providers.zai]
-# Z.AI (ZhipuAI GLM) — OpenAI compatible
-id = "zai"
-base_url = "https://api.z.ai/api/paas/v4"
-protocols = ["openai"]
-api_key_env = "API_KEY"
-display_name = "Z.AI (ZhipuAI GLM)"
-status = "experimental"
-category = "direct"
-region = "CN"
-recommended = false
-notes = "Confirm base_url and model listing"
-
-[providers.zai.auth]
-mode = "bearer"
-
-[providers.zai.verify]
-probe_protocol = "openai"
-require_models = false
-
-[providers.neuralwatt]
-# NeuralWatt — OpenAI compatible, energy-based pricing
-id = "neuralwatt"
-base_url = "https://api.neuralwatt.com/v1"
-protocols = ["openai"]
-api_key_env = "API_KEY"
-display_name = "NeuralWatt"
-status = "experimental"
-category = "direct"
-region = "US"
-recommended = false
-notes = "Energy-based pricing; verify endpoints"
-
-[providers.neuralwatt.auth]
-mode = "bearer"
-
-[providers.neuralwatt.verify]
-probe_protocol = "openai"
-require_models = false
-
 [providers.openrouter]
 # OpenRouter — OpenAI compatible, 400+ models
 id = "openrouter"
@@ -227,6 +169,7 @@ require_models = true
 
 [providers.ollama-local]
 # Ollama (local) — OpenAI compatible, no auth required
+# Verification discovers installed models via /api/tags; no hardcoded probe model.
 id = "ollama-local"
 base_url = "http://localhost:11434/v1"
 protocols = ["openai"]
@@ -236,35 +179,146 @@ status = "verified"
 category = "local"
 region = "local"
 recommended = false
-notes = "Local development; no auth required"
+notes = "Local development; no auth required; models discovered at runtime"
 
 [providers.ollama-local.auth]
 mode = "none"
 
+[providers.ollama-local.models_endpoint]
+method = "GET"
+path = "/api/tags"
+required = true
+
 [providers.ollama-local.verify]
-probe_model = "llama3.2"
 probe_protocol = "openai"
 require_models = true
 
-[providers.ollama-cloud]
-# Ollama (cloud) — OpenAI compatible via /v1 endpoints
-id = "ollama-cloud"
-base_url = "https://ollama.com/v1"
+[providers.lmstudio-local]
+# LM Studio (local) — OpenAI compatible, no auth required
+id = "lmstudio-local"
+base_url = "http://localhost:1234/v1"
 protocols = ["openai"]
 api_key_env = "API_KEY"
-display_name = "Ollama (cloud)"
-status = "experimental"
-category = "direct"
-region = "US"
+display_name = "LM Studio (local)"
+status = "verified"
+category = "local"
+region = "local"
 recommended = false
-notes = "Confirm cloud auth and /models endpoint"
+notes = "Local LM Studio server; no auth required; models discovered at runtime"
 
-[providers.ollama-cloud.auth]
-mode = "bearer"
+[providers.lmstudio-local.auth]
+mode = "none"
 
-[providers.ollama-cloud.verify]
+[providers.lmstudio-local.models_endpoint]
+method = "GET"
+path = "/models"
+required = true
+
+[providers.lmstudio-local.verify]
 probe_protocol = "openai"
-require_models = false
+require_models = true
+
+[providers.llamacpp-local]
+# llama.cpp server (local) — OpenAI compatible, no auth required
+id = "llamacpp-local"
+base_url = "http://localhost:8080/v1"
+protocols = ["openai"]
+api_key_env = "API_KEY"
+display_name = "llama.cpp (local)"
+status = "verified"
+category = "local"
+region = "local"
+recommended = false
+notes = "llama.cpp llama-server; no auth required; models discovered at runtime"
+
+[providers.llamacpp-local.auth]
+mode = "none"
+
+[providers.llamacpp-local.models_endpoint]
+method = "GET"
+path = "/models"
+required = true
+
+[providers.llamacpp-local.verify]
+probe_protocol = "openai"
+require_models = true
+
+[providers.vllm-local]
+# vLLM (local) — OpenAI compatible, no auth required by default
+id = "vllm-local"
+base_url = "http://localhost:8000/v1"
+protocols = ["openai"]
+api_key_env = "API_KEY"
+display_name = "vLLM (local)"
+status = "verified"
+category = "local"
+region = "local"
+recommended = false
+notes = "vLLM OpenAI-compatible server; no auth by default; models discovered at runtime"
+
+[providers.vllm-local.auth]
+mode = "none"
+
+[providers.vllm-local.models_endpoint]
+method = "GET"
+path = "/models"
+required = true
+
+[providers.vllm-local.verify]
+probe_protocol = "openai"
+require_models = true
+
+[providers.localai-local]
+# LocalAI (local) — OpenAI compatible, no auth required
+id = "localai-local"
+base_url = "http://localhost:8080/v1"
+protocols = ["openai"]
+api_key_env = "API_KEY"
+display_name = "LocalAI (local)"
+status = "verified"
+category = "local"
+region = "local"
+recommended = false
+notes = "LocalAI server; no auth required; models discovered at runtime"
+
+[providers.localai-local.auth]
+mode = "none"
+
+[providers.localai-local.models_endpoint]
+method = "GET"
+path = "/models"
+required = true
+
+[providers.localai-local.verify]
+probe_protocol = "openai"
+require_models = true
+
+[providers.custom-compatible]
+# Generic compatible endpoint — operator-configured
+# Use when your server speaks OpenAI Chat Completions and/or Anthropic Messages
+# but is not listed above. Set base_url, protocols, and auth in the config.
+id = "custom-compatible"
+base_url = "http://localhost:8000/v1"
+protocols = ["openai"]
+api_key_env = "API_KEY"
+display_name = "Custom compatible endpoint"
+status = "unverified"
+category = "local"
+region = "local"
+recommended = false
+notes = "Generic OpenAI/Anthropic-compatible endpoint; configure base_url and protocols manually"
+
+[providers.custom-compatible.auth]
+mode = "none"
+
+[providers.custom-compatible.models_endpoint]
+method = "GET"
+path = "/models"
+required = true
+
+[providers.custom-compatible.verify]
+probe_protocol = "openai"
+require_models = true
 
 [providers.openai]
 # OpenAI — direct OpenAI API
@@ -436,106 +490,6 @@ probe_model = "Pro/zai-org/GLM-4.7"
 probe_protocol = "openai"
 require_models = true
 
-[providers.cerebras]
-# Cerebras — fast OpenAI Chat Completions-compatible inference
-id = "cerebras"
-base_url = "https://api.cerebras.ai/v1"
-protocols = ["openai"]
-api_key_env = "API_KEY"
-display_name = "Cerebras"
-status = "experimental"
-category = "direct"
-region = "US"
-recommended = false
-notes = "Fast inference; confirm model availability"
-
-[providers.cerebras.auth]
-mode = "bearer"
-
-[providers.cerebras.verify]
-probe_protocol = "openai"
-require_models = false
-
-[providers.sambanova]
-# SambaNova Cloud — OpenAI Chat Completions-compatible hosted open models
-id = "sambanova"
-base_url = "https://api.sambanova.ai/v1"
-protocols = ["openai"]
-api_key_env = "API_KEY"
-display_name = "SambaNova Cloud"
-status = "experimental"
-category = "direct"
-region = "US"
-recommended = false
-notes = "Enterprise open-model hosting; verify endpoints"
-
-[providers.sambanova.auth]
-mode = "bearer"
-
-[providers.sambanova.verify]
-probe_protocol = "openai"
-require_models = false
-
-[providers.hyperbolic]
-# Hyperbolic — OpenAI Chat Completions-compatible open-model inference
-id = "hyperbolic"
-base_url = "https://api.hyperbolic.xyz/v1"
-protocols = ["openai"]
-api_key_env = "API_KEY"
-display_name = "Hyperbolic"
-status = "experimental"
-category = "direct"
-region = "US"
-recommended = false
-notes = "Open-model inference; confirm /models and SSE"
-
-[providers.hyperbolic.auth]
-mode = "bearer"
-
-[providers.hyperbolic.verify]
-probe_protocol = "openai"
-require_models = false
-
-[providers.featherless]
-# Featherless AI — OpenAI Chat Completions-compatible serverless open-model API
-id = "featherless"
-base_url = "https://api.featherless.ai/v1"
-protocols = ["openai"]
-api_key_env = "API_KEY"
-display_name = "Featherless AI"
-status = "experimental"
-category = "direct"
-region = "US"
-recommended = false
-notes = "Serverless open models; verify catalog stability"
-
-[providers.featherless.auth]
-mode = "bearer"
-
-[providers.featherless.verify]
-probe_protocol = "openai"
-require_models = false
-
-[providers.moonshot]
-# Moonshot AI / Kimi — direct OpenAI Chat Completions-compatible API
-id = "moonshot"
-base_url = "https://api.moonshot.ai/v1"
-protocols = ["openai"]
-api_key_env = "API_KEY"
-display_name = "Moonshot AI (Kimi)"
-status = "experimental"
-category = "direct"
-region = "CN"
-recommended = false
-notes = "Kimi models; confirm intl vs CN endpoint parity"
-
-[providers.moonshot.auth]
-mode = "bearer"
-
-[providers.moonshot.verify]
-probe_protocol = "openai"
-require_models = false
-
 [providers.deepseek]
 # DeepSeek — direct OpenAI Chat Completions-compatible API
 id = "deepseek"
@@ -620,22 +574,3 @@ probe_model = "qwen-plus"
 probe_protocol = "openai"
 require_models = true
 
-[providers.novita]
-# Novita AI — OpenAI Chat Completions-compatible open-model inference
-id = "novita"
-base_url = "https://api.novita.ai/openai"
-protocols = ["openai"]
-api_key_env = "API_KEY"
-display_name = "Novita AI"
-status = "experimental"
-category = "direct"
-region = "global"
-recommended = false
-notes = "Confirm base URL, model listing, and SSE behavior before production"
-
-[providers.novita.auth]
-mode = "bearer"
-
-[providers.novita.verify]
-probe_protocol = "openai"
-require_models = false

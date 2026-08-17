@@ -1,5 +1,9 @@
 # Plan 133 — Phase 2: Multimodal Capability Model and Narrow Content IR
 
+## Status
+
+Complete. Content IR types and MultimodalCapabilities are implemented. Decode/encode helpers remain for Plan 134.
+
 ## Objective
 
 Create the smallest shared abstraction needed to translate multimodal message content without growing pairwise protocol-specific branches indefinitely.

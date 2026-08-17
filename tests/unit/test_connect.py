@@ -134,6 +134,12 @@ def test_connect_none_auth_provider_does_not_prompt_for_api_key(
     monkeypatch.setattr(connect_module, "TerminalMenu", SelectOllama)
     monkeypatch.setattr(connect_module, "collect_api_key", unexpected_prompt)
     monkeypatch.setattr(connect_module, "restart_server", lambda _path: False)
+    # Accept default ID and URL for local providers without reading stdin
+    monkeypatch.setattr(
+        connect_module,
+        "_prompt_custom_instance",
+        lambda _id, _url: (_id, _url),
+    )
 
     assert connect_module.connect(str(config_path)) is True
     config = AppConfig.from_toml(str(config_path))
@@ -2640,8 +2646,8 @@ class TestBundledProviderTemplates:
         assert len(templates) >= 8
         assert "opencode-go" in templates
         assert "openrouter" in templates
-        assert "zai" in templates
         assert "minimax" in templates
+        assert "ollama-local" in templates
 
     def test_bundled_providers_have_required_fields(self) -> None:
         """Each bundled provider has display, url, raw, and data keys."""

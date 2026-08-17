@@ -1,5 +1,9 @@
 # Plan 138 — Phase 7: Provider Registry and Verification Cleanup
 
+## Status
+
+Complete.
+
 ## Objective
 
 Make `eggpool connect` provider coverage accurate and maintainable by reducing brittle fixed-model probes, curating experimental templates, and relying on generic compatible contracts where provider-specific templates add little value.
