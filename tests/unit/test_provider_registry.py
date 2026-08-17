@@ -526,3 +526,87 @@ class TestAccountRegistryRoutingPriority:
         )
         registry.reload(updated)
         assert registry.get_state("a").routing_priority == 9
+
+
+class TestProviderConfigValidation:
+    """Tests for ProviderConfig URL and protocol validation."""
+
+    @pytest.mark.parametrize(
+        "bad_url",
+        [
+            "not-a-url",
+            "ftp://example.com",
+            "://missing-scheme",
+            "http://",
+            "http://user:pass@example.com",
+            "http://example.com?query=1",
+            "http://example.com#fragment",
+            "http:// example.com",
+        ],
+    )
+    def test_rejects_malformed_urls(self, bad_url: str) -> None:
+        from eggpool.errors import ConfigError
+
+        with pytest.raises(ConfigError, match="base_url"):
+            ProviderConfig(
+                id="test",
+                base_url=bad_url,
+                protocols=["openai"],
+                accounts=[{"name": "test", "api_key": "sk-test"}],
+            )
+
+    @pytest.mark.parametrize(
+        "bad_protocols",
+        [
+            ["invalid-protocol"],
+            ["openai", "invalid-protocol"],
+            ["rest"],
+            ["graphql"],
+        ],
+    )
+    def test_rejects_invalid_protocols(self, bad_protocols: list[str]) -> None:
+        import pydantic
+
+        with pytest.raises(pydantic.ValidationError, match="literal_error"):
+            ProviderConfig(
+                id="test",
+                base_url="https://example.com/v1",
+                protocols=bad_protocols,
+                accounts=[{"name": "test", "api_key": "sk-test"}],
+            )
+
+    def test_rejects_duplicate_version_prefix(self) -> None:
+        from eggpool.errors import ConfigError
+
+        with pytest.raises(ConfigError, match="duplicate version prefix"):
+            ProviderConfig(
+                id="test",
+                base_url="https://example.com/v1",
+                protocols=["openai"],
+                models_path="/v1/models",
+                accounts=[{"name": "test", "api_key": "sk-test"}],
+            )
+
+    def test_rejects_invalid_provider_id(self) -> None:
+        from eggpool.errors import ConfigError
+
+        with pytest.raises(ConfigError, match="must be alphanumeric"):
+            ProviderConfig(
+                id="-invalid-",
+                base_url="https://example.com",
+                protocols=["openai"],
+                accounts=[{"name": "test", "api_key": "sk-test"}],
+            )
+
+    def test_valid_local_provider_config(self) -> None:
+        """A well-formed local provider config must parse successfully."""
+        cfg = ProviderConfig(
+            id="ollama-mac",
+            base_url="http://macbook.local:11434/v1",
+            protocols=["openai"],
+            auth={"mode": "none"},
+            accounts=[{"name": "test"}],
+        )
+        assert cfg.id == "ollama-mac"
+        assert cfg.base_url == "http://macbook.local:11434/v1"
+        assert cfg.auth.mode == "none"
