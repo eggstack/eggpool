@@ -542,7 +542,6 @@ class RuntimeGeneration:
     health_manager: HealthManager
     cost_calculator: CostCalculator
     transcoder_policy: Any
-    compression_policy: Any
     dispatch_overhead_recorder: DispatchOverheadRecorder
     dispatch_span_recorder: DispatchSpanRecorder | None
     account_backoff_repo: Any
@@ -1118,7 +1117,6 @@ class ActiveGenerationView:
     stats: Any  # noqa: ANN401
     model_info: Any  # noqa: ANN401
     transcoder_policy: Any  # noqa: ANN401
-    compression_policy: Any  # noqa: ANN401
     client_pool: Any  # noqa: ANN401
     outbound_manager: Any  # noqa: ANN401
     cost_calculator: Any  # noqa: ANN401
@@ -1600,7 +1598,6 @@ class RuntimeManager:
             stats=gen.stats_service,
             model_info=getattr(gen, "model_info", None),
             transcoder_policy=gen.transcoder_policy,
-            compression_policy=gen.compression_policy,
             client_pool=gen.client_pool,
             outbound_manager=gen.outbound_manager,
             cost_calculator=gen.cost_calculator,
@@ -2318,7 +2315,6 @@ class RuntimeGenerationBuilder:
             "health_manager",
             "cost_calculator",
             "transcoder_policy",
-            "compression_policy",
             "dispatch_overhead_recorder",
             "dispatch_span_recorder",
             "account_backoff_repo",
@@ -2364,7 +2360,6 @@ class RuntimeGenerationBuilder:
             health_manager=services["health_manager"],
             cost_calculator=services["cost_calculator"],
             transcoder_policy=services["transcoder_policy"],
-            compression_policy=services["compression_policy"],
             dispatch_overhead_recorder=services["dispatch_overhead_recorder"],
             dispatch_span_recorder=services["dispatch_span_recorder"],
             account_backoff_repo=services["account_backoff_repo"],
@@ -2472,7 +2467,6 @@ _RUNTIME_OWNED_APP_STATE_ATTRS: frozenset[str] = frozenset(
         "local_pre_upstream_recorder",
         "runtime_metrics",
         "transcoder_policy",
-        "compression_policy",
         "client_pool",
         "outbound_manager",
         "httpx_client",

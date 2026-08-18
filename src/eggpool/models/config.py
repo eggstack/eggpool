@@ -28,7 +28,6 @@ from eggpool.constants import (
 )
 from eggpool.errors import ConfigError
 from eggpool.providers.auth import has_auth_scheme_prefix
-from eggpool.transcoder.compression.policy import CompressionConfig
 from eggpool.transcoder.policy import TranscoderPolicy
 
 _HTTP_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
@@ -1336,7 +1335,6 @@ class AppConfig(BaseModel):
         default_factory=dict,
     )
     transcoder: TranscoderPolicy = Field(default_factory=TranscoderPolicy)
-    compression: CompressionConfig = Field(default_factory=CompressionConfig)
     model_info: ModelInfoConfig = Field(default_factory=ModelInfoConfig)
     update_checker: UpdateCheckerConfig = Field(default_factory=UpdateCheckerConfig)
 

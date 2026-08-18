@@ -242,50 +242,17 @@ def _normalize_dashboard_model_row(
     return out
 
 
-def _configured_compression_mode(config: AppConfig) -> str:
-    compression = config.compression
-    if not compression.enabled:
-        return "off"
-    return str(compression.mode)
-
-
-def _observed_mode_from_counts(
-    counts: dict[str, Any],
-    *,
-    active_keys: tuple[str, ...],
-) -> str:
-    active = [key for key in active_keys if int(counts.get(key, 0) or 0) > 0]
-    inactive = [
-        key
-        for key, value in counts.items()
-        if int(value or 0) > 0 and key not in active
-    ]
-    if len(active) > 1 or (active and inactive):
-        return "mixed"
-    if active:
-        return active[0]
-    if inactive:
-        return "off"
-    return "off"
-
-
 def _build_request_shaping_summary(
     config: AppConfig,
     *,
     routing_runtime: dict[str, Any] | None = None,
     cache_observability: dict[str, Any] | None = None,
     canonical_request_segmentation: dict[str, Any] | None = None,
-    compression_observability: dict[str, Any] | None = None,
-    compression_runtime: dict[str, Any] | None = None,
-    compression_policy_stats: dict[str, Any] | None = None,
     cache_stability: dict[str, Any] | None = None,
     period: str = "24h",
 ) -> dict[str, Any]:
     cache_observability = cache_observability or {}
     canonical_request_segmentation = canonical_request_segmentation or {}
-    compression_observability = compression_observability or {}
-    compression_runtime = compression_runtime or {}
-    compression_policy_stats = compression_policy_stats or {}
     cache_stability = cache_stability or {}
     routing_runtime = routing_runtime or {}
 
@@ -296,43 +263,12 @@ def _build_request_shaping_summary(
     known_total = reported + not_reported + unknown
     cache_reported_rate = (reported / known_total) if known_total > 0 else None
 
-    compression_modes = cast(
-        "dict[str, Any]",
-        compression_runtime.get("mode_counts") or {},
-    )
     guardrails = cast("dict[str, Any]", routing_runtime.get("guardrails") or {})
-    cache_safety = cast(
-        "dict[str, Any]",
-        compression_runtime.get("cache_safety") or {},
-    )
-    compression_totals = cast(
-        "dict[str, Any]",
-        compression_observability.get("totals") or {},
-    )
-    compression_latency = cast(
-        "dict[str, Any]",
-        compression_runtime.get("latency_ms") or {},
-    )
     segmentation_by_status = cast(
         "dict[str, Any]",
         canonical_request_segmentation.get("by_status") or {},
     )
-    policy_counts = cast(
-        "list[dict[str, Any]]",
-        compression_policy_stats.get("policy_counts") or [],
-    )
-    stable_prefix_preserved = int(cache_safety.get("stable_prefix_preserved", 0) or 0)
-    stable_prefix_mismatch = int(cache_safety.get("stable_prefix_mismatch", 0) or 0)
-    stable_prefix_total = stable_prefix_preserved + stable_prefix_mismatch
-    stable_prefix_rate = (
-        stable_prefix_preserved / stable_prefix_total
-        if stable_prefix_total > 0
-        else None
-    )
 
-    policy_warning_count = sum(
-        int(entry.get("warning_count", 0) or 0) for entry in policy_counts
-    )
     segmentation_not_collected = int(
         segmentation_by_status.get("not_collected", 0) or 0
     )
@@ -346,40 +282,8 @@ def _build_request_shaping_summary(
     return {
         "period": period,
         "mode": {
-            "compression": _configured_compression_mode(config),
-            "compression_observed": _observed_mode_from_counts(
-                compression_modes,
-                active_keys=("observe", "safe"),
-            ),
             "routing": str(
                 guardrails.get("routing_cache_compression_mode", "reporting_only")
-            ),
-        },
-        "compression": {
-            "requests_analyzed": int(
-                compression_totals.get("observed_requests", 0) or 0
-            ),
-            "requests_compressed": int(
-                compression_runtime.get("applied_count", 0) or 0
-            ),
-            "estimated_savings_tokens": int(
-                compression_runtime.get("estimated_savings_tokens", 0) or 0
-            ),
-            "actual_savings_tokens": int(
-                compression_runtime.get("actual_savings_tokens", 0) or 0
-            ),
-            "failed_fallback_count": int(
-                compression_runtime.get("failed_fallback_count", 0) or 0
-            ),
-            "p95_latency_ms": compression_latency.get("p95"),
-            "warning_count": int(
-                sum(
-                    int(count or 0)
-                    for count in cast(
-                        "dict[str, Any]",
-                        compression_runtime.get("warnings") or {},
-                    ).values()
-                )
             ),
         },
         "cache": {
@@ -416,20 +320,9 @@ def _build_request_shaping_summary(
             "routing_uses_cache_metrics": bool(
                 guardrails.get("routing_uses_cache_metrics", False)
             ),
-            "routing_uses_compression_metrics": bool(
-                guardrails.get("routing_uses_compression_metrics", False)
-            ),
             "routing_uses_stable_prefix_hash": bool(
                 guardrails.get("routing_uses_stable_prefix_hash", False)
             ),
-            "routing_uses_compression_policy": bool(
-                guardrails.get("routing_uses_compression_policy", False)
-            ),
-            "stable_prefix_preserved_rate": stable_prefix_rate,
-            "failed_fallback_count": int(
-                compression_runtime.get("failed_fallback_count", 0) or 0
-            ),
-            "policy_warning_count": policy_warning_count,
         },
     }
 
@@ -725,7 +618,6 @@ async def handle_overview(
         operational_summary,
         pending_health,
         cache_observability,
-        compression_runtime,
         model_info_state,
     ) = await asyncio.gather(
         _await_dashboard_stage(
@@ -799,12 +691,6 @@ async def handle_overview(
         _await_dashboard_stage(
             telemetry,
             "overview",
-            "compression_runtime",
-            stats.get_compression_runtime(time_range.label, use_cache=True),
-        ),
-        _await_dashboard_stage(
-            telemetry,
-            "overview",
             "model_info_summaries",
             _get_model_info_summary_state(model_info_service),
         ),
@@ -836,7 +722,6 @@ async def handle_overview(
     request_shaping_summary = _build_request_shaping_summary(
         request.app.state.config,
         cache_observability=cache_observability,
-        compression_runtime=compression_runtime,
         period=time_range.label,
     )
     enabled_count = sum(1 for a in accounts if a.get("account_enabled"))
@@ -2229,28 +2114,22 @@ async def handle_cache(
     (
         cache_observability,
         canonical_request_segmentation,
-        compression_observability,
-        compression_runtime,
-        compression_policy_stats,
         cache_stability,
         snapshot,
-    ) = await asyncio.gather(
-        stats_service.get_cache_observability(period, use_cache=True),
-        stats_service.get_canonical_request_segmentation(period, use_cache=True),
-        stats_service.get_compression_observability(period, use_cache=True),
-        stats_service.get_compression_runtime(period, use_cache=True),
-        stats_service.get_compression_policy_stats(period, use_cache=True),
-        stats_service.get_cache_stability(period, use_cache=True),
-        runtime_metrics.snapshot(),
+    ) = cast(
+        "tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]",
+        await asyncio.gather(
+            stats_service.get_cache_observability(period, use_cache=True),
+            stats_service.get_canonical_request_segmentation(period, use_cache=True),
+            stats_service.get_cache_stability(period, use_cache=True),
+            runtime_metrics.snapshot(),
+        ),
     )
     _gather_ms = (time.perf_counter() - _gather_start) * 1000
     if telemetry is not None:
         for name in (
             "cache_observability",
             "canonical_request_segmentation",
-            "compression_observability",
-            "compression_runtime",
-            "compression_policy_stats",
             "cache_stability",
             "snapshot",
         ):
@@ -2260,9 +2139,6 @@ async def handle_cache(
         routing_runtime=cast("dict[str, Any]", snapshot.get("routing_runtime") or {}),
         cache_observability=cache_observability,
         canonical_request_segmentation=canonical_request_segmentation,
-        compression_observability=compression_observability,
-        compression_runtime=compression_runtime,
-        compression_policy_stats=compression_policy_stats,
         cache_stability=cache_stability,
         period=period or "24h",
     )
@@ -2280,9 +2156,6 @@ async def handle_cache(
             ),
             cache_observability=cache_observability,
             canonical_request_segmentation=canonical_request_segmentation,
-            compression_observability=compression_observability,
-            compression_runtime=compression_runtime,
-            compression_policy_stats=compression_policy_stats,
             cache_stability=cache_stability,
             request_shaping_summary=request_shaping_summary,
         )
@@ -2331,19 +2204,6 @@ async def handle_canonical_request_segmentation_json(request: Request) -> Respon
     return JSONResponse(content=serialize_canonical_request_segmentation(data))
 
 
-async def handle_compression_observability_json(request: Request) -> Response:
-    """Return compression observability aggregates as JSON.
-
-    Includes observe-mode totals, applied-mode totals, per-policy
-    rollups, and policy source counts.
-    """
-    _get_dashboard_config(request)
-    period = request.query_params.get("period", "24h")
-    stats_service = _get_stats(request)
-    data = await stats_service.get_compression_observability(period)
-    return JSONResponse(content=data)
-
-
 async def handle_request_shaping_json(request: Request) -> Response:
     """Return the operator-facing request-shaping summary as JSON."""
     _get_dashboard_config(request)
@@ -2354,19 +2214,16 @@ async def handle_request_shaping_json(request: Request) -> Response:
     (
         cache_observability,
         canonical_request_segmentation,
-        compression_observability,
-        compression_runtime,
-        compression_policy_stats,
         cache_stability,
         snapshot,
-    ) = await asyncio.gather(
-        stats_service.get_cache_observability(period),
-        stats_service.get_canonical_request_segmentation(period),
-        stats_service.get_compression_observability(period),
-        stats_service.get_compression_runtime(period),
-        stats_service.get_compression_policy_stats(period),
-        stats_service.get_cache_stability(period),
-        runtime_metrics.snapshot(),
+    ) = cast(
+        "tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]",
+        await asyncio.gather(
+            stats_service.get_cache_observability(period),
+            stats_service.get_canonical_request_segmentation(period),
+            stats_service.get_cache_stability(period),
+            runtime_metrics.snapshot(),
+        ),
     )
     return JSONResponse(
         content=_build_request_shaping_summary(
@@ -2376,43 +2233,10 @@ async def handle_request_shaping_json(request: Request) -> Response:
             ),
             cache_observability=cache_observability,
             canonical_request_segmentation=canonical_request_segmentation,
-            compression_observability=compression_observability,
-            compression_runtime=compression_runtime,
-            compression_policy_stats=compression_policy_stats,
             cache_stability=cache_stability,
             period=period,
         )
     )
-
-
-async def handle_compression_runtime_json(request: Request) -> Response:
-    """Return safe-compression runtime aggregates as JSON.
-
-    Mode counts, applied / failed-fallback counts, latency stats,
-    per-transform breakdown, warnings rollup, and cache-safety
-    counters.  All numbers are computed from durable ``requests``
-    columns populated by the observe-mode and safe-mode finalizers.
-    """
-    _get_dashboard_config(request)
-    period = request.query_params.get("period", "24h")
-    stats_service = _get_stats(request)
-    data = await stats_service.get_compression_runtime(period)
-    return JSONResponse(content=data)
-
-
-async def handle_compression_policy_stats_json(request: Request) -> Response:
-    """Return per-policy compression rollup as JSON.
-
-    One entry per resolved policy (including the ``<global>`` sentinel
-    for the no-override path).  Includes mode counts, applied counts,
-    failed-fallback counts, and per-policy warning counts.  Advisory
-    only; the QuotaFairScorer does not consume policy fields.
-    """
-    _get_dashboard_config(request)
-    period = request.query_params.get("period", "24h")
-    stats_service = _get_stats(request)
-    data = await stats_service.get_compression_policy_stats(period)
-    return JSONResponse(content=data)
 
 
 async def handle_cache_stability_json(request: Request) -> Response:
@@ -2471,21 +2295,6 @@ def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:
             handle_canonical_request_segmentation_json,
             JSONResponse,
         ),
-        (
-            "/api/stats/compression-observability",
-            handle_compression_observability_json,
-            JSONResponse,
-        ),
-        (
-            "/api/stats/compression-runtime",
-            handle_compression_runtime_json,
-            JSONResponse,
-        ),
-        (
-            "/api/stats/compression-policies",
-            handle_compression_policy_stats_json,
-            JSONResponse,
-        ),
         ("/api/stats/cache-stability", handle_cache_stability_json, JSONResponse),
         ("/api/stats/request-shaping", handle_request_shaping_json, JSONResponse),
     ):
@@ -2505,9 +2314,6 @@ __all__ = [
     "handle_cache_observability_json",
     "handle_cache_stability_json",
     "handle_canonical_request_segmentation_json",
-    "handle_compression_observability_json",
-    "handle_compression_policy_stats_json",
-    "handle_compression_runtime_json",
     "handle_events",
     "handle_grouped_timeseries_json",
     "handle_latency",

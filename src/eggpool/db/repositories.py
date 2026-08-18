@@ -448,34 +448,6 @@ class RequestRepository:
         segmentation_summary_json: str | None = None,
         transcoded: int = 0,
         raw_usage_json: str | None = None,
-        compression_status: str = "disabled",
-        compression_mode: str | None = None,
-        compression_candidate_count: int = 0,
-        compression_eligible_candidate_count: int = 0,
-        compression_suppressed_candidate_count: int = 0,
-        compression_estimated_original_tokens: int | None = None,
-        compression_estimated_compressed_tokens: int | None = None,
-        compression_estimated_savings_tokens: int | None = None,
-        compression_analyzer_latency_ms: float | None = None,
-        compression_warning_count: int = 0,
-        compression_reason_code_counts_json: str | None = None,
-        compression_summary_json: str | None = None,
-        compression_applied: int = 0,
-        compression_transform_count: int = 0,
-        compression_transforms_by_reason_json: str | None = None,
-        compression_original_tokens: int | None = None,
-        compression_compressed_tokens: int | None = None,
-        compression_savings_tokens: int | None = None,
-        compression_pre_stable_prefix_hash: str | None = None,
-        compression_post_stable_prefix_hash: str | None = None,
-        compression_stable_prefix_preserved: int = 1,
-        compression_warnings_json: str | None = None,
-        compression_latency_ms: float = 0.0,
-        compression_failed_fallback: int = 0,
-        compression_applied_summary_json: str | None = None,
-        compression_policy_name: str | None = None,
-        compression_policy_source: str | None = None,
-        compression_policy_warnings_json: str | None = None,
         last_attempt_id: int | None = None,
     ) -> RequestFinalizationMutation:
         """Finalize a request only if it is still pending.
@@ -526,34 +498,7 @@ class RequestRepository:
             "semi_stable_bytes = ?, "
             "volatile_bytes = ?, "
             "segmentation_summary_json = ?, "
-            "transcoded = ?, raw_usage_json = ?, "
-            "compression_status = ?, compression_mode = ?, "
-            "compression_candidate_count = ?, "
-            "compression_eligible_candidate_count = ?, "
-            "compression_suppressed_candidate_count = ?, "
-            "compression_estimated_original_tokens = ?, "
-            "compression_estimated_compressed_tokens = ?, "
-            "compression_estimated_savings_tokens = ?, "
-            "compression_analyzer_latency_ms = ?, "
-            "compression_warning_count = ?, "
-            "compression_reason_code_counts_json = ?, "
-            "compression_summary_json = ?, "
-            "compression_applied = ?, "
-            "compression_transform_count = ?, "
-            "compression_transforms_by_reason_json = ?, "
-            "compression_original_tokens = ?, "
-            "compression_compressed_tokens = ?, "
-            "compression_savings_tokens = ?, "
-            "compression_pre_stable_prefix_hash = ?, "
-            "compression_post_stable_prefix_hash = ?, "
-            "compression_stable_prefix_preserved = ?, "
-            "compression_warnings_json = ?, "
-            "compression_latency_ms = ?, "
-            "compression_failed_fallback = ?, "
-            "compression_applied_summary_json = ?, "
-            "compression_policy_name = ?, "
-            "compression_policy_source = ?, "
-            "compression_policy_warnings_json = ? "
+            "transcoded = ?, raw_usage_json = ? "
             "WHERE id = ? AND status = 'pending' "
             "RETURNING status",
             (
@@ -606,34 +551,6 @@ class RequestRepository:
                 segmentation_summary_json,
                 transcoded,
                 raw_usage_json,
-                compression_status,
-                compression_mode,
-                compression_candidate_count,
-                compression_eligible_candidate_count,
-                compression_suppressed_candidate_count,
-                compression_estimated_original_tokens,
-                compression_estimated_compressed_tokens,
-                compression_estimated_savings_tokens,
-                compression_analyzer_latency_ms,
-                compression_warning_count,
-                compression_reason_code_counts_json,
-                compression_summary_json,
-                compression_applied,
-                compression_transform_count,
-                compression_transforms_by_reason_json,
-                compression_original_tokens,
-                compression_compressed_tokens,
-                compression_savings_tokens,
-                compression_pre_stable_prefix_hash,
-                compression_post_stable_prefix_hash,
-                compression_stable_prefix_preserved,
-                compression_warnings_json,
-                compression_latency_ms,
-                compression_failed_fallback,
-                compression_applied_summary_json,
-                compression_policy_name,
-                compression_policy_source,
-                compression_policy_warnings_json,
                 request_id,
             ),
         )

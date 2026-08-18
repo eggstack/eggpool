@@ -52,14 +52,10 @@ from eggpool.routing.provider import parse_model_provider
 from eggpool.runtime_dispatch import (
     SPAN_AUTH,
     SPAN_BODY_READ,
-    SPAN_COMPRESSION_ANALYZE,
-    SPAN_COMPRESSION_APPLY,
-    SPAN_COMPRESSION_POLICY,
     SPAN_CONTEXT_BUILD,
     SPAN_CONTEXT_LIMIT,
     SPAN_JSON_PARSE,
     SPAN_MODEL_PARSE,
-    SPAN_SEGMENTATION,
     SPAN_TRANSCODE_PREFLIGHT,
     DispatchSpanRecorder,
 )
@@ -67,7 +63,6 @@ from eggpool.runtime_manager import GenerationLease, wrap_stream_with_lease
 from eggpool.transcoder.context import TranscodeContext
 from eggpool.transcoder.errors import TranscodeLossError
 from eggpool.transcoder.prepared import PreparedTranscode
-from eggpool.transcoder.segmentation_guard import should_segment_request
 
 if TYPE_CHECKING:
     from collections.abc import Collection
@@ -75,7 +70,6 @@ if TYPE_CHECKING:
     from fastapi import Request
     from starlette.types import Message, Receive, Scope, Send
 
-    from eggpool.models.config import AppConfig
     from eggpool.request.response_handoff import ResponseHandoffState
 
 logger = logging.getLogger(__name__)
@@ -521,7 +515,6 @@ async def _handle_proxy_request_inner(
     # provider set (built from the registry when the generation was
     # constructed).  Reading through ``request.app.state.config`` would
     # bypass the lease and use a generation that may already be retired.
-    config: AppConfig = lease.runtime.config
     known_providers = lease.runtime.immutable_request_state.provider_ids
     with _span(span_recorder, SPAN_MODEL_PARSE):
         model_id, provider_id = parse_model_provider(model_value, known_providers)
@@ -615,205 +608,11 @@ async def _handle_proxy_request_inner(
         upstream_protocol=endpoint.protocol,
     )
 
-    # Phase 6: resolve the compression policy for this request.
-    # Resolution merges the global ``[compression]`` config with any
-    # matching ``[[compression.policies]]`` entries.  The resolver is
-    # content-private (it never inspects the request body) and
-    # fail-closed: a malformed override logs a warning and falls
-    # back to the global config.  The resolved config is what the
-    # analyzer, the applier, and the finalizer all see, so observe
-    # mode and safe mode always agree on the per-request knobs.
-    #
-    # Resolution happens pre-route.  Provider id / kind / resolved
-    # model are not yet known, so provider-specific overrides are
-    # silently skipped pre-route; operators who need provider-
-    # specific policy must do a second post-route pass (or rely on
-    # the broader client / protocol / model match fields).
-    #
-    # This runs BEFORE the segmentation guard so the guard reads the
-    # effective (possibly policy-overridden) compression enabled/mode
-    # instead of the raw global config.
-    compression_policy = lease.runtime.compression_policy
-    with _span(span_recorder, SPAN_COMPRESSION_POLICY):
-        resolved_compression_policy: Any = None
-        if compression_policy is not None:
-            try:
-                from eggpool.transcoder.compression import (
-                    CompressionPolicyContext,
-                    resolve_compression_policy,
-                )
-
-                policy_ctx = CompressionPolicyContext(
-                    client_id=request.headers.get("x-eggpool-client"),
-                    client_name=request.headers.get("user-agent"),
-                    source_protocol=endpoint.protocol,
-                    target_protocol=endpoint.protocol,
-                    requested_model=model_value,
-                    resolved_model=None,
-                    provider_id=None,
-                    provider_kind=None,
-                    transcoded=False,
-                )
-                resolved_compression_policy = resolve_compression_policy(
-                    compression_policy,
-                    policy_ctx,
-                )
-            except Exception:  # noqa: BLE001
-                logger.debug(
-                    "compression_policy_resolution_failed",
-                    extra={"proxy_request_id": request_id},
-                    exc_info=True,
-                )
-                resolved_compression_policy = None
-
-    # The analyzer and applier read the resolved config when
-    # available; fall back to the global config when resolution
-    # failed (the resolver itself is fail-closed, but the import or
-    # the call could still raise on malformed state).
-    effective_compression_policy: Any = (
-        resolved_compression_policy.config
-        if resolved_compression_policy is not None
-        else compression_policy
-    )
-
-    # Phase 2.1 (performance optimization): segmentation is skipped
-    # when compression is disabled.  The guard checks the
-    # effective compression policy resolved above rather than the
-    # raw global config, so a scoped ``[[compression.policies]]``
-    # override that enables observe/safe is correctly detected.
-    _seg_compression_enabled = (
-        getattr(effective_compression_policy, "enabled", False)
-        if effective_compression_policy is not None
-        else False
-    )
-    _seg_compression_mode = (
-        str(getattr(effective_compression_policy, "mode", "off"))
-        if effective_compression_policy is not None
-        else "off"
-    )
-    _segmentation_needed = should_segment_request(
-        config,
-        compression_enabled=_seg_compression_enabled,
-        compression_mode=_seg_compression_mode,
-        cache_observability_enabled=False,
-    )
-
+    # Semantic compression has been removed.  Segmentation and
+    # compression are no longer performed; the request body is
+    # passed through unchanged.
     segmentation_result: Any = None
-    segmentation_not_collected = False
-    if _segmentation_needed:
-        with _span(span_recorder, SPAN_SEGMENTATION):
-            try:
-                from eggpool.transcoder.segmentation import segment_request
-
-                segmentation_result = segment_request(
-                    payload, protocol=endpoint.protocol
-                )
-            except Exception:  # noqa: BLE001
-                # Segmentation is observational.  A failure here must never
-                # block the request path; the finalizer falls back to
-                # ``segmentation_status = 'empty_request'``.
-                logger.debug(
-                    "segmentation_failed",
-                    extra={"proxy_request_id": request_id},
-                    exc_info=True,
-                )
-                segmentation_result = None
-    else:
-        segmentation_not_collected = True
-
-    # Phase 4: run the observe-mode compression analyzer.  The
-    # analyzer is observational and never mutates the request
-    # body.  It runs only when ``[compression] enabled = true``;
-    # otherwise it short-circuits to ``None`` and the finalizer
-    # records no compression fields.  Failure here must never
-    # block the request path.
-    #
-    # When ``mode == "safe"`` the analyzer is skipped entirely; the
-    # safe-mode applier builds an equivalent observation from its
-    # own pass so we don't run two full compression walks for the
-    # same request.  The finalizer duck-types against the
-    # ``CompressionObservation`` shape, so the safe-mode adapter
-    # exposed by ``build_safe_mode_observation`` covers the same
-    # fields without requiring an independent analyzer call.
-    compression_observation: Any = None
-    if (
-        effective_compression_policy is not None
-        and getattr(effective_compression_policy, "enabled", False)
-        and getattr(effective_compression_policy, "mode", None) == "observe"
-    ):
-        with _span(span_recorder, SPAN_COMPRESSION_ANALYZE):
-            try:
-                from eggpool.transcoder.compression import analyze_compression
-
-                compression_observation = analyze_compression(
-                    segmentation_result,
-                    policy=effective_compression_policy,
-                )
-            except Exception:  # noqa: BLE001
-                logger.debug(
-                    "compression_analysis_failed",
-                    extra={"proxy_request_id": request_id},
-                    exc_info=True,
-                )
-                compression_observation = None
-
-    # Phase 5: run the safe-mode deterministic compressor.  The
-    # applier mutates only eligible volatile_suffix segments,
-    # applying transforms through path-level copy-on-write (no-op
-    # runs return the original payload by identity, applied runs
-    # copy only the dict/list ancestors on mutated paths and
-    # preserve unchanged subtrees by reference); stable prefixes
-    # and cache-protected blocks are never touched.  Runs only when
-    # ``[compression] enabled = true`` AND ``[compression] mode =
-    # 'safe'``; otherwise ``compression_result`` stays ``None`` and
-    # the finalizer records safe defaults.  Failure here must never
-    # block the request path.
-    compression_result: Any = None
-    if (
-        effective_compression_policy is not None
-        and getattr(effective_compression_policy, "enabled", False)
-        and getattr(effective_compression_policy, "mode", None) == "safe"
-        and segmentation_result is not None
-    ):
-        with _span(span_recorder, SPAN_COMPRESSION_APPLY):
-            try:
-                from eggpool.transcoder.compression.apply import (
-                    apply_safe_compression,
-                    build_safe_mode_observation,
-                )
-
-                compression_result = apply_safe_compression(
-                    payload=payload,
-                    segmentation=segmentation_result,
-                    policy=effective_compression_policy,
-                    text_hints=None,  # production is content-private
-                )
-                # Derive the observation from a single safe-mode pass
-                # rather than running the analyzer separately (Phase 2
-                # dispatch optimization).  ``compression_observation``
-                # stays ``None`` when the applier fails so we don't
-                # synthesize an observation that disagrees with the
-                # request path's actual behavior.
-                compression_observation = build_safe_mode_observation(
-                    compression_result
-                )
-            except Exception:  # noqa: BLE001
-                logger.debug(
-                    "compression_apply_failed",
-                    extra={"proxy_request_id": request_id},
-                    exc_info=True,
-                )
-                compression_result = None
-                compression_observation = None
-
-    # Determine the input payload for model rewrite: when Phase 5
-    # compression applied transforms, use the mutated payload;
-    # otherwise use the original client payload unchanged.
-    payload_for_rewrite: dict[str, Any] = payload
-    if compression_result is not None and getattr(compression_result, "applied", False):
-        transformed = getattr(compression_result, "transformed_payload", None)
-        if isinstance(transformed, dict):
-            payload_for_rewrite = cast("dict[str, Any]", transformed)
+    segmentation_not_collected = True
 
     # Phase 5: precompute thinking requirement and reservation tokens so the
     # coordinator does not have to reparse ``original_body`` (and re-classify)
@@ -847,22 +646,13 @@ async def _handle_proxy_request_inner(
         # remains the immutable parsed client snapshot. Keep the normalized
         # model in the decoded object so final serialization cannot fall back
         # to the client-suffixed model.
-        provider_payload = dict(payload_for_rewrite)
+        provider_payload = dict(payload)
         if provider_payload.get("model") != model_id:
             provider_payload["model"] = model_id
         if provider_payload != payload:
-            if compression_result is not None and getattr(
-                compression_result, "applied", False
-            ):
-                provider_bound.adopt_provider_payload(
-                    provider_payload,
-                    reason="compression",
-                    increment_generation=False,
-                )
-            else:
-                provider_bound.set_provider_payload(
-                    provider_payload, increment_generation=False
-                )
+            provider_bound.set_provider_payload(
+                provider_payload, increment_generation=False
+            )
 
         context = ProxyRequestContext(
             request_id=request_id,
@@ -885,54 +675,12 @@ async def _handle_proxy_request_inner(
             transcode_context=transcode_ctx,
             segmentation=segmentation_result,
             segmentation_not_collected=segmentation_not_collected,
-            compression_observation=compression_observation,
-            compression_result=compression_result,
-            resolved_compression_policy=resolved_compression_policy,
             prepared_transcode=prepared_transcode,
             estimated_reservation_tokens=precomputed_reservation_tokens,
             thinking_requirement=precomputed_thinking_req,
             estimated_context_input_tokens=precomputed_context_input_tokens,
             parsed_payload=parsed_payload,
             provider_bound=provider_bound,
-        )
-
-    if segmentation_result is not None:
-        logger.debug(
-            "request_segmented",
-            extra={
-                "proxy_request_id": request_id,
-                "model": model_id,
-                "protocol": endpoint.protocol,
-                "segmentation_status": str(
-                    getattr(segmentation_result, "status", "empty_request")
-                ),
-                "stable_prefix_estimated_tokens": getattr(
-                    segmentation_result, "stable_prefix_estimated_tokens", None
-                ),
-                "semi_stable_estimated_tokens": getattr(
-                    segmentation_result, "semi_stable_estimated_tokens", None
-                ),
-                "volatile_estimated_tokens": getattr(
-                    segmentation_result, "volatile_estimated_tokens", None
-                ),
-                "stable_prefix_bytes": getattr(
-                    segmentation_result, "stable_prefix_bytes", None
-                ),
-                "volatile_bytes": getattr(segmentation_result, "volatile_bytes", None),
-                "compressible_candidate_count": (
-                    segmentation_result.compressible_candidate_count()
-                ),
-                "protected_count": segmentation_result.protected_count(),
-            },
-        )
-    elif not _segmentation_needed:
-        logger.debug(
-            "segmentation_skipped",
-            extra={
-                "proxy_request_id": request_id,
-                "model": model_id,
-                "protocol": endpoint.protocol,
-            },
         )
 
     logger.debug(

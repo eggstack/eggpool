@@ -128,7 +128,7 @@ rules and never introduce a generic EAV/property store.
 - Catalog refresh persistence is delta-based: stable semantic model/provider fields are compared outside the write transaction, compact per-account freshness lives in `catalog_refresh_state`, and steady successful pings are sampled internally while failures/transitions remain immediate.
 - **Load-based, never cost-based**: request count + token count + active count + health
 - Pending request/token claims are included in the existing `QuotaEstimator` reservation-load snapshot; they are not a second routing system or durable table.
-- `QuotaFairScorer` does NOT consume cache/compression fields
+- `QuotaFairScorer` does NOT consume cache fields
 
 Routing trace batches use one `executemany` call inside the transaction owner’s
 transaction. Unexpected database errors propagate to the writer or fatal

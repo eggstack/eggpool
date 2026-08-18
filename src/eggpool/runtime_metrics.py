@@ -742,9 +742,7 @@ class RuntimeMetricsService:
             "guardrails": {
                 "routing_cache_compression_mode": "reporting_only",
                 "routing_uses_cache_metrics": False,
-                "routing_uses_compression_metrics": False,
                 "routing_uses_stable_prefix_hash": False,
-                "routing_uses_compression_policy": False,
                 "route_scorer_inputs": [
                     "health",
                     "quota",

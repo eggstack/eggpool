@@ -1,11 +1,9 @@
-"""Phase 8 routing guardrails: cache/compression metrics NEVER enter routing.
+"""Routing guardrails: cache/compression metrics NEVER enter routing.
 
-Proves that the QuotaFairScorer, Router, and compression pipeline are
-completely decoupled.  Cache/compression metrics are reporting-only by
+Proves that the QuotaFairScorer and Router are completely decoupled
+from cache/compression metrics.  These metrics are reporting-only by
 default and must not influence account selection, health scoring, or
 route selection.
-
-See plans/cache_compression_phase_08_routing_guardrails.md.
 """
 
 from __future__ import annotations
@@ -13,7 +11,6 @@ from __future__ import annotations
 import dataclasses
 import inspect
 import os
-from typing import Any
 
 import pytest
 
@@ -27,14 +24,6 @@ from eggpool.quota.estimation import (
 )
 from eggpool.quota.scorer import QuotaFairScorer, RoutingScore
 from eggpool.routing.router import Router
-from eggpool.transcoder.compression.policy import (
-    CompressionConfig,
-    CompressionPolicyOverride,
-)
-from eggpool.transcoder.compression.policy_resolver import (
-    CompressionPolicyContext,
-    resolve_compression_policy,
-)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -361,165 +350,7 @@ class TestSameProviderFairnessUnderAdversarialCacheAndCompression:
 
 
 # ---------------------------------------------------------------------------
-# 4. TestCompressionFallbackDoesNotAffectHealth
-# ---------------------------------------------------------------------------
-
-
-class TestCompressionFallbackDoesNotAffectHealth:
-    """Compression fail-closed fallback MUST NOT mark a provider unhealthy."""
-
-    def test_failed_fallback_does_not_mark_account_unhealthy(self) -> None:
-        """When apply_safe_compression returns failed_fallback=True, the
-        HealthManager must remain in a healthy state."""
-        from collections import Counter
-
-        from eggpool.health.health_manager import HealthManager
-        from eggpool.transcoder.compression.apply import apply_safe_compression
-        from eggpool.transcoder.compression.policy import CompressionConfig
-        from eggpool.transcoder.segmentation import (
-            RequestSegment,
-            SegmentationResult,
-            SegmentationStatus,
-            SegmentKind,
-            SegmentSource,
-        )
-
-        health = HealthManager()
-        health.record_success("acct_a")
-
-        snap_before = health.get_account_health("acct_a")
-        assert snap_before.health_state == "healthy"
-        assert snap_before.is_healthy is True
-
-        # apply_safe_compression itself never touches HealthManager;
-        # this test proves the boundary: the compression result is
-        # purely informational and the caller is responsible for
-        # routing/health decisions.
-        #
-        # Construct a payload and a minimal segmentation with one
-        # volatile segment that points to a string in the payload.
-        seg = RequestSegment(
-            kind=SegmentKind.VOLATILE_SUFFIX,
-            source=SegmentSource.LATEST_USER_MESSAGE,
-            message_index=0,
-            content_path=("messages", 0, "content"),
-            byte_length=11,
-            estimated_tokens=3,
-            protected=False,
-            compressible_candidate=True,
-            reason="volatile_suffix",
-        )
-        seg_count: dict[SegmentKind, int] = Counter({SegmentKind.VOLATILE_SUFFIX: 1})
-        segmentation = SegmentationResult(
-            status=SegmentationStatus.SEGMENTED,
-            segments=(seg,),
-            segment_count_by_kind=seg_count,
-            stable_prefix_bytes=0,
-            semi_stable_bytes=0,
-            volatile_bytes=11,
-            stable_prefix_estimated_tokens=None,
-            semi_stable_estimated_tokens=None,
-            volatile_estimated_tokens=3,
-            stable_prefix_hash="original_hash",
-            request_shape_hash="shape_hash",
-            cache_control_present=False,
-        )
-        payload: dict[str, Any] = {
-            "model": "gpt-4",
-            "messages": [{"role": "user", "content": "hello world"}],
-        }
-
-        policy = CompressionConfig(
-            enabled=True,
-            mode="safe",
-            min_candidate_tokens=0,
-            min_savings_tokens=0,
-        )
-        _result = apply_safe_compression(payload, segmentation, policy=policy)
-
-        # The result may or may not be a failed_fallback depending on
-        # the segmentation; what matters is that HealthManager is
-        # completely unaffected.
-        snap_after = health.get_account_health("acct_a")
-        assert snap_after.health_state == "healthy"
-        assert snap_after.is_healthy is True
-        assert snap_after.consecutive_failures == 0
-
-    def test_compression_result_never_modifies_health_manager(self) -> None:
-        """The apply_safe_compression function has no dependency on
-        HealthManager and cannot mutate it."""
-        import ast
-        import pathlib
-
-        apply_src = pathlib.Path(
-            "src/eggpool/transcoder/compression/apply.py"
-        ).read_text()
-        tree = ast.parse(apply_src)
-        imports = [
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, (ast.Import, ast.ImportFrom))
-        ]
-        for imp in imports:
-            if isinstance(imp, ast.ImportFrom):
-                assert imp.module != "eggpool.health.health_manager", (
-                    "apply.py must not import HealthManager"
-                )
-            elif isinstance(imp, ast.Import):
-                for alias in imp.names:
-                    assert alias.name != "eggpool.health.health_manager", (
-                        "apply.py must not import HealthManager"
-                    )
-
-
-# ---------------------------------------------------------------------------
-# 5. TestPolicyResolverDoesNotAffectRouting
-# ---------------------------------------------------------------------------
-
-
-class TestPolicyResolverDoesNotAffectRouting:
-    """Phase 6 policy resolution is informational only; it never
-    modifies routing state or removes accounts from routing."""
-
-    def test_policy_disabling_compression_does_not_change_routing(self) -> None:
-        """Override disables compression post-route; routing state unchanged."""
-        base = CompressionConfig(enabled=True)
-        override = CompressionPolicyOverride(name="off", enabled=False)
-        ctx = CompressionPolicyContext(client_id="x", source_protocol="openai")
-        result = resolve_compression_policy(base, ctx, overrides=[override])
-
-        assert result.name == "off"
-        assert result.config.enabled is False
-        # The resolver returns a config; the test confirms no exceptions,
-        # no route-state mutation; the policy object is information-only.
-        assert result.warnings == ()
-
-    def test_policy_enabling_safe_compression_does_not_change_routing(
-        self,
-    ) -> None:
-        """Override enables safe compression; routing state unchanged."""
-        base = CompressionConfig(enabled=False)
-        override = CompressionPolicyOverride(name="on", enabled=True)
-        ctx = CompressionPolicyContext(client_id="y", source_protocol="openai")
-        result = resolve_compression_policy(base, ctx, overrides=[override])
-
-        assert result.name == "on"
-        assert result.config.enabled is True
-        assert result.warnings == ()
-
-    def test_resolver_returns_frozen_result(self) -> None:
-        """ResolvedCompressionPolicy is frozen; cannot be mutated."""
-        from dataclasses import FrozenInstanceError
-
-        base = CompressionConfig(enabled=True)
-        ctx = CompressionPolicyContext(client_id="a")
-        result = resolve_compression_policy(base, ctx)
-        with pytest.raises(FrozenInstanceError):
-            result.name = "changed"  # type: ignore[misc]
-
-
-# ---------------------------------------------------------------------------
-# 6. TestNoPostCompressionReroute
+# 4. TestNoPostCompressionReroute
 # ---------------------------------------------------------------------------
 
 

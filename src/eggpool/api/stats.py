@@ -566,56 +566,6 @@ async def handle_canonical_request_segmentation(
     )
 
 
-async def handle_compression_observability(
-    request: Request, period: str | None = "24h"
-) -> Response:
-    """GET /api/stats/compression-observability.
-
-    Phase 4 observe-mode compression accounting.  Reports
-    candidate counts, eligible vs suppressed token totals, the
-    analyzer's median/p95 latency, and the top reason codes so
-    operators can see what a future phase would compress without
-    enabling the actual compression.
-
-    Output shape:
-
-    - ``period``                              : resolved time-range label
-    - ``total_requests``                      : finalized rows in window
-    - ``by_status``                           : ``{disabled, observed,
-      ...} -> request_count``
-    - ``by_mode``                             : ``{observe, ...} -> request_count``
-    - ``per_provider_status``                 : (provider_id,
-      upstream_protocol) -> per-status dict
-    - ``per_model_status``                    : model_id -> per-status
-      + totals dict
-    - ``totals``                              : aggregate
-      ``candidate_count``, ``eligible_count``, ``suppressed_count``,
-      ``estimated_original_tokens``,
-      ``estimated_compressed_tokens``,
-      ``estimated_savings_tokens``,
-      ``analyzer_latency_ms_total`` /
-      ``analyzer_latency_ms_median`` /
-      ``analyzer_latency_ms_p95``,
-      ``warning_count``, ``observed_requests``
-    - ``top_reason_codes``                    : ``[(code, count), ...]``
-      aggregated across the window
-    - ``by_policy``                          : Phase 6 resolved-policy
-      rollup (see :func:`fetch_compression_observability` for the
-      full shape).  ``"<global>"`` is the sentinel for requests
-      that did not match any ``[[compression.policies]]`` entry.
-    - ``by_policy_source``                   : ``{"global",
-      "policy:<name>", ...} -> request_count`` stable audit strings.
-    - ``policy_warning_count_total``         : sum of compression
-      warning counts across resolved-policy rows in window.
-    """
-    from eggpool.stats import resolve_time_range
-
-    time_range = resolve_time_range(period)
-    stats = _get_stats(request)
-    payload = await stats.get_compression_observability(time_range)
-    return JSONResponse(content={"period": time_range.label, **payload})
-
-
 async def handle_recent_requests(
     request: Request,
     limit: int = 50,
@@ -821,14 +771,6 @@ def register_stats_routes(app: Any, require_auth: bool = False) -> None:
         methods=["GET"],
         dependencies=dependencies,
     )
-    # Phase 4: observe-mode compression accounting.  Same auth
-    # surface as the cache-observability endpoint.
-    app.add_api_route(
-        path="/api/stats/compression-observability",
-        endpoint=handle_compression_observability,
-        methods=["GET"],
-        dependencies=dependencies,
-    )
     # Per-request trace endpoint.  Per-request traces expose the
     # selected model, prompt volume, and error detail that operators
     # consider sensitive, so it is ALWAYS auth-gated even when the
@@ -858,7 +800,6 @@ __all__ = [
     "handle_bandwidth",
     "handle_cache_observability",
     "handle_canonical_request_segmentation",
-    "handle_compression_observability",
     "handle_errors",
     "handle_events",
     "handle_ip_stats",

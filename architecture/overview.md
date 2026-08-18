@@ -27,12 +27,11 @@ the OpenAI Responses API or claim full OpenAI API parity.
 | 14 | [Data Models](#14-data-models) | Pydantic config, domain, API, database models | [deep-dive-models.md](deep-dive-models.md) |
 | 15 | [External Integrations](#15-external-integrations) | OpenCode, Claude Code, Aider, Codex, 8+ tools | [deep-dive-integrations.md](deep-dive-integrations.md) |
 | 16 | [Security](#16-security) | Header redaction, API key auth, constant-time compare | [deep-dive-security.md](deep-dive-security.md) |
-| 17 | [Cache & Compression](#17-cache--compression) | Observability, safe compression, provider contracts | [deep-dive-cache-compression.md](deep-dive-cache-compression.md) |
-| 18 | [Observability](#18-observability) | Routing trace writer, structured diagnostics | [deep-dive-observability.md](deep-dive-observability.md) |
-| 19 | [Retry Classification](#19-retry-classification) | Error categorization, backoff, retry decisions | [deep-dive-retry.md](deep-dive-retry.md) |
-| 20 | [Metrics & Telemetry](#20-metrics--telemetry) | Thinking counters, event-loop lag, dispatch overhead | [deep-dive-metrics.md](deep-dive-metrics.md) |
-| 21 | [Lifecycle Management](#21-lifecycle-management) | Backup, restore, uninstall orchestration | [deep-dive-lifecycle.md](deep-dive-lifecycle.md) |
-| 22 | [Deployment & Operations](#22-deployment--operations) | Systemd, scripts, install, operational tools | [deep-dive-deployment.md](deep-dive-deployment.md) |
+| 17 | [Observability](#17-observability) | Routing trace writer, structured diagnostics | [deep-dive-observability.md](deep-dive-observability.md) |
+| 18 | [Retry Classification](#18-retry-classification) | Error categorization, backoff, retry decisions | [deep-dive-retry.md](deep-dive-retry.md) |
+| 19 | [Metrics & Telemetry](#19-metrics--telemetry) | Thinking counters, event-loop lag, dispatch overhead | [deep-dive-metrics.md](deep-dive-metrics.md) |
+| 20 | [Lifecycle Management](#20-lifecycle-management) | Backup, restore, uninstall orchestration | [deep-dive-lifecycle.md](deep-dive-lifecycle.md) |
+| 21 | [Deployment & Operations](#21-deployment--operations) | Systemd, scripts, install, operational tools | [deep-dive-deployment.md](deep-dive-deployment.md) |
 
 ## System Architecture at a Glance
 
@@ -63,7 +62,7 @@ the OpenAI Responses API or claim full OpenAI API parity.
 │  ┌─────────────────────────────────────────────────▼────────────┐  │
 │  │                     SQLite (WAL mode)                         │  │
 │  │  requests | attempts | routing_decisions | models | accounts  │  │
-│  │  quotas | pings | backoffs | model_info_* | compression_*    │  │
+│  │  quotas | pings | backoffs | model_info_*                 │  │
 │  └──────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────┘
                                 │
@@ -107,7 +106,7 @@ The CLI entry point is a two-phase bootstrap: `cli.py` (73 lines) first tries `f
 | **Path** | `src/eggpool/request/`, `src/eggpool/api/`, `src/eggpool/proxy/` |
 | **Deep Dive** | [deep-dive-request-lifecycle.md](deep-dive-request-lifecycle.md) |
 
-The request lifecycle is orchestrated by `RequestCoordinator` in `request/coordinator.py`. API handlers (`api/chat_completions.py` for OpenAI, `api/messages.py` for Anthropic) parse the request and call `handle_proxy_request()` — a shared pipeline in `api/proxy_request.py` that handles auth, body parsing, model/provider resolution, capability checks, context-limit enforcement, transcoding preflight, segmentation, compression, dispatch, and response handling. The coordinator persists each attempt to SQLite before dispatch, manages retry with failover, and ensures every terminal outcome is owned by exactly one `RequestFinalizationJob`. Dispatch retries are limited to typed HTTPX transport failures before an explicit response-handoff fact; local preparation and response-adaptation faults are isolated as local errors. Non-streaming adaptation precedes durable success, while streaming responses flow through `proxy/sse.py` (bounded SSE decoder) and `proxy/sse_observer.py` (diagnostic observation).
+The request lifecycle is orchestrated by `RequestCoordinator` in `request/coordinator.py`. API handlers (`api/chat_completions.py` for OpenAI, `api/messages.py` for Anthropic) parse the request and call `handle_proxy_request()` — a shared pipeline in `api/proxy_request.py` that handles auth, body parsing, model/provider resolution, capability checks, context-limit enforcement, transcoding preflight, dispatch, and response handling. The coordinator persists each attempt to SQLite before dispatch, manages retry with failover, and ensures every terminal outcome is owned by exactly one `RequestFinalizationJob`. Dispatch retries are limited to typed HTTPX transport failures before an explicit response-handoff fact; local preparation and response-adaptation faults are isolated as local errors. Non-streaming adaptation precedes durable success, while streaming responses flow through `proxy/sse.py` (bounded SSE decoder) and `proxy/sse_observer.py` (diagnostic observation).
 
 **Related**: [deep-dive-routing.md](deep-dive-routing.md), [deep-dive-transcoder.md](deep-dive-transcoder.md), [deep-dive-providers.md](deep-dive-providers.md), [deep-dive-health.md](deep-dive-health.md)
 
@@ -118,9 +117,9 @@ The request lifecycle is orchestrated by `RequestCoordinator` in `request/coordi
 | **Path** | `src/eggpool/transcoder/` |
 | **Deep Dive** | [deep-dive-transcoder.md](deep-dive-transcoder.md) |
 
-Transparent request/response format conversion between OpenAI Chat Completions and Anthropic Messages protocols. When a client sends Anthropic Messages but the routed provider only supports OpenAI Chat Completions (or vice versa), the transcoder translates both the request body and the streaming response. `BodyTranscoder` Protocol (`protocol.py`) defines the interface; `OpenAIToAnthropic` and `AnthropicToOpenAI` are the concrete implementations. Streaming translation (`streaming.py`) handles SSE frame-by-frame with synchronous `translate_frame()` and `finish()`. The transcoder also handles tool-use translation, thinking/reasoning control normalization, and configurable reasoning field names. A compression sub-package (`transcoder/compression/`) implements segmentation, observe-mode analysis, safe-mode suffix compression, and policy overrides.
+Transparent request/response format conversion between OpenAI Chat Completions and Anthropic Messages protocols. When a client sends Anthropic Messages but the routed provider only supports OpenAI Chat Completions (or vice versa), the transcoder translates both the request body and the streaming response. `BodyTranscoder` Protocol (`protocol.py`) defines the interface; `OpenAIToAnthropic` and `AnthropicToOpenAI` are the concrete implementations. Streaming translation (`streaming.py`) handles SSE frame-by-frame with synchronous `translate_frame()` and `finish()`. The transcoder also handles tool-use translation, thinking/reasoning control normalization, and configurable reasoning field names.
 
-**Related**: [deep-dive-cache-compression.md](deep-dive-cache-compression.md), [deep-dive-providers.md](deep-dive-providers.md), [deep-dive-request-lifecycle.md](deep-dive-request-lifecycle.md)
+**Related**: [deep-dive-providers.md](deep-dive-providers.md), [deep-dive-request-lifecycle.md](deep-dive-request-lifecycle.md)
 
 ### 4. Routing & Quota
 
@@ -195,7 +194,7 @@ Circuit breaker-based health tracking for accounts and models. `HealthManager` (
 | **Path** | `src/eggpool/dashboard/`, `src/eggpool/stats/`, `src/eggpool/api/stats.py` |
 | **Deep Dive** | [deep-dive-dashboard.md](deep-dive-dashboard.md) |
 
-Self-updating server-rendered HTML dashboard with 50+ themes. `dashboard/routes.py` registers page routes (overview, cache, runtime, etc.) and JSON API endpoints. `dashboard/render.py` handles HTML rendering with `CacheAdvancedState` controlling disclosure visibility. The stats layer (`stats/service.py`, `stats/queries.py`) provides SQL query functions for timeseries, segmentation, cache metrics, transcoding stats, and dashboard explanations. JSON API endpoints under `/api/stats/` expose summary, accounts, models, timeseries, errors, latency, pings, routing, operational, and pending-health data. The dashboard is auth-gated separately from the proxy API.
+Self-updating server-rendered HTML dashboard with 50+ themes. `dashboard/routes.py` registers page routes (overview, cache, runtime, etc.) and JSON API endpoints. `dashboard/render.py` handles HTML rendering with `CacheAdvancedState` controlling disclosure visibility. The stats layer (`stats/service.py`, `stats/queries.py`) provides SQL query functions for timeseries, cache metrics, transcoding stats, and dashboard explanations. JSON API endpoints under `/api/stats/` expose summary, accounts, models, timeseries, errors, latency, pings, routing, operational, and pending-health data. The dashboard is auth-gated separately from the proxy API.
 
 **Related**: [deep-dive-metrics.md](deep-dive-metrics.md), [deep-dive-observability.md](deep-dive-observability.md)
 
@@ -265,18 +264,7 @@ Header redaction middleware (`security/redaction.py`) strips configured sensitiv
 
 **Related**: [deep-dive-core.md](deep-dive-core.md)
 
-### 17. Cache & Compression
-
-| | |
-|---|---|
-| **Path** | `src/eggpool/transcoder/compression/`, `src/eggpool/proxy/normalized_usage.py`, `src/eggpool/transcoder/cache_stability.py` |
-| **Deep Dive** | [deep-dive-cache-compression.md](deep-dive-cache-compression.md) |
-
-Cache-preserving request shaping covers cache reporting, canonical segmentation, transcoder cache stability, observe/safe compression, policy overrides, and dashboard/runtime views. The stack is observational by default — no request body, route, or scoring is altered unless the operator explicitly opts in. `transcoder/compression/analyzer.py` analyzes opportunities; `transcoder/compression/apply.py` applies safe-mode transforms with fail-closed stable-prefix verification. Routing is hardcoded to never consume cache/compression fields.
-
-**Related**: [deep-dive-transcoder.md](deep-dive-transcoder.md)
-
-### 18. Observability
+### 17. Observability
 
 | | |
 |---|---|
@@ -287,7 +275,7 @@ Routing trace persistence for debugging and dashboard drill-down. `observability
 
 **Related**: [deep-dive-routing.md](deep-dive-routing.md), [deep-dive-dashboard.md](deep-dive-dashboard.md)
 
-### 19. Retry Classification
+### 18. Retry Classification
 
 | | |
 |---|---|
@@ -298,7 +286,7 @@ Upstream failure classification and retry decision logic. `retry/classification.
 
 **Related**: [deep-dive-health.md](deep-dive-health.md), [deep-dive-request-lifecycle.md](deep-dive-request-lifecycle.md), [deep-dive-providers.md](deep-dive-providers.md)
 
-### 20. Metrics & Telemetry
+### 19. Metrics & Telemetry
 
 | | |
 |---|---|
@@ -309,7 +297,7 @@ Structured observability across three subsystems. `metrics/buffer.py` implements
 
 **Related**: [deep-dive-dashboard.md](deep-dive-dashboard.md), [deep-dive-request-lifecycle.md](deep-dive-request-lifecycle.md), [deep-dive-runtime.md](deep-dive-runtime.md)
 
-### 21. Lifecycle Management
+### 20. Lifecycle Management
 
 | | |
 |---|---|
@@ -320,7 +308,7 @@ Backup, restore, and uninstall orchestration. `lifecycle/backup.py` creates time
 
 **Related**: [deep-dive-core.md](deep-dive-core.md), [deep-dive-deployment.md](deep-dive-deployment.md), [deep-dive-database.md](deep-dive-database.md)
 
-### 22. Deployment & Operations
+### 21. Deployment & Operations
 
 | | |
 |---|---|
@@ -389,7 +377,6 @@ src/eggpool/
 ├── security/          # Header redaction, security utilities
 ├── stats/             # Statistics queries and service
 ├── transcoder/        # Protocol transcoding (OpenAI ↔ Anthropic)
-│   └── compression/   # Safe compression and policy
 ├── _share/            # Bundled config examples for pipx
 ├── auth.py            # Local API key auth (constant-time)
 ├── cli.py             # CLI bootstrap (tiny)
@@ -414,7 +401,7 @@ tests/
 ├── perf/              # 3 files — hot-path microbenchmarks
 ├── live/              # 1 file — opt-in real-network enrichment
 ├── helpers/           # Shared test utilities
-└── fixtures/          # Test fixtures (cache_compression, streaming, etc.)
+└── fixtures/          # Test fixtures (streaming, etc.)
 
 scripts/               # 13 operational, diagnostic, installer scripts
 deploy/                # Systemd unit, logrotate, env template
@@ -436,7 +423,6 @@ Runtime configuration lives in `config.toml` + `.env` (API keys). Key sections:
 | `[models]` | `collapse_models`, catalog withdrawal |
 | `[providers.<id>]` | Per-provider config (URL, auth, protocols, accounts) |
 | `[transcoder]` | Protocol transcoding features, thinking/reasoning |
-| `[compression]` | Request shaping (observe/safe modes, transforms) |
 | `[model_info]` | Source enablement, TTLs, overrides |
 | `[dashboard]` | Theme, auth policy |
 | `[metrics]` | Buffering, flush modes |

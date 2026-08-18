@@ -273,11 +273,6 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     # a fresh policy; no shared module-level singleton survives the
     # swap.
     "transcoder": ReloadDisposition.LIVE,
-    # ``compression`` is consumed via ``coordinator._compression_policy``;
-    # the candidate builder rebuilds it from ``candidate_config.compression``
-    # so policy changes take effect
-    # on the next generation.
-    "compression": ReloadDisposition.LIVE,
     # Milestone D2: model-info scheduling fields consumed by the
     # ``model_info_refresh`` and ``model_info_canonical_backfill``
     # tasks; the process supervisor reconfigures the tasks with the

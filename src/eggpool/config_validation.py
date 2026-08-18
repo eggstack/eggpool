@@ -355,7 +355,6 @@ def compute_runtime_fingerprint(config: AppConfig) -> str:
         "backup",
         "network",
         "transcoder",
-        "compression",
         "model_info",
     ):
         section = getattr(config, section_name)

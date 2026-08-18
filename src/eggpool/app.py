@@ -605,7 +605,6 @@ def mirror_generation_on_app_state(
         "account_backoff_repo": generation.account_backoff_repo,
         "cost_calculator": generation.cost_calculator,
         "transcoder_policy": generation.transcoder_policy,
-        "compression_policy": generation.compression_policy,
         "dispatch_overhead_recorder": generation.dispatch_overhead_recorder,
         "dispatch_span_recorder": generation.dispatch_span_recorder,
         "stats": generation.stats_service,
@@ -655,9 +654,8 @@ def _log_operational_profile(
       write-pressure controls.
     - ``metrics_write_mode`` / ``metrics_flush_interval_s``: metrics
       coalescer knobs.
-    - ``transcoder_enabled`` / ``compression_enabled`` /
-      ``compression_mode``: pre-upstream observability /
-      transformation modes.
+    - ``transcoder_enabled``: pre-upstream transcoder
+      mode.
     - ``task_total`` / ``task_process_owned`` /
       ``task_generation_leased``: background-task ownership counts.
     - ``model_info_enabled``: whether the model-info service is
@@ -687,8 +685,6 @@ def _log_operational_profile(
         getattr(config.routing, "trace", None), "queue_capacity", 1000
     )
     transcoder_enabled = bool(getattr(config.transcoder, "enabled", True))
-    compression_enabled = bool(getattr(config.compression, "enabled", False))
-    compression_mode = str(getattr(config.compression, "mode", "off"))
 
     # Runtime topology: process identity and asyncio
     # loop identity so operators can verify the single-loop model.
@@ -712,8 +708,6 @@ def _log_operational_profile(
         "metrics_write_mode": config.metrics.write_mode,
         "metrics_flush_interval_s": config.metrics.flush_interval_s,
         "transcoder_enabled": transcoder_enabled,
-        "compression_enabled": compression_enabled,
-        "compression_mode": compression_mode,
         "model_info_enabled": model_info_enabled,
         "task_total": len(gen_tasks) + len(proc_tasks),
         "task_process_owned": proc_owned_count,
@@ -964,7 +958,6 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     app.state.health_manager = gen_result.health_manager
     app.state.account_backoff_repo = gen_result.account_backoff_repo
     app.state.cost_calculator = gen_result.cost_calculator
-    app.state.compression_policy = gen_result.compression_policy
     app.state.dispatch_overhead_recorder = gen_result.dispatch_overhead_recorder
     app.state.dispatch_span_recorder = gen_result.dispatch_span_recorder
     app.state.stats = gen_result.stats_service

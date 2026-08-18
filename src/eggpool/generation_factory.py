@@ -81,7 +81,6 @@ class PreparedRuntimeGeneration:
     health_manager: HealthManager
     cost_calculator: CostCalculator
     transcoder_policy: Any
-    compression_policy: Any
     dispatch_overhead_recorder: DispatchOverheadRecorder
     dispatch_span_recorder: DispatchSpanRecorder | None
     account_backoff_repo: Any
@@ -220,12 +219,8 @@ class RuntimeGenerationFactory:
         registry = AccountRegistry(config)
         account_identities = await _load_account_identities(db, registry)
 
-        # -- Transcoder / compression policy snapshots ---------------------
+        # -- Transcoder policy snapshot -----------------------------------
         transcoder_policy = config.transcoder
-        shaping_policy_needed = bool(
-            config.compression.enabled or config.compression.policies
-        )
-        compression_policy = config.compression if shaping_policy_needed else None
 
         # -- Health manager (generation-owned) -----------------------------
         health_manager = HealthManager()
@@ -396,7 +391,6 @@ class RuntimeGenerationFactory:
             local_pre_upstream_recorder=local_pre_upstream_recorder,
             dispatch_span_recorder=dispatch_span_recorder,
             transcoder_policy=transcoder_policy,
-            compression_policy=compression_policy,
             stream_diagnostics=stream_diagnostics,
             routing_trace_enabled=(
                 config.routing.trace.mode != "off"
@@ -499,7 +493,6 @@ class RuntimeGenerationFactory:
             health_manager=health_manager,
             cost_calculator=cost_calculator,
             transcoder_policy=transcoder_policy,
-            compression_policy=compression_policy,
             dispatch_overhead_recorder=dispatch_overhead_recorder,
             dispatch_span_recorder=dispatch_span_recorder,
             account_backoff_repo=account_backoff_repo,
@@ -526,7 +519,6 @@ class RuntimeGenerationFactory:
             health_manager=health_manager,
             cost_calculator=cost_calculator,
             transcoder_policy=transcoder_policy,
-            compression_policy=compression_policy,
             dispatch_overhead_recorder=dispatch_overhead_recorder,
             dispatch_span_recorder=dispatch_span_recorder,
             account_backoff_repo=account_backoff_repo,

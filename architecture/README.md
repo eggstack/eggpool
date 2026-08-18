@@ -78,26 +78,6 @@ buffer before translated output is built.
 
 See [deep-dive-transcoder.md](deep-dive-transcoder.md).
 
-## Request shaping
-
-The supported request-shaping surface is deliberately small:
-
-- provider-reported cache-counter observability;
-- canonical request segmentation and cache-boundary tracking;
-- optional compression in `observe` or `safe` mode;
-- policy-scoped compression overrides;
-- bounded dashboard/runtime diagnostics.
-
-Compression is `suffix_only`. Safe transforms operate only on eligible volatile
-suffix segments, preserve stable prefixes and protected cache boundaries, and
-fail closed on integrity changes. Metrics are reporting-only and never enter
-`QuotaFairScorer`. Synthetic cache insertion, compression recommendation
-tuning, static-prefix placement, and custom DNS caching are not runtime
-features. Removed configuration blocks fail through Pydantic `extra = "forbid"`.
-
-See [deep-dive-cache-compression.md](deep-dive-cache-compression.md) and
-`docs/cache-compression.md`.
-
 ## Routing and health
 
 Routing is tier-based and load-based. `QuotaFairScorer` uses request/token load,

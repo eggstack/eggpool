@@ -208,7 +208,6 @@ async def install_test_runtime_manager(
         health_manager=coordinator._health_manager,  # pyright: ignore[reportPrivateUsage]
         cost_calculator=coordinator._cost_calculator,  # pyright: ignore[reportPrivateUsage]
         transcoder_policy=coordinator._transcoder_policy,  # pyright: ignore[reportPrivateUsage]
-        compression_policy=coordinator._compression_policy,  # pyright: ignore[reportPrivateUsage]
         dispatch_overhead_recorder=coordinator._dispatch_overhead_recorder,  # pyright: ignore[reportPrivateUsage]
         dispatch_span_recorder=coordinator._dispatch_span_recorder,  # pyright: ignore[reportPrivateUsage]
         account_backoff_repo=coordinator._account_backoff_repo,  # pyright: ignore[reportPrivateUsage]

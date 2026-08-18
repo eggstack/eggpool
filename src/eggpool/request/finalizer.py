@@ -89,37 +89,6 @@ class _FinalizationDiagnosticSnapshot:
     semi_stable_bytes: int | None = None
     volatile_bytes: int | None = None
     segmentation_summary_json: str | None = None
-    # Compression observation
-    compression_status: str = "disabled"
-    compression_mode: str | None = None
-    compression_candidate_count: int = 0
-    compression_eligible_candidate_count: int = 0
-    compression_suppressed_candidate_count: int = 0
-    compression_estimated_original_tokens: int | None = None
-    compression_estimated_compressed_tokens: int | None = None
-    compression_estimated_savings_tokens: int | None = None
-    compression_analyzer_latency_ms: float | None = None
-    compression_warning_count: int = 0
-    compression_reason_code_counts_json: str | None = None
-    compression_summary_json: str | None = None
-    # Compression result
-    compression_applied: int = 0
-    compression_transform_count: int = 0
-    compression_transforms_by_reason_json: str | None = None
-    compression_original_tokens: int | None = None
-    compression_compressed_tokens: int | None = None
-    compression_savings_tokens: int | None = None
-    compression_pre_stable_prefix_hash: str | None = None
-    compression_post_stable_prefix_hash: str | None = None
-    compression_stable_prefix_preserved: int = 1
-    compression_warnings_json: str | None = None
-    compression_latency_ms: float = 0.0
-    compression_failed_fallback: int = 0
-    compression_applied_summary_json: str | None = None
-    # Resolved compression policy
-    compression_policy_name: str | None = None
-    compression_policy_source: str | None = None
-    compression_policy_warnings_json: str | None = None
 
 
 @dataclass(slots=True)
@@ -184,35 +153,6 @@ class FinalizationData:
     # "segmentation was not run" from "segmentation ran on an empty
     # request".
     segmentation_not_collected: bool = False
-    # Phase 4 compression observation.  When ``None`` the database
-    # renders ``compression_status = 'disabled'`` with all compression
-    # columns left as ``None`` (preserving historical behaviour and
-    # respecting the default ``enabled = false`` policy).  When
-    # supplied, the analyzer's per-request roll-up — candidate
-    # counts, eligible vs suppressed token totals, analyzer latency,
-    # warning list, reason-code tallies, and a compact JSON summary —
-    # is persisted so operators can see what a future phase would
-    # compress without re-parsing the request.
-    compression_observation: Any | None = None
-    # Phase 5 compression result.  When ``None`` the Phase 5
-    # compression columns stay at their safe defaults (all zeros /
-    # None).  When supplied, the applier's per-request roll-up —
-    # applied flag, transform counts, token savings, stable-prefix
-    # hash comparison, warnings, and a compact JSON summary — is
-    # persisted so the dashboard can show actual compression outcomes.
-    compression_result: Any | None = None
-    # Phase 6 resolved compression policy.  Computed in
-    # :mod:`eggpool.api.proxy_request` by merging the global
-    # ``[compression]`` config with any matching
-    # ``[[compression.policies]]`` entries.  Carries the resolved
-    # :class:`CompressionConfig`, the audit name / source, the
-    # list of matched override names (file order), and any
-    # resolution warnings.  The finalizer extracts the name,
-    # source, and warnings into dedicated columns so dashboards
-    # can filter on resolved policy without re-running the
-    # resolver.  ``None`` when compression is disabled, when the
-    # resolver import / call failed, or on legacy / error paths.
-    resolved_compression_policy: Any | None = None
     # Canonical decision and normalized input from the failure boundary.  The
     # retained finalization owner reuses these exact objects rather than
     # reconstructing a decision from status/error class.
@@ -655,34 +595,6 @@ class RequestFinalizer:
                 segmentation_summary_json=diag.segmentation_summary_json,
                 transcoded=1 if data.transcoded else 0,
                 raw_usage_json=raw_usage_json_value,
-                compression_status=diag.compression_status,
-                compression_mode=diag.compression_mode,
-                compression_candidate_count=diag.compression_candidate_count,
-                compression_eligible_candidate_count=diag.compression_eligible_candidate_count,
-                compression_suppressed_candidate_count=diag.compression_suppressed_candidate_count,
-                compression_estimated_original_tokens=diag.compression_estimated_original_tokens,
-                compression_estimated_compressed_tokens=diag.compression_estimated_compressed_tokens,
-                compression_estimated_savings_tokens=diag.compression_estimated_savings_tokens,
-                compression_analyzer_latency_ms=diag.compression_analyzer_latency_ms,
-                compression_warning_count=diag.compression_warning_count,
-                compression_reason_code_counts_json=diag.compression_reason_code_counts_json,
-                compression_summary_json=diag.compression_summary_json,
-                compression_applied=diag.compression_applied,
-                compression_transform_count=diag.compression_transform_count,
-                compression_transforms_by_reason_json=diag.compression_transforms_by_reason_json,
-                compression_original_tokens=diag.compression_original_tokens,
-                compression_compressed_tokens=diag.compression_compressed_tokens,
-                compression_savings_tokens=diag.compression_savings_tokens,
-                compression_pre_stable_prefix_hash=diag.compression_pre_stable_prefix_hash,
-                compression_post_stable_prefix_hash=diag.compression_post_stable_prefix_hash,
-                compression_stable_prefix_preserved=diag.compression_stable_prefix_preserved,
-                compression_warnings_json=diag.compression_warnings_json,
-                compression_latency_ms=diag.compression_latency_ms,
-                compression_failed_fallback=diag.compression_failed_fallback,
-                compression_applied_summary_json=diag.compression_applied_summary_json,
-                compression_policy_name=diag.compression_policy_name,
-                compression_policy_source=diag.compression_policy_source,
-                compression_policy_warnings_json=diag.compression_policy_warnings_json,
             )
             transitioned = request_mutation.transitioned
 
@@ -1106,173 +1018,6 @@ class RequestFinalizer:
             seg_stable_bytes = getattr(segmentation_obj, "stable_prefix_bytes", None)
             seg_semi_bytes = getattr(segmentation_obj, "semi_stable_bytes", None)
             seg_volatile_bytes = getattr(segmentation_obj, "volatile_bytes", None)
-            try:
-                from eggpool.transcoder.segmentation import (
-                    segmentation_summary_json,
-                )
-
-                seg_summary_json = segmentation_summary_json(segmentation_obj)
-            except (TypeError, ValueError):
-                seg_summary_json = None
-
-        # --- compression observation fields ---
-        compression_obj = data.compression_observation
-        comp_status = "disabled"
-        comp_mode: str | None = None
-        comp_candidate_count = 0
-        comp_eligible_count = 0
-        comp_suppressed_count = 0
-        comp_orig_tokens: int | None = None
-        comp_comp_tokens: int | None = None
-        comp_savings_tokens: int | None = None
-        comp_latency_ms: float | None = None
-        comp_warning_count = 0
-        comp_reason_counts_json: str | None = None
-        comp_summary_json: str | None = None
-        if compression_obj is not None:
-            comp_status = "observed"
-            comp_mode = str(getattr(compression_obj, "mode", "observe"))
-            comp_candidate_count = int(
-                getattr(compression_obj, "candidate_count", 0) or 0
-            )
-            comp_eligible_count = int(
-                getattr(compression_obj, "eligible_candidate_count", 0) or 0
-            )
-            comp_suppressed_count = int(
-                getattr(compression_obj, "suppressed_candidate_count", 0) or 0
-            )
-            comp_orig_tokens = getattr(
-                compression_obj, "estimated_original_tokens", None
-            )
-            comp_comp_tokens = getattr(
-                compression_obj, "estimated_compressed_tokens", None
-            )
-            comp_savings_tokens = getattr(
-                compression_obj, "estimated_savings_tokens", None
-            )
-            latency_value = getattr(compression_obj, "analyzer_latency_ms", None)
-            if isinstance(latency_value, (int, float)):
-                comp_latency_ms = float(latency_value)
-            warnings_value = getattr(compression_obj, "warnings", None)
-            if isinstance(warnings_value, (list, tuple)):
-                comp_warning_count = len(list(warnings_value))  # type: ignore[arg-type]
-            try:
-                reason_counts = getattr(compression_obj, "reason_code_counts", None)
-                if reason_counts is not None:
-                    comp_reason_counts_json = jsonx_dumps_str(
-                        dict(reason_counts), default=str, sort_keys=True
-                    )
-            except (TypeError, ValueError):
-                comp_reason_counts_json = None
-            try:
-                to_json = getattr(compression_obj, "to_summary_json", None)
-                if callable(to_json):
-                    summary_value = to_json()
-                    if isinstance(summary_value, str):
-                        comp_summary_json = summary_value
-            except (TypeError, ValueError):
-                comp_summary_json = None
-
-        # --- compression result fields ---
-        compression_result_obj = data.compression_result
-        comp_applied = 0
-        comp_transform_count = 0
-        comp_transforms_by_reason_json: str | None = None
-        comp_orig_tok: int | None = None
-        comp_comp_tok: int | None = None
-        comp_savings_tok: int | None = None
-        comp_pre_hash: str | None = None
-        comp_post_hash: str | None = None
-        comp_stable_preserved = 1
-        comp_warnings_json: str | None = None
-        comp_result_latency_ms = 0.0
-        comp_failed_fallback = 0
-        comp_applied_summary_json: str | None = None
-        if compression_result_obj is not None:
-            comp_applied = 1 if getattr(compression_result_obj, "applied", False) else 0
-            comp_transform_count = int(
-                getattr(compression_result_obj, "transform_count", 0) or 0
-            )
-            transforms_by_reason = getattr(
-                compression_result_obj, "transforms_by_reason", None
-            )
-            if transforms_by_reason is not None:
-                try:
-                    comp_transforms_by_reason_json = jsonx_dumps_str(
-                        dict(transforms_by_reason),
-                        default=str,
-                        sort_keys=True,
-                    )
-                except (TypeError, ValueError):
-                    comp_transforms_by_reason_json = None
-            comp_orig_tok = getattr(compression_result_obj, "original_tokens", None)
-            if isinstance(comp_orig_tok, (int, float)):
-                comp_orig_tok = int(comp_orig_tok)
-            else:
-                comp_orig_tok = None
-            comp_comp_tok = getattr(compression_result_obj, "compressed_tokens", None)
-            if isinstance(comp_comp_tok, (int, float)):
-                comp_comp_tok = int(comp_comp_tok)
-            else:
-                comp_comp_tok = None
-            comp_savings_tok = getattr(compression_result_obj, "savings_tokens", None)
-            if isinstance(comp_savings_tok, (int, float)):
-                comp_savings_tok = int(comp_savings_tok)
-            else:
-                comp_savings_tok = None
-            comp_pre_hash = getattr(
-                compression_result_obj, "pre_stable_prefix_hash", None
-            )
-            comp_post_hash = getattr(
-                compression_result_obj, "post_stable_prefix_hash", None
-            )
-            comp_stable_preserved = (
-                1
-                if getattr(compression_result_obj, "stable_prefix_preserved", True)
-                else 0
-            )
-            warnings_raw = getattr(compression_result_obj, "warnings", None)
-            if isinstance(warnings_raw, (list, tuple)):
-                try:
-                    comp_warnings_json = jsonx_dumps_str(
-                        list(warnings_raw),  # type: ignore[arg-type]
-                        default=str,
-                    )
-                except (TypeError, ValueError):
-                    comp_warnings_json = None
-            latency_val = getattr(compression_result_obj, "latency_ms", 0.0)
-            if isinstance(latency_val, (int, float)):
-                comp_result_latency_ms = float(latency_val)
-            comp_failed_fallback = (
-                1 if getattr(compression_result_obj, "failed_fallback", False) else 0
-            )
-            if comp_applied:
-                to_json = getattr(compression_result_obj, "summary_json", None)
-                if to_json is not None:
-                    comp_applied_summary_json = (
-                        to_json if isinstance(to_json, str) else None
-                    )
-
-        # --- resolved compression policy fields ---
-        resolved_policy_obj = data.resolved_compression_policy
-        policy_name: str | None = None
-        policy_source: str | None = None
-        policy_warnings_json: str | None = None
-        if resolved_policy_obj is not None:
-            name_attr = getattr(resolved_policy_obj, "name", None)
-            if isinstance(name_attr, str) and name_attr:
-                policy_name = name_attr
-            source_attr = getattr(resolved_policy_obj, "source", None)
-            if isinstance(source_attr, str) and source_attr:
-                policy_source = source_attr
-            warnings_attr = getattr(resolved_policy_obj, "warnings", None)
-            if isinstance(warnings_attr, (list, tuple)):
-                try:
-                    policy_warnings_json = jsonx_dumps_str(
-                        [str(w) for w in warnings_attr],  # type: ignore[arg-type]
-                    )
-                except (TypeError, ValueError):
-                    policy_warnings_json = None
 
         return _FinalizationDiagnosticSnapshot(
             segmentation_status=seg_status,
@@ -1285,34 +1030,6 @@ class RequestFinalizer:
             semi_stable_bytes=seg_semi_bytes,
             volatile_bytes=seg_volatile_bytes,
             segmentation_summary_json=seg_summary_json,
-            compression_status=comp_status,
-            compression_mode=comp_mode,
-            compression_candidate_count=comp_candidate_count,
-            compression_eligible_candidate_count=comp_eligible_count,
-            compression_suppressed_candidate_count=comp_suppressed_count,
-            compression_estimated_original_tokens=comp_orig_tokens,
-            compression_estimated_compressed_tokens=comp_comp_tokens,
-            compression_estimated_savings_tokens=comp_savings_tokens,
-            compression_analyzer_latency_ms=comp_latency_ms,
-            compression_warning_count=comp_warning_count,
-            compression_reason_code_counts_json=comp_reason_counts_json,
-            compression_summary_json=comp_summary_json,
-            compression_applied=comp_applied,
-            compression_transform_count=comp_transform_count,
-            compression_transforms_by_reason_json=comp_transforms_by_reason_json,
-            compression_original_tokens=comp_orig_tok,
-            compression_compressed_tokens=comp_comp_tok,
-            compression_savings_tokens=comp_savings_tok,
-            compression_pre_stable_prefix_hash=comp_pre_hash,
-            compression_post_stable_prefix_hash=comp_post_hash,
-            compression_stable_prefix_preserved=comp_stable_preserved,
-            compression_warnings_json=comp_warnings_json,
-            compression_latency_ms=comp_result_latency_ms,
-            compression_failed_fallback=comp_failed_fallback,
-            compression_applied_summary_json=comp_applied_summary_json,
-            compression_policy_name=policy_name,
-            compression_policy_source=policy_source,
-            compression_policy_warnings_json=policy_warnings_json,
         )
 
     def _apply_finalizer_failure_effects(

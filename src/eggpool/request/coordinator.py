@@ -526,9 +526,6 @@ class ProxyRequestContext:
     thinking_intent: Any | None = None  # ThinkingRequestIntent | None
     segmentation: Any | None = None
     segmentation_not_collected: bool = False
-    compression_observation: Any | None = None
-    compression_result: Any | None = None
-    resolved_compression_policy: Any | None = None
     prepared_transcode: PreparedTranscode | None = None
     # Phase 4.4: precomputed values computed once in handle_proxy_request()
     # so _select_and_persist_attempt() does not reparse original_body.
@@ -694,7 +691,6 @@ class RequestCoordinator:
         local_pre_upstream_recorder: Any | None = None,  # noqa: ANN401
         dispatch_span_recorder: Any | None = None,  # noqa: ANN401
         transcoder_policy: TranscoderPolicy | None = None,
-        compression_policy: Any | None = None,  # noqa: ANN401
         stream_diagnostics: StreamDiagnostics | None = None,
         finalization_supervisor: Any | None = None,  # noqa: ANN401
         routing_trace_guard: Any | None = None,  # noqa: ANN401
@@ -750,7 +746,6 @@ class RequestCoordinator:
         self._local_pre_upstream_recorder = local_pre_upstream_recorder
         self._dispatch_span_recorder = dispatch_span_recorder
         self._transcoder_policy = transcoder_policy
-        self._compression_policy = compression_policy
         self._stream_diagnostics = stream_diagnostics or get_stream_diagnostics()
         self._finalization_supervisor = finalization_supervisor
         if routing_trace_guard is None and routing_trace_enabled:
@@ -2949,9 +2944,6 @@ class RequestCoordinator:
                     ),
                     segmentation=context.segmentation,
                     segmentation_not_collected=context.segmentation_not_collected,
-                    compression_observation=context.compression_observation,
-                    compression_result=context.compression_result,
-                    resolved_compression_policy=context.resolved_compression_policy,
                 ),
             )
             self._stream_diagnostics.record_outcome(
@@ -3265,9 +3257,6 @@ class RequestCoordinator:
                     transcoded=context.transcode_context is not None,
                     segmentation=context.segmentation,
                     segmentation_not_collected=context.segmentation_not_collected,
-                    compression_observation=context.compression_observation,
-                    compression_result=context.compression_result,
-                    resolved_compression_policy=context.resolved_compression_policy,
                 ),
             )
 
@@ -3940,9 +3929,6 @@ class RequestCoordinator:
                         normalized_usage=normalized_usage,
                         segmentation=context.segmentation,
                         segmentation_not_collected=context.segmentation_not_collected,
-                        compression_observation=context.compression_observation,
-                        compression_result=context.compression_result,
-                        resolved_compression_policy=context.resolved_compression_policy,
                         transcoded=context.transcode_context is not None,
                     ),
                 )
@@ -4041,9 +4027,6 @@ class RequestCoordinator:
                         transcoded=(context.transcode_context is not None),
                         segmentation=context.segmentation,
                         segmentation_not_collected=context.segmentation_not_collected,
-                        compression_observation=context.compression_observation,
-                        compression_result=context.compression_result,
-                        resolved_compression_policy=context.resolved_compression_policy,
                     )
                     await self._finalize_terminal(context, selected, fin_data)
                     self._stream_diagnostics.record_outcome(
@@ -4148,9 +4131,6 @@ class RequestCoordinator:
                         transcoded=context.transcode_context is not None,
                         segmentation=context.segmentation,
                         segmentation_not_collected=context.segmentation_not_collected,
-                        compression_observation=context.compression_observation,
-                        compression_result=context.compression_result,
-                        resolved_compression_policy=context.resolved_compression_policy,
                     ),
                 )
                 self._stream_diagnostics.record_outcome(
@@ -5100,9 +5080,6 @@ class RequestCoordinator:
                     ),
                     segmentation=context.segmentation,
                     segmentation_not_collected=context.segmentation_not_collected,
-                    compression_observation=context.compression_observation,
-                    compression_result=context.compression_result,
-                    resolved_compression_policy=context.resolved_compression_policy,
                 ),
             )
         except AcceptedFinalizationInvariantError as finalize_err:
@@ -5524,9 +5501,6 @@ class RequestCoordinator:
                 thinking_trace_json=_serialize_thinking_trace(context.thinking_trace),
                 segmentation=context.segmentation,
                 segmentation_not_collected=context.segmentation_not_collected,
-                compression_observation=context.compression_observation,
-                compression_result=context.compression_result,
-                resolved_compression_policy=context.resolved_compression_policy,
             ),
         )
 
@@ -5636,9 +5610,6 @@ class RequestCoordinator:
                     ),
                     segmentation=context.segmentation,
                     segmentation_not_collected=context.segmentation_not_collected,
-                    compression_observation=context.compression_observation,
-                    compression_result=context.compression_result,
-                    resolved_compression_policy=context.resolved_compression_policy,
                 ),
             )
             # Record first-class HTTPX transport outcome for streaming
@@ -5706,9 +5677,6 @@ class RequestCoordinator:
                     ),
                     segmentation=context.segmentation,
                     segmentation_not_collected=context.segmentation_not_collected,
-                    compression_observation=context.compression_observation,
-                    compression_result=context.compression_result,
-                    resolved_compression_policy=context.resolved_compression_policy,
                 ),
             )
 

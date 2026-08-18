@@ -85,9 +85,6 @@ _DASHBOARD_CACHE_TTL_BY_NAMESPACE: dict[str, float] = {
     "transcoding_stats": 60.0,
     "cache_observability": 60.0,
     "canonical_request_segmentation": 60.0,
-    "compression_observability": 60.0,
-    "compression_runtime": 60.0,
-    "compression_policy_stats": 60.0,
     "cache_stability": 60.0,
     "pending_health": 15.0,
     "model_options": 300.0,
@@ -1883,87 +1880,6 @@ class StatsService:
         if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
             return cast("dict[str, Any]", cached)
         result = await queries.fetch_canonical_request_segmentation(
-            self._db,
-            time_range.start_str(),
-            time_range.end_str(),
-        )
-        if use_cache:
-            self._set_dashboard_cache(key, result)
-        return result
-
-    async def get_compression_observability(
-        self, period: str | None = None, *, use_cache: bool = False
-    ) -> dict[str, Any]:
-        """Phase 4 observe-mode compression accounting aggregates.
-
-        Reads the compression columns populated by
-        :mod:`eggpool.transcoder.compression.analyzer` and persisted
-        by :meth:`RequestRepository.finalize_if_pending`.  Returns
-        the same shape as
-        :func:`eggpool.stats.queries.fetch_compression_observability`:
-
-        - ``total_requests`` / ``by_status`` / ``by_mode``
-        - ``per_provider_status`` / ``per_account_status``
-          / ``per_model_status``
-        - ``totals`` (aggregate candidate / token / latency
-          counts, plus observed_requests and warning count)
-        - ``top_reason_codes`` (top 10 reason codes)
-        """
-        time_range = resolve_time_range(period)
-        key = self._dashboard_cache_key("compression_observability", time_range)
-        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
-            return cast("dict[str, Any]", cached)
-        result = await queries.fetch_compression_observability(
-            self._db,
-            time_range.start_str(),
-            time_range.end_str(),
-        )
-        if use_cache:
-            self._set_dashboard_cache(key, result)
-        return result
-
-    async def get_compression_runtime(
-        self, period: str | None = None, *, use_cache: bool = False
-    ) -> dict[str, Any]:
-        """Phase 7 runtime compression aggregates for operator dashboards.
-
-        Surfaces mode counts, applied / fallback counts, latency stats,
-        per-transform aggregates, warnings rollup, and cache-safety
-        counters.  All values are computed from the durable
-        ``requests`` columns populated by the Phase 4 / Phase 5 / Phase 6
-        finalizers — never from in-memory caches or hot-path buffers.
-        """
-        time_range = resolve_time_range(period)
-        key = self._dashboard_cache_key("compression_runtime", time_range)
-        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
-            return cast("dict[str, Any]", cached)
-        result = await queries.fetch_compression_runtime(
-            self._db,
-            time_range.start_str(),
-            time_range.end_str(),
-        )
-        if use_cache:
-            self._set_dashboard_cache(key, result)
-        return result
-
-    async def get_compression_policy_stats(
-        self, period: str | None = None, *, use_cache: bool = False
-    ) -> dict[str, Any]:
-        """Phase 7 per-policy compression rollup.
-
-        Aggregates the Phase 6 ``compression_policy_name`` /
-        ``compression_policy_source`` audit columns (migration 0044)
-        into one entry per resolved policy.  ``<global>`` is the
-        sentinel for the no-override path; operator-chosen names come
-        from the ``[[compression.policies]]`` entries.  All metrics are
-        advisory / audit; the :class:`QuotaFairScorer` does not
-        consume policy fields.
-        """
-        time_range = resolve_time_range(period)
-        key = self._dashboard_cache_key("compression_policy_stats", time_range)
-        if use_cache and (cached := self._get_dashboard_cache(key)) is not None:
-            return cast("dict[str, Any]", cached)
-        result = await queries.fetch_compression_policy_stats(
             self._db,
             time_range.start_str(),
             time_range.end_str(),

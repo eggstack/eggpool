@@ -92,8 +92,6 @@ class TransformContext:
     thinking_intent: Any | None = None  # ThinkingRequestIntent
     thinking_capability: Any | None = None  # ThinkingCapability
     prepared_transcode: Any | None = None  # PreparedTranscode
-    compression_policy: Any | None = None
-    resolved_compression_policy: Any | None = None
     selected_provider_id: str | None = None
     selected_provider_kind: str | None = None
     model_id: str = ""

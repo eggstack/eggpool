@@ -105,7 +105,7 @@ Load-based scoring with four inputs:
 3. **Active count** — in-flight requests
 4. **Health** — upstream health state
 
-**Hardcoded invariant**: No cache, compression, segmentation, or policy field ever enters the scorer. `RoutingScore` dataclass is audited by tests.
+**Hardcoded invariant**: No cache or policy field ever enters the scorer. `RoutingScore` dataclass is audited by tests.
 
 ### `quota/estimation.py` — QuotaEstimator
 
@@ -193,8 +193,8 @@ Every `routing_decisions` row carries `score_components_json`:
 ## Key Invariants
 
 - `QuotaFairScorer.score_accounts` accepts only 4 inputs: `account_names`, `model_name`, `active_requests`, `request_estimates`
-- Cache/compression metrics NEVER enter routing
-- Same-provider fairness preserved across adversarial cache/compression profiles
+- Cache metrics NEVER enter routing
+- Same-provider fairness preserved across adversarial cache profiles
 - Priority tier boundaries are strict: lower-priority never advance ahead of higher-priority
 - `weight` scales effective request/token capacity within a tier;
   `routing_priority` orders tiers
