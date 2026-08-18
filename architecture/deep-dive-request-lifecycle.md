@@ -98,16 +98,20 @@ Client Request
 
 ### `request/coordinator.py` — RequestCoordinator
 
-The orchestrator. Wires together all lifecycle stages:
+The orchestrator. Wires together all lifecycle stages as a thin sequencing
+facade.  Implementation details are delegated to focused helper modules:
 
 - Receives `ProxyRequestContext` from endpoint handlers
 - Calls `Router.select_accounts_for_failover()` for routing
 - Persists the request/reservation/attempt bundle in one transaction
-- Builds upstream URL via `_get_upstream_url()` (provider contract)
+- Builds upstream URL via `_get_upstream_url()` (delegates to `upstream_helpers.py`)
 - Builds upstream headers via `_build_upstream_headers()` (provider contract)
 - Manages retry/failover loop
 - Handles streaming via `_build_stream_generator`
 - Finalizes via `RequestFinalizer`
+- Post-selection thinking control adaptation delegates to `thinking_adaptation.py`
+- Upstream failure observation/classification delegates to `failure_helpers.py`
+- Endpoint validation and protocol resolution delegate to `upstream_helpers.py`
 
 **Key invariants**:
 - Request persisted before upstream dispatch
@@ -174,6 +178,42 @@ document/media limits are subsequent, narrower constraints.
 
 Cached JSON parse with derived state (model, tools, messages, etc.) through
 `eggpool.jsonx`, preserving the selected stdlib/orjson backend.
+
+### `request/thinking_adaptation.py` — Post-selection thinking controls
+
+Extracted from `RequestCoordinator` in Plan 136 Phase 5.  Owns provider-specific
+thinking control resolution, budget recompute, and control normalization — the
+post-selection preparation stage that runs after account selection but before
+upstream dispatch.  Functions receive dependencies explicitly (catalog, policy,
+config) rather than referencing coordinator state.  Strict-policy rejections
+propagate as `CapabilityError`; callers must finalize the attempt before
+re-raising.
+
+- `resolve_selected_thinking_capability()` — best-effort catalog lookup
+- `client_has_thinking_controls()` — pure detection of thinking/reasoning fields
+- `recompute_thinking_budget_for_provider()` — re-resolves budget against selected provider's capability
+- `adapt_provider_thinking_controls()` — validates and adapts controls against the provider contract
+
+### `request/upstream_helpers.py` — Upstream URL and endpoint validation
+
+Extracted from `RequestCoordinator` in Plan 136 Phase 5.  Resolves the absolute
+upstream URL from provider configuration and validates that the client endpoint
+matches the model's supported protocols.
+
+- `get_upstream_url()` — URL composition via `compose_provider_url()`
+- `resolve_upstream_protocol()` — protocol resolution for transcoding
+- `validate_endpoint_or_transcode()` — endpoint/protocol mismatch detection and resolution
+
+### `request/failure_helpers.py` — Failure observation and classification
+
+Extracted from `RequestCoordinator` in Plan 136 Phase 5.  Normalizes upstream
+failures into typed observations, classifies them into retry/effects decisions,
+and maps the result to the public upstream error hierarchy.
+
+- `build_failure_observation()` — single normalization point for upstream failures
+- `error_from_failure_effects()` — maps canonical decisions to public error types
+- `classify_upstream_failure()` — combined observation + classification + error mapping
+- `classify_upstream_error()` — lightweight classifier for error status codes
 
 ### Provider payload ownership
 

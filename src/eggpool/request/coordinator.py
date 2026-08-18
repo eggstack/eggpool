@@ -15,13 +15,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 
-# ThinkingCapability is imported at runtime (not TYPE_CHECKING) because the
-# per-provider capability lookup helpers instantiate it directly.
 from eggpool.accounts.registry import AccountRegistry, AccountRuntimeIdentity
-from eggpool.catalog.capabilities import (
-    ThinkingCapability,
-    ThinkingRequestRequirement,
-)
 from eggpool.catalog.protocols import ProtocolMismatchError
 from eggpool.constants import DEFAULT_PROVIDER_ID
 from eggpool.db.repositories import (
@@ -39,13 +33,10 @@ from eggpool.errors import (
     AuthenticationError,
     CapabilityError,
     DatabaseError,
-    ModelNotFoundError,
     ModelUnavailableError,
     PrematureStreamEOFError,
     QuotaExhaustedError,
     RateLimitError,
-    TemporaryUpstreamError,
-    TransientUpstreamError,
     UpstreamError,
     UpstreamExhaustedError,
 )
@@ -57,7 +48,6 @@ from eggpool.failure import (
     ModelQuarantine,
 )
 from eggpool.failure.classifier import classify_failure_effects
-from eggpool.failure.signal_extract import extract_failure_signal
 from eggpool.health.health_manager import (
     FailureCategory,
     classify_failure_category,
@@ -70,7 +60,6 @@ from eggpool.providers.contract import (
     build_auth_headers,
     build_static_headers,
     build_upstream_headers,
-    compose_provider_url,
 )
 from eggpool.proxy.client import filter_response_headers
 from eggpool.proxy.normalized_usage import (
@@ -174,6 +163,10 @@ from eggpool.transcoder.streaming import select_streaming_transcoder
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from eggpool.catalog.capabilities import (
+        ThinkingCapability,
+        ThinkingRequestRequirement,
+    )
     from eggpool.catalog.pricing import CostCalculator
     from eggpool.catalog.service import CatalogService
     from eggpool.db.connection import Database
@@ -304,52 +297,6 @@ def resolve_selected_provider_kind(
     except Exception:  # noqa: BLE001
         return None
     return None
-
-
-def _extract_original_thinking_budget_inputs(
-    context: ProxyRequestContext,
-) -> tuple[str | None, int | None]:
-    """Extract the original client thinking controls from ``context.original_body``.
-
-    Returns ``(requested_effort, requested_budget_tokens)`` so callers can
-    distinguish an OpenAI-style ``reasoning_effort`` request from an
-    Anthropic-style explicit ``thinking.budget_tokens`` request.
-
-    The post-selection budget recompute must resolve against the original
-    client intent rather than the already-translated provider payload,
-    because the resolver prioritises an explicit ``requested_budget_tokens``
-    value over the capability's ``effort_to_budget_tokens`` mapping. If we
-    forwarded the translated Anthropic budget here, the provider's effort
-    override would never be consulted for OpenAI clients.
-
-    Returns ``(None, None)`` when the body cannot be parsed as a JSON
-    object or when no thinking controls are present.
-    """
-    # F7: prefer cached parsed dict from ParsedRequestPayload.
-    payload_cache = context.parsed_payload
-    if payload_cache is not None:
-        original_body_obj: object | None = payload_cache.parsed_dict
-    else:
-        try:
-            original_body_obj = jsonx_loads(context.original_body)
-        except ValueError:
-            return (None, None)
-    if not isinstance(original_body_obj, dict):
-        return (None, None)
-    original_body: dict[str, object] = original_body_obj  # pyright: ignore[reportUnknownVariableType]
-    effort_obj: object = original_body.get("reasoning_effort")  # pyright: ignore[reportUnknownMemberType]
-    if isinstance(effort_obj, str) and effort_obj:
-        return (effort_obj, None)
-    thinking_obj: object = original_body.get("thinking")  # pyright: ignore[reportUnknownMemberType]
-    if isinstance(thinking_obj, dict):
-        thinking_dict: dict[str, object] = thinking_obj  # pyright: ignore[reportUnknownVariableType]
-        budget_obj: object = thinking_dict.get("budget_tokens")  # pyright: ignore[reportUnknownMemberType]
-        if isinstance(budget_obj, (int, float)):
-            return (None, int(budget_obj))
-    budget_obj = original_body.get("thinking_budget")  # pyright: ignore[reportUnknownMemberType]
-    if isinstance(budget_obj, (int, float)):
-        return (None, int(budget_obj))
-    return (None, None)
 
 
 def _safe_ratio(numerator: int, denominator: int) -> float | None:
@@ -4513,33 +4460,21 @@ class RequestCoordinator:
         response_started: bool = False,
         downstream_started: bool = False,
     ) -> FailureObservation:
-        """Normalize one upstream failure without retaining raw wire data."""
-        header_map = {key.lower(): value for key, value in (headers or [])}
-        retry_after = self._classifier.parse_retry_after(
-            header_map,
-            default=None,
-        )
-        return FailureObservation(
-            source=source,
+        """Normalize one upstream failure without retaining raw wire data.
+
+        Delegates to :func:`failure_helpers.build_failure_observation`.
+        """
+        from eggpool.request.failure_helpers import build_failure_observation
+
+        return build_failure_observation(
+            context=context,
+            selected=selected,
             status_code=status_code,
+            headers=headers,
+            body=body,
             error_class=error_class,
-            provider_id=selected.provider_id if selected is not None else None,
-            account_name=selected.account_name if selected is not None else None,
-            model_id=context.model_id if context is not None else None,
-            upstream_model_id=context.model_id if context is not None else None,
-            client_protocol=context.protocol if context is not None else "openai",
-            upstream_protocol=(
-                context.upstream_protocol if context is not None else "openai"
-            ),
-            response_signal=extract_failure_signal(
-                body,
-                error_class=error_class,
-                status_code=status_code,
-            ),
-            retry_after_s=retry_after,
+            source=source,
             response_started=response_started,
-            proxy_request_id=context.request_id if context is not None else None,
-            attempt_id=selected.attempt_id if selected is not None else None,
             downstream_started=downstream_started,
         )
 
@@ -4549,37 +4484,13 @@ class RequestCoordinator:
         *,
         status_code: int | None,
     ) -> UpstreamError | None:
-        """Adapt the canonical decision to the public upstream errors."""
-        if effects.account_effect == "disable_auth":
-            return AuthenticationError("Authentication failed", status_code=status_code)
-        if effects.account_effect == "rate_limit":
-            return RateLimitError(
-                "Rate limited",
-                status_code=status_code,
-                retry_after=(
-                    effects.retry_after_s if effects.retry_after_s is not None else 60.0
-                ),
-            )
-        if effects.account_effect == "quota":
-            return QuotaExhaustedError("Quota exhausted", status_code=status_code)
-        if effects.model_effect != "none":
-            return ModelUnavailableError("Model unavailable", status_code=status_code)
-        if effects.account_effect in {"cooldown", "failure"}:
-            if status_code in {408, 502, 504}:
-                return TransientUpstreamError(
-                    effects.evidence_class,
-                    status_code=status_code,
-                )
-            return TemporaryUpstreamError(
-                effects.evidence_class,
-                status_code=status_code,
-            )
-        if effects.retry:
-            return TemporaryUpstreamError(
-                effects.evidence_class,
-                status_code=status_code,
-            )
-        return None
+        """Adapt the canonical decision to the public upstream errors.
+
+        Delegates to :func:`failure_helpers.error_from_failure_effects`.
+        """
+        from eggpool.request.failure_helpers import error_from_failure_effects
+
+        return error_from_failure_effects(effects, status_code=status_code)
 
     def _classify_upstream_failure(
         self,
@@ -4590,19 +4501,18 @@ class RequestCoordinator:
         headers: list[tuple[str, str]],
         body: bytes | None,
     ) -> tuple[UpstreamError | None, FailureObservation, FailureEffects]:
-        """Classify an upstream response once for retry and shared effects."""
-        observation = self._build_failure_observation(
+        """Classify an upstream response once for retry and shared effects.
+
+        Delegates to :func:`failure_helpers.classify_upstream_failure`.
+        """
+        from eggpool.request.failure_helpers import classify_upstream_failure
+
+        return classify_upstream_failure(
             context=context,
             selected=selected,
             status_code=status_code,
             headers=headers,
             body=body,
-        )
-        effects = classify_failure_effects(observation)
-        return (
-            self._error_from_failure_effects(effects, status_code=status_code),
-            observation,
-            effects,
         )
 
     def _classify_upstream_error(
@@ -4613,42 +4523,20 @@ class RequestCoordinator:
     ) -> UpstreamError | None:
         """Classify an upstream error status code into an exception.
 
-        Returns None for non-retryable client errors (400, non-model-specific 404)
-        where the response body should be passed through as-is.
+        Delegates to :func:`failure_helpers.classify_upstream_error`.
         """
-        observation = self._build_failure_observation(
-            context=None,
-            selected=None,
-            status_code=status_code,
-            headers=headers,
-            body=body,
-        )
-        return self._error_from_failure_effects(
-            classify_failure_effects(observation),
-            status_code=status_code,
-        )
+        from eggpool.request.failure_helpers import classify_upstream_error
+
+        return classify_upstream_error(status_code, headers, body)
 
     def _get_upstream_url(self, protocol: str, provider_id: str | None = None) -> str:
         """Get the absolute upstream URL for a protocol and provider.
 
-        When a provider configuration is available, uses
-        ``compose_provider_url()`` to combine ``base_url`` with the
-        configured protocol-specific path so all outbound dispatch
-        paths share the same URL composition rules as catalog fetch.
-        Falls back to bare paths when no provider config is loaded.
+        Delegates to :func:`upstream_helpers.get_upstream_url`.
         """
-        if provider_id and self._config is not None:
-            provider_cfg = self._config.providers.get(provider_id)
-            if provider_cfg is not None:
-                path = (
-                    provider_cfg.anthropic_path
-                    if protocol == "anthropic"
-                    else provider_cfg.openai_path
-                )
-                return compose_provider_url(provider_cfg, path)
-        if protocol == "anthropic":
-            return "/messages"
-        return "/chat/completions"
+        from eggpool.request.upstream_helpers import get_upstream_url
+
+        return get_upstream_url(protocol, provider_id, config=self._config)
 
     def _resolve_selected_thinking_capability(
         self,
@@ -4658,22 +4546,15 @@ class RequestCoordinator:
     ) -> ThinkingCapability:
         """Best-effort lookup of the selected provider's thinking capability.
 
-        Returns :class:`ThinkingCapability` with status ``"unknown"`` when
-        the provider entry is missing or carries no capability metadata.
-        Used by post-selection helpers to apply provider-specific
-        ``effort_to_budget_tokens`` overrides and min/max clamps for
-        collapsed model ids.
+        Delegates to :func:`thinking_adaptation.resolve_selected_thinking_capability`.
         """
-        from eggpool.catalog.capabilities import dict_to_model_capabilities
+        from eggpool.request.thinking_adaptation import (
+            resolve_selected_thinking_capability,
+        )
 
-        entry = self._catalog.cache.get_provider_model_entry(model_id, provider_id)
-        if entry is None:
-            return ThinkingCapability()
-        caps_raw: object = entry.get("capabilities")  # pyright: ignore[reportUnknownMemberType]
-        if not isinstance(caps_raw, dict):
-            return ThinkingCapability()
-        caps_dict: dict[str, object] = caps_raw  # pyright: ignore[reportUnknownVariableType]
-        return dict_to_model_capabilities(caps_dict).thinking
+        return resolve_selected_thinking_capability(
+            self._catalog, model_id, provider_id
+        )
 
     async def _determine_thinking_rejection_status(
         self,
@@ -4712,111 +4593,19 @@ class RequestCoordinator:
     ) -> None:
         """Re-resolve ``thinking.budget_tokens`` for the selected provider.
 
-        The preflight translation in :meth:`execute` uses the collapsed
-        (best-effort) capability, which may under- or over-restrict
-        thinking budgets for provider-specific overrides. This helper
-        runs :func:`resolve_thinking_budget` against the selected
-        provider's capability and overwrites the ``thinking`` block in
-        the provider-bound payload with the resolved budget.
-
-        Resolution uses the **original** client thinking controls
-        (``reasoning_effort`` for OpenAI, explicit ``thinking.budget_tokens``
-        for Anthropic), not the already-translated provider payload
-        budget. Forwarding the translated value would short-circuit the
-        resolver's effort mapping because ``requested_budget_tokens``
-        is consulted before ``requested_effort``; for OpenAI clients
-        that would prevent the selected provider's
-        ``effort_to_budget_tokens`` override from taking effect.
-
-        Strict-policy rejections propagate as :class:`CapabilityError`
-        so the client receives an HTTP 400 before any upstream dispatch.
-        Callers must wrap invocations with
-        :meth:`_finalize_selected_capability_rejection` so durable
-        attempt state and runtime counters are cleaned up before the
-        error is re-raised.
+        Delegates to :func:`thinking_adaptation.recompute_thinking_budget_for_provider`.
         """
-        from eggpool.transcoder.budget_resolver import resolve_thinking_budget
+        from eggpool.request.thinking_adaptation import (
+            recompute_thinking_budget_for_provider,
+        )
 
-        if not context.transcode_required:
-            return
-        if self._transcoder_policy is not None and not getattr(
-            self._transcoder_policy.features, "thinking", False
-        ):
-            return
-        thinking_block_obj: object = request.provider_payload.get("thinking")
-        budget_defaults: dict[str, int] | None = None
-        policy = "lenient"
-        if self._transcoder_policy is not None:
-            budget_defaults = self._transcoder_policy.thinking_budget_defaults.as_dict()
-            policy = self._transcoder_policy.budget_resolution_policy
-        original_effort, original_budget = _extract_original_thinking_budget_inputs(
-            context,
+        recompute_thinking_budget_for_provider(
+            context=context,
+            selected=selected,
+            thinking_capability=thinking_capability,
+            request=request,
+            transcoder_policy=self._transcoder_policy,
         )
-        if (
-            original_effort is None
-            and original_budget is None
-            and not isinstance(thinking_block_obj, dict)
-        ):
-            return
-        resolution = resolve_thinking_budget(
-            model_id=context.model_id,
-            provider_id=selected.provider_id,
-            requested_effort=original_effort,
-            requested_budget_tokens=original_budget,
-            capability=thinking_capability,
-            budget_defaults=budget_defaults,
-            budget_resolution_policy=policy,
-        )
-        if context.thinking_trace is not None:
-            context.thinking_trace["resolved_budget_tokens"] = resolution.budget_tokens
-            context.thinking_trace["budget_resolution_source"] = resolution.source
-            context.thinking_trace["capability_status"] = thinking_capability.status
-            context.thinking_trace["capability_source"] = thinking_capability.source
-        if resolution.thinking_enabled and resolution.budget_tokens is not None:
-            if context.thinking_trace is not None and not context.thinking_trace.get(
-                "upstream_fields"
-            ):
-                context.thinking_trace["upstream_fields"] = ["thinking"]
-            if isinstance(thinking_block_obj, dict):
-                request.mutate_top_level_mapping(
-                    "thinking",
-                    "budget_tokens",
-                    resolution.budget_tokens,
-                    reason="thinking_budget",
-                )
-            else:
-                provider_payload = dict(request.provider_payload)
-                provider_payload["thinking"] = {
-                    "type": "enabled",
-                    "budget_tokens": resolution.budget_tokens,
-                }
-                request.adopt_provider_payload(
-                    provider_payload,
-                    reason="thinking_budget",
-                )
-        elif "thinking" in request.provider_payload:
-            if context.thinking_trace is not None and resolution.source in {
-                "reasoning_disabled",
-                "unmapped_effort_dropped",
-            }:
-                context.thinking_trace["upstream_fields"] = []
-            provider_payload = dict(request.provider_payload)
-            del provider_payload["thinking"]
-            request.adopt_provider_payload(
-                provider_payload,
-                reason="thinking_budget_disabled",
-            )
-        if context.transcode_context is not None:
-            context.transcode_context.loss_warnings.extend(resolution.warnings)
-            if resolution.clamped:
-                context.transcode_context.loss_warnings.append(
-                    {
-                        "kind": "budget_clamped",
-                        "reason": "provider_specific_override",
-                        "resolved": resolution.budget_tokens,
-                        "provider_id": selected.provider_id,
-                    }
-                )
 
     def _apply_selected_provider_transcode_adjustments(
         self,
@@ -4903,120 +4692,20 @@ class RequestCoordinator:
     ) -> None:
         """Validate and adapt thinking controls against the provider contract.
 
-        Runs after budget recompute and before upstream dispatch.  Uses the
-        original client intent (Workstream D) rather than re-reading
-        already-translated fields.  On rejection, raises
-        :class:`CapabilityError` so callers can finalize the attempt.
-
-        This stage runs for both native and transcoded paths, and for
-        both streaming and non-streaming requests.  When the client
-        protocol matches the upstream protocol (native path), unknown
-        contracts pass through — the upstream will reject if needed.
+        Delegates to :func:`thinking_adaptation.adapt_provider_thinking_controls`.
         """
-        from eggpool.catalog.capabilities import ThinkingRequestIntent
-        from eggpool.transcoder.builtin_contracts import resolve_control_contract
-        from eggpool.transcoder.provider_adaptation import (
-            ProviderControlPolicy,
-            adapt_thinking_controls,
-        )
+        from eggpool.request.thinking_adaptation import adapt_provider_thinking_controls
 
-        intent = context.thinking_intent
-        if not isinstance(intent, ThinkingRequestIntent):
-            return
-        if not intent.client_requests_new_reasoning:
-            return
-
-        # Resolve the effective control contract.
-        provider_url = ""
-        if selected.provider_id:
-            entry = self._catalog.cache.get_provider_model_entry(
-                context.model_id,
-                selected.provider_id,
-            )
-            if entry is not None:
-                provider_url = str(entry.get("base_url", ""))
-
-        # Resolve provider kind for contract matching.
-        provider_kind = resolve_selected_provider_kind(
-            self._catalog,
-            selected,
+        adapt_provider_thinking_controls(
+            context=context,
+            selected=selected,
+            thinking_capability=thinking_capability,
+            request=request,
+            catalog=self._catalog,
             config=self._config,
+            transcoder_policy=self._transcoder_policy,
+            resolve_provider_kind_fn=resolve_selected_provider_kind,
         )
-
-        contract = resolve_control_contract(
-            capability=thinking_capability,
-            provider_id=selected.provider_id or "",
-            provider_kind=provider_kind,
-            provider_base_url=provider_url,
-            model_id=context.model_id,
-            protocol=context.upstream_protocol or context.protocol,
-        )
-
-        # For native paths (client protocol == upstream protocol), only
-        # apply normalization when we have a definitive contract.  Unknown
-        # contracts pass through — the upstream will reject if needed.
-        is_native = context.protocol == (context.upstream_protocol or context.protocol)
-        if is_native and contract.mode == "unknown":
-            return
-
-        # Build the adaptation policy from config.
-        policy = ProviderControlPolicy()
-        if self._transcoder_policy is not None and hasattr(
-            self._transcoder_policy,
-            "provider_control_policy",
-        ):
-            pcp = self._transcoder_policy.provider_control_policy
-            policy = ProviderControlPolicy(
-                unsupported_control=pcp.unsupported_control,
-                unknown_contract=pcp.unknown_contract,
-                allow_compatibility_retry=pcp.allow_compatibility_retry,
-            )
-
-        # Pass the current provider-bound payload read-only.  The adapter
-        # builds its own shallow-copied working root and returns a fresh
-        # dict that shares unaffected descendants (messages/tools/etc.)
-        # with the source.  This avoids the previously-reviewed
-        # a full defensive payload copy followed by a second whole-graph
-        # rematerialization in ``replace_provider_payload``.
-        payload_obj = request.provider_payload
-
-        # Override the capability's control_contract with the resolved one.
-        adapted_capability = thinking_capability.model_copy(deep=True)
-        adapted_capability.control_contract = contract
-
-        result = adapt_thinking_controls(
-            payload=payload_obj,
-            client_protocol=context.protocol,
-            model_id=context.model_id,
-            provider_id=selected.provider_id or "",
-            capability=adapted_capability,
-            intent=intent,
-            policy=policy,
-        )
-
-        # Update the thinking trace with adaptation results.
-        if context.thinking_trace is not None:
-            context.thinking_trace["provider_control_decision"] = result.decision
-            context.thinking_trace["provider_control_warnings"] = [
-                {"kind": w.kind, "detail": w.detail, "field": w.field_name}
-                for w in result.warnings
-            ]
-            if result.changed:
-                context.thinking_trace["upstream_fields"] = list(
-                    result.emitted_controls,
-                )
-
-        # If the adaptation changed the payload, adopt the result
-        # through the trusted narrow boundary.  ``result.payload`` is a
-        # fresh shallow-copied root with only the affected ``thinking``
-        # subtree copied; ``adopt_provider_payload`` retains that
-        # read-only descendant sharing rather than recursively
-        # rematerializing the entire graph.
-        if result.changed:
-            request.adopt_provider_payload(
-                result.payload,
-                reason="thinking_control",
-            )
 
     async def _finalize_selected_capability_rejection(
         self,
@@ -5796,30 +5485,13 @@ class RequestCoordinator:
     ) -> bool:
         """Return True when the client request contains thinking/reasoning controls.
 
-        Checks for OpenAI-style ``reasoning_effort`` or Anthropic-style
-        ``thinking`` / ``thinking_budget`` fields.  Used by the prepared
-        transcode reuse logic to decide whether the cached preflight
-        translation is safe to skip — thinking budget resolution depends
-        on provider-specific capability lookup, which is not available
-        during preflight.
+        Delegates to :func:`thinking_adaptation.client_has_thinking_controls`.
         """
-        # F7: prefer cached parsed dict from ParsedRequestPayload.
-        if parsed_payload is not None:
-            body_obj: object | None = parsed_payload.parsed_dict
-        else:
-            try:
-                body_obj = jsonx_loads(original_body)
-            except ValueError:
-                return False
-        if not isinstance(body_obj, dict):
-            return False
-        body: dict[str, object] = body_obj  # pyright: ignore[reportUnknownVariableType]
-        if isinstance(body.get("reasoning_effort"), str):
-            return True
-        thinking_obj = body.get("thinking")
-        if isinstance(thinking_obj, dict) and "budget_tokens" in thinking_obj:
-            return True
-        return body.get("thinking_budget") is not None
+        from eggpool.request.thinking_adaptation import client_has_thinking_controls
+
+        return client_has_thinking_controls(
+            original_body, protocol, parsed_payload=parsed_payload
+        )
 
     def _all_accounts_attempted(self, context: ProxyRequestContext) -> bool:
         """Return whether every enabled account has been attempted.
@@ -6083,97 +5755,28 @@ class RequestCoordinator:
     ) -> str | None:
         """Determine the upstream protocol for transcoding.
 
-        Returns the protocol to use upstream, or None when no
-        transcodable route exists. When the client protocol matches
-        a resolved model protocol, returns that protocol directly
-        (native match, no transcoding needed).
-
-        Translation is on by default. ``_transcoder_policy.enabled`` is
-        a deprecated escape hatch — only an explicit ``False`` disables
-        translation (restoring the legacy protocol-exact routing). ``None``
-        and ``True`` both allow transcoding, so a missing policy object
-        never silently disables it.
+        Delegates to :func:`upstream_helpers.resolve_upstream_protocol`.
         """
-        model_protocols = self._catalog.cache.get_model_protocols(
-            context.model_id,
-            provider_id=context.provider_id,
+        from eggpool.request.upstream_helpers import resolve_upstream_protocol
+
+        return resolve_upstream_protocol(
+            context,
+            catalog=self._catalog,
+            transcoder_policy=self._transcoder_policy,
         )
-        if context.protocol in model_protocols:
-            return context.protocol  # native match
-
-        if (
-            self._transcoder_policy is not None
-            and self._transcoder_policy.enabled is False
-        ):
-            return None  # legacy protocol-exact behaviour (escape hatch)
-
-        # Find transcodable protocols among all eligible accounts.
-        candidates = self._catalog.cache.get_transcodable_protocols(
-            context.model_id,
-            client_protocol=context.protocol,
-            provider_id=context.provider_id,
-        )
-        if not candidates:
-            return None
-
-        # Choose the protocol with the largest eligible-account set.
-        counts = {
-            p: self._catalog.cache.count_eligible_accounts_for_protocol(
-                context.model_id,
-                p,
-                provider_id=context.provider_id,
-            )
-            for p in candidates
-        }
-        # Prefer the protocol with the most eligible accounts;
-        # ties broken by alphabetical order.
-        return max(sorted(counts), key=lambda p: counts[p])
 
     def _validate_endpoint_or_transcode(self, context: ProxyRequestContext) -> None:
         """Validate that the endpoint matches the model's protocol.
 
-        When the client protocol does not match the model's native
-        protocol but a transcodable route exists (transcoder enabled and
-        an account supports the native protocol), the mismatch is
-        accepted and ``upstream_protocol`` / ``transcode_required`` are
-        set on the context.
-
-        Raises ProtocolMismatchError (which callers render as 400) when
-        the wrong endpoint is used for a known model and no transcodable
-        route exists.
+        Delegates to :func:`upstream_helpers.validate_endpoint_or_transcode`.
         """
-        if not self._catalog.cache.has_model(context.model_id):
-            raise ModelNotFoundError(context.model_id)
+        from eggpool.request.upstream_helpers import validate_endpoint_or_transcode
 
-        model_protocols = self._catalog.cache.get_model_protocols(
-            context.model_id,
-            provider_id=context.provider_id,
+        validate_endpoint_or_transcode(
+            context,
+            catalog=self._catalog,
+            transcoder_policy=self._transcoder_policy,
         )
-        if not model_protocols:
-            # Unresolved protocol - fail closed
-            raise ModelUnavailableError(
-                f"Model {context.model_id!r} has unresolved protocol"
-            )
-
-        if context.protocol in model_protocols:
-            return
-
-        # Check if transcoding can bridge the protocol gap.
-        upstream_protocol = self._resolve_upstream_protocol(context)
-        if upstream_protocol is not None:
-            context.upstream_protocol = upstream_protocol
-            context.transcode_required = True
-            # Sync the transcode_context so execute() can detect the
-            # protocol mismatch and select the correct transcoder.
-            if context.transcode_context is not None:
-                context.transcode_context.upstream_protocol = upstream_protocol
-            return
-
-        from eggpool.catalog.protocols import ModelProtocolResolver
-
-        resolver = ModelProtocolResolver()
-        model_protocol = sorted(model_protocols)[0]
-        resolver.validate_endpoint(model_protocol, context.protocol, context.model_id)
 
     def invalidate_account_id_cache(self, account_name: str | None = None) -> None:
         """Clear cached account IDs.
