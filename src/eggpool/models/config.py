@@ -121,6 +121,9 @@ class DatabaseConfig(BaseModel):
     # uses one connection; set to 2 to open a separate read-only stats
     # connection when dashboard reads should avoid the data-plane lock.
     worker_threads: int = Field(default=1, ge=1, le=2)
+    # Bound WAL file size after checkpoints.  ``None`` (default) retains the
+    # SQLite default (unbounded).  A sensible SBC value is 67108864 (64 MiB).
+    journal_size_limit: int | None = Field(default=None, gt=0)
 
 
 class ReadinessProbeConfig(BaseModel):

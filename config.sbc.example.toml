@@ -26,6 +26,9 @@ busy_timeout_ms = 10000
 wal = true
 synchronous = "NORMAL"
 worker_threads = 1
+# Bound WAL file size after checkpoints to 64 MiB.  Constrains
+# microSD storage consumption without aggressive checkpoint tuning.
+journal_size_limit = 67108864
 
 [models]
 refresh_interval_s = 300

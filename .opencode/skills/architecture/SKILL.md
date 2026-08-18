@@ -111,6 +111,12 @@ Controlled by `[transcoder]` config; on by default.
 - Schema migrations in `src/eggpool/db/schema/` (numbered SQL files)
 - Analytics indexes are fixed schema assets, not dashboard feature toggles;
   migration 0053 removes only the unused per-attempt status aggregate index.
+- WAL residue is bounded by `journal_size_limit` when configured; the SBC
+  profile defaults to 64 MiB. The pragma caps WAL file size after passive
+  checkpoints without altering durability semantics.
+- `DatabaseLifecycleState` transitions are diagnostic; the caller sets
+  admission flags independently. `FAILED_CLOSED` is terminal and triggers
+  worker restart.
 
 The historical `requests` table is frozen for optional diagnostics. Add columns
 only for durable lifecycle/accounting facts, routing repair, billing/usage truth,

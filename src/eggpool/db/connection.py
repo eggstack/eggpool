@@ -146,12 +146,14 @@ class Database:
         wal: bool = True,
         synchronous: str = "NORMAL",
         read_only: bool = False,
+        journal_size_limit: int | None = None,
     ) -> None:
         self._path = path
         self._busy_timeout_ms = busy_timeout_ms
         self._wal = wal
         self._synchronous = synchronous
         self._read_only = read_only
+        self._journal_size_limit = journal_size_limit
         self._conn: aiosqlite.Connection | None = None
         self._connection_lock = asyncio.Lock()
         self._canonical_loop: asyncio.AbstractEventLoop | None = None
@@ -321,6 +323,10 @@ class Database:
             if self._wal:
                 await self._conn.execute("PRAGMA journal_mode = WAL")
             await self._conn.execute(f"PRAGMA synchronous = {self._synchronous}")
+            if self._journal_size_limit is not None:
+                await self._conn.execute(
+                    f"PRAGMA journal_size_limit = {self._journal_size_limit}"
+                )
             await self._conn.commit()
             self._writes_admitted = True
             self._reads_admitted = True

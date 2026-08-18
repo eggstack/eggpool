@@ -808,6 +808,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         busy_timeout_ms=config.database.busy_timeout_ms,
         wal=config.database.wal,
         synchronous=config.database.synchronous,
+        journal_size_limit=config.database.journal_size_limit,
     )
     await db.connect()
     db.set_fatal_handler(_exit_for_database_failure)

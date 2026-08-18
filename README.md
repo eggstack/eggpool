@@ -177,7 +177,7 @@ Use `eggpool connect` for interactive provider setup. See [docs/providers.md](do
 |---------|---------|
 | `[server]` | Bind address, port (default 11300), API key, logging, threads |
 | `[upstream]` | Upstream API base URL, timeouts, connection pool |
-| `[database]` | SQLite path, WAL mode |
+| `[database]` | SQLite path, WAL mode, WAL size limit |
 | `[models]` | Catalog refresh, exposure mode, model collapse, withdrawal policy |
 | `[routing]` | Routing strategy, retry limits, quota mode, same-tier fairness |
 | `[dashboard]` | Dashboard toggle, theme, refresh interval |

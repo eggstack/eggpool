@@ -39,6 +39,10 @@ synchronous = "NORMAL"
 # read-only stats/dashboard connection for file-backed SQLite when dashboard
 # isolation is worth the extra connection and thread.
 worker_threads = 1
+# Optional: bound WAL file size after checkpoints (bytes).  ``None``/omitted
+# uses the SQLite default (unbounded).  A sensible SBC value is 67108864
+# (64 MiB).  See architecture/deep-dive-database.md for durability notes.
+# journal_size_limit = 67108864
 
 # ─── Maintenance Budgets ────────────────────────────────────────────
 # Bounds for periodic database maintenance tasks (retention cleanup,

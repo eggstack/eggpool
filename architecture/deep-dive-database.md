@@ -99,6 +99,42 @@ ownership is published only after commit; statement, rollback, and ambiguous
 commit failures raise and release provisional ownership. No placeholder
 durable identity is returned.
 
+### Write-path characterization (Plan 137)
+
+The dispatch and finalization write paths are already compact. Each request
+lifecycle involves exactly two SQLite transactions:
+
+**Dispatch (before upstream):**
+
+1. In-memory claim under `_selection_claim_lock` — no DB I/O.
+2. Single `BEGIN IMMEDIATE` transaction outside the lock:
+   `request INSERT or UPDATE` → `reservation INSERT` → `attempt INSERT` → `COMMIT`.
+3. Runtime publication under a second lock acquisition — no DB I/O.
+
+**Finalization (after upstream):**
+
+1. Single `BEGIN IMMEDIATE` transaction:
+   `request UPDATE WHERE status='pending' RETURNING` →
+   `attempt UPDATE WHERE completed_at IS NULL RETURNING` →
+   `reservation UPDATE WHERE status='active' RETURNING` → `COMMIT`.
+
+All three finalization mutations use `RETURNING` clauses, eliminating
+read-after-write SELECTs. Conditional `WHERE` clauses make duplicate
+finalization idempotent. Analytics emission, routing traces, and account
+events are post-commit, buffered, or best-effort — they never participate
+in the correctness transaction.
+
+**SBC diagnostic write policy:**
+
+- Routing traces: off (`mode = "off"`, `sample_rate = 0.0`).
+- Dispatch spans: off (`sample_rate = 0.0`).
+- Metrics: `low_wear` mode with 120 s flush; no inline writes.
+- Readiness probe: disabled by default.
+- Backup: disabled by default.
+
+No redundant reads or writes were found during the audit. Diagnostic fields
+are already disabled or sampled under the SBC profile.
+
 ### `db/migrations.py` — MigrationRunner
 
 Schema migration execution. Ordered SQL files in `db/schema/`.
@@ -197,3 +233,70 @@ Key invariants:
 - Every request receives one durable request/reservation/attempt outcome
 - Transaction failure fails closed before upstream dispatch
 - Claim compensation releases provisional ownership exactly once
+
+## WAL Residue (Plan 137)
+
+WAL files grow with write activity. SQLite checkpoints truncate them, but the
+default WAL file size limit is unbounded. On storage-constrained SBCs, an
+unbounded WAL can consume significant microSD space before a passive
+checkpoint runs.
+
+The `journal_size_limit` pragma bounds the WAL file size after each checkpoint.
+When set, SQLite truncates the WAL to this size (or smaller) after a
+`PRAGMA wal_checkpoint(PASSIVE)`. The pragma does not change checkpoint
+cadence or synchronous mode; it only caps residual WAL size.
+
+Default behavior: `None` (unbounded) for workstation installs. The SBC
+profile sets `journal_size_limit = 67108864` (64 MiB), which provides
+headroom for normal operation while bounding steady-state WAL consumption.
+
+The pragma is safe with `synchronous=NORMAL` and WAL mode: it does not alter
+durability semantics. The checkpoint itself is already passive and
+non-blocking (runs in background cleanup).
+
+## Database Lifecycle Clarity (Plan 137)
+
+`DatabaseLifecycleState` tracks the connection lifecycle. The transitions
+are:
+
+```
+DISCONNECTED → CONNECTING → READY → SHUTTING_DOWN
+                                     FAILED_CLOSED (from any active state on error)
+```
+
+`_transition_state()` is a diagnostic setter — the caller's invariants
+(locks, writes-admitted flag) are set independently. The only enforced
+invariants are:
+
+- `FAILED_CLOSED` is terminal for this instance (a supervisor restart
+  creates a fresh `Database`).
+- `SHUTTING_DOWN` is terminal-ish (no return to `READY`).
+
+Error handling transitions to `FAILED_CLOSED` from `CONNECTING`, `READY`, or
+`SHUTTING_DOWN`. This is intentional: a corrupted or invalidated connection
+must close admission regardless of the current state.
+
+The `_invalidate_connection()` method detaches the connection, records the
+failure reason, and transitions to `FAILED_CLOSED`. It does not attempt
+reconnection — the deployment contract is a worker restart.
+
+## Schema Baseline Decision (Plan 137)
+
+The project currently runs 53 numbered SQL migrations. A future 1.0 release
+could establish a migration baseline: replace the full migration chain with a
+baseline schema snapshot and a bridge strategy for pre-1.0 installs.
+
+**Decision for this phase:** Document but do not execute. The baseline
+policy should be:
+
+1. Once the compatibility policy permits, replace indefinite pre-1.0
+   migration archaeology with a baseline/bridge strategy.
+2. Do not destructively squash migrations while current installs still
+   need them.
+3. The baseline snapshot should be the schema state at the 1.0 release
+   tag.
+4. A bridge migration applies the delta from the last pre-1.0 checksum
+   to the baseline, allowing fresh installs to skip the full chain.
+
+This is deferred until the 1.0 compatibility policy is finalized. No
+destructive migration changes are made in this phase.
