@@ -3702,14 +3702,25 @@ class RequestCoordinator:
                     # raise PrematureStreamEOFError — that would trigger
                     # upstream error classification and potential retry,
                     # but the terminal event is the client-visible outcome.
-                    if eof_decision.classification not in {
+                    #
+                    # Plan 145 (Workstream A): ``response.failed`` and
+                    # ``response.incomplete`` are provider-level terminal
+                    # events that have already been durably finalized as
+                    # MIDSTREAM_ERROR.  Returning immediately prevents
+                    # fallthrough into the success path, which would
+                    # submit a conflicting COMPLETED terminal outcome to
+                    # the finalization supervisor (raising
+                    # ``TerminalConflictError``) and emit a misleading
+                    # ``STREAM_OUTCOME_COMPLETED_*`` diagnostic.
+                    if eof_decision.classification in {
                         "terminal_failure",
                         "terminal_incomplete",
                     }:
-                        raise PrematureStreamEOFError(
-                            eof_decision.classification,
-                            request_id=context.request_id,
-                        )
+                        return
+                    raise PrematureStreamEOFError(
+                        eof_decision.classification,
+                        request_id=context.request_id,
+                    )
                 if streaming_transcoder is not None:
                     try:
                         out_chunks = streaming_transcoder.finish(eof_result)

@@ -24,16 +24,19 @@ from eggpool.db.repositories import (
 from eggpool.health.health_manager import HealthManager
 from eggpool.models.config import AppConfig
 from eggpool.request.coordinator import (
+    FinalizationData,
     ProxyRequestContext,
     RequestCoordinator,
 )
 from eggpool.request.finalization_job import RequestFinalizationSupervisor
+from eggpool.request.finalizer import FinalizationOutcome
 from eggpool.routing.router import Router
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
 UPSTREAM_BASE = "https://test-upstream.example.com"
+RESPONSES_UPSTREAM_BASE = "https://test-responses-upstream.example.com"
 
 
 def _build_config() -> AppConfig:
@@ -1568,3 +1571,296 @@ async def test_single_account_failover_bypass(
     )
     assert req_row is not None
     assert req_row["status"] in ("completed", "error")
+
+
+# ---------------------------------------------------------------------------
+# Plan 145 — Responses non-success stream fallthrough regression
+# ---------------------------------------------------------------------------
+
+
+def _build_responses_config() -> AppConfig:
+    os.environ["OPENCODE_TEST_KEY"] = "test-key-123"
+    return AppConfig.from_dict(
+        {
+            "server": {
+                "api_key_env": "OPENCODE_TEST_KEY",
+                "host": "127.0.0.1",
+                "port": 0,
+            },
+            "database": {"path": ":memory:"},
+            "upstream": {"base_url": RESPONSES_UPSTREAM_BASE},
+            "providers": {
+                "responses-provider": {
+                    "id": "responses-provider",
+                    "base_url": RESPONSES_UPSTREAM_BASE,
+                    "protocols": ["openai"],
+                    "responses_path": "/responses",
+                    "accounts": [
+                        {"name": "test-acct", "api_key_env": "OPENCODE_TEST_KEY"}
+                    ],
+                }
+            },
+            "models": {"startup_refresh": False, "refresh_interval_s": 0},
+            "dashboard": {"enabled": False},
+        }
+    )
+
+
+@pytest_asyncio.fixture()
+async def responses_db() -> AsyncGenerator[Database, None]:
+    database = Database(path=":memory:")
+    await database.connect()
+    runner = MigrationRunner(database)
+    await runner.run()
+    async with database.transaction():
+        await database.execute_write(
+            "INSERT INTO accounts (name, api_key_env, enabled, weight, provider_id) "
+            "VALUES (?, ?, 1, 1.0, ?)",
+            ("test-acct", "OPENCODE_TEST_KEY", "responses-provider"),
+        )
+        await database.execute_write(
+            "INSERT OR IGNORE INTO models (model_id, protocol) VALUES (?, ?)",
+            ("gpt-4", "openai"),
+        )
+    yield database
+    await database.disconnect()
+
+
+@pytest_asyncio.fixture()
+async def responses_coordinator(
+    responses_db: Database,
+) -> AsyncGenerator[RequestCoordinator, None]:
+    config = _build_responses_config()
+    httpx_client = httpx.AsyncClient(
+        base_url=config.upstream.base_url,
+        timeout=httpx.Timeout(300.0, connect=5.0, read=300.0, write=30.0, pool=30.0),
+    )
+    registry = AccountRegistry(config)
+    catalog = CatalogService(config, registry, responses_db, httpx_client)
+    catalog.cache.load_model(
+        model_id="gpt-4",
+        display_name="GPT-4",
+        protocol="openai",
+        capabilities={},
+        source_metadata={},
+    )
+    catalog.cache.add_account_support("gpt-4", "test-acct")
+    router = Router(registry, catalog)
+    router.set_account_weight("test-acct", 1.0)
+    health_manager = HealthManager()
+    request_repo = RequestRepository(responses_db)
+    reservation_repo = ReservationRepository(responses_db)
+    attempt_repo = AttemptRepository(responses_db)
+    usage_window_repo = UsageWindowRepository(responses_db)
+    coord = RequestCoordinator(
+        registry=registry,
+        catalog=catalog,
+        router=router,
+        db=responses_db,
+        client_pool=httpx_client,
+        request_repo=request_repo,
+        reservation_repo=reservation_repo,
+        attempt_repo=attempt_repo,
+        usage_window_repo=usage_window_repo,
+        health_manager=health_manager,
+    )
+    finalization_supervisor = RequestFinalizationSupervisor(
+        db=responses_db,
+        effects_applier=coord._effects_applier,  # pyright: ignore[reportPrivateUsage]
+    )
+    coord._finalization_supervisor = finalization_supervisor  # pyright: ignore[reportPrivateUsage]
+    yield coord
+    await finalization_supervisor.shutdown()
+    await httpx_client.aclose()
+
+
+@pytest.mark.parametrize(
+    ("terminal_event", "expected_classification"),
+    [
+        ("response.failed", "terminal_failure"),
+        ("response.incomplete", "terminal_incomplete"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_responses_non_success_stream_terminates_after_finalization(
+    responses_coordinator: RequestCoordinator,
+    responses_db: Database,
+    terminal_event: str,
+    expected_classification: str,
+) -> None:
+    """Plan 145 Workstream C: ``response.failed`` and ``response.incomplete``
+    must each produce exactly one non-success finalization and must not
+    fall through to the success completion path.
+
+    Before the fix the streaming generator falls through into the ordinary
+    success block, calls ``_finalize_terminal(COMPLETED)``, and conflicts
+    with the earlier ``MIDSTREAM_ERROR`` submission — raising
+    ``TerminalConflictError`` into the client iterator and writing an
+    incorrect completed-stream diagnostic.
+    """
+    request_id = f"plan145-{terminal_event}"
+    request_body = json.dumps(
+        {
+            "model": "gpt-4",
+            "input": "hi",
+            "stream": True,
+            "store": False,
+        }
+    ).encode()
+
+    finalize_calls: list[FinalizationData] = []
+    original_finalize = responses_coordinator._finalize_terminal
+
+    async def _spy_finalize(
+        context: ProxyRequestContext,
+        selected: object,
+        data: FinalizationData,
+    ) -> None:
+        finalize_calls.append(data)
+        await original_finalize(context, selected, data)
+
+    responses_coordinator._finalize_terminal = _spy_finalize  # type: ignore[method-assign]
+
+    sse_body = "\n".join(
+        [
+            "event: response.created",
+            'data: {"id": "resp-1", "object": "response"}',
+            "",
+            f"event: {terminal_event}",
+            'data: {"id": "resp-1", "status": "failed"}',
+            "",
+        ]
+    ).encode()
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=sse_body,
+            headers={"content-type": "text/event-stream"},
+        )
+
+    with respx.mock:
+        respx.post(f"{RESPONSES_UPSTREAM_BASE}/responses").mock(side_effect=_handler)
+
+        context = ProxyRequestContext(
+            request_id=request_id,
+            protocol="openai",
+            model_id="gpt-4",
+            streaming=True,
+            original_body=request_body,
+            incoming_headers={"content-type": "application/json"},
+            request_surface="responses",
+        )
+        response = await responses_coordinator.execute(context)
+
+    assert response.status_code == 200
+    assert response.stream_iterator is not None
+
+    downstream_chunks: list[bytes] = []
+    async for chunk in response.stream_iterator:  # type: ignore[union-attr]
+        downstream_chunks.append(chunk)
+    downstream = b"".join(downstream_chunks)
+
+    # Terminal bytes were forwarded to the client unchanged.
+    assert b"event: response.created" in downstream
+    assert f"event: {terminal_event}".encode() in downstream
+
+    # Exactly one terminal finalization, with MIDSTREAM_ERROR, and the
+    # matching error_detail classification.
+    assert len(finalize_calls) == 1, (
+        f"expected exactly one finalize_terminal call, got {len(finalize_calls)}: "
+        f"{[d.outcome.value for d in finalize_calls]}"
+    )
+    assert finalize_calls[0].outcome == FinalizationOutcome.MIDSTREAM_ERROR
+    assert finalize_calls[0].error_detail == expected_classification
+
+    # The durable request row reflects the non-success terminal outcome.
+    request_row = await responses_db.fetch_one(
+        "SELECT status FROM requests WHERE proxy_request_id = ?",
+        (request_id,),
+    )
+    assert request_row is not None
+    assert request_row["status"] == "error", (
+        f"expected status='error' for {terminal_event}, got {request_row['status']!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_responses_completed_stream_still_finalizes_completed(
+    responses_coordinator: RequestCoordinator,
+    responses_db: Database,
+) -> None:
+    """Plan 145 Workstream C: ``response.completed`` (the only successful
+    Responses terminal event) must still finalize exactly once with
+    ``COMPLETED`` after the fallthrough fix. This guards against the
+    fix accidentally breaking the canonical success path.
+    """
+    request_id = "plan145-response-completed"
+    request_body = json.dumps(
+        {
+            "model": "gpt-4",
+            "input": "hi",
+            "stream": True,
+            "store": False,
+        }
+    ).encode()
+
+    finalize_calls: list[FinalizationData] = []
+    original_finalize = responses_coordinator._finalize_terminal
+
+    async def _spy_finalize(
+        context: ProxyRequestContext,
+        selected: object,
+        data: FinalizationData,
+    ) -> None:
+        finalize_calls.append(data)
+        await original_finalize(context, selected, data)
+
+    responses_coordinator._finalize_terminal = _spy_finalize  # type: ignore[method-assign]
+
+    sse_body = "\n".join(
+        [
+            "event: response.created",
+            'data: {"id": "resp-2", "object": "response"}',
+            "",
+            "event: response.completed",
+            'data: {"id": "resp-2", "status": "completed"}',
+            "",
+        ]
+    ).encode()
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=sse_body,
+            headers={"content-type": "text/event-stream"},
+        )
+
+    with respx.mock:
+        respx.post(f"{RESPONSES_UPSTREAM_BASE}/responses").mock(side_effect=_handler)
+
+        context = ProxyRequestContext(
+            request_id=request_id,
+            protocol="openai",
+            model_id="gpt-4",
+            streaming=True,
+            original_body=request_body,
+            incoming_headers={"content-type": "application/json"},
+            request_surface="responses",
+        )
+        response = await responses_coordinator.execute(context)
+
+    assert response.status_code == 200
+    assert response.stream_iterator is not None
+    async for _chunk in response.stream_iterator:  # type: ignore[union-attr]
+        pass
+
+    assert len(finalize_calls) == 1
+    assert finalize_calls[0].outcome == FinalizationOutcome.COMPLETED
+
+    request_row = await responses_db.fetch_one(
+        "SELECT status FROM requests WHERE proxy_request_id = ?",
+        (request_id,),
+    )
+    assert request_row is not None
+    assert request_row["status"] == "completed"

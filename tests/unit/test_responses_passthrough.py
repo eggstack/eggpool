@@ -22,18 +22,29 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+from fastapi import FastAPI, Request
 
 from eggpool.api.errors import openai_error_response
 from eggpool.api.proxy_request import (
     ProxyEndpointConfig,
     _validate_responses_stateless,
 )
-from eggpool.models.config import ProviderConfig
+from eggpool.api.responses import handle_responses
+from eggpool.models.config import AppConfig, ProviderConfig
 from eggpool.providers.contract import compose_provider_url
 from eggpool.proxy.sse_observer import IncrementalSSEObserver
+from eggpool.request.coordinator import PreparedProxyResponse
 from eggpool.request.stream_completion import classify_stream_eof
+from eggpool.runtime_manager import (
+    ImmutableRequestState,
+    RuntimeGeneration,
+    RuntimeManager,
+    attach_runtime_manager,
+)
 
 # ---------------------------------------------------------------------------
 # G1. Provider config/path
@@ -734,3 +745,159 @@ class TestResponsesPayloadPassthrough:
                 assert bound.provider_payload[key] == "gpt-5"
             else:
                 assert bound.provider_payload[key] == client_payload[key]
+
+
+# ---------------------------------------------------------------------------
+# Plan 145 — Real ASGI /v1/responses stateless-admission proof
+# ---------------------------------------------------------------------------
+
+
+class _TestGenerationSupervisor:
+    def all_healthy(self) -> bool:
+        return True
+
+    async def stop_all(self) -> None:
+        return
+
+
+class TestResponsesAsgiStatelessAdmission:
+    """Plan 145 Workstream D: stateless Responses admission must reject
+    stateful fields at the real ASGI endpoint boundary before any
+    coordinator/provider work is performed."""
+
+    def _make_app(self) -> FastAPI:
+        app = FastAPI()
+        config = AppConfig()
+        config.server.api_key_env = ""  # disable auth
+        config.security.trusted_proxies = ["127.0.0.1"]
+        app.state.config = config
+        app.state.test_coordinator = MagicMock()
+
+        @app.post("/v1/responses")
+        async def responses(request: Request) -> Any:  # pyright: ignore[reportUnusedFunction]
+            return await handle_responses(request)  # type: ignore[return-value]
+
+        return app
+
+    async def _install_runtime(self, app: FastAPI) -> MagicMock:
+        config = app.state.config
+        coordinator = app.state.test_coordinator
+        registry = MagicMock()
+        registry.get_provider_ids.return_value = tuple(config.providers)
+        registry.get_enabled_states.return_value = ()
+        catalog = MagicMock()
+        catalog.cache.get_model_protocols.return_value = set()
+        catalog.cache.get_transcodable_protocols.return_value = ()
+        generation = RuntimeGeneration(
+            generation_id=0,
+            config=config,
+            config_digest="test",
+            registry=registry,
+            catalog=catalog,
+            router=MagicMock(),
+            coordinator=coordinator,
+            client_pool=MagicMock(),
+            outbound_manager=None,
+            health_manager=MagicMock(),
+            cost_calculator=MagicMock(),
+            transcoder_policy=MagicMock(enabled=False),
+            dispatch_overhead_recorder=MagicMock(),
+            dispatch_span_recorder=None,
+            account_backoff_repo=None,
+            stats_service=MagicMock(),
+            supervisor=_TestGenerationSupervisor(),
+            routing_trace_guard=None,
+            routing_trace_writer=None,
+            created_at_monotonic=0.0,
+            created_at_epoch=0.0,
+            immutable_request_state=ImmutableRequestState(
+                provider_ids=frozenset(config.providers),
+                account_names=frozenset(),
+                hop_by_hop_headers=frozenset(),
+                local_credential_headers=frozenset(),
+                trusted_proxies=frozenset(config.security.trusted_proxies),
+            ),
+        )
+        manager = RuntimeManager()
+        await manager.install_initial(generation)
+        attach_runtime_manager(app, manager)
+        return coordinator
+
+    @pytest.mark.asyncio
+    async def test_string_conversation_is_rejected_before_coordinator(self) -> None:
+        """A string ``conversation`` field must return 400 before the
+        coordinator runs. Plan 145 (D2): proves stateless admission runs
+        before any provider/account side effect."""
+        app = self._make_app()
+        coordinator = await self._install_runtime(app)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/v1/responses",
+                json={
+                    "model": "test-model",
+                    "input": "hello",
+                    "conversation": "conv_123",
+                    "store": False,
+                },
+            )
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["error"]["type"] == "invalid_request_error"
+        assert "conversation" in body["error"]["message"]
+        coordinator.execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_omitted_store_is_rejected_before_coordinator(self) -> None:
+        """An omitted ``store`` field must return 400 before the
+        coordinator runs. Plan 145 (D2): proves ``store=false`` is
+        enforced explicitly."""
+        app = self._make_app()
+        coordinator = await self._install_runtime(app)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/v1/responses",
+                json={"model": "test-model", "input": "hello"},
+            )
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["error"]["type"] == "invalid_request_error"
+        assert "store=false must be explicitly set" in body["error"]["message"]
+        coordinator.execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_store_false_reaches_coordinator_seam(self) -> None:
+        """An explicit ``store=false`` request must pass stateless
+        admission and reach the mocked coordinator seam. Plan 145 (D3):
+        proves the gate permits the canonical stateless payload."""
+        app = self._make_app()
+        coordinator = await self._install_runtime(app)
+        coordinator.execute = AsyncMock(
+            return_value=PreparedProxyResponse(
+                status_code=200,
+                headers=[("content-type", "application/json")],
+                body=b'{"id":"resp-1","object":"response"}',
+            )
+        )
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/v1/responses",
+                json={
+                    "model": "test-model",
+                    "input": "hello",
+                    "store": False,
+                },
+            )
+        assert resp.status_code == 200
+        coordinator.execute.assert_called_once()
+        context = coordinator.execute.await_args.args[0]
+        assert context.protocol == "openai"
+        assert context.request_surface == "responses"
