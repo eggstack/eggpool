@@ -15,7 +15,7 @@ the OpenAI Responses API or claim full OpenAI API parity.
 | 2 | [Request Lifecycle](#2-request-lifecycle) | Coordinator, API endpoints, proxy, finalization | [deep-dive-request-lifecycle.md](deep-dive-request-lifecycle.md) |
 | 3 | [Protocol Transcoding](#3-protocol-transcoding) | OpenAI ↔ Anthropic body + streaming translation | [deep-dive-transcoder.md](deep-dive-transcoder.md) |
 | 4 | [Routing & Quota](#4-routing--quota) | Priority tiers, fairness rotor, quota estimation | [deep-dive-routing.md](deep-dive-routing.md) |
-| 5 | [Provider Architecture](#5-provider-architecture) | Client pool, contracts, auth, 27+ providers | [deep-dive-providers.md](deep-dive-providers.md) |
+| 5 | [Provider Architecture](#5-provider-architecture) | Client pool, contracts, auth, 22 bundled providers | [deep-dive-providers.md](deep-dive-providers.md) |
 | 6 | [Database Layer](#6-database-layer) | SQLite WAL, migrations, repositories | [deep-dive-database.md](deep-dive-database.md) |
 | 7 | [Runtime & Process Mgmt](#7-runtime--process-management) | Generations, supervisor, Granian worker | [deep-dive-runtime.md](deep-dive-runtime.md) |
 | 8 | [Health Management](#8-health-management) | Circuit breaker, cooldown, failure effects, quarantine | [deep-dive-health.md](deep-dive-health.md) |
@@ -68,7 +68,7 @@ the OpenAI Responses API or claim full OpenAI API parity.
                                 │
                     ┌───────────▼───────────┐
                     │   Upstream Providers   │
-                    │   (27+ providers)      │
+                    │   (22 bundled providers)  │
                     └───────────────────────┘
 ```
 
@@ -139,7 +139,7 @@ Quota-aware account routing with tiered priority, fairness rotation, and eligibi
 | **Path** | `src/eggpool/providers/`, `src/eggpool/accounts/` |
 | **Deep Dive** | [deep-dive-providers.md](deep-dive-providers.md) |
 
-Supports 27+ upstream providers (OpenCode Go, OpenAI, Anthropic, Groq, DeepInfra, Gemini, xAI, Mistral, SiliconFlow, DeepSeek, Together, Fireworks, OpenRouter, Alibaba, MiniMax, and more). `ProviderClientPool` (`providers/client_pool.py`) manages per-provider `httpx.AsyncClient` instances with independent connection pools. `providers/contract.py` centralizes URL composition (`compose_provider_url()`) and auth header construction (`build_auth_headers()`). `providers/outbound.py` manages a shared HTTP client for non-provider network paths. Models are exposed with provider-suffixed IDs (`model-id/provider-id`); `parse_model_provider()` in `routing/provider.py` is the canonical suffix parser. `accounts/registry.py` maintains the in-memory account registry; `accounts/state.py` tracks per-account runtime state (active requests, health, quota).
+Supports 22 bundled upstream providers (OpenCode Go, OpenAI, Anthropic, Groq, DeepInfra, Gemini, xAI, Mistral, SiliconFlow, DeepSeek, Together, Fireworks, OpenRouter, Alibaba, MiniMax, MiniMax-CN, Ollama, LM Studio, llama.cpp, vLLM, LocalAI, and a generic custom-compatible endpoint). Additional providers are supportable through the generic custom-compatible path when they implement the OpenAI Chat Completions or Anthropic Messages contract. `ProviderClientPool` (`providers/client_pool.py`) manages per-provider `httpx.AsyncClient` instances with independent connection pools. `providers/contract.py` centralizes URL composition (`compose_provider_url()`) and auth header construction (`build_auth_headers()`). `providers/outbound.py` manages a shared HTTP client for non-provider network paths. Models are exposed with provider-suffixed IDs (`model-id/provider-id`); `parse_model_provider()` in `routing/provider.py` is the canonical suffix parser. `accounts/registry.py` maintains the in-memory account registry; `accounts/state.py` tracks per-account runtime state (active requests, health, quota).
 
 **Related**: [deep-dive-catalog.md](deep-dive-catalog.md), [deep-dive-routing.md](deep-dive-routing.md), [deep-dive-request-lifecycle.md](deep-dive-request-lifecycle.md)
 

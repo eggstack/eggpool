@@ -424,6 +424,7 @@ document_input = { base64 = true, url = false }
 non_text_tool_result = true
 max_serialized_request_bytes = 20971520
 
+[providers.groq]
 # Groq — low-latency OpenAI Chat Completions-compatible inference
 id = "groq"
 base_url = "https://api.groq.com/openai/v1"
