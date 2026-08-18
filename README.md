@@ -280,6 +280,18 @@ and a retry that selects a different provider rebuilds the translated
 generation from the original client payload. Text-only and tool-only
 requests continue to reuse the preflight translation.
 
+Selected-provider transcode rejections (`CapabilityError` from a
+selected-provider capability check, or `TranscodeLossError` from the
+transcoder under `loss_policy = "reject"`) are client-validation
+outcomes, not internal defects. The attempt-loop seam converges selected
+durable/runtime ownership synchronously through the canonical finalization
+owner and re-raises the typed exception so the API renders it as HTTP 400.
+No retry selects another account, no upstream HTTP request is built/sent,
+and no provider health, suppression, quarantine, circuit, or durable
+backoff effect is applied. A simulated durable finalization failure
+propagates into the existing supervisor/restart path instead of silently
+reporting a clean 400 while convergence is unknown.
+
 Streaming completion is determined by the upstream protocol, not by the absence
 of a transport exception. OpenAI streams require `data: [DONE]` and Anthropic
 streams require `event: message_stop`. Provider-specific markerless behavior,

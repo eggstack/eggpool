@@ -1392,7 +1392,7 @@ class RequestCoordinator:
                 break
 
             last_selected = selected
-            # Plan 141: after ``SelectedAttempt`` exists, perform the
+            # Plan 141/142: after ``SelectedAttempt`` exists, perform the
             # definitive cross-protocol translation against the selected
             # provider's capability row. This applies when the preflight
             # produced no reusable :class:`PreparedTranscode` (provider-
@@ -1407,6 +1407,55 @@ class RequestCoordinator:
                         transcoder=transcoder,
                     )
                 except asyncio.CancelledError:
+                    raise
+                except CapabilityError as err:
+                    # Plan 142: a selected-provider capability check
+                    # (e.g. thinking-budget rejection, modality/control
+                    # incompatibility) is a client-validation outcome, not
+                    # an internal defect. Converge the selected attempt
+                    # through the canonical capability-rejection terminal
+                    # owner, then re-raise the typed error so the API
+                    # renderer renders it as 400. No retry, no provider
+                    # health/backoff/quarantine effect.
+                    try:
+                        await self._finalize_selected_capability_rejection(
+                            context=context,
+                            selected=selected,
+                            err=err,
+                        )
+                    except (
+                        AcceptedFinalizationInvariantError,
+                        DatabaseError,
+                    ) as finalize_err:
+                        # Plan 142: fail closed. Do not silently ignore a
+                        # durable finalization failure; the existing 500
+                        # fallback in ``RequestCoordinator.execute`` and
+                        # ``_handle_proxy_request_inner`` will own the
+                        # response rather than reporting a clean 400 when
+                        # convergence is unknown.
+                        raise finalize_err from err
+                    raise
+                except TranscodeLossError as err:
+                    # Plan 142: the transcoder's strict ``loss_policy =
+                    # "reject"`` (or per-feature loss) decided that the
+                    # selected provider cannot represent the client's
+                    # request. This is a client-validation outcome;
+                    # converge the selected attempt through the canonical
+                    # transcode-loss terminal owner, then re-raise so the
+                    # API renderer renders it as 400. No retry, no
+                    # provider health/backoff/quarantine effect, no
+                    # upstream HTTP request is built.
+                    try:
+                        await self._finalize_selected_transcode_loss_rejection(
+                            context=context,
+                            selected=selected,
+                            err=err,
+                        )
+                    except (
+                        AcceptedFinalizationInvariantError,
+                        DatabaseError,
+                    ) as finalize_err:
+                        raise finalize_err from err
                     raise
                 except Exception as err:
                     raise self._local_dispatch_error(
@@ -4490,12 +4539,65 @@ class RequestCoordinator:
         except AcceptedFinalizationInvariantError as finalize_err:
             raise finalize_err from err
         except DatabaseError as finalize_err:
-            logger.warning(
-                "capability rejection finalize failed request_id=%s attempt_id=%s: %s",
-                context.request_id,
-                selected.attempt_id,
-                finalize_err,
+            # Plan 142: fail closed. Do not silently report a clean 400
+            # when the canonical finalization owner could not converge
+            # the selected attempt state. The existing 500 fallback in
+            # ``RequestCoordinator.execute`` and the request-level
+            # exception handler own the response instead so the
+            # supervisor/restart path can recover durable convergence.
+            raise finalize_err from err
+
+    async def _finalize_selected_transcode_loss_rejection(
+        self,
+        *,
+        context: ProxyRequestContext,
+        selected: SelectedAttempt,
+        err: TranscodeLossError,
+    ) -> None:
+        """Clean up state after a post-selection ``TranscodeLossError``.
+
+        Plan 142: when the configured cross-protocol ``loss_policy =
+        "reject"`` (or a per-feature loss path) decides the selected
+        provider cannot represent the client request, this helper
+        converges the selected attempt durable/runtime ownership
+        synchronously through the canonical finalization owner so the
+        request does not strand in durable state. The terminal outcome
+        is ``CLIENT_ERROR / 400`` because ``TranscodeLossError`` is a
+        client-validation outcome, not an account health signal.
+
+        No upstream health, backoff, or quarantine effect is applied.
+        No thinking-specific trace/counter work runs here (mirrors the
+        structure of :meth:`_finalize_selected_oversize_rejection` for
+        the minimum code needed to render a 400).
+        """
+        elapsed_ms = self._elapsed_ms(context)
+        try:
+            await self._finalize_terminal(
+                context,
+                selected,
+                FinalizationData(
+                    outcome=FinalizationOutcome.CLIENT_ERROR,
+                    status_code=400,
+                    error_class=type(err).__name__,
+                    error_detail=str(err),
+                    upstream_latency_ms=elapsed_ms,
+                    bytes_received=context.original_body_size
+                    or len(context.original_body),
+                    upstream_protocol=context.upstream_protocol,
+                    thinking_trace_json=_serialize_thinking_trace(
+                        context.thinking_trace,
+                    ),
+                    segmentation=context.segmentation,
+                    segmentation_not_collected=context.segmentation_not_collected,
+                ),
             )
+        except AcceptedFinalizationInvariantError as finalize_err:
+            raise finalize_err from err
+        except DatabaseError as finalize_err:
+            # Plan 142: fail closed. Propagate into the existing
+            # supervisor/restart path; do not silently report a clean
+            # 400 when durable convergence is unknown.
+            raise finalize_err from err
 
     async def _finalize_selected_oversize_rejection(
         self,

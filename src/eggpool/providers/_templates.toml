@@ -270,12 +270,14 @@ probe_protocol = "openai"
 require_models = true
 
 [providers.llamacpp-local.model_capabilities.default.multimodal]
-# llama.cpp supports base64 images via the OpenAI-compatible endpoint.
-# URL images are not supported.  Document PDF and audio support depend
-# on the loaded model and are conservatively disabled. No provider-defined
-# request ceiling is advertised; the upstream server accepts whatever the
-# OpenAI-compatible transport can deliver.
-image_input = { base64 = true, url = false }
+# llama.cpp's llama-server accepts base64 and URL images through the
+# OpenAI-compatible endpoint (``image_url.url`` may be a remote URL,
+# a base64 string, or a local file path per the current server docs).
+# Document PDF and audio support depend on the loaded model/mmproj and
+# are conservatively disabled. No provider-defined request ceiling is
+# advertised; the upstream server accepts whatever the OpenAI-compatible
+# transport can deliver.
+image_input = { base64 = true, url = true }
 document_input = { base64 = false, url = false }
 non_text_tool_result = false
 

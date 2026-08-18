@@ -115,11 +115,42 @@ groups `image_input`, `document_input`, `audio_input`, `non_text_tool_result`,
 and `max_serialized_request_bytes`. Capabilities are provider/model/protocol
 scoped; unknown remains unknown and must never authorize a native field.
 
+The bundled local-provider templates declare **endpoint-level** source-form
+support against the *current* OpenAI-compatible surface contract only;
+the actual multimodal capability of any individual loaded model/mmproj is
+discovered at runtime and is not guaranteed by the template. Plan 142
+confirmed these against the upstream docs:
+
+- **Ollama OpenAI-compatible** (`docs.ollama.com/api/openai-compatibility`):
+  declares `Base64 encoded image` as supported and `Image URL` as not
+  supported. The native `/api/chat` surface accepts file paths and
+  URLs in addition to base64, but the OpenAI-compatible surface does
+  not; templates therefore declare `image_input.url = false`.
+- **llama.cpp `llama-server`** docs accept remote URLs, base64, and
+  local file paths for `image_url.url`; templates declare
+  `image_input.url = true`.
+- **vLLM OpenAI-compatible online serving** accepts URL images subject
+  to `--allowed-media-domains`; templates declare `image_input.url = true`.
+
 Source forms are capability-gated: the transcoder consults `MediaCapability`
 flags before translating images and documents, emitting `unsupported_source_form`
 loss warnings when the target provider cannot represent the source form.
 Tool-result media is preserved when the target supports `non_text_tool_result`;
 otherwise it is flattened to text with a `media_tool_result_flattened` warning.
+
+When the configured cross-protocol `loss_policy = "reject"` fires (typically
+for a selected provider that cannot represent a protected cache-control
+field), the transcoder raises `TranscodeLossError`. The coordinator's
+attempt-loop seam treats this as a client-validation outcome:
+
+- `_finalize_selected_transcode_loss_rejection` converges the selected
+  durable/runtime ownership synchronously through the canonical finalization
+  owner (`CLIENT_ERROR / 400`, fail-closed on `DatabaseError`).
+- The typed exception is re-raised so `proxy_request.py` renders it as
+  HTTP 400 (`endpoint.error_response(400, "invalid_request_error")`).
+- No retry selects another account, no upstream HTTP request is built/sent,
+  and no provider health, suppression, quarantine, circuit, or durable
+  backoff effect is applied.
 
 Serialized via `model_capabilities_to_dict` / `dict_to_model_capabilities`
 for the catalog cache round-trip. Merge via `merge_model_capabilities` uses

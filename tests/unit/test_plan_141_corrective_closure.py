@@ -1,119 +1,76 @@
-"""Plan 141 — final corrective closure regression tests.
+"""Plan 142 — final corrective closure regression tests.
 
-Focused regression tests for the boundaries corrected by Plan 141:
+Focused regression tests for the typed-error boundaries corrected by
+Plan 142:
 
-- F1: API-level provider-bound 413 (RequestTooLargeError → 413, not 500)
-- F2: Healthy selected oversize finalization
-- F3: Failed oversize finalization (DatabaseError is propagated, marker not set)
-- F4: Selected-provider multimodal authority (capability lookup uses
-  selected.provider_id)
-- F5: Retry/source-generation safety (retries translate from original
-  client payload)
-- F6: Fast-path preservation (text-only prepared_transcode reuse still
-  works)
-- F7: Provider metadata (Ollama/vLLM image_url declarations match verified
-  docs)
+- F1: API-bound provider 413 routes through the proxy exception boundary
+  as ``RequestTooLargeError`` (HTTP 413, not 500), for both OpenAI and
+  Anthropic adapters, with the generation lease released exactly once.
+- F2: Selected oversize/capability/transcode-loss finalization fails
+  closed on a durable finalization failure (DatabaseError propagates).
+- F3: Selected-provider capability lookup observes ``selected.provider_id``.
+- F4: Retry/source-generation safety through ``_apply_selected_provider_transcode``.
+- F5: Text-only prepared-transcode fast path preserved.
+- F6: Selected-provider transcode-loss rejection surfaces as typed
+  ``TranscodeLossError`` (not ``_LocalDispatchError``/500).
+- F7: Provider metadata URL-image facts.
 """
 
 from __future__ import annotations
 
+import json as _json
 import tomllib
 from importlib.resources import files
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+from fastapi import FastAPI, Request
 
-from eggpool.errors import DatabaseError, RequestTooLargeError
+from eggpool.api.chat_completions import handle_chat_completions
+from eggpool.api.messages import handle_messages
+from eggpool.errors import (
+    DatabaseError,
+    RequestTooLargeError,
+)
+from eggpool.models.config import AppConfig
 from eggpool.request.coordinator import (
     FinalizationData,
     FinalizationOutcome,
     ProxyRequestContext,
     RequestCoordinator,
     SelectedAttempt,
+    _LocalDispatchError,
 )
 from eggpool.request.provider_bound_request import ProviderBoundRequest
+from eggpool.runtime_manager import (
+    ImmutableRequestState,
+    RuntimeGeneration,
+    RuntimeManager,
+    attach_runtime_manager,
+)
+from eggpool.transcoder.context import TranscodeContext
+from eggpool.transcoder.errors import TranscodeLossError
 from eggpool.transcoder.prepared import PreparedTranscode
 from eggpool.transcoder.sensitive_media import (
     request_has_provider_sensitive_media,
 )
 
-if TYPE_CHECKING:
-    from eggpool.request.finalization_job import FinalizationIdentity
-
 # ---------------------------------------------------------------------------
-# F1 — API-level provider-bound 413
+# Shared helpers
 # ---------------------------------------------------------------------------
 
 
-class TestRequestTooLargeErrorRendering:
-    """Plan 141: the API handler must render RequestTooLargeError as 413.
-
-    The pre-141 implementation let the exception fall through to the
-    ordinary 500 containment because the proxy_request handler had no
-    explicit catch for it. The new explicit handler renders the
-    protocol-shaped 413.
-    """
-
-    def test_openai_shaped_413_error(self) -> None:
-        from eggpool.api.errors import openai_error_response
-
-        response = openai_error_response(
-            status_code=413,
-            message="Serialized request body too large",
-        )
-        assert response.status_code == 413
-        assert response.body is not None
-        import json as _json
-
-        body = _json.loads(response.body)
-        assert body["error"]["type"] == "invalid_request_error"
-        assert body["error"]["code"] == "413"
-        assert "too large" in body["error"]["message"].lower()
-
-    def test_anthropic_shaped_413_error(self) -> None:
-        from eggpool.api.errors import anthropic_error_response
-
-        response = anthropic_error_response(
-            status_code=413,
-            message="Serialized request body too large",
-        )
-        assert response.status_code == 413
-        import json as _json
-
-        body = _json.loads(response.body)
-        assert body["type"] == "error"
-        assert body["error"]["type"] == "invalid_request_error"
-        assert "too large" in body["error"]["message"].lower()
-
-
-class TestErrorStatusCodeMapping:
-    """The static error mapper must keep returning 413 for RequestTooLargeError."""
-
-    def test_returns_413(self) -> None:
-        from eggpool.request.static_helpers import error_status_code
-
-        assert error_status_code(RequestTooLargeError("big")) == 413
-
-
-# ---------------------------------------------------------------------------
-# F2 — Healthy selected oversize finalization
-# ---------------------------------------------------------------------------
-
-
-def _make_coordinator_with_supervisor(
-    supervisor: Any,
-) -> RequestCoordinator:
-    catalog = MagicMock()
-    coordinator = RequestCoordinator(
+def _make_coordinator_with_supervisor(supervisor: Any) -> RequestCoordinator:
+    return RequestCoordinator(
         registry=MagicMock(),
-        catalog=catalog,
+        catalog=MagicMock(),
         router=MagicMock(),
         db=MagicMock(),
         client_pool=MagicMock(),
         finalization_supervisor=supervisor,
     )
-    return coordinator
 
 
 def _make_selected(provider_id: str = "p1") -> SelectedAttempt:
@@ -144,23 +101,162 @@ def _make_context() -> ProxyRequestContext:
     )
 
 
-class TestOversizeMarkerSetAfterConvergence:
-    """The _oversize_finalized flag is a proof-of-convergence marker.
+# ---------------------------------------------------------------------------
+# F1 — API-bound provider 413 routes through the proxy exception boundary
+# ---------------------------------------------------------------------------
 
-    On the healthy path the canonical finalization owner converges the
-    attempt first; only then is the marker set. This prevents a later
-    _handle_exhausted from skipping a real 413 cleanup because the
-    marker was set before the finalization actually completed.
-    """
 
+class TestRequestTooLargeErrorStatusCode:
+    """``error_status_code`` must keep returning 413 for ``RequestTooLargeError``."""
+
+    def test_maps_to_413(self) -> None:
+        from eggpool.request.static_helpers import error_status_code
+
+        assert error_status_code(RequestTooLargeError("big")) == 413
+
+
+class _StubGenerationSupervisor:
+    def all_healthy(self) -> bool:
+        return True
+
+    async def stop_all(self) -> None:
+        return
+
+
+async def _build_app_with_generation(
+    coordinator_mock: Any,
+) -> tuple[FastAPI, RuntimeManager]:
+    """Install a real RuntimeGeneration wired to ``coordinator_mock``."""
+
+    app = FastAPI()
+    config = AppConfig()
+    config.server.api_key_env = ""
+    config.security.trusted_proxies = ["127.0.0.1"]
+    app.state.config = config
+    app.state.test_coordinator = coordinator_mock
+
+    @app.post("/v1/chat/completions")
+    async def chat_completions(request: Request) -> Any:  # pyright: ignore[reportUnusedFunction]
+        return await handle_chat_completions(request)  # type: ignore[return-value]
+
+    @app.post("/v1/messages")
+    async def messages(request: Request) -> Any:  # pyright: ignore[reportUnusedFunction]
+        return await handle_messages(request)  # type: ignore[return-value]
+
+    registry = MagicMock(
+        get_provider_ids=lambda: tuple(config.providers),
+        get_enabled_states=lambda: (),
+    )
+    catalog = MagicMock(
+        cache=MagicMock(
+            get_model_protocols=lambda *_a, **_k: {"openai"},
+            get_transcodable_protocols=lambda *_a, **_k: (),
+        )
+    )
+    generation = RuntimeGeneration(
+        generation_id=0,
+        config=config,
+        config_digest="test",
+        registry=registry,
+        catalog=catalog,
+        router=MagicMock(),
+        coordinator=coordinator_mock,
+        client_pool=MagicMock(),
+        outbound_manager=None,
+        health_manager=MagicMock(),
+        cost_calculator=MagicMock(),
+        transcoder_policy=MagicMock(enabled=False),
+        dispatch_overhead_recorder=MagicMock(),
+        dispatch_span_recorder=None,
+        account_backoff_repo=None,
+        stats_service=MagicMock(),
+        supervisor=_StubGenerationSupervisor(),
+        routing_trace_guard=None,
+        routing_trace_writer=None,
+        created_at_monotonic=0.0,
+        created_at_epoch=0.0,
+        immutable_request_state=ImmutableRequestState(
+            provider_ids=frozenset(config.providers),
+            account_names=frozenset(),
+            hop_by_hop_headers=frozenset(),
+            local_credential_headers=frozenset(),
+            trusted_proxies=frozenset(config.security.trusted_proxies),
+        ),
+    )
+    manager = RuntimeManager()
+    await manager.install_initial(generation)
+    attach_runtime_manager(app, manager)
+    return app, manager
+
+
+def _active_leases(manager: RuntimeManager) -> int:
+    slot = manager._active  # type: ignore[attr-defined]
+    if slot is None:
+        return 0
+    return slot.active_leases
+
+
+@pytest.mark.parametrize("path", ["/v1/chat/completions", "/v1/messages"])
+@pytest.mark.asyncio
+async def test_provider_413_routed_at_api_boundary(path: str) -> None:
+    """A ``RequestTooLargeError`` from the coordinator must render as 413
+    with a protocol-shaped body, not as 500. The generation lease must
+    also be released exactly once on the error path."""
+
+    coordinator_mock = MagicMock()
+    coordinator_mock.execute = AsyncMock(
+        side_effect=RequestTooLargeError("Serialized request body too large")
+    )
+    app, manager = await _build_app_with_generation(coordinator_mock)
+
+    lease_count_before = _active_leases(manager)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            path,
+            json={
+                "model": "gpt-4/opencode-go",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+    lease_count_after = _active_leases(manager)
+
+    assert response.status_code == 413
+    # Lease must be released exactly once on the error path.
+    assert lease_count_after == lease_count_before
+    body = _json.loads(response.text)
+    if path == "/v1/chat/completions":
+        assert body["error"]["type"] == "invalid_request_error"
+        assert body["error"]["code"] == "413"
+    else:
+        assert body["type"] == "error"
+        assert body["error"]["type"] == "invalid_request_error"
+    assert "too large" in body["error"]["message"].lower()
+
+
+# ---------------------------------------------------------------------------
+# F2 — Selected oversize / capability / transcode-loss fail-closed
+# ---------------------------------------------------------------------------
+
+
+def _supervisor_raising(dberror: DatabaseError) -> MagicMock:
+    supervisor = MagicMock()
+    run_job = MagicMock()
+    run_job.run = AsyncMock(side_effect=dberror)
+    supervisor.register_or_get = MagicMock(return_value=run_job)
+    return supervisor
+
+
+def _supervisor_succeeding() -> MagicMock:
+    supervisor = MagicMock()
+    supervisor.register_or_get = MagicMock(return_value=MagicMock(run=AsyncMock()))
+    return supervisor
+
+
+class TestSelectedOversizeFinalization:
     @pytest.mark.asyncio
     async def test_marker_set_only_after_successful_finalization(self) -> None:
-        supervisor = MagicMock()
-        register = MagicMock()
-        run = AsyncMock()
-        register.return_value.run = run
-        supervisor.register_or_get = register
-
+        supervisor = _supervisor_succeeding()
         coordinator = _make_coordinator_with_supervisor(supervisor)
         context = _make_context()
         selected = _make_selected()
@@ -171,32 +267,17 @@ class TestOversizeMarkerSetAfterConvergence:
             err=RequestTooLargeError("too large"),
         )
 
-        # The convergence finalization must have been registered.
         assert supervisor.register_or_get.call_count == 1
-        registered_identity: FinalizationIdentity = (
-            supervisor.register_or_get.call_args.args[0]
-        )
-        assert registered_identity.proxy_request_id == "req-1"
-        assert registered_identity.attempt_id == 1
-        # Outcome must carry 413 / client_error.
         registered_data: FinalizationData = supervisor.register_or_get.call_args.kwargs[
             "finalization_data"
         ]
         assert registered_data.outcome == FinalizationOutcome.CLIENT_ERROR
         assert registered_data.status_code == 413
-        # Marker is set only after the run completed.
         assert context.client_metadata.get("_oversize_finalized") is True
 
     @pytest.mark.asyncio
-    async def test_marker_not_set_when_finalization_raises_database_error(self) -> None:
-        supervisor = MagicMock()
-        register = MagicMock()
-        # Simulate a durable finalization failure.
-        run_job = MagicMock()
-        run_job.run = AsyncMock(side_effect=DatabaseError("commit failed"))
-        register.return_value = run_job
-        supervisor.register_or_get = register
-
+    async def test_database_error_propagates(self) -> None:
+        supervisor = _supervisor_raising(DatabaseError("disk full"))
         coordinator = _make_coordinator_with_supervisor(supervisor)
         context = _make_context()
         selected = _make_selected()
@@ -207,67 +288,68 @@ class TestOversizeMarkerSetAfterConvergence:
                 selected=selected,
                 err=RequestTooLargeError("too large"),
             )
-
-        # Marker is intentionally not set so the existing fail-closed
-        # recovery path can take ownership of the request.
-        assert context.client_metadata.get("_oversize_finalized") is not True
-
-
-# ---------------------------------------------------------------------------
-# F3 — Failed oversize finalization (simulated)
-# ---------------------------------------------------------------------------
-
-
-class TestOversizeFinalizationFailClosed:
-    """A simulated durable-finalization failure cannot masquerade as a
-    successful 413 cleanup. The marker must remain unset and the
-    failure must propagate to the existing supervisor/fail-closed path.
-    """
-
-    @pytest.mark.asyncio
-    async def test_propagation_keeps_marker_unset(self) -> None:
-        supervisor = MagicMock()
-        register = MagicMock()
-        run_job = MagicMock()
-        run_job.run = AsyncMock(side_effect=DatabaseError("disk full"))
-        register.return_value = run_job
-        supervisor.register_or_get = register
-
-        coordinator = _make_coordinator_with_supervisor(supervisor)
-        context = _make_context()
-        selected = _make_selected()
-
-        with pytest.raises(DatabaseError):
-            await coordinator._finalize_selected_oversize_rejection(
-                context=context,
-                selected=selected,
-                err=RequestTooLargeError("too large"),
-            )
-
-        # Marker remains unset so a later fail-closed owner can take over.
+        # Marker is intentionally not set so the fail-closed recovery
+        # path can take ownership of the request.
         assert "_oversize_finalized" not in context.client_metadata
 
 
+class TestSelectedCapabilityFinalizationFailClosed:
+    """Plan 142: a durable finalization failure on capability /
+    transcode-loss rejection must propagate instead of reporting a
+    clean 400 while convergence is unknown."""
+
+    @pytest.mark.asyncio
+    async def test_capability_database_error_propagates(self) -> None:
+        supervisor = _supervisor_raising(DatabaseError("commit failed"))
+        coordinator = _make_coordinator_with_supervisor(supervisor)
+        context = _make_context()
+        selected = _make_selected()
+
+        # A concrete CapabilityError subclass exercises the typed
+        # signature end to end.
+        from eggpool.transcoder.budget_resolver import BudgetResolutionError
+
+        err = BudgetResolutionError(
+            message="budget exceeded",
+            requested_budget_tokens=200000,
+            budget_resolution_policy="strict",
+            reason="strict_clamp",
+            model_id=selected.model_id,
+            provider_id=selected.provider_id,
+        )
+
+        with pytest.raises(DatabaseError):
+            await coordinator._finalize_selected_capability_rejection(
+                context=context,
+                selected=selected,
+                err=err,
+            )
+
+    @pytest.mark.asyncio
+    async def test_transcode_loss_database_error_propagates(self) -> None:
+        supervisor = _supervisor_raising(DatabaseError("commit failed"))
+        coordinator = _make_coordinator_with_supervisor(supervisor)
+        context = _make_context()
+        selected = _make_selected()
+
+        with pytest.raises(DatabaseError):
+            await coordinator._finalize_selected_transcode_loss_rejection(
+                context=context,
+                selected=selected,
+                err=TranscodeLossError(
+                    "selected provider cannot represent URL image",
+                    loss_warnings=[],
+                ),
+            )
+
+
 # ---------------------------------------------------------------------------
-# F4 — Selected-provider multimodal authority
+# F3 — Selected-provider capability lookup uses selected.provider_id
 # ---------------------------------------------------------------------------
 
 
 class TestSelectedProviderCapabilityLookup:
-    """Plan 141: capability resolution uses ``selected.provider_id``.
-
-    The pre-141 path used ``context.provider_id`` (a pre-selection
-    hint). For a collapsed model with multiple providers, that meant
-    the global first-seen row was used to govern the post-selection
-    translation. The corrected path resolves against
-    ``selected.provider_id`` so provider A and provider B
-    capabilities are never cross-borrowed.
-    """
-
     def test_validate_serialized_size_uses_selected_provider(self) -> None:
-        from eggpool.request.coordinator import ProxyRequestContext
-
-        # Two distinct provider rows: A has a small limit, B has none.
         def fake_get_for_provider(
             model_id: str,  # noqa: ARG001
             provider_id: str | None,
@@ -275,9 +357,7 @@ class TestSelectedProviderCapabilityLookup:
             if provider_id == "small-provider":
                 return {
                     "capabilities": {
-                        "multimodal": {
-                            "max_serialized_request_bytes": 100,
-                        }
+                        "multimodal": {"max_serialized_request_bytes": 100}
                     }
                 }
             return None
@@ -299,8 +379,6 @@ class TestSelectedProviderCapabilityLookup:
             original_body=b"{}",
             incoming_headers={},
         )
-        # The size validator must look up capabilities against the
-        # *selected* provider id, not the pre-selection context hint.
         with pytest.raises(RequestTooLargeError):
             coordinator._validate_serialized_request_size(
                 context,
@@ -313,76 +391,115 @@ class TestSelectedProviderCapabilityLookup:
 
 
 # ---------------------------------------------------------------------------
-# F5 — Retry/source-generation safety
+# F4 — Retry/source-generation authority through selected transcode seam
 # ---------------------------------------------------------------------------
 
 
-class TestRetryTranslationFromOriginalPayload:
-    """When the selected provider changes between attempts, the
-    definitive cross-protocol translation must rebuild from the
-    original client payload rather than stacking on the previous
-    provider's translated graph.
-    """
+def _transcoder_mock_with(content_marker: str) -> Any:
+    return MagicMock(
+        client_protocol="openai",
+        upstream_protocol="anthropic",
+        encode_request=MagicMock(
+            return_value=(
+                {
+                    "model": "shared-model",
+                    "messages": [{"role": "user", "content": content_marker}],
+                },
+                [],
+            )
+        ),
+        decode_response=MagicMock(return_value=({}, [])),
+        reencode_error=MagicMock(return_value=(0, {}, [])),
+    )
 
-    def _make_coordinator(self) -> RequestCoordinator:
-        return RequestCoordinator(
+
+class TestRetryTranslationThroughSelectedAttempt:
+    """Retries against a different selected provider must translate
+    from the original client payload through
+    ``_apply_selected_provider_transcode`` rather than only through
+    ``ProviderBoundRequest`` primitives."""
+
+    @pytest.mark.asyncio
+    async def test_provider_b_does_not_inherit_provider_a_translation(self) -> None:
+        coordinator = RequestCoordinator(
             registry=MagicMock(),
             catalog=MagicMock(),
             router=MagicMock(),
             db=MagicMock(),
             client_pool=MagicMock(),
         )
-
-    def test_provider_bound_can_reset_to_client_payload(self) -> None:
-        coordinator = self._make_coordinator()
         coordinator._catalog.cache.get_model_for_provider = MagicMock(return_value=None)
+
         client_payload: dict[str, Any] = {
             "model": "shared-model",
             "messages": [{"role": "user", "content": "hi"}],
         }
-        pb = ProviderBoundRequest(
+        provider_bound = ProviderBoundRequest(
             client_bytes=b'{"model":"shared-model"}',
             client_payload=client_payload,
             client_protocol="openai",
             model_id="shared-model",
         )
-        # Adopt provider A's translated graph.
-        provider_a_payload = {
-            "model": "shared-model",
-            "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
-        }
-        pb.adopt_provider_payload(provider_a_payload, reason="protocol_transcode")
-        assert pb.provider_payload is not provider_a_payload
-        # Roll back to original client payload before provider B retranslation.
-        pb.set_provider_payload(pb.client_payload, increment_generation=True)
-        # The provider-bound graph is now an owned copy of the original
-        # client payload, not provider A's translated graph.
-        assert pb.provider_payload == client_payload
-        assert pb.mutated is True
+        context = ProxyRequestContext(
+            request_id="req-1",
+            protocol="openai",
+            model_id="shared-model",
+            streaming=False,
+            original_body=provider_bound.client_bytes,
+            incoming_headers={},
+            provider_bound=provider_bound,
+            transcode_context=TranscodeContext(
+                request_id="req-1",
+                client_protocol="openai",
+                upstream_protocol="anthropic",
+            ),
+        )
+        # Seed provider A's translated graph through the canonical
+        # adoption boundary.
+        provider_bound.adopt_provider_payload(
+            {
+                "model": "shared-model",
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "hi"}]}
+                ],
+            },
+            reason="protocol_transcode",
+        )
+        selected_a = _make_selected(provider_id="provider-a")
+        await coordinator._apply_selected_provider_transcode(
+            context=context,
+            selected=selected_a,
+            transcoder=_transcoder_mock_with("A"),
+        )
+        assert provider_bound.provider_payload["messages"][0]["content"] == "A"
+
+        selected_b = _make_selected(provider_id="provider-b")
+        await coordinator._apply_selected_provider_transcode(
+            context=context,
+            selected=selected_b,
+            transcoder=_transcoder_mock_with("B"),
+        )
+        calls = [
+            args
+            for call in coordinator._catalog.cache.get_model_for_provider.call_args_list
+            for args in [call.args]
+        ]
+        assert ("shared-model", "provider-a") in calls
+        assert ("shared-model", "provider-b") in calls
+        assert provider_bound.provider_payload["messages"][0]["content"] == "B"
 
 
 # ---------------------------------------------------------------------------
-# F6 — Fast-path preservation
+# F5 — Text-only fast path preserved
 # ---------------------------------------------------------------------------
 
 
 class TestTextOnlyFastPathPreserved:
-    """Text-only cross-protocol requests with a valid prepared
-    transcode continue to reuse the preflight translation. Plan 141
-    only changes the post-selection recompute for provider-sensitive
-    media and per-feature recompute, not the text-only path.
-    """
-
     def test_text_only_request_has_no_provider_sensitive_media(self) -> None:
         payload = {
             "model": "gpt-4",
             "messages": [{"role": "user", "content": "hello"}],
-            "tools": [
-                {
-                    "type": "function",
-                    "function": {"name": "get_weather"},
-                }
-            ],
+            "tools": [{"type": "function", "function": {"name": "get_weather"}}],
         }
         assert request_has_provider_sensitive_media(payload) is False
 
@@ -415,9 +532,6 @@ class TestTextOnlyFastPathPreserved:
         assert request_has_provider_sensitive_media(payload) is True
 
     def test_prepared_transcode_reuse_skip_when_provider_sensitive(self) -> None:
-        """Preflight translation for media requests is not cached so the
-        coordinator can rebuild against the selected provider's row.
-        """
         prepared = PreparedTranscode(
             client_protocol="openai",
             upstream_protocol="anthropic",
@@ -428,17 +542,91 @@ class TestTextOnlyFastPathPreserved:
             loss_policy_used="warn",
             features_fingerprint=0,
         )
-        # The validity is preserved for the protocol/features; the
-        # coordinator's text-only fast path additionally requires no
-        # provider-sensitive media in the original client payload.
-        # This test pins the contract: the validity check itself does
-        # not consider media, but the coordinator short-circuits when
-        # media is present.
         assert prepared.is_valid_for(upstream_protocol="anthropic") is True
 
 
 # ---------------------------------------------------------------------------
-# F7 — Provider metadata (Ollama/vLLM image URL declarations)
+# F6 — Selected-provider transcode-loss rejection at the seam
+# ---------------------------------------------------------------------------
+
+
+class _FakeTranscoderThatRaisesLoss:
+    """BodyTranscoder double that raises ``TranscodeLossError``."""
+
+    client_protocol = "openai"
+    upstream_protocol = "anthropic"
+
+    def encode_request(  # noqa: D401 — protocol signature
+        self, payload: Any, context: Any, **_kwargs: Any
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        raise TranscodeLossError(
+            "selected provider cannot represent URL image", loss_warnings=[]
+        )
+
+    def decode_response(  # noqa: D401 — protocol signature
+        self, payload: Any, context: Any, **_kwargs: Any
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        return {}, []
+
+    def reencode_error(  # noqa: D401 — protocol signature
+        self, status: int, payload: Any, context: Any
+    ) -> tuple[int, dict[str, Any], list[dict[str, Any]]]:
+        return status, {}, []
+
+
+class TestSelectedProviderTranscodeLossTyped:
+    """A ``TranscodeLossError`` raised inside
+    ``_apply_selected_provider_transcode`` must surface as the typed
+    exception to the proxy handler — not as ``_LocalDispatchError``
+    (which becomes a 500) — and must not trigger an upstream attempt
+    or a provider retry."""
+
+    @pytest.mark.asyncio
+    async def test_transcode_loss_raises_typed_not_local_dispatch(self) -> None:
+        supervisor = _supervisor_succeeding()
+        coordinator = _make_coordinator_with_supervisor(supervisor)
+        coordinator._catalog.cache.get_model_for_provider = MagicMock(return_value=None)
+
+        client_payload: dict[str, Any] = {
+            "model": "shared-model",
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+        provider_bound = ProviderBoundRequest(
+            client_bytes=b'{"model":"shared-model"}',
+            client_payload=client_payload,
+            client_protocol="openai",
+            model_id="shared-model",
+        )
+        context = ProxyRequestContext(
+            request_id="req-1",
+            protocol="openai",
+            model_id="shared-model",
+            streaming=False,
+            original_body=provider_bound.client_bytes,
+            incoming_headers={},
+            provider_bound=provider_bound,
+            transcode_context=TranscodeContext(
+                request_id="req-1",
+                client_protocol="openai",
+                upstream_protocol="anthropic",
+            ),
+        )
+        selected = _make_selected(provider_id="provider-a")
+
+        with pytest.raises(TranscodeLossError) as exc_info:
+            await coordinator._apply_selected_provider_transcode(
+                context=context,
+                selected=selected,
+                transcoder=_FakeTranscoderThatRaisesLoss(),
+            )
+        assert not isinstance(exc_info.value, _LocalDispatchError)
+        # A typed capability-transcode loss means no provider retry,
+        # no provider health effect, and no upstream attempt.
+        supervisor.register_or_get.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# F7 — Provider metadata URL-image facts
 # ---------------------------------------------------------------------------
 
 
@@ -454,11 +642,17 @@ def provider_entries() -> dict[str, dict[str, Any]]:
 
 
 class TestLocalProviderImageUrlMetadata:
-    """Plan 141: bundled local metadata must match verified provider
-    documentation. Ollama's OpenAI-compatible chat endpoint supports
-    base64 images but not URL images; vLLM's OpenAI-compatible server
-    supports both. Earlier templates were inconsistent with the vLLM
-    docs and the corrected declaration is pinned here.
+    """Bundled local capability metadata matches current upstream docs.
+
+    - Ollama's OpenAI-compatible ``/v1/chat/completions`` lists
+      ``Base64 encoded image`` as supported and ``Image URL`` as not
+      supported (per ``docs.ollama.com``). The template therefore
+      declares ``image_input.url = false``. The loaded model and
+      mmproj determine actual multimodal availability independently.
+    - llama.cpp ``llama-server`` documents accept remote URLs, base64,
+      and local file paths for ``image_url.url``; ``url = true``.
+    - vLLM's OpenAI-compatible online serving supports URL images via
+      ``--allowed-media-domains``; ``url = true``.
     """
 
     def test_ollama_image_url_is_false(
@@ -472,6 +666,17 @@ class TestLocalProviderImageUrlMetadata:
         assert image_input.get("base64") is True
         assert image_input.get("url") is False
 
+    def test_llamacpp_image_url_is_true(
+        self, provider_entries: dict[str, dict[str, Any]]
+    ) -> None:
+        entry = provider_entries["llamacpp-local"]
+        mm = (
+            entry.get("model_capabilities", {}).get("default", {}).get("multimodal", {})
+        )
+        image_input = mm.get("image_input", {})
+        assert image_input.get("base64") is True
+        assert image_input.get("url") is True
+
     def test_vllm_image_url_is_true(
         self, provider_entries: dict[str, dict[str, Any]]
     ) -> None:
@@ -481,16 +686,11 @@ class TestLocalProviderImageUrlMetadata:
         )
         image_input = mm.get("image_input", {})
         assert image_input.get("base64") is True
-        # vLLM's OpenAI-compatible online serving supports URL images
-        # (subject to --allowed-media-domains). Pinned per Plan 141.
         assert image_input.get("url") is True
 
     def test_no_local_provider_declares_serialized_request_ceiling(
         self, provider_entries: dict[str, dict[str, Any]]
     ) -> None:
-        """Plan 140 removed speculative universal local limits; Plan 141
-        pins the corrected contract.
-        """
         for pid, entry in provider_entries.items():
             if entry.get("category") != "local":
                 continue

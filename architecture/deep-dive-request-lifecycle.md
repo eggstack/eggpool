@@ -322,6 +322,25 @@ always rebuilds from the original client payload; provider A's translation
 is never stacked on provider B's. Text-only and tool-only requests continue
 to reuse the preflight `PreparedTranscode` unchanged.
 
+Selected-provider transcode rejections (`CapabilityError` from a
+selected-provider capability check, or `TranscodeLossError` from the
+transcoder under `loss_policy = "reject"`) are client-validation
+outcomes, not internal defects. Plan 142 makes the attempt-loop seam
+preserve these as typed exceptions: `_finalize_selected_capability_rejection`
+and `_finalize_selected_transcode_loss_rejection` converge selected
+durable/runtime ownership synchronously through the canonical finalization
+owner, then the typed exception is re-raised so `proxy_request.py`
+renders it as HTTP 400 (`openai_capability_error_response` /
+`anthropic_capability_error_response` for thinking-budget rejections;
+the generic `endpoint.error_response(400, "invalid_request_error")`
+for transcode-loss rejections). No retry selects another account, no
+upstream HTTP request is built/sent, and no provider health,
+suppression, quarantine, circuit, or durable backoff effect is
+applied. A simulated durable finalization failure on either path
+propagates `DatabaseError` so the existing supervisor/restart
+ownership path can recover, instead of silently reporting a clean
+400 while convergence is unknown.
+
 Provider-bound serialized-size rejection is a local client-validation
 failure observed after `SelectedAttempt` exists. The provider-bound
 helper `_validate_serialized_request_size` raises `RequestTooLargeError`
