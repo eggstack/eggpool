@@ -35,6 +35,7 @@ from eggpool.errors import (
     DatabaseError,
     ModelUnavailableError,
     PrematureStreamEOFError,
+    RequestTooLargeError,
     UpstreamError,
     UpstreamExhaustedError,
 )
@@ -568,20 +569,27 @@ class RequestCoordinator:
         self,
         context: ProxyRequestContext,
         serialized_body: bytes,
+        *,
+        selected_provider_id: str | None = None,
     ) -> None:
         """Reject locally oversized serialized payloads before upstream dispatch.
 
         Uses ``max_serialized_request_bytes`` from the resolved multimodal
-        capabilities when available.  This is a local-only validation that
-        returns ``RequestTooLargeError`` (HTTP 413) and must never penalize
-        or quarantine the provider account.
+        capabilities for the selected provider when available.  Collapsed
+        models may be served by multiple providers with different limits,
+        so the *selected* provider's row is authoritative.  This is a
+        local-only validation that returns ``RequestTooLargeError``
+        (HTTP 413) and must never penalize or quarantine the provider
+        account.
         """
         from eggpool.catalog.capabilities import dict_to_model_capabilities
         from eggpool.errors import RequestTooLargeError
 
         max_bytes: int | None = None
         try:
-            model_info = self._catalog.cache.get_model(context.model_id)
+            model_info = self._catalog.cache.get_model_for_provider(
+                context.model_id, selected_provider_id
+            )
             if model_info is not None:
                 caps_raw: dict[str, Any] = model_info.get("capabilities", {})  # type: ignore[assignment]
                 caps = dict_to_model_capabilities(caps_raw)
@@ -1199,6 +1207,9 @@ class RequestCoordinator:
                     context.protocol,
                     parsed_payload=context.parsed_payload,
                 )
+                _has_provider_sensitive_media = (
+                    self._client_payload_has_provider_sensitive_media(context)
+                )
                 if (
                     _prepared is not None
                     and _prepared.is_valid_for(
@@ -1206,6 +1217,7 @@ class RequestCoordinator:
                         features=_features,
                     )
                     and (_thinking_off or not _client_has_thinking)
+                    and not _has_provider_sensitive_media
                 ):
                     # Reuse the cached preflight translation.
                     # The transcoder owns this request-local generation. Use
@@ -1240,6 +1252,8 @@ class RequestCoordinator:
                     # Determine the recompute reason for observability.
                     if _prepared is None:
                         _recompute_reason = "no_prepared_result"
+                    elif _has_provider_sensitive_media:
+                        _recompute_reason = "provider_multimodal_capability_required"
                     elif _client_has_thinking:
                         _recompute_reason = "thinking_controls_present"
                     else:
@@ -1277,15 +1291,20 @@ class RequestCoordinator:
                                 self._transcoder_policy.budget_resolution_policy
                             )
                             _loss_policy = self._transcoder_policy.loss_policy
-                        # Look up thinking capability from catalog cache for
-                        # budget resolution (best-effort; None is safe).
+                        # Look up capability metadata from the catalog
+                        # cache for the *selected* provider when available.
+                        # Collapsed models may be served by multiple
+                        # providers with different multimodal/request-size
+                        # contracts, so the global first-seen entry is not
+                        # authoritative once a provider has been selected.
                         try:
                             from eggpool.catalog.capabilities import (
                                 dict_to_model_capabilities,
                             )
 
-                            model_info = self._catalog.cache.get_model(
+                            model_info = self._catalog.cache.get_model_for_provider(
                                 context.model_id,
+                                context.provider_id,
                             )
                             if model_info is not None:
                                 caps_raw: dict[str, Any] = model_info.get(
@@ -2848,7 +2867,19 @@ class RequestCoordinator:
             ) from err
 
         # Validate serialized body size against provider limits.
-        self._validate_serialized_request_size(context, context.body_for_upstream)
+        try:
+            self._validate_serialized_request_size(
+                context,
+                context.body_for_upstream,
+                selected_provider_id=selected.provider_id,
+            )
+        except RequestTooLargeError as err:
+            await self._finalize_selected_oversize_rejection(
+                context=context,
+                selected=selected,
+                err=err,
+            )
+            raise
 
         try:
             client = self._get_client(selected.provider_id, selected.account_name)
@@ -3171,7 +3202,19 @@ class RequestCoordinator:
                 error=err,
             ) from err
         # Validate serialized body size against provider limits.
-        self._validate_serialized_request_size(context, context.body_for_upstream)
+        try:
+            self._validate_serialized_request_size(
+                context,
+                context.body_for_upstream,
+                selected_provider_id=selected.provider_id,
+            )
+        except RequestTooLargeError as err:
+            await self._finalize_selected_oversize_rejection(
+                context=context,
+                selected=selected,
+                err=err,
+            )
+            raise
         body_to_send = context.body_for_upstream
         upstream_include_usage = context.client_metadata.get("upstream_include_usage")
 
@@ -4575,6 +4618,60 @@ class RequestCoordinator:
                 finalize_err,
             )
 
+    async def _finalize_selected_oversize_rejection(
+        self,
+        *,
+        context: ProxyRequestContext,
+        selected: SelectedAttempt,
+        err: RequestTooLargeError,
+    ) -> None:
+        """Clean up state after a post-selection size rejection.
+
+        Provider-bound serialized-size rejection is a local client-validation
+        failure (HTTP 413): no upstream I/O occurred, no provider health
+        penalty is applied, and no backoff or quarantine is recorded. The
+        attempt row, reservation, active request count, and health slot
+        acquired by :meth:`_select_and_persist_attempt` must be converged
+        synchronously through the canonical finalization owner so the request
+        does not strand in durable state.
+
+        The ``_oversize_finalized`` flag is set so the retry loop's later
+        :meth:`_handle_exhausted` call observes the existing terminal job and
+        skips a second finalization that would otherwise conflict on the
+        attempt's identity.
+        """
+        elapsed_ms = self._elapsed_ms(context)
+        context.client_metadata["_oversize_finalized"] = True
+        try:
+            await self._finalize_terminal(
+                context,
+                selected,
+                FinalizationData(
+                    outcome=FinalizationOutcome.CLIENT_ERROR,
+                    status_code=413,
+                    error_class=type(err).__name__,
+                    error_detail=str(err),
+                    upstream_latency_ms=elapsed_ms,
+                    bytes_received=context.original_body_size
+                    or len(context.original_body),
+                    upstream_protocol=context.upstream_protocol,
+                    thinking_trace_json=_serialize_thinking_trace(
+                        context.thinking_trace,
+                    ),
+                    segmentation=context.segmentation,
+                    segmentation_not_collected=context.segmentation_not_collected,
+                ),
+            )
+        except AcceptedFinalizationInvariantError as finalize_err:
+            raise finalize_err from err
+        except DatabaseError as finalize_err:
+            logger.warning(
+                "oversize rejection finalize failed request_id=%s attempt_id=%s: %s",
+                context.request_id,
+                selected.attempt_id,
+                finalize_err,
+            )
+
     def _build_upstream_headers(
         self,
         context: ProxyRequestContext,
@@ -4961,7 +5058,9 @@ class RequestCoordinator:
         elapsed_ms = self._elapsed_ms(context)
 
         # Finalize the request if we have a selected attempt
-        if last_selected is not None:
+        if last_selected is not None and not context.client_metadata.get(
+            "_oversize_finalized"
+        ):
             # Determine outcome based on error type
             outcome = FinalizationOutcome.UPSTREAM_ERROR
             status_code = None
@@ -5243,6 +5342,29 @@ class RequestCoordinator:
         return client_has_thinking_controls(
             original_body, protocol, parsed_payload=parsed_payload
         )
+
+    def _client_payload_has_provider_sensitive_media(
+        self,
+        context: ProxyRequestContext,
+    ) -> bool:
+        """Return True when the client payload needs provider-scoped recompute.
+
+        Capabilities such as image source forms, document support, and
+        tool-result media are resolved against the *selected* provider.
+        The preflight translation was completed before provider
+        selection, so a cached :class:`PreparedTranscode` cannot be
+        safely reused when the request contains any of those forms.
+        Forces a final recompute against the selected provider's row.
+        """
+        from eggpool.transcoder.sensitive_media import (
+            request_has_provider_sensitive_media,
+        )
+
+        if context.parsed_payload is not None:
+            payload = context.parsed_payload.parsed_dict
+            if isinstance(payload, dict):
+                return request_has_provider_sensitive_media(payload)
+        return False
 
     def _all_accounts_attempted(self, context: ProxyRequestContext) -> bool:
         """Return whether every enabled account has been attempted.

@@ -65,13 +65,13 @@ OpenAI Chat Completions and Anthropic Messages requests/responses are converted
 through the transcoder
 package. Request encoders receive the provider-bound payload as a read-only
 `Mapping`, build a fresh target graph, and hand that graph across the trusted
-`adopt_provider_payload()` boundary. A narrow content-block IR
-(`src/eggpool/transcoder/content.py`) provides shared types for cross-protocol
-content translation; `MultimodalCapabilities` in `catalog/capabilities.py`
-gives granular per-model media support. Native prompt-cache fields are
-capability-gated by provider/model contract. TTLs are never silently converted,
-tool-definition boundaries are not moved to message boundaries, and cache keys
-are never synthesized or logged. Loss policy determines whether unsupported
+`adopt_provider_payload()` boundary. `MultimodalCapabilities` in
+`catalog/capabilities.py` gives granular per-model media support; provider-
+sensitive media forces a final recompute against the selected provider's row.
+Native prompt-cache fields are capability-gated by provider/model contract.
+TTLs are never silently converted, tool-definition boundaries are not moved
+to message boundaries, and cache keys are never synthesized or logged. Loss
+policy determines whether unsupported
 fields warn or reject. Strict image/PDF base64 validation rejects obvious
 encoded-size overflow before decoding and releases the temporary validation
 buffer before translated output is built.

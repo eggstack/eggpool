@@ -165,7 +165,7 @@ class TestRegistryPydanticParsing:
         models_endpoint = entry.get("models_endpoint")
         assert models_endpoint is not None
         assert models_endpoint.get("method") == "GET"
-        assert models_endpoint.get("path") == "/api/tags"
+        assert models_endpoint.get("path") == "/models"
 
     def test_minimax_uses_anthropic_compatible_contract(
         self, provider_entries: dict[str, dict[str, Any]]

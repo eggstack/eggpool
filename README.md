@@ -272,7 +272,10 @@ boundary without a defensive source deepcopy. Prepared transcodes are never
 shared across requests. Image/PDF validation rejects obvious encoded-size
 overflow before strict decoding and releases the temporary validation buffer
 before translated output is built; provider media limits and URL behavior are
-unchanged.
+unchanged. Provider-sensitive media requests (images, documents, audio, or
+media inside tool results) force a final recompute against the selected
+provider's capability row so the cached preflight translation cannot bypass
+selected-provider source-form gating.
 
 Streaming completion is determined by the upstream protocol, not by the absence
 of a transport exception. OpenAI streams require `data: [DONE]` and Anthropic

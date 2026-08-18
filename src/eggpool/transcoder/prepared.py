@@ -19,6 +19,7 @@ RECOMPUTE_REASONS: set[str] = {
     "protocol_or_features_mismatch",
     "thinking_controls_present",
     "transcoder_missing",
+    "provider_multimodal_capability_required",
 }
 
 

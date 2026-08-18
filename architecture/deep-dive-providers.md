@@ -40,3 +40,13 @@ truth when a provider serves a non-default protocol or capability contract.
 - Upstream failures, not local quota estimates, suppress account routing.
 - OS resolution and HTTP connection reuse are the default network behavior.
 - Proxy routing remains per-account and independent of normal resolution.
+- Bundled local-runtime multimodal capability declarations represent verified
+  protocol-surface behavior (e.g. base64 image support on the OpenAI-compatible
+  endpoint), not guarantees that every loaded model supports the modality.
+  Provider-bound decisions use the *selected* provider's row — collapsed models
+  served by multiple providers with different capability rows do not borrow
+  another provider's claim.
+- Provider-bound serialized-size decisions resolve against the selected
+  provider's capability row. Speculative universal ceilings (such as a
+  universal 5 MiB local-runtime ceiling) are not encoded in bundled templates;
+  only verified provider-defined limits are advertised.

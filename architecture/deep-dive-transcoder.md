@@ -84,25 +84,19 @@ recursive physical freeze; unchanged provider reuse adopts the payload through
 changes create a new provider-owned generation. Coordinator recompute uses the
 same direct adoption boundary and does not make a defensive source deepcopy.
 
-### `transcoder/content.py` — Content IR
+When the request payload contains provider-sensitive multimodal content
+(images, documents, audio, or media inside tool results), the cached
+`PreparedTranscode` cannot be safely reused across providers with different
+multimodal capabilities. The coordinator forces a final recompute using the
+selected provider's capability row and records the
+`provider_multimodal_capability_required` recompute reason.
 
-Narrow content-block representation for cross-protocol translation. The IR
-covers content blocks only; sampling, reasoning controls, caching, tool-choice
-semantics, structured output, and provider extensions remain in their existing
-protocol-specific paths.
+### `transcoder/sensitive_media.py`
 
-Types: `TextContent`, `ImageContent`, `DocumentContent`, `AudioContent`,
-`ToolUseContent`, `ToolResultContent`, `ThinkingContent`,
-`RedactedThinkingContent`. All are frozen dataclasses. `ContentBlock` is the
-union of all eight.
-
-`ImageContent` and `DocumentContent` carry a `source_type` literal
-(`"base64"` or `"url"`) so capability checks can distinguish source forms
-without inspecting the data. `ToolResultContent.content` is a
-`list[ContentBlock]`, allowing nested media (images, audio) inside tool
-results without flattening at the IR boundary.
-
-Same-protocol passthrough does not canonicalize content through the IR.
+`request_has_provider_sensitive_media()` inspects a parsed request payload
+for image, document, audio, and tool-result media forms. The coordinator
+uses it as the validity gate for preflight reuse; text-only and tool-only
+requests continue to benefit from the prepared-transcode fast path.
 
 ### `catalog/capabilities.py` — MultimodalCapabilities
 
@@ -213,8 +207,9 @@ JSON frame helpers with compact separators for SSE frame construction.
 | 8 | Response-field compat | Configurable OpenAI reasoning field names |
 | 9 | Streaming hot-path | Shared decoder, frame fan-out, synchronous translation |
 | 10 | JSON backend | `eggpool.jsonx` abstraction (orjson/stdlib) |
-| 11 | Content IR | Narrow content-block representation, `MultimodalCapabilities` |
+| 11 | Content IR | Narrow content-block representation, `MultimodalCapabilities` (removed in Plan 140) |
 | 134 | Multimodal transcode | Capability-aware source form gating, tool-result media preservation, multimodal loss-policy enforcement, serialized request-size validation |
+| 140 | Local + multimodal closure | Corrected Ollama discovery, selected-provider capability resolution, provider-sensitive preflight reuse guard, canonical 413 lifecycle, audited local capability metadata, content IR removed |
 
 ## Loss Warning Kinds
 

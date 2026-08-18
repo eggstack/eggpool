@@ -11,6 +11,7 @@ from eggpool.catalog.capabilities import (
     MediaCapability,
     MultimodalCapabilities,
 )
+from eggpool.errors import RequestTooLargeError
 from eggpool.transcoder.anthropic_to_openai import AnthropicToOpenAI
 from eggpool.transcoder.context import TranscodeContext
 from eggpool.transcoder.errors import TranscodeLossError
@@ -610,7 +611,7 @@ class TestSerializedRequestSizeValidation:
 
         coordinator, catalog = self._make_coordinator()
         # Simulate a model with max_serialized_request_bytes = 1000
-        catalog.cache.get_model.return_value = {
+        catalog.cache.get_model_for_provider.return_value = {
             "capabilities": {
                 "multimodal": {
                     "max_serialized_request_bytes": 1000,
@@ -627,13 +628,17 @@ class TestSerializedRequestSizeValidation:
         )
         oversized_body = b"x" * 1001
         with pytest.raises(RequestTooLargeError, match="exceeds provider limit"):
-            coordinator._validate_serialized_request_size(context, oversized_body)
+            coordinator._validate_serialized_request_size(
+                context,
+                oversized_body,
+                selected_provider_id="p1",
+            )
 
     def test_body_at_limit_accepted(self) -> None:
         from eggpool.request.coordinator import ProxyRequestContext
 
         coordinator, catalog = self._make_coordinator()
-        catalog.cache.get_model.return_value = {
+        catalog.cache.get_model_for_provider.return_value = {
             "capabilities": {
                 "multimodal": {
                     "max_serialized_request_bytes": 1000,
@@ -650,14 +655,18 @@ class TestSerializedRequestSizeValidation:
         )
         exact_body = b"x" * 1000
         # Should not raise
-        coordinator._validate_serialized_request_size(context, exact_body)
+        coordinator._validate_serialized_request_size(
+            context,
+            exact_body,
+            selected_provider_id="p1",
+        )
 
     def test_no_limit_when_capability_absent(self) -> None:
         from eggpool.request.coordinator import ProxyRequestContext
 
         coordinator, catalog = self._make_coordinator()
         # No capabilities at all
-        catalog.cache.get_model.return_value = None
+        catalog.cache.get_model_for_provider.return_value = None
         context = ProxyRequestContext(
             request_id="req-size-3",
             protocol="openai",
@@ -668,7 +677,11 @@ class TestSerializedRequestSizeValidation:
         )
         huge_body = b"x" * 10_000_000
         # Should not raise — no limit configured
-        coordinator._validate_serialized_request_size(context, huge_body)
+        coordinator._validate_serialized_request_size(
+            context,
+            huge_body,
+            selected_provider_id="p1",
+        )
 
     def test_base64_below_decoded_limit_above_serialized_limit(self) -> None:
         """Base64 payload under per-file limit but serialized body exceeds max.
@@ -682,7 +695,7 @@ class TestSerializedRequestSizeValidation:
 
         coordinator, catalog = self._make_coordinator()
         # Set a tiny serialized limit (50 bytes)
-        catalog.cache.get_model.return_value = {
+        catalog.cache.get_model_for_provider.return_value = {
             "capabilities": {
                 "multimodal": {
                     "max_serialized_request_bytes": 50,
@@ -700,7 +713,11 @@ class TestSerializedRequestSizeValidation:
         # A "serialized" body that's 51 bytes — exceeds limit
         body_at_51 = b"x" * 51
         with pytest.raises(RequestTooLargeError, match="exceeds provider limit"):
-            coordinator._validate_serialized_request_size(context, body_at_51)
+            coordinator._validate_serialized_request_size(
+                context,
+                body_at_51,
+                selected_provider_id="p1",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -740,3 +757,96 @@ class TestLocalPreparationNoProviderBackoff:
         from eggpool.errors import UpstreamError
 
         assert not isinstance(exc, UpstreamError)
+
+
+# ---------------------------------------------------------------------------
+# Provider-scoped capability resolution (Plan 140 Workstream C)
+# ---------------------------------------------------------------------------
+
+
+class TestProviderScopedSizeLimits:
+    """Oversize limits must be resolved against the *selected* provider.
+
+    Collapsed models may be served by multiple providers with different
+    ``max_serialized_request_bytes`` values. The size validator must not
+    borrow a different provider's limit.
+    """
+
+    def _make_coordinator(self) -> tuple[Any, Any]:
+        from unittest.mock import MagicMock
+
+        from eggpool.request.coordinator import RequestCoordinator
+
+        catalog = MagicMock()
+        coordinator = RequestCoordinator(
+            registry=MagicMock(),
+            catalog=catalog,
+            router=MagicMock(),
+            db=MagicMock(),
+            client_pool=MagicMock(),
+        )
+        return coordinator, catalog
+
+    def test_selected_provider_limit_enforced(self) -> None:
+        from eggpool.request.coordinator import ProxyRequestContext
+
+        coordinator, catalog = self._make_coordinator()
+        # Only the selected provider advertises a small limit; the global
+        # entry is absent.
+        catalog.cache.get_model_for_provider.return_value = {
+            "capabilities": {
+                "multimodal": {
+                    "max_serialized_request_bytes": 100,
+                }
+            }
+        }
+        context = ProxyRequestContext(
+            request_id="req-provider-1",
+            protocol="openai",
+            model_id="shared-model",
+            streaming=False,
+            original_body=b"{}",
+            incoming_headers={},
+        )
+        with pytest.raises(RequestTooLargeError, match="exceeds provider limit"):
+            coordinator._validate_serialized_request_size(
+                context,
+                b"x" * 200,
+                selected_provider_id="small-provider",
+            )
+        catalog.cache.get_model_for_provider.assert_called_with(
+            "shared-model", "small-provider"
+        )
+
+    def test_other_provider_limit_not_borrowed(self) -> None:
+        """A different provider's limit must not apply to the actual selection."""
+        from eggpool.request.coordinator import ProxyRequestContext
+
+        coordinator, catalog = self._make_coordinator()
+        # The selected provider has no metadata; the global fallback is
+        # also None. The validator must not raise.
+        catalog.cache.get_model_for_provider.return_value = None
+        context = ProxyRequestContext(
+            request_id="req-provider-2",
+            protocol="openai",
+            model_id="shared-model",
+            streaming=False,
+            original_body=b"{}",
+            incoming_headers={},
+        )
+        # No raise — selected provider has no overhead limit.
+        coordinator._validate_serialized_request_size(
+            context,
+            b"x" * 10_000_000,
+            selected_provider_id="unlimited-provider",
+        )
+
+
+class TestRequestTooLargeErrorMapping:
+    """error_status_code maps RequestTooLargeError to HTTP 413."""
+
+    def test_returns_413(self) -> None:
+        from eggpool.errors import RequestTooLargeError
+        from eggpool.request.static_helpers import error_status_code
+
+        assert error_status_code(RequestTooLargeError("big")) == 413

@@ -138,3 +138,76 @@ uv run pyright src/ scripts/                        -> passed
 PYTHONHASHSEED=0 TZ=UTC uv run pytest tests/smoke/ -q --tb=short --maxfail=1
   -> passed
 ```
+
+---
+
+## Plan 140 re-evaluation: stateless same-protocol Responses passthrough
+
+Plan 140 re-opened only the narrowest question Plan 139 deferred: would a
+**stateless, same-protocol OpenAI-compatible `/v1/responses` passthrough**
+justify a small endpoint surface? The full Responses semantic parity,
+stateful provider affinity, and Responses ↔ Anthropic translation remain
+explicitly out of scope.
+
+### Evidence
+
+1. **Target clients.** No bundled integration target (OpenCode, Aider,
+   Cline, Continue, Codex, Qwen Code, Kilo, Roo Code, Goose, OpenHands)
+   requires `/v1/responses`. Plan 139's answer stands: no repository
+   example, test, or operator guidance depends on the endpoint.
+
+2. **Bundled local runtime support.** Ollama, LM Studio, llama.cpp, vLLM,
+   and LocalAI continue to expose Chat Completions. Plan 140 corrected
+   Ollama's bundled discovery path (Workstream A) but did not find
+   evidence of a sufficiently compatible Responses surface across the
+   bundled templates. None declares Responses support; all 22 templates
+   advertise `openai` or `anthropic` protocol only.
+
+3. **Stateless replayability.** A Responses request without
+   `previous_response_id` and without conversation state is replayable
+   across distinct accounts; the existing pre-handoff retry path would
+   preserve request semantics. Failover that crosses accounts without
+   response-ID pinning would not invalidate the response, because there
+   is no response to invalidate. This is the only condition under which
+   the existing routing/client/failure-isolation machinery can carry a
+   Responses payload unmodified.
+
+4. **Stateful fields.** `previous_response_id`, `conversation`, and
+   `store` must be rejected locally or explicitly documented unsupported.
+   Without provider affinity or a persistent response-ID store, any
+   cross-account retry on these payloads would be incorrect.
+
+5. **Routing reuse.** A same-protocol Responses passthrough reuses
+   `compose_provider_url()`, the existing client pool, the catalog
+   fetcher, and the finalization supervisor. No third protocol
+   transcoder is required. No Responses ↔ Anthropic translation is
+   introduced.
+
+### Decision
+
+```text
+responses_stateless_passthrough: defer
+```
+
+A stateless same-protocol passthrough is technically narrow but
+provides no measured client value today. No bundled integration or
+operator deployment depends on it, and no bundled provider declares
+Responses support. Adding the endpoint would still require:
+
+- a new route surface in `src/eggpool/api/`;
+- a new protocol token in `catalog/protocols.py` (or a dedicated
+  stateless passthrough flag);
+- explicit local rejection of `previous_response_id` / `conversation` /
+  `store`;
+- catalog and capability coverage that today's providers do not ship.
+
+These costs exceed the deferred value. Plan 139's deferral is
+**confirmed** for stateless same-protocol passthrough as well. Plan 140
+records this evaluation but introduces no code change for `/v1/responses`.
+
+If a future bundled provider declares Responses support and a target
+client demonstrates need, the implementation must remain narrowly
+scoped to the stateless same-protocol path and reject stateful fields
+locally. Cross-protocol Responses ↔ Anthropic translation and persistent
+response-ID stores remain out of scope unless a separate plan is
+written.

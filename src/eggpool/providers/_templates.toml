@@ -168,8 +168,11 @@ probe_protocol = "openai"
 require_models = true
 
 [providers.ollama-local]
-# Ollama (local) — OpenAI compatible, no auth required
-# Verification discovers installed models via /api/tags; no hardcoded probe model.
+# Ollama (local) — OpenAI compatible, no auth required.
+# Verification discovers installed models via the OpenAI-compatible
+# /models endpoint exposed by the same base URL as the chat surface.
+# No Ollama-specific adapter is required; the generic catalog fetcher
+# parses the OpenAI-shaped response. No hardcoded probe model.
 id = "ollama-local"
 base_url = "http://localhost:11434/v1"
 protocols = ["openai"]
@@ -186,7 +189,7 @@ mode = "none"
 
 [providers.ollama-local.models_endpoint]
 method = "GET"
-path = "/api/tags"
+path = "/models"
 required = true
 
 [providers.ollama-local.verify]
@@ -197,11 +200,13 @@ require_models = true
 # Ollama supports base64 images through the OpenAI-compatible endpoint.
 # URL images are not supported (Ollama fetches from data URIs only).
 # Document PDF and audio support depend on the loaded model and are
-# conservatively disabled.  The 5 MB limit is a local-runtime ceiling.
+# conservatively left disabled.  No provider-defined request ceiling
+# is set: Ollama's per-model context window is the binding limit, and
+# the upstream server accepts whatever the OpenAI-compatible transport
+# can deliver.
 image_input = { base64 = true, url = false }
 document_input = { base64 = false, url = false }
 non_text_tool_result = false
-max_serialized_request_bytes = 5242880
 
 [providers.lmstudio-local]
 # LM Studio (local) — OpenAI compatible, no auth required
@@ -232,11 +237,12 @@ require_models = true
 # LM Studio supports base64 images via the OpenAI-compatible endpoint.
 # URL images are not supported (the local server fetches data URIs only).
 # Document PDF and audio support depend on the loaded model and are
-# conservatively disabled.  The 5 MB limit is a local-runtime ceiling.
+# conservatively disabled. No provider-defined request ceiling is
+# advertised; the upstream server accepts whatever the OpenAI-compatible
+# transport can deliver.
 image_input = { base64 = true, url = false }
 document_input = { base64 = false, url = false }
 non_text_tool_result = false
-max_serialized_request_bytes = 5242880
 
 [providers.llamacpp-local]
 # llama.cpp server (local) — OpenAI compatible, no auth required
@@ -266,12 +272,12 @@ require_models = true
 [providers.llamacpp-local.model_capabilities.default.multimodal]
 # llama.cpp supports base64 images via the OpenAI-compatible endpoint.
 # URL images are not supported.  Document PDF and audio support depend
-# on the loaded model and are conservatively disabled.  The 5 MB limit
-# is a local-runtime ceiling.
+# on the loaded model and are conservatively disabled. No provider-defined
+# request ceiling is advertised; the upstream server accepts whatever the
+# OpenAI-compatible transport can deliver.
 image_input = { base64 = true, url = false }
 document_input = { base64 = false, url = false }
 non_text_tool_result = false
-max_serialized_request_bytes = 5242880
 
 [providers.vllm-local]
 # vLLM (local) — OpenAI compatible, no auth required by default
@@ -301,12 +307,12 @@ require_models = true
 [providers.vllm-local.model_capabilities.default.multimodal]
 # vLLM supports base64 images via the OpenAI-compatible endpoint.
 # URL images are not supported.  Document PDF and audio support depend
-# on the loaded model and are conservatively disabled.  The 5 MB limit
-# is a local-runtime ceiling.
+# on the loaded model and are conservatively disabled. No provider-defined
+# request ceiling is advertised; the upstream server accepts whatever the
+# OpenAI-compatible transport can deliver.
 image_input = { base64 = true, url = false }
 document_input = { base64 = false, url = false }
 non_text_tool_result = false
-max_serialized_request_bytes = 5242880
 
 [providers.localai-local]
 # LocalAI (local) — OpenAI compatible, no auth required
@@ -336,12 +342,12 @@ require_models = true
 [providers.localai-local.model_capabilities.default.multimodal]
 # LocalAI supports base64 images via the OpenAI-compatible endpoint.
 # URL images are not supported.  Document PDF and audio support depend
-# on the loaded model and are conservatively disabled.  The 5 MB limit
-# is a local-runtime ceiling.
+# on the loaded model and are conservatively disabled. No provider-defined
+# request ceiling is advertised; the upstream server accepts whatever the
+# OpenAI-compatible transport can deliver.
 image_input = { base64 = true, url = false }
 document_input = { base64 = false, url = false }
 non_text_tool_result = false
-max_serialized_request_bytes = 5242880
 
 [providers.custom-compatible]
 # Generic compatible endpoint — operator-configured
@@ -416,13 +422,12 @@ require_models = false
 
 [providers.anthropic.model_capabilities."claude-sonnet-4-5".multimodal]
 # Claude models support base64 and URL images, base64 PDF documents,
-# and media-bearing tool results.  The 20 MB limit reflects the
-# Anthropic API's practical request ceiling; the actual per-file limits
-# are enforced separately by the transcoder.
+# and media-bearing tool results.  Per-file limits are enforced by the
+# transcoder; the direct Messages API does not advertise a single
+# serialized-request ceiling we can rely on for blocking size decisions.
 image_input = { base64 = true, url = true }
 document_input = { base64 = true, url = false }
 non_text_tool_result = true
-max_serialized_request_bytes = 20971520
 
 [providers.groq]
 # Groq — low-latency OpenAI Chat Completions-compatible inference

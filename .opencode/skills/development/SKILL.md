@@ -139,6 +139,18 @@ uv run pytest tests/contract/ -v
 uv run pytest tests/unit/test_transcoder/test_multimodal.py -v
 ```
 
+### Provider-Sensitive Media Detector
+
+```bash
+uv run pytest tests/unit/test_transcoder/test_sensitive_media.py -v
+```
+
+### Prepared-Transcode Reuse Tests
+
+```bash
+uv run pytest tests/unit/test_prepared_transcode.py tests/unit/test_prepared_transcode_reuse.py -v
+```
+
 ### Smoke Suite
 
 ```bash

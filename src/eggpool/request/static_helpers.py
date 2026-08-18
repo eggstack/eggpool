@@ -11,6 +11,7 @@ from eggpool.errors import (
     ModelUnavailableError,
     QuotaExhaustedError,
     RateLimitError,
+    RequestTooLargeError,
     UpstreamError,
 )
 
@@ -94,6 +95,8 @@ def error_status_code(err: Exception | None) -> int:
         return 503
     if isinstance(err, ModelUnavailableError):
         return 503
+    if isinstance(err, RequestTooLargeError):
+        return 413
     if isinstance(err, UpstreamError) and err.status_code is not None:
         return err.status_code
     # Check for coordinator-internal error types by class name to avoid
