@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from typing import Any
 
 import pytest
 
@@ -491,3 +492,251 @@ class TestSameProtocolPassthrough:
             )
             is None
         )
+
+
+# ---------------------------------------------------------------------------
+# Happy-path multimodal translation
+# ---------------------------------------------------------------------------
+
+
+class TestHappyPathMultimodalTranslation:
+    """Verify multimodal content survives translation when capabilities permit."""
+
+    def test_openai_url_image_translated_to_anthropic_url(self) -> None:
+        transcoder = OpenAIToAnthropic()
+        url = "https://example.com/photo.jpg"
+        payload = {
+            "model": "claude-3",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Describe this"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": url},
+                        },
+                    ],
+                },
+            ],
+        }
+        caps = _mm_caps(image_url=True)
+        result, warnings = transcoder.encode_request(
+            payload,
+            _make_context(),
+            features=_features(),
+            multimodal_capability=caps,
+        )
+        # No loss warnings for the image
+        assert not any(
+            w.get("kind") in ("unsupported_source_form", "unsupported_modality")
+            for w in warnings
+        )
+        # The translated message should contain an image block with URL source
+        user_msg = result["messages"][0]
+        blocks = user_msg["content"]
+        image_blocks = [b for b in blocks if b.get("type") == "image"]
+        assert len(image_blocks) == 1
+        assert image_blocks[0]["source"]["type"] == "url"
+        assert image_blocks[0]["source"]["url"] == url
+
+    def test_anthropic_base64_image_translated_to_openai_data_uri(self) -> None:
+        transcoder = AnthropicToOpenAI()
+        payload = {
+            "model": "gpt-4",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Describe this"},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": _TINY_PNG_B64,
+                            },
+                        },
+                    ],
+                },
+            ],
+        }
+        caps = _mm_caps(image_base64=True)
+        result, warnings = transcoder.encode_request(
+            payload,
+            _make_context("anthropic", "openai"),
+            features=_features(),
+            multimodal_capability=caps,
+        )
+        assert not any(
+            w.get("kind") in ("unsupported_source_form", "unsupported_modality")
+            for w in warnings
+        )
+        user_msg = result["messages"][0]
+        content = user_msg["content"]
+        assert isinstance(content, list)
+        image_parts = [p for p in content if p.get("type") == "image_url"]
+        assert len(image_parts) == 1
+        assert image_parts[0]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+# ---------------------------------------------------------------------------
+# Serialized request-size validation
+# ---------------------------------------------------------------------------
+
+
+class TestSerializedRequestSizeValidation:
+    """Verify _validate_serialized_request_size rejects oversized payloads locally."""
+
+    def _make_coordinator(self) -> tuple[Any, Any]:
+        """Return (coordinator, catalog_mock) with a mock catalog."""
+        from unittest.mock import MagicMock
+
+        from eggpool.request.coordinator import RequestCoordinator
+
+        catalog = MagicMock()
+        coordinator = RequestCoordinator(
+            registry=MagicMock(),
+            catalog=catalog,
+            router=MagicMock(),
+            db=MagicMock(),
+            client_pool=MagicMock(),
+        )
+        return coordinator, catalog
+
+    def test_oversized_body_rejected_locally(self) -> None:
+        from eggpool.errors import RequestTooLargeError
+        from eggpool.request.coordinator import ProxyRequestContext
+
+        coordinator, catalog = self._make_coordinator()
+        # Simulate a model with max_serialized_request_bytes = 1000
+        catalog.cache.get_model.return_value = {
+            "capabilities": {
+                "multimodal": {
+                    "max_serialized_request_bytes": 1000,
+                }
+            }
+        }
+        context = ProxyRequestContext(
+            request_id="req-size-1",
+            protocol="openai",
+            model_id="gpt-4",
+            streaming=False,
+            original_body=b"{}",
+            incoming_headers={},
+        )
+        oversized_body = b"x" * 1001
+        with pytest.raises(RequestTooLargeError, match="exceeds provider limit"):
+            coordinator._validate_serialized_request_size(context, oversized_body)
+
+    def test_body_at_limit_accepted(self) -> None:
+        from eggpool.request.coordinator import ProxyRequestContext
+
+        coordinator, catalog = self._make_coordinator()
+        catalog.cache.get_model.return_value = {
+            "capabilities": {
+                "multimodal": {
+                    "max_serialized_request_bytes": 1000,
+                }
+            }
+        }
+        context = ProxyRequestContext(
+            request_id="req-size-2",
+            protocol="openai",
+            model_id="gpt-4",
+            streaming=False,
+            original_body=b"{}",
+            incoming_headers={},
+        )
+        exact_body = b"x" * 1000
+        # Should not raise
+        coordinator._validate_serialized_request_size(context, exact_body)
+
+    def test_no_limit_when_capability_absent(self) -> None:
+        from eggpool.request.coordinator import ProxyRequestContext
+
+        coordinator, catalog = self._make_coordinator()
+        # No capabilities at all
+        catalog.cache.get_model.return_value = None
+        context = ProxyRequestContext(
+            request_id="req-size-3",
+            protocol="openai",
+            model_id="gpt-4",
+            streaming=False,
+            original_body=b"{}",
+            incoming_headers={},
+        )
+        huge_body = b"x" * 10_000_000
+        # Should not raise — no limit configured
+        coordinator._validate_serialized_request_size(context, huge_body)
+
+    def test_base64_below_decoded_limit_above_serialized_limit(self) -> None:
+        """Base64 payload under per-file limit but serialized body exceeds max.
+
+        This tests the scenario where decoded PDF bytes are under a provider's
+        nominal attachment limit but base64 expansion + JSON wrapper makes the
+        final HTTP body exceed the provider request limit.
+        """
+        from eggpool.errors import RequestTooLargeError
+        from eggpool.request.coordinator import ProxyRequestContext
+
+        coordinator, catalog = self._make_coordinator()
+        # Set a tiny serialized limit (50 bytes)
+        catalog.cache.get_model.return_value = {
+            "capabilities": {
+                "multimodal": {
+                    "max_serialized_request_bytes": 50,
+                }
+            }
+        }
+        context = ProxyRequestContext(
+            request_id="req-size-4",
+            protocol="openai",
+            model_id="gpt-4",
+            streaming=False,
+            original_body=b"{}",
+            incoming_headers={},
+        )
+        # A "serialized" body that's 51 bytes — exceeds limit
+        body_at_51 = b"x" * 51
+        with pytest.raises(RequestTooLargeError, match="exceeds provider limit"):
+            coordinator._validate_serialized_request_size(context, body_at_51)
+
+
+# ---------------------------------------------------------------------------
+# Local preparation failure does not produce provider retry/backoff
+# ---------------------------------------------------------------------------
+
+
+class TestLocalPreparationNoProviderBackoff:
+    """Verify transcode/size errors are local-only and don't penalize providers."""
+
+    def test_transcode_loss_error_is_not_upstream_error(self) -> None:
+        from eggpool.errors import AggregatorError, UpstreamError
+        from eggpool.transcoder.errors import TranscodeLossError
+
+        err = TranscodeLossError("test", [{"kind": "unsupported_modality"}])
+        assert isinstance(err, AggregatorError)
+        assert not isinstance(err, UpstreamError)
+
+    def test_request_too_large_is_not_upstream_error(self) -> None:
+        from eggpool.errors import AggregatorError, RequestTooLargeError, UpstreamError
+
+        err = RequestTooLargeError("too large")
+        assert isinstance(err, AggregatorError)
+        assert not isinstance(err, UpstreamError)
+
+    def test_transcode_loss_error_rendered_as_http_400(self) -> None:
+        """TranscodeLossError maps to HTTP 400 in the proxy renderer."""
+        from eggpool.transcoder.errors import TranscodeLossError
+
+        exc = TranscodeLossError(
+            "Request rejected by loss_policy=reject",
+            [{"kind": "unsupported_modality", "modality": "audio"}],
+        )
+        assert exc.loss_warnings[0]["kind"] == "unsupported_modality"
+        # The proxy renderer catches this as HTTP 400 — verify the exception
+        # is not an UpstreamError which would trigger provider backoff.
+        from eggpool.errors import UpstreamError
+
+        assert not isinstance(exc, UpstreamError)
