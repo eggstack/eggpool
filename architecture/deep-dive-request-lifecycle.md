@@ -112,6 +112,12 @@ facade.  Implementation details are delegated to focused helper modules:
 - Post-selection thinking control adaptation delegates to `thinking_adaptation.py`
 - Upstream failure observation/classification delegates to `failure_helpers.py`
 - Endpoint validation and protocol resolution delegate to `upstream_helpers.py`
+- Static/timing helpers delegate to `static_helpers.py`
+- Usage extraction delegates to `usage_helpers.py`
+- Routing trace payloads delegate to `routing_helpers.py`
+- Backoff persistence delegates to `backoff_persistence.py`
+- Upstream request dispatch delegates to `upstream_execution.py`
+- Claim lifecycle compensation delegates to `claim_lifecycle.py`
 
 **Key invariants**:
 - Request persisted before upstream dispatch
@@ -214,6 +220,61 @@ and maps the result to the public upstream error hierarchy.
 - `error_from_failure_effects()` — maps canonical decisions to public error types
 - `classify_upstream_failure()` — combined observation + classification + error mapping
 - `classify_upstream_error()` — lightweight classifier for error status codes
+
+### `request/static_helpers.py` — Pure static and timing helpers
+
+Extracted from `RequestCoordinator` in Plan 136 Phase 5.  Stateless utilities
+for header lookups, timing calculations, error-to-status-code mapping, and
+local error response construction.  No coordinator state dependency.
+
+- `get_header_value()` — case-insensitive header lookup by name or list of names
+- `elapsed_ms()` — monotonic request latency
+- `upstream_read_ms()` / `upstream_header_ms()` / `coordinator_overhead_ms()` — timing decomposition
+- `error_status_code()` — exception-to-HTTP-status mapping
+- `build_local_error_response()` — protocol-shaped error without exception text
+- `close_response()` — safe upstream response cleanup
+
+### `request/usage_helpers.py` — Usage extraction from upstream responses
+
+Extracted from `RequestCoordinator` in Plan 136 Phase 5.  Parses non-streaming
+response bodies and pre-parsed responses to extract token usage data.
+
+- `extract_non_stream_usage()` — JSON parse + protocol-specific usage extraction
+- `extract_non_stream_usage_from_parsed()` — reuses pre-parsed dict to avoid duplicate decode
+
+### `request/routing_helpers.py` — Routing trace observation
+
+Extracted from `RequestCoordinator` in Plan 136 Phase 5.  Builds the
+score-components payload and tie-break summary for routing decision
+observability.  Purely computational, no coordinator state dependency.
+
+- `build_score_components()` — full routing decision payload for dashboard
+- `build_top_candidates()` — top-N ranked candidates with fairness band positions
+- `derive_tie_break_summary()` — decisive factor between selected and runner-up
+
+### `request/backoff_persistence.py` — Durable backoff state
+
+Extracted from `RequestCoordinator` in Plan 136 Phase 5.  Persists and clears
+account backoff rows in SQLite so suppression survives restarts.
+
+- `persist_backoff()` — upserts failure backoff with account ID resolution
+- `clear_backoff()` — removes backoff rows on successful requests
+
+### `request/upstream_execution.py` — Upstream request dispatch
+
+Extracted from `RequestCoordinator` in Plan 136 Phase 5.  Sends the upstream
+HTTP request and captures shared dispatch timing metrics.
+
+- `send_upstream_request()` — timing-instrumented `client.send()` with connect/header recording
+
+### `request/claim_lifecycle.py` — Claim compensation
+
+Extracted from `RequestCoordinator` in Plan 136 Phase 5.  Releases provisional
+claim ownership and performs stepwise compensation when post-commit publication
+fails.  Receives dependencies explicitly rather than referencing coordinator state.
+
+- `release_unpublished_claim()` — synchronous provisional claim release (quota + health probe)
+- `run_claim_compensation()` — stepwise compensation runner for committed claims
 
 ### Provider payload ownership
 

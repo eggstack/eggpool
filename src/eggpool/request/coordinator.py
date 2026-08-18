@@ -35,8 +35,6 @@ from eggpool.errors import (
     DatabaseError,
     ModelUnavailableError,
     PrematureStreamEOFError,
-    QuotaExhaustedError,
-    RateLimitError,
     UpstreamError,
     UpstreamExhaustedError,
 )
@@ -72,11 +70,6 @@ from eggpool.proxy.normalized_usage import (
 )
 from eggpool.proxy.sse import SSEDecoder
 from eggpool.proxy.sse_observer import IncrementalSSEObserver
-from eggpool.proxy.usage import (
-    StreamUsageResult,
-    extract_anthropic_response_usage,
-    extract_openai_response_usage,
-)
 from eggpool.request.attempt_finalizer import (
     AttemptFinalizationData,
     AttemptFinalizer,
@@ -172,6 +165,7 @@ if TYPE_CHECKING:
     from eggpool.db.connection import Database
     from eggpool.health.health_manager import HealthManager
     from eggpool.models.config import AppConfig
+    from eggpool.proxy.usage import StreamUsageResult
     from eggpool.quota.estimation import QuotaEstimator
     from eggpool.routing.router import Router
     from eggpool.transcoder.policy import TranscoderPolicy
@@ -297,19 +291,6 @@ def resolve_selected_provider_kind(
     except Exception:  # noqa: BLE001
         return None
     return None
-
-
-def _safe_ratio(numerator: int, denominator: int) -> float | None:
-    """Return ``numerator / denominator`` as a utilization ratio.
-
-    Returns ``None`` when the denominator is zero or negative so the
-    payload distinguishes "no capacity configured" from "0 % used".
-    Used by ``_build_score_components`` to surface per-window
-    utilization alongside the raw cost and capacity values.
-    """
-    if denominator <= 0:
-        return None
-    return float(numerator) / float(denominator)
 
 
 def _build_normalized_usage(
@@ -1830,29 +1811,17 @@ class RequestCoordinator:
     ) -> None:
         """Release provisional claim ownership before durable publication.
 
-        This is intentionally synchronous and database-free.  It is used
-        for persistence, cancellation, and identity failures while the
-        durable claim has no retained finalization identity yet.
+        Delegates to :func:`claim_lifecycle.release_unpublished_claim`.
         """
-        if (
-            receipt.pending_request_added
-            and not receipt.pending_load_converted
-            and not receipt.pending_load_released
-        ):
-            estimator = self._quota_estimator
-            if estimator is None:
-                raise RuntimeError("pending claim release requires the quota estimator")
-            release_pending = getattr(estimator, "release_pending_claim", None)
-            if not callable(release_pending):
-                raise RuntimeError("quota estimator cannot release pending claims")
-            release_pending(account_name, tokens=estimated_tokens)
-            receipt.pending_load_released = True
+        from eggpool.request.claim_lifecycle import release_unpublished_claim
 
-        if receipt.health_probe_acquired and not receipt.health_probe_released:
-            if self._health_manager is None:
-                raise RuntimeError("health probe release requires the health manager")
-            self._health_manager.release_request(account_name)
-            receipt.health_probe_released = True
+        release_unpublished_claim(
+            account_name=account_name,
+            estimated_tokens=estimated_tokens,
+            receipt=receipt,
+            quota_estimator=self._quota_estimator,
+            health_manager=self._health_manager,
+        )
 
     async def _publish_runtime_state(
         self,
@@ -1989,93 +1958,19 @@ class RequestCoordinator:
         submission: ClaimCompensationSubmission,
         progress: ClaimCompensationProgress,
     ) -> None:
-        """Release a committed claim one acquired component at a time."""
-        receipt = submission.receipt
+        """Release a committed claim one acquired component at a time.
 
-        if receipt.pending_request_added and not progress.pending_load_released:
-            if receipt.pending_load_converted or receipt.pending_load_released:
-                progress.pending_load_released = True
-            elif self._quota_estimator is None:
-                raise RuntimeError(
-                    "pending claim compensation requires quota estimator"
-                )
-            else:
-                self._quota_estimator.release_pending_claim(
-                    submission.account_name,
-                    tokens=submission.estimated_tokens,
-                )
-                receipt.pending_load_released = True
-                progress.pending_load_released = True
-        else:
-            progress.pending_load_released = True
+        Delegates to :func:`claim_lifecycle.run_claim_compensation`.
+        """
+        from eggpool.request.claim_lifecycle import run_claim_compensation
 
-        if receipt.active_count_added and not progress.active_count_released:
-            await self._router.decrement_active_request_count(submission.account_name)
-            progress.active_count_released = True
-        elif not receipt.active_count_added:
-            progress.active_count_released = True
-
-        if (
-            receipt.quota_reservation_added
-            and not progress.quota_reservation_released
-            and self._quota_estimator is not None
-        ):
-            await self._quota_estimator.remove_reservation(
-                submission.account_name,
-                submission.estimated_microdollars,
-                requests=1,
-                tokens=submission.estimated_tokens,
-            )
-            progress.quota_reservation_released = True
-        elif not receipt.quota_reservation_added or self._quota_estimator is None:
-            progress.quota_reservation_released = True
-
-        if (
-            not progress.durable_attempt_finalized
-            or not progress.durable_reservation_converged
-        ):
-            if (
-                submission.identity.attempt_id is not None
-                and submission.identity.reservation_id is not None
-            ):
-                result = await self._attempt_finalizer.finalize_failed_attempt(
-                    attempt_id=submission.identity.attempt_id,
-                    reservation_id=submission.identity.reservation_id,
-                    data=AttemptFinalizationData(
-                        request_id=submission.identity.db_request_id,
-                        status_code=None,
-                        error_class="PostCommitInterrupted",
-                        release_reason="post_commit_interrupted",
-                        retry_category=RetryCategory.NEVER.value,
-                        bytes_received=submission.bytes_received,
-                        latency_ms=submission.latency_ms,
-                        is_retry_outcome=False,
-                    ),
-                )
-                progress.durable_reservation_converged = result.reservation_converged
-            else:
-                progress.durable_reservation_converged = True
-            progress.durable_attempt_finalized = True
-
-        if not progress.probe_released:
-            if (
-                receipt.health_probe_acquired
-                and not receipt.health_probe_released
-                and self._health_manager is not None
-            ):
-                self._health_manager.release_request(submission.account_name)
-                receipt.health_probe_released = True
-            progress.probe_released = True
-
-        progress.completed = all(
-            (
-                progress.active_count_released,
-                progress.quota_reservation_released,
-                progress.pending_load_released,
-                progress.durable_attempt_finalized,
-                progress.durable_reservation_converged,
-                progress.probe_released,
-            )
+        await run_claim_compensation(
+            submission=submission,
+            progress=progress,
+            quota_estimator=self._quota_estimator,
+            router=self._router,
+            attempt_finalizer=self._attempt_finalizer,
+            health_manager=self._health_manager,
         )
         if progress.completed:
             context.client_metadata["post_commit_interrupted"] = True
@@ -4162,42 +4057,11 @@ class RequestCoordinator:
     ) -> StreamUsageResult | None:
         """Extract usage from a non-streaming response body.
 
-        ``provider_id`` enables provider-specific aliases when parsing
-        an authoritative cost field (e.g. OpenCode Go's bare
-        ``usage.cost`` field). The parser is defensive and returns
-        ``None`` for absent or unparseable cost values; the finalizer
-        will fall back to locally derived cost in that case.
+        Delegates to :func:`usage_helpers.extract_non_stream_usage`.
         """
-        try:
-            data = jsonx_loads(body)
-        except ValueError:
-            logger.warning(
-                "Non-streaming upstream response body is not valid JSON; "
-                "usage will not be extracted (body_len=%d)",
-                len(body),
-            )
-            return None
+        from eggpool.request.usage_helpers import extract_non_stream_usage
 
-        if not isinstance(data, dict):
-            logger.debug(
-                "Non-streaming upstream response is not a JSON object "
-                "(type=%s); usage will not be extracted",
-                type(data).__name__,
-            )
-            return None
-
-        data_dict = cast("dict[str, Any]", data)
-
-        if protocol == "anthropic":
-            return extract_anthropic_response_usage(
-                data_dict,
-                provider_id=provider_id,
-            )
-
-        return extract_openai_response_usage(
-            data_dict,
-            provider_id=provider_id,
-        )
+        return extract_non_stream_usage(protocol, body, provider_id=provider_id)
 
     def _extract_non_stream_usage_from_parsed(
         self,
@@ -4208,27 +4072,12 @@ class RequestCoordinator:
     ) -> StreamUsageResult | None:
         """Extract usage from an already-parsed upstream response.
 
-        Plan 028: reads from ``parsed.parsed_dict`` instead of
-        re-parsing raw bytes, eliminating the duplicate decode in the
-        non-streaming success path.  Falls back to the byte-accepting
-        wrapper when parsing has not yet been attempted or failed.
+        Delegates to :func:`usage_helpers.extract_non_stream_usage_from_parsed`.
         """
-        data_dict = parsed.parsed_dict
-        if data_dict is None:
-            # ``parsed_dict`` has already attempted the one permitted JSON
-            # decode.  Invalid/non-object bodies are valid native pass-through
-            # responses, but they do not contain extractable usage.
-            return None
+        from eggpool.request.usage_helpers import extract_non_stream_usage_from_parsed
 
-        if protocol == "anthropic":
-            return extract_anthropic_response_usage(
-                data_dict,
-                provider_id=provider_id,
-            )
-
-        return extract_openai_response_usage(
-            data_dict,
-            provider_id=provider_id,
+        return extract_non_stream_usage_from_parsed(
+            protocol, parsed, provider_id=provider_id
         )
 
     @staticmethod
@@ -4238,20 +4087,21 @@ class RequestCoordinator:
     ) -> str | None:
         """Return the value for a header, or None.
 
-        Accepts a single name or a list of names tried in order
-        (case-insensitive).
+        Delegates to :func:`static_helpers.get_header_value`.
         """
-        names = [name] if isinstance(name, str) else name
-        lower_names = [n.lower() for n in names]
-        for key, value in headers:
-            if key.lower() in lower_names:
-                return value
-        return None
+        from eggpool.request.static_helpers import get_header_value
+
+        return get_header_value(headers, name)
 
     @staticmethod
     def _elapsed_ms(context: ProxyRequestContext) -> int:
-        """Return request latency from a clock unaffected by wall-clock jumps."""
-        return max(0, int((time.monotonic() - context.started_monotonic) * 1000))
+        """Return request latency from a clock unaffected by wall-clock jumps.
+
+        Delegates to :func:`static_helpers.elapsed_ms`.
+        """
+        from eggpool.request.static_helpers import elapsed_ms
+
+        return elapsed_ms(context)
 
     async def _send_upstream_request(
         self,
@@ -4261,61 +4111,26 @@ class RequestCoordinator:
     ) -> httpx.Response:
         """Send an upstream request and capture shared dispatch timing.
 
-        Timing boundaries:
-
-        - ``context.request_received_monotonic_ns``: earliest ASGI
-          handler entry after auth / body-limit middleware.  Set by
-          ``handle_proxy_request``.
-        - ``context.started_monotonic_ns``: captured when the
-          ``ProxyRequestContext`` is built (after auth, body_read,
-          json_parse, model_parse, context_limit, transcode_preflight,
-          compression policy, segmentation, compression apply,
-          context_build).  ``context.local_pre_upstream_ms`` and the
-          coordinator ``DispatchOverheadRecorder`` use this as their
-          origin.
-        - this function: the dispatch boundary.  ``local_pre_upstream_ms``
-          is computed from ``request_received_monotonic_ns`` so the
-          operator can see the full EggPool-side window; the existing
-          coarse ``dispatch_overhead`` recorder still reflects only the
-          coordinator-internal slice (preserved for backward compatibility).
-
-        ``DispatchOverheadRecorder`` is recorded immediately before
-        ``client.send`` so the rolling-window distribution reflects
-        coordinator-side latency only.  Operators who need a total
-        local pre-upstream metric should read ``context.local_pre_upstream_ms``
-        instead.
+        Delegates to :func:`upstream_execution.send_upstream_request`.
         """
-        if context.request_received_monotonic_ns is not None:
-            context.local_pre_upstream_ms = max(
-                0,
-                int(
-                    (time.perf_counter_ns() - context.request_received_monotonic_ns)
-                    // 1_000_000
-                ),
-            )
-            if self._local_pre_upstream_recorder is not None:
-                self._local_pre_upstream_recorder.record_ms(
-                    context.local_pre_upstream_ms
-                )
-        if self._dispatch_overhead_recorder is not None:
-            self._dispatch_overhead_recorder.record_ns(
-                time.perf_counter_ns() - context.started_monotonic_ns
-            )
-        connect_start = time.monotonic()
-        response = await client.send(request, stream=True)
-        context.upstream_connect_ms = int((time.monotonic() - connect_start) * 1000)
-        context.upstream_headers_ms = self._elapsed_ms(context)
-        return response
+        from eggpool.request.upstream_execution import send_upstream_request
+
+        return await send_upstream_request(
+            client,
+            request,
+            context,
+            local_pre_upstream_recorder=self._local_pre_upstream_recorder,
+            dispatch_overhead_recorder=self._dispatch_overhead_recorder,
+        )
 
     @staticmethod
     async def _close_response(response: httpx.Response | None) -> None:
-        """Close an upstream response without masking the original failure."""
-        if response is None:
-            return
-        try:
-            await response.aclose()
-        except Exception:
-            logger.debug("Error closing upstream response", exc_info=True)
+        """Close an upstream response without masking the original failure.
+
+        Delegates to :func:`static_helpers.close_response`."""
+        from eggpool.request.static_helpers import close_response
+
+        await close_response(response)
 
     def _local_dispatch_error(
         self,
@@ -4378,62 +4193,36 @@ class RequestCoordinator:
         *,
         status_code: int,
     ) -> PreparedProxyResponse:
-        """Build a bounded protocol-shaped local error without exception text."""
-        if context.protocol == "anthropic":
-            body = encode_json_body(
-                {
-                    "type": "error",
-                    "error": {
-                        "type": "api_error",
-                        "message": "Internal proxy error",
-                    },
-                }
-            )
-        else:
-            body = encode_json_body(
-                {
-                    "error": {
-                        "message": "Internal proxy error",
-                        "type": "server_error",
-                        "code": status_code,
-                    }
-                }
-            )
-        return PreparedProxyResponse(
-            status_code=status_code,
-            headers=[
-                ("content-type", "application/json"),
-                ("x-proxy-request-id", context.request_id),
-            ],
-            body=body,
-            request_id=context.request_id,
-            account_name=str(context.client_metadata.get("account_name", "")),
-            latency_ms=0,
-            attempt_count=0,
-        )
+        """Build a bounded protocol-shaped local error without exception text.
+
+        Delegates to :func:`static_helpers.build_local_error_response`.
+        """
+        from eggpool.request.static_helpers import build_local_error_response
+
+        return build_local_error_response(context, status_code=status_code)
 
     @staticmethod
     def _upstream_read_ms(
         context: ProxyRequestContext,
         observed_elapsed_ms: int,
     ) -> int | None:
-        """Return elapsed upstream body/stream read time after response headers."""
-        if context.upstream_headers_ms is None:
-            return None
-        return max(0, observed_elapsed_ms - context.upstream_headers_ms)
+        """Return elapsed upstream body/stream read time after response headers.
+
+        Delegates to :func:`static_helpers.upstream_read_ms`.
+        """
+        from eggpool.request.static_helpers import upstream_read_ms
+
+        return upstream_read_ms(context, observed_elapsed_ms)
 
     @staticmethod
     def _upstream_header_ms(context: ProxyRequestContext) -> int | None:
         """Return elapsed time to receive upstream response headers.
 
-        Returns ``None`` when the upstream response had not finished
-        receiving headers when the context was last updated; the
-        coordinator uses this only for diagnostic instrumentation.
+        Delegates to :func:`static_helpers.upstream_header_ms`.
         """
-        headers_ms = getattr(context, "upstream_headers_ms", None)
-        if headers_ms is None:
-            return None
-        return max(0, int(headers_ms))
+        from eggpool.request.static_helpers import upstream_header_ms
+
+        return upstream_header_ms(context)
 
     @staticmethod
     def _coordinator_overhead_ms(
@@ -4442,10 +4231,15 @@ class RequestCoordinator:
         connect_ms: int | None,
         read_ms: int | None,
     ) -> int | None:
-        """Return elapsed time not attributed to upstream connect or read phases."""
-        if connect_ms is None or read_ms is None:
-            return None
-        return max(0, total_ms - connect_ms - read_ms)
+        """Return elapsed time not attributed to upstream connect or read phases.
+
+        Delegates to :func:`static_helpers.coordinator_overhead_ms`.
+        """
+        from eggpool.request.static_helpers import coordinator_overhead_ms
+
+        return coordinator_overhead_ms(
+            total_ms=total_ms, connect_ms=connect_ms, read_ms=read_ms
+        )
 
     def _build_failure_observation(
         self,
@@ -5067,45 +4861,22 @@ class RequestCoordinator:
     ) -> None:
         """Write the authoritative backoff to ``account_backoff_repo``.
 
-        Silently skips when no repository was injected (e.g. legacy
-        tests) or when the reason has no policy (e.g. client 4xx).
+        Delegates to :func:`backoff_persistence.persist_backoff`.
         """
-        if self._account_backoff_repo is None:
-            return
-        from eggpool.health.backoff import is_backoff_reason
+        from eggpool.request.backoff_persistence import persist_backoff
 
-        if not is_backoff_reason(reason):
-            return
-        account_id = self._account_id_cache.get(account_name)
-        if account_id is None:
-            try:
-                account_repo = AccountRepository(self._db)
-                account_id = await account_repo.get_id_by_name(account_name)
-            except Exception:
-                logger.exception(
-                    "Failed to resolve account_id for backoff persistence (account=%r)",
-                    account_name,
-                )
-                return
-            if account_id is None:
-                return
-            self._account_id_cache[account_name] = account_id
-        try:
-            await self._account_backoff_repo.upsert_failure(
-                account_id=account_id,
-                model_id=model_id,
-                reason=reason,
-                status_code=status_code,
-                error_class=error_class,
-                backoff_until=backoff_until,
-                consecutive_failures=consecutive_failures,
-            )
-        except Exception:
-            logger.exception(
-                "Failed to persist backoff (account=%r reason=%r)",
-                account_name,
-                reason,
-            )
+        await persist_backoff(
+            account_backoff_repo=self._account_backoff_repo,
+            account_id_cache=self._account_id_cache,
+            db=self._db,
+            account_name=account_name,
+            model_id=model_id,
+            reason=reason,
+            status_code=status_code,
+            error_class=error_class,
+            backoff_until=backoff_until,
+            consecutive_failures=consecutive_failures,
+        )
 
     async def _clear_backoff(
         self,
@@ -5116,38 +4887,18 @@ class RequestCoordinator:
     ) -> None:
         """Remove persisted backoff rows for a successful request.
 
-        Errors are logged and swallowed so the request lifecycle
-        continues; the in-memory health manager is the source of
-        truth for the current process and the repository is purely
-        durable state.
+        Delegates to :func:`backoff_persistence.clear_backoff`.
         """
-        if self._account_backoff_repo is None:
-            return
-        account_id = self._account_id_cache.get(account_name)
-        if account_id is None:
-            try:
-                account_repo = AccountRepository(self._db)
-                account_id = await account_repo.get_id_by_name(account_name)
-            except Exception:
-                logger.exception(
-                    "Failed to resolve account_id for backoff cleanup (account=%r)",
-                    account_name,
-                )
-                return
-            if account_id is None:
-                return
-            self._account_id_cache[account_name] = account_id
-        try:
-            await self._account_backoff_repo.clear_success(
-                account_id=account_id,
-                model_id=model_id,
-                reasons=reasons,
-            )
-        except Exception:
-            logger.exception(
-                "Failed to clear backoff rows (account=%r)",
-                account_name,
-            )
+        from eggpool.request.backoff_persistence import clear_backoff
+
+        await clear_backoff(
+            account_backoff_repo=self._account_backoff_repo,
+            account_id_cache=self._account_id_cache,
+            db=self._db,
+            account_name=account_name,
+            model_id=model_id,
+            reasons=reasons,
+        )
 
     async def _finalize_non_retryable(
         self,
@@ -5521,109 +5272,19 @@ class RequestCoordinator:
     ) -> dict[str, Any]:
         """Build the score_components_json payload for one routing decision.
 
-        Includes the full breakdown for the selected account plus
-        the top near-tie candidates so the dashboard can answer
-        "why account A over account B?" without rescoring.
-
-        The payload also carries utilization ratios for each quota
-        window (5h/7d/30d) and a short ``tie_break`` summary
-        identifying the decisive factor between the chosen account
-        and the runner-up (``tier``, ``quota``, ``inflight``,
-        ``transcode``, ``near_tie``) so an operator can correlate
-        visible skew against a concrete cause.
+        Delegates to :func:`routing_helpers.build_score_components`.
         """
-        # Find the score for the selected account from ranked_candidates
-        # if present; else synthesize the bare minimum from the trace.
-        selected_score_obj: Any | None = None
-        for state, score in ranked_candidates:
-            if state.name == selected_account_name:
-                selected_score_obj = score
-                break
+        from eggpool.request.routing_helpers import build_score_components
 
-        top_candidates_payload = self._build_top_candidates(
-            ranked_candidates, fairness_band_names=fairness_band_names
-        )
-        tie_break = self._derive_tie_break_summary(
+        return build_score_components(
             ranked_candidates=ranked_candidates,
-            selected_score_obj=selected_score_obj,
+            selected_account_name=selected_account_name,
+            selected_state=selected_state,
+            selected_score=selected_score,
+            selected_tier=selected_tier,
+            fairness_decision=fairness_decision,
+            fairness_band_names=fairness_band_names,
         )
-
-        if selected_score_obj is not None:
-            payload: dict[str, Any] = {
-                "account_name": selected_account_name,
-                "quota_score": selected_score_obj.quota_score,
-                "inflight_penalty": selected_score_obj.inflight_penalty,
-                "health_penalty": selected_score_obj.health_penalty,
-                "final_score": selected_score_obj.final_score,
-                "weight": selected_score_obj.weight,
-                "active_request_count": (selected_score_obj.active_request_count),
-                "reserved_microdollars": (selected_score_obj.reserved_microdollars),
-                "cost_5h_microdollars": (selected_score_obj.cost_5h_microdollars),
-                "cost_7d_microdollars": (selected_score_obj.cost_7d_microdollars),
-                "cost_30d_microdollars": (selected_score_obj.cost_30d_microdollars),
-                "capacity_5h_microdollars": (
-                    selected_score_obj.capacity_5h_microdollars
-                ),
-                "capacity_7d_microdollars": (
-                    selected_score_obj.capacity_7d_microdollars
-                ),
-                "capacity_30d_microdollars": (
-                    selected_score_obj.capacity_30d_microdollars
-                ),
-                "tier": selected_score_obj.tier,
-                "requires_transcode": selected_score_obj.requires_transcode,
-                "util_5h": _safe_ratio(
-                    selected_score_obj.cost_5h_microdollars,
-                    selected_score_obj.capacity_5h_microdollars,
-                ),
-                "util_7d": _safe_ratio(
-                    selected_score_obj.cost_7d_microdollars,
-                    selected_score_obj.capacity_7d_microdollars,
-                ),
-                "util_30d": _safe_ratio(
-                    selected_score_obj.cost_30d_microdollars,
-                    selected_score_obj.capacity_30d_microdollars,
-                ),
-                "tie_break": tie_break,
-                "top_candidates": top_candidates_payload,
-                "fairness": (
-                    fairness_decision.to_dict()
-                    if fairness_decision is not None
-                    else None
-                ),
-            }
-        else:
-            payload = {
-                "account_name": selected_account_name,
-                "quota_score": 0.0,
-                "inflight_penalty": 0.0,
-                "health_penalty": 0.0,
-                "final_score": (
-                    float(selected_score) if selected_score is not None else 0.0
-                ),
-                "weight": 0.0,
-                "active_request_count": 0,
-                "reserved_microdollars": 0,
-                "cost_5h_microdollars": 0,
-                "cost_7d_microdollars": 0,
-                "cost_30d_microdollars": 0,
-                "capacity_5h_microdollars": 0,
-                "capacity_7d_microdollars": 0,
-                "capacity_30d_microdollars": 0,
-                "tier": int(selected_tier) if selected_tier is not None else 0,
-                "requires_transcode": False,
-                "util_5h": None,
-                "util_7d": None,
-                "util_30d": None,
-                "tie_break": tie_break,
-                "top_candidates": top_candidates_payload,
-                "fairness": (
-                    fairness_decision.to_dict()
-                    if fairness_decision is not None
-                    else None
-                ),
-            }
-        return payload
 
     @staticmethod
     def _build_top_candidates(
@@ -5634,50 +5295,15 @@ class RequestCoordinator:
     ) -> list[dict[str, Any]]:
         """Render the top-N ranked candidates for the dashboard table.
 
-        Each entry includes ``rank_before_fairness`` (the candidate's
-        position in the score-ordered list before the fairness rotor
-        reordered the band), ``rank_after_fairness`` (the candidate's
-        position in the final list), and ``fairness_band_member`` (True
-        when the candidate was part of the fairness band eligible for
-        rotation).
+        Delegates to :func:`routing_helpers.build_top_candidates`.
         """
-        band = fairness_band_names or frozenset()
+        from eggpool.request.routing_helpers import build_top_candidates
 
-        # Build the pre-fairness ordering.  Non-band members keep their
-        # post-fairness rank.  Band members are restored to the sorted
-        # (by account name) order the rotor used before rotation.
-        band_entries = [
-            (state, score) for state, score in ranked_candidates if state.name in band
-        ]
-        band_sorted = sorted(band_entries, key=lambda pair: pair[0].name)
-        pre_fairness_rank: dict[str, int] = {}
-        band_idx = 0
-        for rank, (state, _score) in enumerate(ranked_candidates):
-            if state.name in band:
-                # Place this band member at its sorted position
-                if band_idx < len(band_sorted):
-                    pre_name = band_sorted[band_idx][0].name
-                    pre_fairness_rank[pre_name] = rank
-                    band_idx += 1
-            else:
-                pre_fairness_rank[state.name] = rank
-
-        out: list[dict[str, Any]] = []
-        for rank_after, (state, score) in enumerate(ranked_candidates[:limit]):
-            entry: dict[str, Any] = {
-                "account_name": state.name,
-                "final_score": float(score.final_score),
-                "quota_score": score.quota_score,
-                "inflight_penalty": score.inflight_penalty,
-                "health_penalty": score.health_penalty,
-                "tier": int(score.tier),
-                "requires_transcode": bool(score.requires_transcode),
-                "rank_before_fairness": pre_fairness_rank.get(state.name, rank_after),
-                "rank_after_fairness": rank_after,
-                "fairness_band_member": state.name in band,
-            }
-            out.append(entry)
-        return out
+        return build_top_candidates(
+            ranked_candidates,
+            limit=limit,
+            fairness_band_names=fairness_band_names,
+        )
 
     @staticmethod
     def _derive_tie_break_summary(
@@ -5687,67 +5313,14 @@ class RequestCoordinator:
     ) -> dict[str, Any]:
         """Summarise why the selected account won over its runner-up.
 
-        Returns a small dict the dashboard can render inline so
-        operators do not have to recompute scores to see whether
-        skew was driven by tier, quota utilization, in-flight
-        pressure, or a near-tie within the scorer's tiebreaker
-        range.
+        Delegates to :func:`routing_helpers.derive_tie_break_summary`.
         """
-        summary: dict[str, Any] = {
-            "factor": "no_runner_up",
-            "margin": None,
-            "runner_up": None,
-        }
-        if selected_score_obj is None or len(ranked_candidates) < 2:
-            return summary
-        # Skip the selected account when searching for the runner-up;
-        # the selected entry may not be ranked first if the caller
-        # passed a list that does not start with the selected account.
-        runner_up: tuple[Any, Any] | None = None
-        for state, score in ranked_candidates:
-            if state.name == selected_score_obj.account_name:
-                continue
-            runner_up = (state, score)
-            break
-        if runner_up is None:
-            return summary
-        ru_state, ru_score = runner_up
-        selected_final = float(selected_score_obj.final_score)
-        runner_final = float(ru_score.final_score)
-        margin = runner_final - selected_final
-        summary["margin"] = margin
-        summary["runner_up"] = {
-            "account_name": ru_state.name,
-            "final_score": runner_final,
-            "tier": int(ru_score.tier),
-            "requires_transcode": bool(ru_score.requires_transcode),
-        }
-        if selected_score_obj.requires_transcode != ru_score.requires_transcode:
-            summary["factor"] = (
-                "transcode"
-                if not selected_score_obj.requires_transcode
-                else "transcode"
-            )
-            return summary
-        if selected_score_obj.tier != ru_score.tier:
-            summary["factor"] = "tier"
-            return summary
-        if margin == 0.0:
-            summary["factor"] = "exact_tie"
-            return summary
-        # Score margins within the scorer's tiebreaker range are not
-        # signal — they are deterministic or random noise.  Anything
-        # outside the band is a real utilization / penalty delta.
-        if abs(margin) <= 0.01:
-            summary["factor"] = "near_tie"
-            return summary
-        if abs(selected_score_obj.inflight_penalty - ru_score.inflight_penalty) > abs(
-            selected_score_obj.quota_score - ru_score.quota_score
-        ):
-            summary["factor"] = "inflight"
-            return summary
-        summary["factor"] = "quota"
-        return summary
+        from eggpool.request.routing_helpers import derive_tie_break_summary
+
+        return derive_tie_break_summary(
+            ranked_candidates=ranked_candidates,
+            selected_score_obj=selected_score_obj,
+        )
 
     def _resolve_upstream_protocol(
         self,
@@ -5792,30 +5365,13 @@ class RequestCoordinator:
 
     @staticmethod
     def _error_status_code(err: Exception | None) -> int:
-        """Map an exception to an HTTP status code."""
-        if err is None:
-            return 500
-        if isinstance(err, AuthenticationError):
-            return 502
-        if isinstance(err, RateLimitError):
-            return 429
-        if isinstance(err, QuotaExhaustedError):
-            return 503
-        if isinstance(err, ModelUnavailableError):
-            return 503
-        if isinstance(err, UpstreamError) and err.status_code is not None:
-            return err.status_code
-        if isinstance(err, _RetryableUpstreamError):
-            if err.status_code is not None:
-                return err.status_code
-            return 502
-        if isinstance(err, _NonRetryableUpstreamError):
-            if err.status_code is not None:
-                return err.status_code
-            return 502
-        if isinstance(err, _LocalDispatchError):
-            return 500
-        return 502
+        """Map an exception to an HTTP status code.
+
+        Delegates to :func:`static_helpers.error_status_code`.
+        """
+        from eggpool.request.static_helpers import error_status_code
+
+        return error_status_code(err)
 
 
 class _RetryableUpstreamError(Exception):
