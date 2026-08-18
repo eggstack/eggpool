@@ -113,9 +113,14 @@ Manual release procedure — no automated release workflow. See `docs/releasing.
 > Full design details are in `architecture/README.md` and the `architecture` skill.
 
 **Public protocol scope:** EggPool exposes OpenAI Chat Completions at
-`/v1/chat/completions`, Anthropic Messages at `/v1/messages`, and OpenAI-style
-model listing at `/v1/models`. It does not claim full OpenAI API or Responses
-API parity.
+`/v1/chat/completions`, the stateless OpenAI Responses passthrough at
+`/v1/responses`, Anthropic Messages at `/v1/messages`, and OpenAI-style
+model listing at `/v1/models`. The Responses surface is stateless
+same-protocol only; stateful fields (`previous_response_id`,
+`conversation`, `store=true`, `background=true`) are rejected locally
+with HTTP 400 before provider selection, and `/v1/responses` does not
+include retrieval, cancellation, background jobs, or WebSocket
+transport. EggPool does not claim full OpenAI API parity.
 
 Start subsystem work with the current architecture index and the relevant deep
 dive. Read an active roadmap or focused plan only when the change is in its

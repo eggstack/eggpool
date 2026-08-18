@@ -22,6 +22,7 @@ from eggpool.api.backoff import register_backoff_routes
 from eggpool.api.chat_completions import handle_chat_completions
 from eggpool.api.messages import handle_messages
 from eggpool.api.models import serialize_openai_model
+from eggpool.api.responses import handle_responses
 from eggpool.api.stats import register_stats_routes
 from eggpool.auth import require_auth, require_auth_at_startup
 from eggpool.background import TaskSupervisor
@@ -1975,6 +1976,12 @@ def create_app(
         request: Request,
     ) -> Any:
         return await handle_messages(request)
+
+    @app.post(f"{API_V1_PREFIX}/responses")
+    async def responses(  # pyright: ignore[reportUnusedFunction]
+        request: Request,
+    ) -> Any:
+        return await handle_responses(request)
 
     @app.exception_handler(AggregatorError)
     async def handle_aggregator_error(  # pyright: ignore[reportUnusedFunction]

@@ -9,9 +9,13 @@
 A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts behind OpenAI Chat Completions- and Anthropic Messages-compatible paths.
 
 EggPool's public OpenAI surface is intentionally limited to Chat Completions
-(`POST /v1/chat/completions`) and model listing (`GET /v1/models`). It also
-exposes Anthropic Messages at `POST /v1/messages`. EggPool does not currently
-implement `/v1/responses` or claim full OpenAI API parity.
+(`POST /v1/chat/completions`), the stateless Responses passthrough
+(`POST /v1/responses`), and model listing (`GET /v1/models`). It also
+exposes Anthropic Messages at `POST /v1/messages`. EggPool does not claim
+full OpenAI API parity — `/v1/responses` is a stateless same-protocol
+passthrough (no `previous_response_id`, conversation state, `store=true`,
+`background=true`, retrieval, cancellation, background jobs, or
+WebSocket transport).
 
 ## Features
 
@@ -346,6 +350,7 @@ The stack covers provider cache counters, request segmentation, native cache pre
 |--------|------|-------------|
 | `GET` | `/v1/models` | List available models |
 | `POST` | `/v1/chat/completions` | OpenAI Chat Completions-compatible requests |
+| `POST` | `/v1/responses` | Stateless OpenAI Responses-compatible requests (passthrough only; see [Stateless Responses support](#stateless-responses-support)) |
 | `POST` | `/v1/messages` | Anthropic Messages-compatible requests |
 | `GET` | `/v1/healthz` | Liveness check |
 | `GET` | `/v1/readyz` | Readiness check |
@@ -432,6 +437,43 @@ One GitHub Actions job on every PR:
 
 See `AGENTS.md` for focused test subset commands.
 
+## Stateless Responses support
+
+`POST /v1/responses` is a **stateless same-protocol passthrough** to
+providers that explicitly declare a Responses endpoint. It is not a
+general Responses API implementation and does not claim OpenAI Responses
+parity. The surface exists so current Codex (which only speaks the
+Responses wire API) can route through EggPool.
+
+- **Eligibility.** A provider participates in `/v1/responses` only when
+  its `responses_path` is configured (defaults to `None` for new
+  templates). Bundled templates ship with `responses_path = "/responses"`
+  for openai, ollama-local, llamacpp-local, and vllm-local; other
+  providers can opt in explicitly. Chat Completions eligibility is
+  unchanged.
+- **Stateless only.** Requests with `previous_response_id`,
+  `conversation`, `store = true`, or `background = true` are rejected
+  locally with HTTP 400 before any provider selection or upstream I/O.
+  Stateful Responses features would tie a request to a single upstream's
+  response identity, which cannot survive EggPool's account failover.
+- **No translation.** No Responses ↔ Anthropic translation, no
+  Responses ↔ Chat Completions rewrite, no content IR, and no
+  provider-specific Responses plugin. The body is forwarded unchanged.
+- **No stream_options injection.** Responses streams use native
+  `response.completed` / `response.failed` terminal events; the Chat
+  Completions `stream_options.include_usage` transform is skipped.
+- **No state persistence.** EggPool does not store `response.id`,
+  `previous_response_id`, or conversation history; there is no
+  `/v1/responses/{id}` retrieval, no cancellation, no delete, and no
+  background-job endpoint.
+
+Bundled provider templates that do not advertise a Responses path are
+not eligible for `/v1/responses` traffic; the request is routed only
+among providers that explicitly declared one. The Codex integration
+renderer now emits a current `[model_providers.eggpool]` block with
+`wire_api = "responses"` and an `env_key = "EGGPOOL_API_KEY"`
+reference — see `eggpool configsetup codex --print-secret`.
+
 ## Agent Configuration
 
 `eggpool configsetup` generates configuration snippets for popular coding agents:
@@ -441,7 +483,7 @@ See `AGENTS.md` for focused test subset commands.
 | OpenCode | `eggpool configsetup opencode` | JSON provider config | N/A (clipboard) | auto |
 | Claude Code | `eggpool configsetup claude-code` | JSON snippet | N/A (clipboard) | N/A |
 | Aider | `eggpool configsetup aider` | Shell env exports | `.env.eggpool` | recommended |
-| Codex | `eggpool configsetup codex` | TOML provider block | N/A (printed) | recommended |
+| Codex | `eggpool configsetup codex` | TOML `[model_providers.eggpool]` block (Responses wire API) | N/A (printed) | recommended |
 | Qwen Code | `eggpool configsetup qwen-code` | JSON provider block | N/A (printed) | optional |
 | Kilo | `eggpool configsetup kilo` | JSON provider block | N/A (printed) | optional |
 | Continue | `eggpool configsetup continue` | YAML model block | `~/.continue/eggpool.yaml` | usually yes |

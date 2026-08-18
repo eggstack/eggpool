@@ -173,9 +173,12 @@ require_models = true
 # /models endpoint exposed by the same base URL as the chat surface.
 # No Ollama-specific adapter is required; the generic catalog fetcher
 # parses the OpenAI-shaped response. No hardcoded probe model.
+# Ollama 0.13.3+ exposes a stateless /v1/responses surface used by
+# Codex and other Responses-compatible clients.
 id = "ollama-local"
 base_url = "http://localhost:11434/v1"
 protocols = ["openai"]
+responses_path = "/responses"
 api_key_env = "API_KEY"
 display_name = "Ollama (local)"
 status = "verified"
@@ -245,10 +248,14 @@ document_input = { base64 = false, url = false }
 non_text_tool_result = false
 
 [providers.llamacpp-local]
-# llama.cpp server (local) — OpenAI compatible, no auth required
+# llama.cpp server (local) — OpenAI compatible, no auth required.
+# llama.cpp llama-server exposes a stateless /v1/responses surface
+# alongside the chat completions endpoint; both are reachable from the
+# same base_url.
 id = "llamacpp-local"
 base_url = "http://localhost:8080/v1"
 protocols = ["openai"]
+responses_path = "/responses"
 api_key_env = "API_KEY"
 display_name = "llama.cpp (local)"
 status = "verified"
@@ -282,10 +289,13 @@ document_input = { base64 = false, url = false }
 non_text_tool_result = false
 
 [providers.vllm-local]
-# vLLM (local) — OpenAI compatible, no auth required by default
+# vLLM (local) — OpenAI compatible, no auth required by default.
+# vLLM OpenAI-compatible server documents a stateless /v1/responses
+# surface for text-generation models; both endpoints share the base_url.
 id = "vllm-local"
 base_url = "http://localhost:8000/v1"
 protocols = ["openai"]
+responses_path = "/responses"
 api_key_env = "API_KEY"
 display_name = "vLLM (local)"
 status = "verified"
@@ -380,10 +390,12 @@ probe_protocol = "openai"
 require_models = true
 
 [providers.openai]
-# OpenAI — direct OpenAI API
+# OpenAI — direct OpenAI API.  Reference provider for both the
+# Chat Completions-compatible and Responses surfaces.
 id = "openai"
 base_url = "https://api.openai.com/v1"
 protocols = ["openai"]
+responses_path = "/responses"
 api_key_env = "API_KEY"
 display_name = "OpenAI"
 status = "verified"

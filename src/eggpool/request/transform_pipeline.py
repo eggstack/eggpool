@@ -306,6 +306,14 @@ def _make_stream_options_adapter() -> tuple[TransformMeta, TransformFnAny]:
         ):
             return TransformResult(decision=TransformDecision.SKIPPED)
 
+        # Plan 143: ``stream_options.include_usage`` is a Chat
+        # Completions transform. The Responses surface uses native
+        # ``response.completed`` terminal events to surface usage,
+        # so the mutation must be skipped entirely for that surface.
+        surface = getattr(ctx.proxy_context, "request_surface", None)
+        if surface == "responses":
+            return TransformResult(decision=TransformDecision.SKIPPED)
+
         value = request.provider_payload.get("stream_options")
         include_usage: bool | None = None
         if isinstance(value, Mapping) and "include_usage" in value:

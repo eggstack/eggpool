@@ -3,9 +3,13 @@
 EggPool is a lightweight, LAN-hosted proxy that aggregates multiple LLM provider accounts behind OpenAI Chat Completions- and Anthropic Messages-compatible paths. Designed for Raspberry Pi and SBC deployments, it provides protocol transcoding, quota-aware routing, and a self-updating dashboard.
 
 The public OpenAI contract is intentionally limited to Chat Completions
-(`POST /v1/chat/completions`) and model listing (`GET /v1/models`), alongside
-Anthropic Messages (`POST /v1/messages`). EggPool does not currently implement
-the OpenAI Responses API or claim full OpenAI API parity.
+(`POST /v1/chat/completions`), the stateless Responses passthrough
+(`POST /v1/responses`), and model listing (`GET /v1/models`), alongside
+Anthropic Messages (`POST /v1/messages`). EggPool does not claim full OpenAI
+API parity — `/v1/responses` is a stateless same-protocol passthrough that
+rejects `previous_response_id`, conversation state, `store=true`, and
+`background=true` before any provider selection and does not implement
+retrieval, cancellation, background jobs, or WebSocket transport.
 
 ## Quick Navigation
 
@@ -106,7 +110,7 @@ The CLI entry point is a two-phase bootstrap: `cli.py` (73 lines) first tries `f
 | **Path** | `src/eggpool/request/`, `src/eggpool/api/`, `src/eggpool/proxy/` |
 | **Deep Dive** | [deep-dive-request-lifecycle.md](deep-dive-request-lifecycle.md) |
 
-The request lifecycle is orchestrated by `RequestCoordinator` in `request/coordinator.py`. API handlers (`api/chat_completions.py` for OpenAI, `api/messages.py` for Anthropic) parse the request and call `handle_proxy_request()` — a shared pipeline in `api/proxy_request.py` that handles auth, body parsing, model/provider resolution, capability checks, context-limit enforcement, transcoding preflight, dispatch, and response handling. The coordinator persists each attempt to SQLite before dispatch, manages retry with failover, and ensures every terminal outcome is owned by exactly one `RequestFinalizationJob`. Dispatch retries are limited to typed HTTPX transport failures before an explicit response-handoff fact; local preparation and response-adaptation faults are isolated as local errors. Non-streaming adaptation precedes durable success, while streaming responses flow through `proxy/sse.py` (bounded SSE decoder) and `proxy/sse_observer.py` (diagnostic observation).
+The request lifecycle is orchestrated by `RequestCoordinator` in `request/coordinator.py`. API handlers (`api/chat_completions.py` for OpenAI Chat Completions, `api/responses.py` for the stateless OpenAI Responses passthrough, `api/messages.py` for Anthropic) parse the request and call `handle_proxy_request()` — a shared pipeline in `api/proxy_request.py` that handles auth, body parsing, model/provider resolution, capability checks, context-limit enforcement, transcoding preflight, dispatch, and response handling. The coordinator persists each attempt to SQLite before dispatch, manages retry with failover, and ensures every terminal outcome is owned by exactly one `RequestFinalizationJob`. Dispatch retries are limited to typed HTTPX transport failures before an explicit response-handoff fact; local preparation and response-adaptation faults are isolated as local errors. Non-streaming adaptation precedes durable success, while streaming responses flow through `proxy/sse.py` (bounded SSE decoder) and `proxy/sse_observer.py` (diagnostic observation). Plan 143 introduces an `OpenAIRequestSurface` (`"chat_completions"` or `"responses"`) on `ProxyEndpointConfig` and `ProxyRequestContext` so the same coordinator dispatches both surfaces without adding a third protocol family.
 
 **Related**: [deep-dive-routing.md](deep-dive-routing.md), [deep-dive-transcoder.md](deep-dive-transcoder.md), [deep-dive-providers.md](deep-dive-providers.md), [deep-dive-health.md](deep-dive-health.md)
 

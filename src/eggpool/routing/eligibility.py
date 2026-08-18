@@ -53,6 +53,8 @@ def get_eligible_accounts(
     quarantine: ModelQuarantine | None = None,
     upstream_protocol: str = "openai",
     exclusion_sink: list[tuple[str, str]] | None = None,
+    request_surface: str = "chat_completions",
+    account_supports_request_surface: Callable[[str, str], bool] | None = None,
 ) -> list[AccountRuntimeState]:
     """Get accounts eligible for routing a specific model.
 
@@ -70,6 +72,8 @@ def get_eligible_accounts(
     - when ``local_quota_mode="hard_cap"``, configured local quota
       capacity is not exceeded (when ``quota_estimator`` is supplied)
     - supports thinking when explicitly requested (capability-aware routing)
+    - supports the requested request surface (Plan 143; defaults to
+      chat_completions which is always satisfied for openai providers)
 
     In the default ``local_quota_mode="score_only"`` mode, local quota
     estimates influence routing rank only and never hard-exclude
@@ -123,6 +127,16 @@ def get_eligible_accounts(
             account_provider = catalog.get_provider_for_account(state.name)
             if account_provider != provider_id:
                 continue
+
+        # Plan 143: filter by request surface (e.g. ``"responses"``)
+        # before protocol checks so providers that never declared a
+        # Responses endpoint are excluded at the eligibility gate.
+        if (
+            request_surface != "chat_completions"
+            and account_supports_request_surface is not None
+            and not account_supports_request_surface(state.name, request_surface)
+        ):
+            continue
 
         if (
             protocol is not None

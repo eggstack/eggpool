@@ -803,12 +803,16 @@ enabled = false
 #
 # # Live-verification-required: confirm base_url and endpoints before production use
 
-# Ollama (local) — OpenAI compatible, no auth required
+# Ollama (local) — OpenAI compatible, no auth required.
+# Ollama 0.13.3+ exposes a stateless /v1/responses surface used by
+# Codex; uncomment responses_path to make this provider eligible for
+# POST /v1/responses traffic.
 # Status: verified (well-known local service)
 # [providers.ollama-local]
 # id = "ollama-local"
 # base_url = "http://localhost:11434/v1"
 # protocols = ["openai"]
+# responses_path = "/responses"
 #
 # [[providers.ollama-local.accounts]]
 # name = "default"

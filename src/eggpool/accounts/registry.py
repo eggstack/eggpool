@@ -185,6 +185,33 @@ class AccountRegistry:
         provider_protocols = self.get_provider_protocols(provider_id)
         return any(p in provider_protocols for p in protocols)
 
+    def account_supports_request_surface(
+        self,
+        account_name: str,
+        request_surface: str,
+    ) -> bool:
+        """Return whether an account's provider declares the request surface.
+
+        ``"chat_completions"`` is always supported on providers that ship
+        OpenAI Chat Completions, matching historical behaviour. The
+        ``"responses"`` surface requires the provider to declare a
+        non-null ``responses_path``. Unknown surfaces default to False so
+        future additions cannot silently widen eligibility.
+        """
+        provider_id = self.get_provider_for_account(account_name)
+        if provider_id is None:
+            return False
+        provider = self._config.providers.get(provider_id)
+        if provider is None:
+            return False
+        if request_surface == "chat_completions":
+            return "openai" in provider.protocols
+        if request_surface == "responses":
+            if "openai" not in provider.protocols:
+                return False
+            return getattr(provider, "responses_path", None) is not None
+        return False
+
     def get_accounts_for_provider(self, provider_id: str) -> list[AccountRuntimeState]:
         """Get all account states belonging to a provider."""
         return [

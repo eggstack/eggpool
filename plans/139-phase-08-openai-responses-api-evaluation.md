@@ -267,3 +267,41 @@ locally. Cross-protocol Responses ↔ Anthropic translation, persistent
 response-ID stores, conversation routing state, new SDK
 dependencies, and expanded CI matrices remain out of scope unless a
 separate plan is written.
+
+### Plan 143 superseding closure
+
+Plan 143 was written when current Codex shipped only `WireApi::Responses`
+and rejected `wire_api = "chat"`. Codex's custom provider configuration
+moved to `[model_providers.<id>]` and EggPool's bundled Codex
+integration was no longer advertising a configuration current Codex
+would accept. Plan 143 therefore implements the narrow stateless
+same-protocol `/v1/responses` passthrough that Plan 139 deferred:
+
+* `ProviderConfig.responses_path` declares eligibility per provider;
+  bundled templates add `responses_path = "/responses"` only for
+  providers whose documentation genuinely exposes that route
+  (openai, ollama-local, llamacpp-local, vllm-local).
+* `POST /v1/responses` is registered as a stateless same-protocol
+  endpoint with `protocol = "openai"` and `request_surface = "responses"`.
+* Stateful Responses fields (`previous_response_id`, `conversation`,
+  `store=true`, `background=true`) are rejected locally with HTTP 400
+  before any provider selection or upstream I/O. They are *never*
+  silently stripped.
+* `compose_provider_url()` remains the only URL joiner; the Responses
+  path is composed via the same helper that builds chat and messages
+  URLs.
+* Chat Completions-specific transforms (`stream_options.include_usage`
+  injection) are skipped for the Responses surface; the streaming
+  observer recognises `response.completed` and `response.failed` as
+  terminal events instead of Chat's `[DONE]` marker.
+* `eggpool configsetup codex` now emits a current Codex
+  `[model_providers.eggpool]` block with `wire_api = "responses"` and
+  `env_key = "EGGPOOL_API_KEY"`; the legacy `[provider.eggpool]` /
+  embedded `api_key` / provider-local model subtables are removed.
+
+Plan 143 deliberately does *not* implement Responses ↔ Anthropic
+translation, response-ID persistence, conversation affinity, retrieval,
+cancellation, background jobs, or WebSocket transport. The line-of-work
+completion standard in Plan 143 treats Plans 131–143 as the closure of
+the local-provider / multimodal / Codex compatibility work; no further
+automatic closure plan is anticipated for this area.

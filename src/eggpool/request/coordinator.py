@@ -451,6 +451,12 @@ class ProxyRequestContext:
     upstream_protocol: str = ""
     transcode_required: bool = False
     transcode_context: TranscodeContext | None = None
+    # Plan 143: wire endpoint surface for OpenAI-family requests.
+    # ``"chat_completions"`` is the historical default and the only
+    # surface that triggers ``stream_options.include_usage`` injection
+    # or any Chat Completions-specific transform. ``"responses"`` marks
+    # a stateless same-protocol passthrough.
+    request_surface: str = "chat_completions"
     thinking_trace: dict[str, Any] | None = None
     thinking_intent: Any | None = None  # ThinkingRequestIntent | None
     segmentation: Any | None = None
@@ -2172,6 +2178,7 @@ class RequestCoordinator:
                 thinking_requirement=thinking_req if thinking_req.required else None,
                 capability_policy=_capability_policy,
                 estimated_tokens=int(estimated_tokens),
+                request_surface=getattr(context, "request_surface", "chat_completions"),
             )
         eligible_account_names = plan.eligible_names
         ranked_candidates = plan.ranked_candidates
@@ -2761,7 +2768,9 @@ class RequestCoordinator:
         try:
             headers = self._build_upstream_headers(context, selected)
             upstream_url = self._get_upstream_url(
-                context.upstream_protocol, selected.provider_id
+                context.upstream_protocol,
+                selected.provider_id,
+                request_surface=getattr(context, "request_surface", "chat_completions"),
             )
             from eggpool.request.transform_pipeline import (
                 run_provider_transforms,
@@ -3099,7 +3108,9 @@ class RequestCoordinator:
         try:
             headers = self._build_upstream_headers(context, selected)
             upstream_url = self._get_upstream_url(
-                context.upstream_protocol, selected.provider_id
+                context.upstream_protocol,
+                selected.provider_id,
+                request_surface=getattr(context, "request_surface", "chat_completions"),
             )
             from eggpool.request.transform_pipeline import (
                 run_provider_transforms,
@@ -3443,7 +3454,9 @@ class RequestCoordinator:
         existing behaviour is preserved.
         """
         observer = IncrementalSSEObserver(
-            context.upstream_protocol, provider_id=selected.provider_id
+            context.upstream_protocol,
+            provider_id=selected.provider_id,
+            request_surface=getattr(context, "request_surface", "chat_completions"),
         )
         shared_decoder = SSEDecoder()
         bytes_emitted = 0
@@ -4294,14 +4307,28 @@ class RequestCoordinator:
 
         return classify_upstream_error(status_code, headers, body)
 
-    def _get_upstream_url(self, protocol: str, provider_id: str | None = None) -> str:
+    def _get_upstream_url(
+        self,
+        protocol: str,
+        provider_id: str | None = None,
+        *,
+        request_surface: str = "chat_completions",
+    ) -> str:
         """Get the absolute upstream URL for a protocol and provider.
 
+        ``request_surface`` selects the OpenAI-family endpoint. Defaults
+        to ``"chat_completions"`` so the historical dispatch path is
+        preserved for callers that do not opt in to the Responses surface.
         Delegates to :func:`upstream_helpers.get_upstream_url`.
         """
         from eggpool.request.upstream_helpers import get_upstream_url
 
-        return get_upstream_url(protocol, provider_id, config=self._config)
+        return get_upstream_url(
+            protocol,
+            provider_id,
+            config=self._config,
+            request_surface=request_surface,
+        )
 
     def _resolve_selected_thinking_capability(
         self,

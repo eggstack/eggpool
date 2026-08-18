@@ -4,10 +4,15 @@ This directory is the current design index. Historical implementation plans
 remain under `plans/`; this index describes the runtime that is shipped today.
 
 EggPool's public protocol scope is OpenAI Chat Completions at
-`POST /v1/chat/completions`, Anthropic Messages at `POST /v1/messages`, and
-OpenAI-style model listing at `GET /v1/models`. The service does not claim full
-OpenAI API or `/v1/responses` parity; upstream provider protocol labels do not
-expand this public surface.
+`POST /v1/chat/completions`, the stateless OpenAI Responses passthrough at
+`POST /v1/responses`, Anthropic Messages at `POST /v1/messages`, and
+OpenAI-style model listing at `GET /v1/models`. The service does not claim
+full OpenAI API parity — `/v1/responses` is a stateless same-protocol
+passthrough that rejects stateful fields (`previous_response_id`,
+conversation references, `store=true`, `background=true`) before any
+provider selection and does not implement retrieval, cancellation,
+background jobs, or WebSocket transport. Upstream provider protocol
+labels do not expand this public surface.
 
 For repository work, start here and follow the relevant deep dive. Active
 plans provide scope and sequencing when needed; completed plans are historical
@@ -75,6 +80,16 @@ policy determines whether unsupported
 fields warn or reject. Strict image/PDF base64 validation rejects obvious
 encoded-size overflow before decoding and releases the temporary validation
 buffer before translated output is built.
+
+The Responses surface is a passthrough, not a third transcoder family. The
+wire endpoint is selected via an `OpenAIRequestSurface` (`"chat_completions"`
+or `"responses"`); `ProtocolName` still records the OpenAI translation
+family. Providers must declare `responses_path` to participate in
+`POST /v1/responses`; the URL is composed by the same
+`compose_provider_url()` used for chat and messages routes. Chat-specific
+transforms (`stream_options.include_usage` injection) are skipped for
+Responses; the streaming observer recognises `response.completed` /
+`response.failed` terminal events instead of Chat's `[DONE]` marker.
 
 See [deep-dive-transcoder.md](deep-dive-transcoder.md).
 

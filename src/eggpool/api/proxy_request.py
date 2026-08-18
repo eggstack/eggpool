@@ -117,15 +117,77 @@ class ErrorResponseFactory(Protocol):
     ) -> JSONResponse: ...
 
 
+def _validate_responses_stateless(payload: dict[str, Any]) -> str | None:
+    """Return a rejection message when a Responses payload is not stateless.
+
+    EggPool exposes ``POST /v1/responses`` only as a stateless same-protocol
+    passthrough. Stateful Responses features (``previous_response_id``,
+    conversation references, ``store = true``, ``background = true``) bind
+    a request to a specific upstream's response identity and cannot be
+    safely failed over across accounts. This helper detects those fields
+    and returns a concise rejection message; ``None`` means the payload
+    is stateless and may continue.
+
+    The check happens before durable account selection so the operator's
+    client never receives a partial success followed by a retry on a
+    different provider.
+    """
+    previous = payload.get("previous_response_id")
+    if previous is not None and previous != "":
+        return (
+            "EggPool's /v1/responses is stateless only; "
+            "previous_response_id is not supported."
+        )
+    conversation = payload.get("conversation")
+    if isinstance(conversation, dict) and conversation:
+        # Empty dicts (``{}``) and missing keys are accepted as
+        # ``no conversation reference``; any populated conversation
+        # binding is rejected.
+        return (
+            "EggPool's /v1/responses is stateless only; "
+            "conversation references are not supported."
+        )
+    if payload.get("store") is True:
+        return "EggPool's /v1/responses is stateless only; store=true is not supported."
+    if payload.get("background") is True:
+        return (
+            "EggPool's /v1/responses is stateless only; "
+            "background=true is not supported."
+        )
+    return None
+
+
 @dataclass(frozen=True)
 class ProxyEndpointConfig:
-    """Protocol-specific behavior for the shared proxy endpoint pipeline."""
+    """Protocol-specific behavior for the shared proxy endpoint pipeline.
+
+    Attributes
+    ----------
+    protocol:
+        The translation family of the client endpoint. Responses and
+        Chat Completions both share ``"openai"``; the wire surface is
+        selected via ``request_surface``.
+    request_surface:
+        Identifies the wire endpoint surface served by this handler.
+        Defaults to ``"chat_completions"`` so existing call sites keep
+        their current dispatch behavior. ``"responses"`` selects the
+        stateless OpenAI Responses passthrough introduced by
+        Plan 143; the field is a *surface* declaration, not a new
+        ``ProtocolName``.
+    request_label:
+        Human-readable label used for logging.
+    error_response:
+        Callable that renders a protocol-shaped error response.
+    not_found_error_type / service_error_type:
+        Protocol-specific error type strings for 404 / 5xx responses.
+    """
 
     protocol: ProtocolName
     request_label: str
     error_response: ErrorResponseFactory
     not_found_error_type: str
     service_error_type: str
+    request_surface: str = "chat_completions"
 
 
 @dataclass(frozen=True)
@@ -534,6 +596,7 @@ async def _handle_proxy_request_inner(
                 payload=payload,
                 protocol=endpoint.protocol,
                 catalog_cache=catalog.cache,
+                request_surface=endpoint.request_surface,
             )
         except ContextLimitExceededError as exc:
             return endpoint.error_response(
@@ -575,6 +638,7 @@ async def _handle_proxy_request_inner(
                     protocol=preflight.upstream_protocol,
                     catalog_cache=catalog.cache,
                     extra_input_tokens=preflight.tool_token_padding,
+                    request_surface=endpoint.request_surface,
                 )
             except ContextLimitExceededError as exc:
                 return endpoint.error_response(
@@ -614,6 +678,21 @@ async def _handle_proxy_request_inner(
             error_type="invalid_request_error",
         )
     is_stream = bool(stream_value)
+
+    # Plan 143: the Responses surface is a stateless same-protocol
+    # passthrough. Stateful Responses features would tie a request to a
+    # single upstream's response identity, which cannot survive
+    # EggPool's account failover. Reject them explicitly before durable
+    # account selection so the client never silently believes provider
+    # state is being preserved.
+    if endpoint.request_surface == "responses":
+        rejection = _validate_responses_stateless(payload)
+        if rejection is not None:
+            return endpoint.error_response(
+                status_code=400,
+                message=rejection,
+                error_type="invalid_request_error",
+            )
 
     request_id = proxy_request_id or str(uuid.uuid4())
     transcode_ctx = TranscodeContext(
@@ -685,6 +764,7 @@ async def _handle_proxy_request_inner(
                 trusted_proxies=lease.runtime.immutable_request_state.trusted_proxies,
             ),
             upstream_protocol=endpoint.protocol,
+            request_surface=endpoint.request_surface,
             transcode_required=False,
             transcode_context=transcode_ctx,
             segmentation=segmentation_result,

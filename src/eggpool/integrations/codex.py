@@ -1,4 +1,19 @@
-"""Codex integration renderer."""
+"""Codex integration renderer.
+
+Plan 143 rewrites this module to match the current Codex CLI schema:
+
+* Codex selects providers through the ``[model_providers.<id>]`` table,
+  not the legacy ``[provider.<id>]`` block.
+* The wire API is selected with ``wire_api = "responses"``; Codex
+  rejects ``wire_api = "chat"`` and EggPool's ``POST /v1/responses``
+  is the supported stateless surface (no Responses ↔ Chat translation
+  is implemented).
+* API keys are referenced through ``env_key`` rather than embedded
+  directly in the generated TOML. Operators who already have
+  ``EGGPOOL_API_KEY`` exported do not need to edit the snippet.
+* The chosen model is set via the top-level ``model`` /
+  ``model_provider`` keys, not a provider-local ``default_model``.
+"""
 
 from __future__ import annotations
 
@@ -6,36 +21,42 @@ import shutil
 import subprocess
 from typing import TYPE_CHECKING
 
-from eggpool.integrations.common import render_toml_key, render_toml_string
+from eggpool.integrations.common import render_toml_string
 
 if TYPE_CHECKING:
     from eggpool.integrations.common import IntegrationContext
 
 
-def build_codex_toml_snippet(ctx: IntegrationContext, model: str | None = None) -> str:
-    """Build a TOML provider config snippet for Codex.
+CODEX_PROVIDER_NAME = "eggpool"
+CODEX_PROVIDER_LABEL = "EggPool"
+CODEX_ENV_KEY = "EGGPOOL_API_KEY"
+CODEX_WIRE_API = "responses"
 
-    Renders a ``[provider.eggpool]`` section with the EggPool endpoint
-    and API key, suitable for pasting into a Codex config file.
-    Model IDs containing special characters are quoted in table headers.
+
+def build_codex_toml_snippet(ctx: IntegrationContext, model: str | None = None) -> str:
+    """Build a TOML provider config snippet for current Codex.
+
+    Generates a ``[model_providers.eggpool]`` block plus the
+    top-level ``model`` / ``model_provider`` selection keys. The
+    EggPool server key is referenced via ``env_key = "EGGPOOL_API_KEY"``
+    so the operator controls when the secret is exposed — no
+    plaintext key is embedded in the snippet.
     """
     lines = [
-        "[provider.eggpool]",
-        f"base_url = {render_toml_string(ctx.base_url)}",
-        f"api_key = {render_toml_string(ctx.api_key)}",
+        f"model_provider = {render_toml_string(CODEX_PROVIDER_NAME)}",
     ]
     if model:
-        lines.append(f"default_model = {render_toml_string(model)}")
-    if ctx.models:
-        lines.append("")
-        for m in ctx.models:
-            mid = m["model_id"]
-            table_key = render_toml_key(mid)
-            lines.append(f"[provider.eggpool.models.{table_key}]")
-            limits = m.get("effective_limits", {})
-            ctx_tokens = limits.get("context_tokens")
-            if ctx_tokens is not None and ctx_tokens > 0:
-                lines.append(f"context_window = {ctx_tokens}")
+        lines.append(f"model = {render_toml_string(model)}")
+    lines.extend(
+        [
+            "",
+            f"[model_providers.{CODEX_PROVIDER_NAME}]",
+            f"name = {render_toml_string(CODEX_PROVIDER_LABEL)}",
+            f"base_url = {render_toml_string(ctx.base_url)}",
+            f"wire_api = {render_toml_string(CODEX_WIRE_API)}",
+            f"env_key = {render_toml_string(CODEX_ENV_KEY)}",
+        ]
+    )
     return "\n".join(lines)
 
 

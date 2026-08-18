@@ -734,6 +734,12 @@ class ProviderConfig(BaseModel):
     """Provider family (e.g. ``"anthropic"``, ``"openai"``)."""
     openai_path: str = "/chat/completions"
     anthropic_path: str = "/messages"
+    # Plan 143: stateless OpenAI Responses endpoint surface. ``None``
+    # means the provider does not advertise a Responses endpoint and
+    # cannot receive ``POST /v1/responses`` traffic. The field is a
+    # *surface* declaration rather than a new ``ProtocolName`` value;
+    # ``protocols`` still records the OpenAI family.
+    responses_path: str | None = None
     models_method: Literal["GET", "POST"] = "GET"
     models_path: str = "/models"
     connect_timeout_s: float = Field(default=5, gt=0)
@@ -852,6 +858,8 @@ class ProviderConfig(BaseModel):
         for suffix in versioned_suffixes:
             if base.endswith(suffix):
                 paths_to_check = [self.openai_path, self.anthropic_path]
+                if self.responses_path is not None:
+                    paths_to_check.append(self.responses_path)
                 if self.models_endpoint is not None:
                     paths_to_check.append(self.models_endpoint.path)
                 elif self.models_path:

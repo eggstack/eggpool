@@ -76,8 +76,21 @@ class StreamCompletionSnapshot:
 class IncrementalSSEObserver:
     """Observe already-framed SSE events without owning byte framing."""
 
-    def __init__(self, protocol: str, *, provider_id: str | None = None) -> None:
+    def __init__(
+        self,
+        protocol: str,
+        *,
+        provider_id: str | None = None,
+        request_surface: str = "chat_completions",
+    ) -> None:
         self._protocol = protocol
+        # Plan 143: ``request_surface == "responses"`` swaps the
+        # terminal-event vocabulary. The Responses surface uses
+        # ``response.completed`` (success) and ``response.failed``
+        # (terminal provider failure) instead of Chat's ``[DONE]``
+        # marker. Stream completion classification downstream treats
+        # ``response.completed`` exactly like ``openai_done``.
+        self._request_surface = request_surface
         self._usage_result = StreamUsageResult()
         self._extractor = (
             AnthropicStreamUsageExtractor(provider_id=provider_id)
@@ -137,6 +150,27 @@ class IncrementalSSEObserver:
             else:
                 self._saw_terminal_event = True
                 self._terminal_kind = "anthropic_message_stop"
+            return
+        if self._request_surface == "responses" and frame.frame.event in (
+            "response.completed",
+            "response.incomplete",
+        ):
+            if self._saw_terminal_event:
+                self._post_terminal_data = True
+            else:
+                self._saw_terminal_event = True
+                self._terminal_kind = "openai_done"
+            return
+        if (
+            self._request_surface == "responses"
+            and frame.frame.event == "response.failed"
+        ):
+            if not self._saw_terminal_event:
+                self._saw_terminal_event = True
+                self._terminal_kind = "openai_responses_failed"
+            else:
+                self._post_terminal_data = True
+            return
 
         if (
             self._protocol == "openai"

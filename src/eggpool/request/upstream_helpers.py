@@ -19,6 +19,7 @@ def get_upstream_url(
     provider_id: str | None = None,
     *,
     config: Any | None = None,  # noqa: ANN401
+    request_surface: str = "chat_completions",
 ) -> str:
     """Get the absolute upstream URL for a protocol and provider.
 
@@ -27,21 +28,54 @@ def get_upstream_url(
     configured protocol-specific path so all outbound dispatch
     paths share the same URL composition rules as catalog fetch.
     Falls back to bare paths when no provider config is loaded.
+
+    ``request_surface`` selects which OpenAI-family endpoint the
+    coordinator dispatches to. ``"responses"`` (Plan 143) requires
+    the provider to declare ``responses_path``. The eligibility gate
+    in ``routing.eligibility`` already excludes providers that lack
+    the surface path; this resolver additionally raises a typed
+    ``RuntimeError`` when a selected provider somehow has no path
+    so a wrong URL is never constructed. ``"chat_completions"`` is
+    the historical default and uses ``openai_path``.
     """
     from eggpool.providers.contract import compose_provider_url
 
     if provider_id and config is not None:
         provider_cfg = config.providers.get(provider_id)
         if provider_cfg is not None:
-            path = (
-                provider_cfg.anthropic_path
-                if protocol == "anthropic"
-                else provider_cfg.openai_path
-            )
-            return compose_provider_url(provider_cfg, path)
+            path = _resolve_path_for_surface(provider_cfg, protocol, request_surface)
+            if path is not None:
+                return compose_provider_url(provider_cfg, path)
+            if request_surface == "responses":
+                raise RuntimeError(
+                    f"Provider {provider_cfg.id!r} does not declare a "
+                    f"{request_surface!r} endpoint path"
+                )
+            return "/chat/completions"
     if protocol == "anthropic":
         return "/messages"
+    if request_surface == "responses":
+        return "/responses"
     return "/chat/completions"
+
+
+def _resolve_path_for_surface(
+    provider_cfg: Any,  # noqa: ANN401
+    protocol: str,
+    request_surface: str,
+) -> str | None:
+    """Return the configured path for the requested surface.
+
+    ``None`` signals that the provider did not declare a path for the
+    requested surface (e.g. ``responses_path`` missing). Callers must
+    decide whether this is fatal (Responses) or a fall-through (other
+    surfaces).
+    """
+    if protocol == "anthropic":
+        return provider_cfg.anthropic_path
+    if request_surface == "responses":
+        return getattr(provider_cfg, "responses_path", None)
+    return provider_cfg.openai_path
 
 
 def resolve_upstream_protocol(

@@ -866,12 +866,19 @@ class Router:
         thinking_requirement: ThinkingRequestRequirement | None = None,
         capability_policy: dict[str, str] | None = None,
         estimated_tokens: int | None = None,
+        request_surface: str = "chat_completions",
     ) -> RoutingPlan:
         """Compute eligibility, scoring, and fairness in a single pass.
 
         Returns a :class:`RoutingPlan` containing both the eligible
         account names (for count/exhaustion checks) and the fully
         ranked candidate list (for circuit-breaker probing).
+
+        ``request_surface`` (Plan 143) excludes providers that have
+        not declared the corresponding endpoint path (``responses_path``
+        for the ``"responses"`` surface). The historical default
+        ``"chat_completions"`` preserves every account that already
+        served Chat Completions requests.
         """
         eligibility_exclusions: list[tuple[str, str]] = []
         candidates = self._selection_candidates(
@@ -883,6 +890,7 @@ class Router:
             thinking_requirement=thinking_requirement,
             capability_policy=capability_policy,
             exclusion_sink=eligibility_exclusions,
+            request_surface=request_surface,
         )
         tiers = candidates.tiered()
 
@@ -1161,6 +1169,7 @@ class Router:
         thinking_requirement: ThinkingRequestRequirement | None = None,
         capability_policy: dict[str, str] | None = None,
         exclusion_sink: list[tuple[str, str]] | None = None,
+        request_surface: str = "chat_completions",
     ) -> RoutingCandidates:
         """Return eligible runtime states and indexes for a routing decision."""
         upstream_protocol = protocol or "openai"
@@ -1181,6 +1190,10 @@ class Router:
             quarantine=self._quarantine,
             upstream_protocol=upstream_protocol,
             exclusion_sink=exclusion_sink,
+            request_surface=request_surface,
+            account_supports_request_surface=(
+                self._registry.account_supports_request_surface
+            ),
         )
         if exclude_accounts:
             eligible = [

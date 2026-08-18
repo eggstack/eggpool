@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tomllib
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from unittest.mock import patch
 
 import pytest
@@ -289,29 +289,51 @@ class TestAiderRenderer:
 class TestCodexRenderer:
     def test_toml_snippet_structure(self, ctx_empty: IntegrationContext) -> None:
         snippet = build_codex_toml_snippet(ctx_empty)
-        assert "[provider.eggpool]" in snippet
+        # Plan 143: the current Codex schema uses ``[model_providers]``
+        # rather than the legacy ``[provider]`` block.
+        assert "[model_providers.eggpool]" in snippet
         assert "base_url" in snippet
-        assert "api_key" in snippet
+        assert "wire_api" in snippet
+        assert 'wire_api = "responses"' in snippet
+        assert "env_key" in snippet
+        assert 'env_key = "EGGPOOL_API_KEY"' in snippet
+        # The legacy obsolete shape must not be present.
+        assert "[provider.eggpool]" not in snippet
+        # The legacy direct api_key field must not be embedded.
+        assert "api_key = " not in snippet
 
     def test_toml_snippet_with_model(self, ctx_empty: IntegrationContext) -> None:
         snippet = build_codex_toml_snippet(ctx_empty, model="gpt-4o")
-        assert 'default_model = "gpt-4o"' in snippet
+        assert 'model = "gpt-4o"' in snippet
+        assert 'model_provider = "eggpool"' in snippet
+        # The legacy ``default_model`` field is no longer emitted.
+        assert "default_model" not in snippet
 
-    def test_toml_snippet_model_sections(
+    def test_toml_snippet_uses_responses_wire_api(
         self, ctx_one_model: IntegrationContext
     ) -> None:
         snippet = build_codex_toml_snippet(ctx_one_model)
-        assert '[provider.eggpool.models."gpt-4o/openai"]' in snippet
-        assert "context_window = 128000" in snippet
+        parsed = tomllib.loads(snippet)
+        provider = parsed["model_providers"]["eggpool"]
+        assert provider["wire_api"] == "responses"
+        assert provider["env_key"] == "EGGPOOL_API_KEY"
+        assert provider["name"] == "EggPool"
+        # No provider-local model subtables — current Codex reads model
+        # capability metadata from EggPool, not from the TOML snippet.
+        assert "models" not in provider
+        assert "default_model" not in provider
 
-    def test_toml_snippet_bare_model_id(
-        self, ctx_many_models: IntegrationContext
+    def test_toml_snippet_does_not_emit_legacy_provider_block(
+        self, ctx_one_model: IntegrationContext
     ) -> None:
-        ctx_many_models.models[0]["model_id"] = "gpt-4o"
-        snippet = build_codex_toml_snippet(ctx_many_models)
-        assert "[provider.eggpool.models.gpt-4o]" in snippet
+        snippet = build_codex_toml_snippet(ctx_one_model)
+        # The legacy ``[provider.eggpool]`` block, its ``api_key``
+        # field, and provider-local model subtables are all removed.
+        assert "[provider.eggpool]" not in snippet
+        assert "provider.eggpool.models" not in snippet
+        assert "context_window" not in snippet
 
-    def test_toml_snippet_escapes_scalars_and_model_keys(self) -> None:
+    def test_toml_snippet_escapes_scalars(self) -> None:
         ctx = IntegrationContext(
             config_path="/dev/null",
             api_key='ep_"test\\key',
@@ -319,23 +341,16 @@ class TestCodexRenderer:
             base_url_root="http://host:11300",
             host="host",
             port=11300,
-            models=[
-                {
-                    "model_id": 'model.with/"quotes"',
-                    "display_name": 'model.with/"quotes"',
-                    "capabilities": {},
-                    "source_metadata": {},
-                    "effective_limits": {"context_tokens": 128000},
-                }
-            ],
+            models=[],
         )
         snippet = build_codex_toml_snippet(ctx, model='default/"model"')
         parsed = tomllib.loads(snippet)
-        provider = parsed["provider"]["eggpool"]
-        assert provider["api_key"] == 'ep_"test\\key'
+        provider = parsed["model_providers"]["eggpool"]
         assert provider["base_url"] == 'http://host:11300/"v1'
-        assert provider["default_model"] == 'default/"model"'
-        assert 'model.with/"quotes"' in provider["models"]
+        # ``env_key`` is always the literal name ``EGGPOOL_API_KEY`` —
+        # the API key itself must never be embedded in the snippet.
+        assert provider["env_key"] == "EGGPOOL_API_KEY"
+        assert parsed["model"] == 'default/"model"'
 
 
 class TestQwenCodeRenderer:
@@ -658,7 +673,7 @@ class TestConfigSetupCLI:
         "subcommand,expected_fragment",
         [
             ("aider", "OPENAI_API_KEY"),
-            ("codex", "[provider.eggpool]"),
+            ("codex", "[model_providers.eggpool]"),
             ("qwen-code", '"name": "EggPool"'),
             ("kilo", "openai_compatible"),
             ("continue", "models:"),
@@ -725,7 +740,10 @@ class TestConfigSetupCLI:
         )
         assert result.exit_code == 0
         assert "gpt-4o" in result.output
-        assert "default_model" in result.output
+        # Plan 143: the new Codex schema sets the chosen model via the
+        # top-level ``model`` key, not ``default_model``.
+        assert "model = " in result.output
+        assert "default_model" not in result.output
 
     def test_configsetup_qwen_code_model_option(self, tmp_path: Path) -> None:
         config_file = _make_config_for_cli(tmp_path)
@@ -1114,6 +1132,15 @@ class TestOutputSnippetBackup:
 
 
 class TestCodexTomlParseability:
+    """The new Codex schema uses ``[model_providers.eggpool]``.
+
+    The legacy ``[provider.eggpool.models.*]`` subtables were removed
+    (Plan 143): Codex pulls capability metadata directly from
+    EggPool rather than from per-model subtables in the user's
+    config. These tests verify the new snippet round-trips through
+    ``tomllib`` for the model-id shapes operators actually use.
+    """
+
     def _ctx_with_model(self, model_id: str) -> IntegrationContext:
         return IntegrationContext(
             config_path="/dev/null",
@@ -1133,35 +1160,44 @@ class TestCodexTomlParseability:
             ],
         )
 
+    def _parsed_provider(self, snippet: str) -> dict[str, object]:
+        parsed = tomllib.loads(snippet)
+        return cast("dict[str, object]", parsed["model_providers"]["eggpool"])
+
     def test_parses_with_slash(self) -> None:
         ctx = self._ctx_with_model("gpt-4o/openai")
-        snippet = build_codex_toml_snippet(ctx)
+        snippet = build_codex_toml_snippet(ctx, model="gpt-4o/openai")
         parsed = tomllib.loads(snippet)
-        assert "gpt-4o/openai" in parsed["provider"]["eggpool"]["models"]
+        assert parsed["model"] == "gpt-4o/openai"
+        assert parsed["model_provider"] == "eggpool"
+        # The provider table itself does not depend on the model id;
+        # this primarily proves ``render_toml_string`` escapes the
+        # slash when round-tripping through tomllib.
+        assert self._parsed_provider(snippet)["wire_api"] == "responses"
 
     def test_parses_with_dot(self) -> None:
         ctx = self._ctx_with_model("gpt-4.1-mini")
-        snippet = build_codex_toml_snippet(ctx)
+        snippet = build_codex_toml_snippet(ctx, model="gpt-4.1-mini")
         parsed = tomllib.loads(snippet)
-        assert "gpt-4.1-mini" in parsed["provider"]["eggpool"]["models"]
+        assert parsed["model"] == "gpt-4.1-mini"
 
     def test_parses_with_colon(self) -> None:
         ctx = self._ctx_with_model("provider:model")
-        snippet = build_codex_toml_snippet(ctx)
+        snippet = build_codex_toml_snippet(ctx, model="provider:model")
         parsed = tomllib.loads(snippet)
-        assert "provider:model" in parsed["provider"]["eggpool"]["models"]
+        assert parsed["model"] == "provider:model"
 
     def test_parses_with_space(self) -> None:
         ctx = self._ctx_with_model("my model name")
-        snippet = build_codex_toml_snippet(ctx)
+        snippet = build_codex_toml_snippet(ctx, model="my model name")
         parsed = tomllib.loads(snippet)
-        assert "my model name" in parsed["provider"]["eggpool"]["models"]
+        assert parsed["model"] == "my model name"
 
     def test_parses_bare_model_id(self) -> None:
         ctx = self._ctx_with_model("gpt-4o")
-        snippet = build_codex_toml_snippet(ctx)
+        snippet = build_codex_toml_snippet(ctx, model="gpt-4o")
         parsed = tomllib.loads(snippet)
-        assert "gpt-4o" in parsed["provider"]["eggpool"]["models"]
+        assert parsed["model"] == "gpt-4o"
 
 
 # ---------------------------------------------------------------------------

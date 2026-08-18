@@ -83,17 +83,25 @@ def estimate_json_value_tokens(value: object) -> int:
 def requested_output_tokens(
     payload: Mapping[str, Any],
     protocol: ProtocolName,
+    *,
+    request_surface: str = "chat_completions",
 ) -> int | None:
     """Return the first valid requested output-token limit, if present.
 
     Token limits must be positive integers. In particular, booleans are not
     accepted even though ``bool`` is an ``int`` subclass in Python.
+
+    ``request_surface`` extends the lookup without changing Chat/Anthropic
+    behaviour: the ``"responses"`` surface (Plan 143) accepts the
+    OpenAI Responses field ``max_output_tokens`` in addition to the
+    legacy Chat Completions keys.
     """
-    keys = (
-        ("max_tokens",)
-        if protocol == "anthropic"
-        else ("max_completion_tokens", "max_tokens")
-    )
+    if request_surface == "responses":
+        keys = ("max_output_tokens", "max_completion_tokens", "max_tokens")
+    elif protocol == "anthropic":
+        keys = ("max_tokens",)
+    else:
+        keys = ("max_completion_tokens", "max_tokens")
     for key in keys:
         value = _positive_limit(payload.get(key))
         if value is not None:
@@ -111,6 +119,7 @@ def check_context_limits(
     catalog_cache: ModelLimitCatalog,
     extra_input_tokens: int = 0,
     estimated_input_tokens: int | None = None,
+    request_surface: str = "chat_completions",
 ) -> int | None:
     """Reject requests that exceed limits and return the input estimate used.
 
@@ -135,7 +144,9 @@ def check_context_limits(
             payload,
             extra_input_tokens=extra_input_tokens,
         )
-    requested_output = requested_output_tokens(payload, protocol)
+    requested_output = requested_output_tokens(
+        payload, protocol, request_surface=request_surface
+    )
 
     if max_input is not None and estimated_input > max_input:
         _raise_limit_error(
