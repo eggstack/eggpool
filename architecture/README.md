@@ -9,10 +9,15 @@ EggPool's public protocol scope is OpenAI Chat Completions at
 OpenAI-style model listing at `GET /v1/models`. The service does not claim
 full OpenAI API parity — `/v1/responses` is a stateless same-protocol
 passthrough that rejects stateful fields (`previous_response_id`,
-conversation references, `store=true`, `background=true`) before any
+conversation references including empty objects, `store=true`, omitted
+`store` (must be `false` explicitly), `background=true`) before any
 provider selection and does not implement retrieval, cancellation,
-background jobs, or WebSocket transport. Upstream provider protocol
-labels do not expand this public surface.
+background jobs, or WebSocket transport. `response.completed` is the
+only successful canonical Responses terminal event; `response.failed`
+and `response.incomplete` are terminal non-success outcomes forwarded
+unchanged to the client without provider/account failover after
+downstream handoff. Upstream provider protocol labels do not expand
+this public surface.
 
 For repository work, start here and follow the relevant deep dive. Active
 plans provide scope and sequencing when needed; completed plans are historical
@@ -87,9 +92,13 @@ or `"responses"`); `ProtocolName` still records the OpenAI translation
 family. Providers must declare `responses_path` to participate in
 `POST /v1/responses`; the URL is composed by the same
 `compose_provider_url()` used for chat and messages routes. Chat-specific
-transforms (`stream_options.include_usage` injection) are skipped for
-Responses; the streaming observer recognises `response.completed` /
-`response.failed` terminal events instead of Chat's `[DONE]` marker.
+transforms (`stream_options.include_usage` injection) and the generic
+thinking-control adapter are both skipped for Responses; the API
+boundary skips `_prepare_transcode_preflight()` so no BodyTranscoder or
+StreamingTranscoder is ever selected. The upstream `response.completed`
+event is the only successful terminal marker — `response.failed` and
+`response.incomplete` are classified as terminal non-success outcomes and
+do not trigger a provider retry after downstream handoff.
 
 See [deep-dive-transcoder.md](deep-dive-transcoder.md).
 

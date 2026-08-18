@@ -117,10 +117,14 @@ Manual release procedure — no automated release workflow. See `docs/releasing.
 `/v1/responses`, Anthropic Messages at `/v1/messages`, and OpenAI-style
 model listing at `/v1/models`. The Responses surface is stateless
 same-protocol only; stateful fields (`previous_response_id`,
-`conversation`, `store=true`, `background=true`) are rejected locally
-with HTTP 400 before provider selection, and `/v1/responses` does not
-include retrieval, cancellation, background jobs, or WebSocket
-transport. EggPool does not claim full OpenAI API parity.
+`conversation`, `store=true`, `background=true`, plus omitted `store`)
+are rejected locally with HTTP 400 before provider selection, and
+`/v1/responses` does not include retrieval, cancellation, background
+jobs, or WebSocket transport. EggPool does not claim full OpenAI API
+parity. `response.completed` is the only successful canonical
+Responses terminal event; `response.failed` and `response.incomplete`
+are terminal non-success outcomes forwarded unchanged to the client
+without provider/account failover after downstream handoff.
 
 Start subsystem work with the current architecture index and the relevant deep
 dive. Read an active roadmap or focused plan only when the change is in its

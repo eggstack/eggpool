@@ -117,6 +117,8 @@ from eggpool.request.stream_diagnostics import (
     STREAM_OUTCOME_PREMATURE_EOF_BEFORE_BODY,
     STREAM_OUTCOME_PREMATURE_EOF_MIDSTREAM,
     STREAM_OUTCOME_RESPONSE_HEADER_TIMEOUT,
+    STREAM_OUTCOME_TERMINAL_FAILURE,
+    STREAM_OUTCOME_TERMINAL_INCOMPLETE,
     STREAM_OUTCOME_UPSTREAM_MIDSTREAM_ERROR,
     ProviderStreamTimeoutError,
     StreamDiagnostics,
@@ -3596,15 +3598,29 @@ class RequestCoordinator:
                     "complete",
                     "compatibility_eof",
                 }:
-                    eof_outcome = {
-                        "empty_eof": STREAM_OUTCOME_EMPTY_EOF,
-                        "malformed_eof": STREAM_OUTCOME_MALFORMED_EOF,
-                        "premature_eof": (
+                    # Plan 144 (E3): terminal_failure and
+                    # terminal_incomplete are Responses-level provider
+                    # terminal events that are *not* successful.  They
+                    # should not trigger PrematureStreamEOFError (which
+                    # is for transport-level early EOFs) and should not
+                    # be retried after downstream handoff.
+                    if eof_decision.classification == "terminal_failure":
+                        eof_outcome = STREAM_OUTCOME_TERMINAL_FAILURE
+                    elif eof_decision.classification == "terminal_incomplete":
+                        eof_outcome = STREAM_OUTCOME_TERMINAL_INCOMPLETE
+                    elif eof_decision.classification == "empty_eof":
+                        eof_outcome = STREAM_OUTCOME_EMPTY_EOF
+                    elif eof_decision.classification == "malformed_eof":
+                        eof_outcome = STREAM_OUTCOME_MALFORMED_EOF
+                    elif eof_decision.classification == "premature_eof":
+                        eof_outcome = (
                             STREAM_OUTCOME_PREMATURE_EOF_MIDSTREAM
                             if eof_decision.downstream_started
                             else STREAM_OUTCOME_PREMATURE_EOF_BEFORE_BODY
-                        ),
-                    }[eof_decision.classification]
+                        )
+                    else:
+                        # Unreachable for current literal; kept for safety.
+                        eof_outcome = STREAM_OUTCOME_MALFORMED_EOF
                     self._stream_diagnostics.record_outcome(
                         eof_outcome,
                         proxy_request_id=context.request_id,
@@ -3618,6 +3634,20 @@ class RequestCoordinator:
                     )
                     usage_result = observer.usage
                     incomplete_latency = int((time.monotonic() - reference) * 1000)
+                    # Plan 144 (E3): terminal_failure and
+                    # terminal_incomplete are Responses-level provider
+                    # terminal events.  They are not transport-level early
+                    # EOFs, so we do not raise PrematureStreamEOFError and
+                    # do not trigger provider/account failover after
+                    # downstream handoff.  The upstream SSE event has
+                    # already been forwarded to the client.
+                    if eof_decision.classification in {
+                        "terminal_failure",
+                        "terminal_incomplete",
+                    }:
+                        error_class = "ResponsesTerminalEvent"
+                    else:
+                        error_class = "PrematureStreamEOFError"
                     await self._finalize_terminal(
                         context,
                         selected,
@@ -3635,7 +3665,7 @@ class RequestCoordinator:
                             cache_write_tokens=usage_result.cache_creation_tokens,
                             reasoning_tokens=usage_result.reasoning_tokens,
                             thinking_characters=usage_result.thinking_characters,
-                            error_class="PrematureStreamEOFError",
+                            error_class=error_class,
                             error_detail=eof_decision.classification,
                             bytes_received=context.original_body_size
                             or len(context.original_body),
@@ -3665,11 +3695,21 @@ class RequestCoordinator:
                             int(first_byte_ms) if first_byte_ms > 0 else None
                         ),
                         attempt=selected.attempt_number,
-                        exception_class="PrematureStreamEOFError",
+                        exception_class=error_class,
                     )
-                    raise PrematureStreamEOFError(
-                        eof_decision.classification, request_id=context.request_id
-                    )
+                    # Plan 144 (E3): terminal_failure/terminal_incomplete
+                    # have already been forwarded to the client.  Do not
+                    # raise PrematureStreamEOFError — that would trigger
+                    # upstream error classification and potential retry,
+                    # but the terminal event is the client-visible outcome.
+                    if eof_decision.classification not in {
+                        "terminal_failure",
+                        "terminal_incomplete",
+                    }:
+                        raise PrematureStreamEOFError(
+                            eof_decision.classification,
+                            request_id=context.request_id,
+                        )
                 if streaming_transcoder is not None:
                     try:
                         out_chunks = streaming_transcoder.finish(eof_result)

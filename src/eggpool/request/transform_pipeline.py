@@ -256,6 +256,14 @@ def _make_thinking_control_adapter(
             or not getattr(selected, "provider_id", None)
         ):
             return TransformResult()
+        # Plan 144 (C1): Responses is a passthrough surface — never
+        # mutate the body with Chat/Anthropic thinking-control
+        # normalization.
+        surface = getattr(context, "request_surface", None)
+        if surface == "responses":
+            return TransformResult(
+                decision=TransformDecision.SKIPPED, category="thinking_control"
+            )
         changed = coordinator._apply_selected_provider_transcode_adjustments(
             context=context,
             selected=selected,

@@ -26,6 +26,8 @@ from eggpool.request.stream_diagnostics import (
     STREAM_OUTCOME_FINALIZER_FAILED,
     STREAM_OUTCOME_FINALIZER_TIMEOUT,
     STREAM_OUTCOME_IDLE_TIMEOUT,
+    STREAM_OUTCOME_TERMINAL_FAILURE,
+    STREAM_OUTCOME_TERMINAL_INCOMPLETE,
     STREAM_OUTCOME_UPSTREAM_CONNECT_ERROR,
     STREAM_OUTCOME_UPSTREAM_CONNECT_TIMEOUT,
     STREAM_OUTCOME_UPSTREAM_MIDSTREAM_ERROR,
@@ -140,6 +142,8 @@ def test_empty_snapshot_contract() -> None:
         "stream_idle_timeout": 0,
         "stream_lifetime_timeout": 0,
         "response_header_timeout": 0,
+        STREAM_OUTCOME_TERMINAL_FAILURE: 0,
+        STREAM_OUTCOME_TERMINAL_INCOMPLETE: 0,
     }
     assert snap["httpx_exception_counts"] == {}
     assert snap["upstream_error_class_counts"] == {}

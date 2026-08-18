@@ -159,7 +159,14 @@ class IncrementalSSEObserver:
                 self._post_terminal_data = True
             else:
                 self._saw_terminal_event = True
-                self._terminal_kind = "openai_done"
+                # Plan 144 (E1): ``response.completed`` is the only
+                # successful terminal event.  ``response.incomplete`` is
+                # a terminal *non-success* outcome and must not be
+                # confused with ``response.completed``.
+                if frame.frame.event == "response.completed":
+                    self._terminal_kind = "responses_completed"
+                else:
+                    self._terminal_kind = "responses_incomplete"
             return
         if (
             self._request_surface == "responses"
@@ -167,7 +174,8 @@ class IncrementalSSEObserver:
         ):
             if not self._saw_terminal_event:
                 self._saw_terminal_event = True
-                self._terminal_kind = "openai_responses_failed"
+                # Plan 144 (E1): distinct terminal kind for failure.
+                self._terminal_kind = "responses_failed"
             else:
                 self._post_terminal_data = True
             return

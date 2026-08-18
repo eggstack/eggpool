@@ -40,6 +40,12 @@ def get_upstream_url(
     """
     from eggpool.providers.contract import compose_provider_url
 
+    # Plan 144 (B3): Responses is OpenAI-family only.  Never construct
+    # an Anthropic /messages URL for a Responses request.
+    if request_surface == "responses" and protocol != "openai":
+        raise RuntimeError(
+            f"Responses surface requires openai protocol, got {protocol!r}"
+        )
     if provider_id and config is not None:
         provider_cfg = config.providers.get(provider_id)
         if provider_cfg is not None:
@@ -70,11 +76,19 @@ def _resolve_path_for_surface(
     requested surface (e.g. ``responses_path`` missing). Callers must
     decide whether this is fatal (Responses) or a fall-through (other
     surfaces).
+
+    Plan 144 (B3): when ``request_surface == "responses"`` the protocol
+    must be ``openai`` — the Anthropic ``/messages`` path is never
+    returned for a Responses surface.
     """
+    if request_surface == "responses":
+        if protocol != "openai":
+            raise RuntimeError(
+                f"Responses surface requires openai protocol, got {protocol!r}"
+            )
+        return getattr(provider_cfg, "responses_path", None)
     if protocol == "anthropic":
         return provider_cfg.anthropic_path
-    if request_surface == "responses":
-        return getattr(provider_cfg, "responses_path", None)
     return provider_cfg.openai_path
 
 
@@ -147,6 +161,12 @@ def validate_endpoint_or_transcode(
     Raises ProtocolMismatchError (which callers render as 400) when
     the wrong endpoint is used for a known model and no transcodable
     route exists.
+
+    Plan 144 (B2): Responses is strictly same-protocol.  When
+    ``request_surface == "responses"`` the function never sets
+    ``transcode_required = True`` and never resolves an upstream
+    ``anthropic`` protocol.  An Anthropic-only model is rejected
+    locally before any durable state.
     """
     from eggpool.catalog.protocols import ModelProtocolResolver
     from eggpool.errors import ModelNotFoundError, ModelUnavailableError
@@ -166,6 +186,16 @@ def validate_endpoint_or_transcode(
 
     if context.protocol in model_protocols:
         return
+
+    # Plan 144 (B2): Responses never uses Anthropic transcoding fallback.
+    request_surface = getattr(context, "request_surface", "chat_completions")
+    if request_surface == "responses":
+        # The model only supports a protocol the Responses surface cannot
+        # provide.  Reject with the existing typed error rather than
+        # falling through to the generic transcodable-route path.
+        resolver = ModelProtocolResolver()
+        model_protocol = sorted(model_protocols)[0]
+        resolver.validate_endpoint(model_protocol, context.protocol, context.model_id)
 
     # Check if transcoding can bridge the protocol gap.
     upstream_protocol = resolve_upstream_protocol(

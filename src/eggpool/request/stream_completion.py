@@ -9,8 +9,17 @@ if TYPE_CHECKING:
     from eggpool.proxy.sse_observer import StreamCompletionSnapshot
 
 CompletionPolicy = Literal["strict", "compatible", "permissive_observe"]
+# Plan 144 (E2): ``terminal_failure`` and ``terminal_incomplete`` are
+# distinct non-success classifications for Responses provider-level
+# terminal events (``response.failed`` and ``response.incomplete``).
 EOFClassification = Literal[
-    "complete", "empty_eof", "premature_eof", "malformed_eof", "compatibility_eof"
+    "complete",
+    "empty_eof",
+    "premature_eof",
+    "malformed_eof",
+    "compatibility_eof",
+    "terminal_failure",
+    "terminal_incomplete",
 ]
 
 
@@ -33,12 +42,28 @@ def classify_stream_eof(
 
     ``policy`` is selected for the provider that owns the upstream attempt;
     absence of a marker is never globally treated as success.
+
+    Plan 144 (E2): the classifier distinguishes Responses terminal
+    events by kind.  ``responses_completed`` is the sole success;
+    ``responses_failed`` and ``responses_incomplete`` are terminal
+    non-success outcomes.
     """
     del protocol  # Reserved for protocol-specific policy extensions.
     if snapshot.saw_terminal_event:
-        classification: EOFClassification = (
-            "malformed_eof" if snapshot.parser_error_count else "complete"
-        )
+        if snapshot.terminal_kind == "responses_completed":
+            classification: EOFClassification = "complete"
+        elif snapshot.terminal_kind == "responses_failed":
+            classification = "terminal_failure"
+        elif snapshot.terminal_kind == "responses_incomplete":
+            classification = "terminal_incomplete"
+        elif snapshot.terminal_kind in ("openai_done", "anthropic_message_stop"):
+            classification = "complete"
+        else:
+            # Unknown terminal kind — treat as malformed if parser errors
+            # occurred, otherwise assume complete (conservative).
+            classification = (
+                "malformed_eof" if snapshot.parser_error_count else "complete"
+            )
     elif snapshot.incomplete_frame_at_eof or snapshot.parser_error_count:
         classification = "malformed_eof"
     elif not snapshot.saw_payload:

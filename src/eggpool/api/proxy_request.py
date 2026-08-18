@@ -131,23 +131,34 @@ def _validate_responses_stateless(payload: dict[str, Any]) -> str | None:
     The check happens before durable account selection so the operator's
     client never receives a partial success followed by a retry on a
     different provider.
+
+    Plan 144 (D): the stateless contract is enforced precisely:
+    - any non-None ``previous_response_id`` is rejected;
+    - any non-None ``conversation`` is rejected (including ``{}``);
+    - ``store`` must be explicitly ``false``;
+    - ``background = true`` is rejected.
     """
     previous = payload.get("previous_response_id")
-    if previous is not None and previous != "":
+    if previous is not None:
         return (
             "EggPool's /v1/responses is stateless only; "
             "previous_response_id is not supported."
         )
     conversation = payload.get("conversation")
-    if isinstance(conversation, dict) and conversation:
-        # Empty dicts (``{}``) and missing keys are accepted as
-        # ``no conversation reference``; any populated conversation
-        # binding is rejected.
+    if conversation is not None:
         return (
             "EggPool's /v1/responses is stateless only; "
             "conversation references are not supported."
         )
-    if payload.get("store") is True:
+    store = payload.get("store")
+    if store is False:
+        pass  # explicit false allowed
+    elif store is None:
+        return (
+            "EggPool's /v1/responses is stateless only; "
+            "store=false must be explicitly set."
+        )
+    else:
         return "EggPool's /v1/responses is stateless only; store=true is not supported."
     if payload.get("background") is True:
         return (
@@ -606,69 +617,74 @@ async def _handle_proxy_request_inner(
             )
 
     # Second pass: when transcoding is active, also validate the translated
-    # payload against upstream limits.
+    # payload against upstream limits.  Responses is strictly same-protocol
+    # passthrough — skip transcode preflight entirely (Plan 144, B1).
     with _span(span_recorder, SPAN_TRANSCODE_PREFLIGHT):
-        preflight = _prepare_transcode_preflight(
-            catalog=catalog,
-            model_id=model_id,
-            provider_id=provider_id,
-            client_protocol=endpoint.protocol,
-            payload=payload,
-            transcoder_policy=transcoder_policy,
-        )
-        if preflight is not None:
-            if (
-                getattr(transcoder_policy, "loss_policy", "warn") == "reject"
-                and preflight.warnings
-            ):
-                return endpoint.error_response(
-                    status_code=400,
-                    message=_format_loss_policy_rejection(preflight.warnings),
-                    error_type="invalid_request_error",
-                )
-            try:
-                encoded_translated_body = encode_json_body(
-                    preflight.translated_payload,
-                )
-                _check_context_limits(
-                    model_id=model_id,
-                    provider_id=provider_id,
-                    body=encoded_translated_body,
-                    payload=preflight.translated_payload,
-                    protocol=preflight.upstream_protocol,
-                    catalog_cache=catalog.cache,
-                    extra_input_tokens=preflight.tool_token_padding,
-                    request_surface=endpoint.request_surface,
-                )
-            except ContextLimitExceededError as exc:
-                return endpoint.error_response(
-                    status_code=400,
-                    message=str(exc),
-                    error_type="invalid_request_error",
-                )
-            _loss_policy = getattr(transcoder_policy, "loss_policy", "warn")
-            _features = getattr(transcoder_policy, "features", None)
-            # Plan 141: when the request carries provider-sensitive
-            # multimodal content, the preflight translation cannot be
-            # safely reused across providers with different source-form
-            # contracts. Skip caching the ``PreparedTranscode`` so the
-            # coordinator forces a final recompute against the *selected*
-            # provider's capability row after ``SelectedAttempt`` exists.
-            from eggpool.transcoder.sensitive_media import (
-                request_has_provider_sensitive_media,
+        if endpoint.request_surface == "responses":
+            preflight = None
+            prepared_transcode = None
+        else:
+            preflight = _prepare_transcode_preflight(
+                catalog=catalog,
+                model_id=model_id,
+                provider_id=provider_id,
+                client_protocol=endpoint.protocol,
+                payload=payload,
+                transcoder_policy=transcoder_policy,
             )
+            if preflight is not None:
+                if (
+                    getattr(transcoder_policy, "loss_policy", "warn") == "reject"
+                    and preflight.warnings
+                ):
+                    return endpoint.error_response(
+                        status_code=400,
+                        message=_format_loss_policy_rejection(preflight.warnings),
+                        error_type="invalid_request_error",
+                    )
+                try:
+                    encoded_translated_body = encode_json_body(
+                        preflight.translated_payload,
+                    )
+                    _check_context_limits(
+                        model_id=model_id,
+                        provider_id=provider_id,
+                        body=encoded_translated_body,
+                        payload=preflight.translated_payload,
+                        protocol=preflight.upstream_protocol,
+                        catalog_cache=catalog.cache,
+                        extra_input_tokens=preflight.tool_token_padding,
+                        request_surface=endpoint.request_surface,
+                    )
+                except ContextLimitExceededError as exc:
+                    return endpoint.error_response(
+                        status_code=400,
+                        message=str(exc),
+                        error_type="invalid_request_error",
+                    )
+                _loss_policy = getattr(transcoder_policy, "loss_policy", "warn")
+                _features = getattr(transcoder_policy, "features", None)
+                # Plan 141: when the request carries provider-sensitive
+                # multimodal content, the preflight translation cannot be
+                # safely reused across providers with different source-form
+                # contracts. Skip caching the ``PreparedTranscode`` so the
+                # coordinator forces a final recompute against the *selected*
+                # provider's capability row after ``SelectedAttempt`` exists.
+                from eggpool.transcoder.sensitive_media import (
+                    request_has_provider_sensitive_media,
+                )
 
-            _has_provider_sensitive_media = request_has_provider_sensitive_media(
-                payload
-            )
-            if not _has_provider_sensitive_media:
-                prepared_transcode = PreparedTranscode.from_preflight_result(
-                    result=preflight,
-                    client_protocol=endpoint.protocol,
-                    loss_policy=_loss_policy,
-                    encoded_body=encoded_translated_body,
-                    features=_features,
+                _has_provider_sensitive_media = request_has_provider_sensitive_media(
+                    payload
                 )
+                if not _has_provider_sensitive_media:
+                    prepared_transcode = PreparedTranscode.from_preflight_result(
+                        result=preflight,
+                        client_protocol=endpoint.protocol,
+                        loss_policy=_loss_policy,
+                        encoded_body=encoded_translated_body,
+                        features=_features,
+                    )
 
     stream_value = payload.get("stream", False)
     if stream_value is not None and not isinstance(stream_value, bool):

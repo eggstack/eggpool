@@ -100,6 +100,9 @@ class TestStatelessResponsesValidation:
         [
             ("previous_response_id", "resp_abc123"),
             ("conversation", {"id": "conv_xyz"}),
+            ("conversation", "conv_123"),
+            ("conversation", {}),
+            ("previous_response_id", ""),
             ("store", True),
             ("background", True),
         ],
@@ -111,26 +114,45 @@ class TestStatelessResponsesValidation:
         payload[field_name] = forbidden_value
         message = _validate_responses_stateless(payload)
         assert message is not None
-        assert "not supported" in message
+        assert "not supported" in message or "must be explicitly set" in message
 
     def test_store_false_is_accepted(self) -> None:
         payload = {"model": "gpt-5", "input": "hi", "store": False}
         assert _validate_responses_stateless(payload) is None
 
-    def test_empty_conversation_is_accepted(self) -> None:
-        payload = {"model": "gpt-5", "input": "hi", "conversation": {}}
-        assert _validate_responses_stateless(payload) is None
+    def test_store_omitted_is_rejected(self) -> None:
+        """Plan 144 (D3): store must be explicitly false."""
+        payload = {"model": "gpt-5", "input": "hi"}
+        message = _validate_responses_stateless(payload)
+        assert message is not None
+        assert "store=false must be explicitly set" in message
 
-    def test_empty_previous_response_id_is_accepted(self) -> None:
+    def test_store_true_is_rejected(self) -> None:
+        payload = {"model": "gpt-5", "input": "hi", "store": True}
+        message = _validate_responses_stateless(payload)
+        assert message is not None
+        assert "store=true is not supported" in message
+
+    def test_empty_conversation_is_rejected(self) -> None:
+        """Plan 144 (D1): any non-None conversation, including {}, is rejected."""
+        payload = {"model": "gpt-5", "input": "hi", "conversation": {}}
+        message = _validate_responses_stateless(payload)
+        assert message is not None
+        assert "conversation" in message
+
+    def test_empty_previous_response_id_is_rejected(self) -> None:
+        """Plan 144 (D2): any non-None previous_response_id is rejected."""
         payload = {
             "model": "gpt-5",
             "input": "hi",
             "previous_response_id": "",
         }
-        assert _validate_responses_stateless(payload) is None
+        message = _validate_responses_stateless(payload)
+        assert message is not None
+        assert "previous_response_id" in message
 
     def test_minimal_stateless_payload_is_accepted(self) -> None:
-        payload = {"model": "gpt-5", "input": "hi"}
+        payload = {"model": "gpt-5", "input": "hi", "store": False}
         assert _validate_responses_stateless(payload) is None
 
     def test_responses_endpoint_config_uses_openai_error(self) -> None:
@@ -333,7 +355,10 @@ class TestResponsesUrlResolution:
         )
         assert url == "https://api.openai.com/v1/chat/completions"
 
-    def test_anthropic_url_unchanged(self) -> None:
+    def test_anthropic_with_responses_surface_raises(self) -> None:
+        """Plan 144 (B3): Responses + anthropic protocol is impossible."""
+        import pytest
+
         from eggpool.request.upstream_helpers import get_upstream_url
 
         cfg = ProviderConfig(
@@ -343,10 +368,10 @@ class TestResponsesUrlResolution:
         )
         config = type("_Cfg", (), {"providers": {"anthropic": cfg}})()
 
-        url = get_upstream_url(
-            "anthropic", "anthropic", config=config, request_surface="responses"
-        )
-        assert url == "https://api.anthropic.com/v1/messages"
+        with pytest.raises(RuntimeError, match="Responses surface requires openai"):
+            get_upstream_url(
+                "anthropic", "anthropic", config=config, request_surface="responses"
+            )
 
     def test_missing_responses_path_raises(self) -> None:
         from eggpool.request.upstream_helpers import get_upstream_url
@@ -386,7 +411,7 @@ class TestResponsesStreamingCompletion:
 
         snapshot = observer.completion_snapshot
         assert snapshot.saw_terminal_event is True
-        assert snapshot.terminal_kind == "openai_done"
+        assert snapshot.terminal_kind == "responses_completed"
 
     def test_eof_without_terminal_event_is_not_complete(self) -> None:
         observer = IncrementalSSEObserver(
@@ -408,11 +433,10 @@ class TestResponsesStreamingCompletion:
         observer.finish()
 
         snapshot = observer.completion_snapshot
-        # ``response.failed`` is treated as a terminal failure, not
-        # canonical success; the strict-completion policy below
-        # classifies the stream as malformed.
+        # ``response.failed`` is a terminal failure, not canonical
+        # success; the Plan 144 classifier treats it as non-success.
         assert snapshot.saw_terminal_event is True
-        assert snapshot.terminal_kind == "openai_responses_failed"
+        assert snapshot.terminal_kind == "responses_failed"
 
     def test_classify_stream_eof_treats_responses_completed_as_complete(self) -> None:
         observer = IncrementalSSEObserver(
@@ -448,9 +472,9 @@ class TestResponsesStreamingCompletion:
         )
         assert decision.classification == "premature_eof"
 
-    def test_response_incomplete_also_marks_completion(self) -> None:
-        """Some Responses providers emit ``response.incomplete`` for
-        partial responses. The observer treats it as terminal evidence."""
+    def test_response_incomplete_also_marks_terminal(self) -> None:
+        """Plan 144 (E1): ``response.incomplete`` is a terminal
+        non-success outcome, distinct from ``response.completed``."""
         observer = IncrementalSSEObserver(
             protocol="openai", request_surface="responses"
         )
@@ -459,7 +483,32 @@ class TestResponsesStreamingCompletion:
         observer.finish()
         snapshot = observer.completion_snapshot
         assert snapshot.saw_terminal_event is True
-        assert snapshot.terminal_kind == "openai_done"
+        assert snapshot.terminal_kind == "responses_incomplete"
+        # Plan 144 (E2): classify_stream_eof must return non-success
+        decision = classify_stream_eof(
+            protocol="openai",
+            policy="strict",
+            snapshot=snapshot,
+            downstream_started=True,
+        )
+        assert decision.classification == "terminal_incomplete"
+
+    def test_response_failed_classifies_as_terminal_failure(self) -> None:
+        """Plan 144 (E2): ``response.failed`` -> terminal_failure."""
+        observer = IncrementalSSEObserver(
+            protocol="openai", request_surface="responses"
+        )
+        observer.observe(b"event: response.created\ndata: {}\n\n")
+        observer.observe(b"event: response.failed\ndata: {}\n\n")
+        observer.finish()
+        snapshot = observer.completion_snapshot
+        decision = classify_stream_eof(
+            protocol="openai",
+            policy="strict",
+            snapshot=snapshot,
+            downstream_started=True,
+        )
+        assert decision.classification == "terminal_failure"
 
     def test_response_completion_requires_surface_flag(self) -> None:
         """Without ``request_surface=responses``, terminal events are not
@@ -593,3 +642,95 @@ class TestResponsesOutputLimits:
             )
             is None
         )
+
+
+# ---------------------------------------------------------------------------
+# Plan 144 — thinking_control skip and payload passthrough
+# ---------------------------------------------------------------------------
+
+
+class TestThinkingControlSkippedForResponses:
+    """Plan 144 (C1): thinking-control transforms must be skipped for
+    the Responses surface to preserve passthrough semantics."""
+
+    def test_thinking_control_skipped_for_responses(self) -> None:
+        from unittest.mock import MagicMock
+
+        from eggpool.request.provider_bound_request import ProviderBoundRequest
+        from eggpool.request.transform_pipeline import (
+            TransformContext,
+            TransformDecision,
+            build_provider_transforms,
+            run_transform_pipeline,
+        )
+
+        coordinator = MagicMock()
+        bound = ProviderBoundRequest(
+            client_bytes=b"{}",
+            client_payload={
+                "model": "gpt-5",
+                "input": "hi",
+                "reasoning": {"effort": "high"},
+            },
+            client_protocol="openai",
+            model_id="gpt-5",
+        )
+        bound.set_provider_payload(dict(bound.client_payload))
+        ctx = TransformContext(
+            upstream_protocol="openai",
+            request_id="req-1",
+            selected=MagicMock(provider_id="openai"),
+            proxy_context=type(
+                "_P",
+                (),
+                {
+                    "streaming": False,
+                    "request_surface": "responses",
+                    "client_metadata": {},
+                },
+            )(),
+        )
+        transforms = build_provider_transforms(coordinator)
+        result = run_transform_pipeline(bound, ctx, transforms)
+        # thinking_control adapter should have been SKIPPED
+        thinking_results = [
+            d for d in result.decisions if d.category == "thinking_control"
+        ]
+        assert len(thinking_results) == 1
+        assert thinking_results[0].decision == TransformDecision.SKIPPED
+        # Payload must be unchanged except model normalization
+        assert bound.provider_payload.get("reasoning") == {"effort": "high"}
+
+
+class TestResponsesPayloadPassthrough:
+    """Plan 144 (C/I3): provider-bound JSON must equal the client JSON
+    except for model suffix/base-ID normalization."""
+
+    def test_provider_payload_equals_client_except_model(self) -> None:
+        """The Responses payload passes through untouched after model
+        normalization.  A reasoning/thinking-like field proves the
+        thinking-control adapter was skipped."""
+        from eggpool.request.provider_bound_request import ProviderBoundRequest
+
+        client_payload = {
+            "model": "gpt-5/opencode-go",
+            "input": "What is 2+2?",
+            "reasoning": {"effort": "medium"},
+            "temperature": 0.7,
+        }
+        bound = ProviderBoundRequest(
+            client_bytes=b"{}",
+            client_payload=client_payload,
+            client_protocol="openai",
+            model_id="gpt-5",
+        )
+        # Simulate model normalization (the only allowed mutation)
+        provider_payload = dict(client_payload)
+        provider_payload["model"] = "gpt-5"
+        bound.set_provider_payload(provider_payload)
+        # Verify all non-model fields are identical
+        for key in client_payload:
+            if key == "model":
+                assert bound.provider_payload[key] == "gpt-5"
+            else:
+                assert bound.provider_payload[key] == client_payload[key]

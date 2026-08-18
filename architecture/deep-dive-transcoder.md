@@ -250,6 +250,8 @@ JSON frame helpers with compact separators for SSE frame construction.
 | 134 | Multimodal transcode | Capability-aware source form gating, tool-result media preservation, multimodal loss-policy enforcement, serialized request-size validation |
 | 140 | Local + multimodal closure | Corrected Ollama discovery, selected-provider capability resolution, provider-sensitive preflight reuse guard, canonical 413 lifecycle, audited local capability metadata, content IR removed |
 | 141 | Final corrective closure | Post-selection provider-sensitive translation, 413 renderer, oversize finalization as proof-of-convergence, Responses deferral rationale, corrected vLLM image URL capability |
+| 142 | Typed media rejections | Typed `CapabilityError` / `TranscodeLossError` at the attempt-loop seam, fail-closed durable finalization for selected-rejection paths, provider-bound 413, provider metadata URL-image facts |
+| 144 | Final Responses closure | Responses strictly same-protocol passthrough; transcode preflight and Chat/Anthropic body transforms skipped for `request_surface == "responses"`; stateless admission tightened (`store=false` required, any conversation/`previous_response_id` rejected); distinct terminal kinds for `response.completed` / `response.failed` / `response.incomplete` with only `response.completed` mapping to canonical success |
 
 ## Loss Warning Kinds
 

@@ -47,6 +47,11 @@ STREAM_OUTCOME_EMPTY_EOF = "empty_eof"
 STREAM_OUTCOME_PREMATURE_EOF_BEFORE_BODY = "premature_eof_before_body"
 STREAM_OUTCOME_PREMATURE_EOF_MIDSTREAM = "premature_eof_midstream"
 STREAM_OUTCOME_MALFORMED_EOF = "malformed_eof"
+# Plan 144 (E3): terminal Responses failure/incomplete outcomes are
+# distinct from premature/malformed EOF — they represent a valid
+# upstream-level terminal event that is not a successful completion.
+STREAM_OUTCOME_TERMINAL_FAILURE = "stream_responses_terminal_failure"
+STREAM_OUTCOME_TERMINAL_INCOMPLETE = "stream_responses_terminal_incomplete"
 STREAM_OUTCOME_FIRST_BYTE_TIMEOUT = "first_byte_timeout"
 STREAM_OUTCOME_IDLE_TIMEOUT = "stream_idle_timeout"
 STREAM_OUTCOME_LIFETIME_TIMEOUT = "stream_lifetime_timeout"
@@ -189,6 +194,8 @@ class StreamDiagnostics:
             STREAM_OUTCOME_PREMATURE_EOF_BEFORE_BODY: 0,
             STREAM_OUTCOME_PREMATURE_EOF_MIDSTREAM: 0,
             STREAM_OUTCOME_MALFORMED_EOF: 0,
+            STREAM_OUTCOME_TERMINAL_FAILURE: 0,
+            STREAM_OUTCOME_TERMINAL_INCOMPLETE: 0,
             STREAM_OUTCOME_FIRST_BYTE_TIMEOUT: 0,
             STREAM_OUTCOME_IDLE_TIMEOUT: 0,
             STREAM_OUTCOME_LIFETIME_TIMEOUT: 0,

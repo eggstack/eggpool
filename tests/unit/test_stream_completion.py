@@ -80,3 +80,77 @@ def test_markerless_usage_can_only_complete_under_provider_policy() -> None:
         ).classification
         == "compatibility_eof"
     )
+
+
+# ---------------------------------------------------------------------------
+# Plan 144 — Responses terminal event classifications
+# ---------------------------------------------------------------------------
+
+
+def test_responses_completed_classifies_as_complete() -> None:
+    """``response.completed`` is the sole Responses success."""
+    observer = IncrementalSSEObserver("openai", request_surface="responses")
+    observer.observe(b"event: response.created\ndata: {}\n\n")
+    observer.observe(b"event: response.output_text.delta\ndata: {}\n\n")
+    observer.observe(b"event: response.completed\ndata: {}\n\n")
+    observer.flush()
+
+    decision = classify_stream_eof(
+        protocol="openai",
+        policy="strict",
+        snapshot=observer.completion_snapshot,
+        downstream_started=True,
+    )
+    assert decision.classification == "complete"
+
+
+def test_responses_failed_classifies_as_terminal_failure() -> None:
+    """``response.failed`` is a terminal non-success."""
+    observer = IncrementalSSEObserver("openai", request_surface="responses")
+    observer.observe(b"event: response.created\ndata: {}\n\n")
+    observer.observe(b"event: response.failed\ndata: {}\n\n")
+    observer.flush()
+
+    snapshot = observer.completion_snapshot
+    assert snapshot.terminal_kind == "responses_failed"
+    decision = classify_stream_eof(
+        protocol="openai",
+        policy="strict",
+        snapshot=snapshot,
+        downstream_started=True,
+    )
+    assert decision.classification == "terminal_failure"
+
+
+def test_responses_incomplete_classifies_as_terminal_incomplete() -> None:
+    """``response.incomplete`` is a terminal non-success."""
+    observer = IncrementalSSEObserver("openai", request_surface="responses")
+    observer.observe(b"event: response.created\ndata: {}\n\n")
+    observer.observe(b"event: response.incomplete\ndata: {}\n\n")
+    observer.flush()
+
+    snapshot = observer.completion_snapshot
+    assert snapshot.terminal_kind == "responses_incomplete"
+    decision = classify_stream_eof(
+        protocol="openai",
+        policy="strict",
+        snapshot=snapshot,
+        downstream_started=True,
+    )
+    assert decision.classification == "terminal_incomplete"
+
+
+def test_responses_failed_no_terminal_is_premature() -> None:
+    """Responses stream with deltas but no terminal event is premature."""
+    observer = IncrementalSSEObserver("openai", request_surface="responses")
+    observer.observe(b"event: response.created\ndata: {}\n\n")
+    observer.observe(b"event: response.output_text.delta\ndata: {}\n\n")
+    observer.flush()
+
+    decision = classify_stream_eof(
+        protocol="openai",
+        policy="strict",
+        snapshot=observer.completion_snapshot,
+        downstream_started=True,
+    )
+    assert decision.classification == "premature_eof"

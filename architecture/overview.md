@@ -7,9 +7,13 @@ The public OpenAI contract is intentionally limited to Chat Completions
 (`POST /v1/responses`), and model listing (`GET /v1/models`), alongside
 Anthropic Messages (`POST /v1/messages`). EggPool does not claim full OpenAI
 API parity — `/v1/responses` is a stateless same-protocol passthrough that
-rejects `previous_response_id`, conversation state, `store=true`, and
+rejects `previous_response_id`, conversation references (including empty
+objects), omitted `store` (must be `false` explicitly), `store=true`, and
 `background=true` before any provider selection and does not implement
 retrieval, cancellation, background jobs, or WebSocket transport.
+`response.completed` is the only successful terminal Responses event;
+`response.failed` and `response.incomplete` are terminal non-success
+outcomes that do not trigger provider failover after downstream handoff.
 
 ## Quick Navigation
 

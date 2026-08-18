@@ -46,18 +46,30 @@ All data-plane requests flow through `RequestCoordinator`:
 - Non-streaming response adaptation completes before durable `COMPLETED`; native invalid JSON may pass through when usage is optional, while required transcoded responses must adapt successfully.
 - Every retryable failed attempt must reach terminal state through retained attempt cleanup before the next attempt
 - Each attempt reservation is released exactly once via `AttemptFinalizer`
-- Streaming success requires upstream protocol terminal evidence: OpenAI `[DONE]` or Anthropic `message_stop`. Use `StreamCompletionSnapshot` and `classify_stream_eof()`
+- Streaming success requires upstream protocol terminal evidence: OpenAI `[DONE]`, Anthropic `message_stop`, or Responses `response.completed`. Use `StreamCompletionSnapshot` and `classify_stream_eof()`. Responses `response.failed` / `response.incomplete` are terminal non-success outcomes forwarded unchanged; they do not retry after downstream handoff.
 - `_crash_recovery` runs at every startup and repairs pending requests and active reservations left by a previous process. Normal request handling has no age-only stale sweep.
 
 ## Protocol Transcoding
 
 EggPool's public protocol scope is OpenAI Chat Completions at
-`/v1/chat/completions`, Anthropic Messages at `/v1/messages`, and model listing
-at `/v1/models`; it does not claim full OpenAI API or `/v1/responses` parity.
-Transparent request/response format conversion between OpenAI Chat Completions
-and Anthropic Messages protocols lives in `src/eggpool/transcoder/`.
-`select_transcoder()` in `protocol.py` is the dispatch source of truth.
-Controlled by `[transcoder]` config; on by default.
+`/v1/chat/completions`, the stateless OpenAI Responses passthrough at
+`/v1/responses`, Anthropic Messages at `/v1/messages`, and model listing
+at `/v1/models`. The Responses surface is strictly same-protocol
+passthrough: `_prepare_transcode_preflight()` is skipped, no
+BodyTranscoder or StreamingTranscoder is ever selected, and the
+thinking-control adapter is no-op. Providers must declare
+`responses_path`; Anthropic-only models are rejected locally before any
+durable state. Stateless admission rejects `previous_response_id`, any
+`conversation` reference (including `{}`), omitted `store` (must be
+`false` explicitly), `store=true`, and `background=true` before
+provider selection. `response.completed` is the only successful
+canonical terminal event; `response.failed` / `response.incomplete` are
+terminal non-success outcomes forwarded unchanged with no provider
+failover after downstream handoff. Transparent request/response format
+conversion between OpenAI Chat Completions and Anthropic Messages
+protocols lives in `src/eggpool/transcoder/`. `select_transcoder()` in
+`protocol.py` is the dispatch source of truth. Controlled by
+`[transcoder]` config; on by default.
 
 - **Streaming hot path**: one bounded `SSEDecoder` per upstream stream, synchronous `translate_frame()`/`finish()`, compact JSON separators `(",",":")`, lazy JSON-object parse cache
 - **Request preparation hot path**: ASCII-only context strings use the native `str.isascii()` path; enforced canonical context estimates are returned by limit checking and reused in `ProxyRequestContext`, while unbounded models avoid that walk. Translated tool allowance is passed as estimator arithmetic, with rough padding using the shared decoded structural estimator rather than per-tool JSON encoding. Provider IDs and trusted proxies are immutable, generation-owned lookup sets used directly by leased requests.
