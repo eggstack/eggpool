@@ -135,6 +135,18 @@ in the correctness transaction.
 No redundant reads or writes were found during the audit. Diagnostic fields
 are already disabled or sampled under the SBC profile.
 
+### Measured performance (Plan 137, 1 000 iterations, file-backed SQLite)
+
+Dispatch p50 ≈ 1.3 ms, p95 ≈ 5.3 ms.  Finalization p50 ≈ 0.8 ms,
+p95 ≈ 1.6 ms.  Statement counts: 3 inserts per dispatch, 1 update per
+finalization.  Lock contention is zero under single-worker configuration.
+WAL size ≈ 4.4 MiB after 1 000 complete request cycles.
+
+The `journal_size_limit` pragma does not alter checkpoint cadence or
+synchronous mode.  Timing differences between bounded and unbounded
+configurations are noise; the pragma bounds steady-state WAL consumption
+on constrained SBC storage.
+
 ### `db/migrations.py` — MigrationRunner
 
 Schema migration execution. Ordered SQL files in `db/schema/`.
@@ -250,9 +262,15 @@ Default behavior: `None` (unbounded) for workstation installs. The SBC
 profile sets `journal_size_limit = 67108864` (64 MiB), which provides
 headroom for normal operation while bounding steady-state WAL consumption.
 
+Measured WAL growth: 1 000 complete request cycles (dispatch + finalization)
+produce ≈ 4.4 MiB of WAL. The 64 MiB limit provides ample headroom while
+ensuring the WAL does not grow unbounded on a 32 GiB microSD.
+
 The pragma is safe with `synchronous=NORMAL` and WAL mode: it does not alter
 durability semantics. The checkpoint itself is already passive and
-non-blocking (runs in background cleanup).
+non-blocking (runs in background cleanup). Benchmark comparison (1 000
+iterations each) shows no material timing difference between bounded and
+unbounded configurations — any measured variance is noise, not signal.
 
 ## Database Lifecycle Clarity (Plan 137)
 
