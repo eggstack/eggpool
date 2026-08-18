@@ -1187,12 +1187,13 @@ class RequestCoordinator:
                 upstream_protocol=context.transcode_context.upstream_protocol,
             )
             if transcoder is not None:
-                # Phase 1 optimization: check if the preflight
-                # translation can be reused instead of recomputing.
-                # The prepared result is valid when the upstream
-                # protocol matches and no provider-specific thinking
-                # budget resolution is needed (thinking feature off,
-                # or no thinking controls in the client request).
+                # Plan 141: text-only requests with no provider-sensitive
+                # multimodal content may reuse the preflight translation
+                # immediately so ordinary cross-protocol requests do not pay
+                # the post-selection translation cost. The prepared-transcode
+                # fast path is bounded by ``is_valid_for`` (upstream
+                # protocol + transcoder features match) and by the absence
+                # of provider-sensitive media in the original client payload.
                 _prepared = context.prepared_transcode
                 _features = (
                     self._transcoder_policy.features
@@ -1248,194 +1249,49 @@ class RequestCoordinator:
                         diagnostics.reused,
                         diagnostics.recompute_reason,
                     )
-                else:
-                    # Determine the recompute reason for observability.
-                    if _prepared is None:
-                        _recompute_reason = "no_prepared_result"
-                    elif _has_provider_sensitive_media:
+                elif _prepared is not None:
+                    # Record the pre-selection recompute reason for
+                    # observability. The actual definitive translation is
+                    # deferred until after ``SelectedAttempt`` exists so the
+                    # capability row of the *selected* provider is
+                    # authoritative; see ``_apply_selected_provider_transcode``.
+                    if _has_provider_sensitive_media:
                         _recompute_reason = "provider_multimodal_capability_required"
                     elif _client_has_thinking:
                         _recompute_reason = "thinking_controls_present"
                     else:
                         _recompute_reason = "protocol_or_features_mismatch"
-                    if _prepared is not None:
-                        # Dispatch fields are frozen; only diagnostics mutate.
-                        diagnostics = _prepared.diagnostics
-                        diagnostics.reused = False
-                        diagnostics.recompute_reason = _recompute_reason
+                    diagnostics = _prepared.diagnostics
+                    diagnostics.reused = False
+                    diagnostics.recompute_reason = _recompute_reason
                     logger.debug(
-                        "prepared_transcode_recompute request_id=%s reason=%s",
+                        "prepared_transcode_deferred_to_selection "
+                        "request_id=%s reason=%s",
                         context.request_id,
                         _recompute_reason,
                     )
-                    # Body transcoders treat this provider payload as a
-                    # read-only Mapping and construct a fresh target graph.
-                    # Avoid recursively detaching the source request before
-                    # translation or rematerializing the translated graph
-                    # afterward.
-                    payload = provider_bound.provider_payload
-                    if isinstance(payload, dict):
-                        payload = cast("dict[str, Any]", payload)
-                        _thinking_cap: ThinkingCapability | None = None
-                        _transcoding_cap = None
-                        _multimodal_cap = None
-                        _budget_defaults: dict[str, int] | None = None
-                        _budget_policy = "lenient"
-                        _loss_policy = "warn"
-                        if self._transcoder_policy is not None:
-                            _budget_cfg = (
-                                self._transcoder_policy.thinking_budget_defaults
-                            )
-                            _budget_defaults = _budget_cfg.as_dict()
-                            _budget_policy = (
-                                self._transcoder_policy.budget_resolution_policy
-                            )
-                            _loss_policy = self._transcoder_policy.loss_policy
-                        # Look up capability metadata from the catalog
-                        # cache for the *selected* provider when available.
-                        # Collapsed models may be served by multiple
-                        # providers with different multimodal/request-size
-                        # contracts, so the global first-seen entry is not
-                        # authoritative once a provider has been selected.
-                        try:
-                            from eggpool.catalog.capabilities import (
-                                dict_to_model_capabilities,
-                            )
+                else:
+                    logger.debug(
+                        "prepared_transcode_deferred_to_selection "
+                        "request_id=%s reason=no_prepared_result",
+                        context.request_id,
+                    )
 
-                            model_info = self._catalog.cache.get_model_for_provider(
-                                context.model_id,
-                                context.provider_id,
-                            )
-                            if model_info is not None:
-                                caps_raw: dict[str, Any] = model_info.get(
-                                    "capabilities",
-                                    {},
-                                )  # type: ignore[assignment]
-                                caps = dict_to_model_capabilities(caps_raw)
-                                _thinking_cap = caps.thinking
-                                _transcoding_cap = caps.transcoding
-                                _multimodal_cap = caps.multimodal
-                        except Exception:  # noqa: BLE001
-                            pass  # best-effort; resolver has its own fallbacks
-                        translated, warnings = transcoder.encode_request(
-                            payload,
-                            context.transcode_context,
-                            features=_features,
-                            thinking_capability=_thinking_cap,
-                            transcoding_capability=_transcoding_cap,
-                            multimodal_capability=_multimodal_cap,
-                            budget_defaults=_budget_defaults,
-                            budget_resolution_policy=_budget_policy,
-                            loss_policy=_loss_policy,
+                # Native path: thinking controls pass through unchanged.
+                # Phase D: when transcoding is disabled but the client
+                # still asked for thinking, mark the trace as
+                # passthrough so observability surfaces the decision.
+                if context.thinking_trace is not None:
+                    decision_value = context.thinking_trace.get("decision", "none")
+                    if decision_value == "none":
+                        context.thinking_trace["decision"] = "passthrough"
+                        context.thinking_trace["upstream_protocol"] = (
+                            context.upstream_protocol
                         )
-                        # The encoder owns the fresh target graph. Adopt it
-                        # directly so this changed protocol generation does
-                        # not incur a second equality walk or recursive
-                        # ownership pass.
-                        provider_bound.adopt_provider_payload(
-                            translated,
-                            reason="protocol_transcode",
+                    elif decision_value == "passthrough":
+                        context.thinking_trace["upstream_protocol"] = (
+                            context.upstream_protocol
                         )
-                        context.transcode_context.loss_warnings.extend(warnings)
-
-                        # Determine thinking decision from transcoder warnings
-                        # using the canonical kind-based classifier (Phase D).
-                        if context.thinking_trace is not None:
-                            from eggpool.catalog.capabilities import (
-                                classify_thinking_warning_decision,
-                                is_thinking_warning,
-                            )
-
-                            all_warnings = context.transcode_context.loss_warnings
-                            decision = classify_thinking_warning_decision(
-                                all_warnings,
-                            )
-                            context.thinking_trace["decision"] = decision
-                            thinking_warnings = [
-                                w for w in all_warnings if is_thinking_warning(w)
-                            ]
-                            if decision == "clamped" and any(
-                                w.get("kind") == "budget_clamped"
-                                for w in thinking_warnings
-                            ):
-                                context.thinking_trace["budget_clamped"] = True
-
-                            # Surface resolved budget + upstream field metadata
-                            # whenever the early translation has produced a
-                            # concrete ``thinking`` block.  Phase C
-                            # supplements this in the dispatch path with the
-                            # selected provider's override.
-                            thinking_block_obj: object = translated.get("thinking")  # pyright: ignore[reportUnknownMemberType, reportUnknownMemberType]
-                            if isinstance(thinking_block_obj, dict):
-                                thinking_block: dict[str, object] = thinking_block_obj  # pyright: ignore[reportUnknownVariableType]
-                                budget_value_obj: object = thinking_block.get(
-                                    "budget_tokens"
-                                )  # pyright: ignore[reportUnknownMemberType]
-                                if isinstance(budget_value_obj, (int, float)):
-                                    budget_value = budget_value_obj
-                                    context.thinking_trace["resolved_budget_tokens"] = (
-                                        int(
-                                            budget_value,
-                                        )
-                                    )
-                                    if not context.thinking_trace.get(
-                                        "upstream_fields"
-                                    ):
-                                        context.thinking_trace["upstream_fields"] = [
-                                            "thinking",
-                                        ]
-                            if context.upstream_protocol == "anthropic":
-                                context.thinking_trace["upstream_protocol"] = (
-                                    context.upstream_protocol
-                                )
-
-                            # Record the final thinking decision. Strict
-                            # rejection is rare (it propagates as a
-                            # CapabilityError), but if it slips through as
-                            # a warning we still want a counter increment
-                            # for visibility.
-                            _thinking_counter = get_counter()
-                            client_proto = context.thinking_trace["client_protocol"]
-                            if decision == "transcoded":
-                                await _thinking_counter.increment_transcoded(
-                                    client_protocol=client_proto,
-                                    upstream_protocol=context.upstream_protocol
-                                    or "unknown",
-                                    provider_id="unknown",
-                                )
-                            elif decision == "dropped":
-                                await _thinking_counter.increment_dropped(
-                                    client_protocol=client_proto,
-                                    upstream_protocol=context.upstream_protocol
-                                    or "unknown",
-                                    reason="reasoning_content_dropped",
-                                )
-                            elif decision == "clamped":
-                                await _thinking_counter.increment_budget_clamped(
-                                    client_protocol=client_proto,
-                                    provider_id="unknown",
-                                )
-                            elif decision == "rejected":
-                                await _thinking_counter.increment_rejected(
-                                    client_protocol=client_proto,
-                                    capability_status="budget_rejected",
-                                )
-
-                    # Native path: thinking controls pass through unchanged.
-                    # Phase D: when transcoding is disabled but the client
-                    # still asked for thinking, mark the trace as
-                    # passthrough so observability surfaces the decision.
-                    if context.thinking_trace is not None:
-                        decision_value = context.thinking_trace.get("decision", "none")
-                        if decision_value == "none":
-                            context.thinking_trace["decision"] = "passthrough"
-                            context.thinking_trace["upstream_protocol"] = (
-                                context.upstream_protocol
-                            )
-                        elif decision_value == "passthrough":
-                            context.thinking_trace["upstream_protocol"] = (
-                                context.upstream_protocol
-                            )
             else:
                 # Transcoder unavailable — mark any prepared transcode as
                 # not reused with a reason so operators can see why. The
@@ -1536,6 +1392,29 @@ class RequestCoordinator:
                 break
 
             last_selected = selected
+            # Plan 141: after ``SelectedAttempt`` exists, perform the
+            # definitive cross-protocol translation against the selected
+            # provider's capability row. This applies when the preflight
+            # produced no reusable :class:`PreparedTranscode` (provider-
+            # sensitive media, thinking controls, or no preflight). Text-
+            # only requests with a valid prepared-transcode already adopted
+            # the preflight translation in pre-selection and skip this.
+            if transcoder is not None:
+                try:
+                    await self._apply_selected_provider_transcode(
+                        context=context,
+                        selected=selected,
+                        transcoder=transcoder,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as err:
+                    raise self._local_dispatch_error(
+                        context=context,
+                        selected=selected,
+                        stage="selected_provider_transcode",
+                        error=err,
+                    ) from err
             try:
                 result = await self._execute_upstream(
                     context, selected, attempt_num, transcoder=transcoder
@@ -4635,13 +4514,17 @@ class RequestCoordinator:
         synchronously through the canonical finalization owner so the request
         does not strand in durable state.
 
-        The ``_oversize_finalized`` flag is set so the retry loop's later
-        :meth:`_handle_exhausted` call observes the existing terminal job and
-        skips a second finalization that would otherwise conflict on the
-        attempt's identity.
+        The ``_oversize_finalized`` flag is a **proof-of-convergence marker**:
+        it is set only after the canonical finalization owner has established
+        the required durable and runtime convergence. Earlier setting would
+        let a later ``_handle_exhausted`` call skip convergence when the
+        underlying durable finalization actually failed. On
+        :class:`AcceptedFinalizationInvariantError` or :class:`DatabaseError`
+        the finalization failure is propagated so the existing fail-closed
+        recovery path can take ownership instead of silently reporting a clean
+        413.
         """
         elapsed_ms = self._elapsed_ms(context)
-        context.client_metadata["_oversize_finalized"] = True
         try:
             await self._finalize_terminal(
                 context,
@@ -4665,12 +4548,219 @@ class RequestCoordinator:
         except AcceptedFinalizationInvariantError as finalize_err:
             raise finalize_err from err
         except DatabaseError as finalize_err:
-            logger.warning(
-                "oversize rejection finalize failed request_id=%s attempt_id=%s: %s",
-                context.request_id,
-                selected.attempt_id,
-                finalize_err,
+            # Do not silently swallow a durable finalization failure: the
+            # marker is intentionally not set so the existing fail-closed
+            # recovery path can take ownership of the request.
+            raise finalize_err from err
+        # Finalization has converged selected durable/runtime ownership;
+        # mark the request so the retry loop's later ``_handle_exhausted``
+        # call observes the existing terminal job and skips a conflicting
+        # second finalization for the same attempt.
+        context.client_metadata["_oversize_finalized"] = True
+
+    async def _apply_selected_provider_transcode(
+        self,
+        *,
+        context: ProxyRequestContext,
+        selected: SelectedAttempt,
+        transcoder: BodyTranscoder,
+    ) -> None:
+        """Perform definitive cross-protocol translation against selected provider.
+
+        Plan 141: when the request carries provider-sensitive multimodal
+        content (or the preflight prepared-transcode is otherwise not
+        reusable), the definitive translation is performed here after
+        ``SelectedAttempt`` exists. Capability metadata is resolved against
+        ``selected.provider_id``; the translation always starts from the
+        original client payload so a retry that selects a different
+        provider does not stack the previous provider's translation on top
+        of a different provider's contract.
+
+        Text-only requests with a valid :class:`PreparedTranscode` already
+        adopted the preflight translation in pre-selection and skip this
+        helper. Native same-protocol requests do not reach it.
+        """
+        provider_bound = context.provider_bound
+        if provider_bound is None:
+            return
+        _features = (
+            self._transcoder_policy.features
+            if self._transcoder_policy is not None
+            else None
+        )
+        _thinking_off = _features is None or not getattr(_features, "thinking", False)
+        _client_has_thinking = self._client_has_thinking_controls(
+            context.original_body,
+            context.protocol,
+            parsed_payload=context.parsed_payload,
+        )
+        _has_provider_sensitive_media = (
+            self._client_payload_has_provider_sensitive_media(context)
+        )
+        # If a valid preflight prepared-transcode was already adopted
+        # during pre-selection (text-only path), this helper is a no-op.
+        if not _has_provider_sensitive_media and self._prepared_eligible(
+            prepared_transcode=context.prepared_transcode,
+            features=_features,
+            upstream_protocol=(
+                context.transcode_context.upstream_protocol
+                if context.transcode_context is not None
+                else None
+            ),
+            thinking_off=_thinking_off,
+            client_has_thinking=_client_has_thinking,
+        ):
+            return
+        # Always translate from the original client payload so retries
+        # against a different selected provider start clean. The adopted
+        # translated graph from a previous attempt is discarded; the
+        # ``client_payload`` remains immutable per ProviderBoundRequest's
+        # ownership contract.
+        provider_bound.set_provider_payload(
+            provider_bound.client_payload,
+            increment_generation=True,
+        )
+        _thinking_cap: ThinkingCapability | None = None
+        _transcoding_cap = None
+        _multimodal_cap = None
+        _budget_defaults: dict[str, int] | None = None
+        _budget_policy = "lenient"
+        _loss_policy = "warn"
+        if self._transcoder_policy is not None:
+            _budget_cfg = self._transcoder_policy.thinking_budget_defaults
+            _budget_defaults = _budget_cfg.as_dict()
+            _budget_policy = self._transcoder_policy.budget_resolution_policy
+            _loss_policy = self._transcoder_policy.loss_policy
+        # Plan 141: resolve capability metadata from the catalog cache
+        # against ``selected.provider_id`` only. Collapsed models may be
+        # served by multiple providers with different multimodal/request-
+        # size contracts; the global first-seen entry is not authoritative
+        # once a provider has been selected.
+        try:
+            from eggpool.catalog.capabilities import dict_to_model_capabilities
+
+            model_info = self._catalog.cache.get_model_for_provider(
+                context.model_id,
+                selected.provider_id,
             )
+            if model_info is not None:
+                caps_raw: dict[str, Any] = model_info.get("capabilities", {})  # type: ignore[assignment]
+                caps = dict_to_model_capabilities(caps_raw)
+                _thinking_cap = caps.thinking
+                _transcoding_cap = caps.transcoding
+                _multimodal_cap = caps.multimodal
+        except Exception:  # noqa: BLE001
+            pass  # best-effort; resolver has its own fallbacks
+        payload = provider_bound.provider_payload
+        if not isinstance(payload, dict):
+            return
+        typed_payload = cast("dict[str, Any]", payload)
+        transcode_ctx = context.transcode_context
+        if transcode_ctx is None:
+            return
+        translated, warnings = transcoder.encode_request(
+            typed_payload,
+            transcode_ctx,
+            features=_features,
+            thinking_capability=_thinking_cap,
+            transcoding_capability=_transcoding_cap,
+            multimodal_capability=_multimodal_cap,
+            budget_defaults=_budget_defaults,
+            budget_resolution_policy=_budget_policy,
+            loss_policy=_loss_policy,
+        )
+        # The encoder owns the fresh target graph. Adopt it directly so
+        # this changed protocol generation does not incur a second equality
+        # walk or recursive ownership pass.
+        provider_bound.adopt_provider_payload(
+            translated,
+            reason="protocol_transcode",
+        )
+        transcode_ctx.loss_warnings.extend(warnings)
+
+        # Determine thinking decision from transcoder warnings using the
+        # canonical kind-based classifier (Phase D).
+        if context.thinking_trace is not None:
+            from eggpool.catalog.capabilities import (
+                classify_thinking_warning_decision,
+                is_thinking_warning,
+            )
+
+            all_warnings = transcode_ctx.loss_warnings
+            decision = classify_thinking_warning_decision(all_warnings)
+            context.thinking_trace["decision"] = decision
+            context.thinking_trace["provider_id"] = selected.provider_id
+            thinking_warnings = [w for w in all_warnings if is_thinking_warning(w)]
+            if decision == "clamped" and any(
+                w.get("kind") == "budget_clamped" for w in thinking_warnings
+            ):
+                context.thinking_trace["budget_clamped"] = True
+            # Surface resolved budget + upstream field metadata whenever
+            # the early translation has produced a concrete ``thinking``
+            # block. Phase C supplements this in the dispatch path with the
+            # selected provider's override.
+            thinking_block_obj: object = translated.get("thinking")  # pyright: ignore[reportUnknownMemberType]
+            if isinstance(thinking_block_obj, dict):
+                thinking_block: dict[str, object] = thinking_block_obj  # pyright: ignore[reportUnknownVariableType]
+                budget_value_obj: object = thinking_block.get("budget_tokens")  # pyright: ignore[reportUnknownMemberType]
+                if isinstance(budget_value_obj, (int, float)):
+                    budget_value = budget_value_obj
+                    context.thinking_trace["resolved_budget_tokens"] = int(
+                        budget_value,
+                    )
+                    if not context.thinking_trace.get("upstream_fields"):
+                        context.thinking_trace["upstream_fields"] = ["thinking"]
+            if context.upstream_protocol == "anthropic":
+                context.thinking_trace["upstream_protocol"] = context.upstream_protocol
+
+            _thinking_counter = get_counter()
+            client_proto = context.thinking_trace["client_protocol"]
+            if decision == "transcoded":
+                await _thinking_counter.increment_transcoded(
+                    client_protocol=client_proto,
+                    upstream_protocol=context.upstream_protocol or "unknown",
+                    provider_id=selected.provider_id,
+                )
+            elif decision == "dropped":
+                await _thinking_counter.increment_dropped(
+                    client_protocol=client_proto,
+                    upstream_protocol=context.upstream_protocol or "unknown",
+                    reason="reasoning_content_dropped",
+                )
+            elif decision == "clamped":
+                await _thinking_counter.increment_budget_clamped(
+                    client_protocol=client_proto,
+                    provider_id=selected.provider_id,
+                )
+            elif decision == "rejected":
+                await _thinking_counter.increment_rejected(
+                    client_protocol=client_proto,
+                    capability_status="budget_rejected",
+                )
+
+    @staticmethod
+    def _prepared_eligible(
+        *,
+        prepared_transcode: Any,
+        features: Any,
+        upstream_protocol: str | None,
+        thinking_off: bool,
+        client_has_thinking: bool,
+    ) -> bool:
+        """Return True when a preflight PreparedTranscode is still reusable.
+
+        Mirrors the pre-selection validity check so the post-selection
+        helper can skip translation when the prepared-transcode fast path
+        already produced a valid translated payload.
+        """
+        if prepared_transcode is None or upstream_protocol is None:
+            return False
+        if not prepared_transcode.is_valid_for(
+            upstream_protocol=upstream_protocol,
+            features=features,
+        ):
+            return False
+        return thinking_off or not client_has_thinking
 
     def _build_upstream_headers(
         self,

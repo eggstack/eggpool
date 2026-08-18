@@ -87,6 +87,7 @@ uv run ruff check --fix src/
 - Provider contract tests: `uv run pytest tests/unit/test_contract.py tests/unit/test_contract_urls.py -v`
 - Transcoder/proxy contract tests: `uv run pytest tests/contract/ -v`
 - Multimodal transcoder tests: `uv run pytest tests/unit/test_transcoder/test_multimodal.py -v`
+- Plan 141 final corrective closure: `uv run pytest tests/unit/test_plan_141_corrective_closure.py tests/unit/test_oversize_413_lifecycle.py tests/unit/test_transcoder/test_sensitive_media.py -v`
 - Performance, live, and diagnostic reproducer tests are manually invoked, not run in CI
 - Database fixtures must disconnect on every teardown path; use `try/finally` on the canonical event loop
 
@@ -124,7 +125,7 @@ scope.
 - **Multi-provider architecture**: provider-suffixed model IDs (`model-id/provider-id`), `ProviderClientPool`, `OutboundClientManager`. Deep dive: `architecture/deep-dive-providers.md`
 - **Provider contracts**: `compose_provider_url()` is the single source of truth for upstream URLs
 - **Protocol transcoding**: `src/eggpool/transcoder/` — OpenAI ↔ Anthropic conversion. Deep dive: `architecture/deep-dive-transcoder.md`. Operator guide: `docs/transcoding.md`
-- **Multimodal capabilities**: `MultimodalCapabilities` in `catalog/capabilities.py` provides granular media support per provider/model/protocol. Provider-sensitive media requests (images, documents, audio, tool-result media) force a final recompute after provider selection via `request_has_provider_sensitive_media()`
+- **Multimodal capabilities**: `MultimodalCapabilities` in `catalog/capabilities.py` provides granular media support per provider/model/protocol. Provider-sensitive media requests (images, documents, audio, tool-result media) force a final recompute after provider selection via `request_has_provider_sensitive_media()`. The definitive translation is performed in `_apply_selected_provider_transcode` *after* `SelectedAttempt` exists and uses `selected.provider_id` to resolve capabilities (Plan 141).
 - **Local provider templates**: `_templates.toml` includes presets for Ollama, LM Studio, llama.cpp, vLLM, LocalAI, and a generic custom-compatible endpoint. Local providers use discovery-based verification (no fixed probe models) and the OpenAI-compatible `/models` endpoint for catalog discovery
 - **JSON backend (`eggpool.jsonx`)**: preferred `orjson` (`eggpool[fast]`), falls back to stdlib. Override with `EGGPOOL_JSON_BACKEND=orjson|stdlib|auto`. Off the request path, stdlib `json` allowed for deterministic hashing
 - **Database invariants**: SQLite WAL, single-connection serialization, and task-owned `async with db.transaction():` boundaries for all DML; rollback is private to the owning transaction path and ambiguous outcomes fail closed. WAL residue bounded by `journal_size_limit` when configured (SBC default 64 MiB). Deep dive: `architecture/deep-dive-database.md`

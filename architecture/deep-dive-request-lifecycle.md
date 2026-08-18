@@ -316,6 +316,32 @@ copy-on-write or conservative owning APIs, so the prepared source generation is
 not mutated. Prepared graphs are discarded with the request and are never a
 cross-request cache.
 
+For cross-protocol requests carrying **provider-sensitive media** (images,
+documents, audio, or media inside tool results), Plan 141 explicitly defers
+the definitive translation to **after** `SelectedAttempt` exists. The
+proxy layer's preflight still runs for context-limit and loss-policy
+validation, but it does **not** create a `PreparedTranscode` for
+media-bearing requests. Inside the retry loop, the coordinator's
+`_apply_selected_provider_transcode` helper reverts the `ProviderBoundRequest`
+to the original client payload and re-translates against the *selected*
+provider's `MultimodalCapabilities` row. Capability resolution is
+`catalog.cache.get_model_for_provider(model_id, selected.provider_id)`,
+never a global first-seen lookup. A retry that selects a different provider
+always rebuilds from the original client payload; provider A's translation
+is never stacked on provider B's. Text-only and tool-only requests continue
+to reuse the preflight `PreparedTranscode` unchanged.
+
+Provider-bound serialized-size rejection is a local client-validation
+failure observed after `SelectedAttempt` exists. The provider-bound
+helper `_validate_serialized_request_size` raises `RequestTooLargeError`
+when the selected provider's `max_serialized_request_bytes` ceiling is
+exceeded. `_finalize_selected_oversize_rejection` then converges the
+selected durable/runtime ownership through the canonical finalization
+owner before marking `_oversize_finalized`. The `RequestTooLargeError`
+is explicitly rendered as HTTP 413 by the proxy layer; no upstream I/O
+is performed, no health/backoff/quarantine penalty is applied, and no
+retry selects a different account.
+
 ### `request/limits.py` — Request Limit Enforcement
 
 Enforces model context and output limits before dispatch. ASCII-heavy decoded

@@ -584,13 +584,27 @@ async def _handle_proxy_request_inner(
                 )
             _loss_policy = getattr(transcoder_policy, "loss_policy", "warn")
             _features = getattr(transcoder_policy, "features", None)
-            prepared_transcode = PreparedTranscode.from_preflight_result(
-                result=preflight,
-                client_protocol=endpoint.protocol,
-                loss_policy=_loss_policy,
-                encoded_body=encoded_translated_body,
-                features=_features,
+            # Plan 141: when the request carries provider-sensitive
+            # multimodal content, the preflight translation cannot be
+            # safely reused across providers with different source-form
+            # contracts. Skip caching the ``PreparedTranscode`` so the
+            # coordinator forces a final recompute against the *selected*
+            # provider's capability row after ``SelectedAttempt`` exists.
+            from eggpool.transcoder.sensitive_media import (
+                request_has_provider_sensitive_media,
             )
+
+            _has_provider_sensitive_media = request_has_provider_sensitive_media(
+                payload
+            )
+            if not _has_provider_sensitive_media:
+                prepared_transcode = PreparedTranscode.from_preflight_result(
+                    result=preflight,
+                    client_protocol=endpoint.protocol,
+                    loss_policy=_loss_policy,
+                    encoded_body=encoded_translated_body,
+                    features=_features,
+                )
 
     stream_value = payload.get("stream", False)
     if stream_value is not None and not isinstance(stream_value, bool):
@@ -693,6 +707,18 @@ async def _handle_proxy_request_inner(
 
     try:
         result = await coordinator.execute(context)
+    except RequestTooLargeError:
+        # Provider-bound serialized-size rejection (HTTP 413). Distinct
+        # from the ingress ``read_body_limited()`` 413 path: this is a
+        # local client-validation failure observed after provider
+        # selection/translation. The durable attempt is already
+        # terminalized through the canonical owner; the API handler
+        # only renders the bounded client-facing error.
+        return endpoint.error_response(
+            status_code=413,
+            message="Serialized request body too large",
+            error_type="invalid_request_error",
+        )
     except ModelNotFoundError as exc:
         return endpoint.error_response(
             status_code=404,

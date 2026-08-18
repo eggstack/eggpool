@@ -305,12 +305,13 @@ probe_protocol = "openai"
 require_models = true
 
 [providers.vllm-local.model_capabilities.default.multimodal]
-# vLLM supports base64 images via the OpenAI-compatible endpoint.
-# URL images are not supported.  Document PDF and audio support depend
-# on the loaded model and are conservatively disabled. No provider-defined
-# request ceiling is advertised; the upstream server accepts whatever the
-# OpenAI-compatible transport can deliver.
-image_input = { base64 = true, url = false }
+# vLLM supports base64 and URL images via its OpenAI-compatible online
+# server. URL support requires the upstream to fetch the URL or honor the
+# caller's --allowed-media-domains allow-list. Document PDF and audio
+# support depend on the loaded model and are conservatively disabled. No
+# provider-defined request ceiling is advertised; the upstream server
+# accepts whatever the OpenAI-compatible transport can deliver.
+image_input = { base64 = true, url = true }
 document_input = { base64 = false, url = false }
 non_text_tool_result = false
 

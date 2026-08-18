@@ -66,70 +66,116 @@ responses_api: defer
 ### Evaluation answers
 
 1. **Which target clients actually require Responses rather than Chat Completions?**
-   None. All bundled integration targets (OpenCode, Aider, Cline, Continue, Codex,
-   Qwen Code, Kilo, Roo Code, Goose, OpenHands) use Chat Completions. No repository
-   example, test, integration generator, or project guidance requires
-   `/v1/responses`, `responses.create`, `previous_response_id`, or Responses
-   conversation state.
+   Plan 141 re-evaluation (correction): Responses is a real, currently
+   used protocol surface. OpenAI's Codex, OpenAI's Responses API, the
+   OpenAI Agents SDK, and the OpenAI Python client (`openai>=1.40`) all
+   advertise `/v1/responses` and `client.responses.create(...)` as
+   first-class features. The earlier plan-139 answer overstated the
+   gap; the correct observation is that **EggPool's bundled
+   integration targets** (OpenCode, Aider, Cline, Continue, Codex,
+   Qwen Code, Kilo, Roo Code, Goose, OpenHands) speak Chat Completions
+   today, so no operator deployment currently depends on Responses.
 
 2. **Which bundled/local providers expose a sufficiently compatible Responses endpoint?**
-   None. All 22 bundled templates declare `openai` or `anthropic` protocol. The
-   `SUPPORTED_PROTOCOLS` frozenset in `catalog/protocols.py` has exactly two values.
-   No provider template claims Responses support. While Ollama, LM Studio, llama.cpp,
-   and vLLM may expose Responses-compatible surfaces in newer versions, their EggPool
-   templates use Chat Completions, and no operator evidence demonstrates Responses
-   routing through EggPool.
+   Plan 141 re-evaluation (correction): the upstream ecosystem does
+   provide stateless Responses surfaces. Ollama 0.13.3+ ships a
+   stateless `/v1/responses` endpoint (no `previous_response_id` /
+   `conversation` support). vLLM documents a `/v1/responses` route on
+   its OpenAI-compatible server for text-generation models. EggPool's
+   bundled templates, however, still advertise `openai` or `anthropic`
+   protocol only; the `SUPPORTED_PROTOCOLS` frozenset in
+   `catalog/protocols.py` has exactly two values, and no provider
+   template declares Responses support or carries Responses catalog
+   metadata.
 
 3. **Can same-protocol Responses requests be proxied/routed with minimal transformation?**
-   Not safely. Responses requests carry `previous_response_id` and optional
-   conversation state that EggPool's stateless routing cannot preserve. Failover to
-   a different upstream would invalidate the response ID. There is no provider
-   affinity or session pinning in the current architecture, and adding one solely for
-   Responses would introduce a persistent state machine disproportionate to the
-   value.
+   Yes for the **stateless** subset: a Responses request without
+   `previous_response_id`, `conversation`, or `store` is replayable
+   across distinct accounts, and the existing pre-handoff retry path
+   preserves request semantics. Stateless Responses passthrough reuses
+   `compose_provider_url()`, the existing client pool, the catalog
+   fetcher, and the finalization supervisor. No third protocol
+   transcoder or Responses ↔ Anthropic translation is required.
+   Stateful Responses requests (with `previous_response_id`,
+   `conversation`, or `store`) cannot be safely routed because
+   failover would invalidate the response ID.
 
 4. **Which Responses features are necessary for target clients?**
-   Unknown and currently irrelevant — no target client requires Responses. If a
-   future client demonstrates need, the minimum viable subset would be text
-   generation, tool calls, and streaming events. File/image input, reasoning
-   summaries, and previous-response IDs would require additional discovery.
+   Unknown. No current bundled integration target depends on
+   `/v1/responses`. If a future target does, the minimum viable
+   subset would be text generation, tool calls, streaming events, and
+   stateless responses. File/image input, reasoning summaries, and
+   `previous_response_id` are not in EggPool's scope.
 
 5. **Which stateful semantics conflict with EggPool's current stateless routing or failover model?**
-   `previous_response_id` ties a request to a specific upstream provider's response.
-   EggPool's failover model retries across distinct accounts on transport failure
-   before response handoff. After handoff, no retry is possible. Responses
-   conversation state would require either (a) provider affinity pinning, which
-   conflicts with quota-based routing, or (b) a persistent store of response
-   mappings, which conflicts with the stateless proxy design.
+   `previous_response_id`, `conversation`, and `store` tie a request
+   to a specific upstream provider's response and require either (a)
+   provider affinity pinning, which conflicts with quota-based
+   routing, or (b) a persistent store of response mappings, which
+   conflicts with the stateless proxy design. A stateless Responses
+   passthrough can reject these locally without changing routing
+   semantics.
 
 6. **Would cross-protocol Responses ↔ Anthropic translation require lossy semantics beyond the existing content IR?**
-   Yes. Responses Items, output objects, and streaming event types have no
-   Anthropic Messages equivalent. The existing content IR handles Chat Completions
-   ↔ Messages translation; Responses would require a third independent pairwise
-   transcoder or a general three-protocol canonical request object, both explicitly
-   rejected by Plan 139's scope constraints.
+   Yes. Responses Items, output objects, and streaming event types
+   have no Anthropic Messages equivalent. The existing content IR
+   handles Chat Completions ↔ Messages translation; Responses would
+   require a third independent pairwise transcoder or a general
+   three-protocol canonical request object, both explicitly rejected
+   by Plan 139's scope constraints.
+
+### Decision rationale
+
+The decision is **scope/value proportionality**, not the absence of
+external protocol support. Stateless Responses passthrough is
+technically narrow — it can reuse the existing routing/client pool —
+and the upstream ecosystem does provide compatible surfaces. What
+blocks implementation today is the lack of measured project/operator
+value:
+
+- No bundled integration target depends on `/v1/responses`.
+- No bundled provider template declares Responses support or carries
+  Responses catalog metadata.
+- Adding the endpoint still requires a new route surface, a new
+  protocol token or stateless-passthrough flag in
+  `catalog/protocols.py`, explicit local rejection of
+  `previous_response_id` / `conversation` / `store`, and the
+  per-provider capability/catalog plumbing for the Responses fields
+  EggPool would forward.
+
+Those costs exceed the deferred value today. If a future bundled
+provider ships Responses support and a target client demonstrates
+need, the implementation must remain narrowly scoped to stateless
+same-protocol passthrough and reject stateful fields locally. No
+`/v1/responses` endpoint, transcoder, state store, or CI matrix is
+added by Plan 141.
 
 ### Rejection criteria check
 
-- [x] Current target clients remain fully functional with Chat Completions/Anthropic Messages.
-- [x] Provider support is too inconsistent to route safely (no bundled provider declares Responses).
-- [x] Required state semantics would introduce a persistent state machine solely for one endpoint.
-- [x] The feature would materially expand CI/provider matrices without proportional user value.
-
-All four rejection criteria are met. Deferral is the correct outcome.
+- [x] No current bundled integration target depends on Responses (the
+      deferral is by value proportionality, not by absence of
+      protocol support).
+- [x] No bundled provider template declares Responses support or
+      carries Responses catalog metadata.
+- [x] Stateful semantics would require a persistent state machine
+      or provider affinity solely for one endpoint.
+- [x] The feature would materially expand CI/provider matrices
+      without proportional user value.
 
 ### Relationship to Plan 130
 
-Plan 130 already established `openai_scope: chat_completions` and updated all
-public documentation to explicitly exclude `/v1/responses` parity. Plan 139
-confirms this decision through provider/client evaluation rather than product-scope
-reasoning alone. No additional documentation changes are required — README,
-AGENTS.md, architecture docs, and skills already reflect the narrowed scope.
+Plan 130 already established `openai_scope: chat_completions` and
+updated all public documentation to explicitly exclude
+`/v1/responses` parity. Plan 139 confirms the decision through
+provider/client evaluation, not through claims that the protocol
+does not exist externally. README, AGENTS.md, architecture docs, and
+skills already reflect the narrowed scope and require no further
+public-surface changes.
 
 ### Verification
 
-No code changes were made. Existing docs already reflect the correct scope from
-Plan 130. The full CI gate passes unchanged:
+No code changes were made. Existing docs already reflect the correct
+scope from Plan 130. The full CI gate passes unchanged:
 
 ```text
 uv run ruff format --check src/ tests/ scripts/     -> passed
@@ -143,39 +189,46 @@ PYTHONHASHSEED=0 TZ=UTC uv run pytest tests/smoke/ -q --tb=short --maxfail=1
 
 ## Plan 140 re-evaluation: stateless same-protocol Responses passthrough
 
-Plan 140 re-opened only the narrowest question Plan 139 deferred: would a
-**stateless, same-protocol OpenAI-compatible `/v1/responses` passthrough**
-justify a small endpoint surface? The full Responses semantic parity,
-stateful provider affinity, and Responses ↔ Anthropic translation remain
-explicitly out of scope.
+Plan 140 re-opened only the narrowest question Plan 139 deferred:
+would a **stateless, same-protocol OpenAI-compatible
+`/v1/responses` passthrough** justify a small endpoint surface? The
+full Responses semantic parity, stateful provider affinity, and
+Responses ↔ Anthropic translation remain explicitly out of scope.
+
+Plan 141 refines that evaluation: the upstream ecosystem does expose
+stateless Responses surfaces (Ollama 0.13.3+, vLLM), but no bundled
+provider template in EggPool declares Responses support and no
+bundled integration target depends on it. The deferral therefore
+stands on value proportionality, not on an inaccurate claim that the
+protocol is unsupported externally.
 
 ### Evidence
 
-1. **Target clients.** No bundled integration target (OpenCode, Aider,
-   Cline, Continue, Codex, Qwen Code, Kilo, Roo Code, Goose, OpenHands)
-   requires `/v1/responses`. Plan 139's answer stands: no repository
-   example, test, or operator guidance depends on the endpoint.
+1. **Target clients.** No bundled integration target (OpenCode,
+   Aider, Cline, Continue, Codex, Qwen Code, Kilo, Roo Code, Goose,
+   OpenHands) requires `/v1/responses`. The earlier plan-139 wording
+   overstate the gap; the accurate statement is that EggPool's
+   bundled targets speak Chat Completions today.
 
-2. **Bundled local runtime support.** Ollama, LM Studio, llama.cpp, vLLM,
-   and LocalAI continue to expose Chat Completions. Plan 140 corrected
-   Ollama's bundled discovery path (Workstream A) but did not find
-   evidence of a sufficiently compatible Responses surface across the
-   bundled templates. None declares Responses support; all 22 templates
-   advertise `openai` or `anthropic` protocol only.
+2. **Bundled local runtime support.** Ollama 0.13.3+ ships a
+   stateless `/v1/responses` endpoint (no `previous_response_id` /
+   `conversation`). vLLM documents `/v1/responses` for
+   text-generation models. EggPool's bundled templates still
+   advertise `openai` or `anthropic` protocol only; no template
+   declares Responses support or carries Responses catalog metadata.
 
 3. **Stateless replayability.** A Responses request without
-   `previous_response_id` and without conversation state is replayable
-   across distinct accounts; the existing pre-handoff retry path would
-   preserve request semantics. Failover that crosses accounts without
-   response-ID pinning would not invalidate the response, because there
-   is no response to invalidate. This is the only condition under which
-   the existing routing/client/failure-isolation machinery can carry a
-   Responses payload unmodified.
+   `previous_response_id`, `conversation`, or `store` is replayable
+   across distinct accounts; the existing pre-handoff retry path
+   preserves request semantics. This is the only condition under
+   which the existing routing/client/failure-isolation machinery
+   can carry a Responses payload unmodified.
 
 4. **Stateful fields.** `previous_response_id`, `conversation`, and
-   `store` must be rejected locally or explicitly documented unsupported.
-   Without provider affinity or a persistent response-ID store, any
-   cross-account retry on these payloads would be incorrect.
+   `store` must be rejected locally or explicitly documented
+   unsupported. Without provider affinity or a persistent response-ID
+   store, any cross-account retry on these payloads would be
+   incorrect.
 
 5. **Routing reuse.** A same-protocol Responses passthrough reuses
    `compose_provider_url()`, the existing client pool, the catalog
@@ -189,25 +242,28 @@ explicitly out of scope.
 responses_stateless_passthrough: defer
 ```
 
-A stateless same-protocol passthrough is technically narrow but
-provides no measured client value today. No bundled integration or
-operator deployment depends on it, and no bundled provider declares
-Responses support. Adding the endpoint would still require:
+The decision is **scope/value proportionality**, not the absence of
+external protocol support. Stateless Responses passthrough is
+technically narrow and the upstream ecosystem does provide
+compatible surfaces, but:
 
-- a new route surface in `src/eggpool/api/`;
-- a new protocol token in `catalog/protocols.py` (or a dedicated
-  stateless passthrough flag);
-- explicit local rejection of `previous_response_id` / `conversation` /
-  `store`;
-- catalog and capability coverage that today's providers do not ship.
+- No bundled integration target depends on it.
+- No bundled provider template declares Responses support.
+- Adding the endpoint still requires a new route surface, a new
+  protocol token (or a dedicated stateless-passthrough flag), explicit
+  local rejection of `previous_response_id` / `conversation` /
+  `store`, and the per-provider capability/catalog plumbing that
+  today's bundled providers do not ship.
 
-These costs exceed the deferred value. Plan 139's deferral is
-**confirmed** for stateless same-protocol passthrough as well. Plan 140
-records this evaluation but introduces no code change for `/v1/responses`.
+Those costs exceed the deferred value today. Plan 139's deferral is
+**confirmed** for stateless same-protocol passthrough. Plan 141
+records the corrected rationale but introduces no code change for
+`/v1/responses`.
 
 If a future bundled provider declares Responses support and a target
 client demonstrates need, the implementation must remain narrowly
 scoped to the stateless same-protocol path and reject stateful fields
-locally. Cross-protocol Responses ↔ Anthropic translation and persistent
-response-ID stores remain out of scope unless a separate plan is
-written.
+locally. Cross-protocol Responses ↔ Anthropic translation, persistent
+response-ID stores, conversation routing state, new SDK
+dependencies, and expanded CI matrices remain out of scope unless a
+separate plan is written.

@@ -87,9 +87,17 @@ same direct adoption boundary and does not make a defensive source deepcopy.
 When the request payload contains provider-sensitive multimodal content
 (images, documents, audio, or media inside tool results), the cached
 `PreparedTranscode` cannot be safely reused across providers with different
-multimodal capabilities. The coordinator forces a final recompute using the
-selected provider's capability row and records the
-`provider_multimodal_capability_required` recompute reason.
+multimodal capabilities. Plan 141 made this guarantee strict by moving the
+definitive cross-protocol translation to **after** `SelectedAttempt` exists:
+the `proxy_request` handler still runs a preflight translation for context
+limit checks and loss policy validation, but it does **not** create a
+`PreparedTranscode` for media-bearing requests so the coordinator can rebuild
+the translated generation against the *selected* provider's capability row
+using `catalog.cache.get_model_for_provider(model_id, selected.provider_id)`.
+A retry that selects a different provider reverts the `ProviderBoundRequest`
+to the original client payload before retranslating so provider A's
+translation is never stacked on provider B's. Text-only and tool-only
+requests continue to benefit from the prepared-transcode fast path.
 
 ### `transcoder/sensitive_media.py`
 
@@ -210,6 +218,7 @@ JSON frame helpers with compact separators for SSE frame construction.
 | 11 | Content IR | Narrow content-block representation, `MultimodalCapabilities` (removed in Plan 140) |
 | 134 | Multimodal transcode | Capability-aware source form gating, tool-result media preservation, multimodal loss-policy enforcement, serialized request-size validation |
 | 140 | Local + multimodal closure | Corrected Ollama discovery, selected-provider capability resolution, provider-sensitive preflight reuse guard, canonical 413 lifecycle, audited local capability metadata, content IR removed |
+| 141 | Final corrective closure | Post-selection provider-sensitive translation, 413 renderer, oversize finalization as proof-of-convergence, Responses deferral rationale, corrected vLLM image URL capability |
 
 ## Loss Warning Kinds
 

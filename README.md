@@ -273,9 +273,12 @@ shared across requests. Image/PDF validation rejects obvious encoded-size
 overflow before strict decoding and releases the temporary validation buffer
 before translated output is built; provider media limits and URL behavior are
 unchanged. Provider-sensitive media requests (images, documents, audio, or
-media inside tool results) force a final recompute against the selected
-provider's capability row so the cached preflight translation cannot bypass
-selected-provider source-form gating.
+media inside tool results) force a final recompute against the *selected*
+provider's capability row after `SelectedAttempt` exists, so the cached
+preflight translation cannot bypass selected-provider source-form gating
+and a retry that selects a different provider rebuilds the translated
+generation from the original client payload. Text-only and tool-only
+requests continue to reuse the preflight translation.
 
 Streaming completion is determined by the upstream protocol, not by the absence
 of a transport exception. OpenAI streams require `data: [DONE]` and Anthropic
