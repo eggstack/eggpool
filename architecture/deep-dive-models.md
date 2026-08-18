@@ -33,7 +33,7 @@ class AppConfig(BaseModel):
     models: ModelsConfig
     providers: dict[str, ProviderConfig]
     transcoder: TranscoderPolicy
-    compression: CompressionConfig
+
     cache: CacheConfig
     model_info: ModelInfoConfig
     dashboard: DashboardConfig
@@ -69,7 +69,7 @@ SQLite row models for type-safe database access:
 - Request rows, attempt rows, routing decision rows
 - Account/provider/model rows
 - Quota reservation rows, ping rows, backoff rows
-- Model info metadata rows, compression observation rows
+- Model info metadata rows
 
 ### Domain Models (`domain.py`)
 

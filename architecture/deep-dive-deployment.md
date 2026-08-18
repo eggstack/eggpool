@@ -76,7 +76,7 @@ Runtime configuration. Key sections:
 - `[models]` — collapse_models, catalog withdrawal
 - `[providers.<id>]` — per-provider config
 - `[transcoder]` — protocol transcoding
-- `[compression]` — request shaping
+
 - `[model_info]` — source enablement
 - `[dashboard]` — theme, auth policy
 - `[metrics]` — buffering, flush modes
@@ -91,7 +91,7 @@ API key storage. Never committed.
 
 `eggpool rehash` applies supported changes without restart:
 - Control socket at `~/.local/state/eggpool/eggpool.sock`
-- LIVE fields: provider/account/routing families, transcoder, compression, cache, subset of models, retention durations
+- LIVE fields: provider/account/routing families, transcoder, cache, subset of models, retention durations
 - RESTART_REQUIRED: everything else
 - JSON output pinned at 9 keys
 

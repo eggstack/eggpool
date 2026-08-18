@@ -750,7 +750,6 @@ def _make_real_generation(
         health_manager=MagicMock(),
         cost_calculator=MagicMock(),
         transcoder_policy=MagicMock(),
-        compression_policy=MagicMock(),
         dispatch_overhead_recorder=MagicMock(),
         dispatch_span_recorder=MagicMock(),
         account_backoff_repo=MagicMock(),
@@ -1172,9 +1171,6 @@ def _real_app_config(
     transcoder_enabled: bool = True,
     loss_policy: str = "warn",
     prefer_native: bool = True,
-    compression_enabled: bool = False,
-    compression_mode: str = "observe",
-    min_candidate_tokens: int = 2048,
     persist_redacted_error_detail: bool = False,
     expose_mode: str = "union",
     collapse_models: bool = False,
@@ -1204,11 +1200,6 @@ def _real_app_config(
                 "enabled": transcoder_enabled,
                 "loss_policy": loss_policy,
                 "prefer_native": prefer_native,
-            },
-            "compression": {
-                "enabled": compression_enabled,
-                "mode": compression_mode,
-                "min_candidate_tokens": min_candidate_tokens,
             },
             "models": {
                 "refresh_interval_s": refresh_interval_s,
@@ -1262,17 +1253,14 @@ class TestMilestoneD1CandidateBuild:
             diff = kwargs.get("diff") or args[1]
             candidate_config = validation.config
             transcoder_policy = candidate_config.transcoder
-            compression_policy = candidate_config.compression
             coordinator_kwargs: dict[str, object] = {
                 "transcoder_policy": transcoder_policy,
-                "compression_policy": compression_policy,
                 "persist_error_detail": (
                     candidate_config.security.persist_redacted_error_detail
                 ),
             }
             captured["config"] = candidate_config
             captured["transcoder_policy"] = transcoder_policy
-            captured["compression_policy"] = compression_policy
             captured["persist_error_detail"] = (
                 candidate_config.security.persist_redacted_error_detail
             )
@@ -1293,7 +1281,6 @@ class TestMilestoneD1CandidateBuild:
                 health_manager=gen.health_manager,
                 cost_calculator=gen.cost_calculator,
                 transcoder_policy=transcoder_policy,
-                compression_policy=compression_policy,
                 dispatch_overhead_recorder=gen.dispatch_overhead_recorder,
                 dispatch_span_recorder=gen.dispatch_span_recorder,
                 account_backoff_repo=gen.account_backoff_repo,
@@ -1354,46 +1341,6 @@ class TestMilestoneD1CandidateBuild:
         assert policy.enabled is False
         assert policy.loss_policy == "reject"
         assert policy.prefer_native is False
-
-    @pytest.mark.asyncio
-    async def test_compression_policy_rebuilt_from_candidate(
-        self, monkeypatch: pytest.MonkeyPatch, proc: MagicMock
-    ) -> None:
-        """Candidate ``compression_policy`` mirrors candidate config values."""
-        rm = RuntimeManager()
-        baseline = _real_app_config()
-        await rm.install_initial(
-            _make_real_generation(generation_id=0, config=baseline)
-        )
-        await rm.install_candidate(
-            _make_real_generation(generation_id=1, config=baseline)
-        )
-
-        candidate_config = _real_app_config(
-            compression_enabled=True,
-            compression_mode="safe",
-            min_candidate_tokens=4096,
-        )
-
-        captured: dict[str, object] = {}
-        mgr = ReloadManager(rm, proc)
-        self._stub_candidate_build(mgr, proc, captured, gen_id=2)
-        change = MagicMock(section="compression", disposition=MagicMock(value="live"))
-        diff = _make_diff(changes=(change,))
-        validation = _make_real_validation(candidate_config)
-        monkeypatch.setattr(mgr, "_compute_reload_diff", AsyncMock(return_value=diff))
-        monkeypatch.setattr(mgr, "_reconcile_persistence", AsyncMock())
-        monkeypatch.setattr(mgr, "_prepare_persistence_delta", MagicMock())
-        monkeypatch.setattr(mgr, "_apply_persistence_delta", AsyncMock())
-        monkeypatch.setattr(mgr, "_record_event", AsyncMock())
-        monkeypatch.setattr(rm, "begin_retirement", AsyncMock())
-
-        result = await mgr.reload(validation)
-        assert result.ok is True
-        policy = captured["compression_policy"]
-        assert policy.enabled is True
-        assert policy.mode == "safe"
-        assert policy.min_candidate_tokens == 4096
 
     @pytest.mark.asyncio
     async def test_models_subset_reaches_candidate_config(
@@ -1518,10 +1465,9 @@ class TestMilestoneD1CandidateBuild:
         result = await mgr.reload(validation)
         assert result.ok is True
 
-        # The candidate transcoder / compression policy references
-        # are distinct from the originals.
+        # The candidate transcoder policy reference
+        # is distinct from the original.
         assert id(captured["transcoder_policy"]) != id(baseline.transcoder)
-        assert id(captured["compression_policy"]) != id(baseline.compression)
         # And the captured config itself is distinct.
         assert id(captured["config"]) != id(baseline)
 
@@ -1569,7 +1515,6 @@ class TestMilestoneD1CandidateBuild:
             health_manager=baseline_gen.health_manager,
             cost_calculator=baseline_gen.cost_calculator,
             transcoder_policy=baseline.transcoder,
-            compression_policy=baseline_gen.compression_policy,
             dispatch_overhead_recorder=baseline_gen.dispatch_overhead_recorder,
             dispatch_span_recorder=baseline_gen.dispatch_span_recorder,
             account_backoff_repo=baseline_gen.account_backoff_repo,
@@ -1690,7 +1635,6 @@ class TestMilestoneD1RepeatedReloadSoak:
                 router=MagicMock(),
                 coordinator=MagicMock(
                     transcoder_policy=candidate_config.transcoder,
-                    compression_policy=candidate_config.compression,
                     persist_error_detail=candidate_config.security.persist_redacted_error_detail,
                 ),
                 client_pool=client_pool,
@@ -1698,7 +1642,6 @@ class TestMilestoneD1RepeatedReloadSoak:
                 health_manager=MagicMock(),
                 cost_calculator=MagicMock(),
                 transcoder_policy=candidate_config.transcoder,
-                compression_policy=candidate_config.compression,
                 dispatch_overhead_recorder=MagicMock(),
                 dispatch_span_recorder=MagicMock(),
                 account_backoff_repo=MagicMock(),
@@ -1716,9 +1659,6 @@ class TestMilestoneD1RepeatedReloadSoak:
             # is ever reused.
             captured.setdefault("transcoder_ids", set()).add(
                 id(candidate_config.transcoder)
-            )
-            captured.setdefault("compression_ids", set()).add(
-                id(candidate_config.compression)
             )
             captured.setdefault("client_pool_ids", set()).add(id(client_pool))
             captured.setdefault("outbound_manager_ids", set()).add(id(outbound_manager))
@@ -1770,7 +1710,6 @@ class TestMilestoneD1RepeatedReloadSoak:
         # a resource is reused, the retired generation's reference would
         # collide with the active generation's during the drain window.
         for resource_name, ids_seen in (
-            ("compression_ids", captured["compression_ids"]),
             ("client_pool_ids", captured["client_pool_ids"]),
             ("outbound_manager_ids", captured["outbound_manager_ids"]),
             ("supervisor_ids", captured["supervisor_ids"]),

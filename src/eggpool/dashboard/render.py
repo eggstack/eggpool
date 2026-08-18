@@ -878,8 +878,6 @@ def _td_priority(content: str, priority: int, *, class_: str | None = None) -> s
 _DISPATCH_SPAN_LABELS: dict[str, str] = {
     "coordinator_pre_upstream": "Coordinator pre-upstream",
     "segmentation": "Segmentation",
-    "compression_analyze": "Compression analyze",
-    "compression_apply": "Compression apply",
     "selection_claim_wait": "Selection claim wait",
     "selection_claim_held": "Selection claim held",
     "routing_trace_write": "Routing trace write",

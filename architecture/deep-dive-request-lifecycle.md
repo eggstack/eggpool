@@ -34,16 +34,8 @@ Client Request
     │      volatile       │
     └──────────┬──────────┘
                │
-    ┌──────────▼──────────┐
-    │ 4. Compression      │
-    │    compression/     │
-    │    analyze + apply  │
-    │    (observational   │
-    │     by default)     │
-    └──────────┬──────────┘
-               │
-    ┌──────────▼──────────┐
-    │ 5. Routing          │
+     ┌──────────▼──────────┐
+     │ 4. Routing          │
     │    routing/router.py│
     │    → select account │
     └──────────┬──────────┘
@@ -282,9 +274,8 @@ fails.  Receives dependencies explicitly rather than referencing coordinator sta
 the selected attempt is prepared. `ProviderBoundRequest` treats that graph as
 logically immutable. Narrow changes use path-level copy-on-write, while
 unknown mutators use a conservative deep-owning helper. EggPool-owned
-path-level transforms use the explicit `adopt_provider_payload()` boundary;
-safe compression therefore retains unchanged subtree identity instead of
-being recursively rematerialized at provider binding. If no body semantics
+path-level transforms use the explicit `adopt_provider_payload()` boundary.
+If no body semantics
 change, the accepted client bytes are sent unchanged. Once an upstream
 response is chosen and the stream is handed off, dispatch-only bytes, parsed
 state, and provider payload buffers are released; scalar body-size/accounting

@@ -100,7 +100,6 @@ def _build_inventory_table() -> list[tuple[str, str, bool, str]]:
         "model_overrides",
         "model_capabilities",
         "transcoder",
-        "compression",
         "models",
     }
 
@@ -167,7 +166,6 @@ EXPECTED_INVENTORY_SNAPSHOT: tuple[tuple[str, str, bool], ...] = (
     ("backup.interval_s", "live", False),
     ("backup.retain_count", "live", False),
     ("backup.startup_delay_s", "live", False),
-    ("compression", "live", False),
     ("dashboard.enabled", "restart_required", False),
     ("dashboard.public", "restart_required", False),
     ("dashboard.refresh_interval_s", "restart_required", False),
@@ -632,7 +630,6 @@ def test_inheritable_parent_audit() -> None:
         "model_overrides",
         "model_capabilities",
         "transcoder",
-        "compression",
     }
 
     # Verify documented parents return LIVE for unknown children.
@@ -687,7 +684,7 @@ def test_inheritable_parent_audit() -> None:
 # ===========================================================================
 
 # 50 made-up paths that look like real schema fields but are not in the inventory.
-# NOTE: paths under LIVE parents (transcoder, compression, cache, providers,
+# NOTE: paths under LIVE parents (transcoder, cache, providers,
 # accounts, model_overrides, model_capabilities) intentionally inherit LIVE,
 # so they are NOT included here — they are tested in inheritable_parent_audit.
 _MADE_UP_PATHS: list[str] = [

@@ -266,7 +266,7 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "accounts": ReloadDisposition.LIVE,
     "model_overrides": ReloadDisposition.LIVE,
     "model_capabilities": ReloadDisposition.LIVE,
-    # ---- transcoder / compression / cache / model_info (Milestone D1) ----
+    # ---- transcoder / cache / model_info (Milestone D1) ----
     # ``transcoder`` is consumed via the generation-owned
     # ``TranscoderPolicy`` object on the candidate ``RequestCoordinator``
     # (``coordinator._transcoder_policy``).  Sub-path changes publish
@@ -410,7 +410,7 @@ def _disposition_for(path: str) -> ReloadDisposition:
 
     - ``providers``, ``accounts``, ``model_overrides``,
       ``model_capabilities`` (closure pass).
-    - ``transcoder``, ``compression`` — request-policy blocks
+    - ``transcoder`` — request-policy block
       whose entire Pydantic surface is consumed from a generation-owned
       ``TranscoderPolicy`` / ``CompressionConfig``.  The
       candidate builder in :mod:`eggpool.control.reload_manager`
@@ -442,8 +442,6 @@ def _disposition_for(path: str) -> ReloadDisposition:
         )
     if path.startswith("transcoder.") or path == "transcoder":
         return _FIELD_DISPOSITION.get("transcoder", ReloadDisposition.RESTART_REQUIRED)
-    if path.startswith("compression.") or path == "compression":
-        return _FIELD_DISPOSITION.get("compression", ReloadDisposition.RESTART_REQUIRED)
     if path.startswith("cache.") or path == "cache":
         return _FIELD_DISPOSITION.get("cache", ReloadDisposition.RESTART_REQUIRED)
     if path.startswith("models.") or path == "models":

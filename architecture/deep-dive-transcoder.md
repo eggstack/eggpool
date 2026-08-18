@@ -283,7 +283,7 @@ Phase 7+ adds thinking/reasoning support:
 - Same-protocol requests pass through unchanged
 - Streaming transcoder is synchronous (no async per-chunk)
 - `CacheBoundaryTracker` is observational — never affects routing
-- `QuotaFairScorer` never consumes cache/compression fields
+- `QuotaFairScorer` never consumes cache fields
 - Loss policy defaults to `warn` (request proceeds, loss recorded)
 - `select_transcoder()` is the single dispatch source of truth
 - Frame helpers use compact JSON separators `(",", ":")` for wire efficiency

@@ -63,7 +63,7 @@ class TestPolicyDefaults:
 
         Closure pass: provider/account/routing/model-overrides/model-
         capabilities as ``LIVE``.  Milestone D1 adds the request-policy
-        blocks (``transcoder``, ``compression``, ``cache``) and the
+        blocks (``transcoder``, ``cache``) and the
         request-path-visible ``models`` + ``security`` subset whose
         consumers are generation-owned rebuilders in
         :mod:`eggpool.control.reload_manager`.  Milestone D2 adds
@@ -106,7 +106,6 @@ class TestPolicyDefaults:
             # generation-owned policy objects on the candidate
             # ``RequestCoordinator`` and ``CatalogService``.
             "transcoder",
-            "compression",
             # Request ingestion is generation-owned and can be changed by
             # ``eggpool rehash`` without rebuilding the listener.
             "server.max_request_body_bytes",
@@ -301,7 +300,7 @@ class TestDispositionCoverage:
             )
 
     def test_request_policy_sub_paths_inherit_live(self) -> None:
-        """D1: sub-paths of transcoder/compression/cache/models inherit LIVE.
+        """D1: sub-paths of transcoder/cache/models inherit LIVE.
 
         Reload manager rebuilds these blocks as fresh generation-owned
         policy objects, so any sub-path change is ``LIVE``.  This test
@@ -316,13 +315,6 @@ class TestDispositionCoverage:
             "transcoder.features.thinking",
             "transcoder.thinking_budget_defaults.high",
             "transcoder.openai_reasoning_fields.stream_delta",
-            # Compression surface consumed via ``coordinator._compression_policy``.
-            "compression.enabled",
-            "compression.mode",
-            "compression.min_candidate_tokens",
-            "compression.transforms.fold_repeated_lines",
-            "compression.header_override",
-            "compression.placement",
             # Models surface consumed by generation-owned catalog + tasks.
             "models.refresh_interval_s",
             "models.expose_mode",
@@ -342,10 +334,10 @@ class TestDispositionCoverage:
         )
 
     def test_unknown_child_of_live_parent_inherits_live(self) -> None:
-        """D1: children of ``transcoder``/``compression``/``cache`` inherit LIVE.
+        """D1: children of ``transcoder``/``cache`` inherit LIVE.
 
         The candidate builder in :mod:`eggpool.control.reload_manager`
-        reconstructs the entire ``TranscoderPolicy``/``CompressionConfig``/
+        reconstructs the entire ``TranscoderPolicy``/
         ``CacheConfig`` object from the candidate config.  Because the
         entire block is consumed by the candidate ``RequestCoordinator``,
         any new sub-field under those prefixes is consumed at
@@ -365,7 +357,6 @@ class TestDispositionCoverage:
         """
         for path in (
             "transcoder.brand_new_field_not_yet_in_pydantic",
-            "compression.brand_new_feature",
             "providers.brand_new_subfield",
             "accounts.brand_new_subfield",
         ):
@@ -376,7 +367,7 @@ class TestDispositionCoverage:
     def test_models_unknown_subpath_stays_restart_required(self) -> None:
         """``models`` does NOT blanket-inherit; only registered sub-paths are LIVE.
 
-        Unlike ``transcoder``/``compression``/``cache`` (which are
+        Unlike ``transcoder``/``cache`` (which are
         consumed wholesale by the candidate ``RequestCoordinator``),
         the ``models`` block has both LIVE sub-paths and
         ``RESTART_REQUIRED`` ones (``startup_refresh``,
@@ -665,7 +656,6 @@ class TestComputeDiff:
             health_manager=MagicMock(),
             cost_calculator=MagicMock(),
             transcoder_policy=MagicMock(),
-            compression_policy=MagicMock(),
             dispatch_overhead_recorder=MagicMock(),
             dispatch_span_recorder=MagicMock(),
             account_backoff_repo=MagicMock(),
@@ -1176,7 +1166,6 @@ LIVE_FIELD_CONSUMERS: dict[str, tuple[str, ...]] = {
     # generation-owned policy objects on the candidate
     # ``RequestCoordinator`` (see ``_build_candidate_generation``).
     "transcoder": ("RequestCoordinator._transcoder_policy",),
-    "compression": ("RequestCoordinator._compression_policy",),
     "server.max_request_body_bytes": ("RequestBodyLimitMiddleware", "body_reader"),
     # Milestone D1: request-path-visible models subset.
     "models.refresh_interval_s": ("CatalogService", "TaskSupervisor"),
@@ -1270,7 +1259,7 @@ class TestFieldConsumerOwnership:
                 )
 
     def test_request_policy_consumers_match_generation_owned_fields(self) -> None:
-        """D1: transcoder/compression/cache consumers are generation-owned.
+        """D1: transcoder/cache consumers are generation-owned.
 
         The candidate builder in :mod:`eggpool.control.reload_manager`
         must install the D1 policy objects onto the candidate
@@ -1286,10 +1275,7 @@ class TestFieldConsumerOwnership:
         from eggpool.runtime_manager import RuntimeGeneration
 
         names = {f.name for f in fields(RuntimeGeneration)}
-        for required in (
-            "transcoder_policy",
-            "compression_policy",
-        ):
+        for required in ("transcoder_policy",):
             assert required in names, (
                 f"RuntimeGeneration must expose {required!r} as a generation-owned "
                 "field so the candidate builder can install it"

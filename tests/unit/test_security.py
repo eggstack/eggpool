@@ -419,7 +419,6 @@ async def _install_test_runtime(app: FastAPI) -> MagicMock:
         health_manager=MagicMock(),
         cost_calculator=MagicMock(),
         transcoder_policy=MagicMock(enabled=False),
-        compression_policy=None,
         dispatch_overhead_recorder=MagicMock(),
         dispatch_span_recorder=None,
         account_backoff_repo=None,

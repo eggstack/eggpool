@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
-
-from eggpool.jsonx import dumps_str as jsonx_dumps_str
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -55,7 +52,7 @@ class PreparedTranscode:
     warnings: tuple[Mapping[str, Any], ...]
     tool_token_padding: int
     loss_policy_used: str
-    features_fingerprint: str = ""
+    features_fingerprint: int = 0
     diagnostics: PreparedTranscodeDiagnostics = field(
         default_factory=PreparedTranscodeDiagnostics,
         compare=False,
@@ -119,23 +116,22 @@ class PreparedTranscode:
         )
 
 
-def _features_fingerprint(features: TranscoderFeatures | None) -> str:
-    """Compute a deterministic fingerprint for TranscoderFeatures.
+def _features_fingerprint(features: TranscoderFeatures | None) -> int:
+    """Compute a fingerprint for TranscoderFeatures.
 
-    Returns a short hex digest suitable for comparison.  None/empty
-    features produce a sentinel fingerprint so two identical None
+    Returns an int hash; equality comparison is sufficient and avoids the
+    cost of serializing-then-hashing every cross-protocol request.
+    None/empty features produce a sentinel fingerprint so two identical None
     inputs compare equal.
     """
     if features is None:
-        return "none"
-    raw = jsonx_dumps_str(
-        {
-            "tools": features.tools,
-            "vision": features.vision,
-            "thinking": features.thinking,
-            "structured_outputs": features.structured_outputs,
-            "anthropic_primitives": features.anthropic_primitives,
-        },
-        sort_keys=True,
+        return 0
+    return hash(
+        (
+            bool(features.tools),
+            bool(features.vision),
+            bool(features.thinking),
+            bool(features.structured_outputs),
+            bool(features.anthropic_primitives),
+        )
     )
-    return hashlib.sha256(raw.encode()).hexdigest()[:16]

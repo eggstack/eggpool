@@ -638,41 +638,6 @@ def test_config_examples_omit_known_bad_tuning_keys() -> None:
             ), f"{bad_key} leaked into {path}"
 
 
-def test_config_examples_request_shaping_section_is_operator_facing() -> None:
-    """The request-shaping sections in generated config examples must
-    stay phase-free so operators see product/component language instead
-    of historical development-phase labels.  Plan files and other docs
-    may keep phase references; we only pin the generated examples.
-    """
-    forbidden_phases = (
-        "Phase 1",
-        "Phase 2",
-        "Phase 3",
-        "Phase 4",
-        "Phase 5",
-        "Phase 6",
-        "Phase 7",
-        "Phase 8",
-        "Phase 9",
-        "Phase 10",
-        "Phase 11",
-        "Phase 12",
-    )
-    for path in ("config.example.toml", "src/eggpool/_share/config.example.toml"):
-        text = Path(path).read_text()
-        # Section starts at the "Request shaping surfaces" header and
-        # runs to end-of-file; generated config examples place this
-        # block as the final section.
-        assert "Request shaping surfaces" in text, (
-            f"missing 'Request shaping surfaces' marker in {path}"
-        )
-        section = text.split("Request shaping surfaces", 1)[-1]
-        for bad in forbidden_phases:
-            assert bad not in section, (
-                f"phase-era label {bad!r} leaked into {path} request-shaping section"
-            )
-
-
 def test_provider_models_method_is_normalized() -> None:
     config = AppConfig.from_dict(
         {

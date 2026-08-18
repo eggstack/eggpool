@@ -110,7 +110,7 @@ Two distinct timing slices measuring EggPool-side latency:
 **`LocalPreUpstreamRecorder`** (opt-in, detailed span sampling):
 - Full EggPool-side window
 - From `request_received_monotonic_ns` (ASGI handler entry) to just before upstream dispatch
-- Covers: context_build, body parsing, validation, segmentation, compression, coordinator dispatch overhead
+- Covers: context_build, body parsing, validation, segmentation, coordinator dispatch overhead
 
 Both use monotonic/performance clocks. The two metrics are additive when detailed sampling is enabled.
 

@@ -233,7 +233,7 @@ class TestPreparedTranscodeDispatchData:
         assert prepared.warnings == ({"field": "tools", "kind": "unsupported"},)
         assert prepared.tool_token_padding == 100
         assert prepared.loss_policy_used == "warn"
-        assert prepared.features_fingerprint == "none"
+        assert prepared.features_fingerprint == 0
         assert prepared.diagnostics.available is True
         assert prepared.diagnostics.reused is True
         assert prepared.diagnostics.recompute_reason == (

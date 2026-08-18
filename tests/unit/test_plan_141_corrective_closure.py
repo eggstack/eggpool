@@ -426,7 +426,7 @@ class TestTextOnlyFastPathPreserved:
             warnings=(),
             tool_token_padding=0,
             loss_policy_used="warn",
-            features_fingerprint="none",
+            features_fingerprint=0,
         )
         # The validity is preserved for the protocol/features; the
         # coordinator's text-only fast path additionally requires no

@@ -718,7 +718,6 @@ async def test_snapshot_dispatch_spans_recorded_and_default_keys(
 
     recorder = DispatchSpanRecorder(window_size=10)
     recorder.record_ns("json_parse", 1_000_000)
-    recorder.record_ns("compression_apply", 7_000_000)
     service = _make_service(db, dispatch_span_recorder=recorder)
     snapshot = await service.snapshot()
     dispatch_spans = snapshot["dispatch_spans"]
@@ -726,11 +725,9 @@ async def test_snapshot_dispatch_spans_recorded_and_default_keys(
     spans = {row["span"]: row for row in dispatch_spans["spans"]}
     assert spans["json_parse"]["sample_count"] == 1
     assert spans["json_parse"]["avg_ms"] == 1.0
-    assert spans["compression_apply"]["sample_count"] == 1
-    assert spans["compression_apply"]["avg_ms"] == 7.0
     for key in ALL_SPAN_KEYS:
         assert key in spans
-        if key not in {"json_parse", "compression_apply"}:
+        if key != "json_parse":
             assert spans[key]["sample_count"] == 0
             assert spans[key]["avg_ms"] is None
 

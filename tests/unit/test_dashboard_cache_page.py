@@ -45,41 +45,11 @@ class TestRenderCacheSectionPanels:
                 "transcoded_request_count": 0,
                 "notes": "",
             },
-            compression_observability={
-                "total_requests": 0,
-                "by_status": {},
-                "by_mode": {},
-                "totals": {},
-                "per_model_status": {},
-            },
-            compression_runtime={
-                "window": {"seconds": 0, "request_count": 0},
-                "mode_counts": {},
-                "applied_count": 0,
-                "failed_fallback_count": 0,
-                "candidate_count": 0,
-                "estimated_savings_tokens": 0,
-                "actual_savings_tokens": 0,
-                "latency_ms": {"avg": None, "p50": None, "p95": None, "max": None},
-                "transforms": {},
-                "warnings": {},
-                "cache_safety": {
-                    "stable_prefix_preserved": 0,
-                    "stable_prefix_mismatch": 0,
-                },
-            },
-            compression_policy_stats={
-                "policy_counts": [],
-                "total_requests": 0,
-                "total_policies": 0,
-            },
         )
         for label in (
             "Request shaping",
             "Provider cache counters",
             "Native cache preservation",
-            "Compression",
-            "Policy overrides",
             "Routing isolation",
         ):
             assert label in html, f"section panel {label!r} missing from /cache"
@@ -88,10 +58,9 @@ class TestRenderCacheSectionPanels:
 class TestRenderCachePeriodAwareness:
     """render_cache passes the period string into the rendered page."""
 
-    def test_period_1h_with_compression_data(self) -> None:
+    def test_period_1h_renders(self) -> None:
         html = render_cache(
             period="1h",
-            compression_observability={"totals": {"observed_requests": 7}},
         )
         assert "1h" in html
 
@@ -145,8 +114,6 @@ class TestRenderCacheFallbackSummary:
     def test_fallback_uses_canonical_segmentation_counts(self) -> None:
         fallback = _render_cache_request_shaping_fallback(
             cache_stability=None,
-            compression_observability=None,
-            compression_runtime=None,
             guardrails={},
         )
         assert isinstance(fallback, dict)
@@ -487,7 +454,6 @@ class TestCacheAdvancedStateBuilder:
 
     def test_quiet_state_is_collapsed(self) -> None:
         state = _build_cache_advanced_state(
-            compression_runtime=None,
             guardrails={},
             request_shaping_summary=_base_summary(),
             transcoding_loss_warnings=0,
@@ -501,7 +467,6 @@ class TestCacheAdvancedStateBuilder:
 
     def test_segmentation_parse_failure_adds_reason(self) -> None:
         state = _build_cache_advanced_state(
-            compression_runtime=None,
             guardrails={},
             request_shaping_summary=_base_summary(
                 segmentation={

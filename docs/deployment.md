@@ -255,7 +255,7 @@ families as `LIVE`, so editing ``[providers.<id>]``,
 or ``[model_capabilities.<id>]`` applies without a restart. Other
 fields (server bind host/port, Granian construction, database path,
 middleware, security headers and trusted-proxy attribution, metrics topology, backup paths,
-transcoder/compression storage topology) remain `RESTART_REQUIRED` —
+transcoder storage topology) remain `RESTART_REQUIRED` —
 use `eggpool restart` for those. A mixed live + restart-required
 change is rejected entirely (exit code `2`); no partial application.
 The CLI is fail-closed and never implicitly restarts the service.
@@ -738,7 +738,7 @@ At startup, `_log_operational_profile()` emits a single structured log
 line (INFO level) containing workers, runtime_threads,
 database_worker_threads, stats_db_separate, WAL/synchronous/busy_timeout,
 routing_trace_mode/sample_rate, metrics_write_mode/flush_interval_s,
-transcoder/compression/cache enabled flags, and background task counts
+transcoder/cache enabled flags, and background task counts
 split by process ownership vs generation-leased. This line appears in
 `~/.local/state/eggpool/eggpool.log` (or `journalctl -u eggpool`) and
 is useful for confirming the effective configuration at a glance.

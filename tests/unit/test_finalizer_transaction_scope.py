@@ -8,7 +8,6 @@ after the transaction commits.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -33,21 +32,15 @@ class TestFinalizationDiagnosticSnapshot:
     def test_default_values(self) -> None:
         snap = _FinalizationDiagnosticSnapshot()
         assert snap.segmentation_status == "empty_request"
-        assert snap.compression_status == "disabled"
         assert snap.segmentation_summary_json is None
-        assert snap.compression_summary_json is None
 
     def test_populated_values(self) -> None:
         snap = _FinalizationDiagnosticSnapshot(
             segmentation_status="ok",
             stable_prefix_hash="abc123",
-            compression_status="observed",
-            compression_mode="observe",
         )
         assert snap.segmentation_status == "ok"
         assert snap.stable_prefix_hash == "abc123"
-        assert snap.compression_status == "observed"
-        assert snap.compression_mode == "observe"
 
 
 class TestPrecomputeFinalizationDiagnostics:
@@ -76,7 +69,6 @@ class TestPrecomputeFinalizationDiagnostics:
         )
         snap = f._precompute_finalization_diagnostics(data)
         assert snap.segmentation_status == "empty_request"
-        assert snap.compression_status == "disabled"
 
     def test_segmentation_not_collected(self) -> None:
         f = self._make_finalizer()
@@ -89,39 +81,6 @@ class TestPrecomputeFinalizationDiagnostics:
         )
         snap = f._precompute_finalization_diagnostics(data)
         assert snap.segmentation_status == "not_collected"
-
-    def test_compression_observed(self) -> None:
-        f = self._make_finalizer()
-
-        class _FakeCompressionObs:
-            mode = "observe"
-            candidate_count = 5
-            eligible_candidate_count = 3
-            suppressed_candidate_count = 1
-            estimated_original_tokens = 100
-            estimated_compressed_tokens = 80
-            estimated_savings_tokens = 20
-            analyzer_latency_ms = 1.5
-            warnings = ["w1"]
-            reason_code_counts = {"truncation": 2}
-
-        data = FinalizationData(
-            outcome=FinalizationOutcome.COMPLETED,
-            status_code=200,
-            input_tokens=0,
-            output_tokens=0,
-            compression_observation=_FakeCompressionObs(),  # type: ignore[arg-type]
-        )
-        snap = f._precompute_finalization_diagnostics(data)
-        assert snap.compression_status == "observed"
-        assert snap.compression_mode == "observe"
-        assert snap.compression_candidate_count == 5
-        assert snap.compression_eligible_candidate_count == 3
-        assert snap.compression_suppressed_candidate_count == 1
-        assert snap.compression_warning_count == 1
-        assert snap.compression_reason_code_counts_json is not None
-        parsed = json.loads(snap.compression_reason_code_counts_json)
-        assert parsed["truncation"] == 2
 
 
 class TestFinalizerAccountIdReuse:

@@ -46,8 +46,6 @@ include_score_components = false
 [transcoder]
 enabled = true
 
-[compression]
-enabled = false
 
 [maintenance]
 max_rows_per_batch = 500

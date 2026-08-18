@@ -4770,7 +4770,7 @@ class RequestCoordinator:
         """Build upstream headers using provider contract when available."""
         from eggpool.proxy.client import sanitize_request_headers
 
-        sanitized = sanitize_request_headers(dict(context.incoming_headers))
+        sanitized = sanitize_request_headers(context.incoming_headers)
         provider_cfg = (
             self._config.providers.get(selected.provider_id)
             if self._config is not None

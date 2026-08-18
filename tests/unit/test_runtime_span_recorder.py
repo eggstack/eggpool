@@ -102,7 +102,6 @@ class TestDispatchSpanRecorder:
         for key in (
             "json_parse",
             "segmentation",
-            "compression_apply",
             "selection_claim_wait",
             "routing_plan",
         ):

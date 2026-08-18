@@ -516,8 +516,8 @@ class RuntimeGeneration:
       transport owned by this generation.
     - ``health_manager``/``cost_calculator``: generation-owned state
       containers.
-    - ``transcoder_policy``/``compression_policy``: frozen
-      configuration snapshots consumed during dispatch.
+    - ``transcoder_policy``: frozen configuration snapshot
+      consumed during dispatch.
     - ``dispatch_overhead_recorder``/``dispatch_span_recorder``:
       per-generation telemetry recorders (the supervisor and runtime
       metrics service read these in process-owned wrappers).

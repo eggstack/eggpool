@@ -60,7 +60,7 @@ Bounded rolling-window timing recorders:
 - **`LocalPreUpstreamRecorder`**: full EggPool-side window (ASGI entry → upstream dispatch)
 - **`DispatchSpanRecorder`**: 200-sample dispatch span telemetry with request-coherent sampling (5% default; configurable via `[metrics.dispatch_spans].sample_rate`)
 
-Both use monotonic/performance clocks. Metrics additive: `local_pre_upstream` includes context_build, body parsing, validation, segmentation, compression, and coordinator overhead; `dispatch_overhead` covers only coordinator-internal selection/persistence/dispatch.
+Both use monotonic/performance clocks. Metrics additive: `local_pre_upstream` includes context_build, body parsing, validation, segmentation, and coordinator overhead; `dispatch_overhead` covers only coordinator-internal selection/persistence/dispatch.
 
 ### `runtime_metrics.py` — Runtime/Ops Metrics
 

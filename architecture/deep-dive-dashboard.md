@@ -37,7 +37,7 @@ Route registration for all dashboard pages:
 - `/` — Overview
 - `/models` — Model catalog with stats
 - `/runtime` — Live runtime metrics
-- `/cache` — Request shaping (compression, cache, segmentation)
+- `/cache` — Request shaping (cache, segmentation)
 - `/models/{model_id:path}` — Model detail page
 
 ### `dashboard/render.py`
@@ -166,9 +166,6 @@ Transcoding stats aggregation.
 | `/api/stats/cache-observability` | Cache counter coverage |
 | `/api/stats/canonical-request-segmentation` | Segmentation stats |
 | `/api/stats/cache-stability` | Cache stability |
-| `/api/stats/compression-observability` | Compression opportunities |
-| `/api/stats/compression-runtime` | Compression outcomes |
-| `/api/stats/compression-policies` | Per-policy rollup |
 | `/api/stats/request-shaping` | Operator-facing summary |
 | `/api/stats/thinking` | Thinking/reasoning counters |
 | `/api/stats/update` | Update checker state |

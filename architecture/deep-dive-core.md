@@ -62,7 +62,7 @@ Never raises `SystemExit` — errors are returned as structured objects.
 ### `config_reload_policy.py` — Live Reload Classification
 
 Typed configuration diff and reload policy:
-- `LIVE` fields: provider/account/routing/model-override families, `[transcoder]`, `[compression]`, `[cache]`, subset of `[models]`, retention durations
+- `LIVE` fields: provider/account/routing/model-override families, `[transcoder]`, `[cache]`, subset of `[models]`, retention durations
 - `RESTART_REQUIRED` fields: everything else
 - `_FIELD_DISPOSITION` map is the single source of truth
 - `eggpool rehash` JSON output pinned at 9 keys

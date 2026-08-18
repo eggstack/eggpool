@@ -94,7 +94,6 @@ def _service_graph_manifest(
             "stats_service": type(gen.stats_service).__name__,
             "supervisor": type(gen.supervisor).__name__,
             "transcoder_policy": type(gen.transcoder_policy).__name__,
-            "compression_policy": type(gen.compression_policy).__name__,
             "dispatch_overhead_recorder": type(gen.dispatch_overhead_recorder).__name__,
             "dispatch_span_recorder": type(gen.dispatch_span_recorder).__name__,
             "account_backoff_repo": type(gen.account_backoff_repo).__name__,
@@ -158,7 +157,6 @@ class TestFactoryParity:
             assert result.health_manager is not None
             assert result.cost_calculator is not None
             assert result.transcoder_policy is not None
-            assert result.compression_policy is None
             assert result.dispatch_overhead_recorder is not None
             assert result.dispatch_span_recorder is None
             assert result.account_backoff_repo is not None
@@ -186,7 +184,6 @@ class TestFactoryParity:
             await MigrationRunner(db).run()
             process = _make_process(db=db, stats_db=db)
             config = _make_config(model_info={"enabled": True})
-            config.compression.enabled = True
             config.metrics.dispatch_spans.sample_rate = 0.1
 
             result = await RuntimeGenerationFactory().prepare(
@@ -198,7 +195,6 @@ class TestFactoryParity:
 
             assert result.model_info is not None
             assert result.outbound_manager is not None
-            assert result.compression_policy is not None
             assert result.dispatch_span_recorder is not None
             assert result.local_pre_upstream_recorder is not None
         finally:

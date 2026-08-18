@@ -392,67 +392,6 @@ class TestCanonicalRequestSegmentationEndpoint:
         assert data["per_provider_status"]["prov-a->openai"]["not_collected"] == 2
 
 
-class TestCompressionObservabilityEndpoint:
-    """GET /api/stats/compression-observability returns JSON."""
-
-    @pytest.mark.asyncio()
-    async def test_returns_200_with_auth(self, app_with_key: FastAPI) -> None:
-        response = await _get(app_with_key, "/api/stats/compression-observability")
-        assert response.status_code == 200
-        data = response.json()
-        assert "by_status" in data
-        assert "totals" in data
-        assert "by_policy" in data
-
-
-class TestCompressionRuntimeEndpoint:
-    """GET /api/stats/compression-runtime returns JSON."""
-
-    @pytest.mark.asyncio()
-    async def test_returns_200_with_auth(self, app_with_key: FastAPI) -> None:
-        response = await _get(app_with_key, "/api/stats/compression-runtime")
-        assert response.status_code == 200
-        data = response.json()
-        assert "window" in data
-        assert "mode_counts" in data
-        assert "applied_count" in data
-        assert "latency_ms" in data
-        assert "transforms" in data
-        assert "warnings" in data
-        assert "cache_safety" in data
-
-    @pytest.mark.asyncio()
-    async def test_empty_db_returns_stable_shape(self, app_with_key: FastAPI) -> None:
-        response = await _get(app_with_key, "/api/stats/compression-runtime")
-        data = response.json()
-        assert data["window"]["request_count"] == 0
-        assert data["applied_count"] == 0
-        assert data["mode_counts"] == {
-            "disabled": 0,
-            "observe": 0,
-            "safe": 0,
-        }
-        assert data["latency_ms"] == {
-            "avg": None,
-            "p50": None,
-            "p95": None,
-            "max": None,
-        }
-
-
-class TestCompressionPolicyStatsEndpoint:
-    """GET /api/stats/compression-policies returns JSON."""
-
-    @pytest.mark.asyncio()
-    async def test_returns_200_with_auth(self, app_with_key: FastAPI) -> None:
-        response = await _get(app_with_key, "/api/stats/compression-policies")
-        assert response.status_code == 200
-        data = response.json()
-        assert "policy_counts" in data
-        assert "total_requests" in data
-        assert "total_policies" in data
-
-
 class TestCacheStabilityEndpoint:
     """GET /api/stats/cache-stability returns JSON."""
 
@@ -481,7 +420,6 @@ class TestRequestShapingEndpoint:
         data = response.json()
         assert data["period"] == "24h"
         assert "mode" in data
-        assert "compression" in data
         assert "cache" in data
         assert "guardrails" in data
 
@@ -519,9 +457,6 @@ class TestAuthGating:
         [
             "/api/stats/cache-observability",
             "/api/stats/canonical-request-segmentation",
-            "/api/stats/compression-observability",
-            "/api/stats/compression-runtime",
-            "/api/stats/compression-policies",
             "/api/stats/cache-stability",
             "/api/stats/request-shaping",
         ],
@@ -537,8 +472,6 @@ class TestAuthGating:
         "endpoint",
         [
             "/api/stats/cache-observability",
-            "/api/stats/compression-runtime",
-            "/api/stats/compression-policies",
             "/api/stats/cache-stability",
             "/api/stats/request-shaping",
         ],
@@ -558,8 +491,6 @@ class TestPublicDashboard:
         "endpoint",
         [
             "/api/stats/cache-observability",
-            "/api/stats/compression-runtime",
-            "/api/stats/compression-policies",
             "/api/stats/cache-stability",
             "/api/stats/request-shaping",
         ],
@@ -585,9 +516,6 @@ class TestJsonSafety:
         [
             "/api/stats/cache-observability",
             "/api/stats/canonical-request-segmentation",
-            "/api/stats/compression-observability",
-            "/api/stats/compression-runtime",
-            "/api/stats/compression-policies",
             "/api/stats/cache-stability",
             "/api/stats/request-shaping",
         ],
@@ -612,27 +540,3 @@ class TestJsonSafety:
 
 class TestPeriodParameter:
     """Period parameter is accepted; bad values do not crash."""
-
-    @pytest.mark.parametrize(
-        "period",
-        ["1h", "24h", "7d", "30d"],
-    )
-    @pytest.mark.asyncio()
-    async def test_compression_runtime_accepts_preset(
-        self, app_with_key: FastAPI, period: str
-    ) -> None:
-        response = await _get(
-            app_with_key, f"/api/stats/compression-runtime?period={period}"
-        )
-        assert response.status_code == 200
-
-    @pytest.mark.asyncio()
-    async def test_compression_runtime_handles_unknown_period(
-        self, app_with_key: FastAPI
-    ) -> None:
-        """Unknown period strings return 200 with empty data, not 500."""
-        response = await _get(
-            app_with_key, "/api/stats/compression-runtime?period=garbage"
-        )
-        # 200 with empty/stable data; we don't 500 on bad input.
-        assert response.status_code == 200

@@ -53,7 +53,6 @@ def _build_generation(gen_id: int) -> RuntimeGeneration:
         health_manager=MagicMock(),
         cost_calculator=MagicMock(),
         transcoder_policy=MagicMock(),
-        compression_policy=MagicMock(),
         dispatch_overhead_recorder=MagicMock(),
         dispatch_span_recorder=MagicMock(),
         account_backoff_repo=MagicMock(),

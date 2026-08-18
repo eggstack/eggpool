@@ -741,6 +741,8 @@ class RuntimeMetricsService:
             "active_backoff_count": active_backoff_count,
             "guardrails": {
                 "routing_cache_compression_mode": "reporting_only",
+                "routing_uses_compression_metrics": False,
+                "routing_uses_compression_policy": False,
                 "routing_uses_cache_metrics": False,
                 "routing_uses_stable_prefix_hash": False,
                 "route_scorer_inputs": [

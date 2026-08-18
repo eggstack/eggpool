@@ -159,7 +159,7 @@ Schema migration execution. Ordered SQL files in `db/schema/`.
 
 | Table | Purpose |
 |-------|---------|
-| `requests` | Request lifecycle, usage, cache/compression metrics |
+| `requests` | Request lifecycle, usage, cache metrics |
 | `request_attempts` | Per-request attempt tracking with provider/model/protocol |
 | `routing_decisions` | Routing decisions with score components |
 | `accounts` | Account configuration and state |

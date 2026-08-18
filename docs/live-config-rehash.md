@@ -43,8 +43,6 @@ candidate builder already constructs as generation-owned objects:
   ``transcoder_loss_policy``, ``protocol_safety_mode``, and
   ``http_status_overrides``. A change rebuilds the generation's
   ``TranscoderPolicy`` and rewires the new ``RequestCoordinator``.
-- **Compression policy** (``[compression]``) — every field. The
-  generation rebuild applies policy-scoped observe/safe transforms.
 - **Models subset** (``[models]``) — ``expose_mode``,
   ``collapse_models``, ``refresh_interval_s``, ``stale_after_s``,
   ``allow_stale_catalog``. Startup-only fields
@@ -296,7 +294,7 @@ in `config_reload_policy.py`:
 
 The closure pass enables provider/account/routing/model-override
 families as `LIVE`. The D1 expansion extends the inventory to
-request-policy fields: the entire `[transcoder]` and `[compression]` blocks,
+request-policy fields: the entire `[transcoder]` block,
 and the runtime-tunable subset
 of `[models]` (`expose_mode`, `collapse_models`, `refresh_interval_s`,
 `stale_after_s`, `allow_stale_catalog`), and

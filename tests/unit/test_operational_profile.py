@@ -98,8 +98,6 @@ class TestOperationalProfile:
             "metrics_write_mode",
             "metrics_flush_interval_s",
             "transcoder_enabled",
-            "compression_enabled",
-            "compression_mode",
             "model_info_enabled",
             "task_total",
             "task_process_owned",
