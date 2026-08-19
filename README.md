@@ -142,14 +142,31 @@ See [Deployment](docs/deployment.md) for alternative install methods (pipx, manu
 | `eggpool stats transcoding` | Show protocol transcoding statistics |
 | `eggpool stats repair-costs` | Dry-run/apply repair for suspicious historical request costs |
 | `eggpool stats recompute-costs` | Recompute `cost_microdollars` on historical requests |
+| `eggpool stats explain-dashboard` | Explain dashboard rendering internals |
+| `eggpool modelinfo show` | Show enriched model metadata |
+| `eggpool modelinfo list` | List model-info entries |
+| `eggpool modelinfo refresh` | Trigger model-info source refresh |
+| `eggpool modelinfo aliases` | Show model aliases |
+| `eggpool modelinfo repair` | Repair model-info state |
+| `eggpool dashboard public` | Print dashboard public URL |
 | `eggpool runtime-status` | Print runtime health summary |
 | `eggpool backup` | Create a timestamped backup |
 | `eggpool recover` | Restore from a backup archive |
+| `eggpool db vacuum` | Vacuum the SQLite database |
+| `eggpool set` | Set a config value |
+| `eggpool edit` | Edit config in $EDITOR |
+| `eggpool getkey` | Print the server API key |
+| `eggpool newkey` | Generate and write a new server API key |
+| `eggpool init-config` | Initialize config from template |
+| `eggpool version` | Show installed version |
+| `eggpool croncheck` | Fast-path cron watchdog check (stdlib-only) |
+| `eggpool ensure-running` | Ensure server is running (stdlib-only) |
 | `eggpool deploy systemd` | Print/install systemd unit |
 | `eggpool deploy cron` | Install watchdog cron (non-systemd) |
 | `eggpool deploy backup-cron` | Install daily backup cron job |
 | `eggpool deploy logrotate` | Print/install logrotate config |
 | `eggpool deploy all` | Print every deployment snippet in sequence |
+| `eggpool configsetup` | Generate config snippets for coding agents (opencode, claude-code, aider, codex, etc.) |
 | `eggpool update [VERSION]` | Check for latest, or install an exact PyPI release (`v` prefix accepted) |
 | `eggpool uninstall` | Uninstall EggPool from this machine |
 
@@ -336,13 +353,7 @@ and matching backoff; a durable failure preserves the current suppression.
 
 EggPool includes an opt-in, cache-preserving request-shaping stack. With shipped defaults the entire stack is **reporting-only**: no request body, header, or route is altered. Routing remains load-based — cache and compression fields never enter `QuotaFairScorer`.
 
-The stack covers provider cache counters, request segmentation, native cache preservation, and optional compression (observe → safe). Native cache boundaries are preserved by the transcoder. The dashboard `/cache` page provides operator summary cards and drill-down tables; advanced diagnostics stay collapsed unless a warning is present.
-
-| Operator guide | [docs/cache-compression.md](docs/cache-compression.md) |
-|---|---|
-| Copy-pasteable profiles | [docs/cache-compression-profiles.md](docs/cache-compression-profiles.md) |
-| Troubleshooting | [docs/cache-compression-troubleshooting.md](docs/cache-compression-troubleshooting.md) |
-| Architecture | [architecture/README.md](architecture/README.md) |
+The stack covers provider cache counters, request segmentation, native cache preservation, and optional compression (observe → safe). Native cache boundaries are preserved by the transcoder. The dashboard `/cache` page provides operator summary cards and drill-down tables; advanced diagnostics stay collapsed unless a warning is present. See [architecture/README.md](architecture/README.md) for the full request-shaping design.
 
 ## API Endpoints
 
@@ -398,9 +409,6 @@ The dashboard `/models` page shows enriched model metadata from provider catalog
 | Filesystem layout | [docs/filesystem-layout.md](docs/filesystem-layout.md) |
 | Network & DNS diagnostics | [docs/network-diagnostics.md](docs/network-diagnostics.md) |
 | Protocol transcoding | [docs/transcoding.md](docs/transcoding.md) |
-| Cache & compression operator guide | [docs/cache-compression.md](docs/cache-compression.md) |
-| Cache & compression profiles | [docs/cache-compression-profiles.md](docs/cache-compression-profiles.md) |
-| Cache & compression troubleshooting | [docs/cache-compression-troubleshooting.md](docs/cache-compression-troubleshooting.md) |
 | OpenCode stream stability | [docs/opencode-stream-stability.md](docs/opencode-stream-stability.md) |
 | Model-info OpenRouter debugging | [docs/model-info-openrouter-debug.md](docs/model-info-openrouter-debug.md) |
 | Thinking & reasoning | [docs/thinking.md](docs/thinking.md) |

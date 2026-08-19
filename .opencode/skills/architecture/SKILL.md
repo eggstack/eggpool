@@ -51,58 +51,15 @@ All data-plane requests flow through `RequestCoordinator`:
 
 ## Protocol Transcoding
 
-EggPool's public protocol scope is OpenAI Chat Completions at
-`/v1/chat/completions`, the stateless OpenAI Responses passthrough at
-`/v1/responses`, Anthropic Messages at `/v1/messages`, and model listing
-at `/v1/models`. The Responses surface is strictly same-protocol
-passthrough: `_prepare_transcode_preflight()` is skipped, no
-BodyTranscoder or StreamingTranscoder is ever selected, and the
-thinking-control adapter is no-op. Providers must declare
-`responses_path`; Anthropic-only models are rejected locally before any
-durable state. Stateless admission rejects `previous_response_id`, any
-`conversation` reference (including `{}`), omitted `store` (must be
-`false` explicitly), `store=true`, and `background=true` before
-provider selection. `response.completed` is the only successful
-canonical terminal event; `response.failed` / `response.incomplete` are
-terminal non-success outcomes forwarded unchanged with no provider
-failover after downstream handoff. Transparent request/response format
-conversion between OpenAI Chat Completions and Anthropic Messages
-protocols lives in `src/eggpool/transcoder/`. `select_transcoder()` in
-`protocol.py` is the dispatch source of truth. Controlled by
-`[transcoder]` config; on by default.
-
-- **Streaming hot path**: one bounded `SSEDecoder` per upstream stream, synchronous `translate_frame()`/`finish()`, compact JSON separators `(",",":")`, lazy JSON-object parse cache
-- **Request preparation hot path**: ASCII-only context strings use the native `str.isascii()` path; enforced canonical context estimates are returned by limit checking and reused in `ProxyRequestContext`, while unbounded models avoid that walk. Translated tool allowance is passed as estimator arithmetic, with rough padding using the shared decoded structural estimator rather than per-tool JSON encoding. Provider IDs and trusted proxies are immutable, generation-owned lookup sets used directly by leased requests.
-- **Provider payload lifecycle**: `ProviderBoundRequest` is the sole provider-payload authority after client parsing. Copy-on-write generation-aware mutations, one final serialization cache, frozen before dispatch. Original client bytes remain separate from the provider-bound payload.
-- **Prepared transcode ownership**: preflight retains one request-local translated generation without recursive physical freezing. Valid unchanged reuse and protocol-transcode recompute adopt fresh translated graphs through `adopt_provider_payload()` and reuse encoded bytes where available; later provider-specific changes establish COW or conservative ownership before mutation. Prepared graphs never cross request boundaries.
-- **Provider payload memory**: canonical parsed state is logically immutable. Cross-protocol encoders receive a read-only `Mapping` and return fresh target graphs, which are adopted without a second recursive ownership pass. Narrow provider changes use path-level copy-on-write, trusted EggPool-owned graphs use `adopt_provider_payload()`, unknown graphs use conservative deep ownership, native/no-transform dispatch reuses accepted client bytes, strict media validation rejects obvious encoded-size overflow before decode, and stream handoff releases dispatch-only buffers after retry is impossible.
-- **Thinking-control adaptation ownership**: `adapt_thinking_controls()` accepts a read-only `Mapping[str, Any]` source and builds its own shallow-copied working root. The coordinator's `_adapt_provider_thinking_controls()` adopts changed results through `adopt_provider_payload(reason="thinking_control")` rather than the conservative `replace_provider_payload()` helper. No-op adaptation leaves `payload_generation` unchanged and preserves the cached provider bytes. `mutate_provider_payload()` was removed in Plan 121 (no production callers); the explicit narrow primitives (`mutate_top_level_mapping`, `adopt_provider_payload`, `set_provider_payload`) cover the narrowed surface.
-- **Request body limits**: `[server].max_request_body_bytes` is the whole-request ceiling (10 MiB default); provider document/media limits are applied afterward and never raise it.
-- The transcoder's `usage` property returns a default; finalization must read usage from the coordinator's observer
-- Tool calling is baseline cross-protocol compatibility; the legacy
-  `TranscoderFeatures.tools` field is a no-op compatibility setting.
-- `ModelCapabilities.transcoding` is the explicit native-control contract:
-  `native_structured_outputs`, `strict_tools`, `parallel_tool_control`, and
-  per-protocol `reasoning_efforts`. Missing facts are unknown and do not emit
-  native fields to generic compatible providers.
-- OpenAI reasoning efforts are model-dependent. The verified `none` value
-  disables reasoning; OpenAI → Anthropic translation omits target thinking for
-  it. `xhigh`, `max`, and future labels require an explicit capability mapping
-  before a target budget is emitted; otherwise strict policy rejects and
-  lenient policy drops the target control with a bounded warning.
-- Native prompt-cache translation is capability-gated and bounded to four
-  breakpoints. `TranscodingCapabilities.prompt_cache_breakpoints` is a
-  provider/model contract map with an explicit first-party or compatible-
-  extension dialect, verified TTL labels, and a target bound; protocol names
-  alone never enable cache fields. An absent source breakpoint is a no-op;
-  only an actually emitted target breakpoint counts as mapped. Malformed,
-  unsupported, and overflowed boundaries remain visible losses without
-  creating target-native explicit-cache options. EggPool does not synthesize
-  cache controls or cache keys.
-- Native OpenAI JSON schema uses Anthropic `output_config.format` in the
-  verified direction; native strict tools and parallel disabling use the
-  provider-documented fields. Loss-policy warnings remain local preparation
-  failures and do not penalize or retry providers.
+OpenAI Chat Completions ↔ Anthropic Messages conversion lives in
+`src/eggpool/transcoder/`. The Responses surface (`/v1/responses`) is
+strictly same-protocol passthrough — no transcoding. Controlled by
+`[transcoder]` config; on by default. Provider payload is
+`ProviderBoundRequest` with copy-on-write ownership; cross-protocol
+encoders receive a read-only `Mapping` and return fresh target graphs.
+Native prompt-cache, thinking control, structured outputs, and tool
+calling are capability-gated. See `architecture/deep-dive-transcoder.md`
+for streaming hot path, ownership lifecycle, and full translation table.
 
 ## JSON Backend
 
@@ -157,13 +114,13 @@ worker boundary.
 ```
 AggregatorError (base)
 ├── ConfigError
-│   └── ConfigValidationError (config_validation.py, not errors.py)
-│       ├── ConfigFileAccessError
-│       ├── ConfigParseError
-│       ├── ConfigSchemaError
-│       ├── ConfigStartupAuthError
-│       ├── ConfigAccountCredentialError
-│       └── ConfigInternalError
+├── ConfigValidationError (config_validation.py, not errors.py; inherits AggregatorError, not ConfigError)
+│   ├── ConfigFileAccessError
+│   ├── ConfigParseError
+│   ├── ConfigSchemaError
+│   ├── ConfigStartupAuthError
+│   ├── ConfigAccountCredentialError
+│   └── ConfigInternalError
 ├── DatabaseError
 │   ├── DatabaseCommitError
 │   ├── DatabaseConnectionInvalidatedError

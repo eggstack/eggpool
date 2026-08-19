@@ -87,8 +87,6 @@ uv run ruff check --fix src/
 - Provider contract tests: `uv run pytest tests/unit/test_contract.py tests/unit/test_contract_urls.py -v`
 - Transcoder/proxy contract tests: `uv run pytest tests/contract/ -v`
 - Multimodal transcoder tests: `uv run pytest tests/unit/test_transcoder/test_multimodal.py -v`
-- Plan 141 final corrective closure: `uv run pytest tests/unit/test_plan_141_corrective_closure.py tests/unit/test_oversize_413_lifecycle.py tests/unit/test_transcoder/test_sensitive_media.py -v`
-- Plan 142 typed-error closure: `uv run pytest tests/unit/test_plan_141_corrective_closure.py tests/unit/test_oversize_413_lifecycle.py tests/unit/test_transcoder/test_multimodal.py tests/unit/test_provider_registry.py -v`
 - Performance, live, and diagnostic reproducer tests are manually invoked, not run in CI
 - Database fixtures must disconnect on every teardown path; use `try/finally` on the canonical event loop
 
@@ -123,6 +121,19 @@ Consult active plans only when the change is in their scope.
 - **Runtime generations**: `RuntimeManager` owns active/retiring slots. Deep dive: `architecture/deep-dive-runtime.md`
 - **Health management**: `src/eggpool/health/` — circuit breaker, bounded 1,800s backoff, model quarantine. Deep dive: `architecture/deep-dive-health.md`
 - **Background tasks**: `src/eggpool/background/` — `TaskSupervisor`, fixed-delay scheduler. Deep dive: `architecture/deep-dive-background.md`
+- **Model catalog**: discovers, normalizes, and tracks capabilities across providers. Deep dive: `architecture/deep-dive-catalog.md`
+- **Control plane**: live config reload (rehash) via Unix-domain socket. Deep dive: `architecture/deep-dive-control.md`
+- **Provider architecture**: identity, protocol/model contracts, credentials, outbound transport. Deep dive: `architecture/deep-dive-providers.md`
+- **Retry classification**: upstream failure classification into 8 categories and retry/backoff decisions. Deep dive: `architecture/deep-dive-retry.md`
+- **Security**: header redaction, API key auth, trusted-proxy attribution. Deep dive: `architecture/deep-dive-security.md`
+- **Data models**: Pydantic v2 models for config, domain objects, API payloads, DB rows. Deep dive: `architecture/deep-dive-models.md`
+- **Model info sidecar**: multi-source model metadata enrichment. Deep dive: `architecture/deep-dive-model-info.md`
+- **Dashboard & stats**: self-updating HTML dashboard and JSON stats API. Deep dive: `architecture/deep-dive-dashboard.md`
+- **Observability**: routing trace persistence for debugging and dashboard drill-down. Deep dive: `architecture/deep-dive-observability.md`
+- **Metrics & telemetry**: structured observability, metrics buffering, runtime diagnostics. Deep dive: `architecture/deep-dive-metrics.md`
+- **Integrations**: config generation for external coding tools. Deep dive: `architecture/deep-dive-integrations.md`
+- **Core modules**: CLI entry points, configuration, error handling, constants, JSON backend. Deep dive: `architecture/deep-dive-core.md`
+- **Lifecycle**: startup, shutdown, generation swap sequencing. Deep dive: `architecture/deep-dive-lifecycle.md`
 
 ## Gotchas
 
@@ -147,7 +158,7 @@ Consult active plans only when the change is in their scope.
 Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or `raise ... from None`.
 
 - `AggregatorError` → `ConfigError`, `DatabaseError`, `ProxyError`
-- `ConfigError` → `ConfigValidationError` (with subclasses: `ConfigFileAccessError`, `ConfigParseError`, `ConfigSchemaError`, `ConfigStartupAuthError`, `ConfigAccountCredentialError`, `ConfigInternalError`)
+- `ConfigValidationError` (in `config_validation.py`, not `errors.py`; inherits `AggregatorError`, not `ConfigError`) → `ConfigFileAccessError`, `ConfigParseError`, `ConfigSchemaError`, `ConfigStartupAuthError`, `ConfigAccountCredentialError`, `ConfigInternalError`
 - `DatabaseError` → `DatabaseCommitError`, `DatabaseConnectionInvalidatedError`, `DatabaseRollbackError`, `DatabaseTransactionOwnershipError`, `ModelQuarantineHydrationError`, `ModelQuarantineRecoveryError`
 - `UpstreamError` (has `status_code`) → `TemporaryUpstreamError`, `TransientUpstreamError`, `AuthenticationError`, `QuotaExhaustedError`, `RateLimitError` (has `retry_after`), `ModelUnavailableError`
 - `ProxyError` → `PrematureStreamEOFError`
@@ -157,7 +168,7 @@ Use the hierarchy in `errors.py`. Chain exceptions with `raise ... from err` or 
 - `RuntimeManagerLeaseExhaustedError` (RuntimeError) — mapped to HTTP 503 in `proxy_request.py`
 - `TranscodeLossError` (from `transcoder.errors`) — HTTP 400 when `loss_policy = "reject"`
 - `ProtocolMismatchError` (from `catalog.protocols`) — endpoint/model-protocol mismatch
-- `ConfigValidationError(ConfigError)` and its subclasses are raised by `eggpool.config_validation.validate_config_file()`. They chain from the underlying failure and never raise `SystemExit`
+- `ConfigValidationError` (in `config_validation.py`, not `errors.py`) and its subclasses are raised by `eggpool.config_validation.validate_config_file()`. They chain from the underlying failure and never raise `SystemExit`
 
 ## Fast-Path CLI
 
