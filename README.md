@@ -8,103 +8,20 @@
 
 A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts behind OpenAI Chat Completions- and Anthropic Messages-compatible paths.
 
-EggPool's public OpenAI surface is intentionally limited to Chat Completions
-(`POST /v1/chat/completions`), the stateless Responses passthrough
-(`POST /v1/responses`), and model listing (`GET /v1/models`). It also
-exposes Anthropic Messages at `POST /v1/messages`. EggPool does not claim
-full OpenAI API parity — `/v1/responses` is a stateless same-protocol
-passthrough (no `previous_response_id`, conversation state, `store=true`,
-`background=true`, retrieval, cancellation, background jobs, or
-WebSocket transport).
-
 ## Features
 
-- Proxies model requests across multiple providers and accounts behind a single endpoint
-- OpenAI Chat Completions- and Anthropic Messages-compatible request paths, with transparent bidirectional protocol transcoding
-- Dynamically discovers available models; routes by quota utilization (load-based, never cost-based)
-- Optional per-account outbound proxy support ([pproxy](https://pypi.org/project/pproxy/) — install with `uv sync --extra proxy`; SOCKS5, HTTP, Shadowsocks)
-- Tracks requests, tokens, latency, errors, and cost provenance in SQLite (`provider_reported`, trusted local `derived`/`partial`, bounded `estimated`; reservation is advisory, not a floor)
-- Multi-page dashboard with 50+ themes, reliability, routing, and runtime views
+- Single endpoint for OpenAI Chat Completions (`/v1/chat/completions`), Anthropic Messages (`/v1/messages`), and stateless Responses passthrough (`/v1/responses`)
+- Transparent bidirectional protocol transcoding between OpenAI and Anthropic
+- Dynamic model discovery with load-based routing across multiple providers and accounts
+- Request, token, latency, error, and cost tracking in SQLite
+- Multi-page dashboard with 50+ themes
 - Model metadata enrichment from provider catalogs, OpenRouter, Artificial Analysis, and Hugging Face
-- Provider-neutral request shaping: capability-gated native cache-boundary translation, cache reporting, safe suffix compression, and policy-scoped overrides
-- Single-decode provider payload lifecycle: selected-provider transforms share one immutable client snapshot, generation-aware provider payload, and final serialization cache; cross-protocol encoders read that payload as a `Mapping` and adopt their fresh target graph directly
-- Request preparation is allocation-conscious: canonical decoded context estimates are computed once when model limits are enforced, translated tool allowance reuses the shared structural estimator without per-tool encoding, and provider/trusted-proxy lookup sets are generation-owned
 - Thinking/reasoning capability-aware routing with configurable budget mapping
-- High-concurrency stream stability: bounded terminal-finalization supervision, lock-contention diagnostics, and an OpenCode-specific operator playbook for sustained coding-agent streaming loads
-- Protocol-aware stream completion: clean EOF is classified from upstream `[DONE]`/`message_stop` evidence; truncated streams are never recorded as successful
-- Isolated upstream dispatch: only typed HTTPX transport failures retry across distinct accounts before response handoff; local preparation and response-adaptation faults terminate safely without provider penalties
-- Dispatch timing: distinct `local_pre_upstream` (full EggPool-side) and `dispatch_overhead` (coordinator-internal) metrics with cadence drift diagnostics for background tasks
-- Selection hot path: generation-hydrated account identities keep SQLite outside the claim lock, while provisional request/token load is visible to later scorers before persistence and routing plans carry quarantine exclusions directly into sampled diagnostic traces
-- Durable dispatch persistence: each request commits its request, reservation, and attempt identities in one transaction before upstream dispatch
-- Amortized quota-window maintenance: ordered observations expire incrementally, while rare out-of-order timestamps remain correct through a bounded slow path
-- Bounded observability: coarse metrics by default, opt-in request-coherent spans, bounded rolling-window metrics, and constant-bounded snapshot cost regardless of uptime
-- Error isolation: provider-specific validation errors (e.g. unsupported MiniMax-M3 thinking through OpenCode Go) are contained to a single request — no account/model/circuit/quarantine penalties, no restart or database deletion required
-- Attempt-scoped failure decisions: one bounded canonical decision carries retry, provider evidence, health/quarantine, circuit, backoff, and probe-convergence effects; retained attempt ownership prevents identical failures from colliding or replaying
-- Generation-owned terminal ownership: selected request finalization, failed-attempt cleanup, and post-commit claim compensation are reconciled by one bounded supervisor with kind-qualified identities, typed progress, one global capacity, one retry timer, and one drain; the owning generation retains one terminal reference per accepted command until durable and required runtime convergence
-- Low-round-trip finalization: first-attempt observability is carried by the request INSERT, and terminal `last_attempt_id` is written by the existing request `RETURNING` mutation; request, attempt, and reservation convergence remains one transaction, while duplicate and partial paths retain focused durable reads
-- Truthful stream handoff: `downstream_started` is marked when the proxy forwards ASGI `http.response.start`, before body iteration; an empty started stream is post-handoff with `bytes_emitted = 0`, and cannot be retried
-- Restart-safe crash recovery: startup reconciliation repairs durable requests and reservations left by a prior process; normal runtime cleanup remains owned by the selected attempt
-- Database transactions: one asyncio task owns each SQLite transaction; child or unrelated tasks cannot execute inside another task's boundary, and rollback remains private to that owner.
-- Database recovery: fail-closed startup integrity and restart-safe crash reconciliation; an indeterminate runtime SQLite state closes admission and lets systemd restart the worker
-- Bounded model quarantine: TTL-based suspected/quarantined state with corroboration thresholds and automatic recovery
-- Self-healing provider health: every nonterminal account/model suppression is capped at 30 minutes, durable hints are bounded during hydration, and half-open probes always converge
+- Per-account outbound proxy support ([pproxy](https://pypi.org/project/pproxy/) — install with `uv sync --extra proxy`)
+- Optional `orjson` backend for faster JSON handling (`uv sync --extra fast`)
 - Designed for lightweight deployments (Raspberry Pi, SBCs)
 
-The ordinary install is already a lightweight local profile: it binds to
-loopback, uses one SQLite worker, low-wear analytics buffering, 16 provider
-connections with 4 keepalives, and no model-info, routing-trace, readiness,
-backup, or background PyPI task. `eggpool onboard` asks whether to
-bind to the LAN; noninteractive onboarding keeps loopback. Optional features
-remain explicit configuration choices.
-
-Analytics indexes are fixed schema assets rather than dashboard toggles.
-The schema keeps indexes for request lifecycle, recovery, retention, and
-filtered provider/model views; the unused per-attempt status aggregate index
-was removed to avoid maintaining it on every attempt write.
-
-For a copyable SBC profile with a safe loopback bind and provider discovery
-cadence, see [config.sbc.example.toml](config.sbc.example.toml). Set a server
-API key before changing its bind address to a LAN or wildcard address. Its full
-database backup is disabled by default to keep the low-wear profile truthful;
-enable `[backup]` deliberately when local recovery copies are required.
-
-Resource behavior is intentionally profile-driven rather than governed by a
-universal RSS threshold. Use `eggpool runtime-status --json` after startup to
-inspect the bounded task inventory, local dispatch timings, database/WAL
-state, and generation-retirement ownership on the target host.
-
-For a short manual SBC characterization, use a real target host and a
-secret-safe normal/SBC configuration with configured providers when available.
-Use only the existing runtime snapshot and OS process/socket tools, keep
-provider/network latency separate from EggPool-local timings, and treat the
-observations as descriptive rather than thresholds or CI gates. If suitable
-hardware or safe provider credentials are unavailable, record the affected
-dimensions as `not measured`; do not substitute workstation results or a
-benchmark/soak harness. The completed evidence for this workflow is retained
-in [Plan 126](plans/126-provider-backed-sbc-characterization.md).
-
-## Testing
-
-The ordinary CI gate runs formatting, Ruff, Pyright, and the smoke suite. Local
-verification should select focused capability tests for changed boundaries;
-the complete retained suite and performance diagnostics remain manual,
-information-only checks rather than CI gates. Cache/compression behavior is
-covered by focused boundary contracts; fixture privacy checks do not imply a
-second replay matrix.
-
-Tests are organized around current capability seams. Historical phase/closure
-matrices and benchmark baselines are not routine navigation or CI inputs; use
-the architecture index and the focused tests for the subsystem being changed.
-
-Database fixtures must disconnect on every teardown path. Generation-owned
-tasks and finalization supervisors are joined before their database is closed;
-the canonical asyncio event loop is then allowed to tear down.
-
-Planning is proportional to change risk: detailed roadmaps and child plans are
-for multi-boundary or high-risk work, one focused plan is enough for a bounded
-multi-file correction, and a small deterministic local fix may use an issue or
-concise notes when existing tests protect the seam. A completed roadmap does
-not automatically require a new closure plan.
+For full details on features, architecture, and design decisions, see [architecture/README.md](architecture/README.md).
 
 ## Quick Start
 
@@ -121,14 +38,69 @@ sudo env "PATH=$PATH" "$(command -v eggpool)" deploy systemd --install
 
 See [Deployment](docs/deployment.md) for alternative install methods (pipx, manual, production) and the full deployment guide.
 
-## CLI Reference
+## First-Time Setup
+
+After installation, `eggpool onboard` walks you through:
+
+1. **Connecting providers** — add API keys for your AI providers (OpenAI, Anthropic, OpenRouter, etc.)
+2. **Configuration validation** — `check-config` verifies your setup
+3. **Starting the server** — launch in daemon mode or as a systemd service
+
+```bash
+# Connect a specific provider
+eggpool connect groq
+
+# List available providers
+eggpool connect list
+
+# Validate configuration
+eggpool check-config
+
+# Start the server (daemon mode)
+eggpool serve
+
+# Start in foreground for debugging
+eggpool serve --verbose
+```
+
+### Printing an Agent Config
+
+Generate configuration for your coding agent:
+
+```bash
+# OpenCode
+eggpool configsetup opencode
+
+# Claude Code
+eggpool configsetup claude-code
+
+# Aider (writes .env.eggpool)
+eggpool configsetup aider --model openai/gpt-4 --write
+
+# Codex (Responses wire API)
+eggpool configsetup codex --print-secret
+```
+
+See [Agent Configuration](docs/agent-configuration.md) for all supported targets and options.
+
+### LAN Access
+
+By default, EggPool binds to localhost. To expose it on your LAN:
+
+1. Set a server API key first: `eggpool onboard` (or set `[server].api_key` in config)
+2. Change the bind address: `[server].host = "0.0.0.0"` in `~/.config/eggpool/config.toml`
+3. Restart: `eggpool restart`
+
+See [Firewall](docs/firewall.md) for restricting access to your LAN.
+
+## CLI Commands
 
 | Command | Description |
 |---------|-------------|
 | `eggpool serve` | Start the proxy server (daemon mode; `--verbose` for foreground) |
 | `eggpool stop` | Stop the running server |
 | `eggpool restart` | Fully restart the server (stop then start) |
-| `eggpool rehash` | Apply supported config changes live (provider/account/routing/model-override changes apply without restart; `--json` for standardized output; secret-shaped strings are redacted in event payloads and CLI output) |
+| `eggpool rehash` | Apply supported config changes live without restart (`--json` for structured output) |
 | `eggpool onboard` | Interactive onboarding wizard |
 | `eggpool connect` | Add a provider account interactively |
 | `eggpool connect list` | List supported providers |
@@ -142,12 +114,10 @@ See [Deployment](docs/deployment.md) for alternative install methods (pipx, manu
 | `eggpool stats transcoding` | Show protocol transcoding statistics |
 | `eggpool stats repair-costs` | Dry-run/apply repair for suspicious historical request costs |
 | `eggpool stats recompute-costs` | Recompute `cost_microdollars` on historical requests |
-| `eggpool stats explain-dashboard` | Explain dashboard rendering internals |
 | `eggpool modelinfo show` | Show enriched model metadata |
 | `eggpool modelinfo list` | List model-info entries |
 | `eggpool modelinfo refresh` | Trigger model-info source refresh |
 | `eggpool modelinfo aliases` | Show model aliases |
-| `eggpool modelinfo repair` | Repair model-info state |
 | `eggpool dashboard public` | Print dashboard public URL |
 | `eggpool runtime-status` | Print runtime health summary |
 | `eggpool backup` | Create a timestamped backup |
@@ -166,13 +136,13 @@ See [Deployment](docs/deployment.md) for alternative install methods (pipx, manu
 | `eggpool deploy backup-cron` | Install daily backup cron job |
 | `eggpool deploy logrotate` | Print/install logrotate config |
 | `eggpool deploy all` | Print every deployment snippet in sequence |
-| `eggpool configsetup` | Generate config snippets for coding agents (opencode, claude-code, aider, codex, etc.) |
+| `eggpool configsetup` | Generate config snippets for coding agents (see [Agent Configuration](docs/agent-configuration.md)) |
 | `eggpool update [VERSION]` | Check for latest, or install an exact PyPI release (`v` prefix accepted) |
 | `eggpool uninstall` | Uninstall EggPool from this machine |
 
 All commands accept `--config /path/to/config.toml`. Config resolution: `--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`.
 
-Full command reference: [docs/deployment.md](docs/deployment.md#deploy-commands-reference)
+Full deploy commands reference: [docs/deployment.md](docs/deployment.md#deploy-commands-reference)
 
 ## Configuration
 
@@ -204,194 +174,17 @@ Use `eggpool connect` for interactive provider setup. See [docs/providers.md](do
 | `[dashboard]` | Dashboard toggle, theme, refresh interval |
 | `[providers.*]` | Provider configs with accounts and routing priority |
 | `[network]` | Outbound transport and proxy settings |
-| `[model_info]` | Optional model metadata refresh, aliases, overrides, and external source settings |
-| `[update_checker]` | Optional in-process PyPI release probe for dashboard status |
-| `[transcoder]` | Protocol transcoding between OpenAI Chat Completions and Anthropic Messages |
-
-Fatal SQLite uncertainty closes the worker; the supervisor restarts it and
-startup reconciliation repairs durable leftovers.
-| `[compression]` | Request shaping: `observe`/`safe`, stable thresholds, transform toggles, advanced policy overrides |
+| `[transcoder]` | Protocol transcoding between OpenAI and Anthropic |
+| `[compression]` | Request shaping: observe/safe, stable thresholds, transform toggles |
 | `[maintenance]` | Bounded maintenance budget, SQLite hygiene, contention guard |
-
-The catalog refresh is **non-destructive by default**: failed, empty, or partial upstream responses never silently de-pool a healthy account. Set `[models].catalog_withdrawal_policy` (`preserve_until_health` default, `confirmed_once`, `confirmed_twice`) to opt into destructive behavior on authoritative refreshes. See `architecture/README.md` § Catalog Refresh Semantics.
-
-The default five-minute discovery cadence is not a five-minute full catalog
-rewrite. Semantic model/provider rows are updated only when their metadata or
-support relationships change; successful refresh freshness is kept in compact
-per-account state. Diagnostic ping failures and success/failure transitions are
-durable immediately, while steady successful latency samples are retained at a
-coarse internal cadence.
 
 Full config reference: [`config.example.toml`](config.example.toml) | [docs/providers.md](docs/providers.md)
 
-Request ingestion is bounded by `[server].max_request_body_bytes`, which
-defaults to 10 MiB and can be changed live with `eggpool rehash`. Provider
-document and image limits remain additional constraints; they never raise the
-whole-request ceiling. Oversized bodies are rejected before JSON parsing or
-transcoding.
+### Live Config Changes
 
-Account `weight` is a positive, relative capacity/share hint within an
-eligible priority tier. `1.0` is the baseline; `2.0` approximately doubles an
-account's effective request/token capacity and `0.5` approximately halves it.
-Weight is load-based (never cost-based), does not override priority or health
-eligibility, and does not promise exact request ratios when request sizes or
-provider capacity histories differ. See [Provider configuration](docs/providers.md#account-weight).
+`eggpool rehash` applies provider/account/routing/model-override changes without a restart. Disruptive changes (host, port, database path) require `eggpool restart`.
 
-## Protocol transcoding
-
-When `[transcoder] enabled = true`, EggPool bridges OpenAI Chat Completions and Anthropic Messages bidirectionally so a single client ecosystem (e.g. OpenCode, which speaks OpenAI Chat Completions) can reach Anthropic-only upstreams and vice versa.
-
-What gets translated:
-
-- Request bodies (text + tool-use + vision + thinking + structured outputs)
-- Streaming SSE events (including tool-call deltas and thinking deltas)
-- Non-retryable error envelopes
-- Usage and cost fields (preserved exactly as the upstream reported them)
-
-What is dropped with a structured warning log:
-
-- OpenAI fields with no Anthropic equivalent (`logit_bias`, `presence_penalty`, `top_logprobs`, etc.)
-- Anthropic fields with no OpenAI equivalent (`top_k`, tool-definition
-  `cache_control` on Chat Completions, and provider-specific TTLs)
-
-OpenAI's current documentation distinguishes automatic caching, the
-`prompt_cache_key` grouping/routing hint, and explicit content breakpoints
-(`prompt_cache_breakpoint` plus `prompt_cache_options`) on supported Chat
-Completions models. Anthropic uses block-level `cache_control` with its own
-5-minute default and optional 1-hour TTL. EggPool treats those as endpoint and
-provider/model facts: `transcoding.prompt_cache_breakpoints` is a map of
-explicit provider/model contracts whose entries declare `first_party` or
-`compatible_extension` semantics, verified TTLs, and the breakpoint bound.
-Protocol labels alone never enable these fields. TTLs are never assumed
-equivalent, automatic caching is not converted into an explicit boundary, and
-cache keys are never synthesized or logged. See the [OpenAI prompt caching
-guide](https://developers.openai.com/api/docs/guides/prompt-caching) and
-[Anthropic prompt caching guide](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
-for the upstream semantics current at implementation time.
-
-Feature flags (`[transcoder.features]`) — all **off** by default:
-
-- `tools` — bidirectional tool calling translation
-- `vision` — image/document content parts
-- `thinking` — extended thinking ↔ reasoning_content
-- `structured_outputs` — capability-gated native JSON-schema output, with an explicit lossy fallback
-- `anthropic_primitives` — `top_k`, `cache_control`, `context_management`, `container`, `mcp_servers`
-
-Reasoning effort translation is capability-bound: `none` disables reasoning,
-and values such as `xhigh` or `max` require an explicit provider/model budget
-mapping. Unmapped values are rejected or dropped with a bounded warning; they
-never receive a guessed medium budget.
-
-The streaming hot path is optimised for sustained concurrent coding-agent loads. A single bounded SSE decoder feeds completion tracking, usage extraction, and frame-level translation; shared frames lazily cache JSON parsing, while native pass-through avoids translation work. See [docs/transcoding.md](docs/transcoding.md) for the full translation table, known limitations, and streaming performance notes.
-
-Request transcoding is prepared once during preflight. A valid selected-provider
-reuse adopts that request-local translated generation and sends its already
-encoded bytes; provider-specific thinking or cache changes use the normal
-provider-bound copy-on-write/ownership boundary and serialize only the changed
-generation. Recomputed cross-protocol requests use the same trusted adoption
-boundary without a defensive source deepcopy. Prepared transcodes are never
-shared across requests. Image/PDF validation rejects obvious encoded-size
-overflow before strict decoding and releases the temporary validation buffer
-before translated output is built; provider media limits and URL behavior are
-unchanged. Provider-sensitive media requests (images, documents, audio, or
-media inside tool results) force a final recompute against the *selected*
-provider's capability row after `SelectedAttempt` exists, so the cached
-preflight translation cannot bypass selected-provider source-form gating
-and a retry that selects a different provider rebuilds the translated
-generation from the original client payload. Text-only and tool-only
-requests continue to reuse the preflight translation.
-
-Selected-provider transcode rejections (`CapabilityError` from a
-selected-provider capability check, or `TranscodeLossError` from the
-transcoder under `loss_policy = "reject"`) are client-validation
-outcomes, not internal defects. The attempt-loop seam converges selected
-durable/runtime ownership synchronously through the canonical finalization
-owner and re-raises the typed exception so the API renders it as HTTP 400.
-No retry selects another account, no upstream HTTP request is built/sent,
-and no provider health, suppression, quarantine, circuit, or durable
-backoff effect is applied. A simulated durable finalization failure
-propagates into the existing supervisor/restart path instead of silently
-reporting a clean 400 while convergence is unknown.
-
-Streaming completion is determined by the upstream protocol, not by the absence
-of a transport exception. OpenAI streams require `data: [DONE]` and Anthropic
-streams require `event: message_stop`. Provider-specific markerless behavior,
-when needed, is configured with `[providers.<id>].stream_completion_policy`;
-the default is `strict`. EOF classified inside the handed-off stream iterator
-is terminal for the selected attempt: premature EOF is never retried after
-response handoff at ASGI `http.response.start`, including when no downstream
-body byte has arrived yet.
-Terminal finalization carries this response-lifecycle handoff fact explicitly;
-`bytes_emitted` remains payload accounting and never decides whether response
-status or headers can still change. Retained runtime leases independently
-converge usage, health, and account-runtime outcomes, including when durable
-finalization observes an already-terminal request.
-
-Non-streaming responses are adapted before a request can be durably marked
-`COMPLETED`. Native protocol responses retain bounded pass-through behavior,
-including non-JSON bodies where usage extraction is optional; required
-transcoded responses that cannot be adapted become truthful local errors.
-
-Provider health suppression is bounded to 1,800 seconds for quota, rate-limit,
-transport, server, protocol, and runtime model-absence observations. Successful
-traffic and expiry restore only the matching transient account/model state.
-Authentication failures and authoritative catalog withdrawals remain terminal;
-corrected credentials during validated `eggpool rehash`, explicit operator
-enable/reset, or authoritative model reappearance are their recovery paths.
-Rehash clears only the changed account's auth state. `/api/backoffs` exposes
-the active provider-derived hints; malformed or stale durable rows have no
-routing effect.
-
-Model-quarantine hydration is fail-closed. A successful empty durable read is
-distinct from a read or row-conversion failure: startup remains unready and a
-failed rehash candidate is rejected rather than publishing unknown quarantine
-state. Authoritative catalog reappearance clears the exact durable
-provider/account/model/upstream/protocol identity before in-memory suppression
-and matching backoff; a durable failure preserves the current suppression.
-
-## Request shaping
-
-EggPool includes an opt-in, cache-preserving request-shaping stack. With shipped defaults the entire stack is **reporting-only**: no request body, header, or route is altered. Routing remains load-based — cache and compression fields never enter `QuotaFairScorer`.
-
-The stack covers provider cache counters, request segmentation, native cache preservation, and optional compression (observe → safe). Native cache boundaries are preserved by the transcoder. The dashboard `/cache` page provides operator summary cards and drill-down tables; advanced diagnostics stay collapsed unless a warning is present. See [architecture/README.md](architecture/README.md) for the full request-shaping design.
-
-## API Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/v1/models` | List available models |
-| `POST` | `/v1/chat/completions` | OpenAI Chat Completions-compatible requests |
-| `POST` | `/v1/responses` | Stateless OpenAI Responses-compatible requests (passthrough only; see [Stateless Responses support](#stateless-responses-support)) |
-| `POST` | `/v1/messages` | Anthropic Messages-compatible requests |
-| `GET` | `/v1/healthz` | Liveness check |
-| `GET` | `/v1/readyz` | Readiness check |
-| `GET` | `/api/backoffs` | Active upstream-derived account backoffs (`?now=<epoch>` for reproducible snapshots) |
-| `GET` | `/api/model-info` | Enriched model metadata summaries |
-| `GET` | `/api/model-info/{model_id}` | Enriched metadata detail for one model |
-| `GET` | `/api/model-info/{model_id}/aliases` | Source-keyed alias rows for one model |
-| `GET` | `/api/model-info/sources` | Model-info source health and diagnostics per source |
-| `POST` | `/api/model-info/refresh` | Trigger model-info refresh (auth-gated; supports `?model_id=&source=&force=1`) |
-| `GET` | `/api/stats/cache-observability` | Cache counter status coverage |
-| `GET` | `/api/stats/canonical-request-segmentation` | Segmentation status, not_collected / empty_request / parse_failure counts, and token estimates |
-| `GET` | `/api/stats/cache-stability` | Transcoder cache boundary tracker counters |
-| `GET` | `/api/stats/compression-observability` | Observe-mode opportunity, per-policy roll-ups |
-| `GET` | `/api/stats/compression-runtime` | Safe-mode applied/fallback counts and latency |
-| `GET` | `/api/stats/compression-policies` | Per-policy roll-up table |
-| `GET` | `/api/stats/request-shaping` | Operator-facing request-shaping summary |
-| `GET` | `/api/stats/runtime` | Runtime metrics, routing guardrails, background task summaries, stream diagnostics, and the bounded `finalization_supervisor` snapshot |
-| `GET` | `/api/stats/summary` | Aggregate request stats (counts, tokens, cost, latency) |
-| `GET` | `/api/stats/thinking` | Thinking/reasoning decision counter snapshot |
-| `GET` | `/api/stats/update` | PyPI update check status |
-| `GET` | `/api/stats/routing/eligibility` | Per-account routing eligibility diagnostics |
-| `GET` | `/api/events` | Operational event log |
-| `GET` | `/api/model-info/{model_id}/matches` | Match evidence diagnostics for one model |
-| `GET` | `/api/network/diagnostics` | Network and outbound-client diagnostics |
-
-When `[dashboard].enabled = true`, a multi-page dashboard is served at `/` with request stats, latency metrics, provider health, model-info detail pages, and more. Stats API available under `/api/stats/*`.
-
-### Model-info observability
-
-The dashboard `/models` page shows enriched model metadata from provider catalogs, OpenRouter, Artificial Analysis, and Hugging Face. It surfaces degraded-state notices when the model-info service is unavailable, and join-failure diagnostics when catalog rows don't match canonical lookups. The `/api/stats/runtime` endpoint includes a `model_info` section with source health. See [docs/model-info-openrouter-debug.md](docs/model-info-openrouter-debug.md) for the live verification flow.
+See [Live Configuration Rehash](docs/live-config-rehash.md) for the full reload flow and supported fields.
 
 ## Documentation
 
@@ -399,23 +192,27 @@ The dashboard `/models` page shows enriched model metadata from provider catalog
 |-------|------|
 | Deployment (install, systemd, production) | [docs/deployment.md](docs/deployment.md) |
 | Provider catalog & configuration | [docs/providers.md](docs/providers.md) |
+| API endpoints | [docs/api-reference.md](docs/api-reference.md) |
+| Agent configuration (OpenCode, Claude Code, Aider, etc.) | [docs/agent-configuration.md](docs/agent-configuration.md) |
+| Stateless Responses support | [docs/stateless-responses.md](docs/stateless-responses.md) |
+| Protocol transcoding | [docs/transcoding.md](docs/transcoding.md) |
 | Backup & restore | [docs/backup-restore.md](docs/backup-restore.md) |
 | Release procedure | [docs/releasing.md](docs/releasing.md) |
 | Per-account outbound proxy | [docs/proxy.md](docs/proxy.md) |
 | Model context limits | [docs/model-limits.md](docs/model-limits.md) |
+| Thinking & reasoning | [docs/thinking.md](docs/thinking.md) |
 | Raspberry Pi setup | [docs/raspberry-pi.md](docs/raspberry-pi.md) |
 | Copyable SBC configuration | [config.sbc.example.toml](config.sbc.example.toml) |
+| Configuration profiles | [docs/config-profiles.md](docs/config-profiles.md) |
 | Firewall configuration | [docs/firewall.md](docs/firewall.md) |
 | Filesystem layout | [docs/filesystem-layout.md](docs/filesystem-layout.md) |
 | Network & DNS diagnostics | [docs/network-diagnostics.md](docs/network-diagnostics.md) |
-| Protocol transcoding | [docs/transcoding.md](docs/transcoding.md) |
 | OpenCode stream stability | [docs/opencode-stream-stability.md](docs/opencode-stream-stability.md) |
 | Model-info OpenRouter debugging | [docs/model-info-openrouter-debug.md](docs/model-info-openrouter-debug.md) |
-| Thinking & reasoning | [docs/thinking.md](docs/thinking.md) |
-| Architecture overview | [architecture/README.md](architecture/README.md) |
-| Provider payload ownership and copy-on-write | [architecture/deep-dive-request-lifecycle.md](architecture/deep-dive-request-lifecycle.md) |
 | Live Configuration Rehash | [docs/live-config-rehash.md](docs/live-config-rehash.md) |
+| Dispatch stability runbook | [docs/operations/dispatch-stability.md](docs/operations/dispatch-stability.md) |
 | Database recovery runbook | [docs/runbooks/database-recovery.md](docs/runbooks/database-recovery.md) |
+| Architecture overview | [architecture/README.md](architecture/README.md) |
 
 ## Development
 
@@ -444,84 +241,6 @@ One GitHub Actions job on every PR:
 | `check` | 3.11 | ruff format + ruff check + pyright + `pytest tests/smoke/` |
 
 See `AGENTS.md` for focused test subset commands.
-
-## Stateless Responses support
-
-`POST /v1/responses` is a **stateless same-protocol passthrough** to
-providers that explicitly declare a Responses endpoint. It is not a
-general Responses API implementation and does not claim OpenAI Responses
-parity. The surface exists so current Codex (which only speaks the
-Responses wire API) can route through EggPool.
-
-- **Eligibility.** A provider participates in `/v1/responses` only when
-  its `responses_path` is configured (defaults to `None` for new
-  templates). Bundled templates ship with `responses_path = "/responses"`
-  for openai, ollama-local, llamacpp-local, and vllm-local; other
-  providers can opt in explicitly. Chat Completions eligibility is
-  unchanged.
-- **Stateless only.** Requests carrying `previous_response_id`, any
-  `conversation` reference (including empty `{}` or string IDs),
-  `store = true`, or `background = true` are rejected locally with HTTP
-  400 before any provider selection or upstream I/O. Omitted `store`
-  is also rejected — clients must send `store: false` explicitly so
-  EggPool does not silently rely on a provider's default retention
-  behaviour. Stateful Responses features would tie a request to a
-  single upstream's response identity, which cannot survive EggPool's
-  account failover.
-- **No translation.** No Responses ↔ Anthropic translation, no
-  Responses ↔ Chat Completions rewrite, no content IR, and no
-  provider-specific Responses plugin. The accepted body is forwarded
-  unchanged apart from the canonical `model` provider-suffix/base-ID
-  normalization; Anthropic thinking-budget rewrites and Chat
-  `stream_options.include_usage` injection are skipped. A provider
-  whose only documented protocol is Anthropic is rejected locally with
-  HTTP 400 — the Responses surface cannot route through `/messages`.
-- **Terminal stream semantics.** `response.completed` is the only
-  successful canonical Responses terminal event. `response.failed` and
-  `response.incomplete` are terminal non-success outcomes: the upstream
-  event is forwarded unchanged to the client, the request is durably
-  finalized as non-success, and no provider/account failover is
-  attempted after downstream handoff.
-- **No state persistence.** EggPool does not store `response.id`,
-  `previous_response_id`, or conversation history; there is no
-  `/v1/responses/{id}` retrieval, no cancellation, no delete, and no
-  background-job endpoint.
-
-Bundled provider templates that do not advertise a Responses path are
-not eligible for `/v1/responses` traffic; the request is routed only
-among providers that explicitly declared one. The Codex integration
-renderer now emits a current `[model_providers.eggpool]` block with
-`wire_api = "responses"` and an `env_key = "EGGPOOL_API_KEY"`
-reference — see `eggpool configsetup codex --print-secret`.
-
-## Agent Configuration
-
-`eggpool configsetup` generates configuration snippets for popular coding agents:
-
-| Target | Command | Output | `--write` default | Model |
-|--------|---------|--------|-------------------|-------|
-| OpenCode | `eggpool configsetup opencode` | JSON provider config | N/A (clipboard) | auto |
-| Claude Code | `eggpool configsetup claude-code` | JSON snippet | N/A (clipboard) | N/A |
-| Aider | `eggpool configsetup aider` | Shell env exports | `.env.eggpool` | recommended |
-| Codex | `eggpool configsetup codex` | TOML `[model_providers.eggpool]` block (Responses wire API) | N/A (printed) | recommended |
-| Qwen Code | `eggpool configsetup qwen-code` | JSON provider block | N/A (printed) | optional |
-| Kilo | `eggpool configsetup kilo` | JSON provider block | N/A (printed) | optional |
-| Continue | `eggpool configsetup continue` | YAML model block | `~/.continue/eggpool.yaml` | usually yes |
-| Cline | `eggpool configsetup cline` | JSON profile | `cline-eggpool.json` | recommended |
-| Roo Code | `eggpool configsetup roo-code` | JSON profile | `roo-eggpool.json` | recommended |
-| Goose | `eggpool configsetup goose` | Shell env exports | N/A (printed) | recommended |
-| OpenHands | `eggpool configsetup openhands` | Shell env exports | N/A (printed) | recommended |
-
-Shared options: `--host`, `--base-url`, `--model`, `--write`, `--output`, `--force`, `--no-clipboard`, `--print-secret`.
-Generated JSON, TOML, YAML, and shell snippets escape catalog/config values for
-the target format, including provider-suffixed model IDs.
-
-Examples:
-```sh
-eggpool configsetup aider --model openai/gpt-4 --write
-eggpool configsetup continue --model claude-sonnet-4 --output ~/.continue/eggpool.yaml
-eggpool configsetup cline --no-clipboard
-```
 
 ## License
 
