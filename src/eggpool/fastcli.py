@@ -8,11 +8,11 @@ invocation matters. The full Click CLI in :mod:`eggpool.cli_full` imports
 substantial portions of the application stack at module load time; that
 is overkill for a five-line PID probe.
 
-This module deliberately uses only the Python standard library so the
-fast path does not pull in ``fastapi``, ``granian``, ``httpx``,
-``pydantic``, ``aiosqlite``, or any ``eggpool`` subpackage. The fast
-path is responsible only for the two lightweight commands; everything
-else falls through to the normal Click CLI.
+This module deliberately uses only the Python standard library plus the
+stdlib-only ``eggpool.runtime_paths`` helpers, so the fast path does not
+pull in ``fastapi``, ``granian``, ``httpx``, ``pydantic``, or ``aiosqlite``.
+The fast path is responsible only for the two lightweight commands;
+everything else falls through to the normal Click CLI.
 
 Public API
 ----------

@@ -702,7 +702,7 @@ async def _hydrate_health_from_backoffs(
     """
     from eggpool.db.repositories import AccountRepository  # noqa: PLC0415
 
-    account_repo = AccountRepository(repo._db)  # type: ignore[arg-type]  # noqa: SLF001
+    account_repo = AccountRepository(repo.db)
     from eggpool.health.backoff import (
         MAX_NONTERMINAL_BACKOFF_SECONDS,
         get_backoff_policy,

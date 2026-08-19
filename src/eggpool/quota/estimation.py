@@ -815,14 +815,7 @@ class QuotaEstimator:
         cost_microdollars: int,
         model_id: str | None = None,
     ) -> None:
-        """Record usage and atomically refresh the persisted snapshot.
-
-        Combines :meth:`record_usage` with the per-window snapshot
-        increment so concurrent finalizers cannot interleave between
-        the two updates and lose cost increments. Also increments the
-        per-window request count and token count snapshots, which are
-        the signals the routing scorer actually consumes.
-        """
+        """Record usage and atomically refresh the persisted snapshot."""
         # This section has no await points, so it is atomic on the canonical
         # event loop. Keep it outside the lock; the lock is only needed for
         # the shared persisted snapshot and reservation mirrors below.
@@ -840,17 +833,28 @@ class QuotaEstimator:
             # is the same one ``record_usage`` mutated.
             quota = self.get_account_quota(account_name)
             if quota is not None and quota.persisted_snapshot is not None:
-                safe_cost = max(0, cost_microdollars)
-                quota.persisted_snapshot.cost_5h += safe_cost
-                quota.persisted_snapshot.cost_7d += safe_cost
-                quota.persisted_snapshot.cost_30d += safe_cost
-                safe_tokens = max(0, tokens)
-                quota.persisted_snapshot.request_count_5h += 1
-                quota.persisted_snapshot.request_count_7d += 1
-                quota.persisted_snapshot.request_count_30d += 1
-                quota.persisted_snapshot.token_count_5h += safe_tokens
-                quota.persisted_snapshot.token_count_7d += safe_tokens
-                quota.persisted_snapshot.token_count_30d += safe_tokens
+                if self._usage_window_repo is None:
+                    safe_cost = max(0, cost_microdollars)
+                    quota.persisted_snapshot.cost_5h += safe_cost
+                    quota.persisted_snapshot.cost_7d += safe_cost
+                    quota.persisted_snapshot.cost_30d += safe_cost
+                    safe_tokens = max(0, tokens)
+                    quota.persisted_snapshot.request_count_5h += 1
+                    quota.persisted_snapshot.request_count_7d += 1
+                    quota.persisted_snapshot.request_count_30d += 1
+                    quota.persisted_snapshot.token_count_5h += safe_tokens
+                    quota.persisted_snapshot.token_count_7d += safe_tokens
+                    quota.persisted_snapshot.token_count_30d += safe_tokens
+                else:
+                    values = (
+                        await self._usage_window_repo.get_account_usage_window_snapshot(
+                            quota.persisted_snapshot.account_id,
+                            time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),
+                        )
+                    )
+                    for field_name, value in values.items():
+                        setattr(quota.persisted_snapshot, field_name, value)
+                    quota.persisted_snapshot.loaded_at = time.time()
 
     def estimate_cost(
         self,

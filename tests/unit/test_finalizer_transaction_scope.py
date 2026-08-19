@@ -9,6 +9,7 @@ after the transaction commits.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -81,6 +82,17 @@ class TestPrecomputeFinalizationDiagnostics:
         )
         snap = f._precompute_finalization_diagnostics(data)
         assert snap.segmentation_status == "not_collected"
+
+    def test_segmentation_summary_is_precomputed(self) -> None:
+        f = self._make_finalizer()
+        data = FinalizationData(
+            outcome=FinalizationOutcome.COMPLETED,
+            segmentation=SimpleNamespace(summary_json='{"segments": 1}'),
+        )
+
+        snap = f._precompute_finalization_diagnostics(data)
+
+        assert snap.segmentation_summary_json == '{"segments": 1}'
 
 
 class TestFinalizerAccountIdReuse:

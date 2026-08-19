@@ -361,6 +361,24 @@ class TestReservationManager:
 class TestQuotaFairScorer:
     """Tests for QuotaFairScorer."""
 
+    def test_zero_capacity_is_infinite_utilization(self) -> None:
+        scorer = QuotaFairScorer()
+
+        utilization = scorer._calc_window_utilization(
+            used_requests=1,
+            reserved_requests=0,
+            incoming_requests=0,
+            request_offset=0,
+            used_tokens=1,
+            reserved_tokens=0,
+            incoming_tokens=0,
+            token_offset=0,
+            request_capacity=0,
+            token_capacity=100,
+        )
+
+        assert utilization == float("inf")
+
     @pytest.mark.asyncio()
     async def test_score_accounts(self) -> None:
         """Test scoring accounts. Lower score = less utilized = preferred."""

@@ -737,6 +737,8 @@ class RequestFinalizationJob:
 
     def increment_retry_count(self) -> None:
         """Record one scheduler-initiated retry before execution."""
+        if self.is_complete:
+            return
         self._retry_count += 1
 
     @property
@@ -1234,6 +1236,8 @@ class TerminalCommand:
         self._health = "failed"
 
     def increment_retry_count(self) -> None:
+        if self.is_complete:
+            return
         self._retry_count += 1
 
     def get_task(self) -> asyncio.Task[None] | None:
@@ -1592,7 +1596,12 @@ class RequestFinalizationSupervisor:
             task.add_done_callback(
                 lambda _: self._on_terminal_command_completion(command)
             )
-        await asyncio.shield(task)
+        try:
+            await asyncio.shield(task)
+        except (Exception, asyncio.CancelledError):
+            if command.is_complete:
+                self._reconcile_terminal_command(command)
+            raise
         if command.is_complete:
             self._reconcile_terminal_command(command)
 
@@ -1696,6 +1705,8 @@ class RequestFinalizationSupervisor:
                 continue
             try:
                 job.increment_retry_count()
+                if job.is_complete:
+                    continue
                 if isinstance(job, RequestFinalizationJob):
                     await job.run()
                 else:

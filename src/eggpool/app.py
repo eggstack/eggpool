@@ -37,6 +37,7 @@ from eggpool.control.server import (
     ControlRequest,
     ControlResponse,
     ControlServer,
+    ControlServerError,
 )
 from eggpool.dashboard.routes import register_dashboard_routes
 from eggpool.db.connection import Database
@@ -1349,6 +1350,12 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     try:
         await control_server.start()
         app.state.control_server = control_server
+    except ControlServerError:
+        logger.error(
+            "Failed to start control server: another server is already using "
+            "the control socket; live reload unavailable"
+        )
+        app.state.control_server = None
     except Exception:
         logger.exception("Failed to start control server; live reload unavailable")
         app.state.control_server = None
@@ -1388,7 +1395,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         reload_manager: ReloadManager | None = getattr(
             app.state, "reload_manager", None
         )
-        reload_shutdown_safe = True
         if reload_manager is not None:
             try:
                 shutdown_preparation = await reload_manager.prepare_for_shutdown(
@@ -1396,19 +1402,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                     finalization_timeout_s=10.0,
                 )
                 if not shutdown_preparation.ownership_safe_for_runtime_shutdown:
-                    reload_shutdown_safe = False
                     logger.error(
                         "Reload ownership is not safe for runtime shutdown: %s",
                         shutdown_preparation,
                     )
             except Exception:
-                reload_shutdown_safe = False
                 logger.exception("Error preparing reload ownership during shutdown")
 
         runtime_manager: RuntimeManager | None = getattr(
             app.state, "runtime_manager", None
         )
-        if runtime_manager is not None and reload_shutdown_safe:
+        if runtime_manager is not None:
             try:
                 await runtime_manager.shutdown()
                 if reload_manager is not None:

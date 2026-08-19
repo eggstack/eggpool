@@ -287,6 +287,7 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
             msg = str(err_typed.get("message", str(err_typed)))
         else:
             msg = str(err)
+        self._saw_terminal_event = True
         return [
             self._anthropic_frame(
                 "error",
@@ -329,7 +330,6 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
             out.extend(self._ingest_tool_calls(tool_calls_delta))
         if text:
             out.extend(self._content_delta(text))
-            return out
         if finish:
             out.extend(self._finish(parsed, finish))
         return out

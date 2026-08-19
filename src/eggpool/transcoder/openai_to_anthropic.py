@@ -6,7 +6,6 @@ import time
 from typing import TYPE_CHECKING, Any, cast
 
 from eggpool.jsonx import dumps_str, loads
-from eggpool.transcoder.budget_resolver import BudgetResolutionError
 from eggpool.transcoder.cache_stability import (
     CacheBoundaryAnnotation,
     extract_cache_boundaries,
@@ -712,20 +711,12 @@ class OpenAIToAnthropic:
                         "budget_tokens": resolution.budget_tokens,
                     }
                 warnings.extend(resolution.warnings)
-            except Exception as exc:
+            except Exception:
                 # BudgetResolutionError (strict policy) inherits from
                 # CapabilityError and propagates up to the renderer, which
                 # converts it to an HTTP 400 with a protocol-appropriate
                 # ``capability_error`` body. Other exceptions are
                 # non-capability errors and bubble unchanged.
-                if isinstance(exc, BudgetResolutionError):
-                    warnings.append(
-                        {
-                            "kind": "budget_rejected",
-                            "reason": getattr(exc, "reason", "strict_reject"),
-                            "model_id": payload.get("model", "unknown"),
-                        }
-                    )
                 raise
         elif reasoning_effort is not None:
             warnings.append(

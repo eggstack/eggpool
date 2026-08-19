@@ -2663,14 +2663,23 @@ class ReloadManager:
             self._transaction_complete_event.set()
             # Always release the lease gate on every terminal path —
             # ensures requests resume after cancellation or failure.
-            await self._runtime_manager.ensure_reload_gate_released()
-            # Release admission claim on every terminal path.
-            self._current_transaction = None
-            self._active_reload_task = None
-            async with self._claim_mutex:
-                self._reload_claimed = False
-                self._admitted_at = None
-                self._admitted_request_id = None
+            gate_release_task = asyncio.create_task(
+                self._runtime_manager.ensure_reload_gate_released()
+            )
+            try:
+                await asyncio.shield(gate_release_task)
+            except asyncio.CancelledError:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await asyncio.shield(gate_release_task)
+            finally:
+                # Release admission claim on every terminal path, including
+                # cancellation while the gate release is in progress.
+                self._current_transaction = None
+                self._active_reload_task = None
+                async with self._claim_mutex:
+                    self._reload_claimed = False
+                    self._admitted_at = None
+                    self._admitted_request_id = None
 
     # -- stage helpers -----------------------------------------------------
 

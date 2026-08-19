@@ -2724,38 +2724,39 @@ class RequestCoordinator:
                 )
         except asyncio.CancelledError:
             # Client cancellation after selection - finalize the attempt
-            elapsed_ms = self._elapsed_ms(context)
-            context.client_metadata["_cancelled_finalized"] = True
-            await self._finalize_terminal(
-                context,
-                selected,
-                FinalizationData(
-                    outcome=FinalizationOutcome.CLIENT_CANCELLED,
-                    error_class="CancelledError",
-                    upstream_latency_ms=elapsed_ms,
-                    bytes_received=context.original_body_size
-                    or len(context.original_body),
-                    downstream_started=context.response_handoff.started,
-                    upstream_protocol=context.upstream_protocol,
-                    thinking_trace_json=_serialize_thinking_trace(
-                        context.thinking_trace
+            if not context.client_metadata.get("_cancelled_finalized"):
+                context.client_metadata["_cancelled_finalized"] = True
+                elapsed_ms = self._elapsed_ms(context)
+                await self._finalize_terminal(
+                    context,
+                    selected,
+                    FinalizationData(
+                        outcome=FinalizationOutcome.CLIENT_CANCELLED,
+                        error_class="CancelledError",
+                        upstream_latency_ms=elapsed_ms,
+                        bytes_received=context.original_body_size
+                        or len(context.original_body),
+                        downstream_started=context.response_handoff.started,
+                        upstream_protocol=context.upstream_protocol,
+                        thinking_trace_json=_serialize_thinking_trace(
+                            context.thinking_trace
+                        ),
+                        segmentation=context.segmentation,
+                        segmentation_not_collected=context.segmentation_not_collected,
                     ),
-                    segmentation=context.segmentation,
-                    segmentation_not_collected=context.segmentation_not_collected,
-                ),
-            )
-            self._stream_diagnostics.record_outcome(
-                STREAM_OUTCOME_CLIENT_CANCELLED,
-                proxy_request_id=context.request_id,
-                db_request_id=selected.db_request_id,
-                provider_id=selected.provider_id,
-                account_name=selected.account_name,
-                model_id=selected.model_id,
-                protocol=context.upstream_protocol,
-                elapsed_ms=elapsed_ms,
-                attempt=selected.attempt_number,
-                exception_class="CancelledError",
-            )
+                )
+                self._stream_diagnostics.record_outcome(
+                    STREAM_OUTCOME_CLIENT_CANCELLED,
+                    proxy_request_id=context.request_id,
+                    db_request_id=selected.db_request_id,
+                    provider_id=selected.provider_id,
+                    account_name=selected.account_name,
+                    model_id=selected.model_id,
+                    protocol=context.upstream_protocol,
+                    elapsed_ms=elapsed_ms,
+                    attempt=selected.attempt_number,
+                    exception_class="CancelledError",
+                )
             raise
 
     async def _execute_non_streaming(
@@ -3176,6 +3177,7 @@ class RequestCoordinator:
             ) from err
 
         response = None
+        upstream_iterator: AsyncIterator[bytes] | None = None
         generator_created = False
         try:
             try:
@@ -3408,6 +3410,15 @@ class RequestCoordinator:
             if response is not None and (
                 response.status_code >= 400 or not generator_created
             ):
+                if upstream_iterator is not None and not generator_created:
+                    close_iterator = getattr(upstream_iterator, "aclose", None)
+                    if close_iterator is not None:
+                        try:
+                            await close_iterator()
+                        except Exception:
+                            logger.debug(
+                                "Error closing upstream iterator", exc_info=True
+                            )
                 try:
                     await response.aclose()
                 except Exception:
@@ -3553,7 +3564,7 @@ class RequestCoordinator:
                                     streaming_transcoder.translate_frame(frame)
                                 )
                             except Exception as err:
-                                raise _LocalStreamTranslationError from err
+                                raise _LocalStreamTranslationError(str(err)) from err
                         if out_chunks:
                             output = b"".join(out_chunks)
                             downstream_bytes_emitted += len(output)
@@ -3725,7 +3736,7 @@ class RequestCoordinator:
                     try:
                         out_chunks = streaming_transcoder.finish(eof_result)
                     except Exception as err:
-                        raise _LocalStreamTranslationError from err
+                        raise _LocalStreamTranslationError(str(err)) from err
                     if out_chunks:
                         output = b"".join(out_chunks)
                         downstream_bytes_emitted += len(output)
@@ -3856,6 +3867,7 @@ class RequestCoordinator:
                 observer.finish(shared_decoder.finish())
                 usage_result = observer.usage
                 if not context.client_metadata.get("_cancelled_finalized"):
+                    context.client_metadata["_cancelled_finalized"] = True
                     cancel_latency_total = int((time.monotonic() - reference) * 1000)
                     cancel_connect_ms_value = context.upstream_connect_ms
                     cancel_read_ms_value = self._upstream_read_ms(

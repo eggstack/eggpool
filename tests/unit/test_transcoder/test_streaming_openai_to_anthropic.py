@@ -539,6 +539,40 @@ class TestToolCallStreaming:
         delta_data = json.loads(msg_delta["data"])
         assert delta_data["delta"]["stop_reason"] == "tool_use"
 
+    def test_text_tool_calls_and_finish_same_chunk_are_all_emitted(self) -> None:
+        transcoder = OpenAIToAnthropicStreaming()
+        raw = transcoder.feed(
+            _openai_chunk(
+                role="assistant",
+                content="I will check that.",
+                finish_reason="tool_calls",
+                tool_calls=[
+                    {
+                        "index": 0,
+                        "id": "call_abc",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"city": "SF"}',
+                        },
+                    }
+                ],
+            )
+        )
+
+        raw.extend(transcoder.feed(_openai_done()))
+        frames = _parse_sse_frames(b"".join(raw))
+        block_starts = [
+            json.loads(frame["data"])
+            for frame in frames
+            if frame["event"] == "content_block_start"
+        ]
+        assert [block["content_block"]["type"] for block in block_starts] == [
+            "text",
+            "tool_use",
+        ]
+        assert any(frame["event"] == "message_delta" for frame in frames)
+
     def test_multiple_tool_calls_parallel_indices(self) -> None:
         transcoder = OpenAIToAnthropicStreaming()
         transcoder.feed(

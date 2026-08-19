@@ -175,6 +175,7 @@ EXPECTED_INVENTORY_SNAPSHOT: tuple[tuple[str, str, bool], ...] = (
     ("dashboard.theme", "restart_required", False),
     ("dashboard.themes_dir", "restart_required", False),
     ("database.busy_timeout_ms", "restart_required", False),
+    ("database.journal_size_limit", "restart_required", False),
     ("database.path", "restart_required", False),
     ("database.synchronous", "restart_required", False),
     ("database.wal", "restart_required", False),

@@ -32,12 +32,20 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from eggpool.providers.connect import TerminalMenu
-
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
+
+
+def _lazy_terminal_menu(title: str, options: list[str]) -> Any:
+    """Construct the interactive menu only when backup selection is used."""
+    from eggpool.providers.connect import TerminalMenu as _TerminalMenu
+
+    return _TerminalMenu(title, options)
+
+
+TerminalMenu = _lazy_terminal_menu  # noqa: N816
 
 BACKUP_FORMAT_VERSION = 1
 

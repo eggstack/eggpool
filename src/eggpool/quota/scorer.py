@@ -340,8 +340,10 @@ class QuotaFairScorer:
             0,
             used_tokens + reserved_tokens + incoming_tokens + token_offset,
         )
-        req_util = req_total / request_capacity if request_capacity > 0 else 0.0
-        tok_util = tok_total / token_capacity if token_capacity > 0 else 0.0
+        req_util = (
+            req_total / request_capacity if request_capacity > 0 else float("inf")
+        )
+        tok_util = tok_total / token_capacity if token_capacity > 0 else float("inf")
         return max(req_util, tok_util)
 
     def select_account(self, scores: list[RoutingScore]) -> RoutingScore | None:

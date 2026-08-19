@@ -1665,6 +1665,7 @@ class RuntimeManager:
             slot.drain_event.set()
             if (
                 slot.state is SlotState.RETIRING
+                and slot in self._retiring
                 and not slot.retirement_complete.is_set()
                 and slot.generation.generation_id not in self._retirement_tasks
             ):
@@ -1818,11 +1819,11 @@ class RuntimeManager:
         slot.close_start_time = time.monotonic()
         await self._close_slot_resources(slot, drain_timeout_s=drain_timeout_s)
         slot.close_complete_time = time.monotonic()
-        slot.retirement_complete.set()
         async with self._get_lock():
             slot.state = SlotState.CLOSED
             with contextlib.suppress(ValueError):
                 self._retiring.remove(slot)
+            slot.retirement_complete.set()
         logger.info(
             "Runtime generation %d retirement complete (forced=%s)",
             slot.generation.generation_id,
@@ -1862,7 +1863,7 @@ class RuntimeManager:
             record_close_attempt("supervisor")
             try:
                 await supervisor.stop_all()
-            except Exception as exc:  # noqa: BLE001 -- close path must not raise
+            except (Exception, asyncio.CancelledError) as exc:  # noqa: BLE001
                 slot.last_close_error = f"supervisor.stop_all: {exc!r}"
                 logger.exception(
                     "Runtime generation %d supervisor.stop_all failed",
@@ -1879,7 +1880,7 @@ class RuntimeManager:
                 await finalization_supervisor.shutdown(
                     timeout_s=min(drain_timeout_s, 10.0)
                 )
-            except Exception as exc:  # noqa: BLE001 -- close path continues
+            except (Exception, asyncio.CancelledError) as exc:  # noqa: BLE001
                 slot.last_close_error = f"finalization_supervisor.shutdown: {exc!r}"
                 logger.exception(
                     "Runtime generation %d finalization supervisor shutdown failed",
@@ -1893,7 +1894,7 @@ class RuntimeManager:
             record_close_attempt("client_pool")
             try:
                 await _safe_aclose(client_pool)
-            except Exception as exc:  # noqa: BLE001
+            except (Exception, asyncio.CancelledError) as exc:  # noqa: BLE001
                 slot.last_close_error = f"client_pool.close: {exc!r}"
                 logger.exception(
                     "Runtime generation %d client_pool.close failed",
@@ -1905,7 +1906,7 @@ class RuntimeManager:
             record_close_attempt("outbound_manager")
             try:
                 await _safe_aclose(outbound_manager)
-            except Exception as exc:  # noqa: BLE001
+            except (Exception, asyncio.CancelledError) as exc:  # noqa: BLE001
                 slot.last_close_error = f"outbound_manager.aclose: {exc!r}"
                 logger.exception(
                     "Runtime generation %d outbound_manager.aclose failed",

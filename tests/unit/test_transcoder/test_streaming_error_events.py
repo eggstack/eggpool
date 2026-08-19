@@ -208,6 +208,7 @@ class TestOpenAIErrorToAnthropic:
                 content="Invalid API key",
             )
         )
+        assert transcoder.saw_terminal_event is True
 
         combined = b"".join(raw)
         frames = _parse_sse_frames(combined)

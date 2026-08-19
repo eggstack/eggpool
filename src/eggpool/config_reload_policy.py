@@ -123,6 +123,7 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     # ---- database path / WAL / synchronous / worker thread count ----
     "database.path": ReloadDisposition.RESTART_REQUIRED,
     "database.busy_timeout_ms": ReloadDisposition.RESTART_REQUIRED,
+    "database.journal_size_limit": ReloadDisposition.RESTART_REQUIRED,
     "database.wal": ReloadDisposition.RESTART_REQUIRED,
     "database.synchronous": ReloadDisposition.RESTART_REQUIRED,
     "database.worker_threads": ReloadDisposition.RESTART_REQUIRED,

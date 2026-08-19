@@ -1018,6 +1018,7 @@ class RequestFinalizer:
             seg_stable_bytes = getattr(segmentation_obj, "stable_prefix_bytes", None)
             seg_semi_bytes = getattr(segmentation_obj, "semi_stable_bytes", None)
             seg_volatile_bytes = getattr(segmentation_obj, "volatile_bytes", None)
+            seg_summary_json = getattr(segmentation_obj, "summary_json", None)
 
         return _FinalizationDiagnosticSnapshot(
             segmentation_status=seg_status,

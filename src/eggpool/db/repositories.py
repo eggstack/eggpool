@@ -22,6 +22,7 @@ from eggpool.constants import (
     clamp_sqlite_integer,
 )
 from eggpool.errors import ModelQuarantineHydrationError
+from eggpool.jsonx import dumps_str as jsonx_dumps_str
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -896,9 +897,7 @@ class OperationalEventRepository:
         details: dict[str, Any] | None = None,
     ) -> int:
         """Insert one operational event, return its id."""
-        import json
-
-        details_json = json.dumps(details or {})
+        details_json = jsonx_dumps_str(details or {})
         return await self._db.execute_insert(
             "INSERT INTO operational_events (event_type, details_json) VALUES (?, ?)",
             (event_type, details_json),
@@ -1104,6 +1103,76 @@ class UsageWindowRepository:
                 "token_count_30d": clamp_sqlite_aggregate(row["token_count_30d"]),
             }
             for row in rows
+        }
+
+    async def get_account_usage_window_snapshot(
+        self,
+        account_id: int,
+        now_iso: str,
+    ) -> dict[str, int]:
+        """Return exact persisted usage signals for one account."""
+        row = await self._db.fetch_one(
+            "SELECT "
+            "COALESCE(SUM(CASE WHEN started_at >= datetime(?, '-5 hours') "
+            "THEN CAST(cost_microdollars AS REAL) ELSE 0 END), 0) AS cost_5h, "
+            "COALESCE(SUM(CASE WHEN started_at >= datetime(?, '-7 days') "
+            "THEN CAST(cost_microdollars AS REAL) ELSE 0 END), 0) AS cost_7d, "
+            "COALESCE(SUM(CAST(cost_microdollars AS REAL)), 0) AS cost_30d, "
+            "COALESCE(SUM(CASE WHEN started_at >= datetime(?, '-5 hours') "
+            "THEN 1 ELSE 0 END), 0) AS request_count_5h, "
+            "COALESCE(SUM(CASE WHEN started_at >= datetime(?, '-7 days') "
+            "THEN 1 ELSE 0 END), 0) AS request_count_7d, "
+            "COALESCE(SUM(1), 0) AS request_count_30d, "
+            "COALESCE(SUM(CASE WHEN started_at >= datetime(?, '-5 hours') "
+            "THEN CAST(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) "
+            "+ COALESCE(cache_read_tokens, 0) + COALESCE(cache_write_tokens, 0) "
+            "AS REAL) ELSE 0 END), 0) AS token_count_5h, "
+            "COALESCE(SUM(CASE WHEN started_at >= datetime(?, '-7 days') "
+            "THEN CAST(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) "
+            "+ COALESCE(cache_read_tokens, 0) + COALESCE(cache_write_tokens, 0) "
+            "AS REAL) ELSE 0 END), 0) AS token_count_7d, "
+            "COALESCE(SUM(CAST(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) "
+            "+ COALESCE(cache_read_tokens, 0) + COALESCE(cache_write_tokens, 0) "
+            "AS REAL)), 0) AS token_count_30d "
+            "FROM requests "
+            "WHERE account_id = ? AND status != 'pending' "
+            "AND started_at >= datetime(?, '-30 days')",
+            (
+                now_iso,
+                now_iso,
+                now_iso,
+                now_iso,
+                now_iso,
+                now_iso,
+                account_id,
+                now_iso,
+            ),
+        )
+        if row is None:
+            return {
+                "cost_5h": 0,
+                "cost_7d": 0,
+                "cost_30d": 0,
+                "request_count_5h": 0,
+                "request_count_7d": 0,
+                "request_count_30d": 0,
+                "token_count_5h": 0,
+                "token_count_7d": 0,
+                "token_count_30d": 0,
+            }
+        return {
+            key: clamp_sqlite_aggregate(row[key])
+            for key in (
+                "cost_5h",
+                "cost_7d",
+                "cost_30d",
+                "request_count_5h",
+                "request_count_7d",
+                "request_count_30d",
+                "token_count_5h",
+                "token_count_7d",
+                "token_count_30d",
+            )
         }
 
 
@@ -1658,6 +1727,11 @@ class AccountBackoffRepository:
 
     def __init__(self, db: Database) -> None:
         self._db = db
+
+    @property
+    def db(self) -> Database:
+        """Public accessor for the underlying database connection."""
+        return self._db
 
     async def clear_authentication(self, account_id: int) -> int:
         """Clear terminal authentication hints for one account."""
