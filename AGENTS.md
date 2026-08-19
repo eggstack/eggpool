@@ -112,44 +112,17 @@ Manual release procedure — no automated release workflow. See `docs/releasing.
 
 > Full design details are in `architecture/README.md` and the `architecture` skill.
 
-**Public protocol scope:** EggPool exposes OpenAI Chat Completions at
-`/v1/chat/completions`, the stateless OpenAI Responses passthrough at
-`/v1/responses`, Anthropic Messages at `/v1/messages`, and OpenAI-style
-model listing at `/v1/models`. The Responses surface is stateless
-same-protocol only; stateful fields (`previous_response_id`,
-`conversation`, `store=true`, `background=true`, plus omitted `store`)
-are rejected locally with HTTP 400 before provider selection, and
-`/v1/responses` does not include retrieval, cancellation, background
-jobs, or WebSocket transport. EggPool does not claim full OpenAI API
-parity. `response.completed` is the only successful canonical
-Responses terminal event; `response.failed` and `response.incomplete`
-are terminal non-success outcomes forwarded unchanged to the client
-without provider/account failover after downstream handoff.
-
-Start subsystem work with the current architecture index and the relevant deep
-dive. Read an active roadmap or focused plan only when the change is in its
-scope.
+Start subsystem work with the architecture index and the relevant deep dive.
+Consult active plans only when the change is in their scope.
 
 - **Request lifecycle**: `RequestCoordinator` orchestrates endpoint → routing → persistence → dispatch → finalization. Deep dive: `architecture/deep-dive-request-lifecycle.md`
-- **Dispatch isolation**: local preparation and response adaptation failures are terminal local errors with no provider retry. Only typed HTTPX transport failures may retry, only across distinct accounts before `downstream_started`
-- **Multi-provider architecture**: provider-suffixed model IDs (`model-id/provider-id`), `ProviderClientPool`, `OutboundClientManager`. Deep dive: `architecture/deep-dive-providers.md`
-- **Provider contracts**: `compose_provider_url()` is the single source of truth for upstream URLs
 - **Protocol transcoding**: `src/eggpool/transcoder/` — OpenAI ↔ Anthropic conversion. Deep dive: `architecture/deep-dive-transcoder.md`. Operator guide: `docs/transcoding.md`
-- **Multimodal capabilities**: `MultimodalCapabilities` in `catalog/capabilities.py` provides granular media support per provider/model/protocol. Provider-sensitive media requests (images, documents, audio, tool-result media) force a final recompute after provider selection via `request_has_provider_sensitive_media()`. The definitive translation is performed in `_apply_selected_provider_transcode` *after* `SelectedAttempt` exists and uses `selected.provider_id` to resolve capabilities (Plan 141). Plan 142 made the attempt-loop seam preserve `CapabilityError` / `TranscodeLossError` as typed client rejections (HTTP 400) — they converge selected durable/runtime ownership through the canonical finalization owner, are re-raised so the API renders them as 400, and never trigger a provider retry or health effect; a durable finalization failure fails closed into the supervisor/restart path. The bundled local templates declare **endpoint-level** source-form support against the current OpenAI-compatible surface only (Ollama: `image_input.url = false`; llama.cpp: `url = true`; vLLM: `url = true`); the actual multimodal capability of any loaded model/mmproj is discovered at runtime and is not guaranteed by the template.
-- **Local provider templates**: `_templates.toml` includes presets for Ollama, LM Studio, llama.cpp, vLLM, LocalAI, and a generic custom-compatible endpoint. Local providers use discovery-based verification (no fixed probe models) and the OpenAI-compatible `/models` endpoint for catalog discovery
-- **JSON backend (`eggpool.jsonx`)**: preferred `orjson` (`eggpool[fast]`), falls back to stdlib. Override with `EGGPOOL_JSON_BACKEND=orjson|stdlib|auto`. Off the request path, stdlib `json` allowed for deterministic hashing
-- **Database invariants**: SQLite WAL, single-connection serialization, and task-owned `async with db.transaction():` boundaries for all DML; rollback is private to the owning transaction path and ambiguous outcomes fail closed. WAL residue bounded by `journal_size_limit` when configured (SBC default 64 MiB). Deep dive: `architecture/deep-dive-database.md`
-- **Request schema freeze**: the historical `requests` table is frozen for optional diagnostics. New columns require durable lifecycle/accounting or externally visible compatibility justification; feature-specific diagnostics use sparse/event or narrowly scoped sidecar storage. Do not add cosmetic migrations or a generic EAV store
-- **Quota and routing**: tier-based via `routing_priority`, `QuotaFairScorer`, upstream-authoritative suppression, same-tier fairness rotor. Load-based (request count + token count + active count + health), never cost-based. Positive account `weight` scales effective request/token capacity within an eligible tier (`1.0` baseline, `2.0` approximately double, `0.5` approximately half). Deep dive: `architecture/deep-dive-routing.md`
-- **Error hierarchy**: `AggregatorError` → `UpstreamError` → specific subclasses. See `errors.py`
-- **Process model**: supervisor + Granian worker (`workers=1`), daemon mode (`--verbose` for foreground). `runtime_threads=1` is required. Readiness probe is process-owned and disabled by default. Deep dive: `architecture/deep-dive-deployment.md`
-- **Lean defaults**: loopback binding, low-wear analytics, provider pools of 16/4, background outbound pools of 8/2. Model-info, routing traces, readiness writes, automatic backups, dispatch writing are opt-in. The copyable SBC profile also leaves full-database backups off by default
-- **Runtime generations**: `RuntimeManager` owns active/retiring generation slots. `RuntimeGenerationFactory.prepare()` is the shared startup/rehash construction boundary. `RequestFinalizationSupervisor` is generation-owned. Deep dive: `architecture/deep-dive-runtime.md`
-- **Live rehash**: `eggpool rehash` applies changes without restart. Control socket at `~/.local/state/eggpool/eggpool.sock`. Operator guide: `docs/live-config-rehash.md`
-- **Health management**: `src/eggpool/health/` — circuit breaker, per-account tracking, bounded 1,800s backoff, scoped model quarantine, `DatabaseWritableProbe` for `/readyz`. Deep dive: `architecture/deep-dive-health.md`
-- **Background tasks**: `src/eggpool/background/` — `TaskSupervisor`, fixed-delay scheduler. Process-owned tasks survive generation swaps; generation-leased tasks retire with their generation. Deep dive: `architecture/deep-dive-background.md`
-- **Database teardown**: generation-owned request/finalization/background tasks are joined before process- or fixture-owned databases disconnect; database fixtures must use `try/finally` cleanup on the canonical event loop
-- **Database recovery**: startup integrity is fail-closed. Indeterminate outcomes exit the worker; systemd restarts, then startup integrity and crash reconciliation run before readiness. Runbook: `docs/runbooks/database-recovery.md`
+- **Database invariants**: SQLite WAL, single-connection serialization, task-owned transactions, fail-closed recovery. Deep dive: `architecture/deep-dive-database.md`
+- **Quota and routing**: load-based (never cost-based), tier-based via `routing_priority`. Deep dive: `architecture/deep-dive-routing.md`
+- **Process model**: supervisor + Granian worker (`workers=1`), `runtime_threads=1` required. Deep dive: `architecture/deep-dive-deployment.md`
+- **Runtime generations**: `RuntimeManager` owns active/retiring slots. Deep dive: `architecture/deep-dive-runtime.md`
+- **Health management**: `src/eggpool/health/` — circuit breaker, bounded 1,800s backoff, model quarantine. Deep dive: `architecture/deep-dive-health.md`
+- **Background tasks**: `src/eggpool/background/` — `TaskSupervisor`, fixed-delay scheduler. Deep dive: `architecture/deep-dive-background.md`
 
 ## Gotchas
 
