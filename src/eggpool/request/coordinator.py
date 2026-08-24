@@ -2241,7 +2241,9 @@ class RequestCoordinator:
                         f"{rejected_status or 'unknown'})."
                     ),
                 )
-            if context.attempted_accounts:
+            if self._all_accounts_attempted(
+                context, capability_policy=_capability_policy
+            ):
                 raise UpstreamExhaustedError(
                     f"All eligible accounts attempted for model {context.model_id!r}"
                 )
@@ -2359,7 +2361,9 @@ class RequestCoordinator:
                                 f"{rejected_status or 'unknown'})."
                             ),
                         )
-                    if self._all_accounts_attempted(context):
+                    if self._all_accounts_attempted(
+                        context, capability_policy=_capability_policy
+                    ):
                         raise UpstreamExhaustedError(
                             f"All eligible accounts attempted for model "
                             f"{context.model_id!r}"
@@ -5648,20 +5652,42 @@ class RequestCoordinator:
                 return request_has_provider_sensitive_media(payload)
         return False
 
-    def _all_accounts_attempted(self, context: ProxyRequestContext) -> bool:
-        """Return whether every enabled account has been attempted.
+    def _all_accounts_attempted(
+        self,
+        context: ProxyRequestContext,
+        *,
+        capability_policy: dict[str, str] | None = None,
+    ) -> bool:
+        """Return whether every eligible account has been attempted.
 
         Used by the retry loop to distinguish pre-dispatch
         unavailability (genuine 503) from post-retry exhaustion
         (502 ``UpstreamExhaustedError``). ``True`` when the
-        registered account set is non-empty and every name is
+        eligible account set is non-empty and every name is
         already in ``context.attempted_accounts``.
         """
-        enabled = self._registry.get_enabled_states()
-        if not enabled:
+        eligible = self._router.get_eligible_account_names(
+            context.model_id,
+            provider_id=context.provider_id,
+            protocol=context.upstream_protocol,
+            transcode_eligibility=(
+                {context.protocol, context.upstream_protocol}
+                if context.transcode_required
+                else None
+            ),
+            thinking_requirement=(
+                context.thinking_requirement
+                if context.thinking_requirement is not None
+                and context.thinking_requirement.required
+                else None
+            ),
+            capability_policy=capability_policy,
+            request_surface=getattr(context, "request_surface", "chat_completions"),
+        )
+        if not eligible:
             return False
         attempted = context.attempted_accounts
-        return all(state.name in attempted for state in enabled)
+        return all(account_name in attempted for account_name in eligible)
 
     def _build_score_components(
         self,

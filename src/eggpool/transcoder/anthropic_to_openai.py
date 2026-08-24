@@ -180,7 +180,16 @@ def _translate_anthropic_content_to_openai(
             media_type = str(source.get("media_type", ""))
             if source_type == "url":
                 # Capability gate: target must support document URLs
-                if mm is not None and not mm.document_input.url:
+                if mm is None:
+                    warnings.append(
+                        {
+                            "kind": "document_url_dropped",
+                            "field": "content[document]",
+                            "reason": "openai_no_pdf_url",
+                        }
+                    )
+                    continue
+                if not mm.document_input.url:
                     warnings.append(
                         {
                             "kind": "unsupported_source_form",
@@ -189,14 +198,17 @@ def _translate_anthropic_content_to_openai(
                             "reason": "target_does_not_support_document_urls",
                         }
                     )
-                else:
-                    warnings.append(
-                        {
-                            "kind": "document_url_dropped",
-                            "field": "content[document]",
-                            "reason": "openai_no_pdf_url",
-                        }
-                    )
+                    continue
+                url = str(source.get("url", ""))
+                parts.append(
+                    {
+                        "type": "file",
+                        "file": {
+                            "filename": "document.pdf",
+                            "file_data": url,
+                        },
+                    }
+                )
                 continue
             if media_type != "application/pdf":
                 warnings.append(

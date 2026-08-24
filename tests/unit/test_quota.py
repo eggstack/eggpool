@@ -185,6 +185,14 @@ class TestQuotaEstimator:
         assert estimator.get_account_weight("account1") == 2.0
         assert estimator.get_account_weight("account2") == 0.5
 
+    def test_non_positive_account_weights_are_rejected(self) -> None:
+        estimator = QuotaEstimator()
+
+        with pytest.raises(ValueError, match="greater than zero"):
+            estimator.set_account_weight("zero", 0.0)
+        with pytest.raises(ValueError, match="greater than zero"):
+            estimator.set_account_weight("negative", -1.0)
+
     def test_account_limits(self) -> None:
         """Test account limit management."""
         estimator = QuotaEstimator()

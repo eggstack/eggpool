@@ -274,4 +274,4 @@ class TestVisionAnthropicToOpenAIRoundTrip:
             ],
         }
         _, warnings = transcoder.encode_request(request, ctx, features=_features())
-        assert any(w.get("kind") == "document_unsupported_media" for w in warnings)
+        assert any(w.get("kind") == "document_media_type_unsupported" for w in warnings)

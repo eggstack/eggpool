@@ -21,6 +21,7 @@ import json
 import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, cast
+from urllib.parse import quote
 
 import httpx
 
@@ -74,7 +75,7 @@ class HuggingFaceSource:
 
     def _model_url(self, model_id: str) -> str:
         base = self._config.base_url or "https://huggingface.co"
-        return f"{base.rstrip('/')}/api/models/{model_id}"
+        return f"{base.rstrip('/')}/api/models/{quote(model_id, safe='')}"
 
     async def fetch_all(self) -> list[SourceModelRecord]:
         """Hugging Face is per-model; fetch_all returns cached entries."""

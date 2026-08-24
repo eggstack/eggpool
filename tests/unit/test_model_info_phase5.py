@@ -608,7 +608,7 @@ class TestHuggingFaceSource:
         assert record.source == "huggingface"
         assert record.license == "llama3"
         assert client.call_count == 1
-        assert "/api/models/meta-llama/Llama-3-8B" in (client.last_url or "")
+        assert "/api/models/meta-llama%2FLlama-3-8B" in (client.last_url or "")
 
     @pytest.mark.asyncio()
     async def test_refuses_unaliased_search_match(self) -> None:
@@ -625,6 +625,14 @@ class TestHuggingFaceSource:
         # The URL should be an exact model path, not a search endpoint
         assert "/api/models/random-model-name" in (client.last_url or "")
         assert "/search" not in (client.last_url or "")
+
+    def test_model_url_quotes_all_model_id_path_characters(self) -> None:
+        config = ModelInfoSourceConfig()
+        source = HuggingFaceSource(config=config, client=_MockHttpClient({}))
+
+        assert source._model_url("org/model?revision=main#readme") == (
+            "https://huggingface.co/api/models/org%2Fmodel%3Frevision%3Dmain%23readme"
+        )
 
     @pytest.mark.asyncio()
     async def test_failure_preserves_cached_metadata(self) -> None:

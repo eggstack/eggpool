@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import pytest
 import pytest_asyncio
 
+from eggpool.background.cleanup import cleanup_old_usage_rollups
+from eggpool.background.maintenance import MaintenanceBudget
 from eggpool.constants import SQLITE_INTEGER_MAX
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
@@ -486,7 +489,12 @@ class TestQuerySummaryEmpty:
 
 class TestCleanupOldRollups:
     @pytest.mark.asyncio()
-    async def test_deletes_old_rows(self, repo: UsageRollupRepository) -> None:
+    async def test_deletes_old_rows(
+        self, db: Database, repo: UsageRollupRepository
+    ) -> None:
+        recent_bucket = (
+            datetime.now(UTC).replace(second=0, microsecond=0) - timedelta(days=1)
+        ).strftime("%Y-%m-%d %H:%M:%S")
         await repo.upsert_many(
             [
                 _row(
@@ -497,12 +505,16 @@ class TestCleanupOldRollups:
                     bucket_start="2020-01-02 00:00:00",
                     model_id="old_model_b",
                 ),
-                _row(bucket_start="2026-07-20 12:00:00"),
+                _row(bucket_start=recent_bucket),
             ]
         )
 
-        deleted = await repo.cleanup_old_rollups(retain_days=30)
-        assert deleted == 2
+        result = await cleanup_old_usage_rollups(
+            db,
+            retain_days=30,
+            budget=MaintenanceBudget(max_batches_per_tick=10),
+        )
+        assert result.rows_changed == 2
 
         rows = await repo.query_timeseries(
             start="2000-01-01 00:00:00",
@@ -510,15 +522,22 @@ class TestCleanupOldRollups:
             bucket_size_s=60,
         )
         assert len(rows) == 1
-        assert rows[0]["bucket"] == "2026-07-20 12:00:00"
+        assert rows[0]["bucket"] == recent_bucket
 
 
 class TestCleanupOldRollupsNoOldData:
     @pytest.mark.asyncio()
     async def test_returns_zero_when_no_old_data(
-        self, repo: UsageRollupRepository
+        self, db: Database, repo: UsageRollupRepository
     ) -> None:
-        await repo.upsert_many([_row(bucket_start="2026-07-20 12:00:00")])
+        recent_bucket = (
+            datetime.now(UTC).replace(second=0, microsecond=0) - timedelta(days=1)
+        ).strftime("%Y-%m-%d %H:%M:%S")
+        await repo.upsert_many([_row(bucket_start=recent_bucket)])
 
-        deleted = await repo.cleanup_old_rollups(retain_days=30)
-        assert deleted == 0
+        result = await cleanup_old_usage_rollups(
+            db,
+            retain_days=30,
+            budget=MaintenanceBudget(max_batches_per_tick=10),
+        )
+        assert result.rows_changed == 0

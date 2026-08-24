@@ -245,6 +245,49 @@ async def test_router_selects_account() -> None:
 
 
 @pytest.mark.asyncio()
+async def test_select_account_updates_fairness_diagnostics() -> None:
+    os.environ["TEST_ROUTER_FAIRNESS_A"] = "key-a"
+    os.environ["TEST_ROUTER_FAIRNESS_B"] = "key-b"
+    try:
+        config = AppConfig.from_dict(
+            {
+                "accounts": [
+                    {"name": "acct-a", "api_key_env": "TEST_ROUTER_FAIRNESS_A"},
+                    {"name": "acct-b", "api_key_env": "TEST_ROUTER_FAIRNESS_B"},
+                ]
+            }
+        )
+        registry = AccountRegistry(config)
+        cache = ModelCatalogCache()
+        for account_name in ("acct-a", "acct-b"):
+            cache.update_from_account(
+                account_name,
+                "opencode-go",
+                [{"model_id": "gpt-4", "protocol": "openai"}],
+            )
+
+        class MockCatalog:
+            def __init__(self, c: ModelCatalogCache) -> None:
+                self._cache = c
+
+            @property
+            def cache(self) -> ModelCatalogCache:
+                return self._cache
+
+        router = Router(registry, MockCatalog(cache))  # type: ignore[arg-type]
+        selected = await router.select_account("gpt-4")
+
+        assert selected is not None
+        decision = router.last_fairness_decision
+        assert decision is not None
+        assert decision.candidate_count == 2
+        assert router.last_fairness_band_names == {"acct-a", "acct-b"}
+    finally:
+        del os.environ["TEST_ROUTER_FAIRNESS_A"]
+        del os.environ["TEST_ROUTER_FAIRNESS_B"]
+
+
+@pytest.mark.asyncio()
 async def test_router_no_eligible_account() -> None:
     os.environ["TEST_ROUTER_KEY_2"] = "key"
     try:

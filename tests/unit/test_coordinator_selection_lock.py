@@ -225,3 +225,21 @@ async def test_no_request_remains_pending_after_error() -> None:
         assert row["status"] in {"pending", "error", "completed"}
     finally:
         await db.disconnect()
+
+
+def test_exhaustion_uses_model_eligible_accounts() -> None:
+    class EligibilityRouter:
+        def get_eligible_account_names(
+            self, model_id: str, **kwargs: object
+        ) -> list[str]:
+            assert model_id == "gpt-4"
+            assert kwargs["protocol"] == "openai"
+            return ["serves-gpt-4"]
+
+    coordinator = RequestCoordinator.__new__(RequestCoordinator)
+    coordinator._router = EligibilityRouter()  # type: ignore[assignment]
+    context = _make_context("req-exhaustion-eligible")
+    context.attempted_accounts.add("serves-gpt-4")
+    context.attempted_accounts.add("enabled-but-ineligible")
+
+    assert coordinator._all_accounts_attempted(context) is True

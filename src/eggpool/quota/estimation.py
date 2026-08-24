@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
@@ -1070,6 +1071,8 @@ class QuotaEstimator:
 
     def set_account_weight(self, account_name: str, weight: float) -> None:
         """Set account weight for weighted routing."""
+        if not math.isfinite(weight) or weight <= 0:
+            raise ValueError("Account weight must be finite and greater than zero")
         if account_name not in self.accounts:
             self.accounts[account_name] = AccountQuota(account_name=account_name)
         self.accounts[account_name].weight = weight
@@ -1106,6 +1109,8 @@ class QuotaEstimator:
         Creates the account quota if it does not already exist, then sets
         all seven values: weight, three capacities, and three offsets.
         """
+        if not math.isfinite(weight) or weight <= 0:
+            raise ValueError("Account weight must be finite and greater than zero")
         if account_name not in self.accounts:
             self.accounts[account_name] = AccountQuota(account_name=account_name)
         quota = self.accounts[account_name]

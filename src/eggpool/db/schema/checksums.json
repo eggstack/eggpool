@@ -52,6 +52,7 @@
     "0050_routing_decisions_retention_index.sql": "840974404c8bf1dca1b5e8db7360814b49be2de087801425382f15ef56412a60",
     "0051_model_quarantine.sql": "e60128ee2006073c9dd54af80facb70f6b3a8edfaf69d6619d0b41e35180a940",
     "0052_catalog_refresh_state.sql": "3931b8b1ef87b2e6413f8bba2f16f26b1cee899ea4e962ac9e5ff50be590c99d",
-    "0053_remove_attempt_status_analytics_index.sql": "0918c57f786dcb953fd5a32238d94060c471e768f245f40aeb37e20fec8ffe99"
+    "0053_remove_attempt_status_analytics_index.sql": "0918c57f786dcb953fd5a32238d94060c471e768f245f40aeb37e20fec8ffe99",
+    "0054_model_quarantine_null_identity.sql": "f382fa78f09a55e6a381c225e376b04c31a9775d79ecf6a3f41aeaadf9b8019e"
   }
 }

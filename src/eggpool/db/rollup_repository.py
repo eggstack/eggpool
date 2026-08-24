@@ -493,33 +493,3 @@ class UsageRollupRepository:
         if latest is None:
             return None
         return str(latest)
-
-    async def cleanup_old_rollups(self, retain_days: int, max_rows: int = 5000) -> int:
-        """Delete old rollup buckets. Returns rows deleted.
-
-        Uses chunked deletes with a LIMIT to avoid holding the write
-        lock for too long on large tables.
-        """
-        total_deleted = 0
-        while True:
-            async with self._db.transaction():
-                deleted = await self._db.execute_write(
-                    "DELETE FROM usage_rollups "
-                    "WHERE rowid IN ("
-                    "  SELECT rowid FROM usage_rollups "
-                    "  WHERE bucket_start < datetime('now', ? || ' days') "
-                    "  LIMIT ?"
-                    ")",
-                    (f"-{retain_days}", max_rows),
-                )
-            total_deleted += deleted
-            if deleted < max_rows:
-                break
-
-        if total_deleted > 0:
-            logger.info(
-                "Deleted %d old usage_rollups rows (retention=%d days)",
-                total_deleted,
-                retain_days,
-            )
-        return total_deleted

@@ -342,27 +342,64 @@ class Router:
                 if state is not None:
                     ranked_pairs.append((state, score))
 
+            key = self._fairness_key(
+                provider_id=provider_id,
+                model_id=model_id,
+                protocol=protocol,
+                priority=_priority,
+                client_protocol=client_protocol,
+            )
             if self._fairness_mode != "off" and len(ranked_pairs) >= 2:
                 epsilon = self._fairness_effective_epsilon()
-                band, rest, _band_reason = _fairness_band(
+                band, rest, band_reason = _fairness_band(
                     ranked_pairs,
                     epsilon=epsilon,
                     prefer_native=self._scorer.prefer_native,
                 )
                 if band and self._fairness_mode == "round_robin":
-                    key = self._fairness_key(
-                        provider_id=provider_id,
-                        model_id=model_id,
-                        protocol=protocol,
-                        priority=_priority,
-                        client_protocol=client_protocol,
+                    band, fairness_decision = await self._fairness_rotor.rotate(
+                        key, band, scope=self._fairness_scope
                     )
-                    band, _ = await self._fairness_rotor.rotate(key, band)
                 elif band and self._fairness_mode == "random":
                     import random as _random
 
                     _random.shuffle(band)
+                    fairness_decision = FairnessDecision(
+                        mode="random",
+                        applied=True,
+                        key=key.to_key_string(),
+                        candidate_count=len(band),
+                        scope=self._fairness_scope,
+                        reason="ok",
+                    )
+                else:
+                    fairness_decision = FairnessDecision(
+                        mode=self._fairness_mode,
+                        applied=False,
+                        key=key.to_key_string(),
+                        candidate_count=len(ranked_pairs),
+                        scope=self._fairness_scope,
+                        reason=band_reason,
+                    )
+                self._last_fairness_decision = fairness_decision
+                self._last_fairness_band_names = (
+                    frozenset(s.name for s, _ in band) if band else frozenset()
+                )
                 ranked_pairs = band + rest
+            else:
+                self._last_fairness_decision = FairnessDecision(
+                    mode=self._fairness_mode,
+                    applied=False,
+                    key=key.to_key_string(),
+                    candidate_count=len(ranked_pairs),
+                    scope=self._fairness_scope,
+                    reason=(
+                        "disabled"
+                        if self._fairness_mode == "off"
+                        else "single_candidate"
+                    ),
+                )
+                self._last_fairness_band_names = frozenset()
 
             if ranked_pairs:
                 return ranked_pairs[0][0]
@@ -836,6 +873,7 @@ class Router:
         transcode_eligibility: set[str] | None = None,
         thinking_requirement: ThinkingRequestRequirement | None = None,
         capability_policy: dict[str, str] | None = None,
+        request_surface: str = "chat_completions",
     ) -> list[str]:
         """Get eligible account names for a model.
 
@@ -851,6 +889,7 @@ class Router:
             transcode_eligibility,
             thinking_requirement=thinking_requirement,
             capability_policy=capability_policy,
+            request_surface=request_surface,
         )
         return candidates.names
 

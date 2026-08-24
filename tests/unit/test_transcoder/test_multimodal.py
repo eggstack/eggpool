@@ -580,6 +580,42 @@ class TestHappyPathMultimodalTranslation:
         assert len(image_parts) == 1
         assert image_parts[0]["image_url"]["url"].startswith("data:image/png;base64,")
 
+    def test_anthropic_document_url_translated_when_supported(self) -> None:
+        transcoder = AnthropicToOpenAI()
+        url = "https://example.com/document.pdf"
+        payload = {
+            "model": "gpt-4",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Read this"},
+                        {
+                            "type": "document",
+                            "source": {"type": "url", "url": url},
+                        },
+                    ],
+                },
+            ],
+        }
+        result, warnings = transcoder.encode_request(
+            payload,
+            _make_context("anthropic", "openai"),
+            features=_features(),
+            multimodal_capability=_mm_caps(doc_url=True),
+        )
+
+        assert not any(w.get("kind") == "document_url_dropped" for w in warnings)
+        content = result["messages"][0]["content"]
+        assert isinstance(content, list)
+        document_parts = [p for p in content if p.get("type") == "file"]
+        assert document_parts == [
+            {
+                "type": "file",
+                "file": {"filename": "document.pdf", "file_data": url},
+            }
+        ]
+
 
 # ---------------------------------------------------------------------------
 # Serialized request-size validation
