@@ -19,7 +19,6 @@ import asyncio
 import json
 import os
 import sys
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -29,6 +28,7 @@ from tests.integration.test_rehash_streaming_swap import (
     _make_mock_server,
     _MockState,
     _run_rehash,
+    _short_runtime_path,
     _terminate_server,
     _wait_healthy,
     _write_config,
@@ -64,7 +64,7 @@ async def _spawn_server(
     env: dict[str, str],
 ) -> asyncio.subprocess.Process:
     """Spawn a server with an isolated, safe control-socket directory."""
-    runtime_path = Path(config_path).with_suffix(".runtime")
+    runtime_path = _short_runtime_path(config_path)
     runtime_path.mkdir(parents=True, exist_ok=True)
     runtime_path.chmod(0o700)
     env["EGGPOOL_RUNTIME_DIR"] = str(runtime_path)

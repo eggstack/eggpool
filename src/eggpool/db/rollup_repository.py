@@ -303,9 +303,8 @@ class UsageRollupRepository:
             f"GROUP BY {bucket_expr}, series_key "
             f"ORDER BY bucket "
         )
-        if source_bucket_size_s == bucket_size_s:
-            sql += " LIMIT ?"
-            params.append(limit)
+        sql += " LIMIT ?"
+        params.append(limit)
 
         rows = await self._db.fetch_all(sql, tuple(params))
         return [dict(row) for row in rows]

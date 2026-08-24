@@ -472,6 +472,7 @@ class ModelCatalogCache:
         model_id: str,
         available_accounts: AbstractSet[str],
         provider_id: str | None = None,
+        capability_provider_id: str | None = None,
     ) -> dict[str, Any]:
         """Copy a cache entry into the serialized exposure format."""
         model_copy = dict(model_info)
@@ -485,7 +486,11 @@ class ModelCatalogCache:
         model_copy = self._copy_with_capability_overrides(
             model_copy,
             model_id=model_id,
-            provider_id=provider_id,
+            provider_id=(
+                capability_provider_id
+                if capability_provider_id is not None
+                else provider_id
+            ),
         )
 
         return model_copy
@@ -662,16 +667,13 @@ class ModelCatalogCache:
                 best_info,
                 model_id=model_id,
                 available_accounts=visible_accounts,
+                capability_provider_id=(
+                    provider_ids[0] if len(provider_ids) == 1 else None
+                ),
             )
             # Track contributing providers so /v1/models can surface
             # routing priorities and provider list for collapsed entries.
             model_info_copy["providers"] = list(provider_ids)
-            if len(provider_ids) == 1:
-                model_info_copy = self._copy_with_capability_overrides(
-                    model_info_copy,
-                    model_id=model_id,
-                    provider_id=provider_ids[0],
-                )
 
             # For collapsed entries, aggregate capabilities across all
             # visible providers so the /v1/models response can show

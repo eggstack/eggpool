@@ -466,7 +466,7 @@ async def handle_pricing_provenance(request: Request) -> Response:
     from eggpool.stats.queries import fetch_pricing_provenance_stats
 
     stats = _get_stats(request)
-    rows = await fetch_pricing_provenance_stats(stats._db)
+    rows = await fetch_pricing_provenance_stats(stats.db)
     return JSONResponse(content={"snapshots": rows})
 
 
@@ -583,11 +583,12 @@ async def handle_recent_requests(
     the raw upstream error_detail is never sent to this endpoint.
     """
     stats = _get_stats(request)
+    safe_limit = max(1, min(limit, 200))
     account_id_value: int | None = None
     if account:
         from eggpool.stats.queries import fetch_account_id
 
-        account_id_value = await fetch_account_id(stats._db, account)
+        account_id_value = await fetch_account_id(stats.db, account)
         if account_id_value is None:
             return JSONResponse(
                 status_code=404,
@@ -599,7 +600,7 @@ async def handle_recent_requests(
     # the safe default applies.
     include_client_ip = False
     rows = await stats.get_recent_requests(
-        limit=limit,
+        limit=safe_limit,
         account_id=account_id_value,
         provider_id=provider or None,
         model_id=model or None,
@@ -608,7 +609,7 @@ async def handle_recent_requests(
     )
     return JSONResponse(
         content={
-            "limit": max(1, min(limit, 200)),
+            "limit": safe_limit,
             "account_filter": account,
             "provider_filter": provider,
             "model_filter": model,

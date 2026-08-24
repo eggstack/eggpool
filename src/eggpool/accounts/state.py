@@ -91,19 +91,17 @@ class AccountRuntimeState:
             self.cooldown_until = 0.0
             self.consecutive_failures = 0
 
-    def is_eligible(self) -> bool:
+    def is_eligible(self, now: float | None = None) -> bool:
         """Check if account is eligible for routing."""
+        if now is None:
+            now = time.time()
         if not self.enabled:
             return False
-        self.refresh_transient_state()
-        if self.health_state in (
-            "authentication_failed",
-            "quota_exhausted",
-            "cooldown",
-            "rate_limited",
-        ):
+        if self.health_state in ("authentication_failed",):
             return False
-        return self.cooldown_until <= time.time()
+        if self.health_state == "quota_exhausted":
+            return self.cooldown_until > 0 and self.cooldown_until <= now
+        return self.cooldown_until <= now
 
     def record_success(self) -> None:
         """Record a successful request."""

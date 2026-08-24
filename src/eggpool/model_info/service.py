@@ -116,6 +116,11 @@ class ModelInfoService:
     def repo(self) -> ModelInfoRepository:
         return self._repo
 
+    @property
+    def config(self) -> ModelInfoConfig:
+        """Return the model-info configuration."""
+        return self._config
+
     async def load_cache(self) -> None:
         """Load provider-native observations into the DB from the catalog cache.
 

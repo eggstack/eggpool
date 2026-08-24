@@ -25,10 +25,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)
+_MAX_COUNTER_KEYS = 1024
 
 # ---------------------------------------------------------------------------
 # Event dataclass
@@ -88,12 +90,18 @@ class ThinkingMetricsCounter:
         self._lock = asyncio.Lock()
         self._counters: dict[str, int] = {}
 
+    def _increment(self, key: str) -> None:
+        """Increment a key while bounding label cardinality."""
+        if key not in self._counters and len(self._counters) >= _MAX_COUNTER_KEYS:
+            self._counters.pop(next(iter(self._counters)))
+        self._counters[key] = self._counters.get(key, 0) + 1
+
     # -- Increment helpers ---------------------------------------------------
 
     async def increment_requested(self, *, client_protocol: str) -> None:
         key = f"requested|{client_protocol}"
         async with self._lock:
-            self._counters[key] = self._counters.get(key, 0) + 1
+            self._increment(key)
 
     async def increment_transcoded(
         self,
@@ -104,7 +112,7 @@ class ThinkingMetricsCounter:
     ) -> None:
         key = f"transcoded|{client_protocol}|{upstream_protocol}|{provider_id}"
         async with self._lock:
-            self._counters[key] = self._counters.get(key, 0) + 1
+            self._increment(key)
 
     async def increment_dropped(
         self,
@@ -115,7 +123,7 @@ class ThinkingMetricsCounter:
     ) -> None:
         key = f"dropped|{client_protocol}|{upstream_protocol}|{reason}"
         async with self._lock:
-            self._counters[key] = self._counters.get(key, 0) + 1
+            self._increment(key)
 
     async def increment_rejected(
         self,
@@ -125,38 +133,38 @@ class ThinkingMetricsCounter:
     ) -> None:
         key = f"rejected|{client_protocol}|{capability_status}"
         async with self._lock:
-            self._counters[key] = self._counters.get(key, 0) + 1
+            self._increment(key)
 
     async def increment_unknown_capability(self, *, client_protocol: str) -> None:
         key = f"unknown_capability|{client_protocol}"
         async with self._lock:
-            self._counters[key] = self._counters.get(key, 0) + 1
+            self._increment(key)
 
     async def increment_unsupported_capability(self, *, client_protocol: str) -> None:
         key = f"unsupported_capability|{client_protocol}"
         async with self._lock:
-            self._counters[key] = self._counters.get(key, 0) + 1
+            self._increment(key)
 
     async def increment_budget_clamped(
         self, *, client_protocol: str, provider_id: str
     ) -> None:
         key = f"budget_clamped|{client_protocol}|{provider_id}"
         async with self._lock:
-            self._counters[key] = self._counters.get(key, 0) + 1
+            self._increment(key)
 
     async def increment_stream_delta(
         self, *, client_protocol: str, upstream_protocol: str
     ) -> None:
         key = f"stream_delta|{client_protocol}|{upstream_protocol}"
         async with self._lock:
-            self._counters[key] = self._counters.get(key, 0) + 1
+            self._increment(key)
 
     async def increment_response_block(
         self, *, client_protocol: str, upstream_protocol: str
     ) -> None:
         key = f"response_block|{client_protocol}|{upstream_protocol}"
         async with self._lock:
-            self._counters[key] = self._counters.get(key, 0) + 1
+            self._increment(key)
 
     async def increment_provider_mapped(
         self,
@@ -167,7 +175,7 @@ class ThinkingMetricsCounter:
     ) -> None:
         key = f"provider_mapped|{client_protocol}|{provider_id}|{model_id}"
         async with self._lock:
-            self._counters[key] = self._counters.get(key, 0) + 1
+            self._increment(key)
 
     async def increment_provider_dropped(
         self,
@@ -178,7 +186,7 @@ class ThinkingMetricsCounter:
     ) -> None:
         key = f"provider_dropped|{client_protocol}|{provider_id}|{model_id}"
         async with self._lock:
-            self._counters[key] = self._counters.get(key, 0) + 1
+            self._increment(key)
 
     async def increment_provider_rejected(
         self,
@@ -189,7 +197,7 @@ class ThinkingMetricsCounter:
     ) -> None:
         key = f"provider_rejected|{client_protocol}|{provider_id}|{model_id}"
         async with self._lock:
-            self._counters[key] = self._counters.get(key, 0) + 1
+            self._increment(key)
 
     # -- Query / lifecycle ---------------------------------------------------
 
@@ -237,6 +245,7 @@ class ThinkingMetricsCounter:
 # ---------------------------------------------------------------------------
 
 _counter: ThinkingMetricsCounter | None = None
+_counter_lock = threading.Lock()
 
 
 def get_counter() -> ThinkingMetricsCounter:
@@ -246,7 +255,9 @@ def get_counter() -> ThinkingMetricsCounter:
     """
     global _counter  # noqa: PLW0603
     if _counter is None:
-        _counter = ThinkingMetricsCounter()
+        with _counter_lock:
+            if _counter is None:
+                _counter = ThinkingMetricsCounter()
     return _counter
 
 

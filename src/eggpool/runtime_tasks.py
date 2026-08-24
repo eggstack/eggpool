@@ -48,10 +48,10 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Coroutine
+    from collections.abc import Callable, Coroutine, Iterable
 
     from eggpool.background import TaskSupervisor
     from eggpool.models.config import AppConfig
@@ -277,6 +277,9 @@ def register_runtime_tasks(
         from eggpool.background.cleanup import checkpoint_database  # noqa: PLC0415
 
         result = await checkpoint_database(db)
+        if result.get("contention"):
+            await asyncio.sleep(60.0)
+            result = await checkpoint_database(db)
         if result.get("checkpointed"):
             logger.info("WAL checkpoint: %s", result)
 
@@ -613,6 +616,9 @@ def build_callback_factories_for_specs(
 
             async def _checkpoint_factory() -> None:
                 result = await checkpoint_database(db)
+                if result.get("contention"):
+                    await asyncio.sleep(60.0)
+                    result = await checkpoint_database(db)
                 if result.get("checkpointed"):
                     logger.info("WAL checkpoint: %s", result)
 
@@ -851,16 +857,6 @@ def _register_update_checker(
     )
 
 
-__all__ = [
-    "TaskRegistrationContext",
-    "TaskSpecDiff",
-    "TaskTransitionResult",
-    "apply_spec_diff",
-    "build_task_specs",
-    "compute_spec_diff",
-]
-
-
 async def _clear_quarantine_on_catalog_reappearance(
     gen: Any,  # noqa: ANN401
     result: Any,  # noqa: ANN401
@@ -918,13 +914,28 @@ async def _clear_quarantine_on_catalog_reappearance(
         # provider → enabled accounts.  Iterate and clear each
         # scope key so per-account quarantine is fully cleared.
         for account_name in _accounts_for_provider(registry, provider_id):
-            applier.clear_authoritative_reappearance(
-                provider_id=provider_id,
-                account_id=account_name,
-                canonical_model_id=model_id,
-                upstream_model_id=model_id,
-                upstream_protocol="openai",
-            )
+            protocols_fn = getattr(registry, "get_provider_protocols", None)
+            try:
+                protocols_value: object = (
+                    cast("object", protocols_fn(provider_id)) if protocols_fn else ()
+                )
+            except Exception:
+                protocols_value = ()
+            protocols: list[str] = []
+            if isinstance(protocols_value, (set, frozenset, list, tuple)):
+                protocols = [
+                    protocol
+                    for protocol in cast("Iterable[object]", protocols_value)
+                    if isinstance(protocol, str)
+                ]
+            for upstream_protocol in protocols or ["openai"]:
+                applier.clear_authoritative_reappearance(
+                    provider_id=provider_id,
+                    account_id=account_name,
+                    canonical_model_id=model_id,
+                    upstream_model_id=model_id,
+                    upstream_protocol=upstream_protocol,
+                )
 
 
 def _accounts_for_provider(registry: Any, provider_id: str) -> list[str]:  # noqa: ANN401

@@ -33,6 +33,7 @@ from tests.integration.test_rehash_streaming_swap import (
     _MockState,
     _run_rehash,
     _runtime_generation_id,
+    _short_runtime_path,
     _terminate_server,
     _wait_healthy,
     _write_config,
@@ -51,7 +52,7 @@ async def _spawn_and_drain(
 ) -> tuple[asyncio.subprocess.Process, asyncio.Task[None]]:
     """Spawn server with output suppressed to avoid pipe-buffer deadlocks."""
     if not env.get("EGGPOOL_RUNTIME_DIR"):
-        runtime_path = Path(config_path).with_suffix(".runtime")
+        runtime_path = _short_runtime_path(config_path)
         runtime_path.mkdir(parents=True, exist_ok=True)
         runtime_path.chmod(0o700)
         env["EGGPOOL_RUNTIME_DIR"] = str(runtime_path)
@@ -67,6 +68,7 @@ async def _spawn_and_drain(
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
         env=env,
+        start_new_session=True,
     )
     # Drain is a no-op when stdout/stderr are DEVNULL, but we keep the
     # API consistent with _spawn_server for compatibility.
@@ -467,7 +469,7 @@ async def test_d3_digest_mismatch_rejected_no_generation_change(
     proc, drain = await _spawn_and_drain(config_path, env)
     try:
         assert await _wait_healthy(server_port), "server did not become healthy"
-        runtime_path = Path(config_path).with_suffix(".runtime")
+        runtime_path = _short_runtime_path(config_path)
 
         async with httpx.AsyncClient() as client:
             gen_before = await _runtime_generation_id(client, server_port)
@@ -955,7 +957,7 @@ async def test_d3_concurrent_reload_burst_stays_healthy(tmp_path: Any) -> None:
     proc, drain = await _spawn_and_drain(config_path, env)
     try:
         assert await _wait_healthy(server_port), "server did not become healthy"
-        runtime_path = Path(config_path).with_suffix(".runtime")
+        runtime_path = _short_runtime_path(config_path)
         assert await _wait_control_socket(runtime_path=runtime_path), (
             "control socket did not appear"
         )

@@ -430,10 +430,15 @@ class Database:
         self._ensure_canonical_loop()
         self._transition_state(DatabaseLifecycleState.SHUTTING_DOWN)
         if self._conn is not None:
-            await self._conn.close()
-            self._conn = None
-        self._writes_admitted = False
-        self._reads_admitted = False
+            try:
+                await self._conn.close()
+            finally:
+                self._conn = None
+                self._writes_admitted = False
+                self._reads_admitted = False
+        else:
+            self._writes_admitted = False
+            self._reads_admitted = False
 
     async def _invalidate_connection(self, reason: str) -> None:
         """Detach and close the connection after indeterminate state.

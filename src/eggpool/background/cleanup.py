@@ -8,8 +8,11 @@ import time
 from typing import TYPE_CHECKING
 
 from eggpool.background.maintenance import MaintenanceBudget, MaintenancePassResult
+from eggpool.errors import DatabaseTransactionOwnershipError
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from eggpool.db.connection import Database
     from eggpool.quota.estimation import QuotaEstimator
     from eggpool.routing.router import Router
@@ -17,6 +20,25 @@ if TYPE_CHECKING:
 _DEFAULT_BUDGET = MaintenanceBudget()
 
 logger = logging.getLogger(__name__)
+
+
+async def _retry_runtime_reconciliation(
+    operation: Callable[[], Awaitable[None]],
+    description: str,
+) -> None:
+    """Retry one runtime mirror update once, without aborting the batch."""
+    try:
+        await operation()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Runtime reconciliation failed for %s; retrying: %s", description, exc
+        )
+        try:
+            await operation()
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Runtime reconciliation failed after retry for %s", description
+            )
 
 
 async def _has_remaining_rows(
@@ -341,14 +363,30 @@ async def _reconcile_runtime_reservations(
             estimated_tokens_value if isinstance(estimated_tokens_value, int) else 0
         )
         if quota_estimator is not None:
-            await quota_estimator.remove_reservation(
-                account_name_value,
-                reserved_microdollars,
-                requests=1,
-                tokens=estimated_tokens,
+
+            async def remove_reservation(
+                account_name: str = account_name_value,
+                reserved: int = reserved_microdollars,
+                tokens: int = estimated_tokens,
+            ) -> None:
+                await quota_estimator.remove_reservation(
+                    account_name,
+                    reserved,
+                    requests=1,
+                    tokens=tokens,
+                )
+
+            await _retry_runtime_reconciliation(
+                remove_reservation,
+                f"account {account_name_value!r} quota reservation",
             )
         if router is not None:
-            await router.decrement_active_request_count(account_name_value)
+            await _retry_runtime_reconciliation(
+                lambda account_name=account_name_value: (
+                    router.decrement_active_request_count(account_name)
+                ),
+                f"account {account_name_value!r} active request count",
+            )
 
 
 async def cleanup_old_operational_events(
@@ -692,6 +730,17 @@ async def checkpoint_database(db: Database) -> dict[str, object]:
         busy = int(rows[0][0]) if rows else 0
         log = int(rows[0][1]) if rows else 0
         checkpointed = int(rows[0][2]) if rows else 0
+    except DatabaseTransactionOwnershipError as exc:
+        logger.debug("WAL checkpoint deferred while a transaction is active: %s", exc)
+        duration_ms = (time.monotonic() - start) * 1000
+        return {
+            "busy": 1,
+            "log": 0,
+            "checkpointed": 0,
+            "duration_ms": duration_ms,
+            "mode": "PASSIVE",
+            "contention": True,
+        }
     except Exception:
         logger.exception("WAL checkpoint failed")
         duration_ms = (time.monotonic() - start) * 1000

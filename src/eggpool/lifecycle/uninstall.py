@@ -29,6 +29,25 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
 EGGPOOL_SHELL_MARKER = "# Added by eggpool"
+_SAFE_HOME_CHILD_NAMES = frozenset(
+    {
+        ".aws",
+        ".cache",
+        ".config",
+        ".gnupg",
+        ".local",
+        ".ssh",
+        "Applications",
+        "Desktop",
+        "Documents",
+        "Downloads",
+        "Library",
+        "Movies",
+        "Music",
+        "Pictures",
+        "Public",
+    }
+)
 
 
 class InstallMethod(StrEnum):
@@ -696,10 +715,9 @@ def _assert_safe_path(target: Path, *, label: str) -> None:
             "This is a top-level system directory."
         )
 
-    # Target is a direct child of the home directory that is not an
-    # eggpool-specific path (e.g. ~ itself was already caught above,
-    # but ~/.config, ~/.cache, etc. should also be rejected).
-    if resolved.parent == home:
+    # Protect common top-level home directories, while allowing a clearly
+    # named direct child such as ~/eggpool-data.
+    if resolved.parent == home and resolved.name in _SAFE_HOME_CHILD_NAMES:
         raise RuntimeError(
             f"Refusing to delete '{resolved}' as the {label}. "
             "This is a top-level directory in your home and is not "

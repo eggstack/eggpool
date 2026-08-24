@@ -263,9 +263,6 @@ class MetricsWriteCoalescer:
         and ``_async_lock`` to serialise against other flush
         coroutines.
         """
-        if not self._buffer:
-            return FlushResult()
-
         # Snapshot and clear the buffer under both locks:
         # _thread_lock protects against concurrent record_usage() callers;
         # _async_lock serialises against other flush coroutines.
@@ -275,6 +272,8 @@ class MetricsWriteCoalescer:
             if not self._db.writes_admitted:
                 return FlushResult(error_class="WritesNotAdmitted")
             with self._thread_lock:
+                if not self._buffer:
+                    return FlushResult()
                 buffer_snapshot = self._buffer
                 event_count = self._pending_events
                 self._buffer = {}

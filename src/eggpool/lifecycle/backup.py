@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import tomllib
 import zipfile
 from dataclasses import dataclass, field
@@ -220,11 +221,11 @@ def _plan_restore(archive: zipfile.ZipFile) -> _RestorePlan:
         if name not in {CONFIG_BASENAME, ENV_BASENAME, *DB_BASENAMES, META_BASENAME}:
             raise ValueError(f"Backup contains unexpected member: {info.filename}")
         if name == CONFIG_BASENAME:
-            plan.config_target = Path(info.filename).resolve()
+            plan.config_target = Path(name)
         elif name == ENV_BASENAME:
-            plan.env_target = Path(info.filename).resolve()
+            plan.env_target = Path(name)
         elif name == "usage.sqlite3":
-            plan.db_target = Path(info.filename).resolve()
+            plan.db_target = Path(name)
         plan.members[name] = archive.read(info.filename)
     return plan
 
@@ -589,6 +590,4 @@ def restore_backup(
                 target.write_bytes(snapshot.read_bytes())
         raise
     finally:
-        for snap in staging.iterdir():
-            snap.unlink()
-        staging.rmdir()
+        shutil.rmtree(staging, ignore_errors=True)

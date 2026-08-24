@@ -280,7 +280,23 @@ def render_proxy_response(result: PreparedProxyResponse) -> Response:
             media_type=None,
         )
 
+    from eggpool.proxy.client import HOP_BY_HOP_HEADERS
+
+    connection_tokens = {
+        token.strip().casefold()
+        for name, value in result.headers
+        if name.casefold() == "connection"
+        for token in value.split(",")
+        if token.strip()
+    }
     for name, value in result.headers:
+        lower_name = name.casefold()
+        if (
+            lower_name in HOP_BY_HOP_HEADERS
+            or lower_name in connection_tokens
+            or lower_name in {"content-encoding", "content-length"}
+        ):
+            continue
         response.headers.append(name, value)
     return response
 
@@ -466,7 +482,16 @@ async def handle_proxy_request(
             message="Runtime generation unavailable",
             error_type=endpoint.service_error_type,
         )
-    assert lease is not None  # always acquired or returned 503
+    if lease is None:
+        logger.error(
+            "RuntimeManager returned no lease after successful acquisition",
+            extra={"proxy_request_id": proxy_request_id},
+        )
+        return endpoint.error_response(
+            status_code=503,
+            message="Runtime generation unavailable",
+            error_type=endpoint.service_error_type,
+        )
     coordinator = lease.runtime.coordinator
     span_recorder = getattr(lease.runtime, "dispatch_span_recorder", None)
 

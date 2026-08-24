@@ -1377,7 +1377,7 @@ async def fetch_latency_phase_breakdown(
                 ROW_NUMBER() OVER (ORDER BY {phase}) AS rn,
                 COUNT(*) OVER () AS group_count
             FROM requests
-            WHERE started_at >= ? AND started_at <= ?
+            WHERE started_at >= ? AND started_at < ?
               AND {phase} IS NOT NULL
         )
         SELECT
@@ -1412,7 +1412,7 @@ async def fetch_latency_phase_breakdown(
             }
     # Overall request count for the window (regardless of phase coverage).
     count_rows = await db.fetch_all(
-        "SELECT COUNT(*) AS c FROM requests WHERE started_at >= ? AND started_at <= ?",
+        "SELECT COUNT(*) AS c FROM requests WHERE started_at >= ? AND started_at < ?",
         (_format_dt(start), _format_dt(end)),
     )
     if count_rows:
@@ -1692,11 +1692,8 @@ async def fetch_routing_distribution(
     ``attempted_excluded_count`` plus a per-account histogram of how
     often each account was selected.
 
-    Uses ``<=`` for the end filter so a row inserted in the same second
-    as the time-range boundary is included.  ``format_dt`` truncates
-    fractional seconds, so the request-side boundary string can match a
-    stored ``decision_made_at`` exactly; a strict ``<`` would drop that
-    row and the 1-second slop is harmless for dashboard analytics.
+    Uses a half-open ``[start, end)`` interval so adjacent dashboard
+    windows do not double-count a boundary row.
     """
     sql = """
     SELECT
@@ -1710,7 +1707,7 @@ async def fetch_routing_distribution(
         COALESCE(AVG(selected_score), 0) as avg_selected_score,
         COUNT(DISTINCT selected_account_name) as distinct_selected_accounts
     FROM routing_decisions
-    WHERE decision_made_at >= ? AND decision_made_at <= ?
+    WHERE decision_made_at >= ? AND decision_made_at < ?
     GROUP BY model_id, provider_id
     ORDER BY decision_count DESC
     """
@@ -1729,7 +1726,7 @@ async def fetch_routing_selection_breakdown(
     Includes ``last_selected_at`` and ``last_selected_score`` from the
     most recent routing decision per account so the dashboard can show
     when each account was last chosen and what score it received.
-    Uses ``<=`` for the end filter (see fetch_routing_distribution).
+    Uses the same half-open ``[start, end)`` interval as the distribution.
     """
     sql = """
     SELECT
@@ -1742,23 +1739,23 @@ async def fetch_routing_selection_breakdown(
         (SELECT sub.decision_made_at
          FROM routing_decisions sub
          WHERE sub.selected_account_name = rd.selected_account_name
-           AND sub.decision_made_at >= ? AND sub.decision_made_at <= ?
+           AND sub.decision_made_at >= ? AND sub.decision_made_at < ?
          ORDER BY sub.decision_made_at DESC
          LIMIT 1) as last_selected_at,
         (SELECT sub.selected_score
          FROM routing_decisions sub
          WHERE sub.selected_account_name = rd.selected_account_name
-           AND sub.decision_made_at >= ? AND sub.decision_made_at <= ?
+           AND sub.decision_made_at >= ? AND sub.decision_made_at < ?
          ORDER BY sub.decision_made_at DESC
          LIMIT 1) as last_selected_score,
         (SELECT sub.selected_tier
          FROM routing_decisions sub
          WHERE sub.selected_account_name = rd.selected_account_name
-           AND sub.decision_made_at >= ? AND sub.decision_made_at <= ?
+           AND sub.decision_made_at >= ? AND sub.decision_made_at < ?
          ORDER BY sub.decision_made_at DESC
          LIMIT 1) as last_selected_tier
     FROM routing_decisions rd
-    WHERE rd.decision_made_at >= ? AND rd.decision_made_at <= ?
+    WHERE rd.decision_made_at >= ? AND rd.decision_made_at < ?
     GROUP BY rd.selected_account_name, rd.provider_id
     ORDER BY selection_count DESC
     """
@@ -1799,7 +1796,7 @@ async def fetch_routing_skew_summary(
             COALESCE(selected_account_name, 'unknown') as account_name,
             COUNT(*) as cnt
         FROM routing_decisions
-        WHERE decision_made_at >= ? AND decision_made_at <= ?
+        WHERE decision_made_at >= ? AND decision_made_at < ?
           AND selected_account_name IS NOT NULL
         GROUP BY selected_account_name
     )
@@ -1842,7 +1839,7 @@ async def fetch_routing_exclusion_breakdown(
     Returns one row per ``(account_name, reason)`` with a count.  Rows
     come from the JSON array in each routing_decisions row, so the
     parser unpacks ``reason`` per element before aggregating.
-    Uses ``<=`` for the end filter (see fetch_routing_distribution).
+    Uses the same half-open ``[start, end)`` interval as the distribution.
     """
     sql = """
     SELECT
@@ -1852,7 +1849,7 @@ async def fetch_routing_exclusion_breakdown(
         MAX(rd.decision_made_at) as last_seen_at
     FROM routing_decisions rd,
          json_each(rd.exclude_reasons_json)
-    WHERE rd.decision_made_at >= ? AND rd.decision_made_at <= ?
+        WHERE rd.decision_made_at >= ? AND rd.decision_made_at < ?
       AND json_array_length(rd.exclude_reasons_json) > 0
     GROUP BY account_name, reason
     ORDER BY exclusion_count DESC

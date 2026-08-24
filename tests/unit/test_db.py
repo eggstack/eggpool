@@ -22,8 +22,10 @@ async def db(tmp_path: pytest.TempPathFactory) -> AsyncGenerator[Database, None]
     await database.connect()
     runner = MigrationRunner(database)
     await runner.run()
-    yield database
-    await database.disconnect()
+    try:
+        yield database
+    finally:
+        await database.disconnect()
 
 
 @pytest.mark.asyncio()

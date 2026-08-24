@@ -1863,7 +1863,12 @@ class RuntimeManager:
             record_close_attempt("supervisor")
             try:
                 await supervisor.stop_all()
-            except (Exception, asyncio.CancelledError) as exc:  # noqa: BLE001
+            except asyncio.CancelledError:
+                logger.debug(
+                    "Runtime generation %d supervisor.stop_all cancelled",
+                    generation.generation_id,
+                )
+            except Exception as exc:  # noqa: BLE001
                 slot.last_close_error = f"supervisor.stop_all: {exc!r}"
                 logger.exception(
                     "Runtime generation %d supervisor.stop_all failed",
@@ -1880,7 +1885,12 @@ class RuntimeManager:
                 await finalization_supervisor.shutdown(
                     timeout_s=min(drain_timeout_s, 10.0)
                 )
-            except (Exception, asyncio.CancelledError) as exc:  # noqa: BLE001
+            except asyncio.CancelledError:
+                logger.debug(
+                    "Runtime generation %d finalization supervisor shutdown cancelled",
+                    generation.generation_id,
+                )
+            except Exception as exc:  # noqa: BLE001
                 slot.last_close_error = f"finalization_supervisor.shutdown: {exc!r}"
                 logger.exception(
                     "Runtime generation %d finalization supervisor shutdown failed",
@@ -1894,7 +1904,12 @@ class RuntimeManager:
             record_close_attempt("client_pool")
             try:
                 await _safe_aclose(client_pool)
-            except (Exception, asyncio.CancelledError) as exc:  # noqa: BLE001
+            except asyncio.CancelledError:
+                logger.debug(
+                    "Runtime generation %d client_pool.close cancelled",
+                    generation.generation_id,
+                )
+            except Exception as exc:  # noqa: BLE001
                 slot.last_close_error = f"client_pool.close: {exc!r}"
                 logger.exception(
                     "Runtime generation %d client_pool.close failed",
@@ -1906,7 +1921,12 @@ class RuntimeManager:
             record_close_attempt("outbound_manager")
             try:
                 await _safe_aclose(outbound_manager)
-            except (Exception, asyncio.CancelledError) as exc:  # noqa: BLE001
+            except asyncio.CancelledError:
+                logger.debug(
+                    "Runtime generation %d outbound_manager.aclose cancelled",
+                    generation.generation_id,
+                )
+            except Exception as exc:  # noqa: BLE001
                 slot.last_close_error = f"outbound_manager.aclose: {exc!r}"
                 logger.exception(
                     "Runtime generation %d outbound_manager.aclose failed",

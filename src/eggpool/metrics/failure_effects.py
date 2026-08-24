@@ -25,10 +25,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)
+_MAX_COUNTER_KEYS = 1024
 
 
 _VALID_CATEGORIES: frozenset[str] = frozenset(
@@ -68,6 +70,12 @@ class FailureEffectsCounter:
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
         self._counters: dict[str, int] = {}
+
+    def _increment(self, key: str) -> None:
+        """Increment a key while bounding label cardinality."""
+        if key not in self._counters and len(self._counters) >= _MAX_COUNTER_KEYS:
+            self._counters.pop(next(iter(self._counters)))
+        self._counters[key] = self._counters.get(key, 0) + 1
 
     async def increment_request_local(
         self,
@@ -214,7 +222,7 @@ class FailureEffectsCounter:
     ) -> None:
         key = f"{category}|{reason}|{evidence_class}|{source}|{provider_id}"
         async with self._lock:
-            self._counters[key] = self._counters.get(key, 0) + 1
+            self._increment(key)
 
     async def snapshot(self) -> dict[str, Any]:
         """Return a JSON-safe snapshot.
@@ -254,6 +262,7 @@ class FailureEffectsCounter:
 
 
 _counter: FailureEffectsCounter | None = None
+_counter_lock = threading.Lock()
 
 
 def get_counter() -> FailureEffectsCounter:
@@ -263,7 +272,9 @@ def get_counter() -> FailureEffectsCounter:
     """
     global _counter  # noqa: PLW0603
     if _counter is None:
-        _counter = FailureEffectsCounter()
+        with _counter_lock:
+            if _counter is None:
+                _counter = FailureEffectsCounter()
     return _counter
 
 

@@ -31,6 +31,13 @@ def canonical_needs_update(
     if existing.next_refresh_at != new.next_refresh_at:
         return True
 
+    if (
+        existing.detail == new.detail
+        and existing.provenance == new.provenance
+        and existing.conflicts == new.conflicts
+    ):
+        return False
+
     if _json_dumps(existing.detail) != _json_dumps(new.detail):
         return True
     if _json_dumps(existing.provenance) != _json_dumps(new.provenance):

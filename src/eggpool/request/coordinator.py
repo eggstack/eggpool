@@ -4899,11 +4899,11 @@ class RequestCoordinator:
             if isinstance(thinking_block_obj, dict):
                 thinking_block: dict[str, object] = thinking_block_obj  # pyright: ignore[reportUnknownVariableType]
                 budget_value_obj: object = thinking_block.get("budget_tokens")  # pyright: ignore[reportUnknownMemberType]
-                if isinstance(budget_value_obj, (int, float)):
+                if isinstance(budget_value_obj, int) and not isinstance(
+                    budget_value_obj, bool
+                ):
                     budget_value = budget_value_obj
-                    context.thinking_trace["resolved_budget_tokens"] = int(
-                        budget_value,
-                    )
+                    context.thinking_trace["resolved_budget_tokens"] = budget_value
                     if not context.thinking_trace.get("upstream_fields"):
                         context.thinking_trace["upstream_fields"] = ["thinking"]
             if context.upstream_protocol == "anthropic":

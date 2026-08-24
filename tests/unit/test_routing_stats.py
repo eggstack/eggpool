@@ -8,6 +8,7 @@ parsing from ``exclude_reasons_json``.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import pytest
@@ -17,7 +18,7 @@ from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
 from eggpool.db.repositories import RequestRepository, RoutingDecisionRepository
 from eggpool.stats import queries
-from eggpool.stats.service import StatsService, resolve_time_range
+from eggpool.stats.service import StatsService, TimeRange
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -29,8 +30,10 @@ async def db(tmp_path: pytest.TempPathFactory) -> AsyncGenerator[Database, None]
     await database.connect()
     runner = MigrationRunner(database)
     await runner.run()
-    yield database
-    await database.disconnect()
+    try:
+        yield database
+    finally:
+        await database.disconnect()
 
 
 @pytest_asyncio.fixture()
@@ -198,7 +201,12 @@ class TestStatsServiceRoutingMethods:
     @pytest.mark.asyncio()
     async def test_get_routing_distribution(self, seeded_routing_db: Database) -> None:
         service = StatsService(seeded_routing_db)
-        time_range = resolve_time_range("24h")
+        now = datetime.now(UTC)
+        time_range = TimeRange(
+            start=now - timedelta(days=1),
+            end=now + timedelta(seconds=1),
+            label="test",
+        )
         rows = await service.get_routing_distribution(time_range)
         assert len(rows) == 1
 
@@ -207,7 +215,12 @@ class TestStatsServiceRoutingMethods:
         self, seeded_routing_db: Database
     ) -> None:
         service = StatsService(seeded_routing_db)
-        time_range = resolve_time_range("24h")
+        now = datetime.now(UTC)
+        time_range = TimeRange(
+            start=now - timedelta(days=1),
+            end=now + timedelta(seconds=1),
+            label="test",
+        )
         rows = await service.get_routing_exclusion_breakdown(time_range)
         assert rows[0]["reason"] == "circuit_breaker"
 

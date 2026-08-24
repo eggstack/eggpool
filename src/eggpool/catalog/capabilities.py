@@ -532,14 +532,19 @@ def aggregate_thinking_capabilities(
         budget_min = None
         budget_max = None
 
-    # Merge effort metadata: last-wins for budget mappings, union for
-    # advertised effort labels so collapsed entries keep every known
-    # client-selectable mode visible.
+    # Merge effort metadata conservatively: retain the lowest budget for
+    # each effort so the aggregate never promises more than one provider
+    # can support. Advertised effort labels remain a union.
     effort: dict[str, int] | None = None
     supported_efforts: list[str] = []
     for c in capabilities:
         if c.effort_to_budget_tokens is not None:
-            effort = dict(c.effort_to_budget_tokens)
+            if effort is None:
+                effort = {}
+            for effort_name, budget in c.effort_to_budget_tokens.items():
+                previous = effort.get(effort_name)
+                if previous is None or budget < previous:
+                    effort[effort_name] = budget
         for item in c.supported_efforts:
             if item not in supported_efforts:
                 supported_efforts.append(item)
@@ -1301,13 +1306,13 @@ def classify_thinking_request(
         if isinstance(thinking_val, dict):
             thinking_dict = cast("dict[str, object]", thinking_val)
             budget_val: object = thinking_dict.get("budget_tokens")
-            if isinstance(budget_val, (int, float)):
+            if isinstance(budget_val, int) and not isinstance(budget_val, bool):
                 budget = int(budget_val)
 
     if "thinking_budget" in request_body:
         fields.append("thinking_budget")
         tb_val: object = request_body["thinking_budget"]
-        if isinstance(tb_val, (int, float)):
+        if isinstance(tb_val, int) and not isinstance(tb_val, bool):
             budget = int(tb_val)
 
     # Assistant history indicators (reasoning_content must be preserved)

@@ -938,10 +938,14 @@ class Router:
             request_estimates = {name: estimated_tokens for name in candidates.names}
 
         ranked: list[tuple[AccountRuntimeState, RoutingScore]] = []
-        fairness_decision: FairnessDecision | None = None
-        fairness_band_names: frozenset[str] = frozenset()
+        plan_fairness_decision: FairnessDecision | None = None
+        plan_fairness_band_names: frozenset[str] = frozenset()
+        self._last_fairness_decision = None
+        self._last_fairness_band_names = frozenset()
 
         for _priority, tier_states in tiers:
+            tier_fairness_decision: FairnessDecision | None = None
+            tier_fairness_band_names: frozenset[str] = frozenset()
             tier_candidates = RoutingCandidates(
                 states=tier_states,
                 by_name=candidates.by_name,
@@ -975,7 +979,7 @@ class Router:
                         priority=_priority,
                         client_protocol=client_protocol,
                     )
-                    band, fairness_decision = await self._fairness_rotor.rotate(
+                    band, tier_fairness_decision = await self._fairness_rotor.rotate(
                         key, band, scope=self._fairness_scope
                     )
                 elif band and self._fairness_mode == "random":
@@ -989,7 +993,7 @@ class Router:
                         priority=_priority,
                         client_protocol=client_protocol,
                     )
-                    fairness_decision = FairnessDecision(
+                    tier_fairness_decision = FairnessDecision(
                         mode="random",
                         applied=True,
                         key=key.to_key_string(),
@@ -1005,7 +1009,7 @@ class Router:
                         priority=_priority,
                         client_protocol=client_protocol,
                     )
-                    fairness_decision = FairnessDecision(
+                    tier_fairness_decision = FairnessDecision(
                         mode=self._fairness_mode,
                         applied=False,
                         key=key.to_key_string(),
@@ -1013,7 +1017,7 @@ class Router:
                         scope=self._fairness_scope,
                         reason=band_reason,
                     )
-                fairness_band_names = (
+                tier_fairness_band_names = (
                     frozenset(s.name for s, _ in band) if band else frozenset()
                 )
                 ranked_pairs = band + rest
@@ -1025,7 +1029,7 @@ class Router:
                     priority=_priority,
                     client_protocol=client_protocol,
                 )
-                fairness_decision = FairnessDecision(
+                tier_fairness_decision = FairnessDecision(
                     mode=self._fairness_mode,
                     applied=False,
                     key=key.to_key_string(),
@@ -1037,16 +1041,22 @@ class Router:
                         else "single_candidate"
                     ),
                 )
-                fairness_band_names = frozenset()
+                tier_fairness_band_names = frozenset()
+
+            if plan_fairness_decision is None:
+                plan_fairness_decision = tier_fairness_decision
+                plan_fairness_band_names = tier_fairness_band_names
 
             for state, score in ranked_pairs:
                 ranked.append((state, score))
 
+        self._last_fairness_decision = plan_fairness_decision
+        self._last_fairness_band_names = plan_fairness_band_names
         return RoutingPlan(
             eligible_names=candidates.names,
             ranked_candidates=ranked,
-            fairness_decision=fairness_decision,
-            fairness_band_names=fairness_band_names,
+            fairness_decision=plan_fairness_decision,
+            fairness_band_names=plan_fairness_band_names,
             exclusions=tuple(
                 RoutingExclusion(account_name=name, reason=reason)
                 for name, reason in eligibility_exclusions

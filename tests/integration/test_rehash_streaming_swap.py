@@ -34,9 +34,11 @@ Additional scenarios cover:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
+import signal
 import socket
 import sqlite3
 import sys
@@ -57,6 +59,12 @@ _SERVER_STDERR_TASKS: dict[int, asyncio.Task[None]] = {}
 def _fingerprint(value: str) -> str:
     """Return a safe SHA-256 fingerprint for a secret value (never log raw)."""
     return hashlib.sha256(value.encode()).hexdigest()[:16]
+
+
+def _short_runtime_path(config_path: str) -> Path:
+    """Return a short, deterministic runtime directory for subprocess tests."""
+    digest = hashlib.sha256(config_path.encode()).hexdigest()[:12]
+    return Path("/tmp") / f"eggpool-test-{digest}.runtime"
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +278,7 @@ async def _spawn_server(
 
     ``--config`` is a *group* option so it must precede the subcommand.
     """
-    runtime_path = Path(config_path).with_suffix(".runtime")
+    runtime_path = _short_runtime_path(config_path)
     runtime_path.mkdir(parents=True, exist_ok=True)
     runtime_path.chmod(0o700)
     env["EGGPOOL_RUNTIME_DIR"] = str(runtime_path)
@@ -289,6 +297,7 @@ async def _spawn_server(
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.PIPE,
         env=env,
+        start_new_session=True,
     )
     assert proc.pid is not None
     lines: deque[str] = deque(maxlen=80)
@@ -336,16 +345,32 @@ async def _terminate_server(
 ) -> None:
     """Gracefully terminate the server subprocess."""
     if proc.returncode is None:
-        proc.terminate()
+        if proc.pid is not None:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGTERM)
+        else:
+            proc.terminate()
         try:
             await asyncio.wait_for(proc.wait(), timeout=timeout)
         except TimeoutError:
-            proc.kill()
+            if proc.pid is not None:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
             await proc.wait()
     if proc.pid is not None:
         drain_task = _SERVER_STDERR_TASKS.pop(proc.pid, None)
         if drain_task is not None:
-            await drain_task
+            try:
+                await asyncio.wait_for(drain_task, timeout=timeout)
+            except TimeoutError:
+                drain_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await drain_task
+                if proc.pid is not None:
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(proc.pid, signal.SIGKILL)
         _SERVER_STDERR.pop(proc.pid, None)
 
 
@@ -1601,9 +1626,6 @@ def _write_d1_config(
     loss_policy: str = "warn",
     prefer_native: bool = True,
     transcoder_enabled: bool = True,
-    compression_enabled: bool = False,
-    compression_mode: str = "observe",
-    min_candidate_tokens: int = 2048,
     collapse_models: bool = False,
     expose_mode: str = "union",
     persist_redacted_error_detail: bool = False,
@@ -1629,11 +1651,6 @@ startup_refresh = true
 enabled = {str(transcoder_enabled).lower()}
 loss_policy = "{loss_policy}"
 prefer_native = {str(prefer_native).lower()}
-
-[compression]
-enabled = {str(compression_enabled).lower()}
-mode = "{compression_mode}"
-min_candidate_tokens = {min_candidate_tokens}
 
 [security]
 persist_redacted_error_detail = {str(persist_redacted_error_detail).lower()}
@@ -1715,7 +1732,7 @@ async def test_d1_transcoder_loss_policy_live_reload(tmp_path: Any) -> None:
 
     proc = await _spawn_server(config_path, env)
     try:
-        assert await _wait_healthy(server_port), "server did not become healthy"
+        assert await _wait_healthy(server_port), _server_diagnostics(proc)
         original_pid = proc.pid
         auth = {"Authorization": "Bearer test-rehash-key"}
 
@@ -1774,78 +1791,6 @@ async def test_d1_transcoder_loss_policy_live_reload(tmp_path: Any) -> None:
                 f"post-rehash request failed: {r2.status_code} {r2.text}"
             )
 
-    finally:
-        await _terminate_server(proc)
-        upstream.shutdown()
-
-
-@pytest.mark.asyncio()
-async def test_d1_compression_enabled_live_reload(tmp_path: Any) -> None:
-    """``compression.enabled`` toggles observation without restart."""
-    state = _MockState()
-    upstream = _make_mock_server(state)
-    upstream_port = upstream.server_address[1]
-
-    server_port = _free_port()
-    config_path = str(tmp_path / "config.toml")
-    _write_d1_config(
-        config_path,
-        server_port=server_port,
-        upstream_port=upstream_port,
-        compression_enabled=False,
-        min_candidate_tokens=2048,
-    )
-
-    state_dir = str(tmp_path / "state")
-    os.makedirs(state_dir, exist_ok=True)
-    env = os.environ.copy()
-    env["XDG_STATE_HOME"] = state_dir
-
-    proc = await _spawn_server(config_path, env)
-    try:
-        assert await _wait_healthy(server_port), "server did not become healthy"
-        original_pid = proc.pid
-        auth = {"Authorization": "Bearer test-rehash-key"}
-
-        async with httpx.AsyncClient() as client:
-            r = await client.post(
-                f"http://127.0.0.1:{server_port}/v1/chat/completions",
-                json={
-                    "model": "test-model",
-                    "messages": [{"role": "user", "content": "hi"}],
-                },
-                headers=auth,
-                timeout=10.0,
-            )
-            assert r.status_code == 200
-
-        # Enable compression in observe mode and rehash.
-        _write_d1_config(
-            config_path,
-            server_port=server_port,
-            upstream_port=upstream_port,
-            compression_enabled=True,
-            compression_mode="observe",
-            min_candidate_tokens=4096,
-        )
-        exit_code, stdout, stderr = await _run_rehash(config_path, env)
-        assert exit_code == 0, (
-            f"rehash with compression.enabled failed: {stdout} {stderr}"
-        )
-        assert proc.pid == original_pid
-
-        # New requests succeed on the new generation.
-        async with httpx.AsyncClient() as client:
-            r2 = await client.post(
-                f"http://127.0.0.1:{server_port}/v1/chat/completions",
-                json={
-                    "model": "test-model",
-                    "messages": [{"role": "user", "content": "observing"}],
-                },
-                headers=auth,
-                timeout=10.0,
-            )
-            assert r2.status_code == 200
     finally:
         await _terminate_server(proc)
         upstream.shutdown()

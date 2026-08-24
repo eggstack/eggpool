@@ -301,13 +301,13 @@ class TestAggregateThinkingCapabilities:
         assert result.budget_tokens_min is None
         assert result.budget_tokens_max is None
 
-    def test_effort_last_wins(self) -> None:
+    def test_effort_budget_uses_conservative_minimum(self) -> None:
         caps = [
             ThinkingCapability(effort_to_budget_tokens={"low": 1000}),
             ThinkingCapability(effort_to_budget_tokens={"low": 2000, "high": 8000}),
         ]
         result = aggregate_thinking_capabilities(caps)
-        assert result.effort_to_budget_tokens == {"low": 2000, "high": 8000}
+        assert result.effort_to_budget_tokens == {"low": 1000, "high": 8000}
 
     def test_client_controls_last_wins_per_protocol(self) -> None:
         caps = [

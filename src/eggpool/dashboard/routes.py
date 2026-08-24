@@ -1716,10 +1716,11 @@ async def handle_routing(
     stats = _get_stats(request)
     model_info_service = _get_model_info(request)
     runtime_metrics = getattr(request.app.state, "runtime_metrics", None)
-    trace_mode = getattr(request.app.state.config.routing.trace, "mode", "off")  # type: ignore[union-attr]
-    trace_sample_rate = getattr(
-        request.app.state.config.routing.trace, "sample_rate", 0.0
-    )  # type: ignore[union-attr]
+    app_config = getattr(request.app.state, "config", None)
+    routing_config = getattr(app_config, "routing", None)
+    trace_config = getattr(routing_config, "trace", None)
+    trace_mode = getattr(trace_config, "mode", "off")
+    trace_sample_rate = getattr(trace_config, "sample_rate", 0.0)
     (
         routing_distribution,
         routing_selection_breakdown,

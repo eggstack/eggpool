@@ -37,11 +37,13 @@ import socket
 import sys
 import time
 from http.server import HTTPServer
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 from tests.integration.test_rehash_streaming_swap import (
     _free_port,
@@ -49,6 +51,7 @@ from tests.integration.test_rehash_streaming_swap import (
     _MockState,
     _run_rehash,
     _runtime_generation_id,
+    _short_runtime_path,
     _terminate_server,
     _wait_healthy,
 )
@@ -69,7 +72,7 @@ async def _spawn_server(
     env: dict[str, str],
 ) -> asyncio.subprocess.Process:
     """Spawn a server with an isolated, safe control-socket directory."""
-    runtime_path = Path(config_path).with_suffix(".runtime")
+    runtime_path = _short_runtime_path(config_path)
     runtime_path.mkdir(parents=True, exist_ok=True)
     runtime_path.chmod(0o700)
     env["EGGPOOL_RUNTIME_DIR"] = str(runtime_path)
@@ -319,7 +322,7 @@ async def test_d3_stale_candidate_publication_conflict_rejected(
 
         # Send a control-socket reload with a deliberately wrong digest
         # to prove the digest-mismatch path triggers a rejection.
-        socket_path = _control_socket_path(Path(config_path).with_suffix(".runtime"))
+        socket_path = _control_socket_path(_short_runtime_path(config_path))
         assert os.path.exists(socket_path), f"control socket missing at {socket_path}"
 
         reader, writer = await asyncio.wait_for(

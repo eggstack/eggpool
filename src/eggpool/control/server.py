@@ -65,6 +65,9 @@ logger = logging.getLogger(__name__)
 
 PROTOCOL_VERSION: Final = 1
 CONTROL_SOCKET_NAME: Final = "eggpool.sock"
+# Linux and macOS reject Unix-domain socket paths above roughly 108 bytes;
+# leave a small margin for platform-specific handling.
+CONTROL_SOCKET_PATH_MAX_BYTES: Final = 103
 MAX_REQUEST_SIZE: Final = 65536
 COMMAND_TIMEOUT_S: Final = 30.0
 MAX_REQUEST_ID_LEN: Final = 256
@@ -194,6 +197,13 @@ class ControlServer:
 
     async def start(self) -> None:
         """Bind the socket and begin accepting connections."""
+        path_bytes = os.fsencode(str(self._path))
+        if len(path_bytes) > CONTROL_SOCKET_PATH_MAX_BYTES:
+            raise ControlServerError(
+                "control socket path is too long "
+                f"({len(path_bytes)} bytes; max {CONTROL_SOCKET_PATH_MAX_BYTES}): "
+                f"{self._path}. Set EGGPOOL_RUNTIME_DIR to a shorter directory."
+            )
         _clean_stale_socket(self._path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         _verify_runtime_dir(self._path.parent)

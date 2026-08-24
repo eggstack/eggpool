@@ -79,8 +79,10 @@ def _normalize_item(
 def _dedupe(values: list[str]) -> list[str]:
     """Return values in first-seen order without duplicates."""
     result: list[str] = []
+    seen: set[str] = set()
     for value in values:
-        if value not in result:
+        if value not in seen:
+            seen.add(value)
             result.append(value)
     return result
 

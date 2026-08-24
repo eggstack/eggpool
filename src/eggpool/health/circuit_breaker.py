@@ -46,11 +46,6 @@ class CircuitBreaker:
 
     def record_success(self) -> None:
         """Record a successful request."""
-        # Check if OPEN circuit should transition to HALF_OPEN
-        if self._state == CircuitState.OPEN and self._should_attempt_reset():
-            self._state = CircuitState.HALF_OPEN
-            self._last_state_change = self.clock()
-
         if self._state == CircuitState.HALF_OPEN:
             self._success_count += 1
             # Clear the in-flight flag after each successful probe

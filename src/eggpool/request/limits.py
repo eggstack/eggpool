@@ -242,8 +242,9 @@ def estimate_text_tokens(value: str) -> int:
         return 0
     if value.isascii():
         return _ceil_div(len(value), ESTIMATED_TEXT_CHARS_PER_TOKEN)
-    ascii_chars = len(value.encode("ascii", "ignore"))
-    non_ascii_bytes = len(value.encode("utf-8")) - ascii_chars
+    utf8_bytes = value.encode("utf-8")
+    ascii_chars = sum(char.isascii() for char in value)
+    non_ascii_bytes = len(utf8_bytes) - ascii_chars
     return _ceil_div(
         ascii_chars,
         ESTIMATED_TEXT_CHARS_PER_TOKEN,

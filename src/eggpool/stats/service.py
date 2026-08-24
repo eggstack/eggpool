@@ -247,6 +247,11 @@ class StatsService:
         self._dashboard_cache_hits: int = 0
         self._dashboard_cache_misses: int = 0
 
+    @property
+    def db(self) -> Database:
+        """Return the database used by this service."""
+        return self._db
+
     def _dashboard_cache_key(
         self, namespace: str, time_range: TimeRange, *parts: str
     ) -> tuple[str, ...]:
@@ -274,16 +279,13 @@ class StatsService:
         return value
 
     def _set_dashboard_cache(self, key: tuple[str, ...], value: object) -> None:
-        if (
-            key not in self._dashboard_cache
-            and len(self._dashboard_cache) >= _DASHBOARD_CACHE_MAX_ENTRIES
-        ):
+        self._dashboard_cache[key] = (time.monotonic(), value)
+        while len(self._dashboard_cache) > _DASHBOARD_CACHE_MAX_ENTRIES:
             oldest = min(
                 self._dashboard_cache,
                 key=lambda item: self._dashboard_cache[item][0],
             )
             self._dashboard_cache.pop(oldest, None)
-        self._dashboard_cache[key] = (time.monotonic(), value)
 
     def cache_snapshot(self) -> dict[str, Any]:
         total = self._dashboard_cache_hits + self._dashboard_cache_misses

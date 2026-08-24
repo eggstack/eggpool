@@ -36,6 +36,19 @@ def test_account_runtime_state_quota_exhausted() -> None:
     assert state.is_eligible() is False
 
 
+def test_account_runtime_state_eligibility_does_not_refresh_state() -> None:
+    state = AccountRuntimeState(
+        name="test",
+        health_state="cooldown",
+        cooldown_until=100.0,
+        consecutive_failures=3,
+    )
+    assert state.is_eligible(now=101.0) is True
+    assert state.health_state == "cooldown"
+    assert state.cooldown_until == 100.0
+    assert state.consecutive_failures == 3
+
+
 def test_account_runtime_state_record_success() -> None:
     state = AccountRuntimeState(
         name="test", health_state="cooldown", cooldown_until=time.time() + 60

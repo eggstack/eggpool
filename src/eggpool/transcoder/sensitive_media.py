@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
+from eggpool.jsonx import loads as jsonx_loads
 from eggpool.transcoder.json_helpers import JsonObject, iter_objects
 
 if TYPE_CHECKING:
@@ -29,6 +30,18 @@ _PROVIDER_SENSITIVE_PART_TYPES: frozenset[str] = frozenset(
         "pdf",
     }
 )
+
+
+def _iter_nested_objects(value: object) -> Iterable[JsonObject]:
+    """Yield all mappings nested in a tool argument value."""
+    if isinstance(value, dict):
+        obj = cast("dict[str, object]", value)
+        yield cast("JsonObject", obj)
+        for child in list(obj.values()):
+            yield from _iter_nested_objects(child)
+    elif isinstance(value, list):
+        for child in cast("list[object]", value):
+            yield from _iter_nested_objects(child)
 
 
 def _iter_content_blocks(payload: object) -> Iterable[JsonObject]:
@@ -55,11 +68,22 @@ def _iter_content_blocks(payload: object) -> Iterable[JsonObject]:
                 for tool_call in tool_calls_list:
                     if not isinstance(tool_call, dict):
                         continue
-                    tool_call_obj = cast("dict[str, Any]", tool_call)
+                    tool_call_obj = cast("dict[str, object]", tool_call)
                     inner_obj = tool_call_obj.get("content")
                     if isinstance(inner_obj, list):
                         for part in iter_objects(inner_obj):
                             yield part
+                    function_obj = tool_call_obj.get("function")
+                    if isinstance(function_obj, dict):
+                        function_dict = cast("dict[str, object]", function_obj)
+                        arguments_obj = function_dict.get("arguments")
+                        if isinstance(arguments_obj, str):
+                            try:
+                                arguments_obj = jsonx_loads(arguments_obj)
+                            except (TypeError, ValueError):
+                                arguments_obj = None
+                        yield from _iter_nested_objects(arguments_obj)
+                    yield from _iter_nested_objects(tool_call_obj.get("input"))
     system_obj = as_dict.get("system")
     if isinstance(system_obj, list):
         for part in iter_objects(system_obj):

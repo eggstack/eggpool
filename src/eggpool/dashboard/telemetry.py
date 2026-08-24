@@ -9,6 +9,7 @@ at most 100 floats.
 
 from __future__ import annotations
 
+import math
 import statistics
 from collections import deque
 from typing import Any
@@ -17,7 +18,7 @@ _BUFFER_MAXLEN = 100
 
 
 def _percentile(sorted_vals: list[float], pct: float) -> float:
-    idx = max(0, int(len(sorted_vals) * pct) - 1)
+    idx = min(len(sorted_vals) - 1, max(0, math.ceil(len(sorted_vals) * pct) - 1))
     return sorted_vals[idx]
 
 

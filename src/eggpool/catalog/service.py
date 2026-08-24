@@ -1118,8 +1118,6 @@ class CatalogService:
         policy = self._config.models.catalog_withdrawal_policy
         allow_withdrawals = policy != "preserve_until_health"
         has_unresolved = any(not model.get("protocol") for model in models)
-        if has_unresolved and not allow_withdrawals:
-            return True, False, AccountCatalogOutcome.SUCCESS_PARTIAL
         if has_unresolved:
             return True, False, AccountCatalogOutcome.SUCCESS_PARTIAL
         return True, allow_withdrawals, AccountCatalogOutcome.SUCCESS_AUTHORITATIVE

@@ -78,14 +78,22 @@ class AccountRepository:
         name_to_id: dict[str, int] = {}
         configured_names: set[str] = set()
 
+        account_names = [str(acct["name"]) for acct in config_accounts]
+        existing_by_name: dict[str, Any] = {}
+        if account_names:
+            placeholders = ", ".join("?" for _ in account_names)
+            existing_rows = await self._db.fetch_all(
+                f"SELECT id, name, provider_id FROM accounts "
+                f"WHERE name IN ({placeholders})",
+                tuple(account_names),
+            )
+            existing_by_name = {str(row["name"]): row for row in existing_rows}
+
         for acct in config_accounts:
             name = str(acct["name"])
             provider_id = str(acct.get("provider_id") or DEFAULT_PROVIDER_ID)
             configured_names.add(name)
-            row = await self._db.fetch_one(
-                "SELECT id, provider_id FROM accounts WHERE name = ?",
-                (name,),
-            )
+            row = existing_by_name.get(name)
             if row is not None:
                 existing_provider_id = str(row["provider_id"])
                 if existing_provider_id != provider_id:

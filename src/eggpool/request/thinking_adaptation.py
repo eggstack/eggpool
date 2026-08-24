@@ -362,9 +362,9 @@ def _extract_original_thinking_budget_inputs(
     if isinstance(thinking_obj, dict):
         thinking_dict: dict[str, object] = thinking_obj  # pyright: ignore[reportUnknownVariableType]
         budget_obj: object = thinking_dict.get("budget_tokens")  # pyright: ignore[reportUnknownMemberType]
-        if isinstance(budget_obj, (int, float)):
+        if isinstance(budget_obj, int) and not isinstance(budget_obj, bool):
             return (None, int(budget_obj))
     budget_obj = original_body.get("thinking_budget")  # pyright: ignore[reportUnknownMemberType]
-    if isinstance(budget_obj, (int, float)):
+    if isinstance(budget_obj, int) and not isinstance(budget_obj, bool):
         return (None, int(budget_obj))
     return (None, None)

@@ -647,6 +647,9 @@ class QuotaEstimator:
     global_model_ewma: OrderedDict[str, EWMAEstimate] = field(
         default_factory=lambda: OrderedDict[str, EWMAEstimate]()
     )
+    _global_outlier_counts: OrderedDict[str, int] = field(
+        default_factory=lambda: OrderedDict[str, int](), repr=False
+    )
     # Memory caps for the EWMA tables. Tunable for tests; production
     # code uses the module-level defaults ``EWMA_HARD_CAP`` and
     # ``GLOBAL_EWMA_HARD_CAP``.
@@ -800,7 +803,20 @@ class QuotaEstimator:
         cannot poison its peers.
         """
         if self._is_outlier(cost_per_token, model_id):
-            return
+            count = self._global_outlier_counts.get(model_id, 0) + 1
+            self._global_outlier_counts[model_id] = count
+            self._global_outlier_counts.move_to_end(model_id)
+            if len(self._global_outlier_counts) > self.global_ewma_hard_cap:
+                self._global_outlier_counts.popitem(last=False)
+            if count < 3:
+                return
+            # A sustained change is allowed to replace a stale baseline;
+            # otherwise a legitimate price change can starve this model's
+            # global fallback forever.
+            self._global_outlier_counts.pop(model_id, None)
+            self.global_model_ewma[model_id] = EWMAEstimate()
+        else:
+            self._global_outlier_counts.pop(model_id, None)
         if model_id in self.global_model_ewma:
             self.global_model_ewma.move_to_end(model_id)
         else:
@@ -826,6 +842,7 @@ class QuotaEstimator:
             cost_microdollars=cost_microdollars,
             model_id=model_id,
         )
+        persisted_account_id: int | None = None
         async with self._snapshot_lock:
             # Lifecycle: ``persisted_snapshot`` is set exclusively by
             # :meth:`load_persisted_windows` during startup and is
@@ -847,15 +864,21 @@ class QuotaEstimator:
                     quota.persisted_snapshot.token_count_7d += safe_tokens
                     quota.persisted_snapshot.token_count_30d += safe_tokens
                 else:
-                    values = (
-                        await self._usage_window_repo.get_account_usage_window_snapshot(
-                            quota.persisted_snapshot.account_id,
-                            time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),
-                        )
-                    )
-                    for field_name, value in values.items():
-                        setattr(quota.persisted_snapshot, field_name, value)
-                    quota.persisted_snapshot.loaded_at = time.time()
+                    persisted_account_id = quota.persisted_snapshot.account_id
+
+        if self._usage_window_repo is not None and persisted_account_id is not None:
+            values = await self._usage_window_repo.get_account_usage_window_snapshot(
+                persisted_account_id,
+                time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),
+            )
+            async with self._snapshot_lock:
+                quota = self.get_account_quota(account_name)
+                persisted = quota.persisted_snapshot if quota is not None else None
+                if persisted is None:
+                    return
+                for field_name, value in values.items():
+                    setattr(persisted, field_name, value)
+                persisted.loaded_at = time.time()
 
     def estimate_cost(
         self,

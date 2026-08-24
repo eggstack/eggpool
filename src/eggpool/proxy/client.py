@@ -131,14 +131,15 @@ def filter_response_headers(
     - Preserve useful headers
     - Preserve duplicate headers (e.g. multiple Set-Cookie) as separate entries
     """
-    connection_headers = _connection_header_tokens(
-        raw_value.decode("latin-1")
+    raw_headers = [
+        (raw_name.decode("latin-1"), raw_value.decode("latin-1"))
         for raw_name, raw_value in headers.raw
-        if raw_name.decode("latin-1").casefold() == "connection"
+    ]
+    connection_headers = _connection_header_tokens(
+        value for name, value in raw_headers if name.casefold() == "connection"
     )
     filtered: list[tuple[str, str]] = []
-    for raw_name, raw_value in headers.raw:
-        name = raw_name.decode("latin-1")
+    for name, value in raw_headers:
         lower_name = name.lower()
         if lower_name in HOP_BY_HOP_HEADERS:
             continue
@@ -151,7 +152,7 @@ def filter_response_headers(
             # Starlette computes Content-Length for non-streaming
             # responses; streaming uses chunked transfer.
             continue
-        filtered.append((name, raw_value.decode("latin-1")))
+        filtered.append((name, value))
     return filtered
 
 

@@ -615,7 +615,7 @@ async def handle_model_info_refresh(request: Request) -> Response:
         # a single endpoint hit does not block the event loop for
         # minutes on large fleets.
         batch_result = await model_info.force_refresh_batch(
-            batch_size=model_info._config.max_models_per_cycle,
+            batch_size=model_info.config.max_models_per_cycle,
         )
         return JSONResponse(
             content={

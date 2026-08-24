@@ -1350,11 +1350,8 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     try:
         await control_server.start()
         app.state.control_server = control_server
-    except ControlServerError:
-        logger.error(
-            "Failed to start control server: another server is already using "
-            "the control socket; live reload unavailable"
-        )
+    except ControlServerError as exc:
+        logger.error("Failed to start control server; live reload unavailable: %s", exc)
         app.state.control_server = None
     except Exception:
         logger.exception("Failed to start control server; live reload unavailable")
@@ -1673,6 +1670,9 @@ def create_app(
                         if oldest != self._last_used:
                             del self._cache[oldest]
                 self._cache[key] = (css, time.monotonic())
+                while len(self._cache) > self._max_size:
+                    oldest = min(self._cache, key=lambda k: self._cache[k][1])
+                    del self._cache[oldest]
                 self._last_used = key
 
         _theme_css_cache = _ThemeCssCache()

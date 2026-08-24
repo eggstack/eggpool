@@ -129,7 +129,9 @@ class TestCircuitBreaker:
         cb.record_failure()
         cb.record_failure()
         time.sleep(0.11)
+        assert cb.allow_request()
         cb.record_success()
+        assert cb.allow_request()
         cb.record_success()
         assert cb.state == CircuitState.CLOSED
 
