@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -42,6 +43,27 @@ if TYPE_CHECKING:
 
 _FAST_COMMANDS: frozenset[str] = frozenset({"croncheck", "ensure-running"})
 
+# How long ``ensure-running`` waits for the spawned child to register a
+# live PID file before reporting failure.
+_SPAWN_VERIFY_SECONDS = 2.0
+_SPAWN_POLL_INTERVAL_S = 0.25
+
+
+def _child_confirmed_alive(deadline_s: float | None = None) -> bool:
+    """Poll the PID file until a live process registers behind it."""
+    deadline = time.monotonic() + (
+        _SPAWN_VERIFY_SECONDS if deadline_s is None else deadline_s
+    )
+    while True:
+        pid_file = default_pid_file()
+        if pid_file.exists():
+            pid = read_pid_file(pid_file)
+            if pid is not None and is_process_running(pid):
+                return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(_SPAWN_POLL_INTERVAL_S)
+
 
 def _parse_simple_argv(
     argv: Sequence[str],
@@ -52,9 +74,9 @@ def _parse_simple_argv(
     The parser is intentionally tiny: it walks every argument once,
     tracks the most recently seen config path, and remembers the first
     non-flag argument that looks like a recognized command. Unknown
-    flags are skipped and, when they take a value, the following
-    non-flag argument is consumed. A flag-like argument is never
-    treated as a command.
+    flags are skipped without consuming the following argument; only
+    ``--config``/``-c`` (handled above) take a value. A flag-like
+    argument is never treated as a command.
     """
     config_path: str | None = None
     command: str | None = None
@@ -73,9 +95,9 @@ def _parse_simple_argv(
             i += 1
             continue
         if arg.startswith("--") or (arg.startswith("-") and len(arg) > 1):
-            if i + 1 < len(argv) and not argv[i + 1].startswith("-"):
-                i += 2
-                continue
+            # Unknown flags are skipped without consuming the following
+            # argument: only flags known to take a value (--config/-c,
+            # handled above) may swallow the next token.
             i += 1
             continue
         if command is None and arg in _FAST_COMMANDS:
@@ -137,6 +159,13 @@ def _spawn_daemon(config_path: str | None) -> int:
         return 1
     finally:
         log_handle.close()
+    if not _child_confirmed_alive():
+        print(
+            "ensure-running: server did not confirm startup within "
+            f"{_SPAWN_VERIFY_SECONDS:.0f}s (see {log_path})",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 
@@ -144,8 +173,9 @@ def _run_ensure_running(config_path: str | None) -> int:
     """Fast-path ``ensure-running``.
 
     Exits ``0`` quickly when the server is already alive. Clears stale
-    PID state before spawning, and returns ``0`` once the child has been
-    spawned. Returns non-zero on spawn failure.
+    PID state before spawning, and returns ``0`` only after the spawned
+    child has registered a live PID file. Returns non-zero on spawn
+    failure or when the child fails to confirm startup.
     """
     pid_file = default_pid_file()
     if pid_file.exists():

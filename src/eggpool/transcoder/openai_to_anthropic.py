@@ -1037,7 +1037,10 @@ class OpenAIToAnthropic:
                 elif block_type == "thinking":
                     thinking_text = str(block.get("thinking", ""))
                     if features is not None and features.thinking:
-                        reasoning_content = thinking_text
+                        # Anthropic responses may interleave multiple
+                        # thinking blocks; concatenate instead of letting
+                        # the last block silently win.
+                        reasoning_content = (reasoning_content or "") + thinking_text
                         if block.get("signature"):
                             warnings.append(
                                 {

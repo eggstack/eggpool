@@ -317,8 +317,16 @@ class HealthManager:
             return None
 
         health = self.get_account_health(account_name)
-        health.consecutive_failures += 1
-        health.last_check = self.clock()
+        # Mirror the production effects applier: quota-exhaustion and
+        # rate-limit cooldowns are not circuit-breaker failures (see
+        # ``CircuitBreaker.release_probe``), while generic transients
+        # advance both the health counter and the breaker exactly like
+        # :meth:`record_failure` does.
+        counts_as_failure = reason not in ("quota_exhausted", "rate_limited")
+        if counts_as_failure:
+            health.consecutive_failures += 1
+            health.last_check = self.clock()
+            health.circuit_breaker.record_failure()
         delay = compute_backoff_seconds(
             reason,
             consecutive_failures=health.consecutive_failures,

@@ -240,16 +240,59 @@ class TestSSEEventAssembly:
         assert observer.usage.is_complete
 
     def test_anthropic_content_block_delta_thinking(self) -> None:
-        """Anthropic content_block_delta thinking event extracts characters."""
+        """Anthropic content_block_delta thinking_delta extracts characters."""
         observer = IncrementalSSEObserver(protocol="anthropic")
         event = {
             "type": "content_block_delta",
-            "delta": {"type": "thinking", "thinking": "hello world"},
+            "delta": {"type": "thinking_delta", "thinking": "hello world"},
         }
         observer.observe(_sse_event("content_block_delta", event))
         observer.flush()
 
         assert observer.usage.thinking_characters == 11
+
+    def test_anthropic_thinking_stream_accumulates_characters(self) -> None:
+        """A real Anthropic thinking stream accumulates thinking characters."""
+        observer = IncrementalSSEObserver(protocol="anthropic")
+        observer.observe(
+            _sse_event(
+                "content_block_start",
+                {"type": "content_block_start", "index": 0},
+            )
+        )
+        observer.observe(
+            _sse_event(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "thinking_delta", "thinking": "abc"},
+                },
+            )
+        )
+        observer.observe(
+            _sse_event(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "signature_delta", "signature": "sig"},
+                },
+            )
+        )
+        observer.observe(
+            _sse_event(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "thinking_delta", "thinking": "defg"},
+                },
+            )
+        )
+        observer.flush()
+
+        assert observer.usage.thinking_characters == 7
 
     def test_malformed_json_increments_error(self) -> None:
         """Malformed JSON in a data line increments error count."""

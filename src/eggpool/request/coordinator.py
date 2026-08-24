@@ -47,6 +47,7 @@ from eggpool.failure import (
     ModelQuarantine,
 )
 from eggpool.failure.classifier import classify_failure_effects
+from eggpool.health.backoff import compute_backoff_seconds
 from eggpool.health.health_manager import (
     FailureCategory,
     classify_failure_category,
@@ -2880,19 +2881,21 @@ class RequestCoordinator:
         # Plan 028: single-decode lifecycle via ParsedUpstreamResponse.
         # Created once after aread() completes so both error and success
         # paths share one decoded representation — no redundant parses.
-        resp_headers = filter_response_headers(response.headers)
-        from eggpool.request.parsed_upstream_response import (
-            build_parsed_upstream_response,
-        )
-
-        parsed_response = build_parsed_upstream_response(
-            status_code=response.status_code,
-            headers=resp_headers,
-            raw_body=response.content,
-        )
-
-        # Check for upstream errors before consuming body
+        # Built inside the guarded region below so a parse failure cannot
+        # leak the upstream response.
         try:
+            resp_headers = filter_response_headers(response.headers)
+            from eggpool.request.parsed_upstream_response import (
+                build_parsed_upstream_response,
+            )
+
+            parsed_response = build_parsed_upstream_response(
+                status_code=response.status_code,
+                headers=resp_headers,
+                raw_body=response.content,
+            )
+
+            # Check for upstream errors before consuming body
             if response.status_code >= 400:
                 resp_body = response.content
 
@@ -3477,7 +3480,6 @@ class RequestCoordinator:
         )
         shared_decoder = SSEDecoder()
         bytes_emitted = 0
-        downstream_bytes_emitted = 0
         first_byte_ms = 0.0
         started = time.monotonic()
         # Use the caller-provided request start time so first_byte_ms
@@ -3496,7 +3498,7 @@ class RequestCoordinator:
         )
 
         async def _stream() -> AsyncIterator[bytes]:
-            nonlocal bytes_emitted, downstream_bytes_emitted, first_byte_ms
+            nonlocal bytes_emitted, first_byte_ms
             try:
                 streaming_transcoder = select_streaming_transcoder(
                     client_protocol=context.protocol,
@@ -3570,11 +3572,8 @@ class RequestCoordinator:
                             except Exception as err:
                                 raise _LocalStreamTranslationError(str(err)) from err
                         if out_chunks:
-                            output = b"".join(out_chunks)
-                            downstream_bytes_emitted += len(output)
-                            yield output
+                            yield b"".join(out_chunks)
                     else:
-                        downstream_bytes_emitted += len(chunk)
                         yield chunk
 
                 # Transport EOF is not protocol completion. Drain the parser,
@@ -3644,7 +3643,7 @@ class RequestCoordinator:
                         account_name=selected.account_name,
                         model_id=selected.model_id,
                         protocol=context.upstream_protocol,
-                        bytes_emitted=downstream_bytes_emitted,
+                        bytes_emitted=bytes_emitted,
                         attempt=selected.attempt_number,
                     )
                     usage_result = observer.usage
@@ -3673,7 +3672,7 @@ class RequestCoordinator:
                                 int(first_byte_ms) if first_byte_ms > 0 else None
                             ),
                             upstream_latency_ms=incomplete_latency,
-                            bytes_emitted=downstream_bytes_emitted,
+                            bytes_emitted=bytes_emitted,
                             input_tokens=usage_result.input_tokens,
                             output_tokens=usage_result.output_tokens,
                             cache_read_tokens=usage_result.cache_read_tokens,
@@ -3705,7 +3704,7 @@ class RequestCoordinator:
                         model_id=selected.model_id,
                         protocol=context.upstream_protocol,
                         elapsed_ms=incomplete_latency,
-                        bytes_emitted=downstream_bytes_emitted,
+                        bytes_emitted=bytes_emitted,
                         first_byte_ms=(
                             int(first_byte_ms) if first_byte_ms > 0 else None
                         ),
@@ -3742,9 +3741,7 @@ class RequestCoordinator:
                     except Exception as err:
                         raise _LocalStreamTranslationError(str(err)) from err
                     if out_chunks:
-                        output = b"".join(out_chunks)
-                        downstream_bytes_emitted += len(output)
-                        yield output
+                        yield b"".join(out_chunks)
                 usage_result = observer.usage
 
                 completion_outcome = (
@@ -3760,7 +3757,7 @@ class RequestCoordinator:
                     account_name=selected.account_name,
                     model_id=selected.model_id,
                     protocol=context.upstream_protocol,
-                    bytes_emitted=downstream_bytes_emitted,
+                    bytes_emitted=bytes_emitted,
                     attempt=selected.attempt_number,
                     configured_first_byte_timeout_s=(stream_first_byte_timeout_s),
                     configured_idle_timeout_s=stream_idle_timeout_s,
@@ -5060,11 +5057,11 @@ class RequestCoordinator:
             self._health_manager.release_request(account_name)
             backoff_until_epoch = time.time() + self._quota_exhausted_cooldown_seconds
         elif category == FailureCategory.MODEL_UNAVAILABLE:
-            from eggpool.health.backoff import compute_backoff_seconds
-
             delay = compute_backoff_seconds(
                 category.value,
-                consecutive_failures=1,
+                consecutive_failures=self._health_manager.get_account_health(
+                    account_name
+                ).consecutive_failures,
                 jitter=False,
             )
             if delay is None:
@@ -5083,8 +5080,6 @@ class RequestCoordinator:
             )
             # Transient reasons get a short exponential cooldown so a
             # restart does not silently clear them.
-            from eggpool.health.backoff import compute_backoff_seconds
-
             delay = compute_backoff_seconds(
                 category.value,
                 consecutive_failures=self._health_manager.get_account_health(

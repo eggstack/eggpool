@@ -97,7 +97,7 @@ class TestAnthropicStreamUsageExtractor:
         thinking_text = "Let me think about this..."
         data = {
             "type": "content_block_delta",
-            "delta": {"type": "thinking", "thinking": thinking_text},
+            "delta": {"type": "thinking_delta", "thinking": thinking_text},
         }
         result = extractor.extract(data)
 

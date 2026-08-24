@@ -512,3 +512,23 @@ class TestRecordFailureWithPolicy:
         health = manager.get_account_health("acct")
         # record_failure still increments failure count.
         assert health.consecutive_failures == 1
+
+    def test_generic_transient_advances_circuit_breaker(self) -> None:
+        """Generic transients keep the breaker in sync with the health counter."""
+        manager = HealthManager()
+        result = manager.record_failure_with_policy("acct", "upstream_server_error")
+        assert result is not None
+        health = manager.get_account_health("acct")
+        assert health.consecutive_failures == 1
+        stats = health.circuit_breaker.get_stats()
+        assert stats["failure_count"] == 1
+
+    def test_quota_and_rate_limit_do_not_advance_circuit_breaker(self) -> None:
+        """Cooldown paths mirror the effects applier: no breaker failures."""
+        manager = HealthManager()
+        manager.record_failure_with_policy("acct", "quota_exhausted")
+        manager.record_failure_with_policy("acct2", "rate_limited", retry_after=30.0)
+        for name in ("acct", "acct2"):
+            health = manager.get_account_health(name)
+            assert health.consecutive_failures == 0
+            assert health.circuit_breaker.get_stats()["failure_count"] == 0

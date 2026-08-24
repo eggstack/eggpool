@@ -493,9 +493,16 @@ def _clean_stale_socket(path: Path) -> None:
 
     # Positive stale signal confirmed — safe to remove.
     try:
-        if path.exists():
-            path.unlink()
-            logger.info("Removed stale control socket %s", path)
+        # Re-verify identity at the last possible moment so a file
+        # swapped in between the probe and the unlink is never evicted.
+        identity_final = _stat_socket_identity(path)
+        if identity_final is None or identity_final != identity_after:
+            logger.warning(
+                "Socket identity changed before unlink; not removing %s", path
+            )
+            return
+        path.unlink()
+        logger.info("Removed stale control socket %s", path)
     except OSError as exc:
         logger.warning("Could not remove stale socket %s: %s", path, exc)
 

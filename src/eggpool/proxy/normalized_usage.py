@@ -98,10 +98,9 @@ class NormalizedUsage:
 # Cache-counter field names that, when present in a usage payload,
 # indicate the upstream actually reported cache state.  Used to choose
 # between ``reported`` and ``not_reported`` in :func:`normalize_usage`.
-# ``cached_tokens`` is the standard OpenAI-compatible read counter; the
-# nested ``cache_write_tokens`` field is the OpenRouter / OpenAI-compatible
-# warmup / cache-write counter and must NEVER be conflated with reads.
-_OPENAI_CACHE_FIELDS = ("cached_tokens", "cache_read_input_tokens")
+# The nested ``cache_write_tokens`` field is the OpenRouter /
+# OpenAI-compatible warmup / cache-write counter and must NEVER be
+# conflated with reads.
 _ANTHROPIC_CACHE_FIELDS = (
     "cache_read_input_tokens",
     "cache_creation_input_tokens",

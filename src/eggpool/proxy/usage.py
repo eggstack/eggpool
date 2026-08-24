@@ -277,7 +277,7 @@ class AnthropicStreamUsageExtractor:
             delta = safe_dict(data.get("delta"))
             if delta is None:
                 return None
-            if delta.get("type") == "thinking":
+            if delta.get("type") == "thinking_delta":
                 thinking = delta.get("thinking")
                 chars = len(thinking) if isinstance(thinking, str) else 0
                 return StreamUsageResult(

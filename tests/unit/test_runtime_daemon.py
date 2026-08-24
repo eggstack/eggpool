@@ -383,18 +383,25 @@ class TestFastCliDaemonSpawn:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Fast-path daemon spawn must also use ``serve --verbose``."""
+        import os
+
         from eggpool import fastcli as fastcli_module
 
         config_path = tmp_path / "config.toml"
         config_path.write_text("[server]\n", encoding="utf-8")
         log_path = tmp_path / "eggpool.log"
+        pid_file = tmp_path / "eggpool.pid"
 
         monkeypatch.setattr(fastcli_module, "default_log_file", lambda: log_path)
+        monkeypatch.setattr(fastcli_module, "default_pid_file", lambda: pid_file)
 
         popen_calls: list[list[str]] = []
 
         def _fake_popen(command: list[str], **_kwargs: object) -> object:
             popen_calls.append(command)
+            # Simulate the spawned supervisor registering its PID so the
+            # post-spawn liveness verification observes a live child.
+            pid_file.write_text(str(os.getpid()), encoding="utf-8")
             return object()
 
         monkeypatch.setattr(fastcli_module.subprocess, "Popen", _fake_popen)

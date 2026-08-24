@@ -43,6 +43,16 @@ def test_maybe_run_fast_command_returns_none_for_help() -> None:
     assert fastcli.maybe_run_fast_command(["--help"]) is None
 
 
+def test_maybe_run_fast_command_dispatches_after_unknown_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unknown flag must not swallow the following command token."""
+    pid_file = tmp_path / "eggpool.pid"
+    pid_file.write_text(str(os.getpid()), encoding="utf-8")
+    monkeypatch.setattr("eggpool.fastcli.default_pid_file", lambda: pid_file)
+    assert fastcli.maybe_run_fast_command(["--verbose", "croncheck"]) == 0
+
+
 def test_maybe_run_fast_command_croncheck_alive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -98,9 +108,12 @@ def test_ensure_running_spawns_when_pid_missing(
     pid_file = tmp_path / "missing.pid"
     monkeypatch.setattr("eggpool.fastcli.default_pid_file", lambda: pid_file)
 
-    mock_proc = MagicMock()
+    def _write_pid(*_args: object, **_kwargs: object) -> MagicMock:
+        pid_file.write_text(str(os.getpid()), encoding="utf-8")
+        return MagicMock()
+
     with patch(
-        "eggpool.fastcli.subprocess.Popen", return_value=mock_proc
+        "eggpool.fastcli.subprocess.Popen", side_effect=_write_pid
     ) as mock_popen:
         result = fastcli._run_ensure_running(None)
 
@@ -113,6 +126,21 @@ def test_ensure_running_spawns_when_pid_missing(
     assert kwargs["stdin"] == subprocess.DEVNULL
 
 
+def test_ensure_running_returns_nonzero_when_child_never_confirms(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A child that dies before registering its PID file must not exit 0."""
+    pid_file = tmp_path / "missing.pid"
+    monkeypatch.setattr("eggpool.fastcli.default_pid_file", lambda: pid_file)
+    monkeypatch.setattr("eggpool.fastcli.default_log_file", lambda: tmp_path / "x.log")
+    monkeypatch.setattr(fastcli, "_SPAWN_VERIFY_SECONDS", 0.0)
+
+    with patch("eggpool.fastcli.subprocess.Popen", return_value=MagicMock()):
+        result = fastcli._run_ensure_running(None)
+
+    assert result != 0
+
+
 def test_ensure_running_clears_stale_pid_before_spawning(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -120,14 +148,20 @@ def test_ensure_running_clears_stale_pid_before_spawning(
     pid_file.write_text(str(os.getpid() + 10**8), encoding="utf-8")
     monkeypatch.setattr("eggpool.fastcli.default_pid_file", lambda: pid_file)
 
-    mock_proc = MagicMock()
+    cleared_at_spawn: list[bool] = []
+
+    def _write_pid(*_args: object, **_kwargs: object) -> MagicMock:
+        cleared_at_spawn.append(not pid_file.exists())
+        pid_file.write_text(str(os.getpid()), encoding="utf-8")
+        return MagicMock()
+
     with patch(
-        "eggpool.fastcli.subprocess.Popen", return_value=mock_proc
+        "eggpool.fastcli.subprocess.Popen", side_effect=_write_pid
     ) as mock_popen:
         result = fastcli._run_ensure_running(None)
 
     assert result == 0
-    assert not pid_file.exists(), "stale PID file must be cleared before spawn"
+    assert cleared_at_spawn == [True], "stale PID file must be cleared before spawn"
     mock_popen.assert_called_once()
 
 
@@ -157,9 +191,12 @@ def test_ensure_running_uses_absolute_config_path(
     relative_config.parent.mkdir(parents=True, exist_ok=True)
     relative_config.write_text("[server]\n", encoding="utf-8")
 
-    mock_proc = MagicMock()
+    def _write_pid(*_args: object, **_kwargs: object) -> MagicMock:
+        pid_file.write_text(str(os.getpid()), encoding="utf-8")
+        return MagicMock()
+
     with patch(
-        "eggpool.fastcli.subprocess.Popen", return_value=mock_proc
+        "eggpool.fastcli.subprocess.Popen", side_effect=_write_pid
     ) as mock_popen:
         result = fastcli._run_ensure_running(str(relative_config))
 

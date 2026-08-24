@@ -1422,41 +1422,55 @@ class PingRepository:
         30 minutes, including across process restarts, by consulting the
         latest durable row before inserting.
 
+        The freshness check and insert run inside one transaction-held
+        critical section so concurrent refreshes cannot both pass the
+        30-minute dedup window and double-insert. Nesting inside a
+        caller-owned transaction is permitted.
+
         Returns ``True`` when a row was inserted and ``False`` when a steady
         success was coarsened.
         """
         is_success = (
             error is None and status_code is not None and 200 <= status_code < 300
         )
-        latest = await self._db.fetch_one(
-            "SELECT id, error, status_code FROM provider_pings "
-            "WHERE provider_id = ? AND account_name = ? "
-            "ORDER BY probed_at DESC, id DESC LIMIT 1",
-            (provider_id, account_name),
-        )
-        if is_success and latest is not None:
-            latest_is_success = (
-                latest["error"] is None
-                and latest["status_code"] is not None
-                and 200 <= int(latest["status_code"]) < 300
+        async with self._db.transaction():
+            latest = await self._db.fetch_one(
+                "SELECT id, error, status_code FROM provider_pings "
+                "WHERE provider_id = ? AND account_name = ? "
+                "ORDER BY probed_at DESC, id DESC LIMIT 1",
+                (provider_id, account_name),
             )
-            if latest_is_success:
-                recent = await self._db.fetch_one(
-                    "SELECT 1 FROM provider_pings WHERE id = ? "
-                    "AND probed_at >= datetime('now', '-1800 seconds')",
-                    (latest["id"],),
+            if is_success and latest is not None:
+                latest_is_success = (
+                    latest["error"] is None
+                    and latest["status_code"] is not None
+                    and 200 <= int(latest["status_code"]) < 300
                 )
-                if recent is not None:
-                    return False
-        await self._db.execute_write(
-            """
-            INSERT INTO provider_pings
-                (provider_id, account_name, latency_ms, status_code, error, model_count)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (provider_id, account_name, latency_ms, status_code, error, model_count),
-        )
-        return True
+                if latest_is_success:
+                    recent = await self._db.fetch_one(
+                        "SELECT 1 FROM provider_pings WHERE id = ? "
+                        "AND probed_at >= datetime('now', '-1800 seconds')",
+                        (latest["id"],),
+                    )
+                    if recent is not None:
+                        return False
+            await self._db.execute_write(
+                """
+                INSERT INTO provider_pings
+                    (provider_id, account_name, latency_ms, status_code,
+                     error, model_count)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    provider_id,
+                    account_name,
+                    latency_ms,
+                    status_code,
+                    error,
+                    model_count,
+                ),
+            )
+            return True
 
     async def get_provider_ping_summary(
         self,

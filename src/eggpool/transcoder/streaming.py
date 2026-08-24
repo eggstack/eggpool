@@ -591,6 +591,7 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
         }
         if usage is not None:
             delta_payload["usage"] = {
+                "input_tokens": usage.get("prompt_tokens", 0),
                 "output_tokens": usage.get("completion_tokens", 0),
             }
         return self._anthropic_frame("message_delta", delta_payload)

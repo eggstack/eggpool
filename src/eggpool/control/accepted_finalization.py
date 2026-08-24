@@ -206,13 +206,15 @@ class AcceptedReloadFinalizationJob:
     request_id: str
     generation_id: int
     old_generation_id: int | None
-    transaction: ReloadTransaction
-    candidate: RuntimeGenerationCandidate
-    pending_swap: Any  # PendingGenerationSwap
+    #: Operational references are non-None until :meth:`release_references`
+    #: clears them after completion; step methods assert before use.
+    transaction: ReloadTransaction | None
+    candidate: RuntimeGenerationCandidate | None
+    pending_swap: Any | None  # PendingGenerationSwap
     transition_result: TransitionApplyResult | None
-    published_generation: RuntimeGeneration
+    published_generation: RuntimeGeneration | None
     app: Any | None
-    observer: Any  # ReloadObserver
+    observer: Any | None  # ReloadObserver
     #: Test-only seam -- when set on the reload manager, the job
     #: raises it after ownership transfer (for testing post-acceptance
     #: cancellation).  Checked dynamically at runtime so clearing the
@@ -503,6 +505,8 @@ class AcceptedReloadFinalizationJob:
         """Transfer candidate ownership to the runtime manager."""
         if self._step != AcceptedFinalizationStep.REGISTERED:
             return
+        assert self.candidate is not None
+        assert self.transaction is not None
         transfer_fn = getattr(self.candidate, "transfer_to_runtime_manager", None)
         if transfer_fn is not None:
             transfer_fn()
@@ -524,9 +528,11 @@ class AcceptedReloadFinalizationJob:
             if inject is not None:
                 raise inject
         if self.app is not None:
+            assert self.published_generation is not None
             from eggpool.app import mirror_generation_on_app_state  # noqa: PLC0415
 
             mirror_generation_on_app_state(self.app, self.published_generation)
+        assert self.transaction is not None
         self.transaction.accepted_finalization.compatibility_mirror_updated = True
         self._step = AcceptedFinalizationStep.MIRROR_UPDATED
 
@@ -550,6 +556,7 @@ class AcceptedReloadFinalizationJob:
                     failures=outcome.failures,
                     remaining=outcome.remaining,
                 )
+        assert self.transaction is not None
         self.transaction.accepted_finalization.transitions_finalized = True
         # Advance the transaction state machine through the intermediate
         # states that must precede retirement scheduling.
@@ -569,6 +576,8 @@ class AcceptedReloadFinalizationJob:
         """
         if self._step != AcceptedFinalizationStep.TRANSITIONS_FINALIZED:
             return
+        assert self.observer is not None
+        assert self.transaction is not None
         try:
             await self.observer.on_publish_complete(
                 generation_id=self.generation_id,
@@ -623,6 +632,8 @@ class AcceptedReloadFinalizationJob:
                 # One-shot: clear so retry can succeed.
                 self._reload_manager.TEST_INJECT_RETIREMENT_FAILURE = None
                 raise inject
+        assert self.pending_swap is not None
+        assert self.transaction is not None
         await self.pending_swap.finalize_retirement()
         self.transaction.accepted_finalization.retirement_scheduled = True
         self.transaction.mark_retirement_scheduled()
@@ -638,6 +649,7 @@ class AcceptedReloadFinalizationJob:
         """Mark the transaction as fully completed."""
         if self._step != AcceptedFinalizationStep.RETIREMENT_SCHEDULED:
             return
+        assert self.transaction is not None
         self.transaction.mark_completed()
         self.transaction.accepted_finalization.transaction_completed = True
         self._step = AcceptedFinalizationStep.TRANSACTION_COMPLETED
@@ -713,13 +725,13 @@ class AcceptedReloadFinalizationJob:
         if self._references_released:
             return
         self._references_released = True
-        self.candidate = None  # type: ignore[assignment]
-        self.pending_swap = None  # type: ignore[assignment]
+        self.candidate = None
+        self.pending_swap = None
         self.transition_result = None
-        self.published_generation = None  # type: ignore[assignment]
+        self.published_generation = None
         self.app = None
-        self.observer = None  # type: ignore[assignment]
-        self.transaction = None  # type: ignore[assignment]
+        self.observer = None
+        self.transaction = None
         self._on_attempt_done = None
 
     def mark_reconciled(self) -> None:
