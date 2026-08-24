@@ -235,7 +235,7 @@ class OutboundClientManager:
             raise
         except Exception:
             logger.debug("Error closing outbound client", exc_info=True)
-        else:
+        finally:
             self._client = None
 
 

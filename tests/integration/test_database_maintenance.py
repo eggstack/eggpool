@@ -188,6 +188,24 @@ class TestVacuumRejected:
         finally:
             await db.disconnect()
 
+    @pytest.mark.asyncio
+    async def test_vacuum_child_task_rejects_inherited_transaction_owner(
+        self,
+        writable_db_path: str,
+    ) -> None:
+        """A child task cannot wait on VACUUM while the parent owns a tx."""
+        db = Database(path=writable_db_path)
+        await db.connect()
+        try:
+            await _migrate_and_seed(db)
+
+            async with db.transaction():
+                child = asyncio.create_task(db.vacuum())
+                with pytest.raises(DatabaseError, match="transaction"):
+                    await asyncio.wait_for(child, timeout=1.0)
+        finally:
+            await db.disconnect()
+
 
 class TestVacuumConcurrency:
     """VACUUM and transactions are serialized through the connection lock."""

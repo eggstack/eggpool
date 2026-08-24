@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 import pytest
 import pytest_asyncio
-from starlette.testclient import TestClient
 
 from eggpool.app import create_app
 from eggpool.dashboard import render as render_module
@@ -21,6 +21,22 @@ from eggpool.db.migrations import MigrationRunner
 from eggpool.models.config import AppConfig
 from eggpool.runtime_metrics import RuntimeMetricsService
 from eggpool.stats import StatsService
+
+
+class _AsyncTestClient(httpx.AsyncClient):
+    """Async ASGI client that exposes the application for test setup."""
+
+    app: Any
+
+    def __init__(self, application: Any) -> None:
+        self.app = application
+        super().__init__(
+            transport=httpx.ASGITransport(
+                app=application,
+                raise_app_exceptions=False,
+            ),
+            base_url="http://testserver",
+        )
 
 
 def _build_config(tmp_path) -> AppConfig:
@@ -51,7 +67,7 @@ def _enable_test_key(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest_asyncio.fixture()
 async def migrated_client(tmp_path):
-    """A TestClient wired to a migrated DB for the /api/stats/transcoding endpoint."""
+    """An async client wired to a migrated DB for the stats endpoint."""
     config = _build_config(tmp_path)
     application = create_app(config)
     db = Database(path=config.database.path)
@@ -73,7 +89,7 @@ async def migrated_client(tmp_path):
         started_epoch=0.0,
     )
     try:
-        with TestClient(application, raise_server_exceptions=False) as client:
+        async with _AsyncTestClient(application) as client:
             yield client
     finally:
         await db.disconnect()
@@ -212,8 +228,11 @@ class TestTranscodingCardRendering:
 
 
 class TestTranscodingJsonEndpoint:
-    def test_returns_empty_stats_on_empty_db(self, migrated_client: TestClient) -> None:
-        response = migrated_client.get("/api/stats/transcoding")
+    @pytest.mark.asyncio()
+    async def test_returns_empty_stats_on_empty_db(
+        self, migrated_client: _AsyncTestClient
+    ) -> None:
+        response = await migrated_client.get("/api/stats/transcoding")
         assert response.status_code == 200
         data = response.json()
         assert data["total"] == 0
@@ -222,9 +241,10 @@ class TestTranscodingJsonEndpoint:
         assert data["per_direction"] == {}
         assert data["top_loss_warnings"] == []
 
-    def test_serializes_direction_tuple_keys(
+    @pytest.mark.asyncio()
+    async def test_serializes_direction_tuple_keys(
         self,
-        migrated_client: TestClient,
+        migrated_client: _AsyncTestClient,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         class _StatsService:
@@ -261,29 +281,36 @@ class TestTranscodingJsonEndpoint:
                 migrated_client.app.state.db
             )
 
-        response = migrated_client.get("/api/stats/transcoding?period=7d")
+        response = await migrated_client.get("/api/stats/transcoding?period=7d")
         assert response.status_code == 200
         data = response.json()
         assert data["per_direction"] == {"openai→anthropic": 2}
         assert data["period_seen"] == "7d"
 
-    def test_respects_period_query_param(self, migrated_client: TestClient) -> None:
-        response = migrated_client.get("/api/stats/transcoding?period=7d")
+    @pytest.mark.asyncio()
+    async def test_respects_period_query_param(
+        self, migrated_client: _AsyncTestClient
+    ) -> None:
+        response = await migrated_client.get("/api/stats/transcoding?period=7d")
         assert response.status_code == 200
         data = response.json()
         assert "total" in data
 
-    def test_default_period_is_24h(self, migrated_client: TestClient) -> None:
-        response = migrated_client.get("/api/stats/transcoding")
+    @pytest.mark.asyncio()
+    async def test_default_period_is_24h(
+        self, migrated_client: _AsyncTestClient
+    ) -> None:
+        response = await migrated_client.get("/api/stats/transcoding")
         assert response.status_code == 200
         assert response.json()["total"] == 0
 
-    def test_html_runtime_page_respects_period(
-        self, migrated_client: TestClient
+    @pytest.mark.asyncio()
+    async def test_html_runtime_page_respects_period(
+        self, migrated_client: _AsyncTestClient
     ) -> None:
-        response = migrated_client.get("/runtime?period=7d")
+        response = await migrated_client.get("/runtime?period=7d")
         assert response.status_code == 200
         assert "Transcoding (7d)" in response.text
-        response_24h = migrated_client.get("/runtime?period=24h")
+        response_24h = await migrated_client.get("/runtime?period=24h")
         assert response_24h.status_code == 200
         assert "Transcoding (24h)" in response_24h.text

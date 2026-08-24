@@ -37,6 +37,27 @@ async def test_connect_disconnect(tmp_path: pytest.TempPathFactory) -> None:
 
 
 @pytest.mark.asyncio()
+async def test_safe_rollback_without_connection_reports_not_attempted() -> None:
+    database = Database(path=":memory:")
+
+    assert await database._safe_rollback() == (  # noqa: SLF001
+        False,
+        False,
+        None,
+        None,
+    )
+
+
+def test_read_only_uri_quotes_path() -> None:
+    uri, use_uri = Database._build_read_only_uri(  # noqa: SLF001
+        "/tmp/my db?#%.sqlite3"
+    )
+
+    assert use_uri is True
+    assert uri == "file:/tmp/my%20db%3F%23%25.sqlite3?mode=ro"
+
+
+@pytest.mark.asyncio()
 async def test_connect_rejects_duplicate_connection(
     tmp_path: pytest.TempPathFactory,
 ) -> None:

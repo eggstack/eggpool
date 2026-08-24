@@ -9,6 +9,7 @@ import termios
 import tomllib
 import tty
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -169,7 +170,7 @@ class ConfiguredAccount:
     provider_id: str
     name: str
     api_key_env: str
-    api_key: str | None
+    api_key: str | None = dataclass_field(repr=False)
 
     @property
     def label(self) -> str:

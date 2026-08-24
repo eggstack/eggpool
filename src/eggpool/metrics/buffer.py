@@ -133,23 +133,6 @@ class FlushResult:
     error_class: str | None = None
 
 
-@dataclass(slots=True)
-class MetricsBufferSnapshot:
-    """Diagnostic snapshot of the coalescer's in-memory state."""
-
-    write_mode: str
-    flush_interval_s: int
-    buffered_keys: int
-    buffered_events: int
-    total_events_received: int
-    total_events_flushed: int
-    total_events_dropped: int
-    last_flush_ts: float | None
-    last_flush_rows: int
-    last_flush_duration_ms: int
-    last_flush_error: str | None
-
-
 class MetricsWriteCoalescer:
     """Buffers analytics events in memory and flushes to usage_rollups.
 
@@ -285,11 +268,12 @@ class MetricsWriteCoalescer:
             if rows:
                 await self._rollup_repo.upsert_many(rows)
             elapsed_ms = int((time.monotonic() - start) * 1000)
-            self._last_flush_ts = time.time()
-            self._last_flush_rows = len(rows)
-            self._last_flush_duration_ms = elapsed_ms
-            self._last_flush_error = None
-            self._total_flushed += event_count
+            with self._thread_lock:
+                self._last_flush_ts = time.time()
+                self._last_flush_rows = len(rows)
+                self._last_flush_duration_ms = elapsed_ms
+                self._last_flush_error = None
+                self._total_flushed += event_count
             logger.debug(
                 "Metrics flush (%s): %d rows, %d events, %dms",
                 reason,
@@ -317,7 +301,9 @@ class MetricsWriteCoalescer:
                         existing.cache_write_tokens += delta.cache_write_tokens
                         existing.reasoning_tokens += delta.reasoning_tokens
                         existing.thinking_characters += delta.thinking_characters
-                        existing.cost_microdollars += delta.cost_microdollars
+                        existing.cost_microdollars = clamp_sqlite_integer(
+                            existing.cost_microdollars + delta.cost_microdollars
+                        )
                         existing.bytes_received += delta.bytes_received
                         existing.bytes_emitted += delta.bytes_emitted
                         existing.latency_ms_sum += delta.latency_ms_sum
@@ -347,11 +333,18 @@ class MetricsWriteCoalescer:
         except Exception as exc:
             elapsed_ms = int((time.monotonic() - start) * 1000)
             error_class = type(exc).__name__
-            self._last_flush_ts = time.time()
-            self._last_flush_rows = 0
-            self._last_flush_duration_ms = elapsed_ms
-            self._last_flush_error = error_class
-            logger.exception("Metrics flush failed (%s)", reason)
+            with self._thread_lock:
+                self._last_flush_ts = time.time()
+                self._last_flush_rows = 0
+                self._last_flush_duration_ms = elapsed_ms
+                self._last_flush_error = error_class
+                self._total_dropped += event_count
+            logger.warning(
+                "Metrics flush failed (%s); dropped %d events",
+                reason,
+                event_count,
+                exc_info=True,
+            )
             return FlushResult(
                 rows_flushed=0,
                 duration_ms=elapsed_ms,
@@ -376,22 +369,20 @@ class MetricsWriteCoalescer:
     def snapshot(self) -> dict[str, object]:
         """Return a diagnostic snapshot of the coalescer's state."""
         with self._thread_lock:
-            buffered_keys = len(self._buffer)
-            buffered_events = self._pending_events
-        return {
-            "write_mode": self._write_mode,
-            "flush_interval_s": self._flush_interval_s,
-            "aggregate_only": self._aggregate_only,
-            "buffered_keys": buffered_keys,
-            "buffered_events": buffered_events,
-            "total_events_received": self._total_received,
-            "total_events_flushed": self._total_flushed,
-            "total_events_dropped": self._total_dropped,
-            "last_flush_ts": self._last_flush_ts,
-            "last_flush_rows": self._last_flush_rows,
-            "last_flush_duration_ms": self._last_flush_duration_ms,
-            "last_flush_error": self._last_flush_error,
-        }
+            return {
+                "write_mode": self._write_mode,
+                "flush_interval_s": self._flush_interval_s,
+                "aggregate_only": self._aggregate_only,
+                "buffered_keys": len(self._buffer),
+                "buffered_events": self._pending_events,
+                "total_events_received": self._total_received,
+                "total_events_flushed": self._total_flushed,
+                "total_events_dropped": self._total_dropped,
+                "last_flush_ts": self._last_flush_ts,
+                "last_flush_rows": self._last_flush_rows,
+                "last_flush_duration_ms": self._last_flush_duration_ms,
+                "last_flush_error": self._last_flush_error,
+            }
 
     def _build_rollup_rows(
         self, buffer: dict[_RollupKey, _AggregatedDelta]

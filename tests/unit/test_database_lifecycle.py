@@ -118,5 +118,8 @@ async def test_foreign_loop_access_is_rejected(tmp_path: object) -> None:
         with pytest.raises(DatabaseError, match="foreign event loop"):
             await db.fetch_one("SELECT 1")
 
-    await first_loop()
-    await asyncio.to_thread(asyncio.run, second_loop())
+    try:
+        await first_loop()
+        await asyncio.to_thread(asyncio.run, second_loop())
+    finally:
+        await db.disconnect()

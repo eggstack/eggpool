@@ -10,6 +10,7 @@ import time
 from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 import aiosqlite
 
@@ -385,7 +386,7 @@ class Database:
         rollback_exc: Exception | None = None
         conn = self._conn
         if conn is None:
-            return True, True, False, None
+            return False, False, None, None
         try:
             in_transaction_before = getattr(conn, "in_transaction", None)
             if in_transaction_before is not None and not in_transaction_before:
@@ -423,7 +424,7 @@ class Database:
             return path, False
         if "://" in path:
             return path, True
-        return f"file:{path}?mode=ro", True
+        return f"file:{quote(path, safe='/:')}?mode=ro", True
 
     async def disconnect(self) -> None:
         """Close the connection."""
@@ -765,7 +766,10 @@ class Database:
         """
         if self._read_only:
             raise DatabaseError("VACUUM cannot run on a read-only database")
-        if self._in_transaction_context.get():
+        if (
+            self._in_transaction_context.get()
+            or self._transaction_owner.get() is not None
+        ):
             raise DatabaseError("VACUUM cannot run while a transaction is active")
         async with self._connection_lock:
             try:

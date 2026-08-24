@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 import pytest
 import pytest_asyncio
 
+from eggpool.constants import SQLITE_INTEGER_MAX
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
 from eggpool.db.rollup_repository import UsageRollupRepository
@@ -279,6 +280,13 @@ class TestFlushErrorIsCaught:
         result = await coalescer.flush()
         assert result.error_class == "RuntimeError"
         assert result.rows_flushed == 0
+        snap = coalescer.snapshot()
+        assert snap["total_events_dropped"] == 1
+        assert snap["total_events_received"] == (
+            snap["total_events_flushed"]
+            + snap["buffered_events"]
+            + snap["total_events_dropped"]
+        )
 
 
 class TestSnapshotDiagnostics:
@@ -504,6 +512,35 @@ class TestFlushCancellationSafety:
         snap = coalescer.snapshot()
         assert snap["buffered_events"] >= 1
         assert snap["buffered_keys"] >= 1
+
+    @pytest.mark.asyncio()
+    async def test_cancelled_restore_clamps_cost(self) -> None:
+        config = _make_config(flush_interval_s=30)
+        mock_repo = AsyncMock(spec=UsageRollupRepository)
+        write_started = asyncio.Event()
+        write_wait = asyncio.Event()
+
+        async def slow_upsert(*args: object, **kwargs: object) -> None:
+            write_started.set()
+            await write_wait.wait()
+
+        mock_repo.upsert_many.side_effect = slow_upsert
+        coalescer = MetricsWriteCoalescer(
+            config=config,
+            db=AsyncMock(spec=Database),
+            rollup_repo=mock_repo,
+        )
+        coalescer.record_usage(_make_event(cost_microdollars=SQLITE_INTEGER_MAX))
+
+        flush_task = asyncio.create_task(coalescer.flush(reason="test"))
+        await write_started.wait()
+        coalescer.record_usage(_make_event(cost_microdollars=SQLITE_INTEGER_MAX))
+        flush_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await flush_task
+
+        rows = coalescer._build_rollup_rows(coalescer._buffer)  # noqa: SLF001
+        assert rows[0]["cost_microdollars"] == SQLITE_INTEGER_MAX
 
     @pytest.mark.asyncio()
     async def test_flush_error_does_not_restore_buffer(self) -> None:

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING
+
+import pytest
 
 from eggpool.health.backoff import seed_random_for_test
 from eggpool.health.circuit_breaker import CircuitBreaker, CircuitState
@@ -13,9 +14,6 @@ from eggpool.health.health_manager import (
     classify_failure_category,
 )
 from eggpool.retry.classification import RetryCategory, RetryClassifier
-
-if TYPE_CHECKING:
-    import pytest
 
 
 class TestRetryClassifier:
@@ -425,6 +423,40 @@ class TestClassifyFailureCategoryPhase6:
             classify_failure_category("vendor_specific_code", 402)
             is FailureCategory.QUOTA_EXHAUSTED
         )
+
+    @pytest.mark.parametrize(
+        "error_class",
+        [
+            "authoritative_timeout",
+            "unauthorized_authentication_source",
+            "authentication_timeout",
+            "authorization_pending",
+        ],
+    )
+    def test_auth_substrings_are_not_terminal_auth_failures(
+        self, error_class: str
+    ) -> None:
+        assert (
+            classify_failure_category(error_class)
+            is not FailureCategory.AUTHENTICATION_FAILED
+        )
+
+    def test_authentication_error_names_are_terminal(self) -> None:
+        assert (
+            classify_failure_category("AuthenticationError")
+            is FailureCategory.AUTHENTICATION_FAILED
+        )
+
+
+class TestHealthManagerClock:
+    def test_transient_expiration_uses_injected_clock(self) -> None:
+        now = [100.0]
+        manager = HealthManager(clock=lambda: now[0])
+        manager.record_rate_limit("acct", 10.0)
+
+        assert not manager.is_account_healthy("acct")
+        now[0] = 110.0
+        assert manager.is_account_healthy("acct")
 
 
 class TestRecordFailureWithPolicy:

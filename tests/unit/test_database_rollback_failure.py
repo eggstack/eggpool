@@ -7,6 +7,8 @@ leave diagnostics in a consistent state.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 import pytest_asyncio
 
@@ -15,16 +17,22 @@ from eggpool.db.migrations import MigrationRunner
 from eggpool.errors import DatabaseCommitError, DatabaseRollbackError
 from tests.support.database_faults import fail_commit, fail_rollback
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
 pytestmark = pytest.mark.asyncio
 
 
 @pytest_asyncio.fixture()
-async def test_db() -> Database:
+async def test_db() -> AsyncGenerator[Database, None]:
     """Provide a fresh in-memory database with migrations applied."""
     db = Database(path=":memory:")
     await db.connect()
     await MigrationRunner(db).run()
-    return db
+    try:
+        yield db
+    finally:
+        await db.disconnect()
 
 
 async def test_rollback_failure_invalidates_connection(

@@ -6,7 +6,10 @@ import math
 import time
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from eggpool.health.backoff import MAX_NONTERMINAL_BACKOFF_SECONDS
 from eggpool.health.circuit_breaker import CircuitBreaker
@@ -69,7 +72,15 @@ def classify_failure_category(
     ec = error_class.lower()
     if "contextlimitexceeded" in ec or "context_limit_exceeded" in ec:
         return FailureCategory.CONTEXT_LIMIT_EXCEEDED
-    if "auth" in ec:
+    if ec in {
+        "auth",
+        "auth_error",
+        "auth_failed",
+        "authentication",
+        "authentication_error",
+        "authentication_failed",
+        "authenticationerror",
+    }:
         return FailureCategory.AUTHENTICATION_FAILED
     if "quotaexhausted" in ec or "quota_exhausted" in ec:
         return FailureCategory.QUOTA_EXHAUSTED
@@ -155,18 +166,23 @@ class HealthManager:
     _accounts: dict[str, AccountHealth] = field(
         default_factory=dict[str, AccountHealth]
     )
+    clock: Callable[[], float] = field(default_factory=lambda: time.time)
 
     def get_account_health(self, account_name: str) -> AccountHealth:
         """Get or create account health."""
         if account_name not in self._accounts:
-            self._accounts[account_name] = AccountHealth(account_name=account_name)
+            self._accounts[account_name] = AccountHealth(
+                account_name=account_name,
+                last_check=self.clock(),
+                circuit_breaker=CircuitBreaker(clock=self.clock),
+            )
         return self._accounts[account_name]
 
     def record_success(self, account_name: str, model_id: str | None = None) -> None:
         """Record a successful request."""
         health = self.get_account_health(account_name)
         health.consecutive_failures = 0
-        health.last_check = time.time()
+        health.last_check = self.clock()
         # An in-flight request may succeed after an operator disables its
         # account. Do not let that completion undo an explicit disable.
         if (
@@ -189,7 +205,7 @@ class HealthManager:
         """Record a failed request."""
         health = self.get_account_health(account_name)
         health.consecutive_failures += 1
-        health.last_check = time.time()
+        health.last_check = self.clock()
         health.circuit_breaker.record_failure()
         if reason == "authentication_failed":
             health.health_state = "authentication_failed"
@@ -211,7 +227,7 @@ class HealthManager:
             if math.isfinite(cooldown_seconds) and cooldown_seconds >= 0.0
             else 300.0
         )
-        health.cooldown_until = time.time() + min(
+        health.cooldown_until = self.clock() + min(
             delay, MAX_NONTERMINAL_BACKOFF_SECONDS
         )
         health.is_healthy = False
@@ -224,7 +240,7 @@ class HealthManager:
             if math.isfinite(retry_after_seconds) and retry_after_seconds >= 0.0
             else 60.0
         )
-        health.cooldown_until = time.time() + min(
+        health.cooldown_until = self.clock() + min(
             delay, MAX_NONTERMINAL_BACKOFF_SECONDS
         )
         health.health_state = "rate_limited"
@@ -302,7 +318,7 @@ class HealthManager:
 
         health = self.get_account_health(account_name)
         health.consecutive_failures += 1
-        health.last_check = time.time()
+        health.last_check = self.clock()
         delay = compute_backoff_seconds(
             reason,
             consecutive_failures=health.consecutive_failures,
@@ -322,7 +338,7 @@ class HealthManager:
         # Generic transient category: bounded cooldown with the
         # generic "cooldown" health state so the runtime view stays
         # consistent with ``AccountRuntimeState``.
-        health.cooldown_until = time.time() + delay
+        health.cooldown_until = self.clock() + delay
         health.health_state = "cooldown"
         health.is_healthy = False
         return delay
@@ -340,7 +356,7 @@ class HealthManager:
         health.disabled_until = (
             None
             if duration_seconds is None
-            else time.time() + max(0.0, duration_seconds)
+            else self.clock() + max(0.0, duration_seconds)
         )
 
     def enable_account(self, account_name: str) -> None:
@@ -376,7 +392,7 @@ class HealthManager:
         health.disabled_models[model_id] = (
             None
             if duration_seconds is None
-            else time.time()
+            else self.clock()
             + min(
                 max(0.0, duration_seconds)
                 if math.isfinite(duration_seconds)
@@ -421,9 +437,11 @@ class HealthManager:
             health.terminal_models.discard(mid)
         return len(stale)
 
-    def _refresh_transient_state(self, health: AccountHealth) -> None:
+    def _refresh_transient_state(
+        self, health: AccountHealth, current_time: float | None = None
+    ) -> None:
         """Restore transient health states after cooldown expiration."""
-        now = time.time()
+        now = self.clock() if current_time is None else current_time
         if (
             health.cooldown_until > 0
             and now >= health.cooldown_until
@@ -446,8 +464,9 @@ class HealthManager:
     def is_account_healthy(self, account_name: str) -> bool:
         """Check if an account is healthy."""
         health = self.get_account_health(account_name)
-        self._refresh_transient_state(health)
-        return health.is_healthy and not health.is_disabled()
+        now = self.clock()
+        self._refresh_transient_state(health, now)
+        return health.is_healthy and not health.is_disabled(now)
 
     def is_model_healthy(self, account_name: str, model_id: str) -> bool:
         """Check if a model is healthy for an account.
@@ -456,12 +475,13 @@ class HealthManager:
         readiness probes and candidate enumeration never consume the
         half-open probe slot.
         """
-        if not self.is_account_healthy(account_name):
-            return False
         health = self.get_account_health(account_name)
+        now = self.clock()
+        self._refresh_transient_state(health, now)
+        if not health.is_healthy or health.is_disabled(now):
+            return False
         return (
-            not health.is_disabled()
-            and not health.is_model_disabled(model_id)
+            not health.is_model_disabled(model_id, now)
             and health.circuit_breaker.can_request()
         )
 
@@ -474,10 +494,12 @@ class HealthManager:
         ``False`` when the circuit breaker rejects it (account should
         be excluded from this routing round).
         """
-        if not self.is_account_healthy(account_name):
-            return False
         health = self.get_account_health(account_name)
-        if health.is_disabled() or health.is_model_disabled(model_id):
+        now = self.clock()
+        self._refresh_transient_state(health, now)
+        if not health.is_healthy or health.is_disabled(now):
+            return False
+        if health.is_model_disabled(model_id, now):
             return False
         return health.circuit_breaker.allow_request()
 
@@ -499,9 +521,10 @@ class HealthManager:
     def get_health_stats(self, account_name: str) -> dict[str, Any]:
         """Get health statistics for an account."""
         health = self.get_account_health(account_name)
-        self._refresh_transient_state(health)
+        now = self.clock()
+        self._refresh_transient_state(health, now)
         for model_id in list(health.disabled_models):
-            health.is_model_disabled(model_id)
+            health.is_model_disabled(model_id, now)
         return {
             "account_name": health.account_name,
             "is_healthy": health.is_healthy,

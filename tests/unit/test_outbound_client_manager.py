@@ -39,6 +39,24 @@ class TestOutboundClientManager:
         await manager.aclose()  # Should not raise
 
     @pytest.mark.anyio
+    async def test_aclose_clears_client_when_cancelled(self) -> None:
+        manager = OutboundClientManager()
+        client = httpx.AsyncClient()
+        manager.inject_client(client)
+
+        original_aclose = client.aclose
+
+        async def cancelled_close() -> None:
+            raise asyncio.CancelledError
+
+        client.aclose = cancelled_close  # type: ignore[method-assign]
+        with pytest.raises(asyncio.CancelledError):
+            await manager.aclose()
+
+        assert manager.snapshot()["has_client"] is False
+        await original_aclose()
+
+    @pytest.mark.anyio
     async def test_aclose_without_get_client(self) -> None:
         manager = OutboundClientManager()
         await manager.aclose()  # Should not raise

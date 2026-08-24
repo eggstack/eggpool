@@ -2347,6 +2347,16 @@ class TestConfigAccountLabel:
         )
         assert acct.label == "opencode-go/default  unset"
 
+    def test_repr_masks_api_key(self) -> None:
+        acct = ConfiguredAccount(
+            provider_id="opencode-go",
+            name="default",
+            api_key_env="OPENCODE_GO_API_KEY",
+            api_key="sk-live-key-1234",
+        )
+
+        assert "sk-live-key-1234" not in repr(acct)
+
 
 class TestListConfigAccounts:
     """Tests for list_config_accounts and select_config_account."""
