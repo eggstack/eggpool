@@ -140,9 +140,10 @@ class EventLoopLagMonitor:
         drift_ms = max(0.0, drift_ms)
         self._record_sample(drift_ms)
 
-        # Schedule the next tick.  Base the expected time on the
-        # cadence, not on ``now``, so the measurement is anchored to
-        # a fixed interval even when a tick is late.
+        # Schedule the next tick relative to the expected boundary, not
+        # the (possibly late) fire time, so a single sub-cadence hiccup
+        # does not permanently shift the drift baseline of every
+        # subsequent measurement.
         self._expected_next += self._cadence_s
         # If we've fallen behind multiple cadences (e.g. the event
         # loop was blocked for several seconds), skip ahead rather
@@ -151,7 +152,10 @@ class EventLoopLagMonitor:
             self._expected_next = now + self._cadence_s
 
         loop = asyncio.get_event_loop()
-        self._handle = loop.call_later(self._cadence_s, self._tick)
+        self._handle = loop.call_later(
+            max(0.0, self._expected_next - now),
+            self._tick,
+        )
 
     def _record_sample(self, lag_ms: float) -> None:
         """Append one lag sample to the bounded deque."""

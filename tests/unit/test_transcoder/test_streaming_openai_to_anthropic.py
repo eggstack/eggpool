@@ -571,6 +571,14 @@ class TestToolCallStreaming:
             "text",
             "tool_use",
         ]
+        # Indices must be sequential and unique: text at 0, tools after it.
+        assert [block["index"] for block in block_starts] == [0, 1]
+        block_stops = [
+            json.loads(frame["data"])
+            for frame in frames
+            if frame["event"] == "content_block_stop"
+        ]
+        assert [block["index"] for block in block_stops] == [0, 1]
         assert any(frame["event"] == "message_delta" for frame in frames)
 
     def test_multiple_tool_calls_parallel_indices(self) -> None:

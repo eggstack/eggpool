@@ -854,6 +854,45 @@ class TestPauseTurnSentinel:
         assert len(finish_frames) == 1
         assert finish_frames[0]["choices"][0]["finish_reason"] == "tool_calls"
 
+    def test_pause_turn_sentinel_index_after_real_tool_calls(self) -> None:
+        """Sentinel frames must use the next free OpenAI tool index."""
+        transcoder = AnthropicToOpenAIStreaming()
+        raw_pieces = [
+            transcoder.feed(
+                _anthropic_sse("message_start", message_id="msg-1", model="claude-3")
+            ),
+            transcoder.feed(
+                _anthropic_sse(
+                    "content_block_start",
+                    index=0,
+                    block_type="tool_use",
+                    tool_id="toolu_real_1",
+                    tool_name="get_weather",
+                )
+            ),
+            transcoder.feed(_anthropic_sse("message_delta", stop_reason="pause_turn")),
+        ]
+
+        frames = _parse_sse_frames(b"".join(b"".join(p) for p in raw_pieces))
+
+        tool_indices: list[int] = []
+        sentinel_seen = False
+        for f in frames:
+            if f.get("done") or not f["data"] or f["data"] == "[DONE]":
+                continue
+            data = json.loads(f["data"])
+            choices = data.get("choices", [])
+            if not choices:
+                continue
+            for tc in choices[0].get("delta", {}).get("tool_calls", []):
+                tool_indices.append(tc["index"])
+                if tc.get("function", {}).get("name") == "__eggpool_pause_turn__":
+                    sentinel_seen = True
+
+        # Real call at 0; both sentinel frames use the next free index.
+        assert tool_indices == [0, 1, 1]
+        assert sentinel_seen
+
     def test_pause_turn_appends_loss_warning(self) -> None:
         from eggpool.transcoder.context import TranscodeContext
 

@@ -123,6 +123,36 @@ class TestTelemetryShardBounds:
         snap = monitor.snapshot()
         assert snap.sample_count == 15
 
+    @pytest.mark.asyncio()
+    async def test_lag_monitor_reanchors_after_sub_cadence_stall(self) -> None:
+        """A single late tick must not ratchet all subsequent drift samples."""
+        monitor = EventLoopLagMonitor(cadence_s=1.0, window_size=10)
+        monitor._running = True
+        try:
+            loop = asyncio.get_running_loop()
+            # First tick fires 400 ms late.
+            monitor._expected_next = loop.time() - 0.4
+            monitor._tick()
+            assert monitor.snapshot().max_ms == pytest.approx(400.0, abs=5.0)
+            assert monitor._handle is not None
+            catch_up_when = monitor._handle.when()
+            # Next tick re-anchors to the expected boundary instead of
+            # fire_time + cadence, so the baseline recovers.
+            assert catch_up_when < loop.time() + 1.0
+            # A subsequent healthy tick reports ~zero drift and keeps
+            # the cadence grid intact.
+            monitor._expected_next = catch_up_when
+            monitor._tick()
+            snap = monitor.snapshot()
+            assert snap.min_ms == 0.0
+            assert snap.max_ms == pytest.approx(400.0, abs=5.0)
+            assert monitor._handle is not None
+            assert monitor._handle.when() - catch_up_when == pytest.approx(
+                1.0, abs=1e-3
+            )
+        finally:
+            await monitor.stop()
+
     def test_concurrent_recorder_creation_does_not_leak(self) -> None:
         """Creating many recorders in parallel does not leave orphaned state."""
         recorders = []

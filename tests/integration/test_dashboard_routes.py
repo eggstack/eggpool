@@ -200,6 +200,41 @@ def test_static_theme_css_uses_configured_themes_dir(tmp_path) -> None:
     assert "--page-text: #abcdef;" in response.text
 
 
+def test_theme_cache_overflow_keeps_last_used_entry(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Overflow eviction must never evict the protected last-used theme."""
+    calls: list[str] = []
+
+    def fake_get_theme_css(name: str, themes_dir: str | None = None) -> str:
+        calls.append(name)
+        return f"/* css {name} */"
+
+    monkeypatch.setattr(render_module, "get_theme_css", fake_get_theme_css)
+
+    config = _build_config(tmp_path)
+    application = create_app(config)
+
+    from fastapi.testclient import TestClient
+
+    with TestClient(application) as overflow_client:
+        first = overflow_client.get("/static/theme.css?theme=A")
+        overflow_client.get("/static/theme.css?theme=B")
+        overflow_client.get("/static/theme.css?theme=C")
+        # Re-fetch A: it becomes last_used while remaining the oldest entry.
+        overflow_client.get("/static/theme.css?theme=A")
+        # Overflow insert must evict B (second-oldest), not the active A.
+        overflow_client.get("/static/theme.css?theme=D")
+        refetch = overflow_client.get("/static/theme.css?theme=A")
+
+    # D renders once on first fetch; A must not re-render after eviction.
+    assert calls == ["A", "B", "C", "D"]
+    assert first.status_code == 200
+    assert first.text == "/* css A */"
+    assert refetch.status_code == 200
+    assert refetch.text == "/* css A */"
+
+
 @pytest.mark.asyncio()
 async def test_overview_loads_chart_js_with_defer(
     migrated_app: FastAPI,

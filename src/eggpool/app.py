@@ -1671,7 +1671,10 @@ def create_app(
                             del self._cache[oldest]
                 self._cache[key] = (css, time.monotonic())
                 while len(self._cache) > self._max_size:
-                    oldest = min(self._cache, key=lambda k: self._cache[k][1])
+                    candidates = [k for k in self._cache if k != self._last_used]
+                    if not candidates:
+                        break
+                    oldest = min(candidates, key=lambda k: self._cache[k][1])
                     del self._cache[oldest]
                 self._last_used = key
 

@@ -500,7 +500,12 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
             return []
         self._tool_blocks_emitted = True
         out: list[bytes] = []
-        for anthropic_index, slot in enumerate(self._anthropic_tool_blocks.values()):
+        # Tool blocks follow the optional text block (index 0); offset so
+        # Anthropic block indices stay sequential and unique.
+        base = 1 if self._content_block_started else 0
+        for anthropic_index, slot in enumerate(
+            self._anthropic_tool_blocks.values(), start=base
+        ):
             parsed_input = self._parse_tool_arguments(slot.arguments)
             slot.anthropic_index = anthropic_index
             out.append(
@@ -997,6 +1002,8 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
         openai_id = (
             id_map.generate_openai_id() if id_map is not None else "call_pause_turn"
         )
+        sentinel_index = self._next_openai_tool_index
+        self._next_openai_tool_index += 1
         return [
             self._openai_frame(
                 {
@@ -1011,7 +1018,7 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
                                 "role": "assistant",
                                 "tool_calls": [
                                     {
-                                        "index": 0,
+                                        "index": sentinel_index,
                                         "id": openai_id,
                                         "type": "function",
                                         "function": {
@@ -1038,7 +1045,7 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
                             "delta": {
                                 "tool_calls": [
                                     {
-                                        "index": 0,
+                                        "index": sentinel_index,
                                         "function": {"arguments": "{}"},
                                     }
                                 ]
