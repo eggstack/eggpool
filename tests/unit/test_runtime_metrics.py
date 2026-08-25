@@ -464,6 +464,45 @@ async def test_routing_runtime_fields_and_no_router(db: Database) -> None:
     assert released_routing["reserved_microdollars"] == 0
 
 
+@pytest.mark.asyncio
+async def test_active_backoff_count_values(db: Database) -> None:
+    """``active_backoff_count`` counts unexpired and indefinite rows only.
+
+    Regression: the probe previously queried a nonexistent
+    ``expires_at`` column via ``unixepoch('now')`` (SQLite < 3.38 has
+    no such function) and swallowed the failure, so the dashboard
+    always showed "—" for active backoffs.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC)
+    future_iso = (now + timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S.%f")
+    past_iso = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S.%f")
+
+    async with db.transaction():
+        await db.execute_write(
+            "INSERT INTO accounts (id, name, api_key_env) "
+            "VALUES (1, 'test-acct', 'KEY')"
+        )
+        await db.execute_write(
+            "INSERT INTO account_backoffs (account_id, reason, backoff_until) "
+            "VALUES (1, 'rate_limited', ?)",
+            (future_iso,),
+        )
+        await db.execute_write(
+            "INSERT INTO account_backoffs (account_id, reason, backoff_until) "
+            "VALUES (1, 'quota_exhausted', NULL)"
+        )
+        await db.execute_write(
+            "INSERT INTO account_backoffs (account_id, reason, backoff_until) "
+            "VALUES (1, 'server_error', ?)",
+            (past_iso,),
+        )
+
+    routing = (await _make_service(db).snapshot())["routing_runtime"]
+    assert routing["active_backoff_count"] == 2
+
+
 # -- Probe errors covered by test_snapshot_returns_all_top_level_keys --
 
 

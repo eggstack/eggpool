@@ -682,16 +682,23 @@ class RuntimeMetricsService:
                     probe_errors, f"Health state snapshot failed: {exc}"
                 )
 
-        # Count active backoff rows
+        # Count active backoff rows. ``backoff_until`` is stored as a
+        # UTC ISO string; compare against a Python-computed cutoff so
+        # the query works on SQLite builds without ``unixepoch()``
+        # (< 3.38, e.g. SBC system libraries). NULL ``backoff_until``
+        # is a terminal/indefinite suppression and counts as active,
+        # matching BackoffRepository.list_active().
         try:
+            cutoff = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S.%f")
             row = await self._db.fetch_one(
                 "SELECT COUNT(*) FROM account_backoffs "
-                "WHERE expires_at > unixepoch('now')"
+                "WHERE backoff_until IS NULL OR backoff_until > ?",
+                (cutoff,),
             )
             if row:
                 active_backoff_count = int(row[0] or 0)
-        except Exception:
-            pass
+        except Exception as exc:
+            _append_probe_error(probe_errors, f"Active backoff count failed: {exc}")
 
         # Pending health summary (reuses StatsService logic inline)
         pending_count: int | None = None
@@ -712,8 +719,6 @@ class RuntimeMetricsService:
                 pending_count = int(pending_row["pending_count"] or 0)
                 oldest_pending_at = pending_row["oldest_pending_at"]
                 if oldest_pending_at and pending_count > 0:
-                    from datetime import UTC, datetime
-
                     now = datetime.now(UTC)
                     started = datetime.fromisoformat(str(oldest_pending_at))
                     if started.tzinfo is None:

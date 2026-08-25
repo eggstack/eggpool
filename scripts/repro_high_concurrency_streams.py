@@ -273,7 +273,7 @@ async def _run_burst(
     pending_count = int(pending["c"] if pending else 0)
     active_reservations = await db.fetch_one(
         "SELECT COUNT(*) AS c FROM reservations WHERE status = 'active' "
-        "AND expires_at > unixepoch('now')"
+        "AND expires_at > CURRENT_TIMESTAMP"
     )
     active_reservations_count = int(
         active_reservations["c"] if active_reservations else 0
