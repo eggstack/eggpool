@@ -14,7 +14,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Transparent bidirectional protocol transcoding between OpenAI and Anthropic
 - Dynamic model discovery with load-based routing across multiple providers and accounts
 - Request, token, latency, error, and cost tracking in SQLite
-- Multi-page dashboard with 50+ themes
+- Multi-page dashboard with 50 themes
 - Model metadata enrichment from provider catalogs, OpenRouter, Artificial Analysis, and Hugging Face
 - Thinking/reasoning capability-aware routing with configurable budget mapping
 - Per-account outbound proxy support ([pproxy](https://pypi.org/project/pproxy/) — install with `uv sync --extra proxy`)
@@ -175,7 +175,10 @@ Use `eggpool connect` for interactive provider setup. See [docs/providers.md](do
 | `[providers.*]` | Provider configs with accounts and routing priority |
 | `[network]` | Outbound transport and proxy settings |
 | `[transcoder]` | Protocol transcoding between OpenAI and Anthropic |
-| `[compression]` | Request shaping: observe/safe, stable thresholds, transform toggles |
+| `[metrics]` | Observability write buffering (`immediate` / `balanced` / `low_wear`) |
+| `[security]` | Redacted error-detail persistence |
+| `[backup]` | Opt-in automatic daily backups |
+| `[model_info]` | Multi-source model metadata enrichment |
 | `[maintenance]` | Bounded maintenance budget, SQLite hygiene, contention guard |
 
 Full config reference: [`config.example.toml`](config.example.toml) | [docs/providers.md](docs/providers.md)

@@ -4,7 +4,7 @@ Back to [Overview](overview.md)
 
 ## Purpose
 
-Self-updating server-rendered HTML dashboard with 50+ themes, plus a comprehensive JSON API for stats and operational data.
+Self-updating server-rendered HTML dashboard with 50 themes, plus a comprehensive JSON API for stats and operational data.
 
 ## Architecture
 
@@ -156,20 +156,32 @@ Transcoding stats aggregation.
 
 ## JSON API Endpoints
 
+Representative read-only JSON surface (registered in
+`api/stats.py`, `api/runtime.py`, `api/update.py`, `api/backoff.py`,
+`api/network.py`, `api/model_info.py`, and the dashboard routes):
+`/api/stats/summary`, `/api/stats/accounts`, `/api/stats/models`,
+`/api/stats/timeseries`, `/api/stats/bandwidth`, `/api/stats/errors`,
+`/api/stats/latency`, `/api/stats/pings`, `/api/stats/ips`,
+`/api/stats/attempts`, `/api/stats/retries`, `/api/stats/routing`,
+`/api/stats/routing-selections`, `/api/stats/routing-exclusions`,
+`/api/stats/routing-skew`, `/api/stats/routing/eligibility`,
+`/api/stats/operational`, `/api/stats/pending-health`,
+`/api/stats/pricing-provenance`, plus:
+
 | Endpoint | Purpose |
 |----------|---------|
-| `/api/stats/recent` | Recent requests |
-| `/api/stats/recent/{id}` | Request detail |
-| `/api/stats/models` | Model stats |
-| `/api/stats/providers` | Provider stats |
-| `/api/stats/runtime` | Runtime metrics |
+| `/api/stats/recent-requests` | Bounded recent-requests list (auth-gated) |
+| `/api/stats/recent/{id}` | Request detail (auth-gated) |
 | `/api/stats/cache-observability` | Cache counter coverage |
 | `/api/stats/canonical-request-segmentation` | Segmentation stats |
 | `/api/stats/cache-stability` | Cache stability |
 | `/api/stats/request-shaping` | Operator-facing summary |
+| `/api/stats/transcoding` | Transcoding stats (JSON) |
 | `/api/stats/thinking` | Thinking/reasoning counters |
+| `/api/stats/runtime` | Runtime metrics |
 | `/api/stats/update` | Update checker state |
-| `/api/stats/routing/eligibility` | Routing eligibility diagnostics |
+| `/api/backoffs` | Active upstream-derived account backoffs |
+| `/api/network/diagnostics` | Outbound-client pool diagnostics |
 | `/api/model-info` | Model info summary |
 | `/api/model-info/{model_id}` | Model info detail |
 | `/api/model-info/{model_id}/matches` | Match evidence |

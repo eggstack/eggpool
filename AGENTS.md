@@ -7,6 +7,7 @@ Project-specific skills are in `.opencode/skills/`:
 - `architecture` — architecture index and quick reference; see `architecture/README.md` for full design details
 - `deployment` — production deployment, systemd, operational scripts, configuration changes
 - `development` — linting, testing, pre-commit checks, code style
+- `documentation` — doc map, accuracy verification against code, and pruning rules for README/docs/architecture/AGENTS.md changes
 
 ## Quick Start
 
@@ -98,7 +99,33 @@ Manual release procedure — no automated release workflow. See `docs/releasing.
 
 ## Architecture
 
-Start subsystem work at `architecture/README.md`, then the matching `deep-dive-<subsystem>.md`. Non-obvious wiring:
+Start subsystem work at `architecture/README.md`, then the matching deep dive:
+
+| Subsystem | Deep dive |
+|-----------|-----------|
+| CLI, config, errors, JSON backend | `architecture/deep-dive-core.md` |
+| Request lifecycle, coordinator, proxy, finalization | `architecture/deep-dive-request-lifecycle.md` |
+| Protocol transcoding (OpenAI ↔ Anthropic) | `architecture/deep-dive-transcoder.md` |
+| Routing & quota | `architecture/deep-dive-routing.md` |
+| Providers, contracts, outbound clients | `architecture/deep-dive-providers.md` |
+| SQLite, migrations, repositories | `architecture/deep-dive-database.md` |
+| Runtime generations & process management | `architecture/deep-dive-runtime.md` |
+| Health, circuit breaker, quarantine | `architecture/deep-dive-health.md` |
+| Background tasks & backups | `architecture/deep-dive-background.md` |
+| Dashboard & stats API | `architecture/deep-dive-dashboard.md` |
+| Model catalog & pricing | `architecture/deep-dive-catalog.md` |
+| Model-info sidecar | `architecture/deep-dive-model-info.md` |
+| Control plane (rehash) | `architecture/deep-dive-control.md` |
+| Pydantic data models | `architecture/deep-dive-models.md` |
+| Agent integrations (configsetup) | `architecture/deep-dive-integrations.md` |
+| Security & redaction | `architecture/deep-dive-security.md` |
+| Observability & routing traces | `architecture/deep-dive-observability.md` |
+| Retry classification & backoff | `architecture/deep-dive-retry.md` |
+| Metrics & telemetry | `architecture/deep-dive-metrics.md` |
+| Backup/restore/uninstall lifecycle | `architecture/deep-dive-lifecycle.md` |
+| Deployment & operations tooling | `architecture/deep-dive-deployment.md` |
+
+Non-obvious wiring:
 
 - **Request lifecycle**: `RequestCoordinator` in `src/eggpool/request/` orchestrates endpoint → routing → persistence → dispatch → finalization; HTTP layer in `src/eggpool/api/`
 - **Runtime generations**: `RuntimeManager` (package root, `runtime_manager.py`) owns active/retiring slots and leases; generation-owned attributes mirrored on `app.state` are mirrors, not authority

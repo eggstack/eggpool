@@ -40,8 +40,8 @@ The D1 milestone adds the request-path policy fields that the
 candidate builder already constructs as generation-owned objects:
 
 - **Transcoder policy** (``[transcoder]``) — every field including
-  ``transcoder_loss_policy``, ``protocol_safety_mode``, and
-  ``http_status_overrides``. A change rebuilds the generation's
+  ``loss_policy``, ``prefer_native``, ``features.*``, and
+  ``provider_control_policy.*``. A change rebuilds the generation's
   ``TranscoderPolicy`` and rewires the new ``RequestCoordinator``.
 - **Models subset** (``[models]``) — ``expose_mode``,
   ``collapse_models``, ``refresh_interval_s``, ``stale_after_s``,

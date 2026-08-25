@@ -289,7 +289,7 @@ bounded state machine with corroboration before terminal withdrawal.
 
 - `DispatchOverheadRecorder` — bounded rolling-window recorder for EggPool-local pre-dispatch overhead
 - `LocalPreUpstreamRecorder` — full EggPool-side window from ASGI handler entry to upstream dispatch
-- `DispatchSpanRecorder` — ~22 `SPAN_*` constants with per-span p50/p95/max
+- `DispatchSpanRecorder` — 28 `SPAN_*` constants with per-span p50/p95/max
 - `StreamDiagnostics` — stream outcomes with bounded ring histograms
 - `EventLoopLagMonitor` — bounded event-loop lag telemetry
 - `MetricsWriteCoalescer` — dual locks for thread-safe buffering

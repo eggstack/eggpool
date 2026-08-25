@@ -99,7 +99,7 @@ API key storage. Never committed.
 
 ### Dashboard
 
-Self-updating HTML dashboard with 50+ themes:
+Self-updating HTML dashboard with 50 themes:
 - `/` — Overview
 - `/models` — Model catalog
 - `/runtime` — Live metrics

@@ -37,20 +37,40 @@ EggPool exposes OpenAI Chat Completions- and Anthropic Messages-compatible paths
 
 ## Stats & Observability
 
+Most `/api/stats/*` endpoints are public when the dashboard is public;
+per-request traces stay auth-gated regardless.
+
 | Method | Path | Description |
 |--------|------|-------------|
+| `GET` | `/api/stats/summary` | Aggregate request stats (counts, tokens, cost, latency) |
+| `GET` | `/api/stats/accounts` | Per-account usage roll-up |
+| `GET` | `/api/stats/models` | Per-model usage roll-up |
+| `GET` | `/api/stats/timeseries` | Time-bucketed usage series (`?period=`) |
+| `GET` | `/api/stats/bandwidth` | Request/response byte totals |
+| `GET` | `/api/stats/errors` | Error-class distribution |
+| `GET` | `/api/stats/latency` | Latency percentiles |
+| `GET` | `/api/stats/pings` | Provider ping history |
+| `GET` | `/api/stats/ips` | Client IP aggregates |
+| `GET` | `/api/stats/attempts` | Per-attempt outcome aggregates |
+| `GET` | `/api/stats/retries` | Retry distribution |
+| `GET` | `/api/stats/routing` | Routing decision distribution |
+| `GET` | `/api/stats/routing-selections` | Selection breakdown by model/account |
+| `GET` | `/api/stats/routing-exclusions` | Exclusion reasons breakdown |
+| `GET` | `/api/stats/routing-skew` | Selection skew summary |
+| `GET` | `/api/stats/routing/eligibility` | Per-account routing eligibility diagnostics |
+| `GET` | `/api/stats/operational` | Operational health roll-up |
+| `GET` | `/api/stats/pending-health` | Pending-health probe state |
+| `GET` | `/api/stats/pricing-provenance` | Pricing data provenance |
+| `GET` | `/api/stats/thinking` | Thinking/reasoning decision counter snapshot |
 | `GET` | `/api/stats/cache-observability` | Cache counter status coverage |
 | `GET` | `/api/stats/canonical-request-segmentation` | Segmentation status, counts, and token estimates |
 | `GET` | `/api/stats/cache-stability` | Transcoder cache boundary tracker counters |
-| `GET` | `/api/stats/compression-observability` | Observe-mode opportunity, per-policy roll-ups |
-| `GET` | `/api/stats/compression-runtime` | Safe-mode applied/fallback counts and latency |
-| `GET` | `/api/stats/compression-policies` | Per-policy roll-up table |
 | `GET` | `/api/stats/request-shaping` | Operator-facing request-shaping summary |
+| `GET` | `/api/stats/transcoding` | Protocol transcoding statistics (JSON) |
 | `GET` | `/api/stats/runtime` | Runtime metrics, routing guardrails, background task summaries, stream diagnostics, and `finalization_supervisor` snapshot |
-| `GET` | `/api/stats/summary` | Aggregate request stats (counts, tokens, cost, latency) |
-| `GET` | `/api/stats/thinking` | Thinking/reasoning decision counter snapshot |
 | `GET` | `/api/stats/update` | PyPI update check status |
-| `GET` | `/api/stats/routing/eligibility` | Per-account routing eligibility diagnostics |
+| `GET` | `/api/stats/recent-requests` | Bounded recent-requests list (auth-gated) |
+| `GET` | `/api/stats/recent/{request_id}` | Per-request trace detail (auth-gated) |
 | `GET` | `/api/network/diagnostics` | Network and outbound-client diagnostics |
 
 ## Dashboard
