@@ -75,9 +75,13 @@ class ServerConfig(BaseModel):
     api_key_env: str = "SERVER_API_KEY"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     access_log: bool = False
-    # Granian's single worker owns loop-bound asyncio primitives throughout
-    # the process. Multiple runtime threads are not a supported topology.
-    threads: int = Field(default=1, ge=1, le=1)
+    # Maps to Granian ``runtime_threads``: the number of Rust I/O threads per
+    # worker performing network work. Python coroutines always execute on the
+    # single asyncio event loop Granian creates per worker process regardless
+    # of this value (granian marshals every request onto that loop via
+    # ``loop.call_soon_threadsafe``), so values > 1 are safe for loop-bound
+    # asyncio primitives. Keep the default 1 on SBC profiles.
+    threads: int = Field(default=1, ge=1, le=64)
     max_request_body_bytes: int = Field(default=10 * 1024 * 1024, gt=0)
 
     @property

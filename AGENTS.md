@@ -133,7 +133,7 @@ Non-obvious wiring:
 - **Responses passthrough**: `/v1/responses` is same-protocol only; surface selection is the `request_surface` field (`"chat_completions"` | `"responses"`), not a separate transcoder family → `architecture/deep-dive-request-lifecycle.md`
 - **Control plane**: live config reload (rehash) over a Unix-domain socket, `src/eggpool/control/`
 - **Routing**: load-based, never cost-based; tier-based via `routing_priority`; pieces split across `routing/`, `quota/`, `retry/`, `catalog/`, `health/`
-- **Process model**: supervisor + Granian worker, `workers=1`, `runtime_threads=1` required
+- **Process model**: supervisor + Granian worker, `workers=1` required (one process = one asyncio event loop); `[server].threads` maps to Granian `runtime_threads` (Rust I/O threads, safe above 1)
 
 ## Gotchas
 

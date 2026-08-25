@@ -122,10 +122,12 @@ processes appear as `eggpool` in `ps` / `top` (no generic `python`
 entry), so the total footprint is two processes and one runtime thread before
 considering any upstream outbound connections.
 
-`[server].threads` maps to Granian `runtime_threads` and must remain `1`.
-Values greater than one fail configuration validation because all
-`asyncio.Lock` objects are loop-bound; multi-loop compatibility is not
-supported:
+`[server].threads` maps to Granian `runtime_threads` — the number of
+Rust I/O threads per worker. It does not create additional event loops:
+Granian always runs Python coroutines on a single asyncio loop per worker
+process regardless of this value, so loop-bound `asyncio.Lock` objects stay
+safe at any supported setting. Keep the default `1` on constrained SBC
+hardware; raising it only adds Rust-side network I/O parallelism:
 
 ```toml
 [server]

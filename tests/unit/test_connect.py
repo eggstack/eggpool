@@ -1590,14 +1590,11 @@ class TestGranianServe:
         with pytest.raises(ValidationError):
             ServerConfig(threads=0)
 
-    def test_server_config_threads_two_rejected(self) -> None:
-        """Only the single event-loop runtime is supported."""
-        from pydantic import ValidationError
-
+    def test_server_config_threads_two_accepted(self) -> None:
+        """Granian runtime threads are Rust I/O threads; > 1 is valid."""
         from eggpool.models.config import ServerConfig
 
-        with pytest.raises(ValidationError):
-            ServerConfig(threads=2)
+        assert ServerConfig(threads=2).threads == 2
 
     def test_app_does_not_write_or_remove_pid_file(self) -> None:
         """Lifespan does not own the PID file (supervisor does)."""
@@ -1782,9 +1779,9 @@ class TestGranianServe:
             cli_module.cli, ["--config", str(config_path), "serve", "--verbose"]
         )
 
-        assert result.exit_code != 0
-        assert "threads" in result.output.lower()
-        assert captured == {}
+        assert result.exit_code == 0
+        assert captured["served"] is True
+        assert captured["runtime_threads"] == 4
 
 
 class TestProbeHealthz:

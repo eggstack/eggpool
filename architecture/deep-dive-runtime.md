@@ -20,7 +20,7 @@ Manages the EggPool process lifecycle, runtime generations, and the supervisor +
     ┌──────────▼──────────┐
     │   Granian Worker     │
     │   workers=1          │
-    │   runtime_threads=1  │
+    │   runtime_threads=N  │
     │   (single event loop)│
     └─────────────────────┘
 ```
@@ -33,7 +33,9 @@ Manages the EggPool process lifecycle, runtime generations, and the supervisor +
 - Daemon mode (default for `eggpool serve`)
 - `--verbose` for foreground mode
 - Health probes for supervisor
-- `runtime_threads=1` is required; other values fail configuration validation
+- `runtime_threads` maps to Granian Rust I/O threads per worker; any value in
+  the validated range is safe because Granian dispatches all Python work onto
+  the single per-worker asyncio loop (`loop.call_soon_threadsafe`)
 - Runtime database integrity/indeterminate-state failures close admission and
   exit the worker; systemd restart runs startup integrity and crash repair.
 
@@ -176,7 +178,9 @@ failed durable clear leaves the current in-memory suppression intact.
 
 ## Key Invariants
 
-- Single event-loop thread is canonical (`runtime_threads=1`)
+- Single event-loop thread is canonical: Granian's `workers=1` process model
+  guarantees exactly one asyncio loop regardless of `runtime_threads`, which
+  only sizes the Rust-side I/O pool
 - All `asyncio.Lock` objects are loop-bound
 - `MetricsWriteCoalescer` is the only component using `threading.Lock`
 - `fastcli` and `runtime_paths` are stdlib-only

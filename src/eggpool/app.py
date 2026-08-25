@@ -729,7 +729,9 @@ def _log_operational_profile(
     )
 
     # Runtime topology (Milestone F): explicit topology summary so
-    # operators can verify the single-loop model at a glance.
+    # operators can verify the single-loop model at a glance. Granian
+    # guarantees one asyncio loop per worker process; ``threads`` only
+    # sizes the Rust-side I/O thread pool.
     logger.info(
         "Runtime topology: pid=%d threads=%d asyncio_loop_id=%s",
         os.getpid(),

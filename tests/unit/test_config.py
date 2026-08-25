@@ -582,13 +582,19 @@ def test_file_backed_config_rejects_ephemeral_server_port(tmp_path: Path) -> Non
         AppConfig.from_toml(str(config_file))
 
 
-def test_server_config_rejects_multi_loop_runtime_threads() -> None:
+def test_server_config_accepts_multi_runtime_threads() -> None:
+    """Values > 1 are valid: Granian runtime threads are Rust I/O threads,
+    not event loops; Python stays on the single per-worker asyncio loop."""
     from pydantic import ValidationError
 
     from eggpool.models.config import ServerConfig
 
+    assert ServerConfig().threads == 1
+    assert ServerConfig(threads=4).threads == 4
     with pytest.raises(ValidationError):
-        ServerConfig(threads=2)
+        ServerConfig(threads=0)
+    with pytest.raises(ValidationError):
+        ServerConfig(threads=65)
 
 
 def test_server_config_body_limit_defaults_and_requires_positive_value() -> None:
