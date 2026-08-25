@@ -388,6 +388,44 @@ class TestQuotaFairScorer:
         assert utilization == float("inf")
 
     @pytest.mark.asyncio()
+    async def test_zero_capacity_account_is_excluded(self) -> None:
+        """A zero-capacity account is explicitly ineligible, not inf-scored.
+
+        Malformed persisted state (config validation rejects an explicit
+        zero) must not produce an eligible candidate with an infinite
+        score; it is excluded from selection outright.
+        """
+        from eggpool.quota.estimation import AccountQuota, PersistedWindowSnapshot
+
+        estimator = QuotaEstimator()
+        for name in ("zeroed", "healthy"):
+            estimator.accounts[name] = AccountQuota(
+                account_name=name,
+                capacity_5h_requests=0 if name == "zeroed" else 100,
+                capacity_7d_requests=0 if name == "zeroed" else 35_000,
+                capacity_30d_requests=0 if name == "zeroed" else 150_000,
+                capacity_5h_tokens=0 if name == "zeroed" else 1_000_000,
+                capacity_7d_tokens=0 if name == "zeroed" else 10_000_000,
+                capacity_30d_tokens=0 if name == "zeroed" else 50_000_000,
+                persisted_snapshot=PersistedWindowSnapshot(
+                    account_id=1 if name == "zeroed" else 2,
+                    request_count_5h=49,
+                ),
+            )
+
+        scorer = QuotaFairScorer(quota_estimator=estimator)
+        scores = await scorer.score_accounts(["zeroed", "healthy"])
+        by_name = {score.account_name: score for score in scores}
+
+        assert by_name["zeroed"].is_eligible is False
+        assert by_name["healthy"].is_eligible is True
+        assert scorer.select_account(scores) is not None
+        assert (
+            scorer.select_account(scores).account_name  # type: ignore[union-attr]
+            == "healthy"
+        )
+
+    @pytest.mark.asyncio()
     async def test_score_accounts(self) -> None:
         """Test scoring accounts. Lower score = less utilized = preferred."""
         from eggpool.quota.estimation import AccountQuota, PersistedWindowSnapshot

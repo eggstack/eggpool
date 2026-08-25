@@ -26,6 +26,7 @@ Lower score = less utilized = preferred.
 
 from __future__ import annotations
 
+import math
 import random
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -261,6 +262,12 @@ class QuotaFairScorer:
             max_util = max(p5, pw, pm)
             mean_util = (p5 + pw + pm) / 3.0
             base_score = max_util + self.mean_weight * mean_util
+            # A zero-capacity window (malformed persisted state; config
+            # validation rejects it) scores infinity. Exclude the
+            # account explicitly instead of admitting an unservable,
+            # infinitely-scored candidate.
+            if not math.isfinite(base_score):
+                is_eligible = False
 
             # Inflight request penalty
             count = active.get(name, 0)

@@ -532,3 +532,40 @@ class TestRecordFailureWithPolicy:
             health = manager.get_account_health(name)
             assert health.consecutive_failures == 0
             assert health.circuit_breaker.get_stats()["failure_count"] == 0
+
+    def test_quota_cooldown_escalates_without_breaker(self) -> None:
+        """Repeated quota exhaustion escalates toward the 1800s cap."""
+        seed_random_for_test(7)
+        manager = HealthManager()
+        delays = [
+            manager.record_failure_with_policy("acct", "quota_exhausted")
+            for _ in range(4)
+        ]
+        # Base 300s doubling per cooldown, capped at 1800s (jitter ±15%).
+        assert delays[0] == pytest.approx(300.0, rel=0.15)
+        assert delays[1] == pytest.approx(600.0, rel=0.15)
+        assert delays[2] == pytest.approx(1200.0, rel=0.15)
+        assert delays[3] == pytest.approx(1800.0, rel=0.15)
+        health = manager.get_account_health("acct")
+        assert health.consecutive_failures == 0
+        assert health.consecutive_cooldowns == 4
+        assert health.circuit_breaker.get_stats()["failure_count"] == 0
+
+    def test_rate_limit_cooldown_escalates_when_retry_after_missing(self) -> None:
+        """Rate-limit cooldowns grow along the policy schedule."""
+        seed_random_for_test(11)
+        manager = HealthManager()
+        first = manager.record_failure_with_policy("acct", "rate_limited")
+        second = manager.record_failure_with_policy("acct", "rate_limited")
+        assert first == pytest.approx(60.0, rel=0.15)
+        assert second == pytest.approx(120.0, rel=0.15)
+
+    def test_success_resets_cooldown_escalation(self) -> None:
+        """A success resets the escalation counter back to the base delay."""
+        seed_random_for_test(3)
+        manager = HealthManager()
+        manager.record_failure_with_policy("acct", "quota_exhausted")
+        manager.record_failure_with_policy("acct", "quota_exhausted")
+        manager.record_success("acct")
+        delay = manager.record_failure_with_policy("acct", "quota_exhausted")
+        assert delay == pytest.approx(300.0, rel=0.15)

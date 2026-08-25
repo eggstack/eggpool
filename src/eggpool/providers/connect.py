@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import select
+import shlex
 import sys
 import termios
 import tomllib
@@ -581,7 +583,7 @@ def merge_provider_into_config(
 
     # Protocol transcoding is enabled by default; nothing to enforce here.
 
-    path.write_text(content, encoding="utf-8")
+    _atomic_write_text(path, content)
     return True
 
 
@@ -779,7 +781,7 @@ def remove_account_from_config(
     if _provider_account_count(updated, account.provider_id) == 0:
         updated = _remove_provider_block(updated, account.provider_id)
 
-    path.write_text(updated, encoding="utf-8")
+    _atomic_write_text(path, updated)
     return True
 
 
@@ -906,33 +908,65 @@ def find_shell_profile() -> Path | None:
     return home / ".profile"
 
 
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Replace *path* with *content* via a temporary file and atomic rename.
+
+    A crash mid-write must never leave a truncated config file behind.
+    """
+    tmp_path = path.with_name(path.name + ".tmp")
+    tmp_path.write_text(content, encoding="utf-8")
+    os.replace(tmp_path, path)
+
+
 def export_env_var(env_name: str, value: str) -> Path | None:
-    """Write an export statement to the shell profile. Returns the profile path."""
+    """Write an export statement to the shell profile. Returns the profile path.
+
+    The value is POSIX-quoted so ``$``, backticks, quotes, and
+    backslashes survive sourcing, and the profile is only readable by
+    its owner because it now carries an API key.
+    """
     profile = find_shell_profile()
     if profile is None:
         return None
 
     profile.parent.mkdir(parents=True, exist_ok=True)
 
-    # Check if already exists
-    if profile.exists():
-        existing = profile.read_text(encoding="utf-8")
-        if f"export {env_name}=" in existing:
-            # Replace existing value
-            file_lines = existing.split("\n")
-            new_lines: list[str] = []
-            for line in file_lines:
-                if line.strip().startswith(f"export {env_name}="):
-                    new_lines.append(f'export {env_name}="{value}"')
-                else:
-                    new_lines.append(line)
-            profile.write_text("\n".join(new_lines), encoding="utf-8")
+    export_line = f"export {env_name}={shlex.quote(value)}"
+
+    # Create a missing profile with owner-only permissions up front so
+    # the key-bearing line is never world-readable.
+    if not profile.exists():
+        try:
+            fd = os.open(profile, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            pass  # Created concurrently; fall through to the append path.
+        else:
+            with os.fdopen(fd, "a", encoding="utf-8") as f:
+                f.write("\n# Added by eggpool connect\n")
+                f.write(f"{export_line}\n")
             return profile
 
-    # Append
-    with profile.open("a", encoding="utf-8") as f:
-        f.write("\n# Added by eggpool connect\n")
-        f.write(f'export {env_name}="{value}"\n')
+    # Check if already exists
+    existing = profile.read_text(encoding="utf-8")
+    if f"export {env_name}=" in existing:
+        # Replace existing value atomically.
+        file_lines = existing.split("\n")
+        new_lines: list[str] = []
+        for line in file_lines:
+            if line.strip().startswith(f"export {env_name}="):
+                new_lines.append(export_line)
+            else:
+                new_lines.append(line)
+        _atomic_write_text(profile, "\n".join(new_lines))
+    else:
+        # Append
+        with profile.open("a", encoding="utf-8") as f:
+            f.write("\n# Added by eggpool connect\n")
+            f.write(f"{export_line}\n")
+
+    with contextlib.suppress(OSError):
+        # The profile now carries an API key; drop group/other access.
+        profile.chmod(0o600)
 
     return profile
 

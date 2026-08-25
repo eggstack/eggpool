@@ -721,3 +721,51 @@ class TestToolCallStreaming:
         upstream_id = context.id_map.to_upstream("call_abc")
         assert upstream_id is not None
         assert upstream_id.startswith("toolu_")
+
+
+class TestToolCallDeltaDropWarning:
+    def test_idless_functionless_delta_records_loss_warning(self) -> None:
+        """A tool_calls delta with nothing accumulable surfaces a warning."""
+        from eggpool.transcoder.context import TranscodeContext
+
+        context = TranscodeContext(
+            request_id="dropped-delta",
+            client_protocol="anthropic",
+            upstream_protocol="openai",
+        )
+        transcoder = OpenAIToAnthropicStreaming(transcode_context=context)
+        # Prime message_start so the stream is in a valid state, then send
+        # a tool_calls delta entry with neither an id nor function payload
+        # and no matching slot.
+        transcoder.feed(_openai_chunk(role="assistant", content=None))
+        out = transcoder.feed(
+            _openai_chunk(tool_calls=[{"index": 3}]),
+        )
+        assert out == []
+        kinds = [w.get("streaming_transcoder") for w in context.loss_warnings]
+        assert "tool_call_delta_dropped" in kinds
+
+    def test_normal_tool_call_delta_does_not_warn(self) -> None:
+        from eggpool.transcoder.context import TranscodeContext
+
+        context = TranscodeContext(
+            request_id="good-delta",
+            client_protocol="anthropic",
+            upstream_protocol="openai",
+        )
+        transcoder = OpenAIToAnthropicStreaming(transcode_context=context)
+        transcoder.feed(_openai_chunk(role="assistant", content=None))
+        transcoder.feed(
+            _openai_chunk(
+                tool_calls=[
+                    {
+                        "index": 0,
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "f", "arguments": "{}"},
+                    }
+                ]
+            ),
+        )
+        kinds = [w.get("streaming_transcoder") for w in context.loss_warnings]
+        assert "tool_call_delta_dropped" not in kinds

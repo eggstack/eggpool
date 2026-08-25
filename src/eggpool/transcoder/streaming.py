@@ -400,6 +400,14 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
                 )
                 self._anthropic_tool_blocks[index] = slot
             if slot is None:
+                # A tool_calls delta with neither an id nor a function
+                # payload and no matching slot carries nothing we can
+                # accumulate; surface the drop instead of swallowing it.
+                self._warn(
+                    "tool_call_delta_dropped",
+                    id=self._id,
+                    index=index,
+                )
                 continue
             if function is not None:
                 name_val = function.get("name")
@@ -712,6 +720,16 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
             return []
         block = cast("dict[str, Any]", block_raw)
         if block.get("type") != "tool_use":
+            # ``text`` / ``thinking`` blocks are intentionally handled
+            # via their delta events; anything else is content this
+            # translator cannot represent, so record the loss.
+            block_type = str(block.get("type", ""))
+            if block_type not in ("text", "thinking", "redacted_thinking"):
+                self._warn(
+                    "content_block_type_ignored",
+                    id=self._id,
+                    block_type=block_type,
+                )
             return []
         raw_index = parsed.get("index", 0)
         upstream_index = int(raw_index) if raw_index is not None else 0

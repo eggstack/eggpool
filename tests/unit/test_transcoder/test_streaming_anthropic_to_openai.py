@@ -989,3 +989,60 @@ class TestPauseTurnSentinel:
                     func = tc.get("function", {})
                     if func.get("arguments"):
                         assert json.loads(func["arguments"]) == {}
+
+
+class TestUnknownContentBlockWarning:
+    def test_unknown_block_type_records_loss_warning(self) -> None:
+        """Unrepresentable content blocks surface a loss warning."""
+        from eggpool.proxy.sse import DecodedSSEFrame, SSEFrame
+        from eggpool.transcoder.context import TranscodeContext
+
+        context = TranscodeContext(
+            request_id="unknown-block",
+            client_protocol="openai",
+            upstream_protocol="anthropic",
+        )
+        transcoder = AnthropicToOpenAIStreaming(transcode_context=context)
+        payload = {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "server_tool_use", "id": "srv_1"},
+        }
+        frame = DecodedSSEFrame(
+            SSEFrame(
+                event="content_block_start",
+                data=json.dumps(payload),
+                fields=(("data", json.dumps(payload)),),
+            )
+        )
+        out = transcoder.translate_frame(frame)
+        assert out == []
+        kinds = [w.get("streaming_transcoder") for w in context.loss_warnings]
+        assert "content_block_type_ignored" in kinds
+
+    def test_text_block_start_does_not_warn(self) -> None:
+        """Text block starts are intentionally handled via deltas only."""
+        from eggpool.proxy.sse import DecodedSSEFrame, SSEFrame
+        from eggpool.transcoder.context import TranscodeContext
+
+        context = TranscodeContext(
+            request_id="text-block",
+            client_protocol="openai",
+            upstream_protocol="anthropic",
+        )
+        transcoder = AnthropicToOpenAIStreaming(transcode_context=context)
+        payload = {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        }
+        frame = DecodedSSEFrame(
+            SSEFrame(
+                event="content_block_start",
+                data=json.dumps(payload),
+                fields=(("data", json.dumps(payload)),),
+            )
+        )
+        transcoder.translate_frame(frame)
+        kinds = [w.get("streaming_transcoder") for w in context.loss_warnings]
+        assert "content_block_type_ignored" not in kinds

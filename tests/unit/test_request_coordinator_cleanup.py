@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
 from eggpool.request.finalization_job import (
+    AttemptRuntimeLease,
     ClaimCompensationProgress,
     ClaimCompensationSubmission,
     FailedAttemptCleanupProgress,
@@ -189,3 +192,190 @@ async def test_cancellation_keeps_cleanup_owned_and_progress_is_not_replayed() -
     await supervisor.run_terminal_command(command)
     assert command.is_complete
     assert calls == {"first": 1, "second": 1}
+
+
+# ---------------------------------------------------------------------------
+# Coordinator terminal-owner regressions
+# ---------------------------------------------------------------------------
+
+
+def _capacity_selected() -> tuple[Any, Any]:
+    from eggpool.request.coordinator import SelectedAttempt
+    from eggpool.request.finalizer import FinalizationData, FinalizationOutcome
+
+    lease = AttemptRuntimeLease(
+        account_name="account-1",
+        estimated_tokens=100,
+        estimated_microdollars=5,
+        active_count_acquired=True,
+        quota_reservation_acquired=True,
+        health_probe_acquired=True,
+    )
+    selected = SelectedAttempt(
+        proxy_request_id="req-cap",
+        db_request_id="db-cap",
+        attempt_id=7,
+        reservation_id="res-cap",
+        account_id=1,
+        account_name="account-1",
+        api_key="key",
+        model_id="model-a",
+        estimated_tokens=100,
+        estimated_microdollars=5,
+        attempt_number=1,
+        provider_id="openai",
+        runtime_lease=lease,
+    )
+    data = FinalizationData(outcome=FinalizationOutcome.COMPLETED)
+    return selected, data
+
+
+@pytest.mark.asyncio
+async def test_capacity_rejection_after_handoff_releases_runtime_lease() -> None:
+    """A post-handoff capacity rejection releases every held lease component.
+
+    Ownership was never transferred to a finalization job, so the
+    router active count, quota reservation, and health probe must all
+    be released here; otherwise the account's active count and
+    reserved total leak until process restart.
+    """
+    from eggpool.request.coordinator import RequestCoordinator
+
+    coordinator = object.__new__(RequestCoordinator)
+
+    class _SaturatedSupervisor:
+        def register_or_get(self, *_args: Any, **_kwargs: Any) -> Any:
+            raise FinalizationCapacityError()
+
+    coordinator._finalization_supervisor = _SaturatedSupervisor()
+    coordinator._router = MagicMock()
+    coordinator._quota_estimator = MagicMock()
+    coordinator._health_manager = MagicMock()
+
+    context = SimpleNamespace(
+        request_id="req-cap",
+        protocol="openai",
+        upstream_protocol="openai",
+    )
+    selected, data = _capacity_selected()
+    data.downstream_started = True
+
+    await coordinator._finalize_terminal(context, selected, data)
+
+    coordinator._router.decrement_active_request_count.assert_called_once_with(
+        "account-1"
+    )
+    coordinator._quota_estimator.remove_reservation.assert_called_once_with(
+        "account-1", 5, requests=1, tokens=100
+    )
+    coordinator._health_manager.release_request.assert_called_once_with("account-1")
+    assert selected.runtime_lease.released is True
+
+
+@pytest.mark.asyncio
+async def test_local_dispatch_error_is_finalized_as_client_error() -> None:
+    """Local preparation failures persist as client errors, not upstream.
+
+    Local dispatch failures have zero provider effects; recording them
+    as ``UPSTREAM_ERROR`` inflates the account's consecutive-failure
+    counter and skews per-account error-rate stats.
+    """
+    from eggpool.failure.effects import FailureEffects
+    from eggpool.failure.observation import FailureObservation as Observation
+    from eggpool.request.coordinator import (
+        RequestCoordinator,
+        SelectedAttempt,
+        _LocalDispatchError,
+    )
+    from eggpool.request.finalizer import FinalizationOutcome
+
+    observation = Observation(
+        source="local_preparation",
+        status_code=None,
+        error_class="ValueError",
+        provider_id="openai",
+        account_name="account-1",
+        model_id="model-a",
+        upstream_model_id="model-a",
+        client_protocol="openai",
+        upstream_protocol="openai",
+        response_signal=None,
+        retry_after_s=None,
+        response_started=False,
+        downstream_started=False,
+    )
+    local_error = _LocalDispatchError(
+        stage="request_preparation",
+        error_class="ValueError",
+        failure_observation=observation,
+        failure_effects=FailureEffects(
+            retry=False,
+            retry_scope="none",
+            client_outcome="client_error",
+            account_effect="none",
+            model_effect="none",
+            circuit_penalty=False,
+            persist_backoff=False,
+            backoff_reason=None,
+            backoff_until=None,
+            release_probe_only=True,
+            evidence_class="local_preparation_local",
+            source="local_preparation",
+        ),
+    )
+
+    coordinator = object.__new__(RequestCoordinator)
+    coordinator._persist_error_detail = False
+    captured: dict[str, Any] = {}
+
+    async def _capture(_context: Any, _selected: Any, data: Any) -> None:
+        captured["data"] = data
+
+    coordinator._finalize_terminal = _capture  # type: ignore[method-assign]
+
+    context = SimpleNamespace(
+        request_id="req-local",
+        model_id="model-a",
+        protocol="openai",
+        upstream_protocol="openai",
+        original_body=b"{}",
+        original_body_size=2,
+        client_metadata={},
+        transcode_required=False,
+        transcode_context=None,
+        response_handoff=SimpleNamespace(started=False),
+        started_monotonic=0.0,
+        upstream_connect_ms=None,
+        upstream_headers_ms=None,
+        thinking_trace=None,
+        segmentation=None,
+        segmentation_not_collected=False,
+        streaming=False,
+    )
+    selected = SelectedAttempt(
+        proxy_request_id="req-local",
+        db_request_id="db-local",
+        attempt_id=1,
+        reservation_id="res-local",
+        account_id=1,
+        account_name="account-1",
+        api_key="key",
+        model_id="model-a",
+        estimated_tokens=0,
+        estimated_microdollars=0,
+        attempt_number=1,
+        provider_id="openai",
+    )
+
+    response = await coordinator._handle_exhausted(
+        context=context,
+        last_error=local_error,
+        last_upstream_response=None,
+        attempt_num=1,
+        last_selected=selected,
+    )
+
+    data = captured["data"]
+    assert data.outcome is FinalizationOutcome.CLIENT_ERROR
+    assert data.error_class == "ValueError"
+    assert response.status_code == 500

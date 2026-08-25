@@ -827,8 +827,24 @@ class RequestCoordinator:
                     step="finalization_capacity",
                     request_id=context.request_id,
                 ) from exc
-            if self._health_manager is not None:
-                self._health_manager.release_request(selected.account_name)
+            # Ownership was never transferred, so release every runtime
+            # component this request still holds (active count, quota
+            # reservation, health probe). Skipping any of them leaks the
+            # account's active count / reserved total until restart.
+            for outcome_row in await runtime_lease.release_once(
+                reason="finalization_capacity_rejected",
+                router=self._router,
+                quota_estimator=self._quota_estimator,
+                health_manager=self._health_manager,
+            ):
+                if not outcome_row.released:
+                    logger.error(
+                        "Runtime lease release failed after finalization "
+                        "capacity rejection: request_id=%s component=%s error=%s",
+                        context.request_id,
+                        outcome_row.component,
+                        outcome_row.error,
+                    )
             return
         job.set_dependencies(
             finalizer=self._finalizer,
@@ -3635,6 +3651,8 @@ class RequestCoordinator:
                     else:
                         # Unreachable for current literal; kept for safety.
                         eof_outcome = STREAM_OUTCOME_MALFORMED_EOF
+                    usage_result = observer.usage
+                    incomplete_latency = int((time.monotonic() - reference) * 1000)
                     self._stream_diagnostics.record_outcome(
                         eof_outcome,
                         proxy_request_id=context.request_id,
@@ -3643,11 +3661,13 @@ class RequestCoordinator:
                         account_name=selected.account_name,
                         model_id=selected.model_id,
                         protocol=context.upstream_protocol,
+                        elapsed_ms=incomplete_latency,
                         bytes_emitted=bytes_emitted,
+                        first_byte_ms=(
+                            int(first_byte_ms) if first_byte_ms > 0 else None
+                        ),
                         attempt=selected.attempt_number,
                     )
-                    usage_result = observer.usage
-                    incomplete_latency = int((time.monotonic() - reference) * 1000)
                     # Plan 144 (E3): terminal_failure and
                     # terminal_incomplete are Responses-level provider
                     # terminal events.  They are not transport-level early
@@ -3695,22 +3715,13 @@ class RequestCoordinator:
                             transcoded=context.transcode_context is not None,
                         ),
                     )
-                    self._stream_diagnostics.record_outcome(
-                        STREAM_OUTCOME_UPSTREAM_MIDSTREAM_ERROR,
-                        proxy_request_id=context.request_id,
-                        db_request_id=selected.db_request_id,
-                        provider_id=selected.provider_id,
-                        account_name=selected.account_name,
-                        model_id=selected.model_id,
-                        protocol=context.upstream_protocol,
-                        elapsed_ms=incomplete_latency,
-                        bytes_emitted=bytes_emitted,
-                        first_byte_ms=(
-                            int(first_byte_ms) if first_byte_ms > 0 else None
-                        ),
-                        attempt=selected.attempt_number,
-                        exception_class=error_class,
-                    )
+                    # The specific ``eof_outcome`` recorded above is the
+                    # canonical diagnostic for EOF-classified streams.
+                    # Also recording the generic midstream-error rollup
+                    # here would double-count every EOF and would count
+                    # Responses-level terminal events as transport
+                    # errors; the rollup stays reserved for genuine
+                    # midstream exceptions on the exception path below.
                     # Plan 144 (E3): terminal_failure/terminal_incomplete
                     # have already been forwarded to the client.  Do not
                     # raise PrematureStreamEOFError — that would trigger
@@ -4223,7 +4234,10 @@ class RequestCoordinator:
             context,
             selected,
             FinalizationData(
-                outcome=FinalizationOutcome.UPSTREAM_ERROR,
+                # Local boundary failures have zero provider effects;
+                # persisting them as upstream errors would pollute
+                # account runtime state and error-rate stats.
+                outcome=FinalizationOutcome.CLIENT_ERROR,
                 status_code=500,
                 error_class=local_error.error_class,
                 error_detail="local request failure",
@@ -5372,6 +5386,13 @@ class RequestCoordinator:
                 elif isinstance(last_error, _RetryableUpstreamError):
                     outcome = FinalizationOutcome.UPSTREAM_ERROR
                     health_already_applied = health_applied
+                elif isinstance(last_error, _LocalDispatchError):
+                    # Local preparation/transcoding failures have zero
+                    # provider effects (see ``failure/classifier.py``):
+                    # persist them as client errors so account runtime
+                    # state and per-account error stats are not skewed
+                    # as upstream failures.
+                    outcome = FinalizationOutcome.CLIENT_ERROR
 
             upstream_connect_ms = None
             upstream_read_ms = None
@@ -5379,7 +5400,9 @@ class RequestCoordinator:
             first_byte_ms = None
             bytes_emitted = 0
             upstream_request_id = None
-            if isinstance(last_error, _NonRetryableUpstreamError):
+            if isinstance(
+                last_error, (_NonRetryableUpstreamError, _LocalDispatchError)
+            ):
                 first_byte_ms = self._upstream_header_ms(context)
                 upstream_connect_ms = context.upstream_connect_ms
                 upstream_read_ms = self._upstream_read_ms(context, elapsed_ms)

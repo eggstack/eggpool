@@ -54,6 +54,8 @@ LOSS_WARNING_KINDS: frozenset[str] = frozenset(
         "cache_control_feature_disabled",
         "pause_turn",
         "non_text_content_dropped",
+        "tool_call_delta_dropped",
+        "content_block_type_ignored",
         # Phase 6.2 (vision)
         "image_unsupported_format",
         "image_too_large",
@@ -70,6 +72,7 @@ LOSS_WARNING_KINDS: frozenset[str] = frozenset(
         "unknown_effort",
         "budget_rejected",
         "budget_resolution_no_input",
+        "budget_clamp_skipped",
         # Phase 6.4 (structured outputs)
         "response_format_to_system_prompt",
         "response_format_to_native",

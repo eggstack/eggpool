@@ -368,6 +368,70 @@ class TestLossPolicyReject:
             for w in warnings
         )
 
+    def test_reject_mode_pins_unknown_tool_extension_fields(self) -> None:
+        """Deliberate strictness: unknown vendor tool fields are protected.
+
+        ``provider_extension_not_preserved`` stays in
+        ``CACHE_CONTROL_LOSS_KINDS`` so ``loss_policy="reject"`` fails
+        loudly when a tool carries fields this translator cannot
+        preserve (e.g. a future Anthropic ``defer_loading`` extension).
+        Dropping such fields silently would change client-visible tool
+        semantics without any operator-facing signal.
+        """
+        transcoder = AnthropicToOpenAI()
+        context = _context("anthropic", "openai")
+        payload = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "tools": [
+                {
+                    "name": "search",
+                    "description": "Search",
+                    "input_schema": {"type": "object"},
+                    "defer_loading": True,
+                },
+            ],
+        }
+        with pytest.raises(TranscodeLossError) as exc_info:
+            transcoder.encode_request(payload, context, loss_policy="reject")
+        assert any(
+            w.get("kind") == "provider_extension_not_preserved"
+            for w in exc_info.value.loss_warnings
+        )
+
+    def test_reject_mode_pins_canonical_prefix_boundary_mismatch(self) -> None:
+        """Deliberate strictness: prefix boundary mismatch is protected.
+
+        ``stable_prefix_reordered_canonically`` stays in
+        ``CACHE_CONTROL_LOSS_KINDS`` so ``loss_policy="reject"`` rejects
+        requests whose cache boundaries do not survive translation
+        intact instead of silently reordering/dropping them.
+        """
+        transcoder = OpenAIToAnthropic()
+        context = _context("openai", "anthropic")
+        payload: dict[str, object] = {
+            "model": "claude-3",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "stable prefix",
+                            "prompt_cache_breakpoint": {"mode": "explicit"},
+                        },
+                    ],
+                },
+                {"role": "user", "content": "Hi"},
+            ],
+        }
+        with pytest.raises(TranscodeLossError) as exc_info:
+            transcoder.encode_request(payload, context, loss_policy="reject")
+        assert any(
+            w.get("kind") == "stable_prefix_reordered_canonically"
+            for w in exc_info.value.loss_warnings
+        )
+
 
 class TestWarningsNotInModelVisibleContent:
     """Regression guard: transcoder loss warnings must never appear in

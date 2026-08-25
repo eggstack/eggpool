@@ -126,6 +126,10 @@ class AccountHealth:
     is_healthy: bool = True
     last_check: float = field(default_factory=time.time)
     consecutive_failures: int = 0
+    # Cooldown-only escalations (quota exhaustion / rate limiting) that
+    # deliberately do not advance the circuit breaker. Drives the
+    # exponential backoff schedule for those categories.
+    consecutive_cooldowns: int = 0
     circuit_breaker: CircuitBreaker = field(default_factory=CircuitBreaker)
     # model_id -> disabled_until timestamp (``None`` means disabled
     # indefinitely, matching the account-level ``disabled_until``
@@ -191,6 +195,7 @@ class HealthManager:
         """Record a successful request."""
         health = self.get_account_health(account_name)
         health.consecutive_failures = 0
+        health.consecutive_cooldowns = 0
         health.last_check = self.clock()
         # An in-flight request may succeed after an operator disables its
         # account. Do not let that completion undo an explicit disable.
@@ -336,9 +341,20 @@ class HealthManager:
             health.consecutive_failures += 1
             health.last_check = self.clock()
             health.circuit_breaker.record_failure()
+        else:
+            # Cooldowns escalate their delay without touching breaker
+            # state; otherwise the policy table's multiplier and
+            # ``max_consecutive`` would be dead configuration because
+            # ``consecutive_failures`` never advances for these reasons.
+            health.consecutive_cooldowns += 1
+            health.last_check = self.clock()
         delay = compute_backoff_seconds(
             reason,
-            consecutive_failures=health.consecutive_failures,
+            consecutive_failures=(
+                health.consecutive_cooldowns
+                if not counts_as_failure
+                else health.consecutive_failures
+            ),
             retry_after=retry_after,
             jitter=True,
         )

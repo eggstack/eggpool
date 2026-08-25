@@ -476,6 +476,9 @@ class AnthropicToOpenAI:
                                                 [tr_part],
                                                 vision_enabled=True,
                                                 warnings=warnings,
+                                                multimodal_capability=(
+                                                    multimodal_capability
+                                                ),
                                             )
                                         )
                                         translated_result.extend(img_parts)

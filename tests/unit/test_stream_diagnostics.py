@@ -287,6 +287,49 @@ async def test_idle_timeout_is_distinct_and_closes_upstream_response() -> None:
     coordinator._finalizer.finalize.assert_awaited_once()
 
 
+@pytest.mark.asyncio()
+async def test_premature_eof_records_only_the_specific_outcome() -> None:
+    """EOF classifications are not double-counted as generic midstream errors.
+
+    The specific ``premature_eof_*`` outcome is the canonical diagnostic
+    for EOF-classified streams; the generic ``upstream_midstream_error``
+    rollup stays reserved for genuine midstream exceptions.
+    """
+    from eggpool.request.stream_diagnostics import (
+        STREAM_OUTCOME_PREMATURE_EOF_BEFORE_BODY,
+    )
+
+    coordinator, context, selected = _timeout_stream_coordinator()
+    coordinator._config = None
+
+    async def chunks() -> Any:
+        yield b'data: {"choices": [{"delta": {"content": "x"}}]}\n\n'
+
+    class Response:
+        headers = {"content-type": "text/event-stream"}
+
+        def aiter_bytes(self) -> Any:
+            return chunks()
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    response = Response()
+    stream = coordinator._build_stream_generator(
+        context=context,
+        upstream_response=response,
+        selected=selected,
+        resp_headers=[],
+    )
+    assert await anext(stream)
+    with pytest.raises(Exception):  # noqa: B017, PT011 - PrematureStreamEOFError
+        await anext(stream)
+
+    snap = coordinator._stream_diagnostics.snapshot()
+    assert snap["outcomes"][STREAM_OUTCOME_PREMATURE_EOF_BEFORE_BODY] == 1
+    assert snap["outcomes"][STREAM_OUTCOME_UPSTREAM_MIDSTREAM_ERROR] == 0
+
+
 def test_new_httpx_outcome_labels_exist_in_default_counter_set() -> None:
     """All first-class HTTPX transport outcome labels are present with value 0."""
     diag = StreamDiagnostics()

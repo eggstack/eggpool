@@ -63,6 +63,26 @@ class TestResolveThinkingBudget:
         assert result.clamped is True
         assert any(w["kind"] == "budget_clamped" for w in result.warnings)
 
+    def test_invalid_capability_bounds_skip_contradictory_clamping(self) -> None:
+        """min>max capability shapes skip clamping with one clear warning.
+
+        Applying both bounds to a malformed contract would clamp twice
+        with contradictory warnings; the requested value passes through
+        untouched instead.
+        """
+        cap = ThinkingCapability(budget_tokens_min=16384, budget_tokens_max=1024)
+        result = resolve_thinking_budget(
+            model_id="claude-3",
+            provider_id="anthropic",
+            requested_budget_tokens=512,
+            capability=cap,
+        )
+        assert result.budget_tokens == 512
+        assert result.clamped is False
+        kinds = [w["kind"] for w in result.warnings]
+        assert kinds.count("budget_clamp_skipped") == 1
+        assert not any(w["kind"] == "budget_clamped" for w in result.warnings)
+
     def test_explicit_budget_clamped_to_max(self) -> None:
         cap = ThinkingCapability(budget_tokens_min=1024, budget_tokens_max=8192)
         result = resolve_thinking_budget(

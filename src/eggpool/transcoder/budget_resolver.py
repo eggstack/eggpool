@@ -353,6 +353,24 @@ def _clamp_budget(
 
     value = requested
 
+    if budget_min is not None and budget_max is not None and budget_min > budget_max:
+        # Malformed capability shape (config validation rejects an
+        # explicit min>max, but external model-info sources may not).
+        # Applying both bounds would clamp twice with contradictory
+        # warnings; leave the requested value untouched instead.
+        warnings.append(
+            {
+                "kind": "budget_clamp_skipped",
+                "reason": "invalid_capability_bounds",
+                "requested": requested,
+                "budget_tokens_min": budget_min,
+                "budget_tokens_max": budget_max,
+                "model_id": model_id,
+                "provider_id": provider_label,
+            }
+        )
+        return value, clamped, warnings
+
     if budget_min is not None and value < budget_min:
         value = budget_min
         clamped = True

@@ -466,6 +466,53 @@ class TestToolResultMediaPreservation:
         )
         assert any(w.get("kind") == "media_tool_result_flattened" for w in warnings)
 
+    def test_anthropic_tool_result_image_gated_by_capability(self) -> None:
+        """Tool-result images respect the same capability gates as top-level.
+
+        A base64 image inside a ``tool_result`` must be dropped when the
+        target contract forbids base64 images instead of passing through
+        ungated.
+        """
+        transcoder = AnthropicToOpenAI()
+        payload = {
+            "model": "gpt-4",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_123",
+                            "content": [
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": "image/png",
+                                        "data": _TINY_PNG_B64,
+                                    },
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ],
+        }
+        caps = _mm_caps(non_text_tool_result=True, image_base64=False)
+        result, warnings = transcoder.encode_request(
+            payload,
+            _make_context("anthropic", "openai"),
+            features=_features(),
+            multimodal_capability=caps,
+        )
+        assert any(
+            w.get("kind") == "unsupported_source_form"
+            and w.get("source_form") == "base64"
+            for w in warnings
+        )
+        tool_msg = result["messages"][0]
+        assert tool_msg["content"] == ""
+
 
 # ---------------------------------------------------------------------------
 # Same-protocol passthrough
