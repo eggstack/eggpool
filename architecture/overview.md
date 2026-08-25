@@ -103,7 +103,7 @@ point to related deep dives for implementation details.
 | **Path** | `src/eggpool/cli.py`, `src/eggpool/cli_full.py`, `src/eggpool/fastcli.py`, `src/eggpool/config.py`, `src/eggpool/errors.py`, `src/eggpool/constants.py`, `src/eggpool/jsonx.py`, `src/eggpool/auth.py` |
 | **Deep Dive** | [deep-dive-core.md](deep-dive-core.md) |
 
-The CLI entry point is a two-phase bootstrap: `cli.py` (73 lines) first tries `fastcli.maybe_run_fast_command()` for `croncheck`/`ensure-running` without importing Click, keeping the Raspberry Pi watchdog path lightweight. Everything else falls through to `cli_full.py` (~2135 lines of Click commands). Configuration lives in `config.toml` + `.env`; `config.py` ensures a config file exists by copying the bundled template. `errors.py` defines the typed exception hierarchy (`AggregatorError` → 20+ subclasses). `jsonx.py` abstracts over `orjson` (preferred) and stdlib `json` for hot-path serialization. `auth.py` provides constant-time API key verification via `hmac.compare_digest`.
+The CLI entry point is a two-phase bootstrap: `cli.py` (73 lines) first tries `fastcli.maybe_run_fast_command()` for `croncheck`/`ensure-running` without importing Click, keeping the Raspberry Pi watchdog path lightweight. Everything else falls through to `cli_full.py` (~5000 lines of Click commands). Configuration lives in `config.toml` + `.env`; `config.py` ensures a config file exists by copying the bundled template. `errors.py` defines the typed exception hierarchy (`AggregatorError` → 20+ subclasses). `jsonx.py` abstracts over `orjson` (preferred) and stdlib `json` for hot-path serialization. `auth.py` provides constant-time API key verification via `hmac.compare_digest`.
 
 **Related**: [deep-dive-runtime.md](deep-dive-runtime.md) (fastcli), [deep-dive-control.md](deep-dive-control.md) (reload policy), [deep-dive-security.md](deep-dive-security.md) (auth)
 
@@ -158,7 +158,7 @@ Supports 22 bundled upstream providers (OpenCode Go, OpenAI, Anthropic, Groq, De
 | **Path** | `src/eggpool/db/` |
 | **Deep Dive** | [deep-dive-database.md](deep-dive-database.md) |
 
-Async SQLite with WAL mode, single-connection serialization, and 53 numbered schema migrations. `db/connection.py` wraps `aiosqlite` with `BEGIN IMMEDIATE` transactions and explicit one-task ownership; inherited child tasks fail before SQL. Runtime invalidation closes admission and exits the worker for systemd restart. Startup integrity checking and crash reconciliation are the only durable recovery boundary. All DML runs inside `async with db.transaction():`. `db/repositories.py` contains `AccountRepository`, `ProviderRepository`, `RequestRepository`, and others. Schema lives in `db/schema/` with 53 numbered SQL files and a `checksums.json` manifest.
+Async SQLite with WAL mode, single-connection serialization, and 54 numbered schema migrations (`0001_initial.sql` through `0054_model_quarantine_null_identity.sql`). `db/connection.py` wraps `aiosqlite` with `BEGIN IMMEDIATE` transactions and explicit one-task ownership; inherited child tasks fail before SQL. Runtime invalidation closes admission and exits the worker for systemd restart. Startup integrity checking and crash reconciliation are the only durable recovery boundary. All DML runs inside `async with db.transaction():`. `db/repositories.py` contains `AccountRepository`, `ProviderRepository`, `RequestRepository`, and others; `db/rollup_repository.py` owns pre-aggregated rollups. Schema lives in `db/schema/` with numbered SQL files and a `checksums.json` manifest applied by `db/migrations.MigrationRunner`.
 
 **Related**: [deep-dive-request-lifecycle.md](deep-dive-request-lifecycle.md), [deep-dive-routing.md](deep-dive-routing.md), [deep-dive-health.md](deep-dive-health.md)
 
@@ -202,7 +202,7 @@ Circuit breaker-based health tracking for accounts and models. `HealthManager` (
 | **Path** | `src/eggpool/dashboard/`, `src/eggpool/stats/`, `src/eggpool/api/stats.py` |
 | **Deep Dive** | [deep-dive-dashboard.md](deep-dive-dashboard.md) |
 
-Self-updating server-rendered HTML dashboard with 50+ themes. `dashboard/routes.py` registers page routes (overview, cache, runtime, etc.) and JSON API endpoints. `dashboard/render.py` handles HTML rendering with `CacheAdvancedState` controlling disclosure visibility. The stats layer (`stats/service.py`, `stats/queries.py`) provides SQL query functions for timeseries, cache metrics, transcoding stats, and dashboard explanations. JSON API endpoints under `/api/stats/` expose summary, accounts, models, timeseries, errors, latency, pings, routing, operational, and pending-health data. The dashboard is auth-gated separately from the proxy API.
+Self-updating server-rendered HTML dashboard with 50 bundled themes (user-supplied themes merge over them). `dashboard/routes.py` registers page routes (overview, cache, runtime, etc.) and JSON API endpoints. `dashboard/render.py` handles HTML rendering with `CacheAdvancedState` controlling disclosure visibility. The stats layer (`stats/service.py`, `stats/queries.py`) provides SQL query functions for timeseries, cache metrics, transcoding stats, and dashboard explanations. JSON API endpoints under `/api/stats/` expose summary, accounts, models, timeseries, errors, latency, pings, routing, operational, and pending-health data. The dashboard is auth-gated separately from the proxy API.
 
 **Related**: [deep-dive-metrics.md](deep-dive-metrics.md), [deep-dive-observability.md](deep-dive-observability.md)
 
@@ -323,7 +323,7 @@ Backup, restore, and uninstall orchestration. `lifecycle/backup.py` creates time
 | **Path** | `deploy/`, `scripts/`, `src/eggpool/deploy/` |
 | **Deep Dive** | [deep-dive-deployment.md](deep-dive-deployment.md) |
 
-Production deployment assets and operational tooling. `deploy/eggpool.service` is a security-hardened systemd unit (NoNewPrivileges, ProtectSystem=strict, PrivateTmp, syscall filtering). `deploy/eggpool-logrotate.conf` handles daily log rotation with 14-day retention. `scripts/` contains 13 operational scripts: `install.sh` (quick installer via pipx/uv tool), `check_database.py` (read-only DB invariant checker), `validate_routing.py` (routing invariant validator), `verify_upstream_auth.py` (direct upstream auth verification), `smoke_test.py` (deployment smoke test), and diagnostic/repro scripts. `src/eggpool/deploy/__init__.py` bundles systemd unit, crontab entry, and install script as Python constants for programmatic access.
+Production deployment assets and operational tooling. `deploy/eggpool.service` is a security-hardened systemd unit (NoNewPrivileges, ProtectSystem=strict, PrivateTmp, syscall filtering). `deploy/eggpool-logrotate.conf` handles daily log rotation with 14-day retention. `scripts/` contains 12 operational scripts: `install.sh` (quick installer via pipx/uv tool), `check_database.py` (read-only DB invariant checker), `validate_routing.py` (routing invariant validator), `verify_upstream_auth.py` (direct upstream auth verification), `smoke_test.py` (deployment smoke test), and diagnostic/repro scripts. `src/eggpool/deploy/__init__.py` bundles systemd unit, crontab entry, and install script as Python constants for programmatic access.
 
 **Related**: [deep-dive-control.md](deep-dive-control.md), [deep-dive-lifecycle.md](deep-dive-lifecycle.md), [deep-dive-core.md](deep-dive-core.md)
 
@@ -336,7 +336,7 @@ Immutable frozen-dataclass snapshots swapped atomically via `RuntimeManager`. Re
 Supervisor + 1 Granian worker (`workers=1`). PID file owned by supervisor. Default `runtime_threads=1` (single event-loop thread is canonical).
 
 ### Database Invariants
-SQLite WAL with single-connection serialization. All DML runs inside `async with db.transaction():`. 53 schema migrations tracked by checksums.
+SQLite WAL with single-connection serialization. All DML runs inside `async with db.transaction():`. 54 schema migrations tracked by checksums.
 
 ### JSON Backend
 `eggpool.jsonx` abstracts over `orjson` (preferred) and stdlib `json`. Hot-path serialization, SSE frame helpers, and request body parsing all route through this layer.
@@ -360,62 +360,98 @@ Every live terminal outcome is owned by one kind-qualified command in the genera
 
 ```
 src/eggpool/
-├── accounts/          # Account registry and runtime state
-├── api/               # API endpoint handlers (chat completions, messages, stats)
-├── background/        # TaskSupervisor, cleanup, periodic tasks
-├── catalog/           # Model catalog, pricing, protocols, fetcher, normalizer
-├── control/           # Control plane (Unix socket, live reload)
-├── dashboard/         # Server-rendered HTML dashboard (50+ themes)
-├── db/                # SQLite connection, migrations, repositories, schema
-├── deploy/            # Bundled deployment assets (systemd, crontab)
-├── failure/           # Failure effects and quarantine
-├── health/            # Circuit breaker and health tracking
-├── integrations/      # External tool configuration generation (11 tools)
-├── lifecycle/         # Backup and uninstall orchestration
-├── metrics/           # Metrics buffering, thinking observability, failure counters
-├── model_info/        # Model metadata sidecar (multi-source enrichment)
-├── models/            # Pydantic config, domain, API, database models
-├── observability/     # Routing trace writer
-├── providers/         # Provider client pool, contracts, auth
-├── proxy/             # Transparent proxy, SSE observer, usage normalization
-├── quota/             # Quota estimation, reservations, scoring
-├── request/           # RequestCoordinator, finalizers, dispatch, body reader
-├── retry/             # Error classification and retry decisions
-├── routing/           # Quota-aware routing, eligibility, fairness, provider parsing
-├── security/          # Header redaction, security utilities
-├── stats/             # Statistics queries and service
-├── transcoder/        # Protocol transcoding (OpenAI ↔ Anthropic)
-├── _share/            # Bundled config examples for pipx
-├── auth.py            # Local API key auth (constant-time)
-├── cli.py             # CLI bootstrap (tiny)
-├── cli_full.py        # Click CLI commands (heavy imports)
-├── config.py          # Config file helpers
-├── config_reload_policy.py  # Typed config diff and reload policy
-├── constants.py       # Project-wide constants
-├── errors.py          # Exception hierarchy (20+ subclasses)
-├── fastcli.py         # Fast-path CLI (stdlib-only, croncheck/ensure-running)
-├── generation_factory.py  # Runtime generation construction
-├── jsonx.py           # JSON backend abstraction (orjson/stdlib)
-├── runtime.py         # Process management (restart, stop, PID lifecycle)
-├── runtime_manager.py # Runtime generation ownership
-├── runtime_paths.py   # PID/log path resolution (stdlib-only)
-└── update_checker.py  # PyPI update checker
+├── _share/                # Bundled config examples for pipx installs
+├── accounts/              # Account registry and per-account runtime state
+├── api/                   # Endpoint handlers: chat completions, responses,
+│                          #   messages, models, stats, runtime, update, backoff
+├── background/            # TaskSupervisor tasks: cleanup, backup scheduling,
+│                          #   maintenance
+├── catalog/               # Model catalog: fetcher, normalizer, protocols,
+│                          #   capabilities, pricing, cache, refresh state
+├── control/               # Control plane: UDS server/client, reload manager,
+│                          #   accepted-finalization invariant
+├── dashboard/             # Server-rendered HTML dashboard (50 bundled themes)
+│                          #   + rendering, theming, timeseries bucketing
+├── db/                    # SQLite connection (one-task ownership),
+│                          #   MigrationRunner, repositories, rollups, schema/
+├── deploy/                # Bundled deployment assets as Python constants
+├── failure/               # classify_failure_effects(), EffectsApplier,
+│                          #   signal extraction, model quarantine
+├── health/                # HealthManager, circuit breaker, bounded backoff,
+│                          #   DatabaseWritableProbe (/readyz)
+├── integrations/          # configsetup generators + TARGET_SPECS registry
+├── lifecycle/             # backup / uninstall orchestration
+├── metrics/               # Metrics buffer, thinking counters, failure counters
+├── model_info/            # Metadata sidecar: sources, matching, repository,
+│                          #   scheduler, dedup/identity/normalization
+├── models/                # Pydantic v2: config, api, database, domain models
+├── observability/         # Routing trace writer (micro-batched, opt-in)
+├── providers/             # _templates.toml (22 bundled providers), client
+│                          #   pool, URL/auth contracts, outbound, pproxy
+├── proxy/                 # SSE decoder/observer, usage normalization, cost
+│                          #   reporting, shared upstream client
+├── quota/                 # QuotaWindow estimation, reservations, scorer, audit
+├── request/               # RequestCoordinator, AttemptFinalizer, finalization
+│                          #   job/supervisor glue, claim lifecycle, terminal
+│                          #   status, stream completion classification
+├── retry/                 # RetryCategory classification from HTTP outcomes
+├── routing/               # Router (priority tiers), eligibility chain,
+│                          #   fairness rotor, provider-suffix parsing
+├── security/              # Header redaction middleware
+├── stats/                 # Dashboard query layer: timeseries, cache metrics,
+│                          #   segmentation, explanations
+├── transcoder/            # OpenAI ↔ Anthropic encoders, streaming translation,
+│                          #   budget resolver, cache stability, policy
+├── app.py                 # FastAPI application factory with lifespan management
+├── auth.py                # Local API key auth (constant-time compare)
+├── cli.py                 # CLI bootstrap (~73 lines; fast commands first)
+├── cli_exit_codes.py      # Stable exit codes (e.g. EXIT_RELOAD_BUSY)
+├── cli_full.py            # Full Click CLI (lazy-imported by cli.py)
+├── cli_rehash_format.py   # rehash JSON/human output formatting
+├── cli_rehash_helper.py   # Shared validate-and-rehash helper
+├── config.py              # Config file discovery/bootstrap helpers
+├── config_reload_policy.py  # Typed config diff and live-reload policy
+├── config_utils.py        # Config utilities for CLI and integrations
+├── config_validation.py   # validate_config_file() → ConfigValidationError
+├── constants.py           # Project-wide constants
+├── cost_recompute.py      # Recompute historical costs from current prices
+├── cost_repair.py         # Repair suspicious historical costs (guarded)
+├── deploy_user.py         # User/path resolution for `eggpool deploy`
+├── errors.py              # Typed exception hierarchy (AggregatorError base)
+├── event_loop_lag.py      # Event-loop lag monitor (opt-in)
+├── fastcli.py             # Stdlib-only fast path: croncheck / ensure-running
+├── generation_factory.py  # RuntimeGenerationFactory (startup ≡ reload path)
+├── jsonx.py               # JSON backend abstraction (orjson preferred)
+├── logging.py             # Structured logging setup
+├── onboard.py             # Interactive first-run onboarding
+├── reload_diagnostics.py  # Reload result categories/counters/finalization
+├── reload_transaction.py  # Staged reload state machine (SQLite-atomic)
+├── runtime.py             # Process management: start/restart/stop, PID files
+├── runtime_dispatch.py    # Dispatch overhead / pre-upstream timing recorders
+├── runtime_manager.py     # Generation slots, leases, staged swap ownership
+├── runtime_metrics.py     # RuntimeMetricsService snapshots
+├── runtime_paths.py       # PID/log path resolution (stdlib-only)
+├── runtime_task_inventory.py  # Task ownership inventory for shutdown/reload
+├── runtime_tasks.py       # Unified background task registration per profile
+├── toml_edit.py           # Formatting-preserving scalar TOML edits
+└── update_checker.py      # PyPI release checking (freshness-aware)
 
 tests/
-├── unit/              # ~270 files — focused module-level behavior
-├── integration/       # ~75 files + reload/ — cross-component request and lifecycle
-├── contract/          # 2 files — provider and transcoder protocol preservation
-├── smoke/             # 9 files — CI sanity (import, config, DB, one request)
-├── perf/              # 3 files — hot-path microbenchmarks
-├── live/              # 1 file — opt-in real-network enrichment
-├── helpers/           # Shared test utilities
-└── fixtures/          # Test fixtures (streaming, etc.)
+├── unit/                  # 249 files — focused module-level behavior
+├── integration/           # 72 files + 46 in reload/ — cross-component
+│                          #   request, reload, and lifecycle behavior
+├── contract/              # 3 files — wire-level protocol preservation
+├── smoke/                 # 10 files — CI gate (import, config, DB, requests)
+├── perf/                  # 4 files — hot-path microbenchmarks (manual)
+├── live/                  # 1 file — opt-in real-network enrichment
+├── helpers/               # Shared test utilities
+└── fixtures/              # Test fixtures (streaming, etc.)
 
-scripts/               # 13 operational, diagnostic, installer scripts
-deploy/                # Systemd unit, logrotate, env template
-docs/                  # Operator documentation
-plans/                 # Historical implementation plans
-architecture/          # This directory — architecture docs and deep dives
+scripts/                # 12 operational, diagnostic, installer scripts
+deploy/                 # Systemd unit, logrotate, env template
+docs/                   # Operator documentation
+plans/                  # Historical implementation plans
+architecture/           # This directory — architecture docs and deep dives
 ```
 
 ## Configuration
@@ -443,11 +479,11 @@ The ordinary verification floor is `tests/smoke/`, covering import and CLI start
 
 | Directory | Scope | Count | CI? |
 |-----------|-------|-------|-----|
-| `tests/smoke/` | Import, config, DB, one request per protocol | 9 | Yes |
-| `tests/unit/` | Module-level behavior, isolated | ~270 | No (changed code) |
-| `tests/integration/` | Cross-component, mocked upstream | ~75 + 47 reload | No (changed code) |
-| `tests/contract/` | Wire-level protocol preservation | 2 | No (changed code) |
-| `tests/perf/` | Hot-path microbenchmarks | 3 | Manual |
+| `tests/smoke/` | Import, config, DB, one request per protocol | 10 | Yes |
+| `tests/unit/` | Module-level behavior, isolated | 249 | No (changed code) |
+| `tests/integration/` | Cross-component, mocked upstream | 72 + 46 reload | No (changed code) |
+| `tests/contract/` | Wire-level protocol preservation | 3 | No (changed code) |
+| `tests/perf/` | Hot-path microbenchmarks | 4 | Manual |
 | `tests/live/` | Real-network enrichment | 1 | Manual (opt-in) |
 
 ## Further Reading

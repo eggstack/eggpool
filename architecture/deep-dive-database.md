@@ -153,7 +153,7 @@ Schema migration execution. Ordered SQL files in `db/schema/`.
 
 ### `db/schema/`
 
-53 SQL migration files (`0001_initial.sql` through `0053_remove_attempt_status_analytics_index.sql`), plus `checksums.json`.
+54 SQL migration files (`0001_initial.sql` through `0054_model_quarantine_null_identity.sql`), plus `checksums.json`.
 
 ## Key Tables
 
@@ -300,7 +300,7 @@ reconnection — the deployment contract is a worker restart.
 
 ## Schema Baseline Decision (Plan 137)
 
-The project currently runs 53 numbered SQL migrations. A future 1.0 release
+The project currently runs 54 numbered SQL migrations. A future 1.0 release
 could establish a migration baseline: replace the full migration chain with a
 baseline schema snapshot and a bridge strategy for pre-1.0 installs.
 
