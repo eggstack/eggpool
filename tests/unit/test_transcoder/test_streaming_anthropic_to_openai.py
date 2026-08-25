@@ -322,6 +322,53 @@ class TestMessageDelta:
         assert finish_data["choices"][0]["finish_reason"] == "tool_calls"
 
 
+class TestNullIndexRobustness:
+    """Malformed upstream events with an explicit null index must not
+    abort the stream mid-flight (regression: int(None) TypeError)."""
+
+    @staticmethod
+    def _raw_frame(event: str, payload: dict[str, Any]) -> bytes:
+        return (
+            b"event: "
+            + event.encode()
+            + b"\ndata: "
+            + json.dumps(payload).encode()
+            + b"\n\n"
+        )
+
+    def test_content_block_stop_with_null_index(self) -> None:
+        transcoder = AnthropicToOpenAIStreaming()
+        transcoder.feed(_anthropic_sse("message_start"))
+        transcoder.feed(
+            _anthropic_sse("content_block_start", block_type="tool_use", index=0)
+        )
+        out = transcoder.feed(
+            self._raw_frame(
+                "content_block_stop", {"type": "content_block_stop", "index": None}
+            )
+        )
+        assert out == []
+
+    def test_tool_input_json_delta_with_null_index(self) -> None:
+        transcoder = AnthropicToOpenAIStreaming()
+        transcoder.feed(_anthropic_sse("message_start"))
+        transcoder.feed(
+            _anthropic_sse("content_block_start", block_type="tool_use", index=0)
+        )
+        out = transcoder.feed(
+            self._raw_frame(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": None,
+                    "delta": {"type": "input_json_delta", "partial_json": '{"a"'},
+                },
+            )
+        )
+        # Null index is treated as 0, matching the tool block opened above.
+        assert len(out) == 1
+
+
 class TestUsageInMessageDelta:
     def test_usage_in_message_delta(self) -> None:
         transcoder = AnthropicToOpenAIStreaming()

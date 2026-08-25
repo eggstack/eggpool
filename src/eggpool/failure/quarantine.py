@@ -103,6 +103,14 @@ DEFAULT_SUSPECTED_TTL = 120.0  # 2 minutes
 DEFAULT_QUARANTINED_TTL = 300.0  # 5 minutes
 DEFAULT_PROMOTION_THRESHOLD = 2  # observations to promote suspected → quarantined
 
+# Lifecycle advancement rank used to keep hydration from demoting
+# newer runtime state.
+_STATE_RANK: dict[QuarantineState, int] = {
+    QuarantineState.SUSPECTED: 0,
+    QuarantineState.QUARANTINED: 1,
+    QuarantineState.TERMINAL_WITHDRAWN: 2,
+}
+
 
 @dataclass
 class ModelQuarantine:
@@ -500,7 +508,12 @@ class ModelQuarantine:
         """Hydrate a quarantine entry from durable storage.
 
         Used during startup to restore persisted quarantine state.
-        Expired entries are skipped.
+        Expired entries are skipped.  When an entry already exists for
+        the same scope key, a stale durable row never demotes newer
+        runtime state: a runtime-cleared (healthy) or terminal entry is
+        kept as-is, and hydration otherwise only replaces entries whose
+        stored (state rank, observation count) is strictly more advanced
+        than what is already resident.
         """
         if now is None:
             now = time.time()
@@ -515,6 +528,22 @@ class ModelQuarantine:
             entry.upstream_model_id,
             entry.upstream_protocol,
         )
+        existing = self._entries.get(key)
+        if existing is not None:
+            # A runtime-cleared (healthy) entry is never resurrected by
+            # a stale durable row; terminal withdrawal likewise wins.
+            if existing.state in (
+                QuarantineState.HEALTHY,
+                QuarantineState.TERMINAL_WITHDRAWN,
+            ):
+                return
+            existing_rank = _STATE_RANK[existing.state]
+            incoming_rank = _STATE_RANK[entry.state]
+            if existing_rank > incoming_rank or (
+                existing_rank == incoming_rank
+                and existing.observation_count >= entry.observation_count
+            ):
+                return
         self._entries[key] = entry
 
     def _expire_entry(self, key: str, entry: QuarantineEntry, now: float) -> None:

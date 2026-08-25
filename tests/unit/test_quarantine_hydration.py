@@ -159,6 +159,95 @@ class TestQuarantineHydration:
         assert q.list_entries(now=1100.0) == []
 
 
+class TestHydrationDoesNotDemoteRuntimeState:
+    """A stale durable row must not downgrade newer in-memory state."""
+
+    def test_stale_suspected_row_does_not_demote_quarantined(self) -> None:
+        q = ModelQuarantine()
+        # Runtime observations promoted the entry to QUARANTINED.
+        q.record_observation(
+            provider_id="openai",
+            account_id="acct-1",
+            canonical_model_id="gpt-4o",
+            upstream_model_id=None,
+            upstream_protocol="openai",
+            evidence_provenance=EvidenceProvenance.RUNTIME_HTTP,
+            reason="http_404",
+            now=1000.0,
+        )
+        q.record_observation(
+            provider_id="openai",
+            account_id="acct-1",
+            canonical_model_id="gpt-4o",
+            upstream_model_id=None,
+            upstream_protocol="openai",
+            evidence_provenance=EvidenceProvenance.RUNTIME_HTTP,
+            reason="http_404",
+            now=1001.0,
+        )
+        assert (
+            q.get_entry("openai", "acct-1", "gpt-4o", None, "openai").state
+            is QuarantineState.QUARANTINED
+        )
+
+        # A stale durable SUSPECTED row (count=1) arrives late.
+        stale = _make_entry(
+            state=QuarantineState.SUSPECTED, observation_count=1, expiry=1200.0
+        )
+        q.hydrate_entry(stale, now=1002.0)
+
+        entry = q.get_entry("openai", "acct-1", "gpt-4o", None, "openai")
+        assert entry.state is QuarantineState.QUARANTINED
+
+    def test_more_advanced_durable_row_replaces_resident(self) -> None:
+        q = ModelQuarantine()
+        resident = _make_entry(
+            state=QuarantineState.SUSPECTED, observation_count=1, expiry=1200.0
+        )
+        q.hydrate_entry(resident, now=1050.0)
+
+        advanced = _make_entry(
+            state=QuarantineState.QUARANTINED, observation_count=3, expiry=1300.0
+        )
+        q.hydrate_entry(advanced, now=1050.0)
+
+        entry = q.get_entry("openai", "acct-1", "gpt-4o", None, "openai")
+        assert entry.state is QuarantineState.QUARANTINED
+        assert entry.observation_count == 3
+
+    def test_runtime_cleared_entry_survives_late_hydration(self) -> None:
+        q = ModelQuarantine()
+        durable = _make_entry(
+            state=QuarantineState.QUARANTINED, observation_count=5, expiry=1300.0
+        )
+        # Runtime cleared the entry before hydration ran.
+        q.record_observation(
+            provider_id="openai",
+            account_id="acct-1",
+            canonical_model_id="gpt-4o",
+            upstream_model_id=None,
+            upstream_protocol="openai",
+            evidence_provenance=EvidenceProvenance.RUNTIME_HTTP,
+            reason="http_404",
+            now=1000.0,
+        )
+        q.clear_exact_key(
+            provider_id="openai",
+            account_id="acct-1",
+            canonical_model_id="gpt-4o",
+            upstream_model_id=None,
+            upstream_protocol="openai",
+            reason="successful_request",
+            now=1002.0,
+        )
+
+        q.hydrate_entry(durable, now=1003.0)
+
+        entry = q.get_entry("openai", "acct-1", "gpt-4o", None, "openai")
+        assert entry is not None
+        assert entry.state is QuarantineState.HEALTHY
+
+
 class TestLegacyMigration:
     """Legacy model_unavailable rows migrate as migration_legacy."""
 

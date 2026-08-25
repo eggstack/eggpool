@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 
 from eggpool.failure.signal import FailureSignal
+from eggpool.health.health_manager import AUTH_FAILURE_ERROR_CLASSES
 
 # Maximum bytes to inspect from response body
 _MAX_SIGNAL_INSPECT_BYTES = 4096
@@ -137,7 +138,11 @@ def _signal_from_error_class(
             return FailureSignal.RATE_LIMITED
         if "modelunavailable" in ec or "model_not_found" in ec:
             return FailureSignal.MODEL_ABSENT
-        if "auth" in ec:
+        # Exact-match vocabulary shared with
+        # ``classify_failure_category`` — substring matching would map
+        # transient classes like ``authorization_pending`` onto a
+        # terminal auth signal.
+        if ec in AUTH_FAILURE_ERROR_CLASSES:
             return FailureSignal.AUTHENTICATION_FAILED
         if "capability" in ec or "unsupported" in ec:
             return FailureSignal.UNSUPPORTED_REQUEST_CONTROL

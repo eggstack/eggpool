@@ -630,3 +630,36 @@ class TestWaitForRetirement:
 
         # Cleanup: shutdown will force-close everything
         await manager.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# § Duplicate spawn guard
+# ---------------------------------------------------------------------------
+
+
+class TestDuplicateSpawnGuard:
+    @pytest.mark.asyncio
+    async def test_duplicate_spawn_keeps_original_task_tracked(self) -> None:
+        """A second spawn while retirement runs must not orphan the first."""
+        manager = RuntimeManager()
+        await manager.install_initial(_fake_generation(0))
+
+        lease = await manager.acquire()
+        await manager.install_candidate(_fake_generation(1), drain_timeout_s=5.0)
+        await asyncio.sleep(0.05)
+
+        assert 0 in manager._retirement_tasks
+        original_task = manager._retirement_tasks[0]
+
+        old_slot = next(
+            slot for slot in manager._retiring if slot.generation.generation_id == 0
+        )
+        await manager._spawn_retirement_task(old_slot, 5.0)
+
+        # Registry still tracks the original task — no orphaned overwrite.
+        assert manager._retirement_tasks[0] is original_task
+        assert not original_task.done()
+
+        await lease.release()
+        await manager.wait_for_retirement(0, timeout_s=5.0)
+        await manager.shutdown()

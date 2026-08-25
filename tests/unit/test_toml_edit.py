@@ -48,3 +48,37 @@ def test_similarly_prefixed_key_is_not_replaced() -> None:
         'api_key = "secret"',
         'api_key_environment = "TOKEN"',
     ]
+
+
+def test_array_of_tables_section_is_recognized() -> None:
+    """An [[section]] header must not be reported as a missing section."""
+    result = update_section_value(
+        ["[[providers]]", 'name = "a"', "port = 8080"],
+        "providers",
+        "port",
+        "9090",
+    )
+
+    assert result.section_found
+    assert result.lines == ["[[providers]]", 'name = "a"', "port = 9090"]
+
+
+def test_array_of_tables_missing_key_is_inserted_not_duplicated() -> None:
+    result = update_section_value(
+        ["[server]", "port = 8080", "[[items]]", 'name = "x"'],
+        "items",
+        "count",
+        "3",
+        insert_missing_key=True,
+        append_missing_section=True,
+    )
+
+    assert result.section_found
+    # Key inserted after the existing header; no duplicate section appended.
+    assert result.lines == [
+        "[server]",
+        "port = 8080",
+        "[[items]]",
+        "count = 3",
+        'name = "x"',
+    ]

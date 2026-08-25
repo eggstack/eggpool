@@ -40,6 +40,22 @@ class TestOpenAIStreamUsageExtractor:
         result = extractor.extract(data)
         assert result is None
 
+    def test_top_level_reasoning_tokens_fallback(self) -> None:
+        """Providers emitting a top-level reasoning_tokens are honored."""
+        extractor = OpenAIStreamUsageExtractor()
+        data = {
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
+                "reasoning_tokens": 7,
+            },
+        }
+        result = extractor.extract(data)
+
+        assert result is not None
+        assert result.reasoning_tokens == 7
+
     def test_extract_partial_usage(self) -> None:
         extractor = OpenAIStreamUsageExtractor()
         data = {

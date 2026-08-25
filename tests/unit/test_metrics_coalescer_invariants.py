@@ -392,3 +392,81 @@ class TestCancellationRestore:
         # All 3 events should be in the buffer, merged into 1 key
         assert snap["buffered_events"] == 3
         assert snap["buffered_keys"] == 1
+
+
+class TestPendingEventCeiling:
+    """The absolute pending-event ceiling bounds even hot single keys."""
+
+    def test_ceiling_drops_events_for_existing_key(self) -> None:
+        config = _make_config(max_buffered_events=1)
+        db = AsyncMock()
+        repo = AsyncMock()
+        coalescer = MetricsWriteCoalescer(config=config, db=db, rollup_repo=repo)
+
+        # Ceiling = max_buffered * 64 = 64 events; all merge into one key.
+        for _ in range(100):
+            coalescer.record_usage(_make_event())
+
+        snap = coalescer.snapshot()
+        assert snap["buffered_events"] == 64
+        assert snap["total_events_received"] == 64
+        assert snap["total_events_dropped"] == 36
+
+    @pytest.mark.asyncio()
+    async def test_cancelled_flush_restore_respects_key_cap(self) -> None:
+        """A cancelled flush cannot push the buffer past its key cap."""
+        config = _make_config(max_buffered_events=3)
+        db = AsyncMock()
+        repo = AsyncMock()
+        coalescer = MetricsWriteCoalescer(config=config, db=db, rollup_repo=repo)
+
+        for i in range(3):
+            coalescer.record_usage(_make_event(provider_id=f"p{i}", model_id="m"))
+
+        async def cancel_after_refill(rows: object) -> object:
+            # Concurrent recording refills the buffer while the flush
+            # write is in flight.
+            for i in range(10, 13):
+                coalescer.record_usage(_make_event(provider_id=f"p{i}", model_id="m"))
+            raise asyncio.CancelledError("simulated cancel")
+
+        repo.upsert_many = AsyncMock(side_effect=cancel_after_refill)
+
+        with pytest.raises(asyncio.CancelledError):
+            await coalescer.flush(reason="test")
+
+        snap = coalescer.snapshot()
+        assert snap["buffered_keys"] == 3
+        assert snap["buffered_events"] == 3
+        assert snap["total_events_received"] == 6
+        assert snap["total_events_dropped"] == 3
+        assert (
+            snap["total_events_received"]
+            == snap["total_events_flushed"]
+            + snap["buffered_events"]
+            + snap["total_events_dropped"]
+        )
+
+    @pytest.mark.asyncio()
+    async def test_cancelled_flush_restores_into_existing_keys(self) -> None:
+        """Snapshot keys already resident merge back instead of dropping."""
+        config = _make_config(max_buffered_events=5)
+        db = AsyncMock()
+        repo = AsyncMock()
+        coalescer = MetricsWriteCoalescer(config=config, db=db, rollup_repo=repo)
+
+        for _ in range(4):
+            coalescer.record_usage(_make_event())
+
+        async def cancel_and_rerecord(rows: object) -> object:
+            coalescer.record_usage(_make_event())
+            raise asyncio.CancelledError("simulated cancel")
+
+        repo.upsert_many = AsyncMock(side_effect=cancel_and_rerecord)
+
+        with pytest.raises(asyncio.CancelledError):
+            await coalescer.flush(reason="test")
+
+        snap = coalescer.snapshot()
+        assert snap["buffered_keys"] == 1
+        assert snap["buffered_events"] == 5

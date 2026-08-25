@@ -107,7 +107,7 @@ class EventLoopLagMonitor:
             return
         self._running = True
         self._expected_next = time.monotonic() + self._cadence_s
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         self._handle = loop.call_later(self._cadence_s, self._tick)
 
     async def stop(self) -> None:
@@ -151,7 +151,7 @@ class EventLoopLagMonitor:
         if self._expected_next < now:
             self._expected_next = now + self._cadence_s
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         self._handle = loop.call_later(
             max(0.0, self._expected_next - now),
             self._tick,

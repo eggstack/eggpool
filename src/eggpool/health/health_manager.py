@@ -30,6 +30,23 @@ class FailureCategory(StrEnum):
     UNKNOWN = "unknown"
 
 
+# Error-class strings that are terminal authentication failures. This
+# is an EXACT-match vocabulary: substring matching would misclassify
+# transient classes such as ``authorization_pending`` or
+# ``authentication_timeout`` as terminal auth failures.
+AUTH_FAILURE_ERROR_CLASSES = frozenset(
+    {
+        "auth",
+        "auth_error",
+        "auth_failed",
+        "authentication",
+        "authentication_error",
+        "authentication_failed",
+        "authenticationerror",
+    }
+)
+
+
 def classify_failure_category(
     error_class: str | None,
     status_code: int | None = None,
@@ -72,15 +89,7 @@ def classify_failure_category(
     ec = error_class.lower()
     if "contextlimitexceeded" in ec or "context_limit_exceeded" in ec:
         return FailureCategory.CONTEXT_LIMIT_EXCEEDED
-    if ec in {
-        "auth",
-        "auth_error",
-        "auth_failed",
-        "authentication",
-        "authentication_error",
-        "authentication_failed",
-        "authenticationerror",
-    }:
+    if ec in AUTH_FAILURE_ERROR_CLASSES:
         return FailureCategory.AUTHENTICATION_FAILED
     if "quotaexhausted" in ec or "quota_exhausted" in ec:
         return FailureCategory.QUOTA_EXHAUSTED

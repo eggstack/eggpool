@@ -1706,6 +1706,21 @@ class RuntimeManager:
         """
         gen_id = slot.generation.generation_id
 
+        existing = self._retirement_tasks.get(gen_id)
+        if existing is not None and not existing.done():
+            # A retirement task for this generation is still running.
+            # Overwriting the registry entry would orphan it: the task
+            # keeps running but is no longer joined by
+            # wait_for_retirement() or shutdown. begin_retirement() is
+            # idempotent, so spawning a duplicate adds nothing — keep
+            # tracking the original task instead.
+            logger.info(
+                "Retirement task for generation %d already running; "
+                "not spawning a duplicate",
+                gen_id,
+            )
+            return
+
         async def _retire() -> None:
             try:
                 await self.begin_retirement(

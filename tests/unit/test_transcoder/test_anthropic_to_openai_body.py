@@ -11,6 +11,7 @@ import pytest
 from eggpool.catalog.capabilities import TranscodingCapabilities
 from eggpool.transcoder.anthropic_to_openai import AnthropicToOpenAI
 from eggpool.transcoder.context import TranscodeContext
+from eggpool.transcoder.policy import TranscoderFeatures
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 
@@ -491,6 +492,34 @@ class TestDroppedFields:
         assert result.get("tool_choice") == "auto"
         tc_warnings = [w for w in warnings if w.get("field") == "tool_choice"]
         assert tc_warnings == []
+
+
+class TestThinkingBlockAccumulation:
+    def test_multiple_thinking_blocks_accumulate(
+        self, transcoder: AnthropicToOpenAI
+    ) -> None:
+        """Several thinking blocks in one assistant message must all be kept."""
+        payload = {
+            "model": "claude-3",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "First thought. "},
+                        {"type": "thinking", "thinking": "Second thought."},
+                        {"type": "text", "text": "Answer"},
+                    ],
+                },
+            ],
+        }
+        result, _ = transcoder.encode_request(
+            payload,
+            _make_context(),
+            features=TranscoderFeatures(thinking=True),
+        )
+        msg = result["messages"][0]
+        assert msg["reasoning_content"] == "First thought. Second thought."
+        assert msg["content"] == "Answer"
 
 
 class TestToolTranslation:

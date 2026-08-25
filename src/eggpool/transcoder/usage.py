@@ -69,7 +69,9 @@ def _canonicalise_openai(raw: dict[str, Any]) -> CanonicalUsage:
     prompt = token_count_from(raw, "prompt_tokens")
     completion = token_count_from(raw, "completion_tokens")
     total = token_count_from(raw, "total_tokens")
-    if total == 0 and "total_tokens" not in raw:
+    # Recompute when the total is absent, unparseable, or explicitly
+    # zero — some providers emit ``total_tokens: 0`` even with usage.
+    if not total:
         total = prompt + completion
     return CanonicalUsage(
         prompt_tokens=prompt,

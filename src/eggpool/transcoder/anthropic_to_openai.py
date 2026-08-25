@@ -572,7 +572,12 @@ class AnthropicToOpenAI:
                     elif part_type == "thinking":
                         thinking_enabled = features is not None and features.thinking
                         if thinking_enabled:
-                            reasoning_content = str(part.get("thinking", ""))
+                            # A history may carry several thinking
+                            # blocks per assistant message; accumulate
+                            # them so earlier blocks are not dropped.
+                            reasoning_content = (reasoning_content or "") + str(
+                                part.get("thinking", "")
+                            )
                             if part.get("signature"):
                                 sig_field = (
                                     f"messages[{role}].content[].thinking.signature"

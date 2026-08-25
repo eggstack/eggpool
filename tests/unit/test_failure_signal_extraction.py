@@ -6,6 +6,8 @@ provider response patterns.
 
 from __future__ import annotations
 
+import pytest
+
 from eggpool.failure.signal import FailureSignal
 from eggpool.failure.signal_extract import extract_failure_signal
 
@@ -136,6 +138,21 @@ class TestSignalFromErrorClass:
         assert (
             extract_failure_signal(None, error_class="AuthenticationError")
             == FailureSignal.AUTHENTICATION_FAILED
+        )
+
+    @pytest.mark.parametrize(
+        "error_class",
+        [
+            "authorization_pending",
+            "authentication_timeout",
+            "authoritative_timeout",
+        ],
+    )
+    def test_auth_substring_classes_are_not_terminal(self, error_class: str) -> None:
+        """Transient classes containing 'auth' must not map to terminal auth."""
+        assert (
+            extract_failure_signal(None, error_class=error_class)
+            is not FailureSignal.AUTHENTICATION_FAILED
         )
 
     def test_capability_error_class(self) -> None:

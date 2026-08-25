@@ -19,6 +19,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Absolute ceiling on buffered events, as a multiple of the configured
+# per-key cap. ``max_buffered_events`` bounds distinct rollup keys; a
+# single hot key merges unconditionally and could otherwise grow its
+# accumulator without bound between flushes.
+_MAX_PENDING_EVENTS_FACTOR = 64
+
 
 def _compute_bucket_start(ts: datetime, bucket_size_s: int) -> str:
     """Compute the bucket start UTC timestamp for a given event timestamp.
@@ -124,6 +130,39 @@ class _RollupKey:
     status: str
 
 
+def _merge_delta(target: _AggregatedDelta, delta: _AggregatedDelta) -> None:
+    """Merge one aggregated delta into another accumulator."""
+    target.request_count += delta.request_count
+    target.error_count += delta.error_count
+    target.retry_count += delta.retry_count
+    target.input_tokens += delta.input_tokens
+    target.output_tokens += delta.output_tokens
+    target.cache_read_tokens += delta.cache_read_tokens
+    target.cache_write_tokens += delta.cache_write_tokens
+    target.reasoning_tokens += delta.reasoning_tokens
+    target.thinking_characters += delta.thinking_characters
+    target.cost_microdollars = clamp_sqlite_integer(
+        target.cost_microdollars + delta.cost_microdollars
+    )
+    target.bytes_received += delta.bytes_received
+    target.bytes_emitted += delta.bytes_emitted
+    target.latency_ms_sum += delta.latency_ms_sum
+    if delta.latency_ms_min is not None:
+        target.latency_ms_min = (
+            min(target.latency_ms_min, delta.latency_ms_min)
+            if target.latency_ms_min is not None
+            else delta.latency_ms_min
+        )
+    if delta.latency_ms_max is not None:
+        target.latency_ms_max = (
+            max(target.latency_ms_max, delta.latency_ms_max)
+            if target.latency_ms_max is not None
+            else delta.latency_ms_max
+        )
+    target.first_byte_ms_sum += delta.first_byte_ms_sum
+    target.first_byte_ms_count += delta.first_byte_ms_count
+
+
 @dataclass(slots=True)
 class FlushResult:
     """Result of a flush operation."""
@@ -166,6 +205,9 @@ class MetricsWriteCoalescer:
         self._write_mode = config.write_mode
         self._flush_interval_s = config.flush_interval_s
         self._max_buffered = config.max_buffered_events
+        self._max_pending_events = max(
+            1, config.max_buffered_events * _MAX_PENDING_EVENTS_FACTOR
+        )
         self._bucket_size_s = config.timeseries_bucket_s
         self._aggregate_only = config.aggregate_only
         self._db = db
@@ -213,12 +255,19 @@ class MetricsWriteCoalescer:
         )
 
         with self._thread_lock:
-            # Use a simple non-blocking check: if buffer is oversized, drop.
-            if len(self._buffer) >= self._max_buffered and key not in self._buffer:
+            # Use a simple non-blocking check: if the buffer is
+            # oversized, drop. The pending-event ceiling applies even
+            # to existing keys so a single hot key cannot grow without
+            # bound between flushes.
+            if (
+                len(self._buffer) >= self._max_buffered and key not in self._buffer
+            ) or self._pending_events >= self._max_pending_events:
                 self._total_dropped += 1
                 logger.debug(
-                    "Metrics buffer full (%d keys), dropping event for %s/%s",
+                    "Metrics buffer full (%d keys, %d events), "
+                    "dropping event for %s/%s",
                     len(self._buffer),
+                    self._pending_events,
                     event.provider_id,
                     event.model_id,
                 )
@@ -288,46 +337,26 @@ class MetricsWriteCoalescer:
         except asyncio.CancelledError:
             # Restore the snapshot into the buffer so events are not
             # silently dropped when the caller is cancelled mid-flush.
+            # Existing keys always merge back; new keys are only added
+            # while the configured key cap allows it so a cancelled
+            # flush cannot push the buffer past its bound.
+            restored_events = 0
             with self._thread_lock:
                 for key, delta in buffer_snapshot.items():
-                    if key in self._buffer:
-                        existing = self._buffer[key]
-                        existing.request_count += delta.request_count
-                        existing.error_count += delta.error_count
-                        existing.retry_count += delta.retry_count
-                        existing.input_tokens += delta.input_tokens
-                        existing.output_tokens += delta.output_tokens
-                        existing.cache_read_tokens += delta.cache_read_tokens
-                        existing.cache_write_tokens += delta.cache_write_tokens
-                        existing.reasoning_tokens += delta.reasoning_tokens
-                        existing.thinking_characters += delta.thinking_characters
-                        existing.cost_microdollars = clamp_sqlite_integer(
-                            existing.cost_microdollars + delta.cost_microdollars
-                        )
-                        existing.bytes_received += delta.bytes_received
-                        existing.bytes_emitted += delta.bytes_emitted
-                        existing.latency_ms_sum += delta.latency_ms_sum
-                        if delta.latency_ms_min is not None:
-                            existing.latency_ms_min = (
-                                min(existing.latency_ms_min, delta.latency_ms_min)
-                                if existing.latency_ms_min is not None
-                                else delta.latency_ms_min
-                            )
-                        if delta.latency_ms_max is not None:
-                            existing.latency_ms_max = (
-                                max(existing.latency_ms_max, delta.latency_ms_max)
-                                if existing.latency_ms_max is not None
-                                else delta.latency_ms_max
-                            )
-                        existing.first_byte_ms_sum += delta.first_byte_ms_sum
-                        existing.first_byte_ms_count += delta.first_byte_ms_count
-                    else:
-                        self._buffer[key] = delta
-                self._pending_events += event_count
+                    if key not in self._buffer and (
+                        len(self._buffer) >= self._max_buffered
+                    ):
+                        self._total_dropped += delta.request_count
+                        continue
+                    if key not in self._buffer:
+                        self._buffer[key] = _AggregatedDelta()
+                    _merge_delta(self._buffer[key], delta)
+                    restored_events += delta.request_count
+                self._pending_events += restored_events
             logger.debug(
                 "Metrics flush (%s): cancelled — %d events restored to buffer",
                 reason,
-                event_count,
+                restored_events,
             )
             raise
         except Exception as exc:

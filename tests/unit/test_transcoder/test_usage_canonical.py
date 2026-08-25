@@ -26,6 +26,13 @@ def test_openai_usage_missing_total() -> None:
     assert result.total_tokens == 20
 
 
+def test_openai_usage_explicit_zero_total_recomputes() -> None:
+    """A provider emitting total_tokens: 0 must not block recomputation."""
+    raw = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 0}
+    result = canonicalise_usage(raw, protocol="openai")
+    assert result.total_tokens == 15
+
+
 def test_anthropic_usage() -> None:
     raw = {
         "input_tokens": 10,

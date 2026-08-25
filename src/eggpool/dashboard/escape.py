@@ -7,9 +7,10 @@ to prevent HTML injection (model_id, account_name, error_message, etc.).
 from __future__ import annotations
 
 import html
-import json
 import re
 from typing import Any
+
+from eggpool.jsonx import dumps_str
 
 _PATTERN: re.Pattern[str] = re.compile(r"[^a-zA-Z0-9_-]")
 
@@ -49,8 +50,11 @@ def escape_script_json(value: Any) -> str:
     containing ``</script>`` therefore breaks out of the JSON island and can
     inject markup or script. Replace ``</`` with ``<\\/`` so any hostile
     substring is neutralised without altering the JSON's parseability.
+
+    Serializes through :mod:`eggpool.jsonx` so attribute and ``<script>``
+    JSON renderings agree regardless of the active JSON backend.
     """
-    return json.dumps(value).replace("</", "<\\/")
+    return dumps_str(value).replace("</", "<\\/")
 
 
 def format_microdollars(value: int | float | None) -> str:

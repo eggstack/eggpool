@@ -20,9 +20,16 @@ class ProviderClientPool:
     def __init__(self) -> None:
         self._clients: dict[str, httpx.AsyncClient] = {}
         self._account_clients: dict[tuple[str, str], httpx.AsyncClient] = {}
+        # Clients displaced by a later registration of the same key.
+        # Deferred to close() so re-registration cannot leak the
+        # previous connection pool.
+        self._displaced: list[httpx.AsyncClient] = []
 
     def register(self, provider_id: str, client: httpx.AsyncClient) -> None:
         """Register a client for a provider."""
+        previous = self._clients.get(provider_id)
+        if previous is not None and previous is not client:
+            self._displaced.append(previous)
         self._clients[provider_id] = client
 
     def register_account(
@@ -32,7 +39,11 @@ class ProviderClientPool:
         client: httpx.AsyncClient,
     ) -> None:
         """Register a client for a specific provider account."""
-        self._account_clients[(provider_id, account_name)] = client
+        key = (provider_id, account_name)
+        previous = self._account_clients.get(key)
+        if previous is not None and previous is not client:
+            self._displaced.append(previous)
+        self._account_clients[key] = client
 
     def get_client(
         self,
@@ -94,16 +105,21 @@ class ProviderClientPool:
     async def close(self) -> None:
         """Close all clients."""
         closed: set[int] = set()
+
+        async def _aclose(client: httpx.AsyncClient) -> None:
+            if id(client) in closed:
+                return
+            closed.add(id(client))
+            with contextlib.suppress(Exception):
+                await client.aclose()
+
+        for client in self._displaced:
+            await _aclose(client)
+        self._displaced.clear()
         for client in self._clients.values():
-            if id(client) not in closed:
-                closed.add(id(client))
-                with contextlib.suppress(Exception):
-                    await client.aclose()
+            await _aclose(client)
         for client in self._account_clients.values():
-            if id(client) not in closed:
-                closed.add(id(client))
-                with contextlib.suppress(Exception):
-                    await client.aclose()
+            await _aclose(client)
 
     @classmethod
     def from_config(

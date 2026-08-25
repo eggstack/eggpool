@@ -1092,7 +1092,10 @@ class StatsService:
             else time_range.end.replace(tzinfo=UTC)
         )
         tail_start = max(range_start, day_start)
-        tail_end = min(range_end, now)
+        # Raw queries are half-open (``started_at < end``); extend the
+        # bound one second past ``now`` so requests in the current
+        # partial second are still reconciled.
+        tail_end = min(range_end, now + timedelta(seconds=1))
         if tail_start >= tail_end:
             return rollup_rows
 
@@ -1134,13 +1137,7 @@ class StatsService:
         if not rollup_rows:
             return rollup_rows
         now = datetime.now(UTC)
-        current_bucket_start_dt = now.replace(
-            minute=0 if bucket_s == 3600 else now.minute,
-            second=0,
-            microsecond=0,
-        )
-        if bucket_s == 86400:
-            current_bucket_start_dt = current_bucket_start_dt.replace(hour=0)
+        current_bucket_start_dt = _current_bucket_start(now, bucket_s)
         range_start = (
             time_range.start
             if time_range.start.tzinfo is not None
@@ -1157,7 +1154,8 @@ class StatsService:
         livet_rows = await fetch_timeseries(
             self._db,
             current_bucket_start,
-            format_dt(min(range_end, now)),
+            # Half-open upper bound: cover the current partial second.
+            format_dt(min(range_end, now + timedelta(seconds=1))),
             bucket=bucket,
             account_id=account_id,
             model_id=model_id,
@@ -1190,13 +1188,7 @@ class StatsService:
         if not points:
             return rollup_result
         now = datetime.now(UTC)
-        current_bucket_start_dt = now.replace(
-            minute=0 if bucket_s == 3600 else now.minute,
-            second=0,
-            microsecond=0,
-        )
-        if bucket_s == 86400:
-            current_bucket_start_dt = current_bucket_start_dt.replace(hour=0)
+        current_bucket_start_dt = _current_bucket_start(now, bucket_s)
         range_start = (
             time_range.start
             if time_range.start.tzinfo is not None
@@ -1214,7 +1206,8 @@ class StatsService:
         livet_raw = await fetch_grouped_timeseries(
             self._db,
             current_bucket_start,
-            format_dt(min(range_end, now)),
+            # Half-open upper bound: cover the current partial second.
+            format_dt(min(range_end, now + timedelta(seconds=1))),
             bucket=bucket,
             group_by=group_by,
             limit=limit,
@@ -1924,6 +1917,17 @@ _BUCKET_SIZES: dict[str, int] = {
 
 def _bucket_size_s(bucket: str) -> int:
     return _BUCKET_SIZES.get(bucket, 3600)
+
+
+def _current_bucket_start(now: datetime, bucket_s: int) -> datetime:
+    """Return the UTC start of the bucket containing *now*.
+
+    Daily buckets start at midnight; hourly buckets (the default) start
+    on the hour.  Every sub-minute field is zeroed for both sizes.
+    """
+    if bucket_s == 86400:
+        return now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return now.replace(minute=0, second=0, microsecond=0)
 
 
 def _int(value: object) -> int:

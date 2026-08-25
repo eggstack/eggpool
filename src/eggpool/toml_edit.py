@@ -42,12 +42,22 @@ def render_toml_value(value: object) -> str:
     raise TypeError(f"Unsupported TOML value type: {type(value).__name__}")
 
 
+def _section_header_variants(section: str) -> tuple[str, str]:
+    """Return the plain-table and array-of-tables header forms."""
+    return (f"[{section}]", f"[[{section}]]")
+
+
 def section_has_key(lines: list[str], section: str, key: str) -> bool:
-    """Return whether an exact key exists in the requested TOML section."""
+    """Return whether an exact key exists in the requested TOML section.
+
+    Both ``[section]`` tables and ``[[section]]`` array-of-tables
+    elements are recognized.
+    """
+    headers = _section_header_variants(section)
     in_section = False
     for line in lines:
         stripped = line.strip()
-        if stripped == f"[{section}]":
+        if stripped in headers:
             in_section = True
             continue
         if _is_section_header(stripped):
@@ -71,16 +81,20 @@ def update_section_value(
 
     ``rendered_value`` must already be valid TOML. Missing keys can be inserted
     immediately after an existing section header. Missing sections can
-    optionally be appended to the document.
+    optionally be appended to the document. Both ``[section]`` tables
+    and ``[[section]]`` array-of-tables elements are recognized as the
+    target section so an AoT section is never misreported as missing
+    (which would append a duplicate header).
     """
     output: list[str] = []
     in_section = False
     section_found = False
     key_found = False
+    headers = _section_header_variants(section)
 
     for line in lines:
         stripped = line.strip()
-        if stripped == f"[{section}]":
+        if stripped in headers:
             in_section = True
             section_found = True
             output.append(line)
@@ -95,7 +109,7 @@ def update_section_value(
 
     if section_found and not key_found and insert_missing_key:
         header_index = next(
-            index for index, line in enumerate(output) if line.strip() == f"[{section}]"
+            index for index, line in enumerate(output) if line.strip() in headers
         )
         output.insert(header_index + 1, f"{key} = {rendered_value}")
     elif not section_found and append_missing_section:

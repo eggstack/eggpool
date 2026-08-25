@@ -186,3 +186,48 @@ class TestProviderClientPool:
         assert snap["account_clients"] == [
             {"provider_id": "alpha", "account_name": "proxied"}
         ]
+
+
+class TestDisplacedClientClose:
+    """Re-registration defers the displaced client to close()."""
+
+    @pytest.mark.asyncio
+    async def test_register_displaces_previous_client(self) -> None:
+        pool = ProviderClientPool()
+        client1, client2 = httpx.AsyncClient(), httpx.AsyncClient()
+        pool.register("x", client1)
+        pool.register("x", client2)
+
+        assert pool.get_client("x") is client2
+        assert not client1.is_closed
+
+        await pool.close()
+
+        assert client1.is_closed
+        assert client2.is_closed
+
+    @pytest.mark.asyncio
+    async def test_register_account_displaces_previous_client(self) -> None:
+        pool = ProviderClientPool()
+        client1, client2 = httpx.AsyncClient(), httpx.AsyncClient()
+        pool.register_account("prov", "acct", client1)
+        pool.register_account("prov", "acct", client2)
+
+        assert pool.get_client("prov", account_name="acct") is client2
+
+        await pool.close()
+
+        assert client1.is_closed
+        assert client2.is_closed
+
+    @pytest.mark.asyncio
+    async def test_same_object_reregistration_closes_once(self) -> None:
+        pool = ProviderClientPool()
+        client = httpx.AsyncClient()
+        pool.register("x", client)
+        # Registering the same object again must not duplicate-close.
+        pool.register("x", client)
+
+        await pool.close()
+
+        assert client.is_closed

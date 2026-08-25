@@ -138,6 +138,61 @@ class TestCostCalculator:
         assert (initial, cached, refreshed) == (3000, 3000, 4000)
         assert mock_repo.get_latest_snapshot.await_count == 2
 
+    @staticmethod
+    def _snapshot_with_cache_rates() -> PriceSnapshot:
+        return PriceSnapshot(
+            model_id="gpt-4",
+            input_price_per_1k=None,
+            output_price_per_1k=None,
+            captured_at="2024-01-01T00:00:00",
+            input_per_million_microdollars=3_000_000,
+            output_per_million_microdollars=15_000_000,
+            cache_read_per_million_microdollars=1_500_000,
+            provider_id="provider-a",
+        )
+
+    @pytest.mark.asyncio
+    async def test_openai_inclusive_input_not_double_billed(self) -> None:
+        """Cached subset of prompt_tokens is billed once at the cache rate."""
+        mock_repo = AsyncMock()
+        mock_repo.get_latest_snapshot = AsyncMock(
+            return_value=self._snapshot_with_cache_rates()
+        )
+        calculator = CostCalculator(price_repo=mock_repo)
+
+        # OpenAI semantics: prompt_tokens=1000 *includes* 800 cached.
+        cost, exactness = await calculator.calculate_cost(
+            "gpt-4",
+            input_tokens=1000,
+            output_tokens=200,
+            cache_read_tokens=800,
+            provider_id="provider-a",
+            input_tokens_include_cache=True,
+        )
+
+        # (1000-800)*3 + 800*1.5 + 200*15 = 600 + 1200 + 3000 microdollars
+        assert (cost, exactness) == (4800, "derived")
+
+    @pytest.mark.asyncio
+    async def test_default_disjoint_categories_unchanged(self) -> None:
+        """Anthropic-style disjoint categories keep the historical math."""
+        mock_repo = AsyncMock()
+        mock_repo.get_latest_snapshot = AsyncMock(
+            return_value=self._snapshot_with_cache_rates()
+        )
+        calculator = CostCalculator(price_repo=mock_repo)
+
+        cost, exactness = await calculator.calculate_cost(
+            "gpt-4",
+            input_tokens=1000,
+            output_tokens=200,
+            cache_read_tokens=800,
+            provider_id="provider-a",
+        )
+
+        # 1000*3 + 800*1.5 + 200*15 = 3000 + 1200 + 3000 microdollars
+        assert (cost, exactness) == (7200, "derived")
+
     @pytest.mark.asyncio
     async def test_calculate_cost_input_only(self) -> None:
         snapshot = PriceSnapshot(

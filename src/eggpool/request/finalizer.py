@@ -338,6 +338,11 @@ class RequestFinalizer:
                 data.cache_read_tokens,
                 data.cache_write_tokens,
                 provider_id=selected.provider_id,
+                # OpenAI-protocol usage reports prompt tokens inclusive
+                # of cached tokens; Anthropic-protocol categories are
+                # disjoint. Pass the protocol semantics through so the
+                # calculator does not double-bill the cached subset.
+                input_tokens_include_cache=(data.upstream_protocol == "openai"),
             )
 
         reservation_microdollars = int(

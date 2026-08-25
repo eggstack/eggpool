@@ -187,7 +187,7 @@ class UpdateChecker:
                     ),
                     install_method=install_method,
                     update_command=self._build_update_command(install_method),
-                    last_check_at=asyncio.get_event_loop().time(),
+                    last_check_at=asyncio.get_running_loop().time(),
                     last_check_error=error,
                 )
             else:
@@ -197,7 +197,7 @@ class UpdateChecker:
                     update_available=self._is_newer(current_version, latest_version),
                     install_method=install_method,
                     update_command=self._build_update_command(install_method),
-                    last_check_at=asyncio.get_event_loop().time(),
+                    last_check_at=asyncio.get_running_loop().time(),
                     last_check_error="",
                 )
             self._info = info
@@ -369,7 +369,7 @@ def _default_install_method() -> str:
     return "pip"
 
 
-def _pep440_key(version: str) -> tuple[int, ...]:
+def _pep440_key(version: str) -> tuple[tuple[int, ...], int, int]:
     """Best-effort PEP 440 ordering key for the project's release tags.
 
     The project publishes simple ``X.Y.Z`` releases, but local checkouts
@@ -378,16 +378,18 @@ def _pep440_key(version: str) -> tuple[int, ...]:
     adding a runtime dependency on ``packaging``:
 
     ``.dev`` < ``a`` < ``b`` < ``rc`` < final < ``.post``.
+
+    The release segments are returned as a nested tuple so releases of
+    different lengths compare correctly (``1.0.0`` < ``1.0.0.1``)
+    without truncating long release segments onto each other.
     """
     match = _VERSION_RE.fullmatch(version)
     if match is None:
-        return (0, 0, 0, 0, 4, 0)
+        return ((0,), 0, 0)
 
     release = [int(part) for part in match.group("release").split(".")]
     while len(release) > 1 and release[-1] == 0:
         release.pop()
-    release = release[:4]
-    release.extend([0] * (4 - len(release)))
 
     if match.group("dev_n") is not None:
         rank = 0
@@ -402,7 +404,7 @@ def _pep440_key(version: str) -> tuple[int, ...]:
         rank = 4
         suffix_number = 0
 
-    return (*release, rank, suffix_number)
+    return (tuple(release), rank, suffix_number)
 
 
 def _latest_version_from_response(response: httpx.Response) -> str:

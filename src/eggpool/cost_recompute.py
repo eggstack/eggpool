@@ -61,7 +61,7 @@ async def recompute_request_costs(
         f"input_tokens, output_tokens, cache_read_tokens, "
         f"cache_write_tokens, reasoning_tokens, "
         f"cost_microdollars, provider_cost_microdollars, "
-        f"reserved_microdollars "
+        f"reserved_microdollars, upstream_protocol "
         f"FROM requests "
         f"WHERE status != 'pending' "
         f"ORDER BY started_at DESC, id DESC{limit_clause}",
@@ -109,6 +109,11 @@ async def recompute_request_costs(
             cache_read_tokens=cache_read,
             cache_write_tokens=cache_write,
             provider_id=provider_id,
+            # Mirror the finalizer: OpenAI-protocol rows store prompt
+            # tokens inclusive of cached tokens.
+            input_tokens_include_cache=(
+                str(row["upstream_protocol"] or "") == "openai"
+            ),
         )
         may_have_billable_work = (
             input_tokens + output_tokens + cache_read + cache_write > 0
@@ -125,7 +130,6 @@ async def recompute_request_costs(
             cache_read_tokens=cache_read,
             cache_write_tokens=cache_write,
         )
-        new_total += new_cost
         old_exactness = str(row["exactness"] or "unknown")
         upgrade_eligible = old_exactness in {"estimated", "unknown"}
         if new_cost == old_cost and exactness == old_exactness and not upgrade_eligible:
@@ -141,8 +145,11 @@ async def recompute_request_costs(
         )
         if snapshot is None:
             skipped_no_snapshot += 1
-            new_total -= new_cost
             continue
+
+        # Accumulate only rows that will actually change so skipped
+        # (no-snapshot / unchanged) rows cannot distort the aggregate.
+        new_total += new_cost
 
         delta = new_cost - old_cost
         changes.append(

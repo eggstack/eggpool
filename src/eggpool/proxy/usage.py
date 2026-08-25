@@ -112,17 +112,22 @@ def extract_openai_response_usage(
     completion_details = safe_dict(usage_data.get("completion_tokens_details"))
     reported = _reported_cost(data, provider_id=provider_id, protocol="openai")
 
+    # Canonical location is completion_tokens_details.reasoning_tokens;
+    # some OpenAI-compatible providers emit a top-level
+    # ``reasoning_tokens`` instead.
+    reasoning_tokens = coerce_token_count(
+        completion_details.get("reasoning_tokens", 0)
+        if completion_details is not None
+        else 0
+    ) or coerce_token_count(usage_data.get("reasoning_tokens", 0))
+
     return StreamUsageResult(
         input_tokens=coerce_token_count(usage_data.get("prompt_tokens", 0)),
         output_tokens=coerce_token_count(usage_data.get("completion_tokens", 0)),
         cache_read_tokens=coerce_token_count(
             prompt_details.get("cached_tokens", 0) if prompt_details is not None else 0
         ),
-        reasoning_tokens=coerce_token_count(
-            completion_details.get("reasoning_tokens", 0)
-            if completion_details is not None
-            else 0
-        ),
+        reasoning_tokens=reasoning_tokens,
         is_complete=True,
         reported_cost_microdollars=(
             reported.microdollars if reported is not None else None

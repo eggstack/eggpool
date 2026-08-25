@@ -22,11 +22,28 @@ from eggpool.stats.service import (
     PERIOD_PRESETS,
     StatsService,
     TimeRange,
+    _current_bucket_start,
     resolve_period,
 )
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
+
+
+class TestCurrentBucketStart:
+    """Regression: daily live-tail buckets must start at midnight exactly."""
+
+    def test_daily_bucket_starts_at_midnight(self) -> None:
+        now = datetime(2026, 8, 25, 14, 35, 12, tzinfo=UTC)
+        assert _current_bucket_start(now, 86400) == datetime(
+            2026, 8, 25, 0, 0, 0, tzinfo=UTC
+        )
+
+    def test_hourly_bucket_starts_on_the_hour(self) -> None:
+        now = datetime(2026, 8, 25, 14, 35, 12, tzinfo=UTC)
+        assert _current_bucket_start(now, 3600) == datetime(
+            2026, 8, 25, 14, 0, 0, tzinfo=UTC
+        )
 
 
 @pytest_asyncio.fixture()

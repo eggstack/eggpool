@@ -1021,3 +1021,76 @@ class TestToolTranslation:
             w for w in warnings if w.get("kind") == "tool_call_id_translated"
         ]
         assert len(id_warnings) == 1
+
+
+class TestBreakpointHelperReturnContract:
+    """openai_breakpoint_to_anthropic returns False when it drops a marker."""
+
+    def test_unsupported_target_drop_returns_false(self) -> None:
+        from eggpool.transcoder.cache_translation import openai_breakpoint_to_anthropic
+
+        part: dict[str, Any] = {"prompt_cache_breakpoint": {"mode": "explicit"}}
+        warnings: list[dict[str, Any]] = []
+        context = _make_context()
+        result = openai_breakpoint_to_anthropic(
+            part,
+            source_path="test[0]",
+            capability=None,
+            count=[0],
+            context=context,
+            warnings=warnings,
+        )
+        assert result is False
+        assert "cache_control" not in part
+        assert any(w["kind"] == "cache_breakpoint_unsupported_target" for w in warnings)
+
+    def test_limit_exceeded_drop_returns_false(self) -> None:
+        from eggpool.transcoder.cache_translation import openai_breakpoint_to_anthropic
+
+        capability = TranscodingCapabilities(
+            prompt_cache_breakpoints={
+                "anthropic": {
+                    "dialect": "first_party",
+                    "supported_ttls": ["5m"],
+                    "default_ttl": "5m",
+                }
+            }
+        )
+        part: dict[str, Any] = {"prompt_cache_breakpoint": {"mode": "explicit"}}
+        warnings: list[dict[str, Any]] = []
+        context = _make_context()
+        result = openai_breakpoint_to_anthropic(
+            part,
+            source_path="test[0]",
+            capability=capability,
+            count=[99],
+            context=context,
+            warnings=warnings,
+        )
+        assert result is False
+        assert any(w["kind"] == "cache_breakpoint_limit_exceeded" for w in warnings)
+
+    def test_preserved_marker_returns_true(self) -> None:
+        from eggpool.transcoder.cache_translation import openai_breakpoint_to_anthropic
+
+        capability = TranscodingCapabilities(
+            prompt_cache_breakpoints={
+                "anthropic": {
+                    "dialect": "first_party",
+                    "supported_ttls": ["5m"],
+                    "default_ttl": "5m",
+                }
+            }
+        )
+        part: dict[str, Any] = {"prompt_cache_breakpoint": {"mode": "explicit"}}
+        context = _make_context()
+        result = openai_breakpoint_to_anthropic(
+            part,
+            source_path="test[0]",
+            capability=capability,
+            count=[0],
+            context=context,
+            warnings=[],
+        )
+        assert result is True
+        assert part["cache_control"] == {"type": "ephemeral"}

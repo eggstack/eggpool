@@ -616,8 +616,23 @@ class CostCalculator:
         cache_read_tokens: int = 0,
         cache_write_tokens: int = 0,
         provider_id: str | None = None,
+        *,
+        input_tokens_include_cache: bool = False,
     ) -> tuple[int, str]:
         """Calculate cost in microdollars from token usage.
+
+        Args:
+            model_id: Model identifier used to look up the price snapshot.
+            input_tokens: Prompt/input token count.
+            output_tokens: Completion/output token count.
+            cache_read_tokens: Cache-read token count.
+            cache_write_tokens: Cache-write token count.
+            provider_id: Optional provider scope for the snapshot lookup.
+            input_tokens_include_cache: When ``True`` (OpenAI-protocol
+                usage), ``input_tokens`` already *includes* the cached
+                token counts, so they are subtracted before pricing;
+                when ``False`` (Anthropic-protocol usage) all four
+                categories are disjoint and billed as given.
 
         Returns:
             Tuple of (cost_microdollars, exactness_level). Exactness is
@@ -632,6 +647,14 @@ class CostCalculator:
         output_tokens = _normalize_token_count(output_tokens)
         cache_read_tokens = _normalize_token_count(cache_read_tokens)
         cache_write_tokens = _normalize_token_count(cache_write_tokens)
+
+        if input_tokens_include_cache:
+            # OpenAI-protocol ``prompt_tokens`` includes the cached
+            # subset (``prompt_tokens_details.cached_tokens`` is a
+            # breakdown of the prompt total). Price only the non-cached
+            # remainder at the full input rate; billing the cached
+            # volume again at that rate double-counts it.
+            input_tokens = max(0, input_tokens - cache_read_tokens - cache_write_tokens)
 
         total_tokens = (
             input_tokens + output_tokens + cache_read_tokens + cache_write_tokens

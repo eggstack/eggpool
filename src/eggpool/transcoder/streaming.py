@@ -777,7 +777,8 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
         self,
         parsed: dict[str, Any],
     ) -> list[bytes]:
-        upstream_index = int(parsed.get("index", 0))
+        raw_index = parsed.get("index", 0)
+        upstream_index = int(raw_index) if raw_index is not None else 0
         slot = self._tool_blocks.get(upstream_index)
         if slot is not None:
             slot.finalised = True
@@ -881,7 +882,8 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
         self,
         parsed: dict[str, Any],
     ) -> list[bytes]:
-        upstream_index = int(parsed.get("index", 0))
+        raw_index = parsed.get("index", 0)
+        upstream_index = int(raw_index) if raw_index is not None else 0
         slot = self._tool_blocks.get(upstream_index)
         if slot is None:
             return []

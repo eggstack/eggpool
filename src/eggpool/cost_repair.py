@@ -177,7 +177,8 @@ async def repair_request_costs(
         "r.status, r.input_tokens, r.output_tokens, r.cache_read_tokens, "
         "r.cache_write_tokens, r.cost_microdollars, r.exactness, "
         "r.provider_cost_microdollars, r.reserved_microdollars, "
-        "r.local_cost_microdollars, r.local_cost_exactness "
+        "r.local_cost_microdollars, r.local_cost_exactness, "
+        "r.upstream_protocol "
         "FROM requests r "
         "LEFT JOIN accounts a ON a.id = r.account_id "
         f"WHERE {' AND '.join(where_clauses)} "
@@ -244,6 +245,11 @@ async def repair_request_costs(
                 cache_read_tokens=cache_read_tokens,
                 cache_write_tokens=cache_write_tokens,
                 provider_id=provider_id or None,
+                # Mirror the finalizer: OpenAI-protocol rows store
+                # prompt tokens inclusive of cached tokens.
+                input_tokens_include_cache=(
+                    str(row["upstream_protocol"] or "") == "openai"
+                ),
             )
         total_tokens = (
             input_tokens + output_tokens + cache_read_tokens + cache_write_tokens

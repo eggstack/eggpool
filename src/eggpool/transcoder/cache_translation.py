@@ -59,7 +59,11 @@ def openai_breakpoint_to_anthropic(
     context: TranscodeContext,
     warnings: list[dict[str, Any]],
 ) -> bool:
-    """Translate one OpenAI explicit content breakpoint in place."""
+    """Translate one OpenAI explicit content breakpoint in place.
+
+    Returns ``True`` only when the breakpoint maps natively onto the
+    target part (``cache_control`` set); drop paths return ``False``.
+    """
     if "prompt_cache_breakpoint" not in part:
         return False
     marker_raw = part.pop("prompt_cache_breakpoint")
@@ -105,7 +109,7 @@ def openai_breakpoint_to_anthropic(
                 target_path=None,
             )
         )
-        return True
+        return False
     if count[0] >= target_capability.max_breakpoints:
         warnings.append(
             {
@@ -124,7 +128,7 @@ def openai_breakpoint_to_anthropic(
                 target_path=None,
             )
         )
-        return True
+        return False
     part["cache_control"] = {"type": "ephemeral"}
     count[0] += 1
     context.cache_boundary_tracker.record(
