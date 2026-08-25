@@ -110,7 +110,9 @@ def derive_tie_break_summary(
     }
     if selected_score_obj.requires_transcode != ru_score.requires_transcode:
         summary["factor"] = (
-            "transcode" if not selected_score_obj.requires_transcode else "transcode"
+            "transcode_avoided"
+            if not selected_score_obj.requires_transcode
+            else "transcode_required"
         )
         return summary
     if selected_score_obj.tier != ru_score.tier:
@@ -154,8 +156,9 @@ def build_score_components(
     window (5h/7d/30d) and a short ``tie_break`` summary
     identifying the decisive factor between the chosen account
     and the runner-up (``tier``, ``quota``, ``inflight``,
-    ``transcode``, ``near_tie``) so an operator can correlate
-    visible skew against a concrete cause.
+    ``transcode_avoided``, ``transcode_required``, ``near_tie``)
+    so an operator can correlate visible skew against a concrete
+    cause.
     """
     # Find the score for the selected account from ranked_candidates
     # if present; else synthesize the bare minimum from the trace.

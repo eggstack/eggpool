@@ -10,9 +10,9 @@ from eggpool.health.health_manager import HealthManager
 def test_record_quota_exhausted_sets_cooldown() -> None:
     """402 places account into bounded cooldown."""
     hm = HealthManager()
-    before = time.time()
+    before = hm.clock()
     hm.record_quota_exhausted("acct-a", cooldown_seconds=300.0)
-    after = time.time()
+    after = hm.clock()
 
     health = hm.get_account_health("acct-a")
     assert health.health_state == "quota_exhausted"

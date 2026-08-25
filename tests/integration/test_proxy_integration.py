@@ -611,7 +611,7 @@ async def test_upstream_429_with_retry_after(
     assert response.status_code == 429
     health = app.state.health_manager.get_account_health("test-acct")
     assert health.health_state == "rate_limited"
-    assert health.cooldown_until > time.time() + 20
+    assert health.cooldown_until > app.state.health_manager.clock() + 20
 
 
 # ── 9b. Upstream 402 quota failure passed through ────────────────────────────

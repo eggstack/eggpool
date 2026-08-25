@@ -192,7 +192,6 @@ def compute_backoff_seconds(
     retry_after: float | None = None,
     *,
     jitter: bool = True,
-    now: float | None = None,
 ) -> float | None:
     """Return the bounded backoff delay for a failure, or ``None``.
 
@@ -211,11 +210,8 @@ def compute_backoff_seconds(
         provider's explicit wait is honored.
     jitter:
         Apply the policy's jitter factor. Default ``True``; set to
-        ``False`` for deterministic testing.
-    now:
-        Wall-clock reference for jitter random seeding only. Defaults
-        to ``time.time()`` so multiple calls in the same second are
-        stable enough for tests.
+        ``False`` for deterministic testing (see also
+        :func:`seed_random_for_test`).
     """
     policy = get_backoff_policy(reason)
     if policy is None or policy.base_delay <= 0 or policy.cap <= 0:

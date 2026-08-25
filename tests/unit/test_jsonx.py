@@ -167,6 +167,73 @@ class TestRoundTrip:
         assert json.loads(encoded) == value
 
 
+class TestEncodingEnvelopeParity:
+    """Both backends must agree on the encoding envelope.
+
+    The stdlib fallback mirrors orjson: non-finite floats serialize as
+    ``null`` (never bare ``NaN``/``Infinity`` tokens, which are invalid
+    JSON per RFC 8259) and integers outside orjson's accepted window
+    raise instead of being silently emitted.
+    """
+
+    @pytest.mark.parametrize("backend_name", _BACKENDS)
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            (float("nan"), b"null"),
+            (float("inf"), b"null"),
+            (float("-inf"), b"null"),
+            ({"a": [1, float("nan")]}, b'{"a":[1,null]}'),
+        ],
+        ids=["nan", "inf", "-inf", "nested-nan"],
+    )
+    def test_non_finite_floats_emit_null(
+        self,
+        backend_name: str,
+        value: object,
+        expected: bytes,
+        _restore_jsonx_backend: None,
+    ) -> None:
+        reloaded = _force_backend(backend_name)["reloaded"]
+        assert reloaded.dumps_bytes(value) == expected
+
+    @pytest.mark.parametrize("backend_name", _BACKENDS)
+    @pytest.mark.parametrize(
+        "value",
+        [
+            -(2**63) - 1,
+            2**64,
+            10**30,
+            {"big": 2**64, "nested": [{"bigger": 10**30}]},
+            {2**64: "key"},
+        ],
+        ids=[
+            "int64-min-underflow",
+            "uint64-max-overflow",
+            "huge-int",
+            "deep-big-int",
+            "big-int-key",
+        ],
+    )
+    def test_rejects_out_of_envelope_integers(
+        self, backend_name: str, value: object, _restore_jsonx_backend: None
+    ) -> None:
+        reloaded = _force_backend(backend_name)["reloaded"]
+        with pytest.raises((ValueError, TypeError)):
+            reloaded.dumps_bytes(value)
+        with pytest.raises((ValueError, TypeError)):
+            reloaded.dumps_str(value)
+
+    @pytest.mark.parametrize("backend_name", _BACKENDS)
+    def test_integer_envelope_boundaries_round_trip(
+        self, backend_name: str, _restore_jsonx_backend: None
+    ) -> None:
+        reloaded = _force_backend(backend_name)["reloaded"]
+        value = {"min": -(2**63), "max": 2**64 - 1}
+        encoded = reloaded.dumps_bytes(value)
+        assert json.loads(encoded) == value
+
+
 class TestBackendSelection:
     """The active backend is reported correctly and respects the override."""
 

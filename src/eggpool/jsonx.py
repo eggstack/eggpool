@@ -30,8 +30,9 @@ from __future__ import annotations
 import importlib
 import json
 import logging
+import math
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -117,6 +118,64 @@ if _ACTIVE_BACKEND == "orjson":
         return dumps_bytes(obj, sort_keys=sort_keys, default=default).decode("utf-8")
 
 else:
+    # The stdlib fallback must mirror orjson's encoding envelope so the
+    # two backends never disagree on the same payload:
+    #
+    # * integers outside orjson's accepted window ([-2^63, 2^64-1])
+    #   raise instead of being silently emitted;
+    # * non-finite floats become ``null`` (what orjson emits), never
+    #   bare ``NaN`` / ``Infinity`` tokens, which are invalid JSON per
+    #   RFC 8259.
+    _INT64_MIN = -(2**63)
+    _UINT64_MAX = 2**64 - 1
+
+    def _scan_envelope(obj: Any) -> bool:
+        """Validate *obj* against orjson's integer envelope.
+
+        Raises ``ValueError`` for out-of-range integers and returns
+        whether any non-finite float was seen (so the caller knows a
+        sanitizing copy is required).
+        """
+        if obj is None or isinstance(obj, (bool, str)):
+            return False
+        if isinstance(obj, int):
+            if not (_INT64_MIN <= obj <= _UINT64_MAX):
+                raise ValueError("Integer exceeds 64-bit range")
+            return False
+        if isinstance(obj, float):
+            return not math.isfinite(obj)
+        if isinstance(obj, dict):
+            entries = cast("dict[Any, Any]", obj)
+            return any(
+                _scan_envelope(key) or _scan_envelope(value)
+                for key, value in entries.items()
+            )
+        if isinstance(obj, list):
+            return any(_scan_envelope(item) for item in cast("list[Any]", obj))
+        if isinstance(obj, tuple):
+            return any(_scan_envelope(item) for item in cast("tuple[Any, ...]", obj))
+        return False
+
+    def _sanitize_non_finite(obj: Any) -> Any:
+        """Return a copy of *obj* with non-finite floats replaced by ``None``."""
+        if isinstance(obj, float):
+            return obj if math.isfinite(obj) else None
+        if isinstance(obj, dict):
+            entries = cast("dict[Any, Any]", obj)
+            return {key: _sanitize_non_finite(value) for key, value in entries.items()}
+        if isinstance(obj, list):
+            items = cast("list[Any]", obj)
+            return [_sanitize_non_finite(item) for item in items]
+        if isinstance(obj, tuple):
+            items = cast("tuple[Any, ...]", obj)
+            return tuple(_sanitize_non_finite(item) for item in items)
+        return obj
+
+    def _prepare_stdlib(obj: Any) -> Any:
+        """Return *obj* ready for :func:`json.dumps`, orjson-style."""
+        if _scan_envelope(obj):
+            return _sanitize_non_finite(obj)
+        return obj
 
     def loads(data: JsonInput) -> Any:
         """Decode a JSON document to a Python value."""
@@ -132,7 +191,7 @@ else:
     ) -> bytes:
         """Encode ``obj`` as compact UTF-8 JSON bytes."""
         return json.dumps(
-            obj,
+            _prepare_stdlib(obj),
             default=default,
             ensure_ascii=False,
             separators=(",", ":"),
@@ -147,7 +206,7 @@ else:
     ) -> str:
         """Encode ``obj`` as a compact JSON string."""
         return json.dumps(
-            obj,
+            _prepare_stdlib(obj),
             default=default,
             ensure_ascii=False,
             separators=(",", ":"),

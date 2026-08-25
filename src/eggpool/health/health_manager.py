@@ -179,7 +179,12 @@ class HealthManager:
     _accounts: dict[str, AccountHealth] = field(
         default_factory=dict[str, AccountHealth]
     )
-    clock: Callable[[], float] = field(default_factory=lambda: time.time)
+    # Monotonic default: cooldown/disable deadlines and breaker recovery
+    # are duration math against this clock; wall-clock corrections must
+    # not open or close breakers early. All writers of AccountHealth
+    # deadlines must anchor on this clock (see failure/applier.py and
+    # generation_factory.py hydration).
+    clock: Callable[[], float] = field(default_factory=lambda: time.monotonic)
 
     def get_account_health(self, account_name: str) -> AccountHealth:
         """Get or create account health."""

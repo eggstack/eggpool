@@ -390,7 +390,10 @@ class AnthropicToOpenAI:
 
         for message_index, msg in enumerate(iter_objects(payload.get("messages", []))):
             role = str(msg.get("role", ""))
-            content = msg.get("content", "")
+            # ``or ""`` (not ``.get(key, "")``): an explicit JSON null must
+            # coerce to an empty string, not survive as ``None`` and later
+            # stringify to the literal text "None".
+            content = msg.get("content") or ""
 
             if isinstance(content, str):
                 messages.append({"role": role, "content": content})
@@ -452,7 +455,7 @@ class AnthropicToOpenAI:
                                         "to": client_id,
                                     }
                                 )
-                        result_content = part.get("content", "")
+                        result_content = part.get("content") or ""
                         if isinstance(result_content, list):
                             supports_media_tool_result = (
                                 multimodal_capability is not None
@@ -987,7 +990,7 @@ class AnthropicToOpenAI:
 
         stop_reason = FINISH_REASON_MAP.get(finish_reason, "end_turn")
 
-        content_text = str(message.get("content", ""))
+        content_text = str(message.get("content") or "")
         refusal = message.get("refusal")
         if refusal:
             content_text = str(refusal)

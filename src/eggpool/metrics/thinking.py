@@ -55,7 +55,12 @@ _VALID_DECISIONS: frozenset[str] = frozenset(
 
 @dataclass(frozen=True, slots=True)
 class ThinkingMetricEvent:
-    """Immutable per-request thinking trace metadata."""
+    """Immutable per-request thinking trace metadata.
+
+    ``provider_id`` / ``model_id`` are optional observability
+    dimensions; when supplied they feed the provider-scoped counters,
+    otherwise those counters record the literal ``"unknown"``.
+    """
 
     requested: bool
     client_protocol: str
@@ -68,6 +73,8 @@ class ThinkingMetricEvent:
     upstream_protocol: str | None
     upstream_fields: list[str]
     decision: str  # one of _VALID_DECISIONS
+    provider_id: str | None = None
+    model_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -311,24 +318,24 @@ async def record_thinking_event(event: ThinkingMetricEvent) -> None:
     elif decision == "provider_mapped":
         await counter.increment_provider_mapped(
             client_protocol=event.client_protocol,
-            provider_id="unknown",
-            model_id="unknown",
+            provider_id=event.provider_id or "unknown",
+            model_id=event.model_id or "unknown",
         )
     elif decision == "provider_dropped":
         await counter.increment_provider_dropped(
             client_protocol=event.client_protocol,
-            provider_id="unknown",
-            model_id="unknown",
+            provider_id=event.provider_id or "unknown",
+            model_id=event.model_id or "unknown",
         )
     elif decision == "provider_rejected":
         await counter.increment_provider_rejected(
             client_protocol=event.client_protocol,
-            provider_id="unknown",
-            model_id="unknown",
+            provider_id=event.provider_id or "unknown",
+            model_id=event.model_id or "unknown",
         )
 
     if event.budget_clamped:
         await counter.increment_budget_clamped(
             client_protocol=event.client_protocol,
-            provider_id="unknown",
+            provider_id=event.provider_id or "unknown",
         )

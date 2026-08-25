@@ -27,7 +27,9 @@ class CircuitBreaker:
     recovery_timeout: float = 300.0  # 5 minutes
     success_threshold: int = 1  # One successful half-open probe closes it
 
-    clock: Callable[[], float] = field(default_factory=lambda: time.time)
+    # Monotonic default: recovery timeouts are duration math and must not
+    # jump when the wall clock is corrected (NTP, manual adjustment).
+    clock: Callable[[], float] = field(default_factory=lambda: time.monotonic)
 
     _state: CircuitState = CircuitState.CLOSED
     _failure_count: int = 0

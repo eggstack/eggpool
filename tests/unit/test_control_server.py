@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import os as _os
@@ -744,6 +745,36 @@ class TestControlClient:
             assert resp.message == "ok"
         finally:
             await srv.stop()
+
+    @pytest.mark.asyncio
+    async def test_oversized_response_line_raises_protocol_error(
+        self, socket_dir: Path
+    ) -> None:
+        """A response line past the stream limit must surface as a typed error."""
+
+        async def _oversized_handler(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            with contextlib.suppress(Exception):
+                await reader.readline()
+            writer.write(b"x" * 70000)
+            with contextlib.suppress(Exception):
+                await writer.drain()
+            # Hold the connection open so the client's readline() fails
+            # on the size limit rather than on EOF.
+            await asyncio.sleep(2)
+
+        path = socket_dir / "oversized.sock"
+        server = await asyncio.start_unix_server(_oversized_handler, path=str(path))
+        try:
+            client = ControlClient(socket_path=path, timeout_s=2.0)
+            with pytest.raises(
+                ControlClientProtocolError, match="malformed response framing"
+            ):
+                await client.reload(validated_digest="a" * 64)
+        finally:
+            server.close()
+            await server.wait_closed()
 
 
 # ---------------------------------------------------------------------------

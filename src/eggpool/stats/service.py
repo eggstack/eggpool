@@ -471,7 +471,8 @@ class StatsService:
                 )
                 row["operator_disabled"] = bool(
                     getattr(health, "disabled_until", None) is not None
-                    and float(getattr(health, "disabled_until", 0.0)) > time.time()
+                    and float(getattr(health, "disabled_until", 0.0))
+                    > self._health_manager.clock()
                 )
             else:
                 row["health_state"] = "healthy"

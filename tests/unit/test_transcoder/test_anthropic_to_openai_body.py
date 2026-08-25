@@ -868,3 +868,56 @@ class TestToolTranslation:
             "type": "function",
             "function": {"name": "get_weather"},
         }
+
+
+class TestNullContentCoercion:
+    def test_scalar_null_content_becomes_empty_string(
+        self, transcoder: AnthropicToOpenAI
+    ) -> None:
+        """Explicit null message content must not stringify to the text "None"."""
+        payload = {
+            "model": "claude-opus",
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": None}],
+        }
+        result, _ = transcoder.encode_request(payload, _make_context())
+
+        assert result["messages"] == [{"role": "user", "content": ""}]
+
+    def test_tool_result_null_content_becomes_empty_string(
+        self, transcoder: AnthropicToOpenAI
+    ) -> None:
+        """Explicit null tool_result content must not stringify to "None"."""
+        payload = {
+            "model": "claude-opus",
+            "max_tokens": 64,
+            "messages": [
+                {"role": "user", "content": "What's the weather?"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "get_weather",
+                            "input": {"city": "San Francisco"},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": None,
+                        }
+                    ],
+                },
+            ],
+        }
+        result, _ = transcoder.encode_request(payload, _make_context())
+
+        tool_messages = [m for m in result["messages"] if m.get("role") == "tool"]
+        assert len(tool_messages) == 1
+        assert tool_messages[0]["content"] == ""

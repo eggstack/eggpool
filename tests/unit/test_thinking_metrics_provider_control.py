@@ -124,3 +124,28 @@ class TestRecordThinkingEventProviderDecisions:
         snap = await counter.snapshot()
         found = any(k.startswith("provider_dropped|") for k in snap["counters"])
         assert found
+
+    @pytest.mark.asyncio
+    async def test_event_provider_dimensions_flow_into_keys(self) -> None:
+        """Provider/model fields on the event feed the counter keys."""
+        counter = get_counter()
+        await counter.reset()
+        event = ThinkingMetricEvent(
+            requested=True,
+            client_protocol="openai",
+            request_fields=["reasoning_effort"],
+            requested_effort="high",
+            resolved_budget_tokens=1024,
+            budget_clamped=True,
+            capability_status="supported",
+            capability_source="provider_catalog",
+            upstream_protocol="anthropic",
+            upstream_fields=["thinking"],
+            decision="provider_mapped",
+            provider_id="acme",
+            model_id="acme-large",
+        )
+        await record_thinking_event(event)
+        snap = await counter.snapshot()
+        assert snap["counters"]["provider_mapped|openai|acme|acme-large"] == 1
+        assert snap["counters"]["budget_clamped|openai|acme"] == 1

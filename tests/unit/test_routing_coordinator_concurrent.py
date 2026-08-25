@@ -653,7 +653,8 @@ class TestRoutingDecisionScoreComponents:
                 "tier",
                 "quota",
                 "inflight",
-                "transcode",
+                "transcode_avoided",
+                "transcode_required",
                 "near_tie",
                 "exact_tie",
             }

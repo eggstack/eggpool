@@ -263,7 +263,9 @@ class TestResponseStructure:
 
         assert result["content"] == []
 
-    def test_none_content_stringified(self, transcoder: AnthropicToOpenAI) -> None:
+    def test_none_content_with_tool_calls_has_no_text_block(
+        self, transcoder: AnthropicToOpenAI
+    ) -> None:
         payload = {
             "id": "cmpl-1",
             "model": "gpt-4",
@@ -289,14 +291,32 @@ class TestResponseStructure:
         result, _ = transcoder.decode_response(payload, _make_context())
 
         assert result["content"] == [
-            {"type": "text", "text": "None"},
             {
                 "type": "tool_use",
-                "id": result["content"][1]["id"],
+                "id": result["content"][0]["id"],
                 "name": "get_weather",
                 "input": {},
             },
         ]
+
+    def test_none_content_without_tool_calls_is_empty(
+        self, transcoder: AnthropicToOpenAI
+    ) -> None:
+        payload = {
+            "id": "cmpl-2",
+            "model": "gpt-4",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": None},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1},
+        }
+        result, _ = transcoder.decode_response(payload, _make_context())
+
+        assert result["content"] == []
 
     def test_empty_choices_returns_empty_content(
         self, transcoder: AnthropicToOpenAI
@@ -363,10 +383,9 @@ class TestToolResponseTranslation:
         result, warnings = transcoder.decode_response(payload, _make_context())
 
         assert result["content"] == [
-            {"type": "text", "text": "None"},
             {
                 "type": "tool_use",
-                "id": result["content"][1]["id"],
+                "id": result["content"][0]["id"],
                 "name": "get_weather",
                 "input": {"city": "SF"},
             },
@@ -379,7 +398,7 @@ class TestToolResponseTranslation:
             and w.get("from") == "call_abc"
         ]
         assert len(id_warnings) == 1
-        assert result["content"][1]["id"].startswith("toolu_")
+        assert result["content"][0]["id"].startswith("toolu_")
 
     def test_text_and_tool_calls_both_emitted(
         self, transcoder: AnthropicToOpenAI
@@ -459,12 +478,11 @@ class TestToolResponseTranslation:
         }
         result, _ = transcoder.decode_response(payload, _make_context())
 
-        assert len(result["content"]) == 3
-        assert result["content"][0]["type"] == "text"
+        assert len(result["content"]) == 2
+        assert result["content"][0]["type"] == "tool_use"
+        assert result["content"][0]["name"] == "get_weather"
         assert result["content"][1]["type"] == "tool_use"
-        assert result["content"][1]["name"] == "get_weather"
-        assert result["content"][2]["type"] == "tool_use"
-        assert result["content"][2]["name"] == "get_time"
+        assert result["content"][1]["name"] == "get_time"
 
     def test_malformed_tool_arguments_passed_as_raw(
         self, transcoder: AnthropicToOpenAI
@@ -496,7 +514,7 @@ class TestToolResponseTranslation:
         }
         result, warnings = transcoder.decode_response(payload, _make_context())
 
-        tool_use_block = result["content"][1]
+        tool_use_block = result["content"][0]
         assert tool_use_block["input"] == {"__raw_arguments__": "not-valid-json{"}
         malformed_warnings = [
             w for w in warnings if w.get("kind") == "malformed_tool_arguments"
@@ -535,9 +553,9 @@ class TestToolResponseTranslation:
         }
         result, _ = transcoder.decode_response(payload, context)
 
-        assert result["content"][1]["type"] == "tool_use"
-        assert result["content"][1]["id"] != "toolu_known"
-        assert result["content"][1]["id"].startswith("toolu_")
+        assert result["content"][0]["type"] == "tool_use"
+        assert result["content"][0]["id"] != "toolu_known"
+        assert result["content"][0]["id"].startswith("toolu_")
 
     def test_finish_reason_tool_calls_maps_to_stop_reason_tool_use(
         self, transcoder: AnthropicToOpenAI
@@ -616,10 +634,9 @@ class TestToolResponseTranslation:
         result, _ = transcoder.decode_response(payload, _make_context())
 
         assert result["content"] == [
-            {"type": "text", "text": "None"},
             {
                 "type": "tool_use",
-                "id": result["content"][1]["id"],
+                "id": result["content"][0]["id"],
                 "name": "get_weather",
                 "input": {"city": "San Francisco"},
             },

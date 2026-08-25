@@ -280,7 +280,7 @@ class RequestRepository:
         """Set the selected account after routing decision."""
         await self._db.execute_write(
             "UPDATE requests SET account_id = ?, reserved_microdollars = ? "
-            "WHERE id = ?",
+            "WHERE id = ? AND status = 'pending'",
             (account_id, reserved_microdollars, request_id),
         )
 

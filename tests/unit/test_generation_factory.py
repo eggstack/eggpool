@@ -568,7 +568,8 @@ class TestBackoffHydrationParity:
             # Account should be suppressed
             health = result.health_manager.get_account_health("acct-1")
             assert health.is_healthy is False
-            assert health.cooldown_until - time.time() <= 1801.0
+            # Hydrated cooldown must not exceed the max nonterminal backoff.
+            assert health.cooldown_until - result.health_manager.clock() <= 1801.0
         finally:
             await db.disconnect()
 

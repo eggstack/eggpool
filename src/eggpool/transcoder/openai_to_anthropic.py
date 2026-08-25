@@ -374,7 +374,10 @@ class OpenAIToAnthropic:
 
         for message_index, msg in enumerate(iter_objects(payload.get("messages", []))):
             role = str(msg.get("role", ""))
-            content = msg.get("content", "")
+            # ``or ""`` (not ``.get(key, "")``): an explicit JSON null must
+            # coerce to an empty string, not survive as ``None`` and later
+            # stringify to the literal text "None".
+            content = msg.get("content") or ""
 
             if role in ("system", "developer"):
                 if isinstance(content, str):

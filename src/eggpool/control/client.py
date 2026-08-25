@@ -120,6 +120,13 @@ class ControlClient:
             raise ControlClientTimeoutError(
                 "timed out waiting for server response"
             ) from exc
+        except ValueError as exc:
+            # asyncio raises a bare ValueError when the response line
+            # exceeds the stream limit (no separator found); surface it
+            # as the typed protocol error instead.
+            raise ControlClientProtocolError(
+                f"malformed response framing: {exc}"
+            ) from exc
         except OSError as exc:
             raise ControlClientConnectionError(f"communication error: {exc}") from exc
         finally:

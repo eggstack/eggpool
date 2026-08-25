@@ -827,7 +827,10 @@ async def _hydrate_health_from_backoffs(
             health_manager.record_rate_limit(account_name, remaining)
         else:
             health = health_manager.get_account_health(account_name)
-            health.cooldown_until = now + remaining
+            # Anchor on the manager's clock (monotonic by default); the
+            # persisted deadline is epoch-based and only contributes a
+            # duration (``remaining``) here.
+            health.cooldown_until = health_manager.clock() + remaining
             health.health_state = "cooldown"
             health.is_healthy = False
 

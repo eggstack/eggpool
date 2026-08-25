@@ -1094,3 +1094,20 @@ class TestBreakpointHelperReturnContract:
         )
         assert result is True
         assert part["cache_control"] == {"type": "ephemeral"}
+
+
+class TestNullContentCoercion:
+    def test_tool_message_null_content_becomes_empty_string(self) -> None:
+        """Explicit null tool content must not stringify to the text "None"."""
+        payload = {
+            "model": "gpt-5.6",
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "tool", "tool_call_id": "call_1", "content": None},
+            ],
+        }
+        result, _ = OpenAIToAnthropic().encode_request(payload, _make_context())
+
+        tool_block = result["messages"][1]["content"][0]
+        assert tool_block["type"] == "tool_result"
+        assert tool_block["content"] == ""

@@ -90,7 +90,7 @@ class TestCircuitBreaker:
         """Each breaker records its own construction time."""
         timestamps = iter((100.0, 200.0))
         monkeypatch.setattr(
-            "eggpool.health.circuit_breaker.time.time",
+            "eggpool.health.circuit_breaker.time.monotonic",
             lambda: next(timestamps),
         )
 
@@ -264,7 +264,7 @@ class TestHealthManager:
     def test_expired_model_disable_is_removed_from_stats(self) -> None:
         manager = HealthManager()
         health = manager.get_account_health("account1")
-        health.disabled_models["model1"] = time.time() - 1
+        health.disabled_models["model1"] = manager.clock() - 1
         stats = manager.get_health_stats("account1")
         assert stats["disabled_models"] == []
 
@@ -481,7 +481,7 @@ class TestRecordFailureWithPolicy:
         health = manager.get_account_health("acct")
         assert health.health_state == "quota_exhausted"
         assert not health.is_healthy
-        assert health.cooldown_until > time.time()
+        assert health.cooldown_until > manager.clock()
 
     def test_rate_limited_honors_retry_after(self) -> None:
         manager = HealthManager()

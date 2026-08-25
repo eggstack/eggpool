@@ -31,7 +31,7 @@ class _JsonFormatter(logging.Formatter):
         }
         if record.__dict__.get("extra"):
             payload["extra"] = record.extra  # type: ignore[attr-defined]
-        return json.dumps(payload)
+        return json.dumps(payload, default=str)
 
 
 def configure_logging(level: str = "INFO", json_output: bool = False) -> None:

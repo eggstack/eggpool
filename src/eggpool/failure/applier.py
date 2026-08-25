@@ -232,7 +232,10 @@ class EffectsApplier:
                 delay = effects.backoff_until - now
                 if delay > 0:
                     health = self._health_manager.get_account_health(account)
-                    health.cooldown_until = now + delay
+                    # Anchor on the manager's clock (monotonic by default);
+                    # ``effects.backoff_until`` is epoch-based and must only
+                    # contribute a duration here.
+                    health.cooldown_until = self._health_manager.clock() + delay
                     health.health_state = "cooldown"
                     health.is_healthy = False
 
