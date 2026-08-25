@@ -1711,6 +1711,20 @@ class RequestFinalizationSupervisor:
                     await job.run()
                 else:
                     await self.run_terminal_command(job)
+            except asyncio.CancelledError:
+                # A cancelled inner terminal-command task surfaces as
+                # cancellation in its waiter (asyncio.shield).  Re-raise
+                # only when the scheduler itself is being cancelled;
+                # otherwise treat it as one job-level failure so a dead
+                # job cannot strand every pending retry.
+                current = asyncio.current_task()
+                if current is not None and current.cancelling() > 0:
+                    raise
+                logger.warning(
+                    "Retry scheduler observed cancelled job for %s",
+                    key,
+                )
+                continue
             except Exception:
                 continue
 
@@ -1814,6 +1828,12 @@ class RequestFinalizationSupervisor:
                         "Finalization drain timed out for request %s",
                         job.identity.proxy_request_id,
                     )
+                    # The shield keeps the inner work alive past the wait;
+                    # cancel the wrapper so it does not retain generation
+                    # references until natural completion.
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await task
                 except asyncio.CancelledError:
                     remaining += 1
                 except Exception:
@@ -1845,6 +1865,8 @@ class RequestFinalizationSupervisor:
             job.release_references()
             self._history.append(job.to_record())
             self._counters.completed += 1
+            if job.failure_count > 0:
+                self._counters.failures_recovered += 1
         for _key, command in list(self._active_commands.items()):
             if command.is_complete:
                 self._reconcile_terminal_command(command)

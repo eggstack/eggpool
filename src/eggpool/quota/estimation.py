@@ -451,11 +451,15 @@ class AccountQuota:
         return tokens
 
     def get_persisted_token_count_7d(self) -> int:
-        """7d token count from the persisted snapshot, or the daily window."""
+        """7d token count from the persisted snapshot, or 0 if unavailable.
+
+        No in-memory 7d window exists. Falling back to the 24h daily
+        window would understate weekly utilization by roughly 7x and
+        bias routing toward freshly added accounts.
+        """
         if self.persisted_snapshot is not None:
             return self.persisted_snapshot.token_count_7d
-        tokens, _ = self.daily_window.get_usage()
-        return tokens
+        return 0
 
     def get_persisted_token_count_30d(self) -> int:
         """30d token count from the persisted snapshot, or 0.

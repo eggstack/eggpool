@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hmac
 import os
 import select
 import shlex
@@ -362,7 +363,7 @@ def matching_logout_accounts(
     matches: list[ConfiguredAccount] = []
 
     for account in accounts:
-        if account.api_key == target:
+        if _key_matches(account.api_key, target):
             matches.append(account)
             continue
         if account.api_key_env == target:
@@ -908,13 +909,33 @@ def find_shell_profile() -> Path | None:
     return home / ".profile"
 
 
-def _atomic_write_text(path: Path, content: str) -> None:
+def _key_matches(candidate: str | None, secret: str | None) -> bool:
+    """Constant-time API-key comparison (bytes avoid ASCII restrictions)."""
+    if candidate is None or secret is None:
+        return candidate is secret
+    return hmac.compare_digest(
+        candidate.encode("utf-8"),
+        secret.encode("utf-8"),
+    )
+
+
+def _atomic_write_text(
+    path: Path,
+    content: str,
+    *,
+    mode: int | None = None,
+) -> None:
     """Replace *path* with *content* via a temporary file and atomic rename.
 
     A crash mid-write must never leave a truncated config file behind.
+    When *mode* is given, the replacement carries those permissions
+    atomically, with no window at default umask permissions.
     """
     tmp_path = path.with_name(path.name + ".tmp")
     tmp_path.write_text(content, encoding="utf-8")
+    if mode is not None:
+        with contextlib.suppress(OSError):
+            tmp_path.chmod(mode)
     os.replace(tmp_path, path)
 
 
@@ -948,6 +969,10 @@ def export_env_var(env_name: str, value: str) -> Path | None:
 
     # Check if already exists
     existing = profile.read_text(encoding="utf-8")
+    # Tighten permissions before any key-bearing write so the profile is
+    # never world-readable while it contains the key.
+    with contextlib.suppress(OSError):
+        profile.chmod(0o600)
     if f"export {env_name}=" in existing:
         # Replace existing value atomically.
         file_lines = existing.split("\n")
@@ -957,16 +982,12 @@ def export_env_var(env_name: str, value: str) -> Path | None:
                 new_lines.append(export_line)
             else:
                 new_lines.append(line)
-        _atomic_write_text(profile, "\n".join(new_lines))
+        _atomic_write_text(profile, "\n".join(new_lines), mode=0o600)
     else:
         # Append
         with profile.open("a", encoding="utf-8") as f:
             f.write("\n# Added by eggpool connect\n")
             f.write(f"{export_line}\n")
-
-    with contextlib.suppress(OSError):
-        # The profile now carries an API key; drop group/other access.
-        profile.chmod(0o600)
 
     return profile
 
@@ -1009,7 +1030,7 @@ def _check_duplicate_api_key(
             parts = stripped.split("=", 1)
             if len(parts) == 2:
                 key_value = parts[1].strip().strip('"').strip("'")
-                if key_value == api_key and current_provider:
+                if _key_matches(key_value, api_key) and current_provider:
                     return current_provider
 
     return None

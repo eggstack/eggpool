@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import tomllib
 
-from eggpool.toml_edit import update_section_value
+from eggpool.toml_edit import section_has_key, update_section_value
 
 
 def test_update_accepts_assignment_without_spaces() -> None:
@@ -82,3 +82,55 @@ def test_array_of_tables_missing_key_is_inserted_not_duplicated() -> None:
         "count = 3",
         'name = "x"',
     ]
+
+
+def test_multiline_basic_string_value_is_replaced_wholesale() -> None:
+    original = [
+        "[server]",
+        'api_key = """abc',
+        "def = looks like an assignment",
+        '"""',
+        "port = 8080",
+    ]
+    result = update_section_value(original, "server", "api_key", '"secret"')
+
+    assert result.key_found
+    parsed = tomllib.loads("\n".join(result.lines))
+    assert parsed["server"]["api_key"] == "secret"
+    assert parsed["server"]["port"] == 8080
+
+
+def test_multiline_array_value_is_replaced_wholesale() -> None:
+    original = [
+        "[server]",
+        "cors_origins = [",
+        '  "https://a.example",',
+        '  "https://b.example",',
+        "]",
+        "port = 8080",
+    ]
+    result = update_section_value(
+        original, "server", "cors_origins", '["https://c.example"]'
+    )
+
+    assert result.key_found
+    parsed = tomllib.loads("\n".join(result.lines))
+    assert parsed["server"]["cors_origins"] == ["https://c.example"]
+    assert parsed["server"]["port"] == 8080
+
+
+def test_multiline_string_inner_assignment_does_not_match_key() -> None:
+    original = [
+        "[agent]",
+        'prompt = """',
+        "api_key = placeholder inside text",
+        '"""',
+    ]
+    assert not section_has_key(original, "server", "api_key")
+
+    result = update_section_value(
+        original, "server", "api_key", '"secret"', append_missing_section=True
+    )
+    parsed = tomllib.loads("\n".join(result.lines))
+    assert parsed["server"]["api_key"] == "secret"
+    assert "placeholder inside text" in parsed["agent"]["prompt"]

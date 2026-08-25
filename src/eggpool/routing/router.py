@@ -1243,6 +1243,7 @@ class Router:
             account_supports_request_surface=(
                 self._registry.account_supports_request_surface
             ),
+            account_provider_fallback=self._registry.get_provider_for_account,
         )
         if exclude_accounts:
             eligible = [

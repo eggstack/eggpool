@@ -28,6 +28,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from eggpool.cli_exit_codes import (
+    EXIT_CONTROL_UNAVAILABLE,
     EXIT_RESTART_REQUIRED,
     EXIT_VALIDATION,
 )
@@ -176,7 +177,9 @@ def validate_and_rehash(
             echo_err(message)
         else:
             logger.error(message)
-        raise SystemExit(EXIT_VALIDATION) from None
+        # Match `eggpool rehash`: an unreachable control socket is a
+        # distinct condition (server down), not a validation failure.
+        raise SystemExit(EXIT_CONTROL_UNAVAILABLE) from None
 
     if result.ok:
         message = f"Live reload applied (generation={result.generation})."

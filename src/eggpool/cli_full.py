@@ -3950,14 +3950,10 @@ def _build_update_command(
         if method == "source":
             return ["uv", "sync", "--no-dev"]
         if method == "pipx":
-            command = ["pipx", "install"]
-            if exact:
-                command.append("--force")
+            command = ["pipx", "install", "--force"]
             return [*command, git_target]
         if method == "uv-tool":
-            command = ["uv", "tool", "install"]
-            if exact:
-                command.append("--force")
+            command = ["uv", "tool", "install", "--force"]
             return [*command, git_target]
         return [sys.executable, "-m", "pip", "install", git_target]
 
@@ -3979,7 +3975,7 @@ def _build_update_command(
     if method == "pipx":
         return ["pipx", "upgrade", "eggpool"]
     if method == "uv-tool":
-        return ["uv", "tool", "install", f"eggpool=={target_version}"]
+        return ["uv", "tool", "install", "--force", f"eggpool=={target_version}"]
     return [sys.executable, "-m", "pip", "install", "--upgrade", "eggpool"]
 
 
@@ -4021,8 +4017,6 @@ def update(
             click.echo("Could not determine latest version from PyPI.", err=True)
             sys.exit(1)
 
-        click.echo(f"Current version: {current_version}")
-        click.echo(f"Latest version: {latest_version}")
         if not is_newer_version(current_version, latest_version):
             click.echo("Already up to date.")
             return
@@ -4373,10 +4367,13 @@ def runtime_status(ctx: click.Context, output_json: bool) -> None:
     api_key = config.server.resolved_api_key
 
     # Normalize bind address for localhost probe
-    if host in ("0.0.0.0", "::"):
+    if host == "0.0.0.0":
         host = "127.0.0.1"
+    elif host == "::":
+        host = "::1"
+    url_host = f"[{host}]" if ":" in host else host
 
-    url = f"http://{host}:{port}/api/stats/runtime"
+    url = f"http://{url_host}:{port}/api/stats/runtime"
     req = urllib.request.Request(url, method="GET")
     if api_key:
         req.add_header("Authorization", f"Bearer {api_key}")
@@ -4551,6 +4548,8 @@ def _print_runtime_status(data: dict[str, Any]) -> None:
 
 def _format_duration(seconds: object) -> str:
     """Format seconds into a human-readable duration string."""
+    if seconds is None:
+        return "N/A"
     if not isinstance(seconds, (int, float)):
         return str(seconds)
     s = int(seconds)

@@ -1656,10 +1656,18 @@ class RequestCoordinator:
                     elif category == FailureCategory.RATE_LIMITED:
                         # Non-retryable 429s are propagated to the
                         # client but still indicate upstream pressure.
-                        # ``_NonRetryableUpstreamError`` does not carry
-                        # ``retry_after`` so default to a 60 s cooldown.
+                        # Prefer a provider Retry-After carried by the
+                        # failure effects; default to a 60 s cooldown.
+                        carried_retry_after = (
+                            err.failure_effects.retry_after_s
+                            if err.failure_effects is not None
+                            else None
+                        )
                         self._health_manager.record_rate_limit(
-                            selected.account_name, 60.0
+                            selected.account_name,
+                            60.0
+                            if carried_retry_after is None
+                            else carried_retry_after,
                         )
                         health_applied = True
                 break
@@ -3303,6 +3311,7 @@ class RequestCoordinator:
                 raise _NonRetryableUpstreamError(
                     f"Upstream returned {response.status_code}",
                     status_code=response.status_code,
+                    error_class=failure_effects.evidence_class,
                     failure_observation=failure_observation,
                     failure_effects=failure_effects,
                     upstream_response=(
@@ -3413,10 +3422,24 @@ class RequestCoordinator:
             )
             generator_created = True
         except ProviderStreamTimeoutError as err:
+            _timeout_error, failure_observation, failure_effects = (
+                self._classify_upstream_failure(
+                    context=context,
+                    selected=selected,
+                    status_code=504,
+                    headers=[],
+                    body=None,
+                )
+            )
             raise _RetryableUpstreamError(
                 f"Provider stream timeout: {err.outcome}",
                 status_code=504,
                 error_class=err.outcome,
+                retry_after=failure_effects.retry_after_s,
+                upstream_response=None,
+                retry_category=None,
+                failure_observation=failure_observation,
+                failure_effects=failure_effects,
             ) from err
         finally:
             # Close the upstream response when we are NOT handing the
@@ -5371,9 +5394,16 @@ class RequestCoordinator:
                 # operational diagnostics report the root cause
                 # (e.g. RateLimitError) instead of _RetryableUpstreamError.
                 if (
-                    isinstance(last_error, _RetryableUpstreamError)
-                    and last_error.error_class is not None
-                ) or isinstance(last_error, _LocalDispatchError):
+                    (
+                        isinstance(last_error, _RetryableUpstreamError)
+                        and last_error.error_class is not None
+                    )
+                    or (
+                        isinstance(last_error, _NonRetryableUpstreamError)
+                        and last_error.error_class is not None
+                    )
+                    or isinstance(last_error, _LocalDispatchError)
+                ):
                     error_class = last_error.error_class
                 else:
                     error_class = type(last_error).__name__

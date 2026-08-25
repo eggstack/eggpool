@@ -123,7 +123,10 @@ async def test_fetch_recent_operational_events_filters_by_type(
 @pytest.mark.asyncio
 async def test_stats_service_operational_health(seeded_op_db: Database) -> None:
     service = StatsService(seeded_op_db)
-    time_range = resolve_time_range("7d")
+    # Explicit wide window: the preset ranges end at wall-clock now
+    # (second granularity, exclusive), so freshly seeded rows can share
+    # the boundary second and would be excluded.
+    time_range = resolve_time_range("1970-01-01 00:00:00..2999-12-31 23:59:59")
     summary = await service.get_operational_event_summary(time_range)
     assert summary
     recent = await service.get_recent_operational_events(limit=10)

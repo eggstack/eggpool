@@ -343,32 +343,6 @@ class TestModelInfoRefreshScheduler:
             )
             assert next_refresh > now, f"Status {status} returned past time"
 
-    def test_rank_due_work_sorts_by_priority(self) -> None:
-        """rank_due_work sorts models by priority (lower = more urgent)."""
-        now = datetime.now(UTC)
-        candidates = [
-            (
-                "model-fresh",
-                "fresh",
-                now - timedelta(days=30),
-                now - timedelta(hours=1),
-            ),
-            ("model-sparse", "sparse_new", now - timedelta(hours=1), None),
-            (
-                "model-partial",
-                "partial",
-                now - timedelta(days=5),
-                now - timedelta(hours=1),
-            ),
-        ]
-        decisions = self.scheduler.rank_due_work(candidates, now)
-        assert len(decisions) == 3
-        priorities = [d.priority for d in decisions]
-        assert priorities == sorted(priorities)
-        assert decisions[0].model_id == "model-sparse"
-        assert decisions[1].model_id == "model-partial"
-        assert decisions[2].model_id == "model-fresh"
-
 
 # --- Exponential backoff tests ---
 

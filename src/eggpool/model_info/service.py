@@ -616,12 +616,6 @@ class ModelInfoService:
 
             status, sparse = self._classify_model(model_id)
             detail = self._build_detail(model_id)
-            next_refresh = self._scheduler.next_refresh_for(
-                status=status,
-                first_seen_at=existing.first_seen_at,
-                last_refreshed_at=existing.last_refreshed_at,
-                now=now,
-            )
 
             # Try OpenRouter identity resolution for this model.
             # Source success was already recorded above on the bulk
@@ -687,7 +681,16 @@ class ModelInfoService:
                     )
                     for alias in hf_aliases_or:
                         if "/" in alias:
-                            hf_record = await self._huggingface_source.fetch_one(alias)
+                            try:
+                                hf_record = await self._huggingface_source.fetch_one(
+                                    alias
+                                )
+                            except Exception as exc:
+                                logger.warning(
+                                    "Hugging Face fetch failed for %s: %s", alias, exc
+                                )
+                                await self.record_source_error("huggingface", exc)
+                                continue
                             if hf_record is not None:
                                 await self._persist_source_observation(
                                     hf_record, model_id=model_id

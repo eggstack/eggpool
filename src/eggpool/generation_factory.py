@@ -56,6 +56,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Strong references for fire-and-forget recovery tasks. asyncio keeps only
+# weak references to tasks, so without this set the event loop may garbage
+# collect a pending one-shot refresh before it runs.
+_recovery_tasks: set[asyncio.Task[None]] = set()
+
 
 # ---------------------------------------------------------------------------
 # Factory result
@@ -560,7 +565,9 @@ class RuntimeGenerationFactory:
                 loop = asyncio.get_running_loop()
             except RuntimeError:
                 return
-            loop.create_task(_run())
+            task = loop.create_task(_run())
+            _recovery_tasks.add(task)
+            task.add_done_callback(_recovery_tasks.discard)
 
         router = Router(
             registry,

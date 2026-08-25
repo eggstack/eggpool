@@ -9,6 +9,7 @@ import select
 import ssl
 from collections.abc import AsyncIterable, AsyncIterator, Generator, Iterable
 from typing import Any, Protocol, cast
+from urllib.parse import urlsplit, urlunsplit
 
 import httpcore
 import httpx
@@ -151,7 +152,8 @@ class PProxyNetworkBackend(httpcore.AsyncNetworkBackend):
                 with contextlib.suppress(Exception):
                     await writer.wait_closed()
             raise httpcore.ConnectError(
-                f"pproxy connection via {self._proxy_uri!r} failed: {exc}"
+                f"pproxy connection via {_redact_proxy_uri(self._proxy_uri)} "
+                f"failed: {exc}"
             ) from exc
         return PProxyNetworkStream(reader, writer)
 
@@ -270,6 +272,23 @@ HTTPCORE_EXC_MAP: dict[type[Exception], type[httpx.HTTPError]] = {
     httpcore.ProtocolError: httpx.ProtocolError,
     httpcore.UnsupportedProtocol: httpx.UnsupportedProtocol,
 }
+
+
+def _redact_proxy_uri(uri: str) -> str:
+    """Return the proxy URI with any userinfo credentials removed.
+
+    Connect-failure messages land in logs and diagnostics; the configured
+    proxy URI commonly embeds ``user:password@host``, so only the
+    scheme and host:port are safe to retain.
+    """
+    try:
+        parts = urlsplit(uri)
+    except ValueError:
+        return "[REDACTED]"
+    host_port = parts.netloc.rpartition("@")[2]
+    if not host_port:
+        return "[REDACTED]"
+    return urlunsplit((parts.scheme, host_port, parts.path, parts.query, ""))
 
 
 def _apply_socket_options(

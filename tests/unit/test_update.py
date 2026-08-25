@@ -187,14 +187,11 @@ class TestUpdateCheckOnly:
         assert code == 0
         assert "Already up to date." in output
 
-    def test_bare_up_to_date_reports_current_and_latest_first(self) -> None:
+    def test_bare_up_to_date_prints_single_summary(self) -> None:
         code, output, calls = _invoke_update(current="0.1.0", latest="0.1.0")
         assert code == 0
-        assert (
-            output.index("Current version: 0.1.0")
-            < output.index("Latest version: 0.1.0")
-            < output.index("Already up to date.")
-        )
+        assert output.count("Already up to date.") == 1
+        assert "Current version:" not in output
         assert calls is None
 
     def test_no_install_run(self) -> None:
@@ -230,11 +227,11 @@ class TestUpdateByInstallMethod:
         assert calls[0] == ["pipx", "upgrade", "eggpool"]
 
     def test_uv_tool_install(self) -> None:
-        """uv-tool method runs uv tool install with pinned version."""
+        """uv-tool method runs uv tool install --force with pinned version."""
         code, output, calls = _invoke_update(method="uv-tool")
         assert code == 0
         assert calls is not None
-        assert calls[0] == ["uv", "tool", "install", "eggpool==0.2.0"]
+        assert calls[0] == ["uv", "tool", "install", "--force", "eggpool==0.2.0"]
 
     def test_source_install(self) -> None:
         """source method runs uv sync --no-dev with --directory."""
@@ -263,17 +260,18 @@ class TestUpdateFromSource:
         assert "pip" in cmd[0] or cmd[0] == sys.executable
 
     def test_from_source_on_pipx(self) -> None:
-        """--from-source on pipx install uses pipx install git+https://."""
+        """--from-source on pipx install uses pipx install --force git+https://."""
         code, output, calls = _invoke_update(args=["--from-source"], method="pipx")
         assert code == 0
         assert calls is not None
         cmd = calls[0]
         assert cmd[0] == "pipx"
         assert cmd[1] == "install"
-        assert "git+https://github.com/eggstack/eggpool.git@v0.2.0" in cmd[2]
+        assert "--force" in cmd
+        assert "git+https://github.com/eggstack/eggpool.git@v0.2.0" in cmd[-1]
 
     def test_from_source_on_uv_tool(self) -> None:
-        """--from-source on uv-tool uses uv tool install git+https://."""
+        """--from-source on uv-tool uses uv tool install --force git+https://."""
         code, output, calls = _invoke_update(args=["--from-source"], method="uv-tool")
         assert code == 0
         assert calls is not None
@@ -281,7 +279,8 @@ class TestUpdateFromSource:
         assert cmd[0] == "uv"
         assert cmd[1] == "tool"
         assert cmd[2] == "install"
-        assert "git+https://github.com/eggstack/eggpool.git@v0.2.0" in cmd[3]
+        assert "--force" in cmd
+        assert "git+https://github.com/eggstack/eggpool.git@v0.2.0" in cmd[-1]
 
     def test_from_source_on_source(self) -> None:
         """--from-source on source install uses uv sync --no-dev."""

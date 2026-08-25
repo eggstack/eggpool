@@ -559,10 +559,21 @@ class AcceptedReloadFinalizationJob:
         assert self.transaction is not None
         self.transaction.accepted_finalization.transitions_finalized = True
         # Advance the transaction state machine through the intermediate
-        # states that must precede retirement scheduling.
-        self.transaction.mark_process_transitions_applied()
-        self.transaction.mark_persistence_committed()
-        self.transaction.mark_observable_state_updated()
+        # states that must precede retirement scheduling.  Each mark is
+        # guarded by the current state so an interrupted retry resumes
+        # instead of re-applying an applied transition (same-state
+        # transitions raise TransactionStateError).
+        from eggpool.reload_transaction import TransactionState
+
+        if self.transaction.state in (
+            TransactionState.RUNTIME_SWAP_COMMITTED,
+            TransactionState.RUNTIME_PUBLISHED,
+        ):
+            self.transaction.mark_process_transitions_applied()
+        if self.transaction.state is TransactionState.PROCESS_TRANSITIONS_APPLIED:
+            self.transaction.mark_persistence_committed()
+        if self.transaction.state is TransactionState.PERSISTENCE_COMMITTED:
+            self.transaction.mark_observable_state_updated()
         self._step = AcceptedFinalizationStep.TRANSITIONS_FINALIZED
 
     async def _step_observer_report(self) -> None:

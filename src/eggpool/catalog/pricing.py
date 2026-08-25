@@ -213,6 +213,10 @@ def cost_per_token_is_implausible(
 _CACHE_READ_FALLBACK_PER_MILLION_MICRODOLLARS = 300_000  # $0.30 / 1M
 _CACHE_WRITE_FALLBACK_PER_MILLION_MICRODOLLARS = 3_750_000  # $3.75 / 1M
 
+# Bound for the read-through latest-snapshot cache so long-running
+# processes with model churn do not grow it without limit.
+_LATEST_CACHE_MAX_ENTRIES = 4096
+
 _GENERIC_INPUT_FALLBACK_DOLLARS_PER_1K = 0.003  # $3 / 1M
 _GENERIC_OUTPUT_FALLBACK_DOLLARS_PER_1K = 0.015  # $15 / 1M
 
@@ -663,6 +667,10 @@ class CostCalculator:
             return 0, "unknown"
 
         cache_key = (model_id, provider_id)
+        if len(self._latest_cache) >= _LATEST_CACHE_MAX_ENTRIES:
+            # Bounded growth: a full reset is safe for a read-through
+            # cache and simpler than LRU bookkeeping.
+            self._latest_cache.clear()
         if cache_key not in self._latest_cache:
             self._latest_cache[cache_key] = await self._price_repo.get_latest_snapshot(
                 model_id, provider_id=provider_id

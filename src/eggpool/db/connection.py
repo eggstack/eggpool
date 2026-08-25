@@ -65,7 +65,7 @@ def _classify_op_kind(sql: str) -> str:
         return "delete"
     if upper.startswith("REPLACE"):
         return "replace"
-    if upper.startswith("BEGIN") or upper.startswith("COMMIT"):
+    if upper.startswith(("BEGIN", "COMMIT", "ROLLBACK")):
         return "transaction"
     if upper.startswith("PRAGMA"):
         return "pragma"

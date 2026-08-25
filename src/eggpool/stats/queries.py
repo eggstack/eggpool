@@ -1902,7 +1902,7 @@ async def fetch_operational_event_summary(
             0
         ) as total_expired_reservations
     FROM operational_events
-    WHERE occurred_at >= ? AND occurred_at <= ?
+    WHERE occurred_at >= ? AND occurred_at < ?
     GROUP BY event_type
     ORDER BY event_count DESC
     """

@@ -1587,6 +1587,13 @@ class PingRepository:
         Uses bounded, chunked deletion to avoid long-running transactions.
         """
         b = budget or MaintenanceBudget()
+        # Validate at the boundary: this value becomes a SQLite datetime
+        # modifier string, so a non-int or negative value would silently
+        # change deletion semantics.
+        if type(retain_days) is not int or retain_days < 0:
+            raise ValueError(
+                f"retain_days must be a non-negative integer, got {retain_days!r}"
+            )
         cutoff = f"-{retain_days}"
         total_deleted = 0
         batches = 0
@@ -1716,19 +1723,28 @@ class CatalogReconciliationRepository:
 
 
 def _epoch_to_iso(value: float) -> str:
-    """Convert a POSIX timestamp to the SQLite ``YYYY-MM-DD HH:MM:SS`` format."""
-    return _dt.datetime.fromtimestamp(value, tz=_dt.UTC).strftime("%Y-%m-%d %H:%M:%S")
+    """Convert a POSIX timestamp to the SQLite ``YYYY-MM-DD HH:MM:SS`` format.
+
+    Microseconds are retained so distinct sub-second deadlines never
+    collapse onto identical strings or expire up to a second early.
+    """
+    return _dt.datetime.fromtimestamp(value, tz=_dt.UTC).strftime(
+        "%Y-%m-%d %H:%M:%S.%f"
+    )
 
 
 def _iso_to_epoch(value: str | None) -> float | None:
     """Convert an ISO timestamp from SQLite back to a POSIX epoch (UTC)."""
     if value is None:
         return None
-    try:
-        parsed = _dt.datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(
-            tzinfo=_dt.UTC
-        )
-    except ValueError:
+    parsed: _dt.datetime | None = None
+    for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+        try:
+            parsed = _dt.datetime.strptime(value, fmt).replace(tzinfo=_dt.UTC)
+            break
+        except ValueError:
+            continue
+    if parsed is None:
         return None
     return parsed.timestamp()
 

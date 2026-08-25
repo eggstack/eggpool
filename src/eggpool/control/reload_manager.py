@@ -1523,25 +1523,9 @@ class ReloadManager:
         published_gen: RuntimeGeneration | None = None
 
         # Phase 11: increment total requests.
-        self._counters = ReloadCounters(
+        self._counters = replace(
+            self._counters,
             total_requests=self._counters.total_requests + 1,
-            admitted_operations=self._counters.admitted_operations,
-            busy_rejections=self._counters.busy_rejections,
-            committed_reloads=self._counters.committed_reloads,
-            noop_outcomes=self._counters.noop_outcomes,
-            ignored_only_outcomes=self._counters.ignored_only_outcomes,
-            validation_rejections=self._counters.validation_rejections,
-            restart_required_rejections=self._counters.restart_required_rejections,
-            prepare_failures=self._counters.prepare_failures,
-            commit_failures=self._counters.commit_failures,
-            cancellations=self._counters.cancellations,
-            compensation_failures=self._counters.compensation_failures,
-            retirement_failures=self._counters.retirement_failures,
-            accepted_reloads=self._counters.accepted_reloads,
-            fully_finalized_reloads=self._counters.fully_finalized_reloads,
-            accepted_finalization_failures=self._counters.accepted_finalization_failures,
-            accepted_finalization_retries=self._counters.accepted_finalization_retries,
-            retirement_retry_count=self._counters.retirement_retry_count,
         )
 
         # Phase 6: create the transaction to track state.
@@ -1557,25 +1541,9 @@ class ReloadManager:
             if self._reload_claimed:
                 self._current_transaction = None
                 # Phase 11: increment busy rejections.
-                self._counters = ReloadCounters(
-                    total_requests=self._counters.total_requests,
-                    admitted_operations=self._counters.admitted_operations,
+                self._counters = replace(
+                    self._counters,
                     busy_rejections=self._counters.busy_rejections + 1,
-                    committed_reloads=self._counters.committed_reloads,
-                    noop_outcomes=self._counters.noop_outcomes,
-                    ignored_only_outcomes=self._counters.ignored_only_outcomes,
-                    validation_rejections=self._counters.validation_rejections,
-                    restart_required_rejections=self._counters.restart_required_rejections,
-                    prepare_failures=self._counters.prepare_failures,
-                    commit_failures=self._counters.commit_failures,
-                    cancellations=self._counters.cancellations,
-                    compensation_failures=self._counters.compensation_failures,
-                    retirement_failures=self._counters.retirement_failures,
-                    accepted_reloads=self._counters.accepted_reloads,
-                    fully_finalized_reloads=self._counters.fully_finalized_reloads,
-                    accepted_finalization_failures=self._counters.accepted_finalization_failures,
-                    accepted_finalization_retries=self._counters.accepted_finalization_retries,
-                    retirement_retry_count=self._counters.retirement_retry_count,
                 )
                 raise ReloadInProgressError(
                     "A reload transaction is already in progress"
@@ -1634,25 +1602,9 @@ class ReloadManager:
                 ]
                 if still_pending:
                     self._current_transaction = None
-                    self._counters = ReloadCounters(
-                        total_requests=self._counters.total_requests,
-                        admitted_operations=self._counters.admitted_operations,
+                    self._counters = replace(
+                        self._counters,
                         busy_rejections=self._counters.busy_rejections + 1,
-                        committed_reloads=self._counters.committed_reloads,
-                        noop_outcomes=self._counters.noop_outcomes,
-                        ignored_only_outcomes=self._counters.ignored_only_outcomes,
-                        validation_rejections=self._counters.validation_rejections,
-                        restart_required_rejections=self._counters.restart_required_rejections,
-                        prepare_failures=self._counters.prepare_failures,
-                        commit_failures=self._counters.commit_failures,
-                        cancellations=self._counters.cancellations,
-                        compensation_failures=self._counters.compensation_failures,
-                        retirement_failures=self._counters.retirement_failures,
-                        accepted_reloads=self._counters.accepted_reloads,
-                        fully_finalized_reloads=self._counters.fully_finalized_reloads,
-                        accepted_finalization_failures=self._counters.accepted_finalization_failures,
-                        accepted_finalization_retries=self._counters.accepted_finalization_retries,
-                        retirement_retry_count=self._counters.retirement_retry_count,
                     )
                     raise ReloadInProgressError(
                         "Accepted finalization still pending for "
@@ -1663,25 +1615,9 @@ class ReloadManager:
             self._active_reload_task = asyncio.current_task()
             self._admitted_at = time.monotonic()
             # Phase 11: increment admitted operations.
-            self._counters = ReloadCounters(
-                total_requests=self._counters.total_requests,
+            self._counters = replace(
+                self._counters,
                 admitted_operations=self._counters.admitted_operations + 1,
-                busy_rejections=self._counters.busy_rejections,
-                committed_reloads=self._counters.committed_reloads,
-                noop_outcomes=self._counters.noop_outcomes,
-                ignored_only_outcomes=self._counters.ignored_only_outcomes,
-                validation_rejections=self._counters.validation_rejections,
-                restart_required_rejections=self._counters.restart_required_rejections,
-                prepare_failures=self._counters.prepare_failures,
-                commit_failures=self._counters.commit_failures,
-                cancellations=self._counters.cancellations,
-                compensation_failures=self._counters.compensation_failures,
-                retirement_failures=self._counters.retirement_failures,
-                accepted_reloads=self._counters.accepted_reloads,
-                fully_finalized_reloads=self._counters.fully_finalized_reloads,
-                accepted_finalization_failures=self._counters.accepted_finalization_failures,
-                accepted_finalization_retries=self._counters.accepted_finalization_retries,
-                retirement_retry_count=self._counters.retirement_retry_count,
             )
             # Reset the completion event so shutdown waiters see a fresh
             # signal for this new transaction.
@@ -1749,26 +1685,11 @@ class ReloadManager:
                     changed_sections=sections,
                 )
                 # Phase 11: update counters and finalize.
-                self._counters = ReloadCounters(
-                    total_requests=self._counters.total_requests,
-                    admitted_operations=self._counters.admitted_operations,
-                    busy_rejections=self._counters.busy_rejections,
-                    committed_reloads=self._counters.committed_reloads,
-                    noop_outcomes=self._counters.noop_outcomes,
-                    ignored_only_outcomes=self._counters.ignored_only_outcomes,
-                    validation_rejections=self._counters.validation_rejections,
-                    restart_required_rejections=self._counters.restart_required_rejections
-                    + 1,
-                    prepare_failures=self._counters.prepare_failures,
-                    commit_failures=self._counters.commit_failures,
-                    cancellations=self._counters.cancellations,
-                    compensation_failures=self._counters.compensation_failures,
-                    retirement_failures=self._counters.retirement_failures,
-                    accepted_reloads=self._counters.accepted_reloads,
-                    fully_finalized_reloads=self._counters.fully_finalized_reloads,
-                    accepted_finalization_failures=self._counters.accepted_finalization_failures,
-                    accepted_finalization_retries=self._counters.accepted_finalization_retries,
-                    retirement_retry_count=self._counters.retirement_retry_count,
+                self._counters = replace(
+                    self._counters,
+                    restart_required_rejections=(
+                        self._counters.restart_required_rejections + 1
+                    ),
                 )
                 diag, wire_result = self._finalize_reload(
                     request_id=txn.request_id,
@@ -1801,25 +1722,9 @@ class ReloadManager:
                 txn.mark_aborting(RuntimeError("No changes"))
                 txn.mark_aborted()
                 # Phase 11: update counters and finalize.
-                self._counters = ReloadCounters(
-                    total_requests=self._counters.total_requests,
-                    admitted_operations=self._counters.admitted_operations,
-                    busy_rejections=self._counters.busy_rejections,
-                    committed_reloads=self._counters.committed_reloads,
+                self._counters = replace(
+                    self._counters,
                     noop_outcomes=self._counters.noop_outcomes + 1,
-                    ignored_only_outcomes=self._counters.ignored_only_outcomes,
-                    validation_rejections=self._counters.validation_rejections,
-                    restart_required_rejections=self._counters.restart_required_rejections,
-                    prepare_failures=self._counters.prepare_failures,
-                    commit_failures=self._counters.commit_failures,
-                    cancellations=self._counters.cancellations,
-                    compensation_failures=self._counters.compensation_failures,
-                    retirement_failures=self._counters.retirement_failures,
-                    accepted_reloads=self._counters.accepted_reloads,
-                    fully_finalized_reloads=self._counters.fully_finalized_reloads,
-                    accepted_finalization_failures=self._counters.accepted_finalization_failures,
-                    accepted_finalization_retries=self._counters.accepted_finalization_retries,
-                    retirement_retry_count=self._counters.retirement_retry_count,
                 )
                 diag, wire_result = self._finalize_reload(
                     request_id=txn.request_id,
@@ -1852,25 +1757,9 @@ class ReloadManager:
                 txn.mark_aborting(RuntimeError("All changes ignored"))
                 txn.mark_aborted()
                 # Phase 11: update counters and finalize.
-                self._counters = ReloadCounters(
-                    total_requests=self._counters.total_requests,
-                    admitted_operations=self._counters.admitted_operations,
-                    busy_rejections=self._counters.busy_rejections,
-                    committed_reloads=self._counters.committed_reloads,
-                    noop_outcomes=self._counters.noop_outcomes,
+                self._counters = replace(
+                    self._counters,
                     ignored_only_outcomes=self._counters.ignored_only_outcomes + 1,
-                    validation_rejections=self._counters.validation_rejections,
-                    restart_required_rejections=self._counters.restart_required_rejections,
-                    prepare_failures=self._counters.prepare_failures,
-                    commit_failures=self._counters.commit_failures,
-                    cancellations=self._counters.cancellations,
-                    compensation_failures=self._counters.compensation_failures,
-                    retirement_failures=self._counters.retirement_failures,
-                    accepted_reloads=self._counters.accepted_reloads,
-                    fully_finalized_reloads=self._counters.fully_finalized_reloads,
-                    accepted_finalization_failures=self._counters.accepted_finalization_failures,
-                    accepted_finalization_retries=self._counters.accepted_finalization_retries,
-                    retirement_retry_count=self._counters.retirement_retry_count,
                 )
                 diag, wire_result = self._finalize_reload(
                     request_id=txn.request_id,
@@ -2136,33 +2025,18 @@ class ReloadManager:
                 isinstance(exc, ReloadDigestMismatchError)
                 or getattr(exc, "error_kind", "") == "digest_mismatch"
             )
-            self._counters = ReloadCounters(
-                total_requests=self._counters.total_requests,
-                admitted_operations=self._counters.admitted_operations,
-                busy_rejections=self._counters.busy_rejections,
-                committed_reloads=self._counters.committed_reloads,
-                noop_outcomes=self._counters.noop_outcomes,
-                ignored_only_outcomes=self._counters.ignored_only_outcomes,
+            self._counters = replace(
+                self._counters,
                 validation_rejections=(
                     self._counters.validation_rejections + 1
                     if is_digest_mismatch
                     else self._counters.validation_rejections
                 ),
-                restart_required_rejections=self._counters.restart_required_rejections,
                 prepare_failures=(
                     self._counters.prepare_failures
                     if is_digest_mismatch
                     else self._counters.prepare_failures + 1
                 ),
-                commit_failures=self._counters.commit_failures,
-                cancellations=self._counters.cancellations,
-                compensation_failures=self._counters.compensation_failures,
-                retirement_failures=self._counters.retirement_failures,
-                accepted_reloads=self._counters.accepted_reloads,
-                fully_finalized_reloads=self._counters.fully_finalized_reloads,
-                accepted_finalization_failures=self._counters.accepted_finalization_failures,
-                accepted_finalization_retries=self._counters.accepted_finalization_retries,
-                retirement_retry_count=self._counters.retirement_retry_count,
             )
             # Phase 6: transition transaction to aborting/aborted.
             txn.mark_aborting(exc)
@@ -2225,25 +2099,9 @@ class ReloadManager:
             )
             logger.warning("Reload cancelled at stage %s", error_stage)
             # Phase 11: update counters.
-            self._counters = ReloadCounters(
-                total_requests=self._counters.total_requests,
-                admitted_operations=self._counters.admitted_operations,
-                busy_rejections=self._counters.busy_rejections,
-                committed_reloads=self._counters.committed_reloads,
-                noop_outcomes=self._counters.noop_outcomes,
-                ignored_only_outcomes=self._counters.ignored_only_outcomes,
-                validation_rejections=self._counters.validation_rejections,
-                restart_required_rejections=self._counters.restart_required_rejections,
-                prepare_failures=self._counters.prepare_failures,
-                commit_failures=self._counters.commit_failures,
+            self._counters = replace(
+                self._counters,
                 cancellations=self._counters.cancellations + 1,
-                compensation_failures=self._counters.compensation_failures,
-                retirement_failures=self._counters.retirement_failures,
-                accepted_reloads=self._counters.accepted_reloads,
-                fully_finalized_reloads=self._counters.fully_finalized_reloads,
-                accepted_finalization_failures=self._counters.accepted_finalization_failures,
-                accepted_finalization_retries=self._counters.accepted_finalization_retries,
-                retirement_retry_count=self._counters.retirement_retry_count,
             )
             # Plan 017 Workstream C: pre-init cleanup outcome so the
             # finalize_reload call sees consistent state regardless of
@@ -2439,25 +2297,9 @@ class ReloadManager:
             # classification before mark_aborting() transitions to ABORTING.
             pre_abort_txn_state = txn.state
             # Phase 11: update counters.
-            self._counters = ReloadCounters(
-                total_requests=self._counters.total_requests,
-                admitted_operations=self._counters.admitted_operations,
-                busy_rejections=self._counters.busy_rejections,
-                committed_reloads=self._counters.committed_reloads,
-                noop_outcomes=self._counters.noop_outcomes,
-                ignored_only_outcomes=self._counters.ignored_only_outcomes,
-                validation_rejections=self._counters.validation_rejections,
-                restart_required_rejections=self._counters.restart_required_rejections,
-                prepare_failures=self._counters.prepare_failures,
+            self._counters = replace(
+                self._counters,
                 commit_failures=self._counters.commit_failures + 1,
-                cancellations=self._counters.cancellations,
-                compensation_failures=self._counters.compensation_failures,
-                retirement_failures=self._counters.retirement_failures,
-                accepted_reloads=self._counters.accepted_reloads,
-                fully_finalized_reloads=self._counters.fully_finalized_reloads,
-                accepted_finalization_failures=self._counters.accepted_finalization_failures,
-                accepted_finalization_retries=self._counters.accepted_finalization_retries,
-                retirement_retry_count=self._counters.retirement_retry_count,
             )
             # Phase 6: if we haven't published, abort cleanly.
             # If we have published, attempt compensation.
@@ -2494,25 +2336,9 @@ class ReloadManager:
                     txn.mark_aborting(exc)
                     txn.mark_compensation_failed()
                     # Phase 11: update compensation failure counter.
-                    self._counters = ReloadCounters(
-                        total_requests=self._counters.total_requests,
-                        admitted_operations=self._counters.admitted_operations,
-                        busy_rejections=self._counters.busy_rejections,
-                        committed_reloads=self._counters.committed_reloads,
-                        noop_outcomes=self._counters.noop_outcomes,
-                        ignored_only_outcomes=self._counters.ignored_only_outcomes,
-                        validation_rejections=self._counters.validation_rejections,
-                        restart_required_rejections=self._counters.restart_required_rejections,
-                        prepare_failures=self._counters.prepare_failures,
-                        commit_failures=self._counters.commit_failures,
-                        cancellations=self._counters.cancellations,
+                    self._counters = replace(
+                        self._counters,
                         compensation_failures=self._counters.compensation_failures + 1,
-                        retirement_failures=self._counters.retirement_failures,
-                        accepted_reloads=self._counters.accepted_reloads,
-                        fully_finalized_reloads=self._counters.fully_finalized_reloads,
-                        accepted_finalization_failures=self._counters.accepted_finalization_failures,
-                        accepted_finalization_retries=self._counters.accepted_finalization_retries,
-                        retirement_retry_count=self._counters.retirement_retry_count,
                     )
             elif txn.state in (
                 TransactionState.COMMIT_STARTED,

@@ -1646,7 +1646,7 @@ def create_app(
             def get(self, key: tuple[str, str | None]) -> str | None:
                 if key in self._cache:
                     css, ts = self._cache[key]
-                    if time.monotonic() - ts < self._ttl_s or key == self._last_used:
+                    if time.monotonic() - ts < self._ttl_s:
                         self._last_used = key
                         return css
                     del self._cache[key]
@@ -1997,15 +1997,22 @@ def create_app(
     ) -> JSONResponse:
         if isinstance(exc, RequestTooLargeError):
             status_code = 413
+            message = str(exc)
         elif isinstance(exc, ModelNotFoundError):
             status_code = 404
+            message = str(exc)
         elif isinstance(exc, (NoEligibleAccountError, CatalogUnavailableError)):
             status_code = 503
+            message = str(exc)
         else:
+            # Internal failure classes (database, config, ...) carry file
+            # paths and infrastructure detail; never forward them to
+            # clients.
             status_code = 502
+            message = "Upstream request failed"
         return JSONResponse(
             status_code=status_code,
-            content={"error": str(exc)},
+            content={"error": message},
         )
 
     return app

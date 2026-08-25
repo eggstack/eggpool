@@ -130,11 +130,18 @@ def openai_usage_from_anthropic_usage(
 def merge_anthropic_usage(
     *raw_values: dict[str, Any] | None,
 ) -> dict[str, int]:
-    """Merge partial Anthropic usage blobs from separate stream events."""
+    """Merge partial Anthropic usage blobs from separate stream events.
+
+    Field presence decides participation: an absent field never touches
+    the merged value, while a later blob that explicitly reports ``0``
+    (e.g. a final cache-read correction) authoritatively updates it.
+    """
     merged: dict[str, int] = {}
     for raw in raw_values:
+        if raw is None:
+            continue
         for field in _ANTHROPIC_USAGE_TOKEN_FIELDS:
-            value = token_count_from(raw, field)
-            if value > 0:
-                merged[field] = max(merged.get(field, 0), value)
+            if field not in raw:
+                continue
+            merged[field] = token_count_from(raw, field)
     return merged

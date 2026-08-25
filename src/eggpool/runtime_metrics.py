@@ -13,6 +13,7 @@ string to the ``probe_errors`` list.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import os
@@ -179,8 +180,12 @@ class RuntimeMetricsService:
         # OS load average (Linux/macOS)
         result["load"] = self._snapshot_load(probe_errors)
 
-        # Process count scan (Linux only)
-        result["processes"] = self._snapshot_processes(probe_errors)
+        # Process count scan (Linux only). The /proc walk performs
+        # blocking reads per PID, so it is offloaded to a worker thread
+        # to keep the canonical event loop responsive.
+        result["processes"] = await asyncio.to_thread(
+            self._snapshot_processes, probe_errors
+        )
 
         # Dispatch-overhead recorder (in-memory rolling window)
         result["dispatch_overhead"] = self._snapshot_dispatch_overhead(probe_errors)

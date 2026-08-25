@@ -55,6 +55,7 @@ def get_eligible_accounts(
     exclusion_sink: list[tuple[str, str]] | None = None,
     request_surface: str = "chat_completions",
     account_supports_request_surface: Callable[[str, str], bool] | None = None,
+    account_provider_fallback: Callable[[str], str | None] | None = None,
 ) -> list[AccountRuntimeState]:
     """Get accounts eligible for routing a specific model.
 
@@ -122,9 +123,14 @@ def get_eligible_accounts(
             if quota is not None and not quota.is_within_limits():
                 continue
 
-        # Filter by provider if a specific provider was requested
+        # Filter by provider if a specific provider was requested.
+        # Mirror the router's lookup: fall back to the registry when the
+        # catalog has no provider mapping so `accounts explain` agrees
+        # with actual routing decisions.
         if provider_id is not None:
             account_provider = catalog.get_provider_for_account(state.name)
+            if not account_provider and account_provider_fallback is not None:
+                account_provider = account_provider_fallback(state.name)
             if account_provider != provider_id:
                 continue
 

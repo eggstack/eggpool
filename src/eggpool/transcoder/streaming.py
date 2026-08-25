@@ -259,6 +259,19 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
             self._finished = True
             self._pending_stop_reason = "tool_use"
             out.extend(self._flush_pending_tool_blocks())
+        if self._saw_terminal_event and not self._finished and not self._stopped:
+            # Upstream ended its SSE without a finish_reason (truncation,
+            # flaky provider): close any open content block and synthesize
+            # the default stop so clients still receive the stop sequence.
+            if self._content_block_started:
+                out.append(
+                    self._anthropic_frame(
+                        "content_block_stop",
+                        {"type": "content_block_stop", "index": 0},
+                    )
+                )
+                self._content_block_started = False
+            self._finished = True
         if self._saw_terminal_event:
             out.extend(self._stop_message())
         return out
@@ -629,7 +642,6 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
         self._done_emitted = False
         self._anthropic_usage: dict[str, int] = {}
         self._tool_blocks: dict[int, _OpenAIToolCall] = {}
-        self._openai_tool_index: dict[int, int] = {}
         self._next_openai_tool_index = 0
         self._thinking_delta_count: int = 0
 
@@ -759,7 +771,6 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
             id=openai_id,
             name=name,
         )
-        self._openai_tool_index[upstream_index] = openai_index
         return [
             self._openai_frame(
                 {

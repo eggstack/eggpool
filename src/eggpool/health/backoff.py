@@ -93,6 +93,18 @@ def _jitterize(value: float, jitter: float) -> float:
     return value * random.uniform(low, high)
 
 
+def _jitterize_downward(value: float, jitter: float) -> float:
+    """Return ``value`` reduced by uniform multiplicative jitter.
+
+    ``jitter=0.15`` produces a value in ``[value * 0.85, value]``. Used
+    for provider-supplied ``Retry-After`` waits so the local backoff can
+    never outlast what the provider explicitly requested.
+    """
+    if jitter <= 0.0 or value <= 0.0:
+        return value
+    return value * random.uniform(max(0.0, 1.0 - jitter), 1.0)
+
+
 def get_backoff_policy(reason: str) -> BackoffPolicy | None:
     """Return the policy for a backoff reason, or ``None`` if no policy.
 
@@ -225,7 +237,9 @@ def compute_backoff_seconds(
     ):
         delay = min(float(retry_after), MAX_NONTERMINAL_BACKOFF_SECONDS)
         if jitter:
-            delay = _jitterize(delay, policy.jitter)
+            # Downward-only jitter: a provider-specified wait is an upper
+            # bound the local schedule must never exceed.
+            delay = _jitterize_downward(delay, policy.jitter)
         return min(max(0.0, delay), MAX_NONTERMINAL_BACKOFF_SECONDS)
 
     if consecutive_failures <= 1:

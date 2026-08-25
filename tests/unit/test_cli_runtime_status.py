@@ -37,7 +37,7 @@ def test_format_duration_zero() -> None:
 
 def test_format_duration_non_numeric() -> None:
     assert _format_duration("?") == "?"
-    assert _format_duration(None) == "None"
+    assert _format_duration(None) == "N/A"
 
 
 def test_format_duration_float() -> None:

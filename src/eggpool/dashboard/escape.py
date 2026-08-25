@@ -7,6 +7,7 @@ to prevent HTML injection (model_id, account_name, error_message, etc.).
 from __future__ import annotations
 
 import html
+import math
 import re
 from typing import Any
 
@@ -61,6 +62,8 @@ def format_microdollars(value: int | float | None) -> str:
     """Format a microdollar value as $X.XX."""
     if value is None:
         value = 0
+    if isinstance(value, float) and not math.isfinite(value):
+        return "—"
     return f"${value / 1_000_000:,.2f}"
 
 
@@ -111,15 +114,18 @@ def format_tokens_per_second(value: float | None) -> str:
     """
     if value is None:
         return "—"
-    if float(value) <= 0:
+    number = float(value)
+    if not math.isfinite(number) or number <= 0:
         return "—"
-    return f"{float(value):.1f} tok/s"
+    return f"{number:.1f} tok/s"
 
 
 def format_percent(value: float | None, digits: int = 2) -> str:
     """Format a fraction as a percentage."""
     if value is None:
         value = 0.0
+    if isinstance(value, float) and not math.isfinite(value):
+        return "—"
     return f"{value * 100:.{digits}f}%"
 
 
@@ -127,6 +133,8 @@ def format_latency(value: float | None) -> str:
     """Format a latency value in milliseconds."""
     if value is None:
         value = 0.0
+    if isinstance(value, float) and not math.isfinite(value):
+        return "—"
     return f"{float(value):.1f} ms"
 
 
@@ -261,6 +269,8 @@ def format_percent100(value: float | int | None, digits: int = 1) -> str:
     """
     if value is None:
         value = 0.0
+    if isinstance(value, float) and not math.isfinite(value):
+        return "—"
     return f"{float(value):.{digits}f}%"
 
 

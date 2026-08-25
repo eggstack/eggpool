@@ -7,6 +7,7 @@ small. All values rendered into HTML are escaped via the `escape` module.
 from __future__ import annotations
 
 import json
+import math
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -947,6 +948,8 @@ def _format_small_ms(value: Any) -> str:
         number = float(value)
     except (TypeError, ValueError):
         return str(value)
+    if not math.isfinite(number):
+        return "—"
     if number < 1:
         return f"{number:.2f} ms"
     if number < 10:
@@ -1431,9 +1434,9 @@ def _render_provider_health(ping_summary: list[dict[str, Any]]) -> str:
             f"{_td_priority(pid, 1)}"
             f"{_td_priority(status, 1, class_=status)}"
             f"{_td_priority(avg_lat, 2)}"
-            f"{_td_priority(f'{success_rate}%', 2)}"
+            f"{_td_priority(f'{escape(str(success_rate))}%', 2)}"
             f"{_td_priority(str(model_count), 3)}"
-            f"{_td_priority(last_at, 3)}"
+            f"{_td_priority(escape(last_at), 3)}"
             f"</tr>"
         )
     return (
@@ -3585,11 +3588,11 @@ def render_events(
         for row in events:
             ts = format_timestamp(row.get("created_at", ""))
             name = escape(row.get("account_name", ""))
-            event_type = str(row.get("event_type", ""))
-            etype = escape(event_type)
+            row_type = str(row.get("event_type", ""))
+            etype = escape(row_type)
             details = truncate(row.get("details", ""), 200)
-            cls = sanitize_class_name(event_type)
-            badge_tooltip = _status_badge_tooltip(event_type) or ""
+            cls = sanitize_class_name(row_type)
+            badge_tooltip = _status_badge_tooltip(row_type) or ""
             badge_attrs = (
                 f' data-tooltip="{_stdlib_escape(badge_tooltip)}"'
                 f' aria-label="{_stdlib_escape(badge_tooltip)}"'
@@ -4351,7 +4354,7 @@ def _render_details_panel(
     open_attr = " open" if open_by_default else ""
     return (
         f'<details class="{" ".join(classes)}"{panel_attr}{open_attr}>'
-        f"<summary>{summary_text}</summary>"
+        f"<summary>{escape(summary_text)}</summary>"
         f'<div class="advanced-body">{body}</div>'
         f"</details>"
     )

@@ -14,6 +14,7 @@ from unittest.mock import patch
 import pytest
 
 from eggpool.cli_exit_codes import (
+    EXIT_CONTROL_UNAVAILABLE,
     EXIT_RESTART_REQUIRED,
     EXIT_VALIDATION,
 )
@@ -60,7 +61,7 @@ class TestValidateAndRehash:
         assert exc_info.value.code == EXIT_VALIDATION
         assert any("validation failed" in m.lower() for m in captured_messages)
 
-    def test_control_socket_unavailable_exits_with_exit_1(
+    def test_control_socket_unavailable_exits_with_exit_3(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         config = tmp_path / "config.toml"
@@ -76,7 +77,7 @@ class TestValidateAndRehash:
             validate_and_rehash(
                 str(config), echo_err=lambda msg: captured_messages.append(msg)
             )
-        assert exc_info.value.code == EXIT_VALIDATION
+        assert exc_info.value.code == EXIT_CONTROL_UNAVAILABLE
         assert any("control socket" in m.lower() for m in captured_messages)
 
     def test_restart_required_response_exits_with_exit_2(

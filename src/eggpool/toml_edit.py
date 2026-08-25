@@ -51,20 +51,29 @@ def section_has_key(lines: list[str], section: str, key: str) -> bool:
     """Return whether an exact key exists in the requested TOML section.
 
     Both ``[section]`` tables and ``[[section]]`` array-of-tables
-    elements are recognized.
+    elements are recognized. Lines that continue a multiline value are
+    skipped so a ``key =`` shape inside a multiline string is never
+    mistaken for an assignment.
     """
     headers = _section_header_variants(section)
     in_section = False
-    for line in lines:
-        stripped = line.strip()
+    index = 0
+    total = len(lines)
+    while index < total:
+        stripped = lines[index].strip()
+        index += 1
         if stripped in headers:
             in_section = True
             continue
         if _is_section_header(stripped):
             in_section = False
             continue
-        if in_section and _line_key(stripped) == key:
+        line_key = _line_key(stripped)
+        if line_key is None:
+            continue
+        if in_section and line_key == key:
             return True
+        index += _value_continuation_lines(_line_value(stripped), lines[index:])
     return False
 
 
@@ -92,8 +101,12 @@ def update_section_value(
     key_found = False
     headers = _section_header_variants(section)
 
-    for line in lines:
+    index = 0
+    total = len(lines)
+    while index < total:
+        line = lines[index]
         stripped = line.strip()
+        index += 1
         if stripped in headers:
             in_section = True
             section_found = True
@@ -104,6 +117,9 @@ def update_section_value(
         if in_section and _line_key(stripped) == key:
             output.append(f"{key} = {rendered_value}")
             key_found = True
+            # Consume the continuation lines of the old value so a
+            # multiline string/array is fully replaced, not spliced.
+            index += _value_continuation_lines(_line_value(stripped), lines[index:])
             continue
         output.append(line)
 
@@ -135,3 +151,82 @@ def _line_key(stripped_line: str) -> str | None:
     if not separator:
         return None
     return key.strip()
+
+
+def _line_value(stripped_line: str) -> str:
+    """Return the value text after ``=`` for an assignment line."""
+    _key, _separator, value = stripped_line.partition("=")
+    return value.strip()
+
+
+def _value_continuation_lines(value_text: str, followers: list[str]) -> int:
+    """Count how many ``followers`` continue an unterminated TOML value.
+
+    A value is unterminated when a string delimiter or an array/inline
+    table opened on the assignment line (or a continuation line) has not
+    closed yet. This keeps multiline strings and arrays from being
+    spliced by single-line replacement.
+    """
+    in_basic = False
+    in_literal = False
+    in_triple_basic = False
+    in_triple_literal = False
+    depth = 0
+
+    def scan(text: str) -> None:
+        nonlocal in_basic, in_literal, in_triple_basic, in_triple_literal, depth
+        position = 0
+        length = len(text)
+        while position < length:
+            if in_triple_basic or in_triple_literal:
+                delimiter = '"""' if in_triple_basic else "'''"
+                closing = text.find(delimiter, position)
+                if closing == -1:
+                    return
+                position = closing + 3
+                in_triple_basic = in_triple_literal = False
+                continue
+            if in_basic:
+                if text[position] == "\\":
+                    position += 2
+                    continue
+                if text[position] == '"':
+                    in_basic = False
+                position += 1
+                continue
+            if in_literal:
+                if text[position] == "'":
+                    in_literal = False
+                position += 1
+                continue
+            char = text[position]
+            if char == "#":
+                return
+            if text.startswith('"""', position):
+                in_triple_basic = True
+                position += 3
+                continue
+            if text.startswith("'''", position):
+                in_triple_literal = True
+                position += 3
+                continue
+            if char == '"':
+                in_basic = True
+            elif char == "'":
+                in_literal = True
+            elif char in "[{":
+                depth += 1
+            elif char in "]}":
+                depth = max(0, depth - 1)
+            position += 1
+
+    scan(value_text)
+    consumed = 0
+    for follower in followers:
+        if not (
+            in_basic or in_literal or in_triple_basic or in_triple_literal or depth > 0
+        ):
+            break
+        scan(follower.strip())
+        consumed += 1
+    return consumed

@@ -110,6 +110,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import enum
+import inspect
 import logging
 import time
 from collections.abc import (  # noqa: TC003 - used at runtime
@@ -341,7 +342,7 @@ class RuntimeGenerationCandidate:
             for resource in reversed(self._resources):
                 try:
                     result = resource.close_callback()
-                    if asyncio.iscoroutine(result):
+                    if inspect.isawaitable(result):
                         try:
                             await asyncio.wait_for(result, timeout=5.0)
                         except TimeoutError:
@@ -2274,7 +2275,7 @@ async def _safe_aclose(obj: object) -> None:
     if aclose is None:
         return
     result = aclose()
-    if asyncio.iscoroutine(result):
+    if inspect.isawaitable(result):
         await result
     return
 
