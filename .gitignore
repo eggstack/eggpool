@@ -61,6 +61,10 @@ config.toml
 .DS_Store
 Thumbs.db
 
+# Agent tooling
+.agents/
+.opencode/node_modules/
+
 # Project specific
 /var/
 *.log

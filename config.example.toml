@@ -306,7 +306,7 @@ enabled = true
 public = false
 # Theme name (without .toml extension). "default" uses GitHub Primer colors.
 # Themes are from Halloy: https://themes.halloy.chat/
-# Bundled themes (50+) ship inside the package — no extra files needed.
+# Bundled themes ship inside the package — no extra files needed.
 # To add custom themes, set themes_dir to a directory of .toml theme files.
 # Custom themes are merged with the bundled set (same-name custom themes
 # take precedence over bundled ones).

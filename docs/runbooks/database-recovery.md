@@ -52,8 +52,8 @@ Check the database volume, ownership, and external processes holding the file:
 
 ```bash
 df -h /var/lib/eggpool
-ls -l /var/lib/eggpool/eggpool.db
-fuser /var/lib/eggpool/eggpool.db
+ls -l /var/lib/eggpool/usage.sqlite3
+fuser /var/lib/eggpool/usage.sqlite3
 ```
 
 Resolve the local condition and restart. If a lock is held by a maintenance

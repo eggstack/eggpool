@@ -114,10 +114,12 @@ See [Firewall](docs/firewall.md) for restricting access to your LAN.
 | `eggpool stats transcoding` | Show protocol transcoding statistics |
 | `eggpool stats repair-costs` | Dry-run/apply repair for suspicious historical request costs |
 | `eggpool stats recompute-costs` | Recompute `cost_microdollars` on historical requests |
+| `eggpool stats explain-dashboard` | Show EXPLAIN QUERY PLAN for dashboard queries |
 | `eggpool modelinfo show` | Show enriched model metadata |
 | `eggpool modelinfo list` | List model-info entries |
 | `eggpool modelinfo refresh` | Trigger model-info source refresh |
 | `eggpool modelinfo aliases` | Show model aliases |
+| `eggpool modelinfo repair` | Repair legacy canonical model-info detail blocks |
 | `eggpool dashboard public` | Print dashboard public URL |
 | `eggpool runtime-status` | Print runtime health summary |
 | `eggpool backup` | Create a timestamped backup |
@@ -178,6 +180,8 @@ Use `eggpool connect` for interactive provider setup. See [docs/providers.md](do
 | `[metrics]` | Observability write buffering (`immediate` / `balanced` / `low_wear`) |
 | `[security]` | Redacted error-detail persistence |
 | `[backup]` | Opt-in automatic daily backups |
+| `[limits]` | Spend ceilings per account (5h / weekly / monthly microdollars) |
+| `[pricing]` | Pricing catalog sources and missing-rate fallback |
 | `[model_info]` | Multi-source model metadata enrichment |
 | `[maintenance]` | Bounded maintenance budget, SQLite hygiene, contention guard |
 

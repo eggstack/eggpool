@@ -61,7 +61,7 @@ index shape; do not turn workstation timing or page counts into CI thresholds.
 uv run pytest tests/unit/test_contract.py -v
 
 # Single test by name
-uv run pytest -k "test_routing_plan_fallback" -v
+uv run pytest -k "test_window_expiry" -v
 
 # Integration tests only
 uv run pytest -m integration -v

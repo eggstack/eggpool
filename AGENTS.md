@@ -52,7 +52,7 @@ CI ignores paths-only changes to `docs/`, `architecture/`, `plans/`, `.opencode/
 uv run pytest tests/unit/test_contract.py -v
 
 # Single test by name
-uv run pytest -k "test_routing_plan_fallback" -v
+uv run pytest -k "test_window_expiry" -v
 
 # Integration tests only
 uv run pytest -m integration -v
@@ -130,6 +130,7 @@ Non-obvious wiring:
 - **Request lifecycle**: `RequestCoordinator` in `src/eggpool/request/` orchestrates endpoint → routing → persistence → dispatch → finalization; HTTP layer in `src/eggpool/api/`
 - **Runtime generations**: `RuntimeManager` (package root, `runtime_manager.py`) owns active/retiring slots and leases; generation-owned attributes mirrored on `app.state` are mirrors, not authority
 - **Protocol transcoding**: `src/eggpool/transcoder/` converts OpenAI ↔ Anthropic; operator guide `docs/transcoding.md`
+- **Responses passthrough**: `/v1/responses` is same-protocol only; surface selection is the `request_surface` field (`"chat_completions"` | `"responses"`), not a separate transcoder family → `architecture/deep-dive-request-lifecycle.md`
 - **Control plane**: live config reload (rehash) over a Unix-domain socket, `src/eggpool/control/`
 - **Routing**: load-based, never cost-based; tier-based via `routing_priority`; pieces split across `routing/`, `quota/`, `retry/`, `catalog/`, `health/`
 - **Process model**: supervisor + Granian worker, `workers=1`, `runtime_threads=1` required

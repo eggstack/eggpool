@@ -25,7 +25,7 @@ asyncio-task owner. 50+ schema migrations track evolution.
                │
     ┌──────────▼──────────┐
     │   SQLite File        │
-    │   eggpool.db         │
+    │   usage.sqlite3      │
     └─────────────────────┘
 ```
 

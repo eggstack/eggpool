@@ -87,8 +87,9 @@ encoded-size overflow before decoding and releases the temporary validation
 buffer before translated output is built.
 
 The Responses surface is a passthrough, not a third transcoder family. The
-wire endpoint is selected via an `OpenAIRequestSurface` (`"chat_completions"`
-or `"responses"`); `ProtocolName` still records the OpenAI translation
+wire endpoint is selected by the `request_surface` field on
+`ProxyEndpointConfig` and `ProxyRequestContext` (`"chat_completions"` or
+`"responses"`); `ProtocolName` still records the OpenAI translation
 family. Providers must declare `responses_path` to participate in
 `POST /v1/responses`; the URL is composed by the same
 `compose_provider_url()` used for chat and messages routes. Chat-specific
