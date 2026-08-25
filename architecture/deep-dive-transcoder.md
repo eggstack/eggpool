@@ -193,14 +193,6 @@ Usage canonicalization across protocols (input_tokens ↔ prompt_tokens, cache c
 
 `TranscodeLossError` — raised when `loss_policy = "reject"` and protected loss kinds are detected. Protected kinds include both cache-control boundary losses (`CACHE_CONTROL_LOSS_KINDS`) and multimodal boundary losses (`MULTIMODAL_LOSS_KINDS`): `unsupported_modality`, `unsupported_source_form`, `media_tool_result_flattened`, and `document_media_type_unsupported`.
 
-### `transcoder/segmentation.py`
-
-`segment_request()` — stable-prefix/semi-stable/volatile segmentation. Observational only — never mutates request bodies.
-
-### `transcoder/segmentation_guard.py`
-
-`should_segment_request()` — skip segmentation when no features are active.
-
 ### `transcoder/cache_stability.py`
 
 `CacheBoundaryTracker` — records what the transcoder did to `cache_control` annotations during translation. Append-only, bounded (64 annotations/request).
@@ -230,7 +222,7 @@ additional cache controls.
 
 ### `transcoder/json_helpers.py`
 
-JSON frame helpers with compact separators for SSE frame construction.
+General-purpose JSON helpers for loose-typed protocol payloads (`as_object`, `iter_objects`, `extract_text_blocks`, `decode_base64_payload`, base64 size arithmetic). Compact SSE separators live in `jsonx.dumps_bytes`.
 
 ## Transcoding Phases (Implementation History)
 
@@ -261,6 +253,11 @@ Protected cache-control loss kinds (can trigger `TranscodeLossError` in reject m
 - `cache_control_invalid_shape`
 - `provider_extension_not_preserved`
 - `stable_prefix_reordered_canonically`
+- `cache_breakpoint_unsupported_target`
+- `cache_breakpoint_limit_exceeded`
+- `cache_breakpoint_invalid_shape`
+- `cache_ttl_mismatch`
+- `cache_key_unrepresentable`
 
 Protected multimodal loss kinds (can trigger `TranscodeLossError` in reject mode):
 - `unsupported_modality` — entire modality not representable by target

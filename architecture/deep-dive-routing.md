@@ -70,12 +70,15 @@ Request arrives with model ID
 ### `routing/eligibility.py`
 
 `get_eligible_accounts()` — filters accounts by:
-- Health circuit breaker
-- Protocol compatibility
-- Catalog/model support
-- Backoff status
+- Enabled / authentication / quota / cooldown / rate-limit state
 - Provider configuration
-- Local quota mode
+- Request surface support
+- Protocol compatibility
+- Health circuit breaker
+- Quarantine
+- Catalog/model support
+- Thinking support (capability-aware routing)
+- Local quota mode (`hard_cap` only)
 
 ### `routing/fairness.py` — FairnessRotor
 
@@ -87,7 +90,7 @@ Deterministic round-robin for same-tier peers:
   - `provider_model`
   - `priority_model_protocol`
 
-Rotor position map capped at 4096 entries (`_ROTOR_HARD_CAP`). Eviction is blunt (full clear).
+Rotor position map capped at 4096 entries (`_ROTOR_HARD_CAP`). Eviction is LRU (oldest entry evicted on overflow).
 
 ### `routing/provider.py`
 

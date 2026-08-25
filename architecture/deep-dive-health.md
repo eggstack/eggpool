@@ -38,11 +38,11 @@ Per-account health tracking, circuit breaker, and cooldown management. Health st
 ### `health/health_manager.py` — HealthManager
 
 Per-account health tracking:
-- `is_account_healthy()` — checks circuit breaker + cooldown
-- `mark_success()` — records successful request
-- `mark_failure()` — records failed request, may open circuit
-- `mark_probe()` — half-open probe
-- `get_cooldown_until()` — returns cooldown expiry
+- `is_account_healthy()` — checks disabled/cooldown state
+- `record_success()` — records successful request
+- `record_failure()` — records failed request, may open circuit
+- `try_acquire_request()` — half-open probe slot acquisition
+- `release_request()` — releases probe slot without penalty
 
 ### `health/circuit_breaker.py`
 
@@ -54,9 +54,10 @@ Circuit breaker implementation:
 ### `health/backoff.py`
 
 Backoff tracking for upstream errors. Every nonterminal policy is capped at
-1,800 seconds (30 minutes), including provider `Retry-After` and final jitter.
-Authentication is terminal and has no timed expiry; runtime model absence is
-account/model scoped and bounded.
+1,800 seconds (30 minutes), including final jitter. Provider `Retry-After`
+is honored for rate-limited and quota-exhausted reasons and capped to the
+same bound. Authentication is terminal and has no timed expiry; runtime
+model absence is account/model scoped and bounded.
 
 ## Health Events
 
@@ -86,9 +87,10 @@ transient account rows and that model's bounded quarantine, but never clears an
 authentication failure or unrelated model. An authoritative catalog
 reappearance or explicit operator enable/reset clears terminal model state.
 Validated live rehash compares the old and candidate account identity and
-resolved credentials; a changed credential/provider/key binding re-enables the
-candidate account and clears that account's terminal authentication hint in the
-same SQLite transaction. Unchanged accounts retain their authentication state.
+resolved credentials; a changed credential/provider/key binding re-enables
+the candidate account in-memory and clears that account's terminal
+authentication hint in a SQLite transaction. Unchanged accounts retain
+their authentication state.
 
 Model-quarantine hydration is a generation-publication prerequisite. The
 repository distinguishes a successful empty result from a failed read, and
@@ -127,7 +129,7 @@ half-open probe without provider penalties.
 - Health driven solely by upstream-observed failures, operator disablement, and catalog/protocol incompatibility
 - Compression fallbacks do NOT increment provider error counters
 - Compression fallbacks do NOT write `account_backoffs` rows
-- Compression fallbacks do NOT call `HealthManager.mark_*`
+- Compression fallbacks do NOT call `HealthManager.record_*`
 - Backoff rows persist across restarts
 - Nonterminal backoff, including `Retry-After` and jitter, never exceeds 1,800 seconds
 - Successful requests do not clear authentication or authoritative model withdrawal

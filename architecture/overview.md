@@ -224,7 +224,7 @@ Model discovery, normalization, pricing, protocol resolution, and capability det
 | **Path** | `src/eggpool/model_info/` |
 | **Deep Dive** | [deep-dive-model-info.md](deep-dive-model-info.md) |
 
-Multi-source model metadata enrichment. `ModelInfoService` orchestrates periodic refresh from external sources (OpenRouter, Hugging Face, Artificial Analysis, provider catalog). `model_info/sources/` contains adapter implementations for each source. `model_info/matching.py` implements tiered matching for model lookup (exact alias → exact ID → normalized → deployment suffix → regex → similarity). `model_info/repository.py` persists metadata to SQLite. Enriched metadata powers model display, pricing, and capability detection.
+Multi-source model metadata enrichment. `ModelInfoService` orchestrates periodic refresh from external sources (OpenRouter, Hugging Face, Artificial Analysis, provider catalog). `model_info/sources/` contains adapter implementations for each source. `model_info/matching.py` implements 7-tier matching for model lookup (configured alias → exact source ID → normalized exact → deployment-suffix → release-suffix → regex rule → guarded similarity). `model_info/repository.py` persists metadata to SQLite. Enriched metadata powers model display, pricing, and capability detection.
 
 **Related**: [deep-dive-catalog.md](deep-dive-catalog.md)
 
@@ -235,7 +235,7 @@ Multi-source model metadata enrichment. `ModelInfoService` orchestrates periodic
 | **Path** | `src/eggpool/control/` |
 | **Deep Dive** | [deep-dive-control.md](deep-dive-control.md) |
 
-Unix-domain socket control server for live config rehash. `control/server.py` implements a single-shot newline-delimited JSON protocol (v1) on a UDS (`~/.local/state/eggpool/eggpool.sock`) for `eggpool rehash`. Socket mode `0o600` (owner-only). `control/client.py` connects from the CLI to issue reload commands. `control/reload_manager.py` orchestrates the staged reload: `stage()` → `commit()`/`rollback()` → `finalize_retirement()`. The control plane is the only path for live config changes without process restart.
+Unix-domain socket control server for live config rehash. `control/server.py` implements a single-shot newline-delimited JSON protocol (v1) on a UDS at `<runtime_dir>/eggpool.sock` (resolved by `runtime_paths.runtime_dir()`: `$EGGPOOL_RUNTIME_DIR` → `$XDG_RUNTIME_DIR/eggpool` → `/tmp/eggpool-<UID>.runtime`). for `eggpool rehash`. Socket mode `0o600` (owner-only). `control/client.py` connects from the CLI to issue reload commands. `control/reload_manager.py` orchestrates the staged reload: `stage()` → `commit()`/`rollback()` → `finalize_retirement()`. The control plane is the only path for live config changes without process restart.
 
 **Related**: [deep-dive-runtime.md](deep-dive-runtime.md), [deep-dive-core.md](deep-dive-core.md), [deep-dive-deployment.md](deep-dive-deployment.md)
 
@@ -246,7 +246,7 @@ Unix-domain socket control server for live config rehash. `control/server.py` im
 | **Path** | `src/eggpool/models/` |
 | **Deep Dive** | [deep-dive-models.md](deep-dive-models.md) |
 
-Pydantic v2 models for configuration, domain objects, API payloads, and database rows. `models/config.py` defines `AppConfig` and all nested config models with field validators and TOML parsing. `models/api.py` defines OpenAI and Anthropic request/response models. `models/database.py` defines SQLite row models. `models.domain.py` defines domain objects shared across modules. These models are the single source of truth for schema validation and serialization boundaries.
+Pydantic v2 models for configuration, domain objects, internal API payloads, and database rows. `models/config.py` defines `AppConfig` and all nested config models with field validators and TOML parsing. `models/api.py` defines internal API models (`HealthResponse`, `ReadyResponse`, `ErrorResponse`, model-listing payloads) — wire request/response shapes are parsed at the endpoint layer. `models/database.py` defines SQLite row models. `models/domain.py` defines shared domain objects (`Provider`, `Account`, `AccountRuntimeState`, `ModelDescriptor`). These models are the single source of truth for schema validation and serialization boundaries.
 
 **Related**: [deep-dive-core.md](deep-dive-core.md), [deep-dive-database.md](deep-dive-database.md), [deep-dive-request-lifecycle.md](deep-dive-request-lifecycle.md)
 
@@ -279,7 +279,7 @@ Header redaction middleware (`security/redaction.py`) strips configured sensitiv
 | **Path** | `src/eggpool/observability/` |
 | **Deep Dive** | [deep-dive-observability.md](deep-dive-observability.md) |
 
-Routing trace persistence for debugging and dashboard drill-down. `observability/routing_trace_writer.py` implements a process-owned, single-drain-task writer that collects immutable `RoutingTraceEvent` objects via a non-blocking `submit()` and persists them in micro-batches via `RoutingDecisionRepository`. Bounded queue drops newest events when full. Thread-safe submission via `threading.Lock`. Silent failures — every exception is swallowed and its counter incremented. Routing traces are opt-in via `[routing].trace_enabled`.
+Routing trace persistence for debugging and dashboard drill-down. `observability/routing_trace_writer.py` implements a process-owned, single-drain-task writer that collects immutable `RoutingTraceEvent` objects via a non-blocking `submit()` and persists them in micro-batches via `RoutingDecisionRepository`. Bounded queue drops newest events when full. Thread-safe submission via `threading.Lock`. Silent failures — every exception is swallowed and its counter incremented. Routing traces are opt-in via `[routing.trace] mode = "off" | "sampled" | "all"` (default off).
 
 **Related**: [deep-dive-routing.md](deep-dive-routing.md), [deep-dive-dashboard.md](deep-dive-dashboard.md)
 
@@ -290,7 +290,7 @@ Routing trace persistence for debugging and dashboard drill-down. `observability
 | **Path** | `src/eggpool/retry/` |
 | **Deep Dive** | [deep-dive-retry.md](deep-dive-retry.md) |
 
-Upstream failure classification and retry decision logic. `retry/classification.py` defines `RetryCategory` (NEVER, BAD_REQUEST, AUTH_FAILURE, QUOTA_EXCEEDED, TEMPORARY, TRANSIENT, FATAL, MODEL_UNAVAILABLE) and `classify_retry()` which maps HTTP status codes and error patterns to retry categories with optional `retry_after` durations. Integrates with `failure/classifier.py` for typed failure effects.
+Upstream failure classification and retry decision logic. `retry/classification.py` defines `RetryCategory` (NEVER, BAD_REQUEST, AUTH_FAILURE, QUOTA_EXCEEDED, TEMPORARY, TRANSIENT, FATAL, MODEL_UNAVAILABLE) and `RetryClassifier.classify()`, which adapts the canonical `classify_failure_effects()` decision into a retry category with optional `retry_after` durations. Integrates with `failure/classifier.py` for typed failure effects.
 
 **Related**: [deep-dive-health.md](deep-dive-health.md), [deep-dive-request-lifecycle.md](deep-dive-request-lifecycle.md), [deep-dive-providers.md](deep-dive-providers.md)
 

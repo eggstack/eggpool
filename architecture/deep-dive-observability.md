@@ -54,12 +54,12 @@ Router._select_account()
 ## Configuration
 
 ```toml
-[routing]
-trace_enabled = false    # Opt-in; default off
-# trace_capacity = 1024  # Bounded queue size (default 1024)
+[routing.trace]
+mode = "off"             # Opt-in; default off ("off" | "sampled" | "all")
+# queue_capacity = 1000  # Bounded queue size (default 1000)
 ```
 
-Traces are opt-in — the writer is not constructed when `trace_enabled = false`. This is part of the lean default profile: no routing traces unless the operator explicitly enables them.
+Traces are opt-in — the writer is not constructed when `mode = "off"`. This is part of the lean default profile: no routing traces unless the operator explicitly enables them.
 
 ## Key Invariants
 
@@ -76,17 +76,26 @@ Trace events are persisted to the `routing_decisions` table:
 
 ```sql
 CREATE TABLE routing_decisions (
-    id TEXT PRIMARY KEY,
-    request_id TEXT NOT NULL,
-    attempt_id TEXT NOT NULL,
-    account_id TEXT NOT NULL,
-    provider_id TEXT NOT NULL,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id INTEGER NOT NULL,
+    attempt_number INTEGER NOT NULL,
     model_id TEXT NOT NULL,
-    score REAL,
-    tier INTEGER,
-    gate_results_json TEXT,
-    selected_at_ms REAL,
-    FOREIGN KEY (request_id) REFERENCES requests(id)
+    provider_id TEXT,
+    protocol TEXT,
+    selected_account_id INTEGER,
+    selected_account_name TEXT,
+    selected_tier INTEGER,
+    selected_score REAL,
+    eligible_count INTEGER NOT NULL DEFAULT 0,
+    scored_count INTEGER NOT NULL DEFAULT 0,
+    attempted_excluded_count INTEGER NOT NULL DEFAULT 0,
+    top_score REAL,
+    top_score_account_name TEXT,
+    exclude_reasons_json TEXT NOT NULL DEFAULT '[]',
+    decision_made_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    score_components_json TEXT NOT NULL DEFAULT '{}',
+    FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE,
+    FOREIGN KEY (selected_account_id) REFERENCES accounts(id)
 );
 ```
 

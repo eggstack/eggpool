@@ -35,7 +35,7 @@ Low-wear metrics buffer with periodic flush to SQLite. Designed for SBC deployme
 
 `ThinkingMetricsCounter` tracks thinking/reasoning decision outcomes with low-cardinality labels:
 
-**Labels:** protocol, decision, capability_status, provider_id
+**Labels:** protocol, decision, capability_status, provider_id, upstream_protocol, reason, model_id (vary per counter)
 
 **Counters:**
 - `requested` — thinking was requested by client
@@ -47,13 +47,16 @@ Low-wear metrics buffer with periodic flush to SQLite. Designed for SBC deployme
 - `budget_clamped` — budget was clamped to provider limits
 - `stream_delta` — streaming thinking delta observed
 - `response_block` — non-streaming thinking block observed
+- `provider_mapped` — thinking mapped to provider-specific model
+- `provider_dropped` — thinking dropped at provider mapping
+- `provider_rejected` — thinking rejected at provider mapping
 
 **API surfaces:**
 - `GET /api/stats/thinking` — counter snapshot
 - `/api/stats/runtime` includes `thinking_metrics`
 - Dashboard overview page — Thinking/Reasoning stat card
 
-**Request trace:** each thinking-related request carries a `thinking_trace` dict on `ProxyRequestContext` with fields: `requested`, `client_protocol`, `request_fields`, `requested_effort`, `resolved_budget_tokens`, `budget_clamped`, `capability_status`, `capability_source`, `upstream_protocol`, `upstream_fields`, `decision`. Serialized to `thinking_trace_json` on the `requests` table (migration 0039).
+**Request trace:** each thinking-related request carries a `thinking_trace` dict on `ProxyRequestContext` with fields: `requested`, `client_protocol`, `request_fields`, `requested_effort`, `resolved_budget_tokens`, `budget_clamped`, `capability_status`, `capability_source`, `upstream_protocol`, `upstream_fields`, `decision`, `provider_control_decision`, `provider_control_warnings`. Serialized to `thinking_trace_json` on the `requests` table (migration 0039).
 
 ### Failure Effect Counters (`metrics/failure_effects.py`)
 
@@ -79,6 +82,10 @@ class EventLoopLagSnapshot:
     max_ms: float | None
     p50_ms: float | None
     p95_ms: float | None
+    p99_ms: float | None
+    loop_identity: str
+    cadence_s: float
+    last_sample_ts: float | None
 ```
 
 - Process-local (never persisted)
@@ -95,6 +102,8 @@ Gathers process topology, memory, background task state, database health, OS loa
 - Database health (connection status, WAL size)
 - OS load average (`os.getloadavg` + normalized per-core)
 - Dispatch overhead distribution (via `DispatchOverheadRecorder`)
+- Runtime manager diagnostics (active/retiring generations, finalization_ownership)
+- Finalization supervisor snapshot
 
 Exposed via `/api/stats/runtime` and `eggpool runtime-status --json`.
 
@@ -118,10 +127,10 @@ Both use monotonic/performance clocks. The two metrics are additive when detaile
 
 ```toml
 [metrics]
-# buffering and flush modes configured here
+# write_mode, flush_interval_s, event_loop_lag_enabled configured here
 
-[event_loop_lag]
-# cadence, window_size configurable
+[metrics.dispatch_spans]
+# sample_rate, window_size configurable
 ```
 
 ## Key Invariants

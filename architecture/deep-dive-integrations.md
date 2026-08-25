@@ -10,17 +10,17 @@ Generates configuration files for external coding tools (OpenCode, Claude Code, 
 
 | Tool | Module | Config Format |
 |------|--------|---------------|
-| OpenCode | `opencode.py` | TOML |
-| Claude Code | (via OpenCode) | — |
-| Aider | `aider.py` | YAML |
+| OpenCode | `opencode.py` | JSON |
+| Claude Code | (via `cli_full.py`) | — |
+| Aider | `aider.py` | ENV |
 | Cline | `cline.py` | JSON |
 | Codex | `codex.py` | TOML |
-| Qwen Code | `qwen_code.py` | TOML |
+| Qwen Code | `qwen_code.py` | JSON |
 | Kilo | `kilo.py` | JSON |
-| Continue | `continue_dev.py` | JSON |
+| Continue | `continue_dev.py` | YAML |
 | Roo Code | `roo_code.py` | JSON |
-| Goose | `goose.py` | YAML |
-| OpenHands | `openhands.py` | JSON |
+| Goose | `goose.py` | ENV |
+| OpenHands | `openhands.py` | ENV |
 
 ## Key Module
 

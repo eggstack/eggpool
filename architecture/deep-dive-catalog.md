@@ -11,7 +11,8 @@ The model catalog is responsible for discovering, normalizing, pricing, and trac
 ```
 src/eggpool/catalog/
 ├── __init__.py
-├── service.py              # Orchestrator (~1678 lines)
+├── _time.py                # Timestamp conversion helpers
+├── service.py              # Orchestrator (~1933 lines)
 ├── fetcher.py              # Provider /v1/models endpoint calls
 ├── normalizer.py           # Heterogeneous response normalization
 ├── cache.py                # In-memory catalog cache
@@ -29,7 +30,7 @@ src/eggpool/catalog/
 
 ### Catalog Service (`service.py`)
 
-The central orchestrator (~1678 lines). Manages periodic refresh cycles from provider endpoints, merges results from multiple sources, and maintains the in-memory catalog cache. Invoked on startup and periodically by background tasks.
+The central orchestrator (~1933 lines). Manages periodic refresh cycles from provider endpoints, merges results from multiple sources, and maintains the in-memory catalog cache. Invoked on startup and periodically by background tasks.
 
 Key responsibilities:
 - Triggers `fetch_models_for_account()` for each configured account
@@ -61,7 +62,7 @@ Transforms heterogeneous provider responses into a canonical model list. Handles
 ### Capability Detection (`capabilities.py`)
 
 Tracks per-model capabilities including:
-- Thinking/reasoning support (`CapabilityStatus`: supported, unsupported, unknown)
+- Thinking/reasoning support (`CapabilityStatus`: supported, unsupported, unknown, mixed, conflicting)
 - Budget bounds (`budget_tokens_min`, `budget_tokens_max`)
 - Effort-to-budget token mappings
 - Tool support, streaming support
@@ -77,7 +78,7 @@ Cost estimation and pricing resolution:
 ### Cache (`cache.py`)
 
 `ModelCatalogCache` maintains the in-memory catalog with:
-- Per-account `AccountCatalogOutcome` tracking (success, partial, failure)
+- Per-account `AccountCatalogOutcome` tracking (success_authoritative, success_empty, success_partial, failed, skipped)
 - Atomic swap semantics during refresh
 - Thread-safe read access from request path
 

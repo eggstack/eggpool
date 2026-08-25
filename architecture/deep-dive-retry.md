@@ -22,23 +22,25 @@ Eight categories of upstream failure outcomes:
 
 | Category | Description | Retryable |
 |----------|-------------|-----------|
-| `NEVER` | Non-retryable client error (400, 401, 403) | No |
+| `NEVER` | Non-retryable client error | No |
 | `BAD_REQUEST` | Client error, don't retry | No |
-| `AUTH_FAILURE` | Authentication failure | No |
-| `QUOTA_EXCEEDED` | Rate limit or quota exceeded | Conditional |
-| `TEMPORARY` | Temporary error, retry with backoff | Yes |
-| `TRANSIENT` | Transient error, retry immediately | Yes |
+| `AUTH_FAILURE` | Authentication failure — disables the failing account; may retry on another account | Yes |
+| `QUOTA_EXCEEDED` | Quota or rate-limit effect (`quota`/`rate_limit`) | Conditional |
+| `TEMPORARY` | Retryable outcome outside {408, 502, 504} — backoff | Yes |
+| `TRANSIENT` | Retryable transport-class status (408/502/504) | Yes |
 | `FATAL` | Fatal error, don't retry | No |
 | `MODEL_UNAVAILABLE` | Model-specific 404, retryable on another account | Yes |
 
 ### Classification Logic
 
-`classify_retry()` maps HTTP status codes and error patterns to retry categories:
+`RetryClassifier.classify(status_code, headers, body)` adapts the canonical
+`classify_failure_effects()` decision into a retry category:
 
-- **4xx errors**: mostly `NEVER` or `BAD_REQUEST` (except 429 → `QUOTA_EXCEEDED`)
-- **5xx errors**: mostly `TEMPORARY` or `TRANSIENT`
-- **Timeout/connection errors**: `TEMPORARY` with backoff
-- **Model not found (404)**: `MODEL_UNAVAILABLE` — retryable on a different account
+- **Quota/rate-limit effects** (429, 402, and 403/409/422 with matching response signals) → `QUOTA_EXCEEDED`
+- **Auth effect** (`disable_auth`, e.g. 401/403 with auth signal) → `AUTH_FAILURE`
+- **Model effect** → `MODEL_UNAVAILABLE`
+- **Retryable without those effects**: `TRANSIENT` when status ∈ {408, 502, 504}, otherwise `TEMPORARY`; transport failures classify as `TEMPORARY`
+- **Remaining 4xx**: `BAD_REQUEST`; anything else: `NEVER`
 
 **RetryableError dataclass:**
 ```python
@@ -48,6 +50,8 @@ class RetryableError:
     category: RetryCategory
     retry_after: float | None = None
     message: str = ""
+    account_name: str | None = None
+    model_id: str | None = None
 ```
 
 ### Integration with Failure Effects
@@ -60,8 +64,7 @@ The retry module integrates with `failure/classifier.py` for typed failure effec
 ### Backoff Calculation
 
 Retry-after durations are extracted from:
-- `Retry-After` header (HTTP standard)
-- `X-RateLimit-Reset` header (provider-specific)
+- `Retry-After` header (the only retry header parsed)
 - Exponential backoff with jitter (default)
 
 Bounded to 1,800 seconds maximum per the health management backoff cap.
@@ -70,7 +73,7 @@ Bounded to 1,800 seconds maximum per the health management backoff cap.
 
 ```
 Upstream HTTP response
-    → classify_retry(status_code, headers, body)
+    → RetryClassifier().classify(status_code, headers, body)
     → RetryableError(category, retry_after)
     → RequestCoordinator._should_retry()
     → HealthManager.record_failure() / record_success()
@@ -80,7 +83,7 @@ Upstream HTTP response
 ## Key Invariants
 
 - Retry decisions are attempt-scoped — each attempt independently classified
-- `AUTH_FAILURE` never retries — credentials won't change mid-request
+- `AUTH_FAILURE` disables the failing account's credential state and retries on a different account
 - `MODEL_UNAVAILABLE` retries across accounts — different accounts may have the model
 - `QUOTA_EXCEEDED` respects `retry_after` — no premature retry
 - Total retry attempts bounded by distinct eligible accounts and `1 + max_retries_before_stream`
@@ -91,8 +94,8 @@ Upstream HTTP response
 Retry behavior is configured via the request lifecycle, not standalone:
 
 ```toml
-[upstream]
-max_retries_before_stream = 0  # Default: no pre-stream retry
+[routing]
+max_retries_before_stream = 3  # Default; total attempts = value + 1
 ```
 
 ## Related

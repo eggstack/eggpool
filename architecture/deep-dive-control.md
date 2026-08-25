@@ -14,7 +14,7 @@ src/eggpool/control/
 ├── server.py               # UDS server (~617 lines)
 ├── client.py               # CLI client for rehash commands
 ├── reload_manager.py       # Staged reload orchestration
-└── accepted_finalization.py  # Reload invariant tracking
+└── accepted_finalization.py  # Post-acceptance finalization lifecycle
 ```
 
 ## Key Components
@@ -51,7 +51,7 @@ Unix-domain socket server (~617 lines) implementing a single-shot newline-delimi
 **Security model:**
 - Socket created with mode `0o600` (owner-only read/write)
 - Socket cleaned up on server stop and at startup if stale
-- Path: `~/.local/state/eggpool/eggpool.sock`
+- Path: `<runtime_dir>/eggpool.sock` (defaults to `/tmp/eggpool-<UID>.runtime/eggpool.sock`)
 
 **Connection model:** One request per connection, structured response, then close. Designed for short-lived CLI interactions.
 
@@ -73,16 +73,13 @@ The reload manager coordinates with `RuntimeManager`, `ReloadTransaction`, and `
 
 ### Accepted Finalization (`accepted_finalization.py`)
 
-Tracks reload invariants during the staged reload process. Ensures that:
-- Only one reload is in progress at a time
-- Concurrent rejections return `reload_in_progress`
-- The reload transaction completes atomically
+Tracks post-acceptance finalization lifecycle for committed reloads. For each accepted reload, a process-owned `AcceptedReloadFinalizationJob` executes idempotent steps (ownership transfer, mirror update, transition finalization, observer reporting, retirement scheduling, transaction completion) in order. Completed steps are not repeated on retry; failure leaves the job registered at the exact failed step; cancellation preserves the job so retry can resume.
 
 ## Reload Transaction (`reload_transaction.py`)
 
 A monotonic state machine with atomic commit semantics across SQLite and runtime publication. States progress through:
-- `STAGED` → `COMMITTED` → `RETIREMENT_FINALIZED`
-- On failure: `STAGED` → `ROLLED_BACK`
+- `RUNTIME_STAGED` → `RUNTIME_SWAP_COMMITTED` → `COMPLETED`
+- On failure: `ABORTING` → `ABORTED` (or `COMPENSATION_FAILED`)
 
 The transaction ensures that config changes and runtime generation swaps are atomic — either both succeed or both roll back.
 

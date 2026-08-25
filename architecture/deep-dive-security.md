@@ -9,7 +9,7 @@ and security utilities to protect sensitive data in transit and at rest.
 
 ## Key Modules
 
-### `security/redaction.py` — HeaderRedactionMiddleware
+### `app.py` — `_HeaderRedactionMiddleware`
 
 Strips sensitive headers from upstream responses before they reach clients:
 - `Authorization` → redacted
@@ -37,7 +37,7 @@ bind choice.
 
 Constant-time API key comparison to prevent timing attacks:
 - Used for local API authentication
-- Compares against `EGGPOOL_API_KEY` env var
+- Compares against `SERVER_API_KEY` env var (default for `[server].api_key_env`)
 - Constant-time via `hmac.compare_digest()`
 
 ### `providers/contract.py` — Auth Header Construction

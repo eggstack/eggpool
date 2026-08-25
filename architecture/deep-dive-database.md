@@ -70,7 +70,7 @@ therefore a fixture or task-ownership failure to fix, not a warning to suppress.
 
 ### `db/repositories.py`
 
-All repositories in one module:
+Primary repositories (the usage rollups live in the separate `db/rollup_repository.py` module):
 
 | Repository | Purpose |
 |------------|---------|
@@ -161,6 +161,7 @@ Schema migration execution. Ordered SQL files in `db/schema/`.
 |-------|---------|
 | `requests` | Request lifecycle, usage, cache metrics |
 | `request_attempts` | Per-request attempt tracking with provider/model/protocol |
+| `reservations` | Quota reservations with release/reconciliation |
 | `routing_decisions` | Routing decisions with score components |
 | `accounts` | Account configuration and state |
 | `providers` | Provider configuration |
@@ -168,12 +169,11 @@ Schema migration execution. Ordered SQL files in `db/schema/`.
 | `provider_model_metadata` | Provider-scoped semantic catalog metadata |
 | `account_models` | Account/model support relationships |
 | `catalog_refresh_state` | Compact per-account successful catalog freshness |
-| `quotas` | Quota reservations |
 | `account_backoffs` | Upstream-derived backoff state |
 | `account_events` | Account event log |
 | `operational_events` | Safety-net task events |
 | `provider_pings` | Provider health ping observations |
-| `prices` | Model price snapshots |
+| `model_price_snapshots` | Model price snapshots |
 | `model_info_canonical` | Model metadata sidecar |
 | `model_info_observations` | Source observations |
 | `model_info_aliases` | Model aliases |

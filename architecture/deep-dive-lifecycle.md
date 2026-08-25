@@ -11,8 +11,8 @@ Backup, restore, and uninstall orchestration for EggPool installations.
 ```
 src/eggpool/lifecycle/
 ├── __init__.py
-├── backup.py      # Backup and restore helpers (~564 lines)
-└── uninstall.py   # Uninstall orchestration (~760 lines)
+├── backup.py      # Backup and restore helpers (~593 lines)
+└── uninstall.py   # Uninstall orchestration (~778 lines)
 ```
 
 ## Key Components
@@ -23,7 +23,7 @@ Creates timestamped `.zip` archives containing the complete installation state.
 
 **Archive contents:**
 - `config.toml` — the live configuration
-- `env` (optional) — the environment / API-key file
+- `.env` (optional) — the environment / API-key file
 - `usage.sqlite3` — the SQLite database
 - `usage.sqlite3-wal` — WAL journal if present
 - `usage.sqlite3-shm` — shared-memory file if present
@@ -40,9 +40,12 @@ block EggPool's canonical event loop. Retention pruning is also off-loop.
 
 **Metadata format:**
 ```
-version=0.6.5
-install_method=pipx
-timestamp=2025-01-15T10:30:00+00:00
+format_version = 1
+created_at = '2025-01-15T10:30:00+00:00'
+install_method = 'pipx'
+config_path = '/path/to/config.toml'
+db_path = '/path/to/usage.sqlite3'
+members = ["config.toml", "usage.sqlite3"]
 ```
 
 **Restore process:**
@@ -58,15 +61,15 @@ Reverses installation by detecting the installer method and cleaning up.
 **Install methods detected:**
 | Method | Detection | Cleanup |
 |--------|-----------|---------|
-| `pipx` | `pipx list` shows eggpool | `pipx uninstall eggpool` |
-| `uv-tool` | `uv tool list` shows eggpool | `uv tool uninstall eggpool` |
-| `source` | Project root detection | Manual cleanup |
+| `pipx` | Binary path under `pipx/venvs` or `pipx/shared` | `pipx uninstall eggpool` |
+| `uv-tool` | Binary path under `uv/tools` | `uv tool uninstall eggpool` |
+| `source` | Project root detection | Deletes source checkout directory |
 | `manual` | Fallback | Manual cleanup |
 
 **PATH cleanup:**
-- Detects entries added by the install script (marked with `# Added by eggpool`)
+- Detects eggpool-attributable entries (containing `eggpool` in PATH/export lines, `uv tool update-shell` directives, or `# Added by eggpool` comment blocks)
 - Removes matching PATH entries from shell profiles
-- Supports bash, zsh, and fish
+- Supports bash and zsh (default rc files: `.zshrc`, `.bashrc`, `.bash_profile`, `.profile`)
 
 **Safety:**
 - Interactive confirmation before any destructive action

@@ -94,7 +94,7 @@ The orchestrator. Wires together all lifecycle stages as a thin sequencing
 facade.  Implementation details are delegated to focused helper modules:
 
 - Receives `ProxyRequestContext` from endpoint handlers
-- Calls `Router.select_accounts_for_failover()` for routing
+- Calls `Router.build_routing_plan()` for routing
 - Persists the request/reservation/attempt bundle in one transaction
 - Builds upstream URL via `_get_upstream_url()` (delegates to `upstream_helpers.py`)
 - Builds upstream headers via `_build_upstream_headers()` (provider contract)
@@ -154,7 +154,7 @@ the next await, so a later duplicate caller resumes only unfinished releases.
 The durable attempt transition and reservation terminal state remain separate:
 an attempt update is not evidence that its reservation is released. Reselection
 may proceed only after the supervisor reports convergence; normal child-task
-completion alone is insufficient. One global 128-entry capacity, retry timer,
+completion alone is insufficient. One global 256-entry capacity, retry timer,
 diagnostics surface, and shutdown drain cover all three command kinds. If a
 request waiter is cancelled during cleanup, it joins the existing supervisor
 command and submits the canonical `CLIENT_CANCELLED` request terminal only

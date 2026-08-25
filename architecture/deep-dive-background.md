@@ -20,7 +20,7 @@ The `TaskSupervisor` manages periodic and startup tasks for maintenance, cleanup
     │ • checkpoint        │ (default)
     │ • metrics_flush     │ (default)
     │ • update_checker    │ (opt-in)
-    │ • automatic_backup  │
+    │ • automatic_backup  │ (opt-in)
     └─────────────────────┘
                │
     ┌──────────▼──────────┐
@@ -86,9 +86,14 @@ pings and success/failure transitions remain immediate diagnostics.
 
 ## Safety-Net Tasks
 
-Recorded in `operational_events` table:
-- **`_crash_recovery`** — Recover from unclean shutdown
-- **`reconcile_expired_reservations`** — Release expired quota reservations
+Two recovery functions record `operational_events` rows. They are not
+supervised background tasks — both are invoked directly at startup
+(`_crash_recovery` once, `reconcile_expired_reservations` once and
+also periodically inside `retention_cleanup`):
+- **`_crash_recovery`** — Startup sweep: mark all pending requests as
+  interrupted and release all active reservations (no time gate)
+- **`reconcile_expired_reservations`** — Release reservations past
+  their expiry; also runs periodically inside `retention_cleanup`
 
 ## Update Checker
 

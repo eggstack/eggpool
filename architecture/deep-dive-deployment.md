@@ -27,7 +27,7 @@ Bundled systemd/logrotate/cron snippets for CLI output. `eggpool.service` is byt
 One-shot installer:
 1. Clones repo
 2. Installs uv
-3. Installs EggPool with dev dependencies
+3. Installs EggPool via pipx or uv tool
 
 ### `scripts/install_prompt.py`
 
@@ -44,21 +44,49 @@ Interactive install prompt for guided setup.
 | `scripts/repro_high_concurrency_streams.py` | High-concurrency stream reproducer |
 | `scripts/test_model_info_identity.sh` | Model-info identity test runner |
 | `scripts/debug_model_info_openrouter.sh` | OpenRouter debug helper |
+| `scripts/install.sh` | One-shot installer (pipx or uv tool) |
+| `scripts/install_prompt.py` | Post-install interactive onboarding prompt |
+| `scripts/admission_race_stress.py` | Repeated-run admission race stress test |
+| `scripts/bench_sqlite_writepath.py` | SQLite write-path benchmark |
+| `scripts/run_tests_with_timeout.py` | pytest runner with hard wall-clock timeout |
 
 ## Systemd Integration
 
 ```ini
 [Unit]
-Description=EggPool LLM Proxy
-After=network.target
+Description=EggPool
+Documentation=https://github.com/eggstack/eggpool
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 User=eggpool
-WorkingDirectory=/home/eggpool
-ExecStart=/home/eggpool/.local/bin/eggpool serve
+Group=eggpool
+WorkingDirectory=/var/lib/eggpool
+ExecStart=/opt/eggpool/.venv/bin/eggpool --config /etc/eggpool/config.toml serve
 Restart=on-failure
 RestartSec=5
+StartLimitIntervalSec=300
+StartLimitBurst=5
+TimeoutStopSec=30
+KillSignal=SIGTERM
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/eggpool /var/lib/eggpool/backups
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+EnvironmentFile=/etc/eggpool/env
 
 [Install]
 WantedBy=multi-user.target
@@ -90,7 +118,7 @@ API key storage. Never committed.
 ## Live Reload
 
 `eggpool rehash` applies supported changes without restart:
-- Control socket at `~/.local/state/eggpool/eggpool.sock`
+- Control socket at `<runtime_dir>/eggpool.sock` (`control_socket_path()` → `runtime_paths.runtime_dir()`: `$EGGPOOL_RUNTIME_DIR` → `$XDG_RUNTIME_DIR/eggpool` → `/tmp/eggpool-<UID>.runtime`)
 - LIVE fields: provider/account/routing families, transcoder, cache, subset of models, retention durations
 - RESTART_REQUIRED: everything else
 - JSON output pinned at 9 keys

@@ -24,7 +24,7 @@ Multi-source model metadata enrichment with tiered identity matching. Provides p
                │
     ┌──────────▼──────────┐
     │ Identity Matching   │
-    │ 6-tier resolver     │
+    │ 7-tier resolver     │
     └──────────┬──────────┘
                │
     ┌──────────▼──────────┐
@@ -41,7 +41,7 @@ Multi-source model metadata enrichment with tiered identity matching. Provides p
 ### `model_info/service.py` — ModelInfoService
 
 Orchestrates multi-source enrichment:
-- `refresh()` — bulk refresh cycle
+- `refresh_due_models()` — bulk refresh cycle
 - `refresh_model_info()` — single-model refresh
 - `get_summary_map()` — dashboard summary
 - `health_snapshot()` — runtime diagnostics
@@ -57,14 +57,15 @@ SQLite-backed model info persistence. All sidecar tables.
 
 ### `model_info/matching.py`
 
-Tiered identity matching (6 tiers):
+Tiered identity matching (7 tiers):
 
 | Tier | Method | Description |
 |------|--------|-------------|
 | 0 | `configured_exact_alias` | Operator-configured aliases |
 | 1 | `exact_source_id` | Raw model_id or split variant |
 | 2 | `normalized_exact` | NFKC + casefold + separator strip |
-| 2b | `deployment_suffix_normalized_exact` | Strip deployment suffixes (opt-in) |
+| 2b | `deployment_suffix_normalized_exact` | Strip deployment suffixes |
+| 2c | `release_suffix_normalized_exact` | Strip date/release suffixes |
 | 3 | `regex_rule` | Conservative family patterns |
 | 4 | `similarity_guarded` | difflib.SequenceMatcher (disabled by default) |
 
@@ -116,9 +117,10 @@ Local model IDs matched to source records via:
 1. Configured exact aliases
 2. Exact source model ID
 3. Normalized exact match
-4. Deployment suffix stripping (opt-in)
-5. Regex family patterns
-6. Similarity matching (disabled by default)
+4. Deployment suffix stripping
+5. Release suffix stripping
+6. Regex family patterns
+7. Similarity matching (disabled by default)
 
 Non-exact matches persist evidence rows in `model_info_match_evidence`.
 

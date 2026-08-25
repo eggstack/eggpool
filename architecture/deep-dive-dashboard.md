@@ -35,10 +35,19 @@ Self-updating server-rendered HTML dashboard with 50 themes, plus a comprehensiv
 
 Route registration for all dashboard pages:
 - `/` — Overview
+- `/accounts` — Account breakdown
 - `/models` — Model catalog with stats
+- `/models/{model_id:path}` — Model detail page
+- `/latency` — Latency breakdown
+- `/events` — Recent events
+- `/timeseries` — Time-series charts
+- `/bandwidth` — Bandwidth heatmap
+- `/pings` — Provider ping health
+- `/reliability` — Retry and pending health
+- `/routing` — Routing decision analysis
+- `/traces` — Recent request traces
 - `/runtime` — Live runtime metrics
 - `/cache` — Request shaping (cache, segmentation)
-- `/models/{model_id:path}` — Model detail page
 
 ### `dashboard/render.py`
 
@@ -62,7 +71,7 @@ Theme management.
 
 ### `dashboard/themes/`
 
-50+ CSS theme files.
+50 CSS theme files.
 
 ### `dashboard/static/`
 
