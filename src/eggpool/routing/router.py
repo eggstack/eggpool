@@ -82,6 +82,8 @@ def _fairness_band(
 
     band: list[tuple[AccountRuntimeState, RoutingScore]] = []
     for state, score in ranked:
+        # Defensive: callers pass single-tier lists, but keep the band
+        # tier-pure if that ever changes.
         if state.routing_priority != best_state.routing_priority:
             break
         if prefer_native and score.requires_transcode != best_score.requires_transcode:
@@ -578,9 +580,12 @@ class Router:
 
         supporting = cache.get_supporting_accounts(model_id)
         model_support_row = state.name in supporting
-        fresh_support = model_support_row and not cache.is_account_stale(
-            state.name, self._stale_after_s or 0.0
-        )
+        if self._stale_after_s is None:
+            fresh_support = model_support_row
+        else:
+            fresh_support = model_support_row and not cache.is_account_stale(
+                state.name, self._stale_after_s
+            )
         circuit_closed = (
             self._health_manager is None
             or self._health_manager.is_model_healthy(state.name, model_id)
@@ -1103,7 +1108,11 @@ class Router:
             return []
 
         result: list[tuple[AccountRuntimeState, RoutingScore]] = []
+        failover_fairness_decision: FairnessDecision | None = None
+        failover_fairness_band_names: frozenset[str] = frozenset()
         for _priority, tier_states in tiers:
+            tier_fairness_decision: FairnessDecision | None = None
+            tier_fairness_band_names: frozenset[str] = frozenset()
             tier_candidates = RoutingCandidates(
                 states=tier_states,
                 by_name=candidates.by_name,
@@ -1137,7 +1146,7 @@ class Router:
                         priority=_priority,
                         client_protocol=client_protocol,
                     )
-                    band, fairness_decision = await self._fairness_rotor.rotate(
+                    band, tier_fairness_decision = await self._fairness_rotor.rotate(
                         key, band, scope=self._fairness_scope
                     )
                 elif band and self._fairness_mode == "random":
@@ -1151,7 +1160,7 @@ class Router:
                         priority=_priority,
                         client_protocol=client_protocol,
                     )
-                    fairness_decision = FairnessDecision(
+                    tier_fairness_decision = FairnessDecision(
                         mode="random",
                         applied=True,
                         key=key.to_key_string(),
@@ -1167,7 +1176,7 @@ class Router:
                         priority=_priority,
                         client_protocol=client_protocol,
                     )
-                    fairness_decision = FairnessDecision(
+                    tier_fairness_decision = FairnessDecision(
                         mode=self._fairness_mode,
                         applied=False,
                         key=key.to_key_string(),
@@ -1175,8 +1184,7 @@ class Router:
                         scope=self._fairness_scope,
                         reason=band_reason,
                     )
-                self._last_fairness_decision = fairness_decision
-                self._last_fairness_band_names = (
+                tier_fairness_band_names = (
                     frozenset(s.name for s, _ in band) if band else frozenset()
                 )
                 ranked_pairs = band + rest
@@ -1188,7 +1196,7 @@ class Router:
                     priority=_priority,
                     client_protocol=client_protocol,
                 )
-                self._last_fairness_decision = FairnessDecision(
+                tier_fairness_decision = FairnessDecision(
                     mode=self._fairness_mode,
                     applied=False,
                     key=key.to_key_string(),
@@ -1200,7 +1208,13 @@ class Router:
                         else "single_candidate"
                     ),
                 )
-                self._last_fairness_band_names = frozenset()
+                tier_fairness_band_names = frozenset()
+
+            if failover_fairness_decision is None:
+                failover_fairness_decision = tier_fairness_decision
+                failover_fairness_band_names = tier_fairness_band_names
+                self._last_fairness_decision = failover_fairness_decision
+                self._last_fairness_band_names = failover_fairness_band_names
 
             for state, score in ranked_pairs:
                 result.append((state, score))

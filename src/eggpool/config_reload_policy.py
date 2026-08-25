@@ -247,6 +247,11 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "metrics.rollup_retain_days": ReloadDisposition.RESTART_REQUIRED,
     "metrics.cleanup_interval_s": ReloadDisposition.RESTART_REQUIRED,
     "metrics.cleanup_max_rows_per_pass": ReloadDisposition.RESTART_REQUIRED,
+    # Retention windows for operational_events / routing_decisions are
+    # consumed by the ``retention_cleanup`` task from the current
+    # generation's config on each tick.
+    "metrics.operational_event_retain_days": ReloadDisposition.LIVE,
+    "metrics.routing_decision_retain_days": ReloadDisposition.LIVE,
     # Milestone D2: backup enabled state, scheduling, and retention
     # fields are consumed by the ``automatic_backup`` task; the process
     # supervisor reconfigures the task with the candidate config on reload.

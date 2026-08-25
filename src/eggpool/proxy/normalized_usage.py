@@ -352,9 +352,9 @@ def normalize_from_stream_result(
     Parameters
     ----------
     result:
-        A :class:`StreamUsageResult`.  Any other type yields
-        :attr:`CacheCounterStatus.UNKNOWN_FORMAT` rather than
-        raising, so callers can pass ``None`` from a partial stream.
+        A :class:`StreamUsageResult`.  ``None`` (e.g. a partial stream
+        with no usage event) yields
+        :attr:`CacheCounterStatus.NOT_REPORTED` rather than raising.
     protocol:
         ``"openai"`` or ``"anthropic"`` — selects the cache-counter
         mapping (read/write split for Anthropic, generic cached for

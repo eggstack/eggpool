@@ -2808,7 +2808,18 @@ class RequestCoordinator:
                 run_provider_transforms,
             )
 
-            run_provider_transforms(self, context, selected)
+            pipeline_result = run_provider_transforms(self, context, selected)
+            if pipeline_result.rejection is not None:
+                rejection = pipeline_result.rejection
+                raise CapabilityError(
+                    model_id=str(getattr(context, "model_id", "")),
+                    capability="provider_transform",
+                    requested_fields=[],
+                    message=(
+                        "request rejected by provider transform "
+                        f"{getattr(rejection, 'category', 'unknown')!r}"
+                    ),
+                )
         except CapabilityError as err:
             await self._finalize_selected_capability_rejection(
                 context=context,
@@ -3150,7 +3161,18 @@ class RequestCoordinator:
                 run_provider_transforms,
             )
 
-            run_provider_transforms(self, context, selected)
+            pipeline_result = run_provider_transforms(self, context, selected)
+            if pipeline_result.rejection is not None:
+                rejection = pipeline_result.rejection
+                raise CapabilityError(
+                    model_id=str(getattr(context, "model_id", "")),
+                    capability="provider_transform",
+                    requested_fields=[],
+                    message=(
+                        "request rejected by provider transform "
+                        f"{getattr(rejection, 'category', 'unknown')!r}"
+                    ),
+                )
         except CapabilityError as err:
             await self._finalize_selected_capability_rejection(
                 context=context,

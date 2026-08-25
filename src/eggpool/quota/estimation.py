@@ -348,17 +348,20 @@ class AccountQuota:
                 + self.five_hour_offset
                 + self.reserved_cost
             )
-            used_ratio = cost_5h / self.capacity_5h_microdollars
+            capacity = self.capacity_5h_microdollars
+            used_ratio = cost_5h / capacity if capacity > 0 else float("inf")
             capacities.append(max(0.0, 1.0 - used_ratio))
 
         if self.capacity_7d_microdollars is not None:
             cost_7d = self.get_persisted_cost_7d() + self.weekly_offset
-            used_ratio = cost_7d / self.capacity_7d_microdollars
+            capacity = self.capacity_7d_microdollars
+            used_ratio = cost_7d / capacity if capacity > 0 else float("inf")
             capacities.append(max(0.0, 1.0 - used_ratio))
 
         if self.capacity_30d_microdollars is not None:
             cost_30d = self.get_persisted_cost_30d() + self.monthly_offset
-            used_ratio = cost_30d / self.capacity_30d_microdollars
+            capacity = self.capacity_30d_microdollars
+            used_ratio = cost_30d / capacity if capacity > 0 else float("inf")
             capacities.append(max(0.0, 1.0 - used_ratio))
 
         if self.capacity_5h_requests is not None:
@@ -367,19 +370,22 @@ class AccountQuota:
                 + self.reserved_requests
                 + self.request_offset_5h
             )
-            used_ratio = requests_5h / self.capacity_5h_requests
+            capacity = self.capacity_5h_requests
+            used_ratio = requests_5h / capacity if capacity > 0 else float("inf")
             capacities.append(max(0.0, 1.0 - used_ratio))
 
         if self.capacity_7d_requests is not None:
             requests_7d = self.get_persisted_request_count_7d() + self.request_offset_7d
-            used_ratio = requests_7d / self.capacity_7d_requests
+            capacity = self.capacity_7d_requests
+            used_ratio = requests_7d / capacity if capacity > 0 else float("inf")
             capacities.append(max(0.0, 1.0 - used_ratio))
 
         if self.capacity_30d_requests is not None:
             requests_30d = (
                 self.get_persisted_request_count_30d() + self.request_offset_30d
             )
-            used_ratio = requests_30d / self.capacity_30d_requests
+            capacity = self.capacity_30d_requests
+            used_ratio = requests_30d / capacity if capacity > 0 else float("inf")
             capacities.append(max(0.0, 1.0 - used_ratio))
 
         if self.capacity_5h_tokens is not None:
@@ -388,17 +394,20 @@ class AccountQuota:
                 + self.reserved_tokens
                 + self.token_offset_5h
             )
-            used_ratio = tokens_5h / self.capacity_5h_tokens
+            capacity = self.capacity_5h_tokens
+            used_ratio = tokens_5h / capacity if capacity > 0 else float("inf")
             capacities.append(max(0.0, 1.0 - used_ratio))
 
         if self.capacity_7d_tokens is not None:
             tokens_7d = self.get_persisted_token_count_7d() + self.token_offset_7d
-            used_ratio = tokens_7d / self.capacity_7d_tokens
+            capacity = self.capacity_7d_tokens
+            used_ratio = tokens_7d / capacity if capacity > 0 else float("inf")
             capacities.append(max(0.0, 1.0 - used_ratio))
 
         if self.capacity_30d_tokens is not None:
             tokens_30d = self.get_persisted_token_count_30d() + self.token_offset_30d
-            used_ratio = tokens_30d / self.capacity_30d_tokens
+            capacity = self.capacity_30d_tokens
+            used_ratio = tokens_30d / capacity if capacity > 0 else float("inf")
             capacities.append(max(0.0, 1.0 - used_ratio))
 
         if not capacities:

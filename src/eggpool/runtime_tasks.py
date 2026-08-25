@@ -207,10 +207,14 @@ def register_runtime_tasks(
                 gen_config.models.ping_retain_days, budget=budget
             )
             results["operational_events"] = await cleanup_old_operational_events(
-                db, retain_days=90, budget=budget
+                db,
+                retain_days=gen_config.metrics.operational_event_retain_days,
+                budget=budget,
             )
             results["routing_decisions"] = await cleanup_old_routing_decisions(
-                db, retain_days=90, budget=budget
+                db,
+                retain_days=gen_config.metrics.routing_decision_retain_days,
+                budget=budget,
             )
             results["rollups"] = await cleanup_old_usage_rollups(
                 db,
@@ -551,10 +555,14 @@ def build_callback_factories_for_specs(
                     results[
                         "operational_events"
                     ] = await cleanup_old_operational_events(
-                        db, retain_days=90, budget=budget
+                        db,
+                        retain_days=gen_config.metrics.operational_event_retain_days,
+                        budget=budget,
                     )
                     results["routing_decisions"] = await cleanup_old_routing_decisions(
-                        db, retain_days=90, budget=budget
+                        db,
+                        retain_days=gen_config.metrics.routing_decision_retain_days,
+                        budget=budget,
                     )
                     results["rollups"] = await cleanup_old_usage_rollups(
                         db,

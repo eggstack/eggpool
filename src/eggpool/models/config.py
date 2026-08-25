@@ -450,6 +450,8 @@ class MetricsConfig(BaseModel):
     trace_sample_rate: float = Field(default=0.05, ge=0.0, le=1.0)
     aggregate_only: bool = True
     rollup_retain_days: int = Field(default=90, gt=0)
+    operational_event_retain_days: int = Field(default=90, gt=0)
+    routing_decision_retain_days: int = Field(default=90, gt=0)
     cleanup_interval_s: int = Field(default=86_400, gt=0)
     cleanup_max_rows_per_pass: int = Field(default=5000, gt=0)
     event_loop_lag_enabled: bool = Field(

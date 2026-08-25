@@ -124,6 +124,8 @@ RUNTIME_TASK_INVENTORY: tuple[RuntimeTaskSpec, ...] = (
         reloadable_fields=(
             "dashboard.retain_request_stats_days",
             "dashboard.retain_event_days",
+            "metrics.operational_event_retain_days",
+            "metrics.routing_decision_retain_days",
             "models.ping_retain_days",
         ),
         generation_dependencies=("router",),

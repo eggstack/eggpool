@@ -1951,7 +1951,7 @@ class AccountBackoffRepository:
         now_iso = _epoch_to_iso(now)
         rows = await self._db.fetch_all(
             """
-            SELECT id, account_id, account_id AS acct_id, model_id, reason,
+            SELECT id, account_id, model_id, reason,
                    status_code, error_class, consecutive_failures,
                    backoff_until, last_failure_at, updated_at
             FROM account_backoffs
@@ -1965,7 +1965,6 @@ class AccountBackoffRepository:
         for row in rows:
             entry = dict(row)
             entry["backoff_until_epoch"] = _iso_to_epoch(entry.get("backoff_until"))
-            entry.pop("acct_id", None)
             results.append(entry)
         return results
 

@@ -124,6 +124,8 @@ class TestPolicyDefaults:
             "models.ping_retain_days",
             "dashboard.retain_request_stats_days",
             "dashboard.retain_event_days",
+            "metrics.operational_event_retain_days",
+            "metrics.routing_decision_retain_days",
             # Metrics flush interval reconfigured via process supervisor.
             "metrics.flush_interval_s",
             # Detailed span sample rate reconfigured via generation rebuild.
@@ -1183,6 +1185,12 @@ LIVE_FIELD_CONSUMERS: dict[str, tuple[str, ...]] = {
     "models.ping_retain_days": ("retention_cleanup (gen config per tick)",),
     "dashboard.retain_request_stats_days": ("retention_cleanup (gen config per tick)",),
     "dashboard.retain_event_days": ("retention_cleanup (gen config per tick)",),
+    "metrics.operational_event_retain_days": (
+        "retention_cleanup (gen config per tick)",
+    ),
+    "metrics.routing_decision_retain_days": (
+        "retention_cleanup (gen config per tick)",
+    ),
     # Metrics flush interval reconfigured via the process supervisor.
     "metrics.flush_interval_s": ("metrics_flush (process supervisor reconfigure)",),
     # Detailed span sample rate consumed by the generation-owned

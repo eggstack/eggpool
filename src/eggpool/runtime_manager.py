@@ -144,6 +144,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_CLOSE_COUNTS_MAX_GENERATIONS = 64
+
 
 # ---------------------------------------------------------------------------
 # Candidate resource ownership (Phase 4)
@@ -1871,6 +1873,10 @@ class RuntimeManager:
         def record_close_attempt(resource_name: str) -> None:
             by_resource = self._close_counts.setdefault(generation.generation_id, {})
             by_resource[resource_name] = by_resource.get(resource_name, 0) + 1
+            overflow = len(self._close_counts) - _CLOSE_COUNTS_MAX_GENERATIONS
+            if overflow > 0:
+                for stale_id in sorted(self._close_counts)[:overflow]:
+                    del self._close_counts[stale_id]
 
         # 1. Stop background-task scheduling first so no new ticks fire
         #    while we drain in-flight tasks.
