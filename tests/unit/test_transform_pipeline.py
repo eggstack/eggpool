@@ -248,6 +248,31 @@ class TestRunTransformPipeline:
         assert payload.get("stream_options") is None
         assert request.provider_payload["stream_options"] == {"include_usage": True}
 
+    @pytest.mark.parametrize(
+        ("payload", "expected"),
+        [
+            ({"model": "gpt-4"}, True),
+            ({"model": "gpt-4", "stream_options": {"include_usage": True}}, True),
+            ({"model": "gpt-4", "stream_options": {"include_usage": False}}, False),
+        ],
+    )
+    def test_skipped_transform_preserves_client_usage_preference(
+        self, payload: dict[str, Any], expected: bool
+    ) -> None:
+        request = _make_request(payload)
+        proxy_context = type(
+            "ProxyContext", (), {"streaming": True, "client_metadata": {}}
+        )()
+        context = _make_context(
+            upstream_protocol="anthropic", proxy_context=proxy_context
+        )
+        meta, transform = _make_stream_options_adapter()
+
+        result = run_transform_pipeline(request, context, [(meta, transform)])
+
+        assert result.decisions[0].decision == TransformDecision.SKIPPED
+        assert proxy_context.client_metadata["upstream_include_usage"] is expected
+
 
 # ---------------------------------------------------------------------------
 # serialize_provider_payload

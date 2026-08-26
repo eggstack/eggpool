@@ -48,10 +48,21 @@ def test_json_object_is_cached_on_the_shared_frame() -> None:
     assert first is second
 
 
-def test_incomplete_last_line_is_not_emitted_at_eof() -> None:
+def test_final_line_without_newline_is_emitted_at_eof() -> None:
     decoder = SSEDecoder()
-    decoder.feed(b"data: hello\n")
+    decoder.feed(b"data: [DONE]")
     eof = decoder.finish()
 
-    assert eof.frames == ()
-    assert eof.incomplete_frame
+    assert len(eof.frames) == 1
+    assert eof.frames[0].frame.data == "[DONE]"
+    assert not eof.incomplete_frame
+
+
+def test_final_line_after_newline_is_emitted_without_blank_line() -> None:
+    decoder = SSEDecoder()
+    decoder.feed(b"data: [DONE]\n")
+    eof = decoder.finish()
+
+    assert len(eof.frames) == 1
+    assert eof.frames[0].frame.data == "[DONE]"
+    assert not eof.incomplete_frame

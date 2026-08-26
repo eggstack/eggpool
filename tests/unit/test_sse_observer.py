@@ -101,28 +101,28 @@ class TestSSEEventAssembly:
         assert observer.usage.output_tokens == 5
 
     def test_final_data_line_without_newline(self) -> None:
-        """EOF does not turn an unterminated final event into a frame."""
+        """EOF dispatches a syntactically complete final data line."""
         observer = IncrementalSSEObserver(protocol="openai")
         payload = {"usage": {"prompt_tokens": 13, "completion_tokens": 8}}
 
         observer.observe(f"data: {json.dumps(payload)}".encode())
         observer.flush()
 
-        assert observer.usage.input_tokens == 0
-        assert observer.usage.output_tokens == 0
-        assert observer.completion_snapshot.incomplete_frame_at_eof
+        assert observer.usage.input_tokens == 13
+        assert observer.usage.output_tokens == 8
+        assert not observer.completion_snapshot.incomplete_frame_at_eof
 
     def test_final_multiline_data_line_without_newline(self) -> None:
-        """EOF does not process an unterminated multiline SSE event."""
+        """EOF dispatches a multiline event without a final line break."""
         observer = IncrementalSSEObserver(protocol="openai")
 
         observer.observe(b'data: {"usage": {"prompt_tokens": 21,\n')
         observer.observe(b'data: "completion_tokens": 5}}')
         observer.flush()
 
-        assert observer.usage.input_tokens == 0
-        assert observer.usage.output_tokens == 0
-        assert observer.completion_snapshot.incomplete_frame_at_eof
+        assert observer.usage.input_tokens == 21
+        assert observer.usage.output_tokens == 5
+        assert not observer.completion_snapshot.incomplete_frame_at_eof
 
     def test_multiple_data_lines_joined(self) -> None:
         """Multiple data: lines before blank line are joined with \\n."""

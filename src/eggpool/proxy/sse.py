@@ -174,25 +174,27 @@ class SSEDecoder:
         if self._pending_cr:
             self._line_buffer += "\n"
             self._pending_cr = False
-        incomplete = bool(
-            self._line_buffer
-            or self._fields
-            or self._discarding_line
-            or self._discarding_frame
-        )
         frames = self.feed(b"")
-        if self._line_buffer:
+        # EOF terminates a final line even when the stream omitted its line
+        # terminator.  The SSE parser can dispatch the resulting pending
+        # event without requiring the conventional trailing blank line.
+        if self._discarding_line:
+            self._discarding_line = False
+        elif self._line_buffer:
+            final_line = self._line_buffer
             self._line_buffer = ""
+            self._process_line(final_line)
+        else:
+            self._line_buffer = ""
+        incomplete = self._discarding_frame
         if self._discarding_frame:
             # Preserve the discarded-frame diagnostic without turning the
             # truncated input into a valid frame.
             self._emit_frame()
-        elif not incomplete:
+        else:
             frame = self._emit_frame()
             if frame is not None:
                 frames.append(frame)
-        else:
-            self._reset_frame()
         self._line_buffer = ""
         return SSEDecodeResult(
             frames=tuple(frames),

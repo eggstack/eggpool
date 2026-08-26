@@ -309,9 +309,21 @@ def _make_stream_options_adapter() -> tuple[TransformMeta, TransformFnAny]:
     """Inject OpenAI stream usage options into the shared payload."""
 
     def _apply(request: ProviderBoundRequest, ctx: TransformContext) -> TransformResult:
+        client_stream_options = request.client_payload.get("stream_options")
+        client_include_usage = True
+        if isinstance(client_stream_options, Mapping) and "include_usage" in (
+            client_stream_options
+        ):
+            client_include_usage = bool(
+                cast("Mapping[str, Any]", client_stream_options)["include_usage"]
+            )
         if ctx.upstream_protocol != "openai" or not getattr(
             ctx.proxy_context, "streaming", False
         ):
+            if ctx.proxy_context is not None:
+                ctx.proxy_context.client_metadata["upstream_include_usage"] = (
+                    client_include_usage
+                )
             return TransformResult(decision=TransformDecision.SKIPPED)
 
         # Plan 143: ``stream_options.include_usage`` is a Chat
@@ -320,6 +332,10 @@ def _make_stream_options_adapter() -> tuple[TransformMeta, TransformFnAny]:
         # so the mutation must be skipped entirely for that surface.
         surface = getattr(ctx.proxy_context, "request_surface", None)
         if surface == "responses":
+            if ctx.proxy_context is not None:
+                ctx.proxy_context.client_metadata["upstream_include_usage"] = (
+                    client_include_usage
+                )
             return TransformResult(decision=TransformDecision.SKIPPED)
 
         value = request.provider_payload.get("stream_options")
