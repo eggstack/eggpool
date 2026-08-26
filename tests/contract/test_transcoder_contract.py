@@ -623,7 +623,7 @@ async def test_streaming_openai_client_anthropic_upstream(
     auth_headers: dict[str, str],
 ) -> None:
     """Streaming OpenAI client to Anthropic upstream produces OpenAI SSE."""
-    sse_content = "\n".join(_build_upstream_sse_events()) + "\n"
+    sse_content = "\n".join(_build_upstream_sse_events()) + "\n\n"
 
     with respx.mock:
         respx.post(f"{UPSTREAM_BASE}{ANTHROPIC_PATH}").mock(
@@ -669,7 +669,7 @@ async def test_streaming_anthropic_client_openai_upstream(
     auth_headers: dict[str, str],
 ) -> None:
     """Streaming Anthropic client to OpenAI upstream produces Anthropic SSE."""
-    sse_content = "\n".join(_build_openai_stream_events()) + "\n"
+    sse_content = "\n".join(_build_openai_stream_events()) + "\n\n"
 
     with respx.mock:
         respx.post(f"{UPSTREAM_BASE}{OPENAI_PATH}").mock(

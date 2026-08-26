@@ -128,7 +128,7 @@ class IncrementalSSEObserver:
             else DecodedSSEFrame(decoded)
         )
         payload = frame.frame.data
-        self._frame_count += len(frame.frame.fields or ())
+        self._frame_count += 1
         if frame.frame.is_comment_only:
             return
         if not any(name == "data" for name, _ in (frame.frame.fields or ())):

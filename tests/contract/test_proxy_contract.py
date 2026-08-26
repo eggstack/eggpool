@@ -304,7 +304,7 @@ async def test_openai_streaming_events_preserved(
         "",
         "data: [DONE]",
     ]
-    sse_content = "\n".join(sse_events) + "\n"
+    sse_content = "\n".join(sse_events) + "\n\n"
 
     with respx.mock:
         respx.post(f"{UPSTREAM_BASE}{OPENAI_PATH}").mock(

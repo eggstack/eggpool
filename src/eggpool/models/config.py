@@ -1425,7 +1425,7 @@ class AppConfig(BaseModel):
         do not need upstream credentials (``migrate``, ``accounts status``,
         ``db vacuum``) can skip this check.
         """
-        from eggpool.constants import PLACEHOLDER_API_KEYS
+        from eggpool.constants import is_placeholder_key
 
         for provider_id, provider in self.providers.items():
             for acct in provider.accounts:
@@ -1469,7 +1469,7 @@ class AppConfig(BaseModel):
                         f"Account {acct.name!r} has a whitespace-only API key "
                         f"in {source}"
                     )
-                if raw_key.strip().lower() in PLACEHOLDER_API_KEYS:
+                if is_placeholder_key(raw_key):
                     source = (
                         "api_key" if acct.api_key else f"env var {acct.api_key_env!r}"
                     )

@@ -193,6 +193,10 @@ else:
         """Decode a JSON document to a Python value."""
         if isinstance(data, (bytes, bytearray, memoryview)):
             return json.loads(bytes(data))
+        if not isinstance(data, str):  # pyright: ignore[reportUnnecessaryIsInstance]
+            raise TypeError(
+                f"jsonx.loads expected bytes/str, got {type(data).__name__}"
+            )
         return json.loads(data)
 
     def dumps_bytes(

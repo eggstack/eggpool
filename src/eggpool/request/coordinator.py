@@ -595,16 +595,13 @@ class RequestCoordinator:
         from eggpool.errors import RequestTooLargeError
 
         max_bytes: int | None = None
-        try:
-            model_info = self._catalog.cache.get_model_for_provider(
-                context.model_id, selected_provider_id
-            )
-            if model_info is not None:
-                caps_raw: dict[str, Any] = model_info.get("capabilities", {})  # type: ignore[assignment]
-                caps = dict_to_model_capabilities(caps_raw)
-                max_bytes = caps.multimodal.max_serialized_request_bytes
-        except Exception:  # noqa: BLE001
-            pass
+        model_info = self._catalog.cache.get_model_for_provider(
+            context.model_id, selected_provider_id
+        )
+        if model_info is not None:
+            caps_raw: dict[str, Any] = model_info.get("capabilities", {})  # type: ignore[assignment]
+            caps = dict_to_model_capabilities(caps_raw)
+            max_bytes = caps.multimodal.max_serialized_request_bytes
         if max_bytes is not None and len(serialized_body) > max_bytes:
             raise RequestTooLargeError(
                 f"Serialized request body ({len(serialized_body)} bytes) "

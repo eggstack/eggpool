@@ -116,15 +116,7 @@ def _coerce_numeric(value: Any) -> Decimal | None:
             text = value.strip()
             if not text:
                 return None
-            try:
-                number = Decimal(text)
-            except InvalidOperation:
-                try:
-                    number = Decimal(float(text))
-                except (ValueError, OverflowError):
-                    return None
-                if not math.isfinite(float(number)):
-                    return None
+            number = Decimal(text)
         else:
             return None
     except (ValueError, OverflowError, InvalidOperation):

@@ -37,13 +37,21 @@ def verify_api_key(request: Request, api_key: str) -> bool:
     if not api_key:
         return False
     if not _PROVIDED_KEY_RE.fullmatch(provided):
+        hmac.compare_digest(provided, api_key)
         return False
     return hmac.compare_digest(provided, api_key)
 
 
 def _is_loopback_host(host: str) -> bool:
     """Return whether *host* is provably a local-only bind address."""
-    normalized = host.strip().strip("[]").casefold()
+    normalized = host.strip()
+    if normalized.startswith("[") and "]" in normalized:
+        normalized = normalized[1 : normalized.index("]")]
+    elif normalized.count(":") == 1:
+        address, port = normalized.rsplit(":", 1)
+        if port.isdigit():
+            normalized = address
+    normalized = normalized.strip("[]").casefold()
     if normalized == "localhost":
         return True
     try:
@@ -77,9 +85,9 @@ def require_auth_at_startup(
             "Set api_key in the [server] config section or disable "
             "authentication by removing it."
         )
-    from eggpool.constants import PLACEHOLDER_API_KEYS
+    from eggpool.constants import is_placeholder_key
 
-    if expected.lower() in PLACEHOLDER_API_KEYS:
+    if is_placeholder_key(expected):
         raise RuntimeError(
             "API key contains a placeholder value. "
             "Set a real key before starting the service."

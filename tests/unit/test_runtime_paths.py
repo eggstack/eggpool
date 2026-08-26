@@ -20,6 +20,19 @@ from eggpool.runtime_paths import (
 )
 
 
+def test_runtime_dir_proxy_reads_current_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from eggpool.constants import RUNTIME_DIR
+
+    first = tmp_path / "first-runtime"
+    second = tmp_path / "second-runtime"
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(first))
+    assert first == RUNTIME_DIR
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(second))
+    assert second == RUNTIME_DIR
+
+
 def test_state_dir_under_local_state(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

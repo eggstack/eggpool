@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import enum
+import re
 import sqlite3
 import time
 from contextlib import asynccontextmanager, suppress
@@ -54,7 +55,33 @@ def _classify_op_kind(sql: str) -> str:
     Only the leading keyword is inspected.
     """
     stripped = sql.lstrip()
+    while True:
+        if stripped.startswith("--"):
+            newline = stripped.find("\n")
+            stripped = stripped[newline + 1 :] if newline >= 0 else ""
+        elif stripped.startswith("/*"):
+            comment_end = stripped.find("*/", 2)
+            stripped = stripped[comment_end + 2 :] if comment_end >= 0 else ""
+        else:
+            break
+        stripped = stripped.lstrip()
     upper = stripped.upper()
+    if upper.startswith("WITH"):
+        # Find the first statement keyword outside CTE parentheses. This
+        # keeps nested SELECTs from determining the operation kind.
+        depth = 0
+        for match in re.finditer(
+            r"\(|\)|\b(?:SELECT|INSERT|UPDATE|DELETE|REPLACE|PRAGMA)\b",
+            upper,
+        ):
+            token = match.group(0)
+            if token == "(":
+                depth += 1
+            elif token == ")":
+                depth = max(0, depth - 1)
+            elif depth == 0:
+                upper = upper[match.start() :]
+                break
     if upper.startswith("SELECT"):
         return "select"
     if upper.startswith("INSERT"):

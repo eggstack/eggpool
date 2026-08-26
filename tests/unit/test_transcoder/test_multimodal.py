@@ -924,6 +924,27 @@ class TestProviderScopedSizeLimits:
             selected_provider_id="unlimited-provider",
         )
 
+    def test_unexpected_catalog_failure_is_not_swallowed(self) -> None:
+        from eggpool.request.coordinator import ProxyRequestContext
+
+        coordinator, catalog = self._make_coordinator()
+        catalog.cache.get_model_for_provider.side_effect = RuntimeError("reload race")
+        context = ProxyRequestContext(
+            request_id="req-provider-error",
+            protocol="openai",
+            model_id="shared-model",
+            streaming=False,
+            original_body=b"{}",
+            incoming_headers={},
+        )
+
+        with pytest.raises(RuntimeError, match="reload race"):
+            coordinator._validate_serialized_request_size(
+                context,
+                b"x" * 200,
+                selected_provider_id="provider",
+            )
+
 
 class TestRequestTooLargeErrorMapping:
     """error_status_code maps RequestTooLargeError to HTTP 413."""

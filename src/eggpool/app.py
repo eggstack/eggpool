@@ -110,7 +110,9 @@ class _BodyLimitMiddleware:
     """Reject requests whose Content-Length exceeds the configured limit.
 
     Implemented as a raw ASGI middleware to avoid the body-buffering
-    overhead of ``BaseHTTPMiddleware``.
+    overhead of ``BaseHTTPMiddleware``. This is an early-reject
+    optimization, not the enforcement boundary; chunked and malformed
+    lengths are bounded by :func:`read_body_limited` while the body streams.
     """
 
     def __init__(

@@ -2,6 +2,7 @@
 
 import math
 import os
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, cast
 
@@ -50,10 +51,21 @@ def clamp_sqlite_aggregate(value: object) -> int:
     if value is None:
         return 0
     try:
-        numeric = float(cast("Any", value))
-    except (TypeError, ValueError, OverflowError):
+        if isinstance(value, bool):
+            return 0
+        if isinstance(value, Decimal):
+            numeric = value
+        elif isinstance(value, int):
+            numeric = Decimal(value)
+        elif isinstance(value, float):
+            if not math.isfinite(value):
+                return 0
+            numeric = Decimal(str(value))
+        else:
+            numeric = Decimal(str(cast("Any", value)))
+    except (TypeError, ValueError, OverflowError, InvalidOperation):
         return 0
-    if not math.isfinite(numeric) or numeric <= 0:
+    if not numeric.is_finite() or numeric <= 0:
         return 0
     if numeric >= SQLITE_INTEGER_MAX:
         return SQLITE_INTEGER_MAX
@@ -67,7 +79,36 @@ def clamp_sqlite_aggregate(value: object) -> int:
 # directory with a UID-scoped ``/tmp`` fallback. The wrapped property
 # below resolves the live path on every read so tests that monkey-patch
 # environment variables see the updated value.
-RUNTIME_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp"))
+class _RuntimeDirProxy:
+    """Lazy compatibility proxy for the current XDG runtime directory."""
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._resolve(), name)
+
+    def __fspath__(self) -> str:
+        return str(self._resolve())
+
+    def __truediv__(self, other: object) -> Path:
+        return self._resolve() / other  # type: ignore[operator]
+
+    def __str__(self) -> str:
+        return str(self._resolve())
+
+    def __repr__(self) -> str:
+        return repr(self._resolve())
+
+    def __eq__(self, other: object) -> bool:
+        return self._resolve() == other
+
+    def __hash__(self) -> int:
+        return hash(self._resolve())
+
+    @staticmethod
+    def _resolve() -> Path:
+        return Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp"))
+
+
+RUNTIME_DIR = _RuntimeDirProxy()
 
 
 class _PIDFileProxy:
@@ -120,3 +161,9 @@ PLACEHOLDER_API_KEYS: frozenset[str] = frozenset(
         "your-local-api-key-here",
     }
 )
+
+
+def is_placeholder_key(key: str) -> bool:
+    """Return whether *key* is a known placeholder after normalization."""
+    normalized = key.strip().casefold().replace(" ", "-")
+    return normalized in PLACEHOLDER_API_KEYS

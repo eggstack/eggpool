@@ -101,26 +101,28 @@ class TestSSEEventAssembly:
         assert observer.usage.output_tokens == 5
 
     def test_final_data_line_without_newline(self) -> None:
-        """EOF terminates the final SSE line and event."""
+        """EOF does not turn an unterminated final event into a frame."""
         observer = IncrementalSSEObserver(protocol="openai")
         payload = {"usage": {"prompt_tokens": 13, "completion_tokens": 8}}
 
         observer.observe(f"data: {json.dumps(payload)}".encode())
         observer.flush()
 
-        assert observer.usage.input_tokens == 13
-        assert observer.usage.output_tokens == 8
+        assert observer.usage.input_tokens == 0
+        assert observer.usage.output_tokens == 0
+        assert observer.completion_snapshot.incomplete_frame_at_eof
 
     def test_final_multiline_data_line_without_newline(self) -> None:
-        """EOF processes an unterminated tail of a multiline SSE event."""
+        """EOF does not process an unterminated multiline SSE event."""
         observer = IncrementalSSEObserver(protocol="openai")
 
         observer.observe(b'data: {"usage": {"prompt_tokens": 21,\n')
         observer.observe(b'data: "completion_tokens": 5}}')
         observer.flush()
 
-        assert observer.usage.input_tokens == 21
-        assert observer.usage.output_tokens == 5
+        assert observer.usage.input_tokens == 0
+        assert observer.usage.output_tokens == 0
+        assert observer.completion_snapshot.incomplete_frame_at_eof
 
     def test_multiple_data_lines_joined(self) -> None:
         """Multiple data: lines before blank line are joined with \\n."""
@@ -401,12 +403,11 @@ class TestByteTracking:
         assert observer.bytes_emitted == 9
 
     def test_frame_count_increments(self) -> None:
-        """frame_count increments for each SSE line processed."""
+        """frame_count increments once for each complete SSE frame."""
         observer = IncrementalSSEObserver(protocol="openai")
-        observer.observe(b"data: {}\nevent: test\n: comment\n")
+        observer.observe(b"data: {}\nevent: test\n: comment\n\n")
         observer.flush()
-        # data line + event line + comment line = 3 lines
-        assert observer.frame_count == 3
+        assert observer.frame_count == 1
 
 
 # ---------------------------------------------------------------------------

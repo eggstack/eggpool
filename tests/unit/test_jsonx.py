@@ -95,9 +95,13 @@ class TestLoadsInputForms:
         with pytest.raises(ValueError):
             reloaded.loads(b"not valid json")
 
-    def test_loads_rejects_other_types(self) -> None:
-        with pytest.raises(TypeError):
-            jsonx.loads(123)  # type: ignore[arg-type]
+    @pytest.mark.parametrize("backend_name", _BACKENDS)
+    def test_loads_rejects_other_types(
+        self, backend_name: str, _restore_jsonx_backend: None
+    ) -> None:
+        reloaded = _force_backend(backend_name)["reloaded"]
+        with pytest.raises(TypeError, match=r"jsonx\.loads expected bytes/str"):
+            reloaded.loads(123)  # type: ignore[arg-type]
 
 
 class TestDumpsBytesOutput:

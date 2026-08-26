@@ -53,9 +53,7 @@ def test_verify_api_key_missing(mock_request: MagicMock) -> None:
 
 
 def test_verify_api_key_rejects_malformed_format(mock_request: MagicMock) -> None:
-    """Regression test (M11): provided keys that fail format
-    validation must not be compared against the configured key.
-    """
+    """Provided keys that fail format validation are rejected."""
     mock_request.headers = {"x-api-key": "short"}
     assert verify_api_key(mock_request, "short") is False
 
@@ -64,6 +62,11 @@ def test_verify_api_key_rejects_malformed_format(mock_request: MagicMock) -> Non
 
     mock_request.headers = {"x-api-key": "weird\x00chars"}
     assert verify_api_key(mock_request, "weird\x00chars") is False
+
+
+def test_placeholder_key_normalization_at_startup() -> None:
+    with pytest.raises(RuntimeError, match="placeholder"):
+        require_auth_at_startup("your proxy api key")
 
 
 def test_auth_shape_contains_metadata_without_credential_bytes() -> None:
@@ -200,7 +203,17 @@ class TestRequireAuthAtStartup:
         with pytest.raises(RuntimeError, match="required when binding"):
             require_auth_at_startup(None, host=host)
 
-    @pytest.mark.parametrize("host", ["127.0.0.1", "127.42.0.9", "::1", "localhost"])
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "127.0.0.1",
+            "127.42.0.9",
+            "::1",
+            "localhost",
+            "127.0.0.1:11300",
+            "[::1]:11300",
+        ],
+    )
     def test_loopback_allows_no_key(self, host: str) -> None:
         assert require_auth_at_startup(None, host=host) is None
 
