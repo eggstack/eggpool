@@ -97,7 +97,8 @@ def _first_run_state(
     """
     if task.mode != "periodic":
         return "last_success"
-    now = time.time()
+    # ``_next_run_at`` is a monotonic deadline; compare on the same clock.
+    now = time.monotonic()
     next_run_at = task._next_run_at if task._next_run_at > 0 else None  # pyright: ignore[reportPrivateUsage]
     last_tick_started = (
         task._last_tick_started_at if task._last_tick_started_at > 0 else None  # pyright: ignore[reportPrivateUsage]
@@ -145,7 +146,9 @@ class SupervisedTask:
     - ``_last_tick_drift_s``: ``actual_tick_start - scheduled_tick_start``
       for the most recent tick; positive drift means the scheduler
       began late (event-loop starvation), negative drift means it
-      began early.  Drift does NOT conflate tick duration.
+      began early.  Drift does NOT conflate tick duration.  Both
+      operands are measured on ``time.monotonic()`` so wall-clock
+      steps (NTP, manual adjustment) are never reported as drift.
     """
 
     name: str
@@ -170,6 +173,8 @@ class SupervisedTask:
     # Periodic heartbeat fields (only populated when ``mode == "periodic"``).
     _last_tick_started_at: float = 0.0
     _last_tick_completed_at: float = 0.0
+    # Monotonic deadline for the next tick; wall-clock projections for
+    # display are derived in ``snapshot()``.
     _next_run_at: float = 0.0
     _tick_in_progress: bool = False
     _iteration_count: int = 0
@@ -342,12 +347,14 @@ class SupervisedTask:
                     sleep_s = first_sleep_s
                 else:
                     sleep_s = interval_s
-                # Project the scheduled tick start time so we can
-                # compute drift on resume.  Drift is defined as
+                # Project the scheduled tick start so we can compute
+                # drift on resume.  Drift is defined as
                 # ``actual_tick_start - scheduled_tick_start``; it
                 # measures event-loop latency / scheduler delay, not
-                # tick duration.
-                scheduled_tick_start = time.time() + sleep_s
+                # tick duration.  Both operands use the monotonic clock
+                # so wall-clock adjustments during ``asyncio.sleep()``
+                # never masquerade as scheduler drift.
+                scheduled_tick_start = time.monotonic() + sleep_s
                 try:
                     await asyncio.sleep(sleep_s)
                 except asyncio.CancelledError:
@@ -361,7 +368,7 @@ class SupervisedTask:
                 # Drift = actual start - scheduled start.  Sleep may
                 # return slightly early or late depending on event
                 # loop scheduling; both are surfaced for the operator.
-                self._last_tick_drift_s = tick_started - scheduled_tick_start
+                self._last_tick_drift_s = time.monotonic() - scheduled_tick_start
                 # Preserve the previous tick-start timestamp so the
                 # snapshot can compute the observed interval between
                 # ticks (configured_interval_s vs observed interval).
@@ -391,7 +398,7 @@ class SupervisedTask:
                     self._last_error_at = time.time()
                     self._last_error_class = type(exc).__qualname__
                     self._last_failure = time.time()
-                    self._next_run_at = tick_completed + interval_s
+                    self._next_run_at = time.monotonic() + interval_s
                     logger.exception(
                         "Supervised periodic task %r tick failed",
                         self.name,
@@ -412,7 +419,7 @@ class SupervisedTask:
                     self._iteration_count += 1
                     self._success_count += 1
                     self._consecutive_failure_count = 0
-                    self._next_run_at = tick_completed + interval_s
+                    self._next_run_at = time.monotonic() + interval_s
         finally:
             self._tick_in_progress = False
             self._running = False
@@ -427,15 +434,20 @@ class SupervisedTask:
         next_run_at: float | None = None
         overdue_seconds: float | None = None
         if self.mode == "periodic" and self._next_run_at > 0:
-            next_run_at = self._next_run_at
-            if self._tick_in_progress:
-                overdue_seconds = None
-            else:
-                overdue_seconds = _compute_overdue_seconds(
-                    now=time.time(),
-                    next_run_at=next_run_at,
+            # ``_next_run_at`` is a monotonic deadline.  Overdue is
+            # computed against the same clock so wall-clock steps never
+            # produce false alerts; the exposed timestamp is projected
+            # back onto the wall clock for display only.
+            overdue_seconds = (
+                None
+                if self._tick_in_progress
+                else _compute_overdue_seconds(
+                    now=time.monotonic(),
+                    next_run_at=self._next_run_at,
                     interval_s=self._interval_s,
                 )
+            )
+            next_run_at = time.time() + (self._next_run_at - time.monotonic())
         first_run_state = _first_run_state(self)
         # Milestone A3: surface observed interval and drift so
         # operators can compare the live schedule to the
@@ -625,8 +637,10 @@ class TaskSupervisor:
         )
         # Prime the first next-run window so the dashboard can show
         # "in <interval>" before the very first tick lands.  Same
-        # module so private field assignment is intentional.
-        task._next_run_at = time.time() + first_delay_s  # pyright: ignore[reportPrivateUsage]
+        # module so private field assignment is intentional.  The
+        # deadline is monotonic; ``snapshot()`` projects it onto the
+        # wall clock for display.
+        task._next_run_at = time.monotonic() + first_delay_s  # pyright: ignore[reportPrivateUsage]
         self._tasks[name] = task
         return task
 

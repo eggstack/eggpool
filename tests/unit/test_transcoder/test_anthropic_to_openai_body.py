@@ -272,6 +272,22 @@ class TestBasicRequestTranslation:
             }
         ]
 
+    def test_source_ttl_label_caps_magnitude(self) -> None:
+        """Diagnostic TTL labels accept realistic magnitudes but reject
+        absurd ones (e.g. ``999999h``) as ``unrecognized``."""
+        from eggpool.transcoder.cache_translation import (
+            prompt_cache_source_ttl_label,
+        )
+
+        assert prompt_cache_source_ttl_label("5m") == "5m"
+        assert prompt_cache_source_ttl_label("300s") == "300s"
+        assert prompt_cache_source_ttl_label("1h") == "1h"
+        assert prompt_cache_source_ttl_label("7d") == "7d"
+        assert prompt_cache_source_ttl_label("in_memory") == "in_memory"
+        assert prompt_cache_source_ttl_label("ephemeral") == "ephemeral"
+        assert prompt_cache_source_ttl_label("99999h") == "99999h"
+        assert prompt_cache_source_ttl_label("999999h") == "unrecognized"
+
     def test_system_as_list_of_text_blocks_joined(
         self, transcoder: AnthropicToOpenAI
     ) -> None:

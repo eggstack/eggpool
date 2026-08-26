@@ -153,13 +153,17 @@ def _validate_responses_stateless(payload: dict[str, Any]) -> str | None:
     store = payload.get("store")
     if store is False:
         pass  # explicit false allowed
+    elif store is True:
+        return "EggPool's /v1/responses is stateless only; store=true is not supported."
     elif store is None:
         return (
             "EggPool's /v1/responses is stateless only; "
             "store=false must be explicitly set."
         )
     else:
-        return "EggPool's /v1/responses is stateless only; store=true is not supported."
+        return (
+            "EggPool's /v1/responses is stateless only; store must be explicitly false."
+        )
     if payload.get("background") is True:
         return (
             "EggPool's /v1/responses is stateless only; "

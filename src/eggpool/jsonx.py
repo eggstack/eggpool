@@ -157,12 +157,24 @@ else:
         return False
 
     def _sanitize_non_finite(obj: Any) -> Any:
-        """Return a copy of *obj* with non-finite floats replaced by ``None``."""
+        """Return a copy of *obj* with non-finite floats replaced by ``None``.
+
+        Non-finite *dict keys* are also replaced (with ``None``, which
+        ``json.dumps`` renders as the string ``"null"``).  This mirrors
+        the orjson backend, which serialises non-str keys under
+        ``OPT_NON_STR_KEYS`` and emits non-finite floats as ``null`` —
+        keeping the two backends byte-identical on the same payload.
+        """
         if isinstance(obj, float):
             return obj if math.isfinite(obj) else None
         if isinstance(obj, dict):
             entries = cast("dict[Any, Any]", obj)
-            return {key: _sanitize_non_finite(value) for key, value in entries.items()}
+            return {
+                (
+                    key if not isinstance(key, float) or math.isfinite(key) else None
+                ): _sanitize_non_finite(value)
+                for key, value in entries.items()
+            }
         if isinstance(obj, list):
             items = cast("list[Any]", obj)
             return [_sanitize_non_finite(item) for item in items]

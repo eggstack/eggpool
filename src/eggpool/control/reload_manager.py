@@ -546,6 +546,10 @@ class ReloadManager:
         self._shutdown_adopted_finalization_jobs: dict[
             str, AcceptedReloadFinalizationJob
         ] = {}
+        #: Strong references for fire-and-forget observation/event tasks.
+        #: asyncio keeps only weak references to tasks; without this set
+        #: a pending task can be garbage-collected before it runs.
+        self._background_tasks: set[asyncio.Task[None]] = set()
 
     @property
     def operation_state(self) -> ReloadOperationState | None:
@@ -854,10 +858,12 @@ class ReloadManager:
             loop = task.get_loop()
             if loop.is_closed():
                 return
-            loop.create_task(
+            observe_task = loop.create_task(
                 self._observe_finalization_attempt(job, task),
                 name=f"observe-finalization-{job.request_id}",
             )
+            self._background_tasks.add(observe_task)
+            observe_task.add_done_callback(self._background_tasks.discard)
         except (RuntimeError, TypeError):
             # The event loop may be closing during process teardown.  The
             # shutdown preparation path remains the synchronous backstop.
@@ -996,7 +1002,7 @@ class ReloadManager:
         except RuntimeError:
             return
         transaction = getattr(job, "transaction", None)
-        loop.create_task(
+        event_task = loop.create_task(
             self._safe_record_event(
                 event_type,
                 generation_id=job.generation_id,
@@ -1012,6 +1018,8 @@ class ReloadManager:
                 ),
             )
         )
+        self._background_tasks.add(event_task)
+        event_task.add_done_callback(self._background_tasks.discard)
 
     def _reconcile_finalization_job(
         self,

@@ -897,6 +897,9 @@ class TestPauseTurnSentinel:
         assert first_tc["type"] == "function"
         assert first_tc["function"]["name"] == "__eggpool_pause_turn__"
         assert first_tc["id"].startswith("call_")
+        # Role must appear exactly once per stream (in the initial chunk),
+        # never re-emitted by the synthesized sentinel.
+        assert "role" not in tool_call_frames[0]["choices"][0]["delta"]
 
         assert len(finish_frames) == 1
         assert finish_frames[0]["choices"][0]["finish_reason"] == "tool_calls"

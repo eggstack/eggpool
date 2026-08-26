@@ -144,6 +144,17 @@ class TestStatelessResponsesValidation:
         assert message is not None
         assert "store=true is not supported" in message
 
+    @pytest.mark.parametrize("falsy_value", [0, "", 0.0])
+    def test_store_falsy_non_bool_gets_accurate_message(
+        self, falsy_value: object
+    ) -> None:
+        """Falsy-but-not-false ``store`` values are rejected (correct)
+        but must not be told ``store=true is not supported``."""
+        payload = {"model": "gpt-5", "input": "hi", "store": falsy_value}
+        message = _validate_responses_stateless(payload)
+        assert message is not None
+        assert "store must be explicitly false" in message
+
     def test_empty_conversation_is_rejected(self) -> None:
         """Plan 144 (D1): any non-None conversation, including {}, is rejected."""
         payload = {"model": "gpt-5", "input": "hi", "conversation": {}}

@@ -397,7 +397,8 @@ def _expected_anthropic_pause_turn_events() -> list[dict[str, Any]]:
                 ],
             },
         },
-        # Synthetic __eggpool_pause_turn__ sentinel (tool_call start)
+        # Synthetic __eggpool_pause_turn__ sentinel (tool_call start).
+        # No ``role`` in the delta: the initial chunk already carried it.
         {
             "event": "",
             "data": {
@@ -408,7 +409,6 @@ def _expected_anthropic_pause_turn_events() -> list[dict[str, Any]]:
                     {
                         "index": 0,
                         "delta": {
-                            "role": "assistant",
                             "tool_calls": [
                                 {
                                     "index": 0,

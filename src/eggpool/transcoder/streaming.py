@@ -1046,8 +1046,10 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
                     "choices": [
                         {
                             "index": 0,
+                            # No ``role`` here: the initial chunk already
+                            # carried it and strict clients expect role
+                            # exactly once per stream.
                             "delta": {
-                                "role": "assistant",
                                 "tool_calls": [
                                     {
                                         "index": sentinel_index,

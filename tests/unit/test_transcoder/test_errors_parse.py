@@ -49,6 +49,22 @@ def test_anthropic_error_string_error() -> None:
     assert result.message == "overloaded"
 
 
+def test_anthropic_error_with_null_error_body() -> None:
+    """An explicit ``"error": null`` must yield the fallback message,
+    not the string ``"None"``."""
+    body = {"type": "api_error", "error": None}
+    result = parse_upstream_error(500, body, protocol="anthropic")
+    assert result.status_code == 500
+    assert result.error_type == "api_error"
+    assert result.message == "Unknown upstream error"
+
+
+def test_anthropic_error_with_empty_string_error_body() -> None:
+    body = {"type": "api_error", "error": ""}
+    result = parse_upstream_error(500, body, protocol="anthropic")
+    assert result.message == "Unknown upstream error"
+
+
 def test_raw_preserved() -> None:
     body = {"error": {"type": "test", "message": "test"}}
     result = parse_upstream_error(400, body, protocol="openai")

@@ -134,3 +134,67 @@ def test_multiline_string_inner_assignment_does_not_match_key() -> None:
     parsed = tomllib.loads("\n".join(result.lines))
     assert parsed["server"]["api_key"] == "secret"
     assert "placeholder inside text" in parsed["agent"]["prompt"]
+
+
+def test_commented_section_headers_are_recognized() -> None:
+    """A header with an inline comment is valid TOML and must open/close
+    sections like a plain header."""
+    lines = [
+        "[server] # bind address",
+        'host = "127.0.0.1"',
+        "[quota] # limits",
+        "requests_per_minute = 60",
+    ]
+    assert section_has_key(lines, "server", "host")
+    assert section_has_key(lines, "quota", "requests_per_minute")
+    # A commented header of another section closes the current one.
+    assert not section_has_key(lines, "server", "requests_per_minute")
+    assert not section_has_key(lines, "quota", "host")
+    # A commented-out header is not a section boundary.
+    assert not section_has_key(["# [server]", "port = 1"], "server", "port")
+
+
+def test_update_with_commented_header_does_not_duplicate_section() -> None:
+    """The audit reproduction: updating a key in a config whose headers
+    carry inline comments must not report the section missing (which
+    would append a duplicate table and corrupt the document)."""
+    original = [
+        "[server] # bind address",
+        'host = "127.0.0.1"',
+        "[quota] # limits",
+        "requests_per_minute = 60",
+    ]
+    result = update_section_value(
+        original,
+        "quota",
+        "requests_per_minute",
+        "120",
+        insert_missing_key=True,
+        append_missing_section=True,
+    )
+
+    assert result.section_found
+    assert result.key_found
+    text = "\n".join(result.lines)
+    parsed = tomllib.loads(text)  # duplicate [quota] would raise here
+    assert parsed["quota"]["requests_per_minute"] == 120
+    assert parsed["server"]["host"] == "127.0.0.1"
+
+
+def test_missing_key_is_inserted_after_commented_header() -> None:
+    original = ["[server] # bind address", 'host = "127.0.0.1"']
+    result = update_section_value(
+        original,
+        "server",
+        "port",
+        "8080",
+        insert_missing_key=True,
+        append_missing_section=True,
+    )
+
+    assert result.section_found
+    # The key was absent, so it was inserted after the (commented) header.
+    assert result.lines[0] == "[server] # bind address"
+    assert result.lines[1] == "port = 8080"
+    parsed = tomllib.loads("\n".join(result.lines))
+    assert parsed["server"]["port"] == 8080

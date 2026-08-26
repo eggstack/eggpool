@@ -46,3 +46,26 @@ def test_json_object_is_cached_on_the_shared_frame() -> None:
     first = decoded.json_object()
     second = decoded.json_object()
     assert first is second
+
+
+def test_final_event_without_terminal_newline_is_complete() -> None:
+    """A clean stream that omits the trailing newline after a
+    well-formed final event still delivers that event, and finish()
+    must not report it as interrupted."""
+    decoder = SSEDecoder()
+    decoder.feed(b'data: {"choices":[]}\n\ndata: {"usage":{}}')
+    result = decoder.finish()
+    assert [f.frame.data for f in result.frames] == ['{"usage":{}}']
+    assert not result.incomplete_frame
+
+
+def test_pending_fields_without_blank_line_are_complete() -> None:
+    """Fields terminated by a newline but never flushed by a blank line
+    are drained into a final frame; EOF did not interrupt them."""
+    decoder = SSEDecoder()
+    assert decoder.feed(b"event: message\ndata: hello\n") == []
+    result = decoder.finish()
+    assert [(f.frame.event, f.frame.data) for f in result.frames] == [
+        ("message", "hello")
+    ]
+    assert not result.incomplete_frame

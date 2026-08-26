@@ -126,8 +126,8 @@ class TestIntervalChanges:
         assert supervisor.get_task("interval_task") is new_task
         # New interval reflected
         assert new_task._interval_s == pytest.approx(0.1)
-        # next_run_at reflects the new interval
-        assert new_task._next_run_at > time.time()
+        # next_run_at reflects the new interval (monotonic deadline)
+        assert new_task._next_run_at > time.monotonic()
 
         await supervisor.stop_all()
 

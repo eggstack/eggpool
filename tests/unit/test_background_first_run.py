@@ -75,7 +75,9 @@ class TestFirstRunStateClassification:
             mode="periodic",
             _tick_factory=_empty,
             _interval_s=60.0,
-            _next_run_at=time.time() + 60.0,
+            # ``_next_run_at`` is a monotonic deadline (matching the
+            # classifier's clock).
+            _next_run_at=time.monotonic() + 60.0,
         )
         from eggpool.background import _first_run_state
 
@@ -92,7 +94,7 @@ class TestFirstRunStateClassification:
             _tick_factory=_empty,
             _interval_s=60.0,
             _initial_delay_s=30.0,
-            _next_run_at=time.time() + 30.0,
+            _next_run_at=time.monotonic() + 30.0,
         )
         from eggpool.background import _first_run_state
 
@@ -100,7 +102,7 @@ class TestFirstRunStateClassification:
         assert _first_run_state(task) == "never_run_not_due"
 
         # Now simulate that time has passed beyond initial_delay_s
-        task._next_run_at = time.time() - 5.0  # type: ignore[attr-defined]
+        task._next_run_at = time.monotonic() - 5.0  # type: ignore[attr-defined]
         # Now the deadline has elapsed but initial_delay_s is still set;
         # classification should mark it as startup-deferred, not overdue.
         # (Both are valid first-run states; the operator-visible label

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
@@ -21,6 +22,8 @@ from eggpool.config_utils import (
 )
 from eggpool.db.connection import Database
 from eggpool.models.config import AppConfig
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -386,6 +389,19 @@ def _persist_transcoder_enabled(config_path: str, config: AppConfig) -> bool:
     return True
 
 
+def _is_expected_catalog_absence(exc: BaseException) -> bool:
+    """Return whether *exc* means the catalog database is simply absent.
+
+    A server that has never started has no database (or an empty one),
+    so the catalog tables do not exist yet.  Integration rendering
+    tolerates that and proceeds with configured static models.
+    """
+    if isinstance(exc, FileNotFoundError):
+        return True
+    text = str(exc).lower()
+    return "no such table" in text or "unable to open database" in text
+
+
 def build_integration_context(
     *,
     config_path: str,
@@ -420,8 +436,19 @@ def build_integration_context(
 
     if config is not None:
         collapse_models = config.models.collapse_models
-        with contextlib.suppress(Exception):
+        try:
             models_data = _load_catalog(config, collapse_models)
+        except Exception as exc:
+            # A missing database is normal before first server start;
+            # anything else is unexpected and must not vanish silently.
+            if not _is_expected_catalog_absence(exc):
+                logger.warning(
+                    "Could not load model catalog from %s (%s: %s); "
+                    "rendering proceeds with configured static models only",
+                    config.database.path,
+                    type(exc).__name__,
+                    exc,
+                )
         models_data = _merge_static_models(models_data, config, collapse_models)
         models_data = _apply_capabilities(models_data, config)
         models_data = _apply_limits(models_data, config, collapse_models)

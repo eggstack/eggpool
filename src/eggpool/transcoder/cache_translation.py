@@ -29,7 +29,9 @@ def _bounded_ttl_label(value: object) -> str:
         return "invalid"
     if value in {"in_memory", "ephemeral"}:
         return value
-    if value[:-1].isdigit() and value[-1] in "smhd":
+    # Cap the magnitude (5 digits ≈ 27 hours in seconds) so absurd
+    # values like ``999999h`` cannot reach diagnostic surfaces.
+    if len(value) <= 6 and value[:-1].isdigit() and value[-1] in "smhd":
         return value
     return "unrecognized"
 

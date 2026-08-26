@@ -578,7 +578,7 @@ async def test_task_monitor_states_and_summary(db: Database) -> None:
     summary_supervisor.register_periodic("overdue_periodic", tick, interval_s=60.0)
     overdue_task = summary_supervisor.get_task("overdue_periodic")
     assert overdue_task is not None
-    overdue_task._next_run_at = time.time() - 600  # pyright: ignore[reportPrivateUsage]
+    overdue_task._next_run_at = time.monotonic() - 600  # pyright: ignore[reportPrivateUsage]
     summary_monitor = BackgroundTaskMonitor(summary_supervisor)
     summary = (
         await _make_service(

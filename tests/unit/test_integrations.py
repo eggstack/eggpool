@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tomllib
 from typing import TYPE_CHECKING, cast
@@ -30,8 +31,10 @@ from eggpool.integrations.common import (
     IntegrationContext,
     _apply_capabilities,
     _apply_limits,
+    _is_expected_catalog_absence,
     _openai_client_needs_transcoder,
     _persist_transcoder_enabled,
+    build_integration_context,
     list_catalog_model_ids,
     render_toml_key,
     render_toml_string,
@@ -262,6 +265,73 @@ class TestIntegrationContext:
         thinking = result[0]["capabilities"]["thinking"]
         assert thinking["status"] == "supported"
         assert thinking["supported_efforts"] == ["low", "medium", "high"]
+
+
+# ---------------------------------------------------------------------------
+# Catalog load failure surfacing (BUG-005)
+# ---------------------------------------------------------------------------
+
+
+class TestCatalogLoadFailureSurfacing:
+    """Unexpected catalog-load failures must be logged, not swallowed."""
+
+    def _write_config_with_absent_db(self, tmp_path: Path) -> str:
+        config_file = tmp_path / "config.toml"
+        db_path = tmp_path / "absent" / "usage.sqlite3"
+        config_file.write_text(
+            MINIMAL_CONFIG_TOML + f'\n[database]\npath = "{db_path}"\n',
+            encoding="utf-8",
+        )
+        return str(config_file)
+
+    def test_missing_database_is_tolerated_without_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A server that has never started has no catalog DB; rendering
+        proceeds quietly with static models only."""
+        config_path = self._write_config_with_absent_db(tmp_path)
+        with caplog.at_level(logging.WARNING, logger="eggpool.integrations.common"):
+            ctx = build_integration_context(
+                config_path=config_path,
+                enable_transcoder_for_openai_clients=False,
+            )
+        assert ctx.models == []
+        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert warnings == []
+
+    def test_unexpected_catalog_failure_logs_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch
+    ) -> None:
+        config_path = self._write_config_with_absent_db(tmp_path)
+
+        def _boom(config: AppConfig, collapse_models: bool) -> list[dict[str, object]]:
+            raise RuntimeError("database is locked")
+
+        monkeypatch.setattr("eggpool.integrations.common._load_catalog", _boom)
+        with caplog.at_level(logging.WARNING, logger="eggpool.integrations.common"):
+            ctx = build_integration_context(
+                config_path=config_path,
+                enable_transcoder_for_openai_clients=False,
+            )
+        assert ctx.models == []
+        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any("database is locked" in r.getMessage() for r in warnings)
+        assert any("RuntimeError" in r.getMessage() for r in warnings)
+
+    @pytest.mark.parametrize(
+        "exc,expected",
+        [
+            (FileNotFoundError("usage.sqlite3"), True),
+            (RuntimeError("no such table: models"), True),
+            (RuntimeError("unable to open database file"), True),
+            (RuntimeError("database is locked"), False),
+            (ValueError("bad migration"), False),
+        ],
+    )
+    def test_expected_catalog_absence_classification(
+        self, exc: Exception, expected: bool
+    ) -> None:
+        assert _is_expected_catalog_absence(exc) is expected
 
 
 # ---------------------------------------------------------------------------

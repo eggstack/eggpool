@@ -233,6 +233,24 @@ class TestEncodingEnvelopeParity:
         encoded = reloaded.dumps_bytes(value)
         assert json.loads(encoded) == value
 
+    @pytest.mark.parametrize("backend_name", _BACKENDS)
+    @pytest.mark.parametrize(
+        "key",
+        [float("nan"), float("inf"), float("-inf")],
+        ids=["nan", "inf", "-inf"],
+    )
+    def test_non_finite_float_keys_are_identical_across_backends(
+        self,
+        backend_name: str,
+        key: float,
+        _restore_jsonx_backend: None,
+    ) -> None:
+        """orjson serialises non-finite dict keys as ``"null"`` under
+        ``OPT_NON_STR_KEYS``; the stdlib fallback must produce the same
+        bytes (not the invalid-JSON ``NaN`` token)."""
+        reloaded = _force_backend(backend_name)["reloaded"]
+        assert reloaded.dumps_bytes({key: "x"}) == b'{"null":"x"}'
+
 
 class TestBackendSelection:
     """The active backend is reported correctly and respects the override."""

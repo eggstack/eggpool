@@ -174,7 +174,6 @@ class SSEDecoder:
         if self._pending_cr:
             self._line_buffer += "\n"
             self._pending_cr = False
-        incomplete = bool(self._line_buffer or self._fields or self._discarding_line)
         frames = self.feed(b"")
         if self._line_buffer and not self._discarding_line:
             self._process_line(self._line_buffer)
@@ -183,6 +182,12 @@ class SSEDecoder:
         if frame is not None:
             frames.append(frame)
         self._line_buffer = ""
+        # ``incomplete`` must be computed AFTER the final partial line and
+        # trailing frame have been drained: a stream that merely omits the
+        # terminal newline still delivers its last event above and is not
+        # interrupted.  Only input that was dropped instead of decoded (an
+        # oversized line discarded mid-flight) counts as incomplete.
+        incomplete = self._discarding_line
         return SSEDecodeResult(
             frames=tuple(frames),
             incomplete_frame=incomplete,

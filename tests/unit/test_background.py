@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import time
+import types
 
 import pytest
 
+import eggpool.background as background_module
 from eggpool.background import SupervisedTask, TaskSupervisor
 
 
@@ -222,9 +224,48 @@ def test_periodic_overdue_only_when_deadline_exceeded() -> None:
     assert healthy.snapshot()["overdue_seconds"] in (None, 0.0)
 
     # Prime the deadline into the past so overdue_seconds is positive.
-    healthy._next_run_at = time.time() - 600  # pyright: ignore[reportPrivateUsage]
+    # ``_next_run_at`` is a monotonic deadline (matching the supervisor).
+    healthy._next_run_at = time.monotonic() - 600  # pyright: ignore[reportPrivateUsage]
     overdue_age = healthy.snapshot()["overdue_seconds"]
     assert overdue_age is not None and overdue_age > 0
+
+
+@pytest.mark.asyncio
+async def test_wall_clock_step_does_not_masquerade_as_drift_or_overdue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Drift and overdue deadlines are measured on the monotonic clock,
+    so an NTP step / manual wall-clock change during operation must not
+    surface as scheduler drift or a false overdue alert."""
+    supervisor = TaskSupervisor()
+    calls = 0
+
+    async def tick() -> None:
+        nonlocal calls
+        calls += 1
+
+    task = supervisor.register_periodic("clock_step", tick, interval_s=0.05)
+    await supervisor.start_all()
+
+    real_time = time.time
+    stepped_forward_clock = types.SimpleNamespace(
+        time=lambda: real_time() + 3600.0,
+        monotonic=time.monotonic,
+    )
+    monkeypatch.setattr(background_module, "time", stepped_forward_clock)
+
+    for _ in range(100):
+        if calls >= 2:
+            break
+        await asyncio.sleep(0.01)
+    snap = task.snapshot()
+    await supervisor.stop_all()
+    monkeypatch.undo()
+
+    assert calls >= 2
+    drift = snap["last_tick_drift_s"]
+    assert drift is not None and abs(drift) < 1.0
+    assert snap["overdue_seconds"] in (None, 0.0)
 
 
 def test_register_periodic_rejects_zero_or_negative_interval() -> None:

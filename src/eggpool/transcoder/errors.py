@@ -134,7 +134,7 @@ def _parse_anthropic(
         error_type=body.get("type", "upstream_error"),
         message=body.get("error", {}).get("message", "Unknown upstream error")
         if isinstance(body.get("error"), dict)
-        else str(body.get("error", "Unknown upstream error")),
+        else str(body.get("error") or "Unknown upstream error"),
         upstream_request_id=body.get("request_id"),
         raw=body,
     )

@@ -62,7 +62,7 @@ def section_has_key(lines: list[str], section: str, key: str) -> bool:
     while index < total:
         stripped = lines[index].strip()
         index += 1
-        if stripped in headers:
+        if _matches_header(stripped, headers):
             in_section = True
             continue
         if _is_section_header(stripped):
@@ -107,7 +107,7 @@ def update_section_value(
         line = lines[index]
         stripped = line.strip()
         index += 1
-        if stripped in headers:
+        if _matches_header(stripped, headers):
             in_section = True
             section_found = True
             output.append(line)
@@ -125,7 +125,9 @@ def update_section_value(
 
     if section_found and not key_found and insert_missing_key:
         header_index = next(
-            index for index, line in enumerate(output) if line.strip() in headers
+            index
+            for index, line in enumerate(output)
+            if _matches_header(line.strip(), headers)
         )
         output.insert(header_index + 1, f"{key} = {rendered_value}")
     elif not section_found and append_missing_section:
@@ -140,9 +142,28 @@ def update_section_value(
     )
 
 
+def _strip_header_comment(stripped_line: str) -> str:
+    """Return *stripped_line* with any trailing TOML comment removed."""
+    return stripped_line.split("#", 1)[0].rstrip()
+
+
+def _matches_header(stripped_line: str, headers: tuple[str, str]) -> bool:
+    """Return whether *stripped_line* is one of *headers*.
+
+    A trailing comment after the closing bracket is tolerated so a
+    header written as ``[section] # comment`` still matches.
+    """
+    return stripped_line in headers or _strip_header_comment(stripped_line) in headers
+
+
 def _is_section_header(stripped_line: str) -> bool:
-    """Return whether a stripped line is a TOML table header."""
-    return stripped_line.startswith("[") and stripped_line.endswith("]")
+    """Return whether a stripped line is a TOML table header.
+
+    A trailing comment after the closing bracket is tolerated so
+    ``[other] # comment`` still closes the current section.
+    """
+    line = _strip_header_comment(stripped_line)
+    return line.startswith("[") and line.endswith("]")
 
 
 def _line_key(stripped_line: str) -> str | None:
