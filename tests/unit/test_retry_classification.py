@@ -176,6 +176,29 @@ class TestRetryAfterParsing:
         assert result.retry_after is not None
         assert 59.0 < result.retry_after < 61.0
 
+    def test_protocols_are_carried_into_failure_observation(
+        self, classifier: RetryClassifier, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from eggpool.failure.classifier import classify_failure_effects as classify
+
+        observations = []
+
+        def capture(observation):  # noqa: ANN001
+            observations.append(observation)
+            return classify(observation)
+
+        monkeypatch.setattr(
+            "eggpool.retry.classification.classify_failure_effects", capture
+        )
+        classifier.classify(
+            400,
+            client_protocol="anthropic",
+            upstream_protocol="openai",
+        )
+
+        assert observations[0].client_protocol == "anthropic"
+        assert observations[0].upstream_protocol == "openai"
+
 
 class TestPhase6StatusCodes:
     """Phase 6 explicit status-code handling."""

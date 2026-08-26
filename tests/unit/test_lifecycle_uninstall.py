@@ -979,6 +979,22 @@ class TestUninstallRejectsDangerousPaths:
 
 
 class TestResolveDbPathRejectsDangerous:
+    def test_rejects_unrelated_home_file(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from eggpool.lifecycle.uninstall import _resolve_db_path
+
+        home = tmp_path / "home"
+        home.mkdir()
+        unrelated = home / "important-file.txt"
+        unrelated.write_text("keep", encoding="utf-8")
+        monkeypatch.setattr("pathlib.Path.home", lambda: home)
+        config = tmp_path / "config.toml"
+        config.write_text(f'[database]\npath = "{unrelated}"\n')
+
+        with pytest.raises(RuntimeError):
+            _resolve_db_path(config_path=config, env={})
+
     def test_accepts_home_level_db_file(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:

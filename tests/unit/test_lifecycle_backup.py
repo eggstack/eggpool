@@ -355,6 +355,26 @@ class TestSelectBackup:
 
 
 class TestRestoreBackup:
+    def test_restored_env_is_private(self, tmp_path: Path) -> None:
+        """Restoring credentials never leaves the env file group/world-readable."""
+        original = _make_project(tmp_path / "src")
+        archive = create_backup(original, output_dir=tmp_path / "out", now=_fixed_now())
+
+        restore_root = tmp_path / "restored"
+        restore_root.mkdir()
+        env = restore_root / ".env"
+        env.write_bytes(b"old\n")
+        env.chmod(0o644)
+        targets = BackupContents(
+            config_path=restore_root / "config.toml",
+            db_path=restore_root / "usage.sqlite3",
+            env_path=env,
+        )
+
+        restore_backup(archive, contents=targets)
+
+        assert env.stat().st_mode & 0o777 == 0o600
+
     def test_round_trip_preserves_files(self, tmp_path: Path) -> None:
         """A backup can be restored into a fresh tree."""
         original = _make_project(tmp_path / "src")

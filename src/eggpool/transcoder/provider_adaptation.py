@@ -764,22 +764,31 @@ def _adapt_thinking_budget(
     # inverse entry.  ``map_if_known`` must reject when that mapping is not
     # available; it may not silently drop a selectable control.
     if policy.unsupported_control == "map_if_known" and valid_budget:
-        for effort, mapped_budget in (contract.effort_to_budget_tokens or {}).items():
-            if mapped_budget == value:
-                modified = dict(new_payload)
-                del modified["thinking_budget"]
-                modified["reasoning_effort"] = effort
-                return ControlFieldAdaptation(
-                    disposition="mapped",
-                    payload=modified,
-                    requested_field="thinking_budget",
-                    emitted_field="reasoning_effort",
-                    warning=AdaptationWarning(
-                        kind="budget_mapped",
-                        field_name="thinking_budget",
-                        detail=(f"budget {value!r} mapped to effort {effort!r}"),
-                    ),
-                )
+        accepted_efforts = {effort.lower() for effort in contract.accepted_efforts}
+        matches = [
+            effort
+            for effort, mapped_budget in (
+                contract.effort_to_budget_tokens or {}
+            ).items()
+            if mapped_budget == value
+            and (not accepted_efforts or effort.lower() in accepted_efforts)
+        ]
+        if len(matches) == 1:
+            effort = matches[0]
+            modified = dict(new_payload)
+            del modified["thinking_budget"]
+            modified["reasoning_effort"] = effort
+            return ControlFieldAdaptation(
+                disposition="mapped",
+                payload=modified,
+                requested_field="thinking_budget",
+                emitted_field="reasoning_effort",
+                warning=AdaptationWarning(
+                    kind="budget_mapped",
+                    field_name="thinking_budget",
+                    detail=(f"budget {value!r} mapped to effort {effort!r}"),
+                ),
+            )
 
     if policy.unsupported_control in ("reject", "map_if_known"):
         return ControlFieldAdaptation(

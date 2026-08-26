@@ -258,6 +258,30 @@ class TestOnboardFreshInstall:
 class TestOnboardPromptFunctions:
     """Tests for onboarding prompt functions."""
 
+    def test_prompt_yn_interrupt_during_mode_read_does_not_restore(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import eggpool.onboard as onboard_mod
+
+        stdin = MagicMock()
+        stdin.fileno.return_value = 10
+        monkeypatch.setattr(onboard_mod.sys, "stdin", stdin)
+        monkeypatch.setattr(
+            onboard_mod.termios,
+            "tcgetattr",
+            MagicMock(side_effect=KeyboardInterrupt),
+        )
+        setraw = MagicMock()
+        monkeypatch.setattr(onboard_mod.tty, "setraw", setraw)
+        tcsetattr = MagicMock()
+        monkeypatch.setattr(onboard_mod.termios, "tcsetattr", tcsetattr)
+
+        with pytest.raises(KeyboardInterrupt):
+            onboard_mod._prompt_yn("Continue?")
+
+        setraw.assert_not_called()
+        tcsetattr.assert_not_called()
+
     def test_prompt_yn_imports_correctly(self) -> None:
         """_prompt_yn is importable from onboard module."""
         from eggpool.onboard import _prompt_yn

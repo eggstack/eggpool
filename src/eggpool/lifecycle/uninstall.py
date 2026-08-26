@@ -735,12 +735,22 @@ def _is_safe_path(target: Path) -> bool:
 
 def _assert_safe_database_file_path(target: Path) -> None:
     """Raise if a configured database path points at a broad delete target."""
+    resolved = target.expanduser().resolve()
+    home = Path.home().resolve()
+    database_suffixes = {".db", ".sqlite", ".sqlite3"}
+    if (
+        resolved.parent == home
+        and not resolved.is_dir()
+        and resolved.suffix.lower() not in database_suffixes
+    ):
+        raise RuntimeError(
+            f"Refusing to delete '{resolved}' as the database path; "
+            "home-level database files must use a SQLite database extension."
+        )
     try:
         _assert_safe_path(target, label="database path")
     except RuntimeError:
-        resolved = target.expanduser().resolve()
-        home = Path.home().resolve()
-        if resolved.parent == home and (resolved.is_file() or resolved.suffix):
+        if resolved.parent == home and resolved.suffix.lower() in database_suffixes:
             return
         raise
 

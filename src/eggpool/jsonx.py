@@ -80,7 +80,7 @@ if _ACTIVE_BACKEND == "orjson":
     def loads(data: JsonInput) -> Any:
         """Decode a JSON document to a Python value."""
         if isinstance(data, str):
-            return _orjson.loads(data.encode("utf-8"))
+            return _orjson.loads(data)
         # ``data`` is bytes/bytearray/memoryview; normalise to bytes
         # for the orjson C entry point.  Reject other types at runtime.
         if not isinstance(data, (bytes, bytearray, memoryview)):  # pyright: ignore[reportUnnecessaryIsInstance]

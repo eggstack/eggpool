@@ -248,6 +248,6 @@ def _value_continuation_lines(value_text: str, followers: list[str]) -> int:
             in_basic or in_literal or in_triple_basic or in_triple_literal or depth > 0
         ):
             break
-        scan(follower.strip())
+        scan(follower)
         consumed += 1
     return consumed

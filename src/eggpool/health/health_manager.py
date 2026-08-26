@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import time
 from dataclasses import dataclass, field
@@ -13,6 +14,8 @@ if TYPE_CHECKING:
 
 from eggpool.health.backoff import MAX_NONTERMINAL_BACKOFF_SECONDS
 from eggpool.health.circuit_breaker import CircuitBreaker
+
+logger = logging.getLogger(__name__)
 
 
 class FailureCategory(StrEnum):
@@ -449,6 +452,12 @@ class HealthManager:
         """Clear only bounded runtime model suppression after success."""
         health = self.get_account_health(account_name)
         if model_id in health.terminal_models:
+            logger.debug(
+                "Ignoring successful response for terminal model suppression "
+                "account=%s model=%s",
+                account_name,
+                model_id,
+            )
             return False
         return health.disabled_models.pop(model_id, None) is not None
 

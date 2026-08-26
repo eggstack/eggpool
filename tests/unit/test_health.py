@@ -373,11 +373,15 @@ class TestHealthManager:
             "authentication_failed"
         )
 
-    def test_record_success_preserves_terminal_model_withdrawal(self) -> None:
+    def test_record_success_preserves_terminal_model_withdrawal(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         manager = HealthManager()
         manager.disable_model("account1", "model1", terminal=True)
+        caplog.set_level("DEBUG")
         manager.record_success("account1", "model1")
         assert not manager.is_model_healthy("account1", "model1")
+        assert "terminal model suppression" in caplog.text
         manager.enable_model("account1", "model1")
         assert manager.is_model_healthy("account1", "model1")
 

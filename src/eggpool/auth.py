@@ -22,6 +22,9 @@ _PROVIDED_KEY_RE = re.compile(r"^[A-Za-z0-9_\-]{8,512}$")
 def verify_api_key(request: Request, api_key: str) -> bool:
     """Verify the API key using constant-time comparison.
 
+    Values that fail the supported key format are rejected before the
+    comparison; only format-valid candidates reach the constant-time check.
+
     Args:
         request: The incoming FastAPI request.
         api_key: The expected API key value.
@@ -37,7 +40,6 @@ def verify_api_key(request: Request, api_key: str) -> bool:
     if not api_key:
         return False
     if not _PROVIDED_KEY_RE.fullmatch(provided):
-        hmac.compare_digest(provided, api_key)
         return False
     return hmac.compare_digest(provided, api_key)
 

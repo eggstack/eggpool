@@ -1024,6 +1024,9 @@ class GenerationLease:
             if self.released:
                 return
             self.released = True
+            # Slot ownership callbacks are synchronous and all run on the
+            # canonical event-loop thread; no await can interleave this
+            # count transition with a terminal-reference transition.
             self.slot.active_leases -= 1
             if self.slot.active_leases <= 0 and self.slot.terminal_references <= 0:
                 self.slot.active_leases = 0
@@ -1651,6 +1654,9 @@ class RuntimeManager:
     @staticmethod
     def _retain_terminal_reference(slot: _GenerationSlot) -> None:
         """Retain one accepted finalization job synchronously."""
+        # This callback must complete before the job is published.  It is
+        # intentionally synchronous and runs on the canonical event-loop
+        # thread, so the compound clear/increment cannot be interleaved.
         if slot.state in (SlotState.CLOSING, SlotState.CLOSED, SlotState.FAILED_CLOSE):
             raise RuntimeError(
                 f"generation {slot.generation.generation_id} is already closing"

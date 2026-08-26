@@ -498,6 +498,35 @@ class TestThinkingBudgetFieldAdaptation:
         assert result.payload["reasoning_effort"] == "high"
         assert "thinking_budget" not in result.payload
 
+    @pytest.mark.parametrize(
+        "effort_to_budget, accepted_efforts",
+        [
+            ({"low": 4096, "custom_low": 4096}, ["low", "custom_low"]),
+            ({"custom_medium": 4096}, ["low", "medium", "high"]),
+        ],
+    )
+    def test_map_known_budget_rejects_ambiguous_or_unaccepted_effort(
+        self,
+        effort_to_budget: dict[str, int],
+        accepted_efforts: list[str],
+    ) -> None:
+        cap = _capability(
+            mode="effort",
+            accepted_efforts=accepted_efforts,
+            effort_to_budget=effort_to_budget,
+        )
+        intent = _intent(budget=4096, fields=("thinking_budget",))
+        with pytest.raises(CapabilityError):
+            adapt_thinking_controls(
+                payload={"model": "test", "thinking_budget": 4096},
+                client_protocol="openai",
+                model_id="test-model",
+                provider_id="test-provider",
+                capability=cap,
+                intent=intent,
+                policy=ProviderControlPolicy(unsupported_control="map_if_known"),
+            )
+
 
 # ---------------------------------------------------------------------------
 # Plan 121 — read-only / path-COW contract regression coverage

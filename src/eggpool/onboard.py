@@ -18,9 +18,11 @@ def _prompt_yn(message: str) -> bool:
     sys.stdout.flush()
 
     fd = sys.stdin.fileno()
-    old_settings = None
+    # Capture the original mode before entering the section that changes it.
+    # If tcgetattr is interrupted, raw mode has not been enabled yet and no
+    # restoration is needed.
+    old_settings = termios.tcgetattr(fd)
     try:
-        old_settings = termios.tcgetattr(fd)
         tty.setraw(fd)
 
         while True:
@@ -46,8 +48,7 @@ def _prompt_yn(message: str) -> bool:
             sys.stdout.write(ch)
             sys.stdout.flush()
     finally:
-        if old_settings is not None:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
 def _prompt_add_another() -> bool:

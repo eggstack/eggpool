@@ -283,6 +283,8 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
             return self._handle_error(frame)
         if data.strip() == "[DONE]":
             self._saw_terminal_event = True
+            # Without a finish reason, ``_stop_message`` waits for
+            # ``finish`` to flush the decoder and synthesize one.
             return self._stop_message()
         parsed = self._safe_json(frame)
         if parsed is None:

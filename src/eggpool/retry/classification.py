@@ -78,6 +78,9 @@ class RetryClassifier:
         status_code: int,
         headers: dict[str, str] | None = None,
         body: bytes | None = None,
+        *,
+        client_protocol: str = "openai",
+        upstream_protocol: str = "openai",
     ) -> RetryableError:
         """Classify a status code into a retry category."""
         normalized_headers = {
@@ -93,8 +96,8 @@ class RetryClassifier:
             account_name=None,
             model_id=None,
             upstream_model_id=None,
-            client_protocol="openai",
-            upstream_protocol="openai",
+            client_protocol=client_protocol,
+            upstream_protocol=upstream_protocol,
             response_signal=signal,
             retry_after_s=retry_after,
             response_started=False,

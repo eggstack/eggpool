@@ -222,7 +222,7 @@ def _canonical_value(value: object) -> object | None:
         return value
     if isinstance(value, int | float):
         return value
-    return repr(value)
+    return None
 
 
 def _ordered_accounts(config: AppConfig) -> list[object]:
@@ -652,6 +652,10 @@ def validate_config_file(path: str | Path) -> ConfigValidationResult:
         config.validate_optional_dependencies()
     except ConfigError as exc:
         raise ConfigSchemaError(
+            f"{_VALIDATION_ERROR_PREFIX}: optional dependency check failed: {exc}"
+        ) from exc
+    except Exception as exc:
+        raise ConfigInternalError(
             f"{_VALIDATION_ERROR_PREFIX}: optional dependency check failed: {exc}"
         ) from exc
 

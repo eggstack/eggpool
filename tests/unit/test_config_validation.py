@@ -11,6 +11,7 @@ import pytest
 from eggpool.config_validation import (
     ConfigAccountCredentialError,
     ConfigFileAccessError,
+    ConfigInternalError,
     ConfigParseError,
     ConfigSchemaError,
     ConfigStartupAuthError,
@@ -154,6 +155,18 @@ class TestValidConfig:
 
 
 class TestValidationFailures:
+    def test_optional_dependency_internal_failure_is_typed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from eggpool.models.config import AppConfig
+
+        def fail(_config: AppConfig) -> None:
+            raise ImportError("optional dependency probe failed")
+
+        monkeypatch.setattr(AppConfig, "validate_optional_dependencies", fail)
+        with pytest.raises(ConfigInternalError):
+            validate_config_file(_write_config(tmp_path, _valid_body()))
+
     def test_missing_file(self, tmp_path: Path) -> None:
         missing = tmp_path / "nope.toml"
         with pytest.raises(ConfigFileAccessError) as exc_info:

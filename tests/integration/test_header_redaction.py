@@ -9,6 +9,12 @@ from eggpool.app import _HeaderRedactionMiddleware
 
 @pytest.mark.asyncio
 class TestHeaderRedactionMiddleware:
+    async def test_ignores_non_ascii_configuration_without_crashing(self) -> None:
+        middleware = _HeaderRedactionMiddleware(
+            app=lambda *_args: None, headers_to_redact=["x-sécret"]
+        )
+        assert middleware._redact == {b"x-s?cret"}  # pyright: ignore[reportPrivateUsage]
+
     async def test_strips_configured_headers(self) -> None:
         """Configured headers are removed from response."""
 

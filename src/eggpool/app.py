@@ -51,10 +51,13 @@ from eggpool.db.repositories import (
 from eggpool.db.rollup_repository import UsageRollupRepository
 from eggpool.errors import (
     AggregatorError,
+    AuthenticationError,
     CatalogUnavailableError,
     DatabaseError,
     ModelNotFoundError,
     NoEligibleAccountError,
+    QuotaExhaustedError,
+    RateLimitError,
     RequestTooLargeError,
 )
 from eggpool.event_loop_lag import EventLoopLagMonitor
@@ -191,7 +194,9 @@ class _HeaderRedactionMiddleware:
 
     def __init__(self, app: Any, headers_to_redact: list[str]) -> None:  # noqa: ANN401
         self._app = app
-        self._redact = frozenset(h.lower().encode("ascii") for h in headers_to_redact)
+        self._redact = frozenset(
+            h.lower().encode("ascii", errors="replace") for h in headers_to_redact
+        )
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:  # noqa: ANN401
         if scope.get("type") != "http":
@@ -2005,8 +2010,19 @@ def create_app(
         elif isinstance(exc, ModelNotFoundError):
             status_code = 404
             message = str(exc)
-        elif isinstance(exc, (NoEligibleAccountError, CatalogUnavailableError)):
+        elif isinstance(
+            exc,
+            (
+                NoEligibleAccountError,
+                CatalogUnavailableError,
+                AuthenticationError,
+                QuotaExhaustedError,
+            ),
+        ):
             status_code = 503
+            message = str(exc)
+        elif isinstance(exc, RateLimitError):
+            status_code = 429
             message = str(exc)
         else:
             # Internal failure classes (database, config, ...) carry file

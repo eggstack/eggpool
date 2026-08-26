@@ -245,6 +245,13 @@ def _snapshot_existing_files(targets: Sequence[Path], staging_dir: Path) -> None
         snapshot.write_bytes(target.read_bytes())
 
 
+def _restore_file(target: Path, contents: bytes) -> None:
+    """Restore one file, retaining private permissions for ``.env``."""
+    target.write_bytes(contents)
+    if target.name == ENV_BASENAME:
+        target.chmod(0o600)
+
+
 def _build_archive(
     archive_path: Path,
     contents: BackupContents,
@@ -572,7 +579,7 @@ def restore_backup(
 
         if contents.env_path is not None and ".env" in plan.members:
             contents.env_path.parent.mkdir(parents=True, exist_ok=True)
-            contents.env_path.write_bytes(plan.members[".env"])
+            _restore_file(contents.env_path, plan.members[".env"])
 
         for name in DB_BASENAMES:
             if name not in plan.members:
@@ -587,7 +594,7 @@ def restore_backup(
         for target in targets:
             snapshot = staging / target.name
             if snapshot.exists():
-                target.write_bytes(snapshot.read_bytes())
+                _restore_file(target, snapshot.read_bytes())
         raise
     finally:
         shutil.rmtree(staging, ignore_errors=True)
