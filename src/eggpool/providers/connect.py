@@ -206,13 +206,27 @@ _OPENCODE_GO_FALLBACK: dict[str, dict[str, Any]] = {
             f'id = "{DEFAULT_PROVIDER_ID}"\n'
             'base_url = "https://opencode.ai/zen/go/v1"\n'
             'protocols = ["openai", "anthropic"]\n'
-            'api_key_env = "API_KEY"'
+            'api_key_env = "API_KEY"\n'
+            "\n[providers.opencode-go.auth]\n"
+            'mode = "api_key"\n'
+            'header = "x-api-key"\n'
+            "\n[[providers.opencode-go.auth.additional]]\n"
+            'mode = "bearer"\n'
+            'header = "Authorization"\n'
+            'scheme = "Bearer"'
         ),
         "data": {
             "id": DEFAULT_PROVIDER_ID,
             "base_url": "https://opencode.ai/zen/go/v1",
             "protocols": ["openai", "anthropic"],
             "api_key_env": "API_KEY",
+            "auth": {
+                "mode": "api_key",
+                "header": "x-api-key",
+                "additional": [
+                    {"mode": "bearer", "header": "Authorization", "scheme": "Bearer"},
+                ],
+            },
         },
     },
 }

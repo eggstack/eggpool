@@ -275,6 +275,32 @@ class TestOpenCodeGoFamilyMappings:
         assert result.protocol == "openai"
         assert result.source == "family_mapping"
 
+    def test_muse_spark_contributor_to_anthropic(
+        self, resolver_no_config: ModelProtocolResolver
+    ) -> None:
+        result = resolver_no_config.resolve_from_catalog("muse-spark-1.2-contributor")
+        assert result.protocol == "anthropic"
+        assert result.source == "family_mapping"
+
+    def test_longcat_2_to_openai(
+        self, resolver_no_config: ModelProtocolResolver
+    ) -> None:
+        result = resolver_no_config.resolve_from_catalog("longcat-2.0")
+        assert result.protocol == "openai"
+        assert result.source == "family_mapping"
+
+    def test_hy3_to_openai(self, resolver_no_config: ModelProtocolResolver) -> None:
+        result = resolver_no_config.resolve_from_catalog("hy3")
+        assert result.protocol == "openai"
+        assert result.source == "family_mapping"
+
+    def test_hy3_preview_matches_family(
+        self, resolver_no_config: ModelProtocolResolver
+    ) -> None:
+        result = resolver_no_config.resolve_from_catalog("hy3-preview")
+        assert result.protocol == "openai"
+        assert result.source == "family_mapping"
+
 
 class TestEndpointValidationMiniMaxQwen:
     """Phase 14: MiniMax and Qwen models use /messages (Anthropic)."""

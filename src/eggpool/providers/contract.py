@@ -64,7 +64,10 @@ def compose_provider_url(provider: ProviderConfig, endpoint_path: str) -> str:
 def build_auth_headers(provider: ProviderConfig, api_key: str) -> dict[str, str]:
     """Build upstream authentication headers from provider contract config.
 
-    Returns an empty dict when auth mode is ``none``.
+    Returns an empty dict when auth mode is ``none`` and no additional
+    headers are declared. ``additional`` entries are rendered with the
+    same ``api_key`` so the same credential can satisfy two endpoints
+    that expect different header names.
     """
     auth = provider.auth
     return render_auth_headers(
@@ -72,6 +75,7 @@ def build_auth_headers(provider: ProviderConfig, api_key: str) -> dict[str, str]
         header=auth.header,
         scheme=auth.scheme,
         api_key=api_key,
+        additional=auth.additional,
     )
 
 

@@ -588,12 +588,21 @@ class AccountConfig(BaseModel):
         return self
 
 
-class ProviderAuthConfig(BaseModel):
-    """Provider-specific authentication configuration."""
+class ProviderAdditionalAuthConfig(BaseModel):
+    """A secondary auth header rendered alongside the primary auth.
+
+    Some providers route the same API key to two endpoints that each
+    expect a different header (for example ``Authorization: Bearer``
+    for ``/v1/chat/completions`` and ``x-api-key`` for ``/v1/messages``
+    on OpenCode Go). The primary :class:`ProviderAuthConfig` covers
+    one of those headers; declaring the other here causes every
+    outbound dispatch to carry both so the upstream picks whichever
+    matches the path it advertises.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    mode: Literal["bearer", "api_key", "raw_authorization", "none"] = "bearer"
+    mode: Literal["bearer", "api_key", "raw_authorization"] = "bearer"
     header: str = "Authorization"
     scheme: str = "Bearer"
 
@@ -608,6 +617,58 @@ class ProviderAuthConfig(BaseModel):
         if not value or any(char.isspace() for char in value):
             raise ValueError("Authentication scheme must be a non-empty token")
         return _validate_upstream_header_value(value)
+
+
+class ProviderAuthConfig(BaseModel):
+    """Provider-specific authentication configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["bearer", "api_key", "raw_authorization", "none"] = "bearer"
+    header: str = "Authorization"
+    scheme: str = "Bearer"
+    additional: list[ProviderAdditionalAuthConfig] = Field(
+        default_factory=list[ProviderAdditionalAuthConfig]
+    )
+    """Secondary auth headers sent on every dispatch.
+
+    Use for providers whose different protocol endpoints expect
+    different auth header names for the same API key. ``mode = "none"``
+    forbids additional entries because there is no primary key to
+    mirror.
+    """
+
+    @field_validator("header")
+    @classmethod
+    def validate_header(cls, value: str) -> str:
+        return _validate_upstream_header_name(value)
+
+    @field_validator("scheme")
+    @classmethod
+    def validate_scheme(cls, value: str) -> str:
+        if not value or any(char.isspace() for char in value):
+            raise ValueError("Authentication scheme must be a non-empty token")
+        return _validate_upstream_header_value(value)
+
+    @model_validator(mode="after")
+    def validate_additional(self) -> ProviderAuthConfig:
+        """Reject duplicate/conflicting additional auth headers."""
+        if self.mode == "none" and self.additional:
+            raise ConfigError(
+                "Provider auth has additional entries but mode='none' "
+                "renders no auth header; remove the additional entries or "
+                "pick a non-empty mode"
+            )
+        seen: set[str] = {self.header.casefold()}
+        for entry in self.additional:
+            name = entry.header.casefold()
+            if name in seen:
+                raise ConfigError(
+                    f"Provider auth header {entry.header!r} duplicates the "
+                    "primary auth header or another additional entry"
+                )
+            seen.add(name)
+        return self
 
 
 class ProviderStaticHeaderConfig(BaseModel):
@@ -823,14 +884,16 @@ class ProviderConfig(BaseModel):
     def validate_static_headers(self) -> ProviderConfig:
         """Keep static headers from replacing credentials or each other."""
         seen: set[str] = set()
-        auth_header = self.auth.header.casefold()
+        reserved: set[str] = {self.auth.header.casefold()}
+        for entry in self.auth.additional:
+            reserved.add(entry.header.casefold())
         for header in self.headers:
             name = header.name.casefold()
             if name in seen:
                 raise ConfigError(
                     f"Provider {self.id!r} has duplicate static header {header.name!r}"
                 )
-            if name == auth_header:
+            if name in reserved:
                 raise ConfigError(
                     f"Provider {self.id!r} static header {header.name!r} "
                     "conflicts with the configured authentication header"
@@ -1143,6 +1206,38 @@ def _provider_is_canonical_opencode_go(provider: ProviderConfig) -> bool:
     return provider.base_url.rstrip("/") == _OPENCODE_GO_BASE_URL
 
 
+def _apply_opencode_go_dual_auth(provider: ProviderConfig) -> None:
+    """Ensure the canonical opencode-go provider sends both auth headers.
+
+    OpenCode Go's ``/v1/chat/completions`` accepts ``Authorization: Bearer``
+    while its ``/v1/messages`` accepts ``x-api-key``. Operators using the
+    legacy flat ``[upstream]`` config (which synthesizes an implicit
+    provider with default ``mode="bearer"``) cannot dispatch to the
+    Anthropic endpoint without this dual-header treatment. The bundled
+    template and fallback block already include dual auth explicitly,
+    so synthesis only fires for the implicit provider, and only when
+    the operator has not declared a custom one.
+    """
+    if not _provider_is_canonical_opencode_go(provider):
+        return
+    if provider.auth.mode != "bearer" or provider.auth.additional:
+        return
+    if provider.auth.header.lower() != "authorization":
+        return
+    provider.auth = ProviderAuthConfig(
+        mode="api_key",
+        header="x-api-key",
+        scheme=provider.auth.scheme,
+        additional=[
+            ProviderAdditionalAuthConfig(
+                mode="bearer",
+                header="Authorization",
+                scheme=provider.auth.scheme,
+            ),
+        ],
+    )
+
+
 def _seed_builtin_provider_capabilities(provider: ProviderConfig) -> None:
     """Seed known provider capabilities without clobbering operator overrides."""
     if not _provider_is_canonical_opencode_go(provider):
@@ -1365,18 +1460,18 @@ class AppConfig(BaseModel):
     def _normalize_providers(self) -> AppConfig:
         """Convert flat accounts to default provider if no providers defined."""
         if not self.providers and self.accounts:
-            self.providers = {
-                DEFAULT_PROVIDER_ID: ProviderConfig(
-                    id=DEFAULT_PROVIDER_ID,
-                    base_url=self.upstream.base_url,
-                    protocols=["openai", "anthropic"],
-                    openai_path="/chat/completions",
-                    anthropic_path="/messages",
-                    models_method="GET",
-                    models_path="/models",
-                    accounts=self.accounts,
-                )
-            }
+            provider = ProviderConfig(
+                id=DEFAULT_PROVIDER_ID,
+                base_url=self.upstream.base_url,
+                protocols=["openai", "anthropic"],
+                openai_path="/chat/completions",
+                anthropic_path="/messages",
+                models_method="GET",
+                models_path="/models",
+                accounts=self.accounts,
+            )
+            _apply_opencode_go_dual_auth(provider)
+            self.providers = {DEFAULT_PROVIDER_ID: provider}
             self.accounts = []
         for provider in self.providers.values():
             _seed_builtin_provider_capabilities(provider)

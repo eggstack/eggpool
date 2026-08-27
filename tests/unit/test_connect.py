@@ -453,6 +453,27 @@ class TestFormatProviderBlock:
             "high": 16384,
         }
 
+    def test_opencode_go_template_emits_dual_auth(self, tmp_path: Path) -> None:
+        """The bundled OpenCode Go template renders both auth headers."""
+        from eggpool.models.config import AppConfig
+
+        data = load_provider_templates()["opencode-go"]["data"]
+        block = _format_provider_block(
+            "opencode-go", data, "OPENCODE_KEY", "opencode-go-0001"
+        )
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(block, encoding="utf-8")
+
+        cfg = AppConfig.from_toml(str(config_file))
+        auth = cfg.providers["opencode-go"].auth
+        assert auth.mode == "api_key"
+        assert auth.header == "x-api-key"
+        assert len(auth.additional) == 1
+        extra = auth.additional[0]
+        assert extra.mode == "bearer"
+        assert extra.header == "Authorization"
+        assert extra.scheme == "Bearer"
+
     def test_emits_routing_priority_for_new_provider(self) -> None:
         """New provider blocks include a routing_priority = 0 default."""
         data = {"base_url": "https://example.com", "protocols": ["openai"]}

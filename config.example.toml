@@ -434,6 +434,15 @@ enabled = false
 # # proxy_url_env = "GOROUTER_PERSONAL_PROXY_URL"
 #
 # [providers.opencode-go.auth]
+# # /v1/chat/completions accepts ``Authorization: Bearer`` while
+# # /v1/messages accepts ``x-api-key``; render both so the same account
+# # can serve either protocol without a reconnect. The canonical
+# # opencode-go template applies this automatically; only declare it
+# # explicitly if you are pointing a custom ``base_url`` at OpenCode Go.
+# mode = "api_key"
+# header = "x-api-key"
+#
+# [[providers.opencode-go.auth.additional]]
 # mode = "bearer"
 # header = "Authorization"
 # scheme = "Bearer"

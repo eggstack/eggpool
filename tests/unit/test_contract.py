@@ -6,6 +6,7 @@ import pytest
 
 from eggpool.errors import ConfigError
 from eggpool.models.config import (
+    ProviderAdditionalAuthConfig,
     ProviderAuthConfig,
     ProviderConfig,
     ProviderModelsEndpointConfig,
@@ -99,6 +100,76 @@ class TestBuildAuthHeaders:
         )
         assert build_auth_headers(cfg, "anything") == {}
 
+    def test_additional_auth_renders_both_headers(self):
+        cfg = ProviderConfig(
+            id="opencode-go",
+            base_url="https://opencode.ai/zen/go/v1",
+            auth=ProviderAuthConfig(
+                mode="api_key",
+                header="x-api-key",
+                additional=[
+                    ProviderAdditionalAuthConfig(
+                        mode="bearer",
+                        header="Authorization",
+                        scheme="Bearer",
+                    ),
+                ],
+            ),
+        )
+        assert build_auth_headers(cfg, "sk-test") == {
+            "x-api-key": "sk-test",
+            "Authorization": "Bearer sk-test",
+        }
+
+    def test_additional_auth_case_insensitive_dedup_rejected(self):
+        with pytest.raises(ConfigError, match="duplicates the primary auth"):
+            ProviderAuthConfig(
+                mode="api_key",
+                header="x-api-key",
+                additional=[
+                    ProviderAdditionalAuthConfig(mode="bearer", header="X-Api-Key"),
+                ],
+            )
+
+    def test_additional_auth_duplicate_among_themselves_rejected(self):
+        with pytest.raises(ConfigError, match="duplicates the primary auth"):
+            ProviderAuthConfig(
+                mode="api_key",
+                header="x-api-key",
+                additional=[
+                    ProviderAdditionalAuthConfig(mode="bearer", header="Authorization"),
+                    ProviderAdditionalAuthConfig(mode="bearer", header="authorization"),
+                ],
+            )
+
+    def test_additional_auth_with_none_mode_rejected(self):
+        with pytest.raises(ConfigError, match="additional entries but mode='none'"):
+            ProviderAuthConfig(
+                mode="none",
+                additional=[
+                    ProviderAdditionalAuthConfig(mode="bearer", header="X-Api-Key"),
+                ],
+            )
+
+    def test_static_header_clashes_with_additional_auth_rejected(self):
+        with pytest.raises(ConfigError, match="conflicts with the configured"):
+            ProviderConfig(
+                id="t",
+                base_url="https://api.example.com",
+                auth=ProviderAuthConfig(
+                    mode="api_key",
+                    header="x-api-key",
+                    additional=[
+                        ProviderAdditionalAuthConfig(
+                            mode="bearer", header="Authorization"
+                        ),
+                    ],
+                ),
+                headers=[
+                    ProviderStaticHeaderConfig(name="Authorization", value="Bearer bad")
+                ],
+            )
+
 
 class TestAuthSchemePrefix:
     @pytest.mark.parametrize(
@@ -136,6 +207,41 @@ def test_render_auth_headers(mode: str, expected: dict[str, str]) -> None:
         )
         == expected
     )
+
+
+def test_render_auth_headers_with_additional() -> None:
+    assert render_auth_headers(
+        mode="api_key",
+        header="x-api-key",
+        scheme="Bearer",
+        api_key="sk-test",
+        additional=[
+            ProviderAdditionalAuthConfig(
+                mode="bearer",
+                header="Authorization",
+                scheme="Bearer",
+            ),
+        ],
+    ) == {
+        "x-api-key": "sk-test",
+        "Authorization": "Bearer sk-test",
+    }
+
+
+def test_render_auth_headers_none_mode_with_additional() -> None:
+    """``mode='none'`` skips the primary header but still renders additional."""
+    assert render_auth_headers(
+        mode="none",
+        header="Authorization",
+        scheme="Bearer",
+        api_key="sk-test",
+        additional=[
+            ProviderAdditionalAuthConfig(
+                mode="api_key",
+                header="x-api-key",
+            ),
+        ],
+    ) == {"x-api-key": "sk-test"}
 
 
 class TestBuildStaticHeaders:
@@ -220,6 +326,29 @@ class TestBuildUpstreamHeaders:
         headers = build_upstream_headers(cfg, "selected-key")
 
         assert headers == {"Authorization": "Bearer selected-key"}
+
+    def test_dual_auth_provider_renders_both_headers(self):
+        cfg = ProviderConfig(
+            id="opencode-go",
+            base_url="https://opencode.ai/zen/go/v1",
+            auth=ProviderAuthConfig(
+                mode="api_key",
+                header="x-api-key",
+                additional=[
+                    ProviderAdditionalAuthConfig(
+                        mode="bearer",
+                        header="Authorization",
+                        scheme="Bearer",
+                    ),
+                ],
+            ),
+        )
+        headers = build_upstream_headers(cfg, "sk-test", protocol="anthropic")
+        assert headers == {
+            "anthropic-version": "2023-06-01",
+            "x-api-key": "sk-test",
+            "Authorization": "Bearer sk-test",
+        }
 
 
 class TestProviderConfigContract:

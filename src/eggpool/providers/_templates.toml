@@ -28,7 +28,16 @@ recommended = true
 notes = "Primary provider; OpenAI + Anthropic protocols"
 
 [providers.opencode-go.auth]
+# /v1/chat/completions accepts ``Authorization: Bearer`` and
+# /v1/messages accepts ``x-api-key``; render both so the same
+# account can serve either protocol without a reconnect.
+mode = "api_key"
+header = "x-api-key"
+
+[[providers.opencode-go.auth.additional]]
 mode = "bearer"
+header = "Authorization"
+scheme = "Bearer"
 
 [providers.opencode-go.verify]
 probe_model = "gpt-5.5-mini"

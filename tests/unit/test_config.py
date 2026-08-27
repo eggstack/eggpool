@@ -523,6 +523,68 @@ def test_bearer_mode_rejects_configured_scheme_prefix() -> None:
         config.validate_account_credentials()
 
 
+def test_legacy_upstream_opencode_go_synthesizes_dual_auth() -> None:
+    """Legacy ``[upstream]`` configs must emit x-api-key + Authorization.
+
+    OpenCode Go's ``/v1/chat/completions`` requires Bearer while
+    ``/v1/messages`` requires ``x-api-key``. Without dual auth the
+    Anthropic-protocol models on OpenCode Go (``muse-spark-1.2-contributor``
+    and others) would 401 upstream. The implicit provider built from
+    a flat ``[upstream]`` block must therefore enable both headers
+    automatically so legacy configs route every protocol without
+    requiring a migration.
+    """
+    config = AppConfig.from_dict(
+        {
+            "upstream": {"base_url": "https://opencode.ai/zen/go/v1"},
+            "accounts": [{"name": "personal", "api_key": "sk-test"}],
+        }
+    )
+    provider = config.providers["opencode-go"]
+    assert provider.auth.mode == "api_key"
+    assert provider.auth.header == "x-api-key"
+    assert len(provider.auth.additional) == 1
+    extra = provider.auth.additional[0]
+    assert extra.mode == "bearer"
+    assert extra.header == "Authorization"
+    assert extra.scheme == "Bearer"
+
+
+def test_explicit_opencode_go_provider_keeps_explicit_auth() -> None:
+    """An operator-declared ``[providers.opencode-go].auth`` wins over synthesis."""
+    config = AppConfig.from_dict(
+        {
+            "providers": {
+                "opencode-go": {
+                    "id": "opencode-go",
+                    "base_url": "https://opencode.ai/zen/go/v1",
+                    "protocols": ["openai"],
+                    "auth": {"mode": "bearer"},
+                    "accounts": [{"name": "personal", "api_key": "sk-test"}],
+                }
+            }
+        }
+    )
+    provider = config.providers["opencode-go"]
+    assert provider.auth.mode == "bearer"
+    assert provider.auth.header == "Authorization"
+    assert provider.auth.additional == []
+
+
+def test_legacy_upstream_non_opencode_go_keeps_default_auth() -> None:
+    """Dual auth synthesis only fires for the canonical opencode-go URL."""
+    config = AppConfig.from_dict(
+        {
+            "upstream": {"base_url": "https://api.example.com/v1"},
+            "accounts": [{"name": "personal", "api_key": "sk-test"}],
+        }
+    )
+    provider = config.providers["opencode-go"]
+    assert provider.auth.mode == "bearer"
+    assert provider.auth.header == "Authorization"
+    assert provider.auth.additional == []
+
+
 def test_model_override_price_strings_are_normalized(tmp_path: Path) -> None:
     config_file = tmp_path / "prices.toml"
     config_file.write_text(

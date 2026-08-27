@@ -49,6 +49,13 @@ FAMILY_PROTOCOLS: dict[str, str] = {
     "deepseek-": "openai",
     "minimax-": "anthropic",
     "qwen3": "anthropic",
+    # OpenCode Go families that only expose protocol on a single endpoint.
+    # Verified live: ``muse-spark-1.2-contributor`` accepts
+    # ``POST /v1/messages`` with ``x-api-key``; ``longcat-2.0`` and
+    # ``hy3`` accept ``POST /v1/chat/completions`` with Bearer.
+    "muse-": "anthropic",
+    "longcat-": "openai",
+    "hy3": "openai",
 }
 
 
