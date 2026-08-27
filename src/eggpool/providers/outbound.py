@@ -157,8 +157,6 @@ class OutboundClientManager:
         Thread-safe: concurrent callers will wait for the first build
         rather than creating duplicate clients.
         """
-        if self._client is not None:
-            return self._client
         async with self._lock:
             if self._client is not None:
                 return self._client
@@ -226,17 +224,18 @@ class OutboundClientManager:
 
     async def aclose(self) -> None:
         """Close the shared client if one was built."""
-        client = self._client
-        if client is None:
-            return
-        try:
-            await client.aclose()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.debug("Error closing outbound client", exc_info=True)
-        finally:
-            self._client = None
+        async with self._lock:
+            client = self._client
+            if client is None:
+                return
+            try:
+                await client.aclose()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.debug("Error closing outbound client", exc_info=True)
+            finally:
+                self._client = None
 
 
 class MeteredAsyncTransport(httpx.AsyncBaseTransport):

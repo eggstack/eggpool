@@ -83,6 +83,11 @@ class TestReadBodyLimited:
         with pytest.raises(RequestTooLargeError):
             await read_body_limited(req, max_bytes=100)
 
+    async def test_oversized_chunk_is_not_added_to_bounded_body(self) -> None:
+        req = FakeRequest([b"x" * 101])
+        with pytest.raises(RequestTooLargeError):
+            await read_body_limited(req, max_bytes=100)
+
     async def test_exact_limit_passes(self) -> None:
         req = FakeRequest([b"x" * 100])
         result = await read_body_limited(req, max_bytes=100)

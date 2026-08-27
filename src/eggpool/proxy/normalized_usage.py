@@ -172,14 +172,10 @@ def _extract_openai_cache_tokens(usage: dict[str, Any]) -> dict[str, int | None]
         prompt_details_dict = cast("dict[str, Any]", prompt_details)
         if "cached_tokens" in prompt_details_dict:
             cached = coerce_token_count(prompt_details_dict.get("cached_tokens"))
-            if cached == 0:
-                cached = 0
         if "cache_write_tokens" in prompt_details_dict:
             cache_write = coerce_token_count(
                 prompt_details_dict.get("cache_write_tokens")
             )
-            if cache_write == 0:
-                cache_write = 0
     # OpenAI-compatible rows expose reads under ``cached_tokens`` /
     # ``cache_read_input_tokens``.  Writes are tracked separately under
     # ``cache_write_input_tokens`` and never promoted into the read

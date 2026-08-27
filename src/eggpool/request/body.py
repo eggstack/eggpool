@@ -45,10 +45,11 @@ async def read_body_limited(request: Request, max_bytes: int) -> bytes:
     stream = request.stream()
     try:
         async for chunk in stream:
-            total += len(chunk)
-            if total > max_bytes:
+            chunk_size = len(chunk)
+            if chunk_size > max_bytes - total:
                 too_large = True
                 break
+            total += chunk_size
             body.extend(chunk)
     finally:
         if too_large:

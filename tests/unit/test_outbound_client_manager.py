@@ -88,6 +88,34 @@ class TestOutboundClientManager:
         await manager.aclose()
 
     @pytest.mark.anyio
+    async def test_aclose_serializes_with_get_client(self) -> None:
+        """A client cannot be returned while another task is closing it."""
+        manager = OutboundClientManager()
+        client = httpx.AsyncClient()
+        manager.inject_client(client)
+        close_started = asyncio.Event()
+        release_close = asyncio.Event()
+        original_aclose = client.aclose
+
+        async def blocking_close() -> None:
+            close_started.set()
+            await release_close.wait()
+            await original_aclose()
+
+        client.aclose = blocking_close  # type: ignore[method-assign]
+        close_task = asyncio.create_task(manager.aclose())
+        await close_started.wait()
+        get_task = asyncio.create_task(manager.get_client())
+        await asyncio.sleep(0)
+        assert not get_task.done()
+
+        release_close.set()
+        await close_task
+        replacement = await get_task
+        assert replacement is not client
+        await manager.aclose()
+
+    @pytest.mark.anyio
     async def test_inject_client_replaces_internal(self) -> None:
         manager = OutboundClientManager()
         mock_client = httpx.AsyncClient()

@@ -1055,6 +1055,22 @@ class TestExportEnvVar:
         assert "export PATH=/usr/bin" in content
         assert "export NEW_KEY=new-value" in content
 
+    def test_does_not_treat_similarly_named_export_as_existing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An ``*_ALT`` export must not trigger replacement of the base name."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setenv("SHELL", "/bin/zsh")
+
+        profile = tmp_path / ".zshrc"
+        profile.write_text("export TEST_KEY_ALT=old-value\n")
+
+        export_env_var("TEST_KEY", "new-value")
+
+        content = profile.read_text()
+        assert "export TEST_KEY_ALT=old-value" in content
+        assert "export TEST_KEY=new-value" in content
+
 
 class TestCliConnectList:
     """Tests for ``connect list``."""

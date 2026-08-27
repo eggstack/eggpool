@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
-from eggpool.providers.connect import resolve_apply_outcome
+from eggpool.providers.connect import _is_server_healthy, resolve_apply_outcome
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -124,6 +124,27 @@ class TestResolveApplyOutcome:
             resolve_apply_outcome(str(config))
 
         health_probe.assert_called_once_with(None, str(config))
+
+    def test_health_probe_uses_pid_fallback_when_config_cannot_be_read(
+        self, tmp_path: Path, caplog
+    ) -> None:
+        """A bad config must not redirect the health probe to a default port."""
+        config = tmp_path / "broken.toml"
+        config.write_text("not valid for the health probe", encoding="utf-8")
+        with (
+            patch("eggpool.runtime.read_pid", return_value=123),
+            patch("eggpool.runtime.is_process_running", return_value=True),
+            patch(
+                "eggpool.models.config.AppConfig.from_toml",
+                side_effect=ValueError("partial config"),
+            ),
+            patch("eggpool.runtime.probe_healthz") as probe,
+            caplog.at_level("WARNING", logger="eggpool.providers.connect"),
+        ):
+            assert _is_server_healthy(None, str(config)) is True
+
+        probe.assert_not_called()
+        assert "Could not read server host/port" in caplog.text
 
     def test_validation_failure_returns_false_without_restart(
         self, tmp_path: Path

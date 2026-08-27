@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import hmac
+import logging
 import os
 import select
 import shlex
@@ -23,6 +24,8 @@ from eggpool.constants import DEFAULT_PROVIDER_ID
 from eggpool.providers.contract import PROVIDER_STATUS_SYMBOLS
 from eggpool.runtime import restart_server as _restart_server
 from eggpool.toml_edit import render_toml_value
+
+logger = logging.getLogger(__name__)
 
 _REGISTRY_METADATA_FIELDS = frozenset(
     {
@@ -134,8 +137,15 @@ def _is_server_healthy(
     try:
         config = AppConfig.from_toml(config_path)
         host, port = config.server.host, config.server.port
-    except Exception:  # noqa: BLE001
-        host, port = "127.0.0.1", 11300
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Could not read server host/port for health probe from %s: %s",
+            config_path,
+            exc,
+        )
+        # The PID check above is still meaningful when the selected config
+        # cannot be parsed; do not probe an unrelated default endpoint.
+        return True
     return runtime.probe_healthz(host, port)
 
 
@@ -975,12 +985,13 @@ def export_env_var(env_name: str, value: str) -> Path | None:
     # never world-readable while it contains the key.
     with contextlib.suppress(OSError):
         profile.chmod(0o600)
-    if f"export {env_name}=" in existing:
+    export_prefix = f"export {env_name}="
+    if any(line.lstrip().startswith(export_prefix) for line in existing.splitlines()):
         # Replace existing value atomically.
         file_lines = existing.split("\n")
         new_lines: list[str] = []
         for line in file_lines:
-            if line.strip().startswith(f"export {env_name}="):
+            if line.lstrip().startswith(export_prefix):
                 new_lines.append(export_line)
             else:
                 new_lines.append(line)

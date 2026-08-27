@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -159,6 +160,22 @@ class TestCircuitBreaker:
         assert cb.allow_request()
         cb.record_success()
         assert cb.state is CircuitState.CLOSED
+
+    def test_half_open_probe_slot_is_thread_safe(self) -> None:
+        """Concurrent callers cannot acquire the same half-open probe slot."""
+        now = [100.0]
+        cb = CircuitBreaker(
+            failure_threshold=1,
+            recovery_timeout=10.0,
+            clock=lambda: now[0],
+        )
+        cb.record_failure()
+        now[0] = 110.0
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(lambda _value: cb.allow_request(), (1, 2)))
+
+        assert sorted(results) == [False, True]
 
     def test_reset(self) -> None:
         """Test circuit breaker reset."""
