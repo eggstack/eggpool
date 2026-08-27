@@ -505,8 +505,10 @@ class AcceptedReloadFinalizationJob:
         """Transfer candidate ownership to the runtime manager."""
         if self._step != AcceptedFinalizationStep.REGISTERED:
             return
-        assert self.candidate is not None
-        assert self.transaction is not None
+        if self.candidate is None:
+            raise RuntimeError("candidate is not set")
+        if self.transaction is None:
+            raise RuntimeError("transaction is not set")
         transfer_fn = getattr(self.candidate, "transfer_to_runtime_manager", None)
         if transfer_fn is not None:
             transfer_fn()
@@ -528,11 +530,13 @@ class AcceptedReloadFinalizationJob:
             if inject is not None:
                 raise inject
         if self.app is not None:
-            assert self.published_generation is not None
+            if self.published_generation is None:
+                raise RuntimeError("published_generation is not set")
             from eggpool.app import mirror_generation_on_app_state  # noqa: PLC0415
 
             mirror_generation_on_app_state(self.app, self.published_generation)
-        assert self.transaction is not None
+        if self.transaction is None:
+            raise RuntimeError("transaction is not set")
         self.transaction.accepted_finalization.compatibility_mirror_updated = True
         self._step = AcceptedFinalizationStep.MIRROR_UPDATED
 
@@ -556,7 +560,8 @@ class AcceptedReloadFinalizationJob:
                     failures=outcome.failures,
                     remaining=outcome.remaining,
                 )
-        assert self.transaction is not None
+        if self.transaction is None:
+            raise RuntimeError("transaction is not set")
         self.transaction.accepted_finalization.transitions_finalized = True
         # Advance the transaction state machine through the intermediate
         # states that must precede retirement scheduling.  Each mark is
@@ -587,8 +592,10 @@ class AcceptedReloadFinalizationJob:
         """
         if self._step != AcceptedFinalizationStep.TRANSITIONS_FINALIZED:
             return
-        assert self.observer is not None
-        assert self.transaction is not None
+        if self.observer is None:
+            raise RuntimeError("observer is not set")
+        if self.transaction is None:
+            raise RuntimeError("transaction is not set")
         try:
             await self.observer.on_publish_complete(
                 generation_id=self.generation_id,
@@ -643,8 +650,10 @@ class AcceptedReloadFinalizationJob:
                 # One-shot: clear so retry can succeed.
                 self._reload_manager.TEST_INJECT_RETIREMENT_FAILURE = None
                 raise inject
-        assert self.pending_swap is not None
-        assert self.transaction is not None
+        if self.pending_swap is None:
+            raise RuntimeError("pending_swap is not set")
+        if self.transaction is None:
+            raise RuntimeError("transaction is not set")
         await self.pending_swap.finalize_retirement()
         self.transaction.accepted_finalization.retirement_scheduled = True
         self.transaction.mark_retirement_scheduled()
@@ -660,7 +669,8 @@ class AcceptedReloadFinalizationJob:
         """Mark the transaction as fully completed."""
         if self._step != AcceptedFinalizationStep.RETIREMENT_SCHEDULED:
             return
-        assert self.transaction is not None
+        if self.transaction is None:
+            raise RuntimeError("transaction is not set")
         self.transaction.mark_completed()
         self.transaction.accepted_finalization.transaction_completed = True
         self._step = AcceptedFinalizationStep.TRANSACTION_COMPLETED

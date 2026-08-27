@@ -24,6 +24,7 @@ import pytest_asyncio
 
 from eggpool.app import finalize_stale_requests_once
 from eggpool.background.cleanup import (
+    _chunked_in_delete,
     checkpoint_database,
     cleanup_old_events,
     cleanup_old_model_info_observations,
@@ -2188,3 +2189,31 @@ class TestMaintenanceBatchEventLoopBudget:
         # The tracker should have made progress during maintenance,
         # proving the event loop yielded.
         assert len(progress) >= 5
+
+
+class TestChunkedInDeleteAllowlist:
+    """``_chunked_in_delete`` must reject any non-allowlisted target."""
+
+    @pytest.mark.asyncio
+    async def test_allows_known_target(self, db: Database) -> None:
+        """A hardcoded call site target is accepted."""
+        await _seed_account_and_model(db)
+        async with db.transaction():
+            await db.execute_write(
+                "INSERT INTO requests (account_id, model_id, status, started_at) "
+                "VALUES (1, 'gpt-4', 'completed', datetime('now', '-100 days'))"
+            )
+            deleted = await _chunked_in_delete(db, "requests", "id", [1])
+        assert deleted == 1
+
+    @pytest.mark.asyncio
+    async def test_rejects_unknown_table(self, db: Database) -> None:
+        """An unknown table name must not produce SQL."""
+        with pytest.raises(ValueError, match="disallowed delete target"):
+            await _chunked_in_delete(db, "users", "id", [1])
+
+    @pytest.mark.asyncio
+    async def test_rejects_unknown_column(self, db: Database) -> None:
+        """A valid table with an unexpected column must not produce SQL."""
+        with pytest.raises(ValueError, match="disallowed delete target"):
+            await _chunked_in_delete(db, "requests", "account_id", [1])

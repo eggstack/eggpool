@@ -230,6 +230,38 @@ class TestCircuitBreaker:
         cb.record_failure()
         assert not cb.can_request()
 
+    def test_abandoned_probe_slot_is_reclaimed(self) -> None:
+        """A probe held past recovery_timeout must not wedge the breaker."""
+        now = [100.0]
+        cb = CircuitBreaker(
+            failure_threshold=1,
+            recovery_timeout=10.0,
+            clock=lambda: now[0],
+        )
+        cb.record_failure()
+        now[0] = 110.0
+        assert cb.allow_request()
+        assert cb.state == CircuitState.HALF_OPEN
+        # Acquired probe is never released by the request path; advance the
+        # clock past recovery_timeout and a second allow_request must succeed.
+        now[0] = 121.0
+        assert cb.allow_request()
+        assert cb.state == CircuitState.HALF_OPEN
+
+    def test_can_request_reports_stale_probe_as_available(self) -> None:
+        """can_request() agrees with allow_request() on a stale probe slot."""
+        now = [100.0]
+        cb = CircuitBreaker(
+            failure_threshold=1,
+            recovery_timeout=10.0,
+            clock=lambda: now[0],
+        )
+        cb.record_failure()
+        now[0] = 110.0
+        assert cb.allow_request()
+        now[0] = 125.0
+        assert cb.can_request()
+
 
 class TestHealthManager:
     """Tests for HealthManager."""

@@ -787,7 +787,8 @@ class PendingGenerationSwap:
                 raise RuntimeManagerSwapInProgressError(
                     "A different pending swap is now the manager's pending swap"
                 )
-            assert self._new_slot is not None  # guaranteed by stage()
+            if self._new_slot is None:  # guaranteed by stage()
+                raise RuntimeError("new slot is not set")
 
             # Linearization point: make the new slot active, mark old
             # non-accepting, bump the publication epoch, release the
@@ -1509,7 +1510,8 @@ class RuntimeManager:
                         "is accepting leases"
                     )
                 slot = self._active
-                assert slot is not None and slot.accepting_leases
+                if slot is None or not slot.accepting_leases:
+                    raise RuntimeError("active slot is not set or not accepting leases")
                 if slot.active_leases == 0 and slot.terminal_references == 0:
                     slot.drain_event.clear()
                 slot.active_leases += 1

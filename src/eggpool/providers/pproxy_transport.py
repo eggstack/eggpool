@@ -58,7 +58,8 @@ class AsyncPProxyTransport(httpx.AsyncBaseTransport):
         )
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        assert isinstance(request.stream, httpx.AsyncByteStream)
+        if not isinstance(request.stream, httpx.AsyncByteStream):
+            raise TypeError("request stream is not an AsyncByteStream")
         req = httpcore.Request(
             method=request.method,
             url=httpcore.URL(
@@ -74,7 +75,8 @@ class AsyncPProxyTransport(httpx.AsyncBaseTransport):
         with map_httpcore_exceptions():
             resp = await self._pool.handle_async_request(req)
 
-        assert isinstance(resp.stream, AsyncIterable)
+        if not isinstance(resp.stream, AsyncIterable):
+            raise TypeError("response stream is not an AsyncIterable")
         typed_resp = cast("Any", resp)
         return httpx.Response(
             status_code=resp.status,

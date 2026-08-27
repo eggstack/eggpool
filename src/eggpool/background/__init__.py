@@ -311,7 +311,8 @@ class SupervisedTask:
         the previous tick completes.  This prevents overlapping ticks
         on database maintenance tasks and is the documented policy.
         """
-        assert self._tick_factory is not None
+        if self._tick_factory is None:
+            raise RuntimeError("tick factory is not initialized")
         self._last_started_at = time.time()
         # Resolve the one-time initial delay BEFORE the loop.  Re-reading
         # ``self._initial_delay_s`` on every iteration was the original

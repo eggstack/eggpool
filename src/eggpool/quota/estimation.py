@@ -105,7 +105,13 @@ class QuotaWindow:
         self.used_cost_microdollars = max(0, sum(item[2] for item in retained))
 
     def get_usage(self, current_time: float | None = None) -> tuple[int, int]:
-        """Get current usage within the window."""
+        """Get current usage within the window.
+
+        Not a pure read: expired observations are pruned (and the cached
+        totals updated) before the totals are returned, so the caller always
+        sees the window as of ``current_time``. Pruning is idempotent, and the
+        single canonical event-loop thread makes the mutation race-free.
+        """
         if current_time is None:
             current_time = time.time()
         self._prune_old_observations(current_time)

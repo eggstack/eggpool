@@ -2185,7 +2185,8 @@ class ModelInfoService:
         if global_info is None and provider_info is None:
             return {}
         source_info = global_info if global_info is not None else provider_info
-        assert source_info is not None
+        if source_info is None:
+            raise RuntimeError("source_info is not set")
 
         detail: dict[str, object] = {}
 

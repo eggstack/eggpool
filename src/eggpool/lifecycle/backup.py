@@ -176,7 +176,8 @@ class BackupSource:
 
     def meta_db_path(self) -> Path:
         """The ``db_path`` recorded in archive metadata (the restore target)."""
-        assert self.db_target is not None
+        if self.db_target is None:
+            raise RuntimeError("db_target is not set")
         return self.db_target
 
 

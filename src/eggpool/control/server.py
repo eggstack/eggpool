@@ -83,6 +83,10 @@ class ControlServerError(Exception):
     """An operational error in the control socket server."""
 
 
+class _OversizedRequestError(Exception):
+    """Internal marker: the request line exceeded ``MAX_REQUEST_SIZE``."""
+
+
 @dataclass(frozen=True)
 class ControlRequest:
     """Parsed inbound control request."""
@@ -211,6 +215,7 @@ class ControlServer:
             self._server = await asyncio.start_unix_server(
                 self._handle_connection,
                 str(self._path),
+                limit=MAX_REQUEST_SIZE + 1,
             )
         except OSError as exc:
             raise ControlServerError(
@@ -258,10 +263,16 @@ class ControlServer:
                 await writer.wait_closed()
             return
         try:
-            raw_line = await asyncio.wait_for(
-                reader.readline(),
-                timeout=COMMAND_TIMEOUT_S,
-            )
+            try:
+                raw_line = await asyncio.wait_for(
+                    reader.readline(),
+                    timeout=COMMAND_TIMEOUT_S,
+                )
+            except ValueError as exc:
+                # ``StreamReader.readline`` raises ``ValueError`` once the
+                # buffered line exceeds the stream limit, so oversized
+                # requests are rejected before the line is fully materialized.
+                raise _OversizedRequestError from exc
             response = await self._process_request(raw_line)
             resp_bytes = jsonx.dumps_bytes(response.to_dict()) + b"\n"
             writer.write(resp_bytes)
@@ -272,6 +283,16 @@ class ControlServer:
                 "",
                 "request timed out",
                 stage="timeout",
+            )
+            writer.write(jsonx.dumps_bytes(err_resp.to_dict()) + b"\n")
+            with contextlib.suppress(Exception):
+                await writer.drain()
+        except _OversizedRequestError:
+            logger.warning("oversized control request from %s", peer)
+            err_resp = _error_response(
+                "",
+                f"request exceeds {MAX_REQUEST_SIZE} byte limit",
+                stage="parse",
             )
             writer.write(jsonx.dumps_bytes(err_resp.to_dict()) + b"\n")
             with contextlib.suppress(Exception):

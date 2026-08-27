@@ -397,10 +397,36 @@ class TestControlServerValidation:
                 raw = await asyncio.wait_for(reader.readline(), timeout=5.0)
                 resp = json.loads(raw)
                 assert resp["ok"] is False
-                # Oversized payloads exceed the StreamReader limit (64KB)
-                # before the server's protocol check, so the error stage
-                # is "error" (generic handler) rather than "parse".
-                assert resp["stage"] in ("parse", "error")
+                assert resp["stage"] == "parse"
+                assert "byte limit" in resp["message"]
+            finally:
+                writer.close()
+                with _Silence():
+                    await writer.wait_closed()
+        finally:
+            await srv.stop()
+
+    @pytest.mark.asyncio
+    async def test_rejects_oversized_request_without_newline(
+        self, socket_dir: Path
+    ) -> None:
+        """An unterminated oversized line is rejected by the stream limit."""
+        path = _sock(socket_dir)
+        srv = ControlServer(_noop_handler, path=path)
+        await srv.start()
+        try:
+            oversized = b'{"data": "' + b"x" * (MAX_REQUEST_SIZE + 100)
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_unix_connection(str(path)), timeout=5.0
+            )
+            try:
+                writer.write(oversized)
+                await writer.drain()
+                raw = await asyncio.wait_for(reader.readline(), timeout=5.0)
+                resp = json.loads(raw)
+                assert resp["ok"] is False
+                assert resp["stage"] == "parse"
+                assert "byte limit" in resp["message"]
             finally:
                 writer.close()
                 with _Silence():

@@ -74,7 +74,8 @@ _ACTIVE_BACKEND, _RESOLVED_ORJSON = _resolve_backend()
 USING_ORJSON = _ACTIVE_BACKEND == "orjson"
 
 if _ACTIVE_BACKEND == "orjson":
-    assert _RESOLVED_ORJSON is not None
+    if _RESOLVED_ORJSON is None:
+        raise RuntimeError("orjson backend selected but module is not resolved")
     _orjson = _RESOLVED_ORJSON
 
     def loads(data: JsonInput) -> Any:

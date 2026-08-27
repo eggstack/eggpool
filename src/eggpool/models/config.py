@@ -1518,7 +1518,8 @@ class AppConfig(BaseModel):
         proxy = self.proxies[account.proxy]
         if proxy.url is not None:
             return proxy.url
-        assert proxy.url_env is not None
+        if proxy.url_env is None:
+            raise RuntimeError("proxy url_env is not set")
         return self._resolve_proxy_url_env(proxy.url_env, account.name)
 
     @staticmethod

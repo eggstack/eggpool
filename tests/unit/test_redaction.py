@@ -449,3 +449,27 @@ class TestAllowlistPolicy:
 
     def test_max_redacted_error_detail_chars_constant(self) -> None:
         assert MAX_REDACTED_ERROR_DETAIL_CHARS == 2048
+
+
+class TestSelectedAttemptRepr:
+    """``SelectedAttempt`` must redact the upstream API key from repr."""
+
+    def test_repr_does_not_leak_api_key(self) -> None:
+        from eggpool.request.coordinator import SelectedAttempt
+
+        attempt = SelectedAttempt(
+            proxy_request_id="p",
+            db_request_id="d",
+            attempt_id=1,
+            reservation_id="r",
+            account_id=1,
+            account_name="acct",
+            api_key="sk-secret-key-1234",
+            model_id="m",
+            estimated_tokens=10,
+            estimated_microdollars=20,
+            attempt_number=1,
+        )
+        rendered = repr(attempt)
+        assert "sk-secret-key-1234" not in rendered
+        assert "api_key" not in rendered

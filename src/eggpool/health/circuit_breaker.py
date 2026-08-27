@@ -37,6 +37,7 @@ class CircuitBreaker:
     _last_failure_time: float | None = None
     _last_state_change: float = field(init=False)
     _half_open_in_flight: bool = False
+    _half_open_acquired_at: float | None = None
 
     def __post_init__(self) -> None:
         self._last_state_change = self.clock()
@@ -54,6 +55,7 @@ class CircuitBreaker:
             # so the next probe can proceed.  If the threshold is
             # reached, close the circuit; otherwise remain half-open.
             self._half_open_in_flight = False
+            self._half_open_acquired_at = None
             if self._success_count >= self.success_threshold:
                 self._state = CircuitState.CLOSED
                 self._failure_count = 0
@@ -70,6 +72,7 @@ class CircuitBreaker:
             self._last_state_change = self.clock()
             self._success_count = 0
             self._half_open_in_flight = False
+            self._half_open_acquired_at = None
         elif self._state == CircuitState.CLOSED:
             self._failure_count += 1
             if self._failure_count >= self.failure_threshold:
@@ -89,15 +92,15 @@ class CircuitBreaker:
         if self._state == CircuitState.HALF_OPEN:
             # Allow only one test request at a time; subsequent
             # concurrent requests must wait for the test to complete.
-            if self._half_open_in_flight:
+            if self._half_open_in_flight and not self._probe_slot_is_stale():
                 return False
-            self._half_open_in_flight = True
+            self._acquire_probe_slot()
             return True
         # OPEN state
         if self._should_attempt_reset():
             self._state = CircuitState.HALF_OPEN
             self._last_state_change = self.clock()
-            self._half_open_in_flight = True
+            self._acquire_probe_slot()
             return True
         return False
 
@@ -110,6 +113,25 @@ class CircuitBreaker:
         rate-limit cooldown, quota-exhausted cooldown, or model-disabled).
         """
         self._half_open_in_flight = False
+        self._half_open_acquired_at = None
+
+    def _acquire_probe_slot(self) -> None:
+        """Mark the single half-open probe slot as taken."""
+        self._half_open_in_flight = True
+        self._half_open_acquired_at = self.clock()
+
+    def _probe_slot_is_stale(self) -> bool:
+        """Report whether an in-flight probe slot was abandoned.
+
+        The probe slot is released by :meth:`record_success`,
+        :meth:`record_failure`, or :meth:`release_probe`.  A request that
+        terminates through a path skipping all three would otherwise wedge
+        the breaker forever, so a slot held beyond ``recovery_timeout`` is
+        reclaimed.
+        """
+        if self._half_open_acquired_at is None:
+            return True
+        return self.clock() - self._half_open_acquired_at >= self.recovery_timeout
 
     def can_request(self) -> bool:
         """Check if a request would be allowed without mutating state.
@@ -122,7 +144,7 @@ class CircuitBreaker:
         if self._state == CircuitState.CLOSED:
             return True
         if self._state == CircuitState.HALF_OPEN:
-            return not self._half_open_in_flight
+            return not self._half_open_in_flight or self._probe_slot_is_stale()
         # OPEN state
         return self._should_attempt_reset()
 
@@ -134,6 +156,7 @@ class CircuitBreaker:
         self._last_failure_time = None
         self._last_state_change = self.clock()
         self._half_open_in_flight = False
+        self._half_open_acquired_at = None
 
     def _should_attempt_reset(self) -> bool:
         """Check if we should attempt to reset the circuit."""

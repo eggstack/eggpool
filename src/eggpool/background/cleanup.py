@@ -55,13 +55,33 @@ async def _has_remaining_rows(
     return len(rows) > 0
 
 
+_ALLOWED_DELETE_TARGETS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("reservations", "request_id"),
+        ("requests", "id"),
+        ("account_events", "id"),
+        ("operational_events", "id"),
+        ("usage_rollups", "rowid"),
+        ("model_price_snapshots", "id"),
+        ("model_info_observations", "id"),
+        ("routing_decisions", "id"),
+    }
+)
+
+
 async def _chunked_in_delete(
     db: Database, table: str, column: str, ids: list[object]
 ) -> int:
     """DELETE rows whose *column* is in *ids*, chunked for SQLite limits.
 
+    Table and column names are interpolated into the statement, so they are
+    restricted to :data:`_ALLOWED_DELETE_TARGETS`; only the ``ids`` values are
+    parameterised.
+
     Returns total rows deleted.
     """
+    if (table, column) not in _ALLOWED_DELETE_TARGETS:
+        raise ValueError(f"disallowed delete target: {table}.{column}")
     total_deleted = 0
     for i in range(0, len(ids), _SQLITE_MAX_VARIABLE_NUMBER):
         chunk = ids[i : i + _SQLITE_MAX_VARIABLE_NUMBER]

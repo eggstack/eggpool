@@ -362,7 +362,8 @@ class StatsService:
         of the freshness comparison — there's no live data to be
         fresher than.
         """
-        assert self._rollup_repo is not None
+        if self._rollup_repo is None:
+            raise RuntimeError("rollup repository is not initialized")
         end_dt = time_range.end
         now = datetime.now(UTC)
         # Normalize end_dt for the freshness comparison so callers can
@@ -872,7 +873,8 @@ class StatsService:
           dashboard headline "Accounted tokens" card uses. See
           ``plans/2026-07-07-dashboard-cache-token-card-semantics-fix.md``.
         """
-        assert self._rollup_repo is not None
+        if self._rollup_repo is None:
+            raise RuntimeError("rollup repository is not initialized")
         row = await self._rollup_repo.query_summary(
             start=time_range.start_str(),
             end=time_range.end_str(),
@@ -990,7 +992,8 @@ class StatsService:
         model_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Get flat timeseries from usage_rollups."""
-        assert self._rollup_repo is not None
+        if self._rollup_repo is None:
+            raise RuntimeError("rollup repository is not initialized")
         bucket_s = _bucket_size_s(bucket)
         rows = await self._rollup_repo.query_flat_timeseries(
             start=time_range.start_str(),
@@ -1027,7 +1030,8 @@ class StatsService:
         account_id: int | None = None,
     ) -> list[dict[str, Any]]:
         """Get daily-bucketed bandwidth from usage_rollups."""
-        assert self._rollup_repo is not None
+        if self._rollup_repo is None:
+            raise RuntimeError("rollup repository is not initialized")
         rows = await self._rollup_repo.query_flat_timeseries(
             start=time_range.start_str(),
             end=time_range.end_str(),
@@ -1247,7 +1251,8 @@ class StatsService:
         model_id: str | None = None,
     ) -> dict[str, Any]:
         """Get grouped timeseries from usage_rollups."""
-        assert self._rollup_repo is not None
+        if self._rollup_repo is None:
+            raise RuntimeError("rollup repository is not initialized")
         bucket_s = _bucket_size_s(bucket)
         rows = await self._rollup_repo.query_timeseries(
             start=time_range.start_str(),

@@ -524,7 +524,7 @@ class SelectedAttempt:
     reservation_id: str
     account_id: int
     account_name: str
-    api_key: str
+    api_key: str = field(repr=False)
     model_id: str
     estimated_tokens: int
     estimated_microdollars: int

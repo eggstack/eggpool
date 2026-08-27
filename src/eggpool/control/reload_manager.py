@@ -1923,7 +1923,8 @@ class ReloadManager:
 
             # 9b: Create the pending swap — does not mutate any state yet.
             published_gen = candidate._built_generation  # pyright: ignore[reportPrivateUsage]
-            assert published_gen is not None, "Generation must be built before publish"
+            if published_gen is None:
+                raise RuntimeError("Generation must be built before publish")
             pending_swap = await self._runtime_manager.prepare_candidate_swap(
                 published_gen,
                 drain_timeout_s=self._drain_timeout_s,
@@ -2132,12 +2133,14 @@ class ReloadManager:
                     # Job not yet registered (cancelled between
                     # mark_accepted and job creation).  Create it now
                     # synchronously so ownership is retained.
-                    assert candidate is not None, (
-                        "candidate must be set when reload is accepted"
-                    )
-                    assert published_gen is not None, (
-                        "published_gen must be set when reload is accepted"
-                    )
+                    if candidate is None:
+                        raise RuntimeError(
+                            "candidate must be set when reload is accepted"
+                        ) from None
+                    if published_gen is None:
+                        raise RuntimeError(
+                            "published_gen must be set when reload is accepted"
+                        ) from None
                     self._ensure_accepted_owner_registered(
                         txn=txn,
                         candidate=candidate,
@@ -2152,9 +2155,10 @@ class ReloadManager:
                         if job.generation_id == generation_id:
                             finalization_job = job
                             break
-                assert finalization_job is not None, (
-                    "finalization job must be registered after acceptance"
-                )
+                if finalization_job is None:
+                    raise RuntimeError(
+                        "finalization job must be registered after acceptance"
+                    ) from None
                 # The request waiter is returning by cancellation before
                 # the retained attempt is known to be complete.  Record
                 # that fact for delayed-completion accounting; the

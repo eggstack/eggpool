@@ -313,6 +313,8 @@ class Router:
         The highest non-empty tier is selected and the existing
         ``QuotaFairScorer`` is used to load balance within it.
         """
+        _LAST_FAIRNESS_DECISION.set(None)
+        _LAST_FAIRNESS_BAND_NAMES.set(frozenset())
         candidates = self._selection_candidates(
             model_id,
             exclude_accounts,

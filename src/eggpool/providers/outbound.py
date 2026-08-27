@@ -257,7 +257,9 @@ class MeteredAsyncTransport(httpx.AsyncBaseTransport):
         except Exception:
             self._manager.record_request(success=False, host=host)
             raise
-        self._manager.record_request(success=response.status_code < 400, host=host)
+        self._manager.record_request(
+            success=200 <= response.status_code < 400, host=host
+        )
         return response
 
     async def aclose(self) -> None:

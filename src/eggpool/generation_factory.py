@@ -771,7 +771,8 @@ async def _hydrate_health_from_backoffs(
             continue
 
         if deadline is None:
-            assert model_id is not None
+            if model_id is None:
+                raise RuntimeError("model_id is not set")
             health_manager.disable_model(
                 account_name,
                 model_id,
@@ -779,7 +780,8 @@ async def _hydrate_health_from_backoffs(
             )
             continue
 
-        assert deadline_value is not None
+        if deadline_value is None:
+            raise RuntimeError("deadline_value is not set")
         if deadline_value <= now:
             try:
                 await repo.delete_row(row_id=int(row["id"]))
@@ -810,7 +812,8 @@ async def _hydrate_health_from_backoffs(
 
         remaining = bounded_deadline - now
         if reason == "model_unavailable":
-            assert model_id is not None
+            if model_id is None:
+                raise RuntimeError("model_id is not set")
             health_manager.disable_model(
                 account_name,
                 model_id,
