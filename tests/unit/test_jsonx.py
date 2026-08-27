@@ -255,6 +255,17 @@ class TestEncodingEnvelopeParity:
         reloaded = _force_backend(backend_name)["reloaded"]
         assert reloaded.dumps_bytes({key: "x"}) == b'{"null":"x"}'
 
+    def test_stdlib_rejects_deep_nesting_before_recursion_limit(
+        self, _restore_jsonx_backend: None
+    ) -> None:
+        reloaded = _force_backend("stdlib")["reloaded"]
+        nested: dict[str, object] = {"leaf": 1}
+        for _ in range(70):
+            nested = {"nested": nested}
+
+        with pytest.raises(ValueError, match="maximum nesting depth"):
+            reloaded.dumps_bytes(nested)
+
 
 class TestBackendSelection:
     """The active backend is reported correctly and respects the override."""

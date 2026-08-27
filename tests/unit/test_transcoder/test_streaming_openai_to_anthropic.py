@@ -630,7 +630,7 @@ class TestToolCallStreaming:
         block_stops = [f for f in frames if f["event"] == "content_block_stop"]
         assert len(block_stops) == 2
 
-    def test_malformed_tool_arguments_passes_through_as_raw(self) -> None:
+    def test_malformed_tool_arguments_emit_empty_object(self) -> None:
         from eggpool.transcoder.context import TranscodeContext
 
         context = TranscodeContext(
@@ -673,9 +673,7 @@ class TestToolCallStreaming:
 
         block_start = next(f for f in frames if f["event"] == "content_block_start")
         block_data = json.loads(block_start["data"])
-        assert block_data["content_block"]["input"] == {
-            "__raw_arguments__": "not-valid-json{"
-        }
+        assert block_data["content_block"]["input"] == {}
 
         malformed_warnings = [
             w

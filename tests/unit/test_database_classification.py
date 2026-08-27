@@ -19,3 +19,20 @@ def test_classify_cte_by_outer_statement() -> None:
         )
         == "update"
     )
+
+
+def test_classify_cte_ignores_parentheses_and_keywords_in_literals() -> None:
+    assert (
+        _classify_op_kind(
+            "WITH named AS (SELECT id FROM accounts WHERE name='a) SELECT') "
+            "SELECT id FROM named"
+        )
+        == "select"
+    )
+    assert (
+        _classify_op_kind(
+            'WITH "select" AS (SELECT id FROM accounts) '
+            'UPDATE accounts SET name="DELETE (x)"'
+        )
+        == "update"
+    )

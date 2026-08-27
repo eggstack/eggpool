@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from typing import TYPE_CHECKING, Any
 
@@ -105,21 +106,22 @@ class ProviderClientPool:
     async def close(self) -> None:
         """Close all clients."""
         closed: set[int] = set()
+        clients: list[httpx.AsyncClient] = []
+        for client in self._displaced:
+            if id(client) not in closed:
+                closed.add(id(client))
+                clients.append(client)
+        self._displaced.clear()
+        for client in (*self._clients.values(), *self._account_clients.values()):
+            if id(client) not in closed:
+                closed.add(id(client))
+                clients.append(client)
 
         async def _aclose(client: httpx.AsyncClient) -> None:
-            if id(client) in closed:
-                return
-            closed.add(id(client))
             with contextlib.suppress(Exception):
-                await client.aclose()
+                await asyncio.wait_for(client.aclose(), timeout=5.0)
 
-        for client in self._displaced:
-            await _aclose(client)
-        self._displaced.clear()
-        for client in self._clients.values():
-            await _aclose(client)
-        for client in self._account_clients.values():
-            await _aclose(client)
+        await asyncio.gather(*(_aclose(client) for client in clients))
 
     @classmethod
     def from_config(

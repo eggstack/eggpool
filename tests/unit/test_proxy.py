@@ -51,6 +51,14 @@ def test_malformed_forwarded_client_ip_falls_back_to_peer() -> None:
     assert get_client_ip(request, trusted_proxies=("127.0.0.1",)) == "127.0.0.1"
 
 
+def test_forwarded_client_ip_skips_empty_entries() -> None:
+    request = _request_with_peer(
+        "127.0.0.1",
+        [(b"x-forwarded-for", b", 198.51.100.4")],
+    )
+    assert get_client_ip(request, trusted_proxies=("127.0.0.1",)) == "198.51.100.4"
+
+
 def test_forwarded_ipv6_with_zone_id_passes_through() -> None:
     """IPv6 zone identifiers (RFC 6874) appear in ``%`` form in raw headers."""
     request = _request_with_peer(

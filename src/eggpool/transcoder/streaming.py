@@ -557,19 +557,21 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
     def _parse_tool_arguments(self, raw: str) -> dict[str, Any]:
         """Parse accumulated ``partial_json`` into an input object.
 
-        Invalid JSON is wrapped as ``{"__raw_arguments__": "<raw>"}`` and a
+        Invalid JSON produces an empty object and a
         ``malformed_tool_arguments`` warning is appended to the transcode
-        context (if available).
+        context (if available).  The Anthropic tool-use contract requires
+        ``input`` to be an object, so raw argument text must not be invented
+        as a schema field.
         """
         try:
             parsed_obj: object = loads(raw) if raw else {}
         except ValueError:
             self._warn("malformed_tool_arguments", id=self._id)
-            return {"__raw_arguments__": raw}
+            return {}
         if isinstance(parsed_obj, dict):
             return cast("dict[str, Any]", parsed_obj)
         self._warn("malformed_tool_arguments", id=self._id, reason="not_object")
-        return {"__raw_arguments__": raw}
+        return {}
 
     def _handle_usage_only(
         self,

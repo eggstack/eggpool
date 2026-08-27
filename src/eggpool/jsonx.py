@@ -129,6 +129,7 @@ else:
     #   RFC 8259.
     _INT64_MIN = -(2**63)
     _UINT64_MAX = 2**64 - 1
+    _MAX_NESTING_DEPTH = 64
 
     def _scan_envelope(obj: Any) -> bool:
         """Validate *obj* against orjson's integer envelope.
@@ -137,25 +138,35 @@ else:
         whether any non-finite float was seen (so the caller knows a
         sanitizing copy is required).
         """
-        if obj is None or isinstance(obj, (bool, str)):
-            return False
-        if isinstance(obj, int):
-            if not (_INT64_MIN <= obj <= _UINT64_MAX):
-                raise ValueError("Integer exceeds 64-bit range")
-            return False
-        if isinstance(obj, float):
-            return not math.isfinite(obj)
-        if isinstance(obj, dict):
-            entries = cast("dict[Any, Any]", obj)
-            return any(
-                _scan_envelope(key) or _scan_envelope(value)
-                for key, value in entries.items()
-            )
-        if isinstance(obj, list):
-            return any(_scan_envelope(item) for item in cast("list[Any]", obj))
-        if isinstance(obj, tuple):
-            return any(_scan_envelope(item) for item in cast("tuple[Any, ...]", obj))
-        return False
+        needs_sanitize = False
+        stack: list[tuple[Any, int]] = [(obj, 0)]
+        while stack:
+            current, depth = stack.pop()
+            if current is None or isinstance(current, (bool, str)):
+                continue
+            if isinstance(current, int):
+                if not (_INT64_MIN <= current <= _UINT64_MAX):
+                    raise ValueError("Integer exceeds 64-bit range")
+                continue
+            if isinstance(current, float):
+                needs_sanitize = needs_sanitize or not math.isfinite(current)
+                continue
+            if isinstance(current, dict):
+                if depth >= _MAX_NESTING_DEPTH:
+                    raise ValueError("JSON exceeds maximum nesting depth")
+                entries = cast("dict[Any, Any]", current)
+                next_depth = depth + 1
+                stack.extend(
+                    (item, next_depth) for pair in entries.items() for item in pair
+                )
+            elif isinstance(current, (list, tuple)):
+                if depth >= _MAX_NESTING_DEPTH:
+                    raise ValueError("JSON exceeds maximum nesting depth")
+                stack.extend(
+                    (item, depth + 1)
+                    for item in cast("list[Any] | tuple[Any, ...]", current)
+                )
+        return needs_sanitize
 
     def _sanitize_non_finite(obj: Any) -> Any:
         """Return a copy of *obj* with non-finite floats replaced by ``None``.
@@ -192,13 +203,16 @@ else:
 
     def loads(data: JsonInput) -> Any:
         """Decode a JSON document to a Python value."""
-        if isinstance(data, (bytes, bytearray, memoryview)):
-            return json.loads(bytes(data))
-        if not isinstance(data, str):  # pyright: ignore[reportUnnecessaryIsInstance]
-            raise TypeError(
-                f"jsonx.loads expected bytes/str, got {type(data).__name__}"
-            )
-        return json.loads(data)
+        try:
+            if isinstance(data, (bytes, bytearray, memoryview)):
+                return json.loads(bytes(data))
+            if not isinstance(data, str):  # pyright: ignore[reportUnnecessaryIsInstance]
+                raise TypeError(
+                    f"jsonx.loads expected bytes/str, got {type(data).__name__}"
+                )
+            return json.loads(data)
+        except RecursionError:
+            raise ValueError("JSON exceeds maximum nesting depth") from None
 
     def dumps_bytes(
         obj: Any,

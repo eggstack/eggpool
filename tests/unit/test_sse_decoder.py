@@ -66,3 +66,13 @@ def test_final_line_after_newline_is_emitted_without_blank_line() -> None:
     assert len(eof.frames) == 1
     assert eof.frames[0].frame.data == "[DONE]"
     assert not eof.incomplete_frame
+
+
+def test_multibyte_pending_line_uses_decoded_utf8_byte_length() -> None:
+    decoder = SSEDecoder(max_frame_bytes=11)
+    decoder.feed("data: éé".encode())
+    assert decoder.line_buffer == "data: éé"
+    assert decoder.structural_error_count == 0
+
+    decoder.feed("é".encode())
+    assert decoder.structural_error_count == 1

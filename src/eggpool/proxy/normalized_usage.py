@@ -236,6 +236,19 @@ def _extract_openai(usage: dict[str, Any]) -> NormalizedUsage:
     if "total_tokens" in usage:
         total_tokens = coerce_token_count(usage.get("total_tokens"))
     cache_tokens = _extract_openai_cache_tokens(usage)
+    cached_input = cache_tokens["cached_input_tokens"]
+    if (
+        total_tokens == 0
+        and cached_input is not None
+        and not input_tokens
+        and not output_tokens
+    ) or (
+        total_tokens is None
+        and cached_input is not None
+        and input_tokens is None
+        and output_tokens is None
+    ):
+        total_tokens = cached_input
     reasoning_tokens: int | None = None
     completion_details: Any = usage.get("completion_tokens_details")
     if (
@@ -282,9 +295,13 @@ def _extract_anthropic(usage: dict[str, Any]) -> NormalizedUsage:
         else CacheCounterStatus.NOT_REPORTED
     )
     total_tokens: int | None = None
-    if input_tokens is not None and output_tokens is not None:
+    if (
+        input_tokens is not None
+        or output_tokens is not None
+        or cache_tokens["cached_input_tokens"] is not None
+    ):
         cached = cache_tokens["cached_input_tokens"] or 0
-        total_tokens = input_tokens + output_tokens + cached
+        total_tokens = (input_tokens or 0) + (output_tokens or 0) + cached
     return NormalizedUsage(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
@@ -402,7 +419,7 @@ def normalize_from_stream_result(
                 + (output_tokens if has_output else 0)
                 + (cached_total or 0)
             )
-            if (has_input or has_output)
+            if has_input or has_output or has_cache_read or has_cache_creation
             else None,
             cached_input_tokens=cached_total,
             cache_read_input_tokens=cache_read_value,
@@ -422,7 +439,11 @@ def normalize_from_stream_result(
         input_tokens=input_tokens if has_input else None,
         output_tokens=output_tokens if has_output else None,
         total_tokens=(
-            input_tokens + output_tokens if (has_input or has_output) else None
+            input_tokens + output_tokens
+            if (has_input or has_output)
+            else cache_read
+            if has_cache_read
+            else None
         ),
         cached_input_tokens=cached_value,
         # OpenAI-compatible stream path surfaces reads under the legacy

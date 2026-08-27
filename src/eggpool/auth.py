@@ -22,8 +22,9 @@ _PROVIDED_KEY_RE = re.compile(r"^[A-Za-z0-9_\-]{8,512}$")
 def verify_api_key(request: Request, api_key: str) -> bool:
     """Verify the API key using constant-time comparison.
 
-    Values that fail the supported key format are rejected before the
-    comparison; only format-valid candidates reach the constant-time check.
+    The comparison is performed over fixed-size values even when either
+    value fails validation, so malformed candidates do not take a separate
+    fast path.
 
     Args:
         request: The incoming FastAPI request.
@@ -39,9 +40,20 @@ def verify_api_key(request: Request, api_key: str) -> bool:
         provided = request.headers.get("x-api-key", "").strip()
     if not api_key:
         return False
-    if not _PROVIDED_KEY_RE.fullmatch(provided):
-        return False
-    return hmac.compare_digest(provided, api_key)
+    provided_valid = _PROVIDED_KEY_RE.fullmatch(provided) is not None
+    expected_valid = _PROVIDED_KEY_RE.fullmatch(api_key) is not None
+    matches = hmac.compare_digest(
+        _constant_time_key(provided), _constant_time_key(api_key)
+    )
+    return provided_valid and expected_valid and matches
+
+
+def _constant_time_key(value: str) -> bytes:
+    """Return a fixed-size representation suitable for key comparison."""
+    encoded = value.encode("utf-8", "surrogatepass")
+    if len(encoded) > 512:
+        return b"\xff" * 512
+    return encoded.ljust(512, b"\0")
 
 
 def _is_loopback_host(host: str) -> bool:

@@ -65,7 +65,7 @@ def _classify_op_kind(sql: str) -> str:
         else:
             break
         stripped = stripped.lstrip()
-    upper = stripped.upper()
+    upper = _mask_sql_literals(stripped.upper())
     if upper.startswith("WITH"):
         # Find the first statement keyword outside CTE parentheses. This
         # keeps nested SELECTs from determining the operation kind.
@@ -97,6 +97,30 @@ def _classify_op_kind(sql: str) -> str:
     if upper.startswith("PRAGMA"):
         return "pragma"
     return "other"
+
+
+def _mask_sql_literals(sql: str) -> str:
+    """Replace quoted SQL strings and identifiers with spaces."""
+    chars = list(sql)
+    quote: str | None = None
+    index = 0
+    while index < len(chars):
+        char = chars[index]
+        if quote is None:
+            if char in {"'", '"'}:
+                quote = char
+                chars[index] = " "
+        elif char == quote:
+            chars[index] = " "
+            if index + 1 < len(chars) and chars[index + 1] == quote:
+                chars[index + 1] = " "
+                index += 1
+            else:
+                quote = None
+        else:
+            chars[index] = " "
+        index += 1
+    return "".join(chars)
 
 
 def _classify_error_kind(exc: BaseException) -> str:

@@ -139,6 +139,41 @@ async def test_fetch_models_dev_provider_models_extracts_provider_rows() -> None
     assert rows["mimo-v2.5"]["reasoning"] is True
 
 
+@pytest.mark.asyncio
+async def test_models_dev_cache_caches_empty_results_and_evicts_old_entries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from eggpool.catalog.service import CatalogService
+
+    service = object.__new__(CatalogService)
+    service._models_dev_provider_cache = {}
+    service._catalog_http_client = lambda: object()  # type: ignore[method-assign]
+    calls = 0
+
+    async def fetch_empty(
+        client: object, provider_id: str
+    ) -> dict[str, dict[str, object]]:
+        nonlocal calls
+        calls += 1
+        return {}
+
+    monkeypatch.setattr(
+        "eggpool.catalog.service.fetch_models_dev_provider_models", fetch_empty
+    )
+
+    assert await service._get_models_dev_provider_models("provider-a") == {}  # type: ignore[attr-defined]
+    assert await service._get_models_dev_provider_models("provider-a") == {}  # type: ignore[attr-defined]
+    assert calls == 1
+
+    for index in range(63):
+        service._models_dev_provider_cache[f"provider-{index}"] = (  # type: ignore[attr-defined]
+            float(index),
+            {},
+        )
+    await service._get_models_dev_provider_models("provider-new")  # type: ignore[attr-defined]
+    assert len(service._models_dev_provider_cache) == 64  # type: ignore[attr-defined]
+
+
 def test_models_dev_derives_opencode_go_efforts_from_opencode_rules() -> None:
     assert derive_opencode_go_supported_efforts(
         "mimo-v2.5",

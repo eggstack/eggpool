@@ -80,6 +80,32 @@ def test_openai_marks_not_reported_when_cache_field_absent() -> None:
     assert result.input_tokens == 100
 
 
+def test_anthropic_cache_only_usage_has_total_tokens() -> None:
+    result = normalize_usage(
+        {"usage": {"cache_read_input_tokens": 1_000}},
+        protocol=ANTHROPIC_PROTOCOL,
+    )
+    assert result.input_tokens is None
+    assert result.output_tokens is None
+    assert result.cache_read_input_tokens == 1_000
+    assert result.total_tokens == 1_000
+
+
+def test_openai_cache_only_usage_has_total_tokens() -> None:
+    result = normalize_usage(
+        {
+            "usage": {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "prompt_tokens_details": {"cached_tokens": 1_000},
+            }
+        },
+        protocol=OPENAI_PROTOCOL,
+    )
+    assert result.total_tokens == 1_000
+
+
 def test_openai_marks_not_reported_when_prompt_details_present_but_no_cache() -> None:
     body = _payload(
         {

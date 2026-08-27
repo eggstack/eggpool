@@ -68,6 +68,32 @@ class TestProviderClientPool:
         # close should not raise even if aclose() fails
         await pool.close()
 
+    @pytest.mark.anyio
+    async def test_close_clients_concurrently(self) -> None:
+        import asyncio
+
+        class SlowClient:
+            def __init__(self) -> None:
+                self.started = asyncio.Event()
+                self.release = asyncio.Event()
+
+            async def aclose(self) -> None:
+                self.started.set()
+                await self.release.wait()
+
+        first = SlowClient()
+        second = SlowClient()
+        pool = ProviderClientPool()
+        pool._clients = {"a": first, "b": second}  # type: ignore[assignment]
+
+        close_task = asyncio.create_task(pool.close())
+        await asyncio.wait_for(
+            asyncio.gather(first.started.wait(), second.started.wait()), timeout=1
+        )
+        first.release.set()
+        second.release.set()
+        await close_task
+
     def test_from_config(self) -> None:
         providers = {
             "alpha": ProviderConfig(

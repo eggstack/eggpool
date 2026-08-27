@@ -68,6 +68,7 @@ class SSEDecoder:
         self._max_frame_bytes = max_frame_bytes
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self._line_buffer = ""
+        self._line_buffer_bytes = 0
         self._pending_cr = False
         self._fields: list[tuple[str, str]] = []
         self._data_lines: list[str] = []
@@ -96,6 +97,10 @@ class SSEDecoder:
         text = text.replace("\r\n", "\n").replace("\r", "\n")
         lines = (self._line_buffer + text).split("\n")
         self._line_buffer = lines.pop()
+        if "\n" in text:
+            self._line_buffer_bytes = self._utf8_len(self._line_buffer)
+        else:
+            self._line_buffer_bytes += self._utf8_len(text)
         frames: list[DecodedSSEFrame] = []
         for line in lines:
             if self._discarding_line:
@@ -107,11 +112,12 @@ class SSEDecoder:
                     frames.append(frame)
                 continue
             self._process_line(line)
-        if self._utf8_len(self._line_buffer) > self._max_frame_bytes:
+        if self._line_buffer_bytes > self._max_frame_bytes:
             self._structural_errors += 1
             self._discarding_line = True
             self._discarding_frame = True
             self._line_buffer = ""
+            self._line_buffer_bytes = 0
             self._reset_frame()
         return frames
 
@@ -170,9 +176,12 @@ class SSEDecoder:
         remainder = self._decoder.decode(b"", True)
         self._invalid_utf8 += remainder.count("\ufffd")
         if remainder:
-            self._line_buffer += remainder.replace("\r\n", "\n").replace("\r", "\n")
+            remainder = remainder.replace("\r\n", "\n").replace("\r", "\n")
+            self._line_buffer += remainder
+            self._line_buffer_bytes += self._utf8_len(remainder)
         if self._pending_cr:
             self._line_buffer += "\n"
+            self._line_buffer_bytes += 1
             self._pending_cr = False
         frames = self.feed(b"")
         # EOF terminates a final line even when the stream omitted its line
@@ -183,9 +192,11 @@ class SSEDecoder:
         elif self._line_buffer:
             final_line = self._line_buffer
             self._line_buffer = ""
+            self._line_buffer_bytes = 0
             self._process_line(final_line)
         else:
             self._line_buffer = ""
+            self._line_buffer_bytes = 0
         incomplete = self._discarding_frame
         if self._discarding_frame:
             # Preserve the discarded-frame diagnostic without turning the
@@ -196,6 +207,7 @@ class SSEDecoder:
             if frame is not None:
                 frames.append(frame)
         self._line_buffer = ""
+        self._line_buffer_bytes = 0
         return SSEDecodeResult(
             frames=tuple(frames),
             incomplete_frame=incomplete,

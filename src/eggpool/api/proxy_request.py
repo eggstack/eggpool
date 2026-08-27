@@ -257,7 +257,10 @@ def get_client_ip(
     if peer in trusted_proxies:
         forwarded_for = request.headers.get("x-forwarded-for")
         if forwarded_for is not None:
-            first_forwarded = forwarded_for.split(",", 1)[0]
+            first_forwarded = next(
+                (part.strip() for part in forwarded_for.split(",") if part.strip()),
+                "",
+            )
             forwarded_ip = _valid_forwarded_client_ip(first_forwarded)
             if forwarded_ip is not None:
                 return forwarded_ip
@@ -676,6 +679,13 @@ async def _handle_proxy_request_inner(
                     encoded_translated_body = encode_json_body(
                         preflight.translated_payload,
                     )
+                except ValueError:
+                    return endpoint.error_response(
+                        status_code=400,
+                        message="Invalid JSON",
+                        error_type="invalid_request_error",
+                    )
+                try:
                     _check_context_limits(
                         model_id=model_id,
                         provider_id=provider_id,

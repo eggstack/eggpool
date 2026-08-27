@@ -65,6 +65,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_MODELS_DEV_CACHE_TTL_S = 300
+_MODELS_DEV_CACHE_MAX_ENTRIES = 64
+
 
 @dataclass(frozen=True)
 class CatalogRefreshResult:
@@ -302,14 +305,22 @@ class CatalogService:
         now = time.time()
         if cached is not None:
             cached_at, models = cached
-            if now - cached_at < 300:
+            if now - cached_at < _MODELS_DEV_CACHE_TTL_S:
                 return models
+            self._models_dev_provider_cache.pop(provider_id, None)
         client = self._catalog_http_client()
         if client is None:
             return {}
         models = await fetch_models_dev_provider_models(client, provider_id)
-        if models:
-            self._models_dev_provider_cache[provider_id] = (now, models)
+        self._models_dev_provider_cache[provider_id] = (now, models)
+        if len(self._models_dev_provider_cache) > _MODELS_DEV_CACHE_MAX_ENTRIES:
+            oldest_provider = min(
+                self._models_dev_provider_cache,
+                key=lambda cached_provider: self._models_dev_provider_cache[
+                    cached_provider
+                ][0],
+            )
+            self._models_dev_provider_cache.pop(oldest_provider, None)
         return models
 
     @staticmethod

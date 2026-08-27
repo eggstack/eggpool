@@ -127,7 +127,7 @@ class FairnessRotor:
             position = self._positions.pop(key_str, 0)
             if len(self._positions) >= _ROTOR_HARD_CAP:
                 self._positions.popitem(last=False)
-            self._positions[key_str] = (position + 1) % n
+            self._positions[key_str] = position + 1
 
         start = position % n
         rotated = sorted_cands[start:] + sorted_cands[:start]

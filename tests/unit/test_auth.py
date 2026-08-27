@@ -64,6 +64,24 @@ def test_verify_api_key_rejects_malformed_format(mock_request: MagicMock) -> Non
     assert verify_api_key(mock_request, "weird\x00chars") is False
 
 
+def test_verify_api_key_compares_invalid_candidates_before_rejecting(
+    mock_request: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[bytes, bytes]] = []
+
+    def compare(left: bytes, right: bytes) -> bool:
+        calls.append((left, right))
+        return True
+
+    monkeypatch.setattr("eggpool.auth.hmac.compare_digest", compare)
+    mock_request.headers = {"x-api-key": "invalid key"}
+
+    assert verify_api_key(mock_request, "valid-key") is False
+    assert len(calls) == 1
+    assert len(calls[0][0]) == len(calls[0][1]) == 512
+
+
 def test_placeholder_key_normalization_at_startup() -> None:
     with pytest.raises(RuntimeError, match="placeholder"):
         require_auth_at_startup("your proxy api key")

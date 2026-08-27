@@ -46,6 +46,7 @@ from eggpool.dashboard.render import (
     render_timeseries,
     render_traces,
 )
+from eggpool.dashboard.routes import _gather_dashboard
 
 
 class _HTMLTextExtractor(HTMLParser):
@@ -95,6 +96,24 @@ class _TableScrollParser(HTMLParser):
             return
         if self._div_stack.pop():
             self._scroll_depth -= 1
+
+
+@pytest.mark.asyncio
+async def test_dashboard_gather_preserves_success_when_probe_fails() -> None:
+    async def failing_probe() -> dict[str, object]:
+        raise RuntimeError("stats shard unavailable")
+
+    async def successful_probe() -> dict[str, object]:
+        return {"healthy": True}
+
+    result = await _gather_dashboard(
+        failing_probe(),
+        successful_probe(),
+        fallbacks=({}, {}),
+        page="test",
+    )
+
+    assert result == ({}, {"healthy": True})
 
 
 class TestEscape:

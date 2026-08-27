@@ -189,6 +189,32 @@ class TestFairnessRotorRoundRobin:
         assert rotated4[0][0].name == "acct0001"
 
     @pytest.mark.asyncio()
+    async def test_position_counter_survives_candidate_count_changes(self) -> None:
+        from eggpool.routing.fairness import FairnessKey, FairnessRotor
+
+        rotor = FairnessRotor()
+        key = FairnessKey("prov", "m1", "openai", 0)
+        candidates = [
+            (
+                AccountRuntimeState(name=f"acct{i}"),
+                RoutingScore(
+                    account_name=f"acct{i}",
+                    quota_score=0.0,
+                    weight=1.0,
+                    is_eligible=True,
+                ),
+            )
+            for i in range(1, 4)
+        ]
+
+        await rotor.rotate(key, candidates[:2])
+        rotated, _ = await rotor.rotate(key, candidates[:2])
+        assert rotated[0][0].name == "acct2"
+
+        rotated, _ = await rotor.rotate(key, candidates)
+        assert rotated[0][0].name == "acct3"
+
+    @pytest.mark.asyncio()
     async def test_fairness_rotor_single_candidate(self) -> None:
         """Single candidate returns without rotation."""
         from eggpool.routing.fairness import FairnessKey, FairnessRotor

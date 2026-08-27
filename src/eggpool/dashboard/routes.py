@@ -144,6 +144,32 @@ async def _await_dashboard_stage(
             )
 
 
+async def _gather_dashboard(
+    *awaitables: Awaitable[Any],
+    fallbacks: tuple[Any, ...],
+    page: str,
+) -> tuple[Any, ...]:
+    """Run independent dashboard probes while preserving partial results."""
+    results = await asyncio.gather(*awaitables, return_exceptions=True)
+    resolved: list[Any] = []
+    for index, result in enumerate(results):
+        if isinstance(result, BaseException):
+            if isinstance(
+                result, (asyncio.CancelledError, KeyboardInterrupt, SystemExit)
+            ):
+                raise result
+            logger.warning(
+                "Dashboard %s probe %d failed; using an empty result",
+                page,
+                index,
+                exc_info=(type(result), result, result.__traceback__),
+            )
+            resolved.append(fallbacks[index])
+        else:
+            resolved.append(result)
+    return tuple(resolved)
+
+
 @dataclass(frozen=True, slots=True)
 class ModelInfoDashboardState:
     """Compact diagnostic bundle for the dashboard's model-info summary call."""
@@ -619,7 +645,7 @@ async def handle_overview(
         pending_health,
         cache_observability,
         model_info_state,
-    ) = await asyncio.gather(
+    ) = await _gather_dashboard(
         _await_dashboard_stage(
             telemetry,
             "overview",
@@ -694,6 +720,21 @@ async def handle_overview(
             "model_info_summaries",
             _get_model_info_summary_state(model_info_service),
         ),
+        fallbacks=(
+            [],
+            [],
+            [],
+            [],
+            {},
+            [],
+            [],
+            [],
+            [],
+            {},
+            {},
+            ModelInfoDashboardState(summaries={}, available=False),
+        ),
+        page="overview",
     )
     # ``get_dashboard_overview`` is derived from already-fetched overview
     # inputs. Passing them through avoids a second summary/cache query after
@@ -860,7 +901,7 @@ async def handle_models(
 
     models, model_info_state = cast(
         "tuple[list[dict[str, Any]] | None, ModelInfoDashboardState]",
-        await asyncio.gather(
+        await _gather_dashboard(
             stats.get_model_stats(
                 time_range, account_name=account or None, use_cache=True
             ),
@@ -873,6 +914,8 @@ async def handle_models(
                 # rows) that this avoids under-requesting.
                 model_ids=None,
             ),
+            fallbacks=([], ModelInfoDashboardState(summaries={}, available=False)),
+            page="models",
         ),
     )
     normalized_stats_rows: list[dict[str, Any]] = []
@@ -1624,11 +1667,18 @@ async def handle_latency(
     model_info_service = _get_model_info(request)
     provider_ttft, model_ttft, phases, model_info_state = cast(
         "_LatencyPayload",
-        await asyncio.gather(
+        await _gather_dashboard(
             stats.get_provider_ttft_summary(time_range, use_cache=True),
             stats.get_provider_model_ttft(time_range, use_cache=True),
             stats.get_latency_phase_breakdown(time_range, use_cache=True),
             _get_model_info_summary_state(model_info_service),
+            fallbacks=(
+                [],
+                [],
+                [],
+                ModelInfoDashboardState(summaries={}, available=False),
+            ),
+            page="latency",
         ),
     )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
@@ -1664,12 +1714,14 @@ async def handle_reliability(
         recent_operational_events,
     ) = cast(
         "_ReliabilityPayload",
-        await asyncio.gather(
+        await _gather_dashboard(
             stats.get_attempt_stats(time_range, use_cache=True),
             stats.get_retry_distribution(time_range, use_cache=True),
             stats.get_pending_health_snapshot(use_cache=True),
             stats.get_operational_event_summary(time_range, use_cache=True),
             stats.get_recent_operational_events(limit=25),
+            fallbacks=([], [], {}, [], []),
+            page="reliability",
         ),
     )
     _gather_ms = (time.perf_counter() - _gather_start) * 1000
@@ -1730,7 +1782,7 @@ async def handle_routing(
         runtime_snapshot,
     ) = cast(
         "_RoutingPayloadWithRuntime",
-        await asyncio.gather(
+        await _gather_dashboard(
             stats.get_routing_distribution(time_range, use_cache=True),
             stats.get_routing_selection_breakdown(time_range, use_cache=True),
             stats.get_routing_exclusion_breakdown(time_range, use_cache=True),
@@ -1739,6 +1791,15 @@ async def handle_routing(
             runtime_metrics.snapshot()
             if runtime_metrics is not None
             else _empty_dict(),
+            fallbacks=(
+                [],
+                [],
+                [],
+                {},
+                ModelInfoDashboardState(summaries={}, available=False),
+                {},
+            ),
+            page="routing",
         ),
     )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
@@ -1781,9 +1842,11 @@ async def handle_traces(
     model_info_service = _get_model_info(request)
     recent_requests, model_info_state = cast(
         "tuple[list[dict[str, Any]], ModelInfoDashboardState]",
-        await asyncio.gather(
+        await _gather_dashboard(
             stats.get_recent_requests(limit=bounded_limit),
             _get_model_info_summary_state(model_info_service),
+            fallbacks=([], ModelInfoDashboardState(summaries={}, available=False)),
+            page="traces",
         ),
     )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
@@ -1810,9 +1873,11 @@ async def handle_pings(
     stats = _get_stats(request)
     ping_summary, recent_pings = cast(
         "_PingsPayload",
-        await asyncio.gather(
+        await _gather_dashboard(
             stats.get_ping_summary(time_range, use_cache=True),
             stats.get_ping_recent(limit=50),
+            fallbacks=([], []),
+            page="pings",
         ),
     )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
@@ -1841,13 +1906,15 @@ async def handle_events(
     stats = _get_stats(request)
     events, available_types = cast(
         "tuple[list[dict[str, Any]], list[str]]",
-        await asyncio.gather(
+        await _gather_dashboard(
             stats.get_recent_events(
                 limit=100,
                 event_type=type_filter or None,
                 time_range=time_range,
             ),
             stats.get_event_types_in_range(time_range),
+            fallbacks=([], []),
+            page="events",
         ),
     )
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
@@ -1886,7 +1953,7 @@ async def handle_timeseries(
     stats = _get_stats(request)
     telemetry = getattr(request.app.state, "dashboard_telemetry", None)
     model_info_service = _get_model_info(request)
-    grouped, model_info_state = await asyncio.gather(
+    grouped, model_info_state = await _gather_dashboard(
         _await_dashboard_stage(
             telemetry,
             "timeseries",
@@ -1902,6 +1969,8 @@ async def handle_timeseries(
             ),
         ),
         _get_model_info_summary_state(model_info_service),
+        fallbacks=([], ModelInfoDashboardState(summaries={}, available=False)),
+        page="timeseries",
     )
     series = _aggregate_series_from_grouped(grouped)
     theme_css, _, current_theme, available = _get_theme_data(request, theme)
@@ -1955,11 +2024,13 @@ async def handle_bandwidth(
     heatmap_range = _heatmap_time_range(_HEATMAP_MAX_DAYS)
     summary, daily = cast(
         "tuple[dict[str, Any], list[dict[str, Any]]]",
-        await asyncio.gather(
+        await _gather_dashboard(
             stats.get_summary(time_range, account_name=account or None, use_cache=True),
             stats.get_bandwidth_timeseries(
                 heatmap_range, account_name=account or None, use_cache=True
             ),
+            fallbacks=({}, []),
+            page="bandwidth",
         ),
     )
     _gather_ms = (time.perf_counter() - _gather_start) * 1000
@@ -2066,9 +2137,11 @@ async def handle_runtime(
     _gather_start = time.perf_counter()
     snapshot, transcoding_stats = cast(
         "tuple[dict[str, Any], dict[str, Any] | None]",
-        await asyncio.gather(
+        await _gather_dashboard(
             runtime_metrics.snapshot(),
             stats_service.get_transcoding_stats(period, use_cache=True),
+            fallbacks=({}, None),
+            page="runtime",
         ),
     )
     _gather_ms = (time.perf_counter() - _gather_start) * 1000
@@ -2119,11 +2192,13 @@ async def handle_cache(
         snapshot,
     ) = cast(
         "tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]",
-        await asyncio.gather(
+        await _gather_dashboard(
             stats_service.get_cache_observability(period, use_cache=True),
             stats_service.get_canonical_request_segmentation(period, use_cache=True),
             stats_service.get_cache_stability(period, use_cache=True),
             runtime_metrics.snapshot(),
+            fallbacks=({}, {}, {}, {}),
+            page="cache",
         ),
     )
     _gather_ms = (time.perf_counter() - _gather_start) * 1000
@@ -2219,11 +2294,13 @@ async def handle_request_shaping_json(request: Request) -> Response:
         snapshot,
     ) = cast(
         "tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]",
-        await asyncio.gather(
+        await _gather_dashboard(
             stats_service.get_cache_observability(period),
             stats_service.get_canonical_request_segmentation(period),
             stats_service.get_cache_stability(period),
             runtime_metrics.snapshot(),
+            fallbacks=({}, {}, {}, {}),
+            page="request_shaping",
         ),
     )
     return JSONResponse(
