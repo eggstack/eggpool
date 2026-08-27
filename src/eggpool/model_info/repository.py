@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
+from eggpool.jsonx import dumps_str, loads
 from eggpool.model_info.presentation import compact_benchmark_rows
 from eggpool.model_info.types import CanonicalModelInfo, SourceModelRecord
 
@@ -36,8 +36,8 @@ class ModelInfoRepository:
         resolved_model_id = model_id or record.model_id
         resolved_provider_id = provider_id or record.provider_id
 
-        normalized_json = json.dumps(record.normalized, sort_keys=True)
-        raw_json = json.dumps(record.raw_payload, sort_keys=True)
+        normalized_json = dumps_str(record.normalized, sort_keys=True)
+        raw_json = dumps_str(record.raw_payload, sort_keys=True)
 
         async with self._db.transaction():
             await self._db.execute_write(
@@ -178,9 +178,9 @@ class ModelInfoRepository:
                 info.model_id,
                 info.status,
                 info.summary,
-                json.dumps(info.detail, sort_keys=True),
-                json.dumps(info.provenance, sort_keys=True),
-                json.dumps(info.conflicts, sort_keys=True),
+                dumps_str(info.detail, sort_keys=True),
+                dumps_str(info.provenance, sort_keys=True),
+                dumps_str(info.conflicts, sort_keys=True),
                 int(info.sparse),
                 info.first_seen_at.isoformat(),
                 info.last_seen_at.isoformat(),
@@ -442,7 +442,9 @@ class ModelInfoRepository:
         for row in rows:
             raw = row["normalized_json"]
             try:
-                decoded = json.loads(raw) if isinstance(raw, str) else raw
+                decoded = (
+                    loads(raw) if isinstance(raw, (str, bytes, bytearray)) else raw
+                )
             except (ValueError, TypeError):
                 decoded = {}
             if not isinstance(decoded, dict):
@@ -596,7 +598,7 @@ class ModelInfoRepository:
         match_method / discovered_by / diagnostics_json were added by
         migration 0049.
         """
-        diag_json = json.dumps(diagnostics or {}, sort_keys=True)
+        diag_json = dumps_str(diagnostics or {}, sort_keys=True)
         async with self._db.transaction():
             await self._db.execute_write(
                 "INSERT INTO model_info_aliases "
@@ -640,7 +642,7 @@ class ModelInfoRepository:
         0049 already created the table.
         """
         now_iso = datetime.now(UTC).isoformat()
-        diag_json = json.dumps(diagnostics or {}, sort_keys=True)
+        diag_json = dumps_str(diagnostics or {}, sort_keys=True)
         async with self._db.transaction():
             await self._db.execute_write(
                 "INSERT OR IGNORE INTO models "
@@ -752,7 +754,9 @@ class ModelInfoRepository:
         for row in rows:
             raw = row["normalized_json"]
             try:
-                decoded = json.loads(raw) if isinstance(raw, str) else raw
+                decoded = (
+                    loads(raw) if isinstance(raw, (str, bytes, bytearray)) else raw
+                )
             except (ValueError, TypeError):
                 decoded = {}
             if not isinstance(decoded, dict):
@@ -889,13 +893,11 @@ class ModelInfoRepository:
             status=row["status"],
             summary=row["summary"],
             sparse=bool(row["sparse"]),
-            detail=json.loads(row["detail_json"]) if row["detail_json"] else {},
+            detail=loads(row["detail_json"]) if row["detail_json"] else {},
             provenance=(
-                json.loads(row["provenance_json"]) if row["provenance_json"] else {}
+                loads(row["provenance_json"]) if row["provenance_json"] else {}
             ),
-            conflicts=(
-                json.loads(row["conflicts_json"]) if row["conflicts_json"] else {}
-            ),
+            conflicts=(loads(row["conflicts_json"]) if row["conflicts_json"] else {}),
             first_seen_at=_parse_timestamp(row["first_seen_at"]),
             last_seen_at=_parse_timestamp(row["last_seen_at"]),
             last_refreshed_at=(

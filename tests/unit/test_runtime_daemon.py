@@ -14,6 +14,7 @@ All subprocess spawns are mocked; the tests do not start a real server.
 
 from __future__ import annotations
 
+import io
 import os
 import subprocess
 import sys
@@ -283,6 +284,33 @@ class TestStartServerDaemonSpawn:
         assert captured_handles, "Popen should have received a file handle"
         for handle in captured_handles:
             assert getattr(handle, "closed", False) is True
+
+    def test_start_server_daemon_closes_aliased_log_handle_once(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Aliased stdout/stderr targets are not closed twice."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("[server]\n", encoding="utf-8")
+
+        class TrackingStream(io.IOBase):
+            close_calls = 0
+
+            def close(self) -> None:
+                self.close_calls += 1
+                super().close()
+
+        stream = TrackingStream()
+        monkeypatch.setattr(
+            runtime_module,
+            "_open_daemon_streams",
+            lambda _log_path, **_kwargs: (stream, stream),
+        )
+        with patch.object(runtime_module.subprocess, "Popen", return_value=MagicMock()):
+            runtime_module.start_server(
+                str(config_path), daemon=True, log_path=str(tmp_path / "daemon.log")
+            )
+
+        assert stream.close_calls == 1
 
     def test_start_server_daemon_verify_waits_for_pid_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

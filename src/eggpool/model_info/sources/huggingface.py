@@ -17,7 +17,6 @@ Design constraints (from the phase-5 plan):
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, cast
@@ -26,6 +25,7 @@ from urllib.parse import quote
 import httpx
 
 from eggpool.errors import ModelInfoSourceFetchError
+from eggpool.jsonx import dumps_str
 from eggpool.model_info.sources.base import SourceTTLCache
 from eggpool.model_info.types import SourceModelRecord
 
@@ -130,7 +130,7 @@ def _parse_hf_entry(
 ) -> SourceModelRecord:
     """Convert a raw Hugging Face model dict into a ``SourceModelRecord``."""
     raw_hash = hashlib.sha256(
-        json.dumps(raw, sort_keys=True, default=str).encode()
+        dumps_str(raw, sort_keys=True, default=str).encode()
     ).hexdigest()
 
     # Extract structured fields

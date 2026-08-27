@@ -9,7 +9,6 @@ and do not break startup, catalog refresh, or routing.
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import math
 from dataclasses import dataclass, field
@@ -19,6 +18,7 @@ from typing import TYPE_CHECKING, Any, cast
 import httpx
 
 from eggpool.errors import ModelInfoSourceFetchError
+from eggpool.jsonx import dumps_str
 from eggpool.model_info.sources.base import SourceTTLCache
 from eggpool.model_info.types import BenchmarkObservation, SourceModelRecord
 
@@ -210,7 +210,7 @@ def _parse_entry_to_record(
 ) -> SourceModelRecord:
     """Convert a raw AA model dict into a ``SourceModelRecord``."""
     raw_hash = hashlib.sha256(
-        json.dumps(raw, sort_keys=True, default=str).encode()
+        dumps_str(raw, sort_keys=True, default=str).encode()
     ).hexdigest()
 
     display_name = (

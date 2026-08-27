@@ -11,6 +11,7 @@ import pytest
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
 from eggpool.errors import ModelInfoSourceFetchError
+from eggpool.jsonx import dumps_str
 from eggpool.model_info.identity import resolve_openrouter_record
 from eggpool.model_info.repository import ModelInfoRepository
 from eggpool.model_info.service import (
@@ -944,15 +945,13 @@ class TestBoundRawPayload:
 
     def test_large_payload_replaced_with_summary(self) -> None:
         """Payload over 64 KiB is replaced by a summary dict."""
-        import json as _json
-
         now = datetime.now(UTC)
         # Create a payload that exceeds 64 KiB
         large_raw: dict[str, object] = {"id": "openai/gpt-4o"}
         # Pad to exceed 64 KiB
         padding = "x" * 70_000
         large_raw["padding"] = padding
-        raw_json = _json.dumps(large_raw, sort_keys=True, default=str)
+        raw_json = dumps_str(large_raw, sort_keys=True, default=str)
         assert len(raw_json.encode()) > 65_536  # confirm it's over limit
 
         record = SourceModelRecord(

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import sys
 from datetime import UTC, datetime
 from typing import Any
+
+from eggpool.jsonx import dumps_str
 
 
 class _HumanFormatter(logging.Formatter):
@@ -31,7 +32,7 @@ class _JsonFormatter(logging.Formatter):
         }
         if record.__dict__.get("extra"):
             payload["extra"] = record.extra  # type: ignore[attr-defined]
-        return json.dumps(payload, default=str)
+        return dumps_str(payload, default=str)
 
 
 def configure_logging(level: str = "INFO", json_output: bool = False) -> None:

@@ -6,7 +6,6 @@ small. All values rendered into HTML are escaped via the `escape` module.
 
 from __future__ import annotations
 
-import json
 import math
 import time
 from collections.abc import Mapping
@@ -16,6 +15,7 @@ from html import escape as _stdlib_escape
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote
 
+from eggpool.jsonx import dumps_str, loads
 from eggpool.model_info.presentation import display_model_info_status
 
 if TYPE_CHECKING:
@@ -6093,9 +6093,9 @@ def _render_chart_canvas(
     payload = escape_script_json(
         {
             "type": chart_type,
-            "labels": json.loads(labels_json),
-            "datasets": json.loads(datasets_json),
-            "options": json.loads(options_json),
+            "labels": loads(labels_json),
+            "datasets": loads(datasets_json),
+            "options": loads(options_json),
         }
     )
     return f"""
@@ -6297,8 +6297,8 @@ def _render_attempts_by_provider_chart(
     success = int(attempts.get("success_attempts", 0) or 0)
     retry = int(attempts.get("retry_attempts", 0) or 0)
     failed = int(attempts.get("failed_attempts", 0) or 0)
-    labels = json.dumps(["Success", "Retry", "Failed"])
-    datasets = json.dumps(
+    labels = dumps_str(["Success", "Retry", "Failed"])
+    datasets = dumps_str(
         [
             {
                 "label": "Attempts",
@@ -6311,7 +6311,7 @@ def _render_attempts_by_provider_chart(
             }
         ]
     )
-    options = json.dumps(
+    options = dumps_str(
         {
             "responsive": True,
             "maintainAspectRatio": False,
@@ -6765,8 +6765,8 @@ def _render_exclusion_taxonomy_chart(
     if sum(category_totals.values()) == 0:
         return '<p class="empty">No exclusion data in this period.</p>'
 
-    labels = json.dumps(["Suppressive", "Advisory", "Unknown"])
-    datasets = json.dumps(
+    labels = dumps_str(["Suppressive", "Advisory", "Unknown"])
+    datasets = dumps_str(
         [
             {
                 "label": "Exclusions",
@@ -6783,7 +6783,7 @@ def _render_exclusion_taxonomy_chart(
             }
         ]
     )
-    options = json.dumps(
+    options = dumps_str(
         {
             "responsive": True,
             "maintainAspectRatio": False,
@@ -7219,8 +7219,8 @@ def _render_latency_phases(phases: dict[str, Any] | None) -> str:
     if sample_count <= 0:
         return ""
 
-    labels = json.dumps(["Connect", "Read", "Coordinator overhead"])
-    datasets = json.dumps(
+    labels = dumps_str(["Connect", "Read", "Coordinator overhead"])
+    datasets = dumps_str(
         [
             {
                 "label": "avg",
@@ -7251,7 +7251,7 @@ def _render_latency_phases(phases: dict[str, Any] | None) -> str:
             },
         ]
     )
-    options = json.dumps(
+    options = dumps_str(
         {
             "responsive": True,
             "maintainAspectRatio": False,

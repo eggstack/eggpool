@@ -150,6 +150,26 @@ class TestOnboardCommand:
 class TestOnboardFreshInstall:
     """Tests for fresh-install onboarding behavior."""
 
+    def test_ensure_config_logs_template_copy_failure(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A failed bundled-template copy is visible before fallback."""
+        from eggpool import config as config_module
+
+        config_path = tmp_path / "config.toml"
+
+        def _fail_copy(*_args: object, **_kwargs: object) -> None:
+            raise PermissionError("copy denied")
+
+        with (
+            patch.object(config_module.shutil, "copy2", side_effect=_fail_copy),
+            caplog.at_level("WARNING", logger="eggpool.config"),
+        ):
+            config_module.ensure_config(str(config_path))
+
+        assert config_path.exists()
+        assert "bundled config template unavailable: copy denied" in caplog.text
+
     def test_ensure_config_creates_minimal_config(self, tmp_path: Path) -> None:
         """ensure_config creates config from bundled template if missing."""
         from eggpool.config import ensure_config

@@ -50,6 +50,22 @@ class FakeRequest:
         return self._stream
 
 
+class FailingDrainStream:
+    """Stream that fails only while draining after an oversized chunk."""
+
+    def __init__(self) -> None:
+        self._sent = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> bytes:
+        if not self._sent:
+            self._sent = True
+            return b"x" * 101
+        raise RuntimeError("transport closed")
+
+
 @pytest.mark.asyncio
 class TestReadBodyLimited:
     async def test_small_body_passes(self) -> None:
@@ -87,6 +103,20 @@ class TestReadBodyLimited:
         req._headers["content-length"] = "not-a-number"
         with pytest.raises(RequestTooLargeError):
             await read_body_limited(req, max_bytes=100)
+
+    async def test_failed_drain_is_logged_and_size_error_is_preserved(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        req = FakeRequest([])
+        req._stream = FailingDrainStream()
+
+        with (
+            caplog.at_level("DEBUG", logger="eggpool.request.body"),
+            pytest.raises(RequestTooLargeError),
+        ):
+            await read_body_limited(req, max_bytes=100)
+
+        assert "Request body drain aborted: transport closed" in caplog.text
 
 
 class TestBodyLimitMiddleware:

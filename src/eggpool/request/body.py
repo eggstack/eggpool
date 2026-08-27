@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import TYPE_CHECKING, Any
 
 from eggpool.errors import RequestTooLargeError
@@ -12,6 +13,8 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from starlette.requests import Request
+
+logger = logging.getLogger(__name__)
 
 
 def encode_json_body(payload: Mapping[str, Any]) -> bytes:
@@ -59,8 +62,10 @@ async def read_body_limited(request: Request, max_bytes: int) -> bytes:
                 async with asyncio.timeout(5.0):
                     async for _chunk in stream:
                         pass
-            except Exception:
-                pass
+            except Exception as exc:
+                # Draining is best effort: preserve the original size-limit
+                # error while making transport and iterator failures visible.
+                logger.debug("Request body drain aborted: %s", exc)
     if too_large:
         raise RequestTooLargeError(f"Request body exceeds limit of {max_bytes} bytes")
     return bytes(body)

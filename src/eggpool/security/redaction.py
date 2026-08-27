@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import re
 from typing import Any, cast
+
+from eggpool.jsonx import dumps_str, loads
 
 REDACTED = "[REDACTED]"
 
@@ -132,7 +133,7 @@ def _is_user_content_key(key: Any) -> bool:
 def _enforce_byte_budget(value: Any, byte_budget: int) -> Any:
     """Collapse oversized sanitized values to a fail-closed marker."""
     try:
-        if len(json.dumps(value, ensure_ascii=False)) > byte_budget:
+        if len(dumps_str(value)) > byte_budget:
             return REDACTED
     except (TypeError, ValueError):
         return REDACTED
@@ -257,8 +258,8 @@ def _try_parse_json(value: str) -> Any | None:
     if not stripped or stripped[0] not in "{[":
         return None
     try:
-        return json.loads(stripped)
-    except (json.JSONDecodeError, ValueError):
+        return loads(stripped)
+    except (ValueError, TypeError):
         return None
 
 
@@ -341,7 +342,7 @@ def redact_error_detail(value: str | None) -> str | None:
         if sanitized == REDACTED:
             return _bound_output(REDACTED)
         try:
-            return _bound_output(json.dumps(sanitized, ensure_ascii=False))
+            return _bound_output(dumps_str(sanitized))
         except (TypeError, ValueError):
             # Fall through to regex-based redaction.
             pass

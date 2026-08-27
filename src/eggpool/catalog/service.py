@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import datetime as _dt
-import json
 import logging
 import time
 from dataclasses import dataclass
@@ -51,6 +50,7 @@ from eggpool.db.repositories import (
     PingRepository,
     PriceSnapshotRepository,
 )
+from eggpool.jsonx import dumps_str, loads
 from eggpool.providers.client_pool import ProviderClientPool
 
 if TYPE_CHECKING:
@@ -108,15 +108,15 @@ def _unix_to_db_timestamp(value: object, *, fallback: float) -> str:
 
 def _canonical_json(value: object) -> str:
     """Serialize catalog JSON with stable ordering for semantic comparison."""
-    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+    return dumps_str(value, sort_keys=True)
 
 
 def _canonical_stored_json(value: object) -> str:
     """Normalize a JSON value read from SQLite for semantic comparison."""
     if isinstance(value, (str, bytes, bytearray)):
         try:
-            return _canonical_json(json.loads(value))
-        except (json.JSONDecodeError, UnicodeDecodeError):
+            return _canonical_json(loads(value))
+        except (ValueError, UnicodeDecodeError):
             return str(value)
     return _canonical_json(value)
 
@@ -199,8 +199,8 @@ def _parse_metadata_object(
         )
         return {}
     try:
-        parsed: object = json.loads(value)
-    except (json.JSONDecodeError, UnicodeDecodeError):
+        parsed: object = loads(value)
+    except (ValueError, UnicodeDecodeError):
         logger.warning(
             "Ignoring malformed cached %s for model %r",
             field_name,

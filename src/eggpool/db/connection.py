@@ -181,6 +181,21 @@ def _is_fatal_database_error(exc: BaseException) -> bool:
     return False
 
 
+def _format_pragma_integer(value: object, name: str) -> str:
+    """Validate an integer PRAGMA value before SQL interpolation."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise DatabaseError(f"{name} must be an integer")
+    return str(value)
+
+
+def _format_pragma_synchronous(value: object) -> str:
+    """Validate the configured SQLite synchronous mode."""
+    allowed = {"OFF", "NORMAL", "FULL", "EXTRA"}
+    if not isinstance(value, str) or value not in allowed:
+        raise DatabaseError("synchronous must be OFF, NORMAL, FULL, or EXTRA")
+    return value
+
+
 class Database:
     """Async wrapper around aiosqlite with pragma configuration.
 
@@ -350,6 +365,15 @@ class Database:
             )
         if self._connection_lock.locked():
             raise DatabaseError("Database connection lock is still held")
+        busy_timeout_ms = _format_pragma_integer(
+            self._busy_timeout_ms, "busy_timeout_ms"
+        )
+        synchronous = _format_pragma_synchronous(self._synchronous)
+        journal_size_limit = (
+            _format_pragma_integer(self._journal_size_limit, "journal_size_limit")
+            if self._journal_size_limit is not None
+            else None
+        )
         self._transition_state(DatabaseLifecycleState.CONNECTING)
         self._invalidated_reason = None
         self._invalidated_reason_class = None
@@ -361,9 +385,7 @@ class Database:
                 uri, use_uri = self._build_read_only_uri(self._path)
                 self._conn = await aiosqlite.connect(uri, uri=use_uri)
                 self._conn.row_factory = aiosqlite.Row
-                await self._conn.execute(
-                    f"PRAGMA busy_timeout = {self._busy_timeout_ms}"
-                )
+                await self._conn.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
                 self._writes_admitted = False
                 self._reads_admitted = True
                 self._transition_state(DatabaseLifecycleState.READY)
@@ -371,13 +393,13 @@ class Database:
             self._conn = await aiosqlite.connect(self._path)
             self._conn.row_factory = aiosqlite.Row
             await self._conn.execute("PRAGMA foreign_keys = ON")
-            await self._conn.execute(f"PRAGMA busy_timeout = {self._busy_timeout_ms}")
+            await self._conn.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
             if self._wal:
                 await self._conn.execute("PRAGMA journal_mode = WAL")
-            await self._conn.execute(f"PRAGMA synchronous = {self._synchronous}")
-            if self._journal_size_limit is not None:
+            await self._conn.execute(f"PRAGMA synchronous = {synchronous}")
+            if journal_size_limit is not None:
                 await self._conn.execute(
-                    f"PRAGMA journal_size_limit = {self._journal_size_limit}"
+                    f"PRAGMA journal_size_limit = {journal_size_limit}"
                 )
             await self._conn.commit()
             self._writes_admitted = True

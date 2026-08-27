@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING
+
+from eggpool.jsonx import dumps_str
 
 if TYPE_CHECKING:
     from eggpool.model_info.types import CanonicalModelInfo
@@ -47,4 +48,4 @@ def canonical_needs_update(
 
 def _json_dumps(obj: dict[str, object]) -> str:
     """Deterministic JSON serialisation for comparison."""
-    return json.dumps(obj, sort_keys=True, default=str)
+    return dumps_str(obj, sort_keys=True, default=str)

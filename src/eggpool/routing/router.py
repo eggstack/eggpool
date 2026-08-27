@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import random
 import time
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -367,9 +368,7 @@ class Router:
                         key, band, scope=self._fairness_scope
                     )
                 elif band and self._fairness_mode == "random":
-                    import random as _random
-
-                    _random.shuffle(band)
+                    random.shuffle(band)
                     fairness_decision = FairnessDecision(
                         mode="random",
                         applied=True,
@@ -1047,9 +1046,7 @@ class Router:
                         key, band, scope=self._fairness_scope
                     )
                 elif band and self._fairness_mode == "random":
-                    import random as _random
-
-                    _random.shuffle(band)
+                    random.shuffle(band)
                     key = self._fairness_key(
                         provider_id=provider_id,
                         model_id=model_id,
@@ -1209,9 +1206,7 @@ class Router:
                         key, band, scope=self._fairness_scope
                     )
                 elif band and self._fairness_mode == "random":
-                    import random as _random
-
-                    _random.shuffle(band)
+                    random.shuffle(band)
                     key = self._fairness_key(
                         provider_id=provider_id,
                         model_id=model_id,

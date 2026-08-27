@@ -174,6 +174,19 @@ async def test_synchronous_pragma(db: Database) -> None:
 
 
 @pytest.mark.asyncio()
+async def test_connect_rejects_non_integer_pragma_value(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    database = Database(
+        path=str(tmp_path / "invalid_pragma.sqlite3"),  # type: ignore[operator]
+        busy_timeout_ms="5000; DROP TABLE accounts",  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(DatabaseError, match="busy_timeout_ms must be an integer"):
+        await database.connect()
+
+
+@pytest.mark.asyncio()
 async def test_crash_recovery_marks_stale_pending(db: Database) -> None:
     """Stale pending requests are marked as interrupted."""
     async with db.transaction():

@@ -326,11 +326,9 @@ def start_server(  # noqa: PLR0913 - daemon options are explicit by design
         # duplicated it into the child. The child still has its own
         # open handle, so the log file is not orphaned; the parent no
         # longer holds a Python-level reference to it.
-        if log_target is not None:
-            for stream in (stdout_target, stderr_target):
-                if isinstance(stream, io.IOBase):
-                    with contextlib.suppress(OSError):
-                        stream.close()
+        if log_target is not None and isinstance(stdout_target, io.IOBase):
+            with contextlib.suppress(Exception):
+                stdout_target.close()
 
     if verify:
         _wait_for_pid_file(verify_timeout_s)

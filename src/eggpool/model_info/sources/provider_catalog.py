@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, cast
 
+from eggpool.jsonx import dumps_str
 from eggpool.model_info.types import SourceModelRecord
 
 if TYPE_CHECKING:
@@ -52,7 +52,7 @@ class ProviderCatalogSource:
         entry: dict[str, object],
     ) -> SourceModelRecord:
         raw_hash = hashlib.sha256(
-            json.dumps(entry, sort_keys=True, default=str).encode()
+            dumps_str(entry, sort_keys=True, default=str).encode()
         ).hexdigest()
 
         last_seen = entry.get("last_seen_at")

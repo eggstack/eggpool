@@ -947,6 +947,8 @@ def _span(
     try:
         yield
     except BaseException:
+        # Cancellation is a BaseException; always close the timer before
+        # propagating cancellation or another fatal exception.
         timer.__exit__(*sys.exc_info())
         raise
     timer.__exit__(None, None, None)

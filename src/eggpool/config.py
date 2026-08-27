@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+import shutil
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 _MINIMAL_CONFIG = """\
 [server]
@@ -42,13 +46,11 @@ def ensure_config(config_path: str) -> None:
         ref = files("eggpool._share").joinpath("config.example.toml")
         with as_file(ref) as source_path:
             if source_path.exists():
-                import shutil
-
                 shutil.copy2(source_path, path)
                 sys.stdout.write(f"  Created {config_path} from bundled template\n")
                 return
-    except Exception:
-        pass
+    except (OSError, shutil.Error) as exc:
+        logger.warning("bundled config template unavailable: %s", exc)
 
     try:
         path.write_text(_MINIMAL_CONFIG, encoding="utf-8")

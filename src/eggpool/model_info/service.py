@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
 from eggpool.errors import ModelInfoSourceFetchError
+from eggpool.jsonx import dumps_str
 from eggpool.model_info.dedup import canonical_needs_update
 from eggpool.model_info.identity import (
     choose_alias_candidates,
@@ -3224,7 +3224,7 @@ def _bound_raw_payload(record: SourceModelRecord) -> SourceModelRecord:
     If the serialised payload exceeds the limit, replace it with a summary
     dict containing selected fields and the original hash.
     """
-    raw_json = json.dumps(record.raw_payload, sort_keys=True, default=str)
+    raw_json = dumps_str(record.raw_payload, sort_keys=True, default=str)
     if len(raw_json.encode()) <= _RAW_PAYLOAD_BOUND_BYTES:
         return record
 
