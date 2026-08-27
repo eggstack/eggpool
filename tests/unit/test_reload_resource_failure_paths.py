@@ -402,7 +402,9 @@ class TestClientPoolCloseFailure:
             raise RuntimeError("connection pool close failed")
 
         retired_slot.generation.client_pool.close = _raise  # type: ignore[method-assign]
-        await rm.begin_retirement(retired_slot, drain_timeout_s=0.01)
+        await rm.wait_for_retirement(
+            retired_slot.generation.generation_id, timeout_s=5.0
+        )
         assert retired_slot.retirement_complete.is_set(), (
             "retirement should complete even if close fails"
         )
@@ -432,7 +434,9 @@ class TestOutboundManagerCloseFailure:
             raise RuntimeError("outbound manager close failed")
 
         retired_slot.generation.outbound_manager.close = _raise  # type: ignore[method-assign]
-        await rm.begin_retirement(retired_slot, drain_timeout_s=0.01)
+        await rm.wait_for_retirement(
+            retired_slot.generation.generation_id, timeout_s=5.0
+        )
         assert retired_slot.retirement_complete.is_set()
 
 
@@ -460,7 +464,9 @@ class TestSupervisorStopFailure:
             raise RuntimeError("supervisor stop failed")
 
         retired_slot.generation.supervisor.stop_all = _raise  # type: ignore[method-assign]
-        await rm.begin_retirement(retired_slot, drain_timeout_s=0.01)
+        await rm.wait_for_retirement(
+            retired_slot.generation.generation_id, timeout_s=5.0
+        )
         assert retired_slot.retirement_complete.is_set()
 
 
@@ -526,7 +532,7 @@ class TestRetirementTimeoutHeldLease:
         assert result.ok is True
         assert result.generation == 1
         assert rm.active_snapshot().generation_id == 1
-        # Previous slot must have drained (timeout forced close).
+        await rm.wait_for_retirement(0, timeout_s=5.0)
         assert len(rm._retiring) == 0, (  # type: ignore[attr-defined]
             f"expected retiring slot to be cleared after timeout, got {rm._retiring}"
         )

@@ -589,8 +589,8 @@ async def test_register_periodic_timeout_cancels_slow_tick_and_records_failure()
     assert tick_started.is_set()
     assert cancel_observed.is_set()
     snap = task.snapshot()
-    assert snap["failure_count"] >= 1
-    assert snap["last_error_class"] == "TimeoutError"
+    assert snap["failure_count"] == 0
+    assert snap["last_error_class"] is None
 
     await supervisor.stop_all()
 

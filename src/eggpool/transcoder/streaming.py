@@ -646,6 +646,7 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
         self._tool_blocks: dict[int, _OpenAIToolCall] = {}
         self._next_openai_tool_index = 0
         self._thinking_delta_count: int = 0
+        self._pending_stop_reason: str | None = None
 
     @property
     def thinking_delta_count(self) -> int:
@@ -957,6 +958,7 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
 
         if stop == "pause_turn":
             out.extend(self._synthesise_pause_turn_sentinel())
+            self._pending_stop_reason = "tool_use"
             if self._transcode_context is not None:
                 self._transcode_context.loss_warnings.append(
                     {
@@ -967,7 +969,10 @@ class AnthropicToOpenAIStreaming(_BaseStreamingTranscoder):
                 )
 
         if stop:
-            fr = _STOP_TO_FINISH.get(stop, "stop")
+            if self._pending_stop_reason is not None:
+                fr = _STOP_TO_FINISH.get(self._pending_stop_reason, "stop")
+            else:
+                fr = _STOP_TO_FINISH.get(stop, "stop")
             frame: dict[str, Any] = {
                 "id": self._id,
                 "object": "chat.completion.chunk",

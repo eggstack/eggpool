@@ -121,13 +121,16 @@ class TestAccountQuota:
             ("capacity_30d_tokens", "token_count_30d", "reserved_tokens"),
         ],
     )
-    def test_reservations_count_against_longer_horizons(
+    def test_reservations_do_not_count_against_longer_horizons(
         self,
         capacity_field: str,
         snapshot_field: str,
         reservation_field: str,
     ) -> None:
-        """Active reservations participate in every configured quota horizon."""
+        """Active reservations are a global snapshot, so they apply only to the
+        tightest window (5h). Counting them again against 7d/30d would
+        triplicate pressure and trigger premature hard-cap exclusion.
+        """
         quota = AccountQuota(
             account_name="test-account",
             persisted_snapshot=PersistedWindowSnapshot(
@@ -137,8 +140,7 @@ class TestAccountQuota:
             **{capacity_field: 10, reservation_field: 2},
         )
 
-        assert not quota.is_within_limits()
-        assert quota.get_remaining_capacity() == 0.0
+        assert quota.is_within_limits()
 
     def test_manual_offset_is_deprecated(self) -> None:
         """Deprecated ``manual_offset`` must not affect reported usage."""

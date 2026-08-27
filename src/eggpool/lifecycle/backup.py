@@ -373,6 +373,9 @@ def _create_runtime_backup_sync(
     import tempfile
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    for orphan in output_dir.glob(".eggpool-backup-staging-*"):
+        if orphan.is_dir():
+            shutil.rmtree(orphan, ignore_errors=True)
     staging_dir = Path(
         tempfile.mkdtemp(
             prefix=".eggpool-backup-staging-",

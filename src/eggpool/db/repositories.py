@@ -903,7 +903,12 @@ class OperationalEventRepository:
         event_type: str,
         details: dict[str, Any] | None = None,
     ) -> int:
-        """Insert one operational event, return its id."""
+        """Insert one operational event, return its id.
+
+        Callers must invoke this inside an existing ``db.transaction()``
+        so the event is committed atomically with the originating
+        operation.  The insert itself does not open a nested transaction.
+        """
         details_json = jsonx_dumps_str(details or {})
         return await self._db.execute_insert(
             "INSERT INTO operational_events (event_type, details_json) VALUES (?, ?)",

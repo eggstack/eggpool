@@ -31,6 +31,7 @@ from eggpool.background.cleanup import (
     retry_runtime_reconciliation,
 )
 from eggpool.cli_exit_codes import STAGE_RELOAD_IN_PROGRESS
+from eggpool.config_reload_policy import sanitize_text_for_audit
 from eggpool.constants import API_V1_PREFIX
 from eggpool.control.reload_manager import ReloadInProgressError, ReloadManager
 from eggpool.control.server import (
@@ -1319,7 +1320,10 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
                 warnings=(),
                 restart_required=(),
                 retirement_pending=False,
-                message=f"Server-side validation failed: {exc}",
+                message=(
+                    "Server-side validation failed: "
+                    f"{sanitize_text_for_audit(str(exc))}"
+                ),
             )
 
         try:
@@ -1351,7 +1355,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
                 warnings=(),
                 restart_required=(),
                 retirement_pending=False,
-                message=f"Reload failed: {exc}",
+                message=f"Reload failed: {sanitize_text_for_audit(str(exc))}",
             )
 
         return ControlResponse(
@@ -1696,7 +1700,8 @@ def create_app(
                     to_evict = [
                         k
                         for k, (_, ts) in self._cache.items()
-                        if k != self._last_used and now - ts >= self._ttl_s
+                        if (k != self._last_used or now - ts >= self._ttl_s)
+                        and now - ts >= self._ttl_s
                     ]
                     if to_evict:
                         del self._cache[to_evict[0]]

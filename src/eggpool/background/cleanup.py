@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING
 from eggpool.background.maintenance import MaintenanceBudget, MaintenancePassResult
 from eggpool.errors import DatabaseTransactionOwnershipError
 
+_SQLITE_MAX_VARIABLE_NUMBER = 900
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
@@ -51,6 +53,24 @@ async def _has_remaining_rows(
     """
     rows = await db.fetch_all(query, params)
     return len(rows) > 0
+
+
+async def _chunked_in_delete(
+    db: Database, table: str, column: str, ids: list[object]
+) -> int:
+    """DELETE rows whose *column* is in *ids*, chunked for SQLite limits.
+
+    Returns total rows deleted.
+    """
+    total_deleted = 0
+    for i in range(0, len(ids), _SQLITE_MAX_VARIABLE_NUMBER):
+        chunk = ids[i : i + _SQLITE_MAX_VARIABLE_NUMBER]
+        placeholders = ",".join("?" for _ in chunk)
+        total_deleted += await db.execute_write(
+            f"DELETE FROM {table} WHERE {column} IN ({placeholders})",
+            chunk,
+        )
+    return total_deleted
 
 
 def _retention_cutoff(retain_days: int) -> str:
@@ -142,16 +162,8 @@ async def cleanup_old_requests(
                 break
 
             ids = [row["id"] for row in rows]
-            placeholders = ",".join("?" for _ in ids)
-
-            await db.execute_write(
-                f"DELETE FROM reservations WHERE request_id IN ({placeholders})",
-                ids,
-            )
-            await db.execute_write(
-                f"DELETE FROM requests WHERE id IN ({placeholders})",
-                ids,
-            )
+            await _chunked_in_delete(db, "reservations", "request_id", ids)
+            await _chunked_in_delete(db, "requests", "id", ids)
 
         total_deleted += len(ids)
         batches += 1
@@ -212,11 +224,7 @@ async def cleanup_old_events(
                 break
 
             ids = [row["id"] for row in rows]
-            placeholders = ",".join("?" for _ in ids)
-            count = await db.execute_write(
-                f"DELETE FROM account_events WHERE id IN ({placeholders})",
-                ids,
-            )
+            count = await _chunked_in_delete(db, "account_events", "id", ids)
 
         total_deleted += count
         batches += 1
@@ -423,11 +431,7 @@ async def cleanup_old_operational_events(
                 break
 
             ids = [row["id"] for row in rows]
-            placeholders = ",".join("?" for _ in ids)
-            count = await db.execute_write(
-                f"DELETE FROM operational_events WHERE id IN ({placeholders})",
-                ids,
-            )
+            count = await _chunked_in_delete(db, "operational_events", "id", ids)
 
         total_deleted += count
         batches += 1
@@ -487,11 +491,7 @@ async def cleanup_old_usage_rollups(
                 break
 
             ids = [row["rowid"] for row in rows]
-            placeholders = ",".join("?" for _ in ids)
-            count = await db.execute_write(
-                f"DELETE FROM usage_rollups WHERE rowid IN ({placeholders})",
-                ids,
-            )
+            count = await _chunked_in_delete(db, "usage_rollups", "rowid", ids)
 
         total_deleted += count
         batches += 1
@@ -551,11 +551,7 @@ async def cleanup_old_price_snapshots(
                 break
 
             ids = [row["id"] for row in rows]
-            placeholders = ",".join("?" for _ in ids)
-            count = await db.execute_write(
-                f"DELETE FROM model_price_snapshots WHERE id IN ({placeholders})",
-                ids,
-            )
+            count = await _chunked_in_delete(db, "model_price_snapshots", "id", ids)
 
         total_deleted += count
         batches += 1
@@ -615,11 +611,7 @@ async def cleanup_old_model_info_observations(
                 break
 
             ids = [row["id"] for row in rows]
-            placeholders = ",".join("?" for _ in ids)
-            count = await db.execute_write(
-                f"DELETE FROM model_info_observations WHERE id IN ({placeholders})",
-                ids,
-            )
+            count = await _chunked_in_delete(db, "model_info_observations", "id", ids)
 
         total_deleted += count
         batches += 1
@@ -679,11 +671,7 @@ async def cleanup_old_routing_decisions(
                 break
 
             ids = [row["id"] for row in rows]
-            placeholders = ",".join("?" for _ in ids)
-            count = await db.execute_write(
-                f"DELETE FROM routing_decisions WHERE id IN ({placeholders})",
-                ids,
-            )
+            count = await _chunked_in_delete(db, "routing_decisions", "id", ids)
 
         total_deleted += count
         batches += 1

@@ -112,7 +112,20 @@ def write_server_api_key(config_path: str, new_key: str) -> tuple[bool, str | No
             "[server] uses api_key_env; rotate the env-var to apply the new key."
         )
 
-    path.write_text("\n".join(result.lines) + "\n", encoding="utf-8")
+    new_content = "\n".join(result.lines) + "\n"
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp_path.write_text(new_content, encoding="utf-8")
+        fd = os.open(str(tmp_path), os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(str(tmp_path), str(path))
+    except BaseException:
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise
     return True, None
 
 

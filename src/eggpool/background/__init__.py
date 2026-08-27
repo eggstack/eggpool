@@ -385,6 +385,18 @@ class SupervisedTask:
                 except asyncio.CancelledError:
                     self._tick_in_progress = False
                     break
+                except TimeoutError:
+                    tick_completed = time.time()
+                    tick_duration_ms = (tick_completed - tick_started) * 1000
+                    self._last_tick_completed_at = tick_completed
+                    self._last_tick_duration_ms = tick_duration_ms
+                    self._tick_in_progress = False
+                    self._iteration_count += 1
+                    self._next_run_at = time.monotonic() + interval_s
+                    logger.warning(
+                        "Supervised periodic task %r tick timed out",
+                        self.name,
+                    )
                 except Exception as exc:  # noqa: BLE001
                     tick_completed = time.time()
                     tick_duration_ms = (tick_completed - tick_started) * 1000

@@ -1004,7 +1004,6 @@ class GenerationLease:
 
     generation_id: int
     slot: _GenerationSlot
-    release_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     released: bool = False
 
     @property
@@ -1020,7 +1019,7 @@ class GenerationLease:
         slot's drain event when the count reaches zero so retirement
         tasks can proceed without polling.
         """
-        async with self.release_lock:
+        async with self.slot.close_lock:
             if self.released:
                 return
             self.released = True
@@ -1823,7 +1822,6 @@ class RuntimeManager:
                     logger.critical("Runtime retirement fail-closed: %s", reason)
                     if self._fatal_handler is not None:
                         self._fatal_handler(reason)
-                    return
                 slot.forced_close = True
                 logger.warning(
                     "Runtime generation %d retirement drain timed out with "
@@ -1881,16 +1879,25 @@ class RuntimeManager:
 
         # 1. Stop background-task scheduling first so no new ticks fire
         #    while we drain in-flight tasks.
+        _close_budget = min(drain_timeout_s, 10.0)
         supervisor = generation.supervisor
         if supervisor is not None:
             record_close_attempt("supervisor")
             try:
-                await supervisor.stop_all()
+                await asyncio.wait_for(supervisor.stop_all(), timeout=_close_budget)
+            except TimeoutError:
+                slot.last_close_error = "supervisor.stop_all: timed out"
+                logger.warning(
+                    "Runtime generation %d supervisor.stop_all timed out after %.1fs",
+                    generation.generation_id,
+                    _close_budget,
+                )
             except asyncio.CancelledError:
                 logger.debug(
                     "Runtime generation %d supervisor.stop_all cancelled",
                     generation.generation_id,
                 )
+                raise
             except Exception as exc:  # noqa: BLE001
                 slot.last_close_error = f"supervisor.stop_all: {exc!r}"
                 logger.exception(
@@ -1913,6 +1920,7 @@ class RuntimeManager:
                     "Runtime generation %d finalization supervisor shutdown cancelled",
                     generation.generation_id,
                 )
+                raise
             except Exception as exc:  # noqa: BLE001
                 slot.last_close_error = f"finalization_supervisor.shutdown: {exc!r}"
                 logger.exception(
@@ -1926,12 +1934,20 @@ class RuntimeManager:
         if client_pool is not None:
             record_close_attempt("client_pool")
             try:
-                await _safe_aclose(client_pool)
+                await asyncio.wait_for(_safe_aclose(client_pool), timeout=_close_budget)
+            except TimeoutError:
+                slot.last_close_error = "client_pool.close: timed out"
+                logger.warning(
+                    "Runtime generation %d client_pool.close timed out after %.1fs",
+                    generation.generation_id,
+                    _close_budget,
+                )
             except asyncio.CancelledError:
                 logger.debug(
                     "Runtime generation %d client_pool.close cancelled",
                     generation.generation_id,
                 )
+                raise
             except Exception as exc:  # noqa: BLE001
                 slot.last_close_error = f"client_pool.close: {exc!r}"
                 logger.exception(
@@ -1943,12 +1959,23 @@ class RuntimeManager:
         if outbound_manager is not None:
             record_close_attempt("outbound_manager")
             try:
-                await _safe_aclose(outbound_manager)
+                await asyncio.wait_for(
+                    _safe_aclose(outbound_manager), timeout=_close_budget
+                )
+            except TimeoutError:
+                slot.last_close_error = "outbound_manager.aclose: timed out"
+                logger.warning(
+                    "Runtime generation %d outbound_manager.aclose"
+                    " timed out after %.1fs",
+                    generation.generation_id,
+                    _close_budget,
+                )
             except asyncio.CancelledError:
                 logger.debug(
                     "Runtime generation %d outbound_manager.aclose cancelled",
                     generation.generation_id,
                 )
+                raise
             except Exception as exc:  # noqa: BLE001
                 slot.last_close_error = f"outbound_manager.aclose: {exc!r}"
                 logger.exception(

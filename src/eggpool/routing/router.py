@@ -305,6 +305,7 @@ class Router:
         client_protocol: str | None = None,
         thinking_requirement: ThinkingRequestRequirement | None = None,
         capability_policy: dict[str, str] | None = None,
+        request_surface: str = "chat_completions",
     ) -> AccountRuntimeState | None:
         """Select an account for the given model.
 
@@ -320,6 +321,7 @@ class Router:
             transcode_eligibility,
             thinking_requirement=thinking_requirement,
             capability_policy=capability_policy,
+            request_surface=request_surface,
         )
         tiers = candidates.tiered()
         if not tiers:

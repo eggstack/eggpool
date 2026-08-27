@@ -864,7 +864,9 @@ class CostCalculator:
 
 
 def rate_is_implausible(rate: int | None) -> bool:
-    return rate is not None and rate > _MAX_TRUSTED_RATE_PER_MILLION_MICRODOLLARS
+    return rate is not None and (
+        rate < 0 or rate > _MAX_TRUSTED_RATE_PER_MILLION_MICRODOLLARS
+    )
 
 
 def _rate_is_implausible(rate: int | None) -> bool:

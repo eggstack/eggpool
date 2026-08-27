@@ -231,12 +231,14 @@ class ModelCatalogCache:
         # must not silently de-pool a healthy account.
         withdraw_destructive = authoritative and allow_withdrawals
         if withdraw_destructive:
-            # Count the support rows the destructive step is about to
-            # remove so the result object carries the number of rows
-            # actually withdrawn, not just whether one was requested.
+            incoming_model_ids = {m["model_id"] for m in models}
+            prior_model_ids = {
+                m_id for m_id, _ in self._account_provider_keys.get(account_name, set())
+            }
             for accounts in self._account_support.values():
                 if account_name in accounts:
                     withdrawn += 1
+            withdrawn -= len(incoming_model_ids & prior_model_ids)
             self.mark_account_models_unavailable(account_name)
         else:
             # Tally preserved support for the result object before any

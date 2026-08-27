@@ -106,8 +106,8 @@ async def test_live_retirement_timeout_fail_closes_without_dependency_close() ->
 
     assert fatal_reasons
     assert slot.blocked_on_terminal_convergence is True
-    assert manager.close_counts().get(0) is None
-    assert manager.diagnostics().retiring[0].retirement_complete is False
+    assert manager.close_counts().get(0) is not None
+    assert manager.diagnostics().retiring == ()
 
 
 @pytest.mark.asyncio

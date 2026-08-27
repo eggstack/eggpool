@@ -60,7 +60,10 @@ def runtime_dir() -> Path:
     if xdg_runtime:
         return Path(xdg_runtime) / "eggpool"
 
-    return Path(f"/tmp/eggpool-{os.getuid()}.runtime")
+    fallback = Path(f"/tmp/eggpool-{os.getuid()}.runtime")
+    with contextlib.suppress(OSError):
+        os.makedirs(fallback, mode=0o700, exist_ok=True)
+    return fallback
 
 
 def default_pid_file() -> Path:
@@ -83,7 +86,12 @@ def default_pid_file() -> Path:
     if state.exists():
         return state / "eggpool.pid"
 
-    return Path("/tmp") / f"eggpool-{os.getuid()}.pid"
+    fallback = Path("/tmp") / f"eggpool-{os.getuid()}.pid"
+    with contextlib.suppress(OSError):
+        os.makedirs(fallback.parent, mode=0o700, exist_ok=True)
+        fd = os.open(str(fallback), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(fd)
+    return fallback
 
 
 def default_log_file() -> Path:
@@ -107,7 +115,12 @@ def default_log_file() -> Path:
         state.mkdir(parents=True, exist_ok=True)
     if state.exists() and os.access(state, os.W_OK):
         return path
-    return Path("/tmp") / f"eggpool-{os.getuid()}.log"
+    fallback = Path("/tmp") / f"eggpool-{os.getuid()}.log"
+    with contextlib.suppress(OSError):
+        os.makedirs(fallback.parent, mode=0o700, exist_ok=True)
+        fd = os.open(str(fallback), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(fd)
+    return fallback
 
 
 def read_pid_file(path: Path | None = None) -> int | None:

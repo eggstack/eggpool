@@ -135,6 +135,8 @@ def merge_anthropic_usage(
     Field presence decides participation: an absent field never touches
     the merged value, while a later blob that explicitly reports ``0``
     (e.g. a final cache-read correction) authoritatively updates it.
+    A zero value from ``raw`` is skipped when the accumulator already
+    carries a non-zero value for that field.
     """
     merged: dict[str, int] = {}
     for raw in raw_values:
@@ -143,5 +145,8 @@ def merge_anthropic_usage(
         for field in _ANTHROPIC_USAGE_TOKEN_FIELDS:
             if field not in raw:
                 continue
-            merged[field] = token_count_from(raw, field)
+            value = token_count_from(raw, field)
+            if value == 0 and field in merged:
+                continue
+            merged[field] = value
     return merged

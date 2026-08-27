@@ -41,7 +41,7 @@ KillSignal=SIGTERM
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/var/lib/eggpool /var/lib/eggpool/backups
+ReadWritePaths=/var/lib/eggpool /var/lib/eggpool/backups /var/log/eggpool
 PrivateTmp=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
@@ -60,6 +60,7 @@ SystemCallArchitectures=native
 
 # Environment
 EnvironmentFile=/etc/eggpool/env
+Environment=EGGPOOL_LOG_FILE=/var/log/eggpool/eggpool.log
 
 [Install]
 WantedBy=multi-user.target

@@ -424,8 +424,8 @@ class Database:
             in_transaction_after = getattr(conn, "in_transaction", None)
             if in_transaction_after is False:
                 rollback_succeeded = True
-        except Exception as rb_exc:  # noqa: BLE001
-            rollback_exc = rb_exc
+        except BaseException as rb_exc:  # noqa: BLE001
+            rollback_exc = rb_exc  # type: ignore[assignment]
             rollback_succeeded = False
         return (
             rollback_attempted,
