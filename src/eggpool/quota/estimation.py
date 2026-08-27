@@ -701,6 +701,7 @@ class QuotaEstimator:
     # publication converts them into the canonical reservation mirrors.
     _account_pending_requests: dict[str, int] = field(default_factory=dict[str, int])
     _account_pending_tokens: dict[str, int] = field(default_factory=dict[str, int])
+    _account_pending_cost: dict[str, int] = field(default_factory=dict[str, int])
     # Serializes record_usage + persisted_snapshot updates so concurrent
     # finalizers cannot interleave between the two updates and lose cost
     # increments.
@@ -846,17 +847,14 @@ class QuotaEstimator:
         model_id: str | None = None,
     ) -> None:
         """Record usage and atomically refresh the persisted snapshot."""
-        # This section has no await points, so it is atomic on the canonical
-        # event loop. Keep it outside the lock; the lock is only needed for
-        # the shared persisted snapshot and reservation mirrors below.
-        self.record_usage(
-            account_name,
-            tokens=tokens,
-            cost_microdollars=cost_microdollars,
-            model_id=model_id,
-        )
         persisted_account_id: int | None = None
         async with self._snapshot_lock:
+            self.record_usage(
+                account_name,
+                tokens=tokens,
+                cost_microdollars=cost_microdollars,
+                model_id=model_id,
+            )
             # Lifecycle: ``persisted_snapshot`` is set exclusively by
             # :meth:`load_persisted_windows` during startup and is
             # never replaced afterwards. Reading it under
@@ -1030,7 +1028,9 @@ class QuotaEstimator:
         quota = self.get_account_quota(account_name)
         if quota is None:
             return
-        quota.reserved_cost = self._account_reserved_cost.get(account_name, 0)
+        quota.reserved_cost = self._account_reserved_cost.get(
+            account_name, 0
+        ) + self._account_pending_cost.get(account_name, 0)
         quota.reserved_requests = self._account_reserved_requests.get(
             account_name, 0
         ) + self._account_pending_requests.get(account_name, 0)
@@ -1038,7 +1038,9 @@ class QuotaEstimator:
             account_name, 0
         ) + self._account_pending_tokens.get(account_name, 0)
 
-    def add_pending_claim(self, account_name: str, *, tokens: int) -> None:
+    def add_pending_claim(
+        self, account_name: str, *, tokens: int, cost: int = 0
+    ) -> None:
         """Publish provisional request/token load for a claimed account.
 
         This method is intentionally synchronous and database-free.  The
@@ -1048,28 +1050,44 @@ class QuotaEstimator:
         """
         if tokens < 0:
             raise ValueError("pending claim tokens must be non-negative")
+        if cost < 0:
+            raise ValueError("pending claim cost must be non-negative")
         self._account_pending_requests[account_name] = clamp_sqlite_integer(
             self._account_pending_requests.get(account_name, 0) + 1
         )
         self._account_pending_tokens[account_name] = clamp_sqlite_integer(
             self._account_pending_tokens.get(account_name, 0) + tokens
         )
+        self._account_pending_cost[account_name] = clamp_sqlite_integer(
+            self._account_pending_cost.get(account_name, 0) + cost
+        )
         self._sync_reservation_mirrors(account_name)
 
-    def release_pending_claim(self, account_name: str, *, tokens: int) -> None:
+    def release_pending_claim(
+        self, account_name: str, *, tokens: int, cost: int = 0
+    ) -> None:
         """Release one provisional claim, surfacing ownership underflow."""
         if tokens < 0:
             raise ValueError("pending claim tokens must be non-negative")
+        if cost < 0:
+            raise ValueError("pending claim cost must be non-negative")
         pending_requests = self._account_pending_requests.get(account_name, 0)
         pending_tokens = self._account_pending_tokens.get(account_name, 0)
+        pending_cost = self._account_pending_cost.get(account_name, 0)
         if pending_requests < 1 or pending_tokens < tokens:
             raise RuntimeError(
                 "pending claim ownership underflow for "
                 f"account={account_name!r} requests={pending_requests} "
                 f"tokens={pending_tokens} release_tokens={tokens}"
             )
+        if pending_cost < cost:
+            raise RuntimeError(
+                "pending claim cost ownership underflow for "
+                f"account={account_name!r} cost={pending_cost} release_cost={cost}"
+            )
         self._account_pending_requests[account_name] = pending_requests - 1
         self._account_pending_tokens[account_name] = pending_tokens - tokens
+        self._account_pending_cost[account_name] = pending_cost - cost
         self._sync_reservation_mirrors(account_name)
 
     def convert_pending_claim(
@@ -1086,7 +1104,7 @@ class QuotaEstimator:
         claim lock.  It performs no SQLite I/O and never creates a second
         representation of the same request.
         """
-        self.release_pending_claim(account_name, tokens=tokens)
+        self.release_pending_claim(account_name, tokens=tokens, cost=cost)
         self._account_reserved_cost[account_name] = clamp_sqlite_integer(
             self._account_reserved_cost.get(account_name, 0) + cost
         )

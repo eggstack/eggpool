@@ -34,6 +34,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final, cast
 from urllib.parse import urlsplit
 
+from pydantic import BaseModel
+
 from eggpool.auth import require_auth_at_startup
 from eggpool.config_utils import get_section, load_raw_config
 from eggpool.errors import AggregatorError, ConfigError
@@ -216,13 +218,28 @@ def _canonical_value(value: object) -> object | None:
                 continue
             rendered.append(projected)
         return rendered or None
+    if isinstance(value, (tuple, set, frozenset)):
+        if isinstance(value, tuple):
+            sequence_items: list[object] = list(cast("tuple[object, ...]", value))
+        else:
+            sequence_items = sorted(
+                cast("set[object] | frozenset[object]", value), key=repr
+            )
+        sequence_rendered: list[object] = []
+        for item in sequence_items:
+            projected = _canonical_value(item)
+            if projected is not None:
+                sequence_rendered.append(projected)
+        return sequence_rendered or None
+    if isinstance(value, BaseModel):
+        return _canonical_value(value.model_dump())
     if isinstance(value, str):
         return value or None
     if isinstance(value, bool):
         return value
     if isinstance(value, int | float):
         return value
-    return None
+    raise TypeError(f"unsupported runtime fingerprint value: {type(value).__name__}")
 
 
 def _ordered_accounts(config: AppConfig) -> list[object]:

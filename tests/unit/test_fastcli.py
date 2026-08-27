@@ -27,6 +27,9 @@ from eggpool import fastcli
         (["--help"], (None, None)),
         (["--unknown-flag", "value", "croncheck"], (None, "croncheck")),
         (["croncheck", "--unknown-flag", "value"], (None, "croncheck")),
+        (["croncheck", "--config"], (None, None)),
+        (["croncheck", "--config", "--verbose"], (None, None)),
+        (["croncheck", "--config="], (None, None)),
     ],
 )
 def test_parse_simple_argv(

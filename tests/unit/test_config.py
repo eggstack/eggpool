@@ -809,6 +809,14 @@ def test_server_config_resolved_api_key_env() -> None:
     assert sc.resolved_api_key is None  # env var not set in test
 
 
+def test_server_config_whitespace_api_key_is_not_resolved() -> None:
+    """Whitespace-only inline keys must not leak as usable credentials."""
+    from eggpool.models.config import ServerConfig
+
+    sc = ServerConfig(api_key="   ")
+    assert sc.resolved_api_key == ""
+
+
 def test_server_config_empty_api_key_env_disables_auth() -> None:
     """Setting api_key_env to empty string disables authentication."""
     from eggpool.models.config import ServerConfig

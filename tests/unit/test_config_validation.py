@@ -7,6 +7,7 @@ import inspect
 from pathlib import Path
 
 import pytest
+from pydantic import BaseModel
 
 from eggpool.config_validation import (
     ConfigAccountCredentialError,
@@ -17,6 +18,7 @@ from eggpool.config_validation import (
     ConfigStartupAuthError,
     ConfigValidationError,
     ConfigValidationWarning,
+    _canonical_value,
     compute_runtime_fingerprint,
     validate_config_file,
 )
@@ -298,6 +300,21 @@ def test_config_validation_error_subclasses_inherit_aggregator() -> None:
     ):
         assert issubclass(cls, ConfigValidationError)
         assert issubclass(cls, AggregatorError)
+
+
+class _FingerprintModel(BaseModel):
+    value: str
+
+
+def test_canonical_value_preserves_non_mapping_containers_and_models() -> None:
+    assert _canonical_value(("a", "b")) == ["a", "b"]
+    assert _canonical_value({"b", "a"}) == ["a", "b"]
+    assert _canonical_value(_FingerprintModel(value="a")) == {"value": "a"}
+
+
+def test_canonical_value_rejects_unsupported_values() -> None:
+    with pytest.raises(TypeError, match="unsupported runtime fingerprint value"):
+        _canonical_value(object())
 
 
 def test_validate_config_file_signature_is_click_free() -> None:

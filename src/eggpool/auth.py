@@ -110,7 +110,7 @@ async def require_auth(request: Request) -> None:
     """
     config: AppConfig = request.app.state.config
     expected = config.server.resolved_api_key
-    if not expected:
+    if expected is None:
         return
 
     stripped = expected.strip()

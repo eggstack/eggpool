@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from dataclasses import dataclass
@@ -18,6 +17,7 @@ from eggpool.catalog.capabilities import (
 )
 from eggpool.catalog.limits import EffectiveModelLimits, conservative_limits
 from eggpool.constants import DEPRECATED_MODEL_ID
+from eggpool.jsonx import loads as jsonx_loads
 from eggpool.routing.provider import parse_model_provider
 
 if TYPE_CHECKING:
@@ -100,8 +100,8 @@ def _parse_metadata_field(
         )
         return {}
     try:
-        parsed: object = json.loads(value)
-    except (json.JSONDecodeError, UnicodeDecodeError):
+        parsed: object = jsonx_loads(value)
+    except (ValueError, UnicodeDecodeError):
         logger.warning(
             "Ignoring malformed cached %s for model %r",
             field_name,

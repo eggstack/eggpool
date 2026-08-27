@@ -222,7 +222,7 @@ class Router:
         self._fairness_rotor = FairnessRotor()
         self._last_fairness_decision: FairnessDecision | None = None
         self._last_fairness_band_names: frozenset[str] = frozenset()
-        self._active_count_lock: asyncio.Lock | None = None
+        self._active_count_lock = asyncio.Lock()
         self._scorer = QuotaFairScorer(
             quota_estimator=self._quota_estimator,
             health_manager=self._health_manager,
@@ -240,12 +240,6 @@ class Router:
             missing_account_recovery_min_interval_s
         )
         self._missing_account_recovery_attempt_at: dict[str, float] = {}
-
-    def _get_active_count_lock(self) -> asyncio.Lock:
-        """Create the active-count lock on the event loop that uses it."""
-        if self._active_count_lock is None:
-            self._active_count_lock = asyncio.Lock()
-        return self._active_count_lock
 
     def _fairness_effective_epsilon(self) -> float:
         """Return fairness epsilon, falling back to scorer tiebreaker_range."""
@@ -1523,7 +1517,7 @@ class Router:
         """Increment the active request count for an account."""
         state = self._registry.get_state(account_name)
         if state is not None:
-            async with self._get_active_count_lock():
+            async with self._active_count_lock:
                 state.active_request_count += 1
 
     async def decrement_active_request_count(self, account_name: str) -> None:
@@ -1550,7 +1544,7 @@ class Router:
             raise ValueError("active request decrement must be positive")
         state = self._registry.get_state(account_name)
         if state is not None:
-            async with self._get_active_count_lock():
+            async with self._active_count_lock:
                 current = state.active_request_count
                 if count > current:
                     logger.warning(

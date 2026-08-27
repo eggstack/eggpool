@@ -336,10 +336,9 @@ class TestProviderStaticHeaderConfig:
         with pytest.raises(ConfigError):
             ProviderStaticHeaderConfig(name="X-Test", value="a", value_env="B")
 
-    def test_neither_value_nor_value_env_ok(self):
-        h = ProviderStaticHeaderConfig(name="X-Test")
-        assert h.value is None
-        assert h.value_env is None
+    def test_neither_value_nor_value_env_rejected(self):
+        with pytest.raises(ConfigError):
+            ProviderStaticHeaderConfig(name="X-Test")
 
     @pytest.mark.parametrize(
         "name",

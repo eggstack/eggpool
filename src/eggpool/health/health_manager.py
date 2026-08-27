@@ -126,6 +126,9 @@ class AccountHealth:
     """Health state for an account."""
 
     account_name: str
+    clock: Callable[[], float] = field(
+        default_factory=lambda: time.monotonic, repr=False
+    )
     is_healthy: bool = True
     last_check: float = field(default_factory=time.time)
     consecutive_failures: int = 0
@@ -149,7 +152,7 @@ class AccountHealth:
     def is_disabled(self, current_time: float | None = None) -> bool:
         """Check if account is currently disabled."""
         if current_time is None:
-            current_time = time.time()
+            current_time = self.clock()
 
         disabled = (
             self.disabled_until is not None and current_time < self.disabled_until
@@ -168,7 +171,7 @@ class AccountHealth:
         until = self.disabled_models[model_id]
         if until is None:
             return True
-        now = current_time if current_time is not None else time.time()
+        now = current_time if current_time is not None else self.clock()
         if now >= until:
             self.disabled_models.pop(model_id, None)
             return False
@@ -194,6 +197,7 @@ class HealthManager:
         if account_name not in self._accounts:
             self._accounts[account_name] = AccountHealth(
                 account_name=account_name,
+                clock=self.clock,
                 last_check=self.clock(),
                 circuit_breaker=CircuitBreaker(clock=self.clock),
             )

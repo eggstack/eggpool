@@ -76,8 +76,6 @@ class AccountRepository:
     ) -> dict[str, int]:
         """Upsert configured accounts inside the caller's transaction."""
         name_to_id: dict[str, int] = {}
-        configured_names: set[str] = set()
-
         account_names = [str(acct["name"]) for acct in config_accounts]
         existing_by_name: dict[str, Any] = {}
         if account_names:
@@ -92,7 +90,6 @@ class AccountRepository:
         for acct in config_accounts:
             name = str(acct["name"])
             provider_id = str(acct.get("provider_id") or DEFAULT_PROVIDER_ID)
-            configured_names.add(name)
             row = existing_by_name.get(name)
             if row is not None:
                 existing_provider_id = str(row["provider_id"])
@@ -133,15 +130,17 @@ class AccountRepository:
                 )
                 name_to_id[name] = last_id
 
-        existing = await self._db.fetch_all(
-            "SELECT id, name FROM accounts WHERE enabled = 1"
-        )
-        for row in existing:
-            if row["name"] not in configured_names:
-                await self._db.execute_write(
-                    "UPDATE accounts SET enabled = 0 WHERE id = ?",
-                    (row["id"],),
-                )
+        if account_names:
+            placeholders = ", ".join("?" for _ in account_names)
+            await self._db.execute_write(
+                "UPDATE accounts SET enabled = 0 WHERE enabled = 1 "
+                f"AND name NOT IN ({placeholders})",
+                tuple(account_names),
+            )
+        else:
+            await self._db.execute_write(
+                "UPDATE accounts SET enabled = 0 WHERE enabled = 1"
+            )
 
         return name_to_id
 

@@ -36,6 +36,7 @@ async def run_claim_compensation(
             quota_estimator.release_pending_claim(
                 submission.account_name,
                 tokens=submission.estimated_tokens,
+                cost=submission.estimated_microdollars,
             )
             receipt.pending_load_released = True
             progress.pending_load_released = True
@@ -119,6 +120,7 @@ def release_unpublished_claim(
     *,
     account_name: str,
     estimated_tokens: int,
+    estimated_microdollars: int = 0,
     receipt: Any,  # RuntimePublicationReceipt  # noqa: ANN401
     quota_estimator: Any | None,  # noqa: ANN401
     health_manager: Any | None,  # noqa: ANN401
@@ -139,7 +141,11 @@ def release_unpublished_claim(
         release_pending = getattr(quota_estimator, "release_pending_claim", None)
         if not callable(release_pending):
             raise RuntimeError("quota estimator cannot release pending claims")
-        release_pending(account_name, tokens=estimated_tokens)
+        release_pending(
+            account_name,
+            tokens=estimated_tokens,
+            cost=estimated_microdollars,
+        )
         receipt.pending_load_released = True
 
     if receipt.health_probe_acquired and not receipt.health_probe_released:

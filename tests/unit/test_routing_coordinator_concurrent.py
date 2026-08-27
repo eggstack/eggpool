@@ -1108,8 +1108,12 @@ class TestPublishOrdering:
                 def __init__(self, inner: Any) -> None:
                     self._inner = inner
 
-                def add_pending_claim(self, account_name: str, *, tokens: int) -> None:
-                    self._inner.add_pending_claim(account_name, tokens=tokens)
+                def add_pending_claim(
+                    self, account_name: str, *, tokens: int, cost: int = 0
+                ) -> None:
+                    self._inner.add_pending_claim(
+                        account_name, tokens=tokens, cost=cost
+                    )
 
                 def convert_pending_claim(
                     self,
@@ -1122,9 +1126,11 @@ class TestPublishOrdering:
                     raise RuntimeError("simulated reservation failure")
 
                 def release_pending_claim(
-                    self, account_name: str, *, tokens: int
+                    self, account_name: str, *, tokens: int, cost: int = 0
                 ) -> None:
-                    self._inner.release_pending_claim(account_name, tokens=tokens)
+                    self._inner.release_pending_claim(
+                        account_name, tokens=tokens, cost=cost
+                    )
 
                 async def add_reservation(
                     self,
@@ -1166,6 +1172,9 @@ class TestPublishOrdering:
             )
             assert all(
                 estimator._account_pending_tokens.get(name, 0) == 0 for name in names
+            )
+            assert all(
+                estimator._account_pending_cost.get(name, 0) == 0 for name in names
             )
 
             # After monkeypatch is reverted, the next selection

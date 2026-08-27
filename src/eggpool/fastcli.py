@@ -84,14 +84,15 @@ def _parse_simple_argv(
     while i < len(argv):
         arg = argv[i]
         if arg == "--config" or arg == "-c":
-            if i + 1 < len(argv):
+            if i + 1 < len(argv) and not argv[i + 1].startswith("-"):
                 config_path = argv[i + 1]
                 i += 2
                 continue
-            i += 1
-            continue
+            return None, None
         if arg.startswith("--config="):
             config_path = arg.split("=", 1)[1]
+            if not config_path:
+                return None, None
             i += 1
             continue
         if arg.startswith("--") or (arg.startswith("-") and len(arg) > 1):

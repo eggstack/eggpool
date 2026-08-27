@@ -1253,7 +1253,8 @@ class RuntimeManager:
         *,
         fatal_handler: Callable[[str], Any] | None = None,
     ) -> None:
-        self._lock: asyncio.Lock | None = None
+        self._lock = asyncio.Lock()
+        self._lease_condition = asyncio.Condition(self._lock)
         self._active: _GenerationSlot | None = None
         self._retiring: list[_GenerationSlot] = []
         self._next_generation_id = 0
@@ -1266,7 +1267,6 @@ class RuntimeManager:
         # admission.  Replaces the event-based clear/set pattern that
         # had a lost-wakeup race.  All waiters block on the condition
         # and re-evaluate the predicate under the shared lock.
-        self._lease_condition: asyncio.Condition | None = None
         self._lease_admission_gated: bool = False  # authoritative gate state
         # Plan 016 Workstream B: monotonic publication epoch.  Incremented
         # only on committed publication so an acquire() that snapshotted
@@ -1280,16 +1280,11 @@ class RuntimeManager:
         self._fatal_handler = fatal_handler
 
     def _get_lock(self) -> asyncio.Lock:
-        """Create manager synchronization primitives on first async use."""
-        if self._lock is None:
-            self._lock = asyncio.Lock()
-            self._lease_condition = asyncio.Condition(self._lock)
+        """Return the manager synchronization lock."""
         return self._lock
 
     def _get_lease_condition(self) -> asyncio.Condition:
         """Return the condition sharing the manager's loop-bound lock."""
-        self._get_lock()
-        assert self._lease_condition is not None
         return self._lease_condition
 
     # -- publication --------------------------------------------------------
@@ -2181,7 +2176,7 @@ class RuntimeManager:
         self._next_generation_id = current + 1
         return current
 
-    def attach_supervisor_to_active(
+    async def attach_supervisor_to_active(
         self,
         supervisor: Any,
     ) -> RuntimeGeneration | None:
@@ -2194,12 +2189,13 @@ class RuntimeManager:
         helper.  Returns the new generation, or ``None`` when no
         active generation is installed.
         """
-        slot = self._active
-        if slot is None:
-            return None
-        new_generation = replace(slot.generation, supervisor=supervisor)
-        slot.generation = new_generation
-        return new_generation
+        async with self._get_lock():
+            slot = self._active
+            if slot is None:
+                return None
+            new_generation = replace(slot.generation, supervisor=supervisor)
+            slot.generation = new_generation
+            return new_generation
 
 
 # ---------------------------------------------------------------------------

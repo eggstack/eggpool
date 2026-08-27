@@ -23,6 +23,7 @@ from eggpool.auth import require_auth
 from eggpool.catalog.capabilities import classify_thinking_request
 from eggpool.catalog.protocols import ProtocolMismatchError, ProtocolName
 from eggpool.errors import (
+    AccountSuspendedError,
     CapabilityError,
     CatalogUnavailableError,
     ContextLimitExceededError,
@@ -873,6 +874,7 @@ async def _handle_proxy_request_inner(
         NoEligibleAccountError,
         CatalogUnavailableError,
         ModelUnavailableError,
+        AccountSuspendedError,
     ) as exc:
         return endpoint.error_response(
             status_code=503,

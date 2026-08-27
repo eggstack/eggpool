@@ -50,12 +50,14 @@ from eggpool.db.repositories import (
 )
 from eggpool.db.rollup_repository import UsageRollupRepository
 from eggpool.errors import (
+    AccountSuspendedError,
     AggregatorError,
     AuthenticationError,
     CatalogUnavailableError,
     DatabaseError,
     ModelNotFoundError,
     NoEligibleAccountError,
+    PrematureStreamEOFError,
     QuotaExhaustedError,
     RateLimitError,
     RequestTooLargeError,
@@ -1064,7 +1066,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     app.state.supervisor = supervisor
     # Patch the active generation's supervisor reference now that it
     # exists so retirement closes it.
-    patched = runtime_manager.attach_supervisor_to_active(supervisor)
+    patched = await runtime_manager.attach_supervisor_to_active(supervisor)
     if patched is not None:
         mirror_generation_on_app_state(app, patched)
 
@@ -2017,6 +2019,7 @@ def create_app(
                 CatalogUnavailableError,
                 AuthenticationError,
                 QuotaExhaustedError,
+                AccountSuspendedError,
             ),
         ):
             status_code = 503
@@ -2024,15 +2027,21 @@ def create_app(
         elif isinstance(exc, RateLimitError):
             status_code = 429
             message = str(exc)
+        elif isinstance(exc, PrematureStreamEOFError):
+            status_code = 502
+            message = str(exc)
         else:
             # Internal failure classes (database, config, ...) carry file
             # paths and infrastructure detail; never forward them to
             # clients.
             status_code = 502
             message = "Upstream request failed"
+        content: dict[str, object] = {"error": message}
+        if isinstance(exc, PrematureStreamEOFError):
+            content["classification"] = exc.classification
         return JSONResponse(
             status_code=status_code,
-            content={"error": message},
+            content=content,
         )
 
     return app

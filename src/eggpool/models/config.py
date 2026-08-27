@@ -87,9 +87,10 @@ class ServerConfig(BaseModel):
     @property
     def resolved_api_key(self) -> str | None:
         """Return the API key, checking inline first then env var."""
-        if self.api_key:
-            return self.api_key
-        return os.environ.get(self.api_key_env)
+        if self.api_key is not None:
+            return self.api_key.strip() or ("" if self.api_key else None)
+        env_key = os.environ.get(self.api_key_env)
+        return env_key.strip() if env_key is not None else None
 
 
 class UpstreamConfig(BaseModel):
@@ -630,7 +631,7 @@ class ProviderStaticHeaderConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_value_source(self) -> ProviderStaticHeaderConfig:
-        if self.value is not None and self.value_env is not None:
+        if (self.value is None) == (self.value_env is None):
             raise ConfigError(
                 f"Static header {self.name!r} must set exactly one of "
                 "value or value_env"

@@ -1272,7 +1272,7 @@ class TestActiveGenerationMetadata:
         await manager.install_initial(gen)
 
         new_supervisor = MagicMock()
-        manager.attach_supervisor_to_active(new_supervisor)
+        await manager.attach_supervisor_to_active(new_supervisor)
 
         view = manager.snapshot_active_values()
         assert view.supervisor is new_supervisor

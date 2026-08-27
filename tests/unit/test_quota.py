@@ -575,7 +575,7 @@ class TestQuotaFairScorer:
                 capacity_5h_requests=100,
                 capacity_5h_tokens=1_000,
             )
-            estimator.add_pending_claim(name, tokens=100)
+            estimator.add_pending_claim(name, tokens=100, cost=1_000)
 
         scores = await QuotaFairScorer(
             quota_estimator=estimator,
@@ -587,6 +587,7 @@ class TestQuotaFairScorer:
 
         assert by_name["heavy"].reserved_requests == 1
         assert by_name["heavy"].reserved_tokens == 100
+        assert estimator.accounts["heavy"].reserved_cost == 1_000
         assert by_name["heavy"].quota_score < by_name["baseline"].quota_score
 
     def test_pending_claim_release_underflow_is_observable(self) -> None:

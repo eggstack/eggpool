@@ -80,14 +80,8 @@ class FairnessRotor:
     """
 
     def __init__(self) -> None:
-        self._lock: asyncio.Lock | None = None
+        self._lock = asyncio.Lock()
         self._positions: OrderedDict[str, int] = OrderedDict()
-
-    def _get_lock(self) -> asyncio.Lock:
-        """Create the loop-bound lock on first use."""
-        if self._lock is None:
-            self._lock = asyncio.Lock()
-        return self._lock
 
     async def rotate(
         self,
@@ -129,7 +123,7 @@ class FairnessRotor:
 
         sorted_cands = sorted(candidates, key=lambda pair: pair[0].name)
 
-        async with self._get_lock():
+        async with self._lock:
             position = self._positions.pop(key_str, 0)
             if len(self._positions) >= _ROTOR_HARD_CAP:
                 self._positions.popitem(last=False)

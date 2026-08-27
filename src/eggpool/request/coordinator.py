@@ -1784,6 +1784,7 @@ class RequestCoordinator:
         *,
         account_name: str,
         estimated_tokens: int,
+        estimated_microdollars: int = 0,
         receipt: RuntimePublicationReceipt,
     ) -> None:
         """Release provisional claim ownership before durable publication.
@@ -1795,6 +1796,7 @@ class RequestCoordinator:
         release_unpublished_claim(
             account_name=account_name,
             estimated_tokens=estimated_tokens,
+            estimated_microdollars=estimated_microdollars,
             receipt=receipt,
             quota_estimator=self._quota_estimator,
             health_manager=self._health_manager,
@@ -2449,11 +2451,13 @@ class RequestCoordinator:
                         self._quota_estimator.add_pending_claim(
                             account_name,
                             tokens=estimated_tokens,
+                            cost=estimated_microdollars,
                         )
                     except BaseException:
                         self._release_unpublished_claim(
                             account_name=account_name,
                             estimated_tokens=estimated_tokens,
+                            estimated_microdollars=estimated_microdollars,
                             receipt=claim_receipt,
                         )
                         raise
@@ -2492,6 +2496,7 @@ class RequestCoordinator:
                 self._release_unpublished_claim(
                     account_name=claim_identity.account_name,
                     estimated_tokens=estimated_tokens,
+                    estimated_microdollars=claim_identity.estimated_microdollars,
                     receipt=claim_receipt,
                 )
                 raise
@@ -2506,6 +2511,7 @@ class RequestCoordinator:
             self._release_unpublished_claim(
                 account_name=claim_identity.account_name,
                 estimated_tokens=estimated_tokens,
+                estimated_microdollars=claim_identity.estimated_microdollars,
                 receipt=claim_receipt,
             )
             raise DatabaseError(

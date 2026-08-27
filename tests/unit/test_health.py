@@ -268,6 +268,16 @@ class TestHealthManager:
         stats = manager.get_health_stats("account1")
         assert stats["disabled_models"] == []
 
+    def test_model_disable_expiry_uses_injected_clock(self) -> None:
+        now = [100.0]
+        manager = HealthManager(clock=lambda: now[0])
+        manager.disable_model("account1", "model1", duration_seconds=10)
+
+        now[0] = 105.0
+        assert manager.get_account_health("account1").is_model_disabled("model1")
+        now[0] = 111.0
+        assert not manager.get_account_health("account1").is_model_disabled("model1")
+
     def test_record_failure(self) -> None:
         """Test recording failure."""
         manager = HealthManager()
