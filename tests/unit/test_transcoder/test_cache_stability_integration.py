@@ -132,6 +132,34 @@ class TestAnthropicToOpenAICacheStability:
             for a in annotations
         )
 
+    @pytest.mark.parametrize("cache_control", ["ephemeral", {"type": "1h"}])
+    def test_invalid_cache_control_records_annotation(
+        self, cache_control: object
+    ) -> None:
+        payload = {
+            "model": "gpt-4",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Hi",
+                            "cache_control": cache_control,
+                        }
+                    ],
+                }
+            ],
+        }
+        _, warnings = self.transcoder.encode_request(payload, self.context)
+        assert any(w.get("kind") == "cache_control_invalid_shape" for w in warnings)
+        assert any(
+            a.kind == "dropped_invalid_shape"
+            and a.source_protocol == "anthropic"
+            and a.target_protocol == "openai"
+            for a in self.context.cache_boundary_tracker.annotations
+        )
+
     def test_message_block_cache_control_emits_unsupported_target(
         self,
     ) -> None:
@@ -430,6 +458,9 @@ class TestLossPolicyReject:
         assert any(
             w.get("kind") == "stable_prefix_reordered_canonically"
             for w in exc_info.value.loss_warnings
+        )
+        assert any(
+            a.kind == "reordered" for a in context.cache_boundary_tracker.annotations
         )
 
 

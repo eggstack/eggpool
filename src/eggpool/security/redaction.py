@@ -21,7 +21,8 @@ MAX_SAFE_DIAGNOSTIC_CHARS = 512
 
 # Authorization: Bearer <token>  /  Authorization: <scheme> <value>
 _AUTH_HEADER_RE = re.compile(
-    r"(?i)(authorization\s*[:=]\s*)(?:[^\s,;\"'}]+(?:\s+[^\s,;\"'}]+)*)"
+    r"(?i)((?:authorization|x-api-key|x-auth-token|api[_-]?key)\s*[:=]\s*)"
+    r"(?:[^\s,;\"'}]+(?:\s+[^\s,;\"'}]+)*)"
 )
 _BEARER_RE = re.compile(r"(?i)(bearer\s+)([A-Za-z0-9._\-+/=]+)")
 

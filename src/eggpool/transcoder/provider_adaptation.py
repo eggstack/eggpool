@@ -63,7 +63,7 @@ class ControlFieldAdaptation:
     payload: Mapping[str, Any]
     requested_field: str | None = None
     emitted_field: str | None = None
-    warning: AdaptationWarning | None = None
+    warnings: tuple[AdaptationWarning, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -388,13 +388,11 @@ def _handle_effort_budget_contract(
                 new_payload = result.payload
                 changed = True
                 emitted.append("reasoning_effort")
-                if result.warning:
-                    warnings.append(result.warning)
+                warnings.extend(result.warnings)
             elif result.disposition == "dropped":
                 new_payload = result.payload
                 changed = True
-                if result.warning:
-                    warnings.append(result.warning)
+                warnings.extend(result.warnings)
             elif result.disposition == "rejected":
                 return _reject(
                     new_payload,
@@ -422,8 +420,7 @@ def _handle_effort_budget_contract(
                 changed = True
                 if "thinking" in new_payload:
                     emitted.append("thinking")
-                if result.warning:
-                    warnings.append(result.warning)
+                warnings.extend(result.warnings)
             elif result.disposition == "rejected":
                 return _reject(
                     new_payload,
@@ -451,13 +448,11 @@ def _handle_effort_budget_contract(
                 changed = True
                 if result.emitted_field is not None:
                     emitted.append(result.emitted_field)
-                if result.warning:
-                    warnings.append(result.warning)
+                warnings.extend(result.warnings)
             elif result.disposition == "dropped":
                 new_payload = result.payload
                 changed = True
-                if result.warning:
-                    warnings.append(result.warning)
+                warnings.extend(result.warnings)
             elif result.disposition == "rejected":
                 return _reject(
                     new_payload,
@@ -496,8 +491,7 @@ def _handle_effort_budget_contract(
         if result.disposition in ("mapped", "dropped"):
             new_payload = result.payload
             changed = True
-            if result.warning:
-                warnings.append(result.warning)
+            warnings.extend(result.warnings)
             if "thinking" in new_payload:
                 emitted.append("thinking")
 
@@ -547,10 +541,12 @@ def _adapt_reasoning_effort(
             payload=modified,
             requested_field="reasoning_effort",
             emitted_field="reasoning_effort",
-            warning=AdaptationWarning(
-                kind="effort_mapped",
-                field_name="reasoning_effort",
-                detail=f"effort {effort_value!r} mapped to {alias_target!r}",
+            warnings=(
+                AdaptationWarning(
+                    kind="effort_mapped",
+                    field_name="reasoning_effort",
+                    detail=f"effort {effort_value!r} mapped to {alias_target!r}",
+                ),
             ),
         )
 
@@ -579,10 +575,12 @@ def _adapt_reasoning_effort(
         disposition="dropped",
         payload=modified,
         requested_field="reasoning_effort",
-        warning=AdaptationWarning(
-            kind="thinking_control_dropped",
-            field_name="reasoning_effort",
-            detail=f"effort {effort_value!r} not accepted by contract",
+        warnings=(
+            AdaptationWarning(
+                kind="thinking_control_dropped",
+                field_name="reasoning_effort",
+                detail=f"effort {effort_value!r} not accepted by contract",
+            ),
         ),
     )
 
@@ -727,7 +725,7 @@ def _adapt_thinking_block(
         payload=modified,
         requested_field="thinking",
         emitted_field="thinking" if thinking_dict else None,
-        warning=warnings[0] if warnings else None,
+        warnings=tuple(warnings),
     )
 
 
@@ -783,10 +781,12 @@ def _adapt_thinking_budget(
                 payload=modified,
                 requested_field="thinking_budget",
                 emitted_field="reasoning_effort",
-                warning=AdaptationWarning(
-                    kind="budget_mapped",
-                    field_name="thinking_budget",
-                    detail=(f"budget {value!r} mapped to effort {effort!r}"),
+                warnings=(
+                    AdaptationWarning(
+                        kind="budget_mapped",
+                        field_name="thinking_budget",
+                        detail=(f"budget {value!r} mapped to effort {effort!r}"),
+                    ),
                 ),
             )
 
@@ -804,13 +804,15 @@ def _adapt_thinking_budget(
         disposition="dropped",
         payload=modified,
         requested_field="thinking_budget",
-        warning=AdaptationWarning(
-            kind="thinking_control_dropped",
-            field_name="thinking_budget",
-            detail=(
-                f"contract mode {contract.mode!r} does not accept budget"
-                if valid_budget
-                else "thinking budget is invalid or outside provider bounds"
+        warnings=(
+            AdaptationWarning(
+                kind="thinking_control_dropped",
+                field_name="thinking_budget",
+                detail=(
+                    f"contract mode {contract.mode!r} does not accept budget"
+                    if valid_budget
+                    else "thinking budget is invalid or outside provider bounds"
+                ),
             ),
         ),
     )

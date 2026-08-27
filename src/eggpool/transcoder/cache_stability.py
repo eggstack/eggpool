@@ -37,6 +37,8 @@ from eggpool.jsonx import dumps_str as jsonx_dumps_str
 # * ``dropped_invalid_shape`` — cache_control annotation had a
 #   non-conforming shape and could not be carried across. Loss is
 #   defensive.
+# * ``reordered`` — cache boundaries were normalized into the target
+#   protocol's stable prefix order.
 # * ``synthesized`` — reserved. Phase 3 never emits ``synthesized``;
 #   it exists for forward-compatibility with Phase 4 work that may
 #   add provider-native cache hints.
@@ -45,6 +47,7 @@ CACHE_BOUNDARY_KIND_PRESERVED_RELOCATED: str = "preserved_relocated"
 CACHE_BOUNDARY_KIND_DROPPED_UNSUPPORTED_TARGET: str = "dropped_unsupported_target"
 CACHE_BOUNDARY_KIND_DROPPED_FEATURE_DISABLED: str = "dropped_feature_disabled"
 CACHE_BOUNDARY_KIND_DROPPED_INVALID_SHAPE: str = "dropped_invalid_shape"
+CACHE_BOUNDARY_KIND_REORDERED: str = "reordered"
 CACHE_BOUNDARY_KIND_SYNTHESIZED: str = "synthesized"
 
 # Hard cap on the number of annotations recorded per request. The

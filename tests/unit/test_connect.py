@@ -782,6 +782,18 @@ class TestMergeProviderIntoConfig:
         assert "[providers.test]" in content
         assert "test.example.com" in content
 
+        assert 'host = "127.0.0.1"' in content
+        assert config_path.stat().st_mode & 0o777 == 0o600
+
+    def test_inline_api_key_config_is_owner_only(self, tmp_path: Path) -> None:
+        config_path = tmp_path / "config.toml"
+        merge_provider_into_config(
+            str(config_path),
+            {"id": "test", "base_url": "https://test.example.com"},
+            "sk-inline-secret",
+        )
+        assert config_path.stat().st_mode & 0o777 == 0o600
+
 
 class TestCheckDuplicateApiKey:
     """Tests for checking duplicate API keys."""
@@ -2337,7 +2349,7 @@ class TestConfigAccountLabel:
             api_key_env="OPENCODE_GO_API_KEY",
             api_key="sk-live-key-1234",
         )
-        assert acct.label == "opencode-go/default  sk-l...1234"
+        assert acct.label == "opencode-go/default  sk...34"
 
     def test_label_with_env_only(self) -> None:
         """Shows env var name when only api_key_env is set."""

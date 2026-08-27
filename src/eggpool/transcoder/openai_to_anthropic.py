@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from eggpool.jsonx import dumps_str, loads
 from eggpool.transcoder.cache_stability import (
+    CACHE_BOUNDARY_KIND_REORDERED,
     CacheBoundaryAnnotation,
     extract_cache_boundaries,
     extract_cache_control_type,
@@ -965,6 +966,15 @@ class OpenAIToAnthropic:
                     "kind": "stable_prefix_reordered_canonically",
                     "field": "cache_control",
                 }
+            )
+            context.cache_boundary_tracker.record(
+                CacheBoundaryAnnotation(
+                    kind=CACHE_BOUNDARY_KIND_REORDERED,
+                    source_protocol="openai",
+                    target_protocol="anthropic",
+                    source_path="cache_control",
+                    target_path="cache_control",
+                )
             )
 
         # Phase 3 loss-policy enforcement. When the operator has

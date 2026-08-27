@@ -22,7 +22,7 @@ _DEFAULT_BUDGET = MaintenanceBudget()
 logger = logging.getLogger(__name__)
 
 
-async def _retry_runtime_reconciliation(
+async def retry_runtime_reconciliation(
     operation: Callable[[], Awaitable[None]],
     description: str,
 ) -> None:
@@ -383,12 +383,12 @@ async def _reconcile_runtime_reservations(
                     tokens=tokens,
                 )
 
-            await _retry_runtime_reconciliation(
+            await retry_runtime_reconciliation(
                 remove_reservation,
                 f"account {account_name_value!r} quota reservation",
             )
         if router is not None:
-            await _retry_runtime_reconciliation(
+            await retry_runtime_reconciliation(
                 lambda account_name=account_name_value: (
                     router.decrement_active_request_count(account_name)
                 ),

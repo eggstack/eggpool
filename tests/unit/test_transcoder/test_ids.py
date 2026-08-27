@@ -12,6 +12,18 @@ def test_register_and_lookup() -> None:
     assert m.to_client("u1") == "c1"
 
 
+def test_register_replaces_stale_bidirectional_entries() -> None:
+    m = ToolCallIdMap()
+    m.register("c1", "u1")
+    m.register("c1", "u2")
+    assert m.to_upstream("c1") == "u2"
+    assert m.to_client("u1") is None
+
+    m.register("c2", "u2")
+    assert m.to_upstream("c1") is None
+    assert m.to_client("u2") == "c2"
+
+
 def test_missing_keys_return_none() -> None:
     m = ToolCallIdMap()
     assert m.to_upstream("missing") is None

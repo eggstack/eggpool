@@ -36,6 +36,12 @@ class ToolCallIdMap:
         upstream_id: str,
     ) -> None:
         """Register a mapping in both directions."""
+        previous_upstream = self._client_to_upstream.get(client_id)
+        if previous_upstream is not None and previous_upstream != upstream_id:
+            self._upstream_to_client.pop(previous_upstream, None)
+        previous_client = self._upstream_to_client.get(upstream_id)
+        if previous_client is not None and previous_client != client_id:
+            self._client_to_upstream.pop(previous_client, None)
         self._client_to_upstream[client_id] = upstream_id
         self._upstream_to_client[upstream_id] = client_id
 

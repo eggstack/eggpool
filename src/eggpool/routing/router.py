@@ -6,6 +6,7 @@ import asyncio
 import logging
 import math
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -26,6 +27,13 @@ if TYPE_CHECKING:
     from eggpool.health.health_manager import HealthManager
 
 logger = logging.getLogger(__name__)
+
+_LAST_FAIRNESS_DECISION: ContextVar[FairnessDecision | None] = ContextVar(
+    "eggpool_last_fairness_decision", default=None
+)
+_LAST_FAIRNESS_BAND_NAMES: ContextVar[frozenset[str]] = ContextVar(
+    "eggpool_last_fairness_band_names", default=frozenset()
+)
 
 
 def _group_by_priority(
@@ -220,8 +228,6 @@ class Router:
         self._fairness_epsilon = fairness_epsilon
         self._fairness_scope = fairness_scope
         self._fairness_rotor = FairnessRotor()
-        self._last_fairness_decision: FairnessDecision | None = None
-        self._last_fairness_band_names: frozenset[str] = frozenset()
         self._active_count_lock = asyncio.Lock()
         self._scorer = QuotaFairScorer(
             quota_estimator=self._quota_estimator,
@@ -281,12 +287,12 @@ class Router:
     @property
     def last_fairness_decision(self) -> FairnessDecision | None:
         """Return the most recent fairness rotation decision, if any."""
-        return self._last_fairness_decision
+        return _LAST_FAIRNESS_DECISION.get()
 
     @property
     def last_fairness_band_names(self) -> frozenset[str]:
         """Return account names in the most recent fairness band."""
-        return self._last_fairness_band_names
+        return _LAST_FAIRNESS_BAND_NAMES.get()
 
     async def select_account(
         self,
@@ -377,25 +383,27 @@ class Router:
                         scope=self._fairness_scope,
                         reason=band_reason,
                     )
-                self._last_fairness_decision = fairness_decision
-                self._last_fairness_band_names = (
+                _LAST_FAIRNESS_DECISION.set(fairness_decision)
+                _LAST_FAIRNESS_BAND_NAMES.set(
                     frozenset(s.name for s, _ in band) if band else frozenset()
                 )
                 ranked_pairs = band + rest
             else:
-                self._last_fairness_decision = FairnessDecision(
-                    mode=self._fairness_mode,
-                    applied=False,
-                    key=key.to_key_string(),
-                    candidate_count=len(ranked_pairs),
-                    scope=self._fairness_scope,
-                    reason=(
-                        "disabled"
-                        if self._fairness_mode == "off"
-                        else "single_candidate"
-                    ),
+                _LAST_FAIRNESS_DECISION.set(
+                    FairnessDecision(
+                        mode=self._fairness_mode,
+                        applied=False,
+                        key=key.to_key_string(),
+                        candidate_count=len(ranked_pairs),
+                        scope=self._fairness_scope,
+                        reason=(
+                            "disabled"
+                            if self._fairness_mode == "off"
+                            else "single_candidate"
+                        ),
+                    )
                 )
-                self._last_fairness_band_names = frozenset()
+                _LAST_FAIRNESS_BAND_NAMES.set(frozenset())
 
             if ranked_pairs:
                 return ranked_pairs[0][0]
@@ -458,6 +466,7 @@ class Router:
         include_gates: bool = False,
         thinking_requirement: ThinkingRequestRequirement | None = None,
         capability_policy: dict[str, str] | None = None,
+        request_surface: str = "chat_completions",
     ) -> list[dict[str, Any]]:
         """Return one row per registered account explaining eligibility.
 
@@ -468,7 +477,8 @@ class Router:
         ``"no_provider"``, ``"wrong_provider"``, ``"no_model"``,
         ``"model_stale"``, ``"no_protocol"``, ``"protocol_mismatch"``,
         ``"thinking_unsupported"``, ``"thinking_unknown"``,
-        ``"thinking_conflicting"`` otherwise) and a short ``reason_detail``
+        ``"thinking_conflicting"``, ``"no_surface"``,
+        ``"model_quarantined"`` otherwise) and a short ``reason_detail``
         for dashboard display.
         Used by ``eggpool accounts explain`` to surface why a model
         is routing only to a subset of accounts.
@@ -498,6 +508,7 @@ class Router:
                 transcode_eligibility=transcode_eligibility,
                 thinking_requirement=thinking_requirement,
                 capability_policy=capability_policy,
+                request_surface=request_surface,
             )
             row: dict[str, Any] = {
                 "account_name": state.name,
@@ -514,6 +525,7 @@ class Router:
                     transcode_eligibility=transcode_eligibility,
                     thinking_requirement=thinking_requirement,
                     capability_policy=capability_policy,
+                    request_surface=request_surface,
                 )
                 gates["final_eligible"] = eligible
                 row["gates"] = gates
@@ -530,6 +542,7 @@ class Router:
         transcode_eligibility: set[str] | None,
         thinking_requirement: ThinkingRequestRequirement | None = None,
         capability_policy: dict[str, str] | None = None,
+        request_surface: str = "chat_completions",
     ) -> dict[str, Any]:
         """Collect pass/fail booleans for every routing gate on one account.
 
@@ -610,6 +623,19 @@ class Router:
 
                 thinking_support = extract_thinking_status_from_entry(entry)
 
+        request_surface_supported = request_surface == "chat_completions" or (
+            self._registry.account_supports_request_surface(state.name, request_surface)
+        )
+        model_quarantined = False
+        if self._quarantine is not None:
+            model_quarantined = self._quarantine.is_model_quarantined(
+                provider_id=state_provider or provider_id or "unknown",
+                account_id=state.name,
+                canonical_model_id=model_id,
+                upstream_model_id=model_id,
+                upstream_protocol=protocol or "openai",
+            )
+
         return {
             "config_enabled": state.enabled,
             "credentials_usable": self._registry.has_usable_credentials(state.name),
@@ -621,6 +647,8 @@ class Router:
                 None if provider_id is None else state_provider == provider_id
             ),
             "provider_supports_protocol": provider_supports_protocol,
+            "request_surface_supported": request_surface_supported,
+            "model_quarantined": model_quarantined,
             "model_support_row": model_support_row,
             "model_support_enabled": model_support_row,
             "fresh_support": fresh_support,
@@ -642,6 +670,7 @@ class Router:
         transcode_eligibility: set[str] | None,
         thinking_requirement: ThinkingRequestRequirement | None = None,
         capability_policy: dict[str, str] | None = None,
+        request_surface: str = "chat_completions",
     ) -> tuple[bool, str, str]:
         """Decide whether ``state`` can serve ``model_id`` and why not.
 
@@ -712,6 +741,21 @@ class Router:
                 )
 
         if (
+            request_surface != "chat_completions"
+            and not self._registry.account_supports_request_surface(
+                state.name, request_surface
+            )
+        ):
+            return (
+                False,
+                "no_surface",
+                (
+                    f"Account {state.name!r} does not support request surface "
+                    f"{request_surface!r}."
+                ),
+            )
+
+        if (
             protocol is not None
             and not self._registry.account_supports_protocol(state.name, protocol)
             and not (
@@ -758,6 +802,23 @@ class Router:
                     f"have temporarily excluded it."
                 ),
             )
+
+        if self._quarantine is not None:
+            account_provider = self._catalog.cache.get_provider_for_account(
+                state.name
+            ) or self._registry.get_provider_for_account(state.name)
+            if self._quarantine.is_model_quarantined(
+                provider_id=account_provider or provider_id or "unknown",
+                account_id=state.name,
+                canonical_model_id=model_id,
+                upstream_model_id=model_id,
+                upstream_protocol=protocol or "openai",
+            ):
+                return (
+                    False,
+                    "model_quarantined",
+                    (f"Model {model_id!r} is quarantined for account {state.name!r}."),
+                )
 
         if not self._catalog.cache.is_account_model_available(
             state.name,
@@ -939,8 +1000,8 @@ class Router:
         ranked: list[tuple[AccountRuntimeState, RoutingScore]] = []
         plan_fairness_decision: FairnessDecision | None = None
         plan_fairness_band_names: frozenset[str] = frozenset()
-        self._last_fairness_decision = None
-        self._last_fairness_band_names = frozenset()
+        _LAST_FAIRNESS_DECISION.set(None)
+        _LAST_FAIRNESS_BAND_NAMES.set(frozenset())
 
         for _priority, tier_states in tiers:
             tier_fairness_decision: FairnessDecision | None = None
@@ -1049,8 +1110,8 @@ class Router:
             for state, score in ranked_pairs:
                 ranked.append((state, score))
 
-        self._last_fairness_decision = plan_fairness_decision
-        self._last_fairness_band_names = plan_fairness_band_names
+        _LAST_FAIRNESS_DECISION.set(plan_fairness_decision)
+        _LAST_FAIRNESS_BAND_NAMES.set(plan_fairness_band_names)
         return RoutingPlan(
             eligible_names=candidates.names,
             ranked_candidates=ranked,
@@ -1207,8 +1268,8 @@ class Router:
             if failover_fairness_decision is None:
                 failover_fairness_decision = tier_fairness_decision
                 failover_fairness_band_names = tier_fairness_band_names
-                self._last_fairness_decision = failover_fairness_decision
-                self._last_fairness_band_names = failover_fairness_band_names
+                _LAST_FAIRNESS_DECISION.set(failover_fairness_decision)
+                _LAST_FAIRNESS_BAND_NAMES.set(failover_fairness_band_names)
 
             for state, score in ranked_pairs:
                 result.append((state, score))

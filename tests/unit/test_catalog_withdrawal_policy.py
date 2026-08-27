@@ -331,6 +331,7 @@ def _make_router_for_explain() -> Router:
     router._providers_config.providers = {}
     router._catalog_service = MagicMock()
     router._catalog = MagicMock()
+    router._quarantine = None
     router._stale_after_s = 0.0
     router._local_quota_mode = "score_only"
     return router
@@ -380,6 +381,8 @@ def test_collect_gate_status_returns_expected_keys() -> None:
         "provider_id_catalog",
         "provider_match",
         "provider_supports_protocol",
+        "request_surface_supported",
+        "model_quarantined",
         "model_support_row",
         "model_support_enabled",
         "fresh_support",

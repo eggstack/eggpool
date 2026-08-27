@@ -342,6 +342,29 @@ def test_validation_warning_payload_is_logger_safe() -> None:
 
 
 class TestRuntimeFingerprintSecrets:
+    def test_api_key_environment_names_are_redacted(self) -> None:
+        """Changing an environment variable name must not change the digest."""
+        from eggpool.models.config import AppConfig
+
+        def make_config(api_key_env: str) -> AppConfig:
+            return AppConfig.from_dict(
+                {
+                    "providers": {
+                        "provider": {
+                            "id": "provider",
+                            "base_url": "https://provider.example",
+                            "accounts": [
+                                {"name": "default", "api_key_env": api_key_env}
+                            ],
+                        }
+                    }
+                }
+            )
+
+        assert compute_runtime_fingerprint(make_config("FIRST_SECRET_NAME")) == (
+            compute_runtime_fingerprint(make_config("SECOND_SECRET_NAME"))
+        )
+
     def test_strips_account_api_keys(self) -> None:
         """The fingerprint treats every per-account ``api_key`` field as secret."""
         from eggpool.models.config import AppConfig

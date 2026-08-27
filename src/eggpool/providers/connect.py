@@ -392,7 +392,7 @@ def _mask_secret(value: str | None) -> str:
         return "unset"
     if len(value) <= 8:
         return "*" * len(value)
-    return f"{value[:4]}...{value[-4:]}"
+    return f"{value[:2]}...{value[-2:]}"
 
 
 class TerminalMenu:
@@ -545,7 +545,7 @@ def merge_provider_into_config(
     if not path.exists():
         minimal = (
             "[server]\n"
-            'host = "0.0.0.0"\n'
+            'host = "127.0.0.1"\n'
             "port = 11300\n"
             'log_level = "INFO"\n'
             "\n"
@@ -556,6 +556,8 @@ def merge_provider_into_config(
             "refresh_interval_s = 300\n"
         )
         path.write_text(minimal, encoding="utf-8")
+        with contextlib.suppress(OSError):
+            path.chmod(0o600)
 
     content = path.read_text(encoding="utf-8")
     provider_id = provider_data.get("id", "unknown")
@@ -584,7 +586,7 @@ def merge_provider_into_config(
 
     # Protocol transcoding is enabled by default; nothing to enforce here.
 
-    _atomic_write_text(path, content)
+    _atomic_write_text(path, content, mode=0o600 if api_key else None)
     return True
 
 

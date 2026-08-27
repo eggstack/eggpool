@@ -264,7 +264,7 @@ def _ordered_accounts(config: AppConfig) -> list[object]:
             if raw_key:
                 projection["api_key"] = "<redacted>"
             elif account.api_key_env:
-                projection["api_key_env"] = account.api_key_env
+                projection["api_key_env"] = "<redacted>"
             rows.append((provider_id, account.name, projection))
     rows.sort(key=lambda row: (row[0], row[1]))
     return [row[2] for row in rows]

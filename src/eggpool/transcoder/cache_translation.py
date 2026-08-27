@@ -161,10 +161,28 @@ def anthropic_boundary_to_openai(
     cache_control_raw = part.get("cache_control")
     if not isinstance(cache_control_raw, dict):
         warnings.append({"kind": "cache_control_invalid_shape", "field": source_path})
+        context.cache_boundary_tracker.record(
+            CacheBoundaryAnnotation(
+                kind="dropped_invalid_shape",
+                source_protocol="anthropic",
+                target_protocol="openai",
+                source_path=source_path,
+                target_path=None,
+            )
+        )
         return False
     cache_control = cast("dict[str, Any]", cache_control_raw)
     if cache_control.get("type") != "ephemeral":
         warnings.append({"kind": "cache_control_invalid_shape", "field": source_path})
+        context.cache_boundary_tracker.record(
+            CacheBoundaryAnnotation(
+                kind="dropped_invalid_shape",
+                source_protocol="anthropic",
+                target_protocol="openai",
+                source_path=source_path,
+                target_path=None,
+            )
+        )
         return False
     target_capability = _cache_capability(capability, "openai")
     if cache_control.get("ttl") is not None:

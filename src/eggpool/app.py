@@ -28,6 +28,7 @@ from eggpool.auth import require_auth, require_auth_at_startup
 from eggpool.background import TaskSupervisor
 from eggpool.background.cleanup import (
     reconcile_expired_reservations,
+    retry_runtime_reconciliation,
 )
 from eggpool.cli_exit_codes import STAGE_RELOAD_IN_PROGRESS
 from eggpool.constants import API_V1_PREFIX
@@ -430,7 +431,7 @@ async def finalize_stale_requests_once(
     per_account_reconciled: dict[str, dict[str, int]] = {}
     for row in transitioned:
         account_name = row.get("account_name")
-        if not account_name:
+        if not isinstance(account_name, str) or not account_name:
             logger.warning(
                 "Stale request %s has no account identity; leaving runtime "
                 "convergence unresolved",
@@ -452,11 +453,22 @@ async def finalize_stale_requests_once(
             row.get("reservation_id") in released_reservation_ids
             and quota_estimator is not None
         ):
-            await quota_estimator.remove_reservation(
-                account_name,
-                int(reserved),
-                requests=1,
-                tokens=int(leaked_tokens),
+
+            async def remove_reservation(
+                account: str = account_name,
+                reserved_value: Any = reserved,
+                token_value: Any = leaked_tokens,
+            ) -> None:
+                await quota_estimator.remove_reservation(
+                    account,
+                    int(reserved_value),
+                    requests=1,
+                    tokens=int(token_value),
+                )
+
+            await retry_runtime_reconciliation(
+                remove_reservation,
+                f"account {account_name!r} quota reservation",
             )
         bucket["tokens"] += int(leaked_tokens)
         bucket["microdollars"] += int(reserved)
@@ -466,14 +478,29 @@ async def finalize_stale_requests_once(
             type(router), "decrement_active_request_count_by", None
         )
         if decrement_many is not None:
-            await router.decrement_active_request_count_by(
-                account_name, bucket["requests"]
+
+            async def decrement_many_requests(
+                account: str = account_name,
+                request_count: int = bucket["requests"],
+            ) -> None:
+                await router.decrement_active_request_count_by(account, request_count)
+
+            await retry_runtime_reconciliation(
+                decrement_many_requests,
+                f"account {account_name!r} active request count",
             )
         else:
             # Compatibility for lightweight test/dummy routers predating the
             # exact-count API.  Production Router always takes the bulk path.
             for _ in range(bucket["requests"]):
-                await router.decrement_active_request_count(account_name)
+
+                async def decrement_one_request(account: str = account_name) -> None:
+                    await router.decrement_active_request_count(account)
+
+                await retry_runtime_reconciliation(
+                    decrement_one_request,
+                    f"account {account_name!r} active request count",
+                )
 
     logger.info(
         "Stale request finalizer: cleaned up %d leaked requests across %d accounts",

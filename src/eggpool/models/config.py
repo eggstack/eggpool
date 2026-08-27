@@ -787,7 +787,12 @@ class ProviderConfig(BaseModel):
     @field_validator("base_url")
     @classmethod
     def validate_base_url(cls, value: str) -> str:
-        """Require an absolute credential-free HTTP(S) provider URL."""
+        """Require an absolute credential-free HTTP(S) provider URL.
+
+        The hostname is intentionally not resolved here: provider URLs are
+        operator-trusted endpoints and DNS resolution during config parsing
+        would be both surprising and vulnerable to DNS rebinding.
+        """
         if value != value.strip() or any(char.isspace() for char in value):
             raise ConfigError("Provider base_url must not contain whitespace")
         try:

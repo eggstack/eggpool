@@ -210,6 +210,12 @@ discovery-based verification — no hardcoded probe model. The connect flow
 lets you choose a preset, assign a custom provider instance ID, and
 optionally override the default base URL for LAN hosts.
 
+Provider `base_url` values are operator-trusted outbound destinations. The
+configuration validator checks URL syntax and embedded credentials, but does
+not resolve or block private, loopback, or link-local hosts. Only point a
+provider at a destination you intend EggPool to contact; use the local/LAN
+examples here for explicitly trusted internal services.
+
 ```toml
 # Example: LM Studio on a LAN host
 [providers.lmstudio-office]

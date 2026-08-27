@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from eggpool.security.redaction import (
     MAX_REDACTED_ERROR_DETAIL_CHARS,
     REDACTED,
@@ -33,6 +35,12 @@ class TestRedactErrorDetailRegex:
     def test_authorization_header(self) -> None:
         result = redact_error_detail("Authorization: Bearer secret-token-123")
         assert "secret-token-123" not in (result or "")
+        assert REDACTED in (result or "")
+
+    @pytest.mark.parametrize("header", ["X-Api-Key", "X-Auth-Token", "api-key"])
+    def test_api_key_headers(self, header: str) -> None:
+        result = redact_error_detail(f"{header}: secret-header-value")
+        assert "secret-header-value" not in (result or "")
         assert REDACTED in (result or "")
 
     def test_bearer_token(self) -> None:

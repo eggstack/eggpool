@@ -1174,6 +1174,21 @@ class RequestCoordinator:
                         context.request_id,
                         selected.attempt_id,
                     )
+                    try:
+                        await self._schedule_unexpected_local_cleanup(
+                            context=context,
+                            selected=selected,
+                            error=err,
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        logger.exception(
+                            "Failed to schedule unexpected local cleanup: "
+                            "request_id=%s attempt_id=%s",
+                            context.request_id,
+                            selected.attempt_id,
+                        )
             return self._build_local_error_response(context, status_code=500)
 
     async def _execute_impl(
@@ -4295,6 +4310,34 @@ class RequestCoordinator:
                 failure_effects=local_error.failure_effects,
                 thinking_trace_json=_serialize_thinking_trace(context.thinking_trace),
             ),
+        )
+
+    async def _schedule_unexpected_local_cleanup(
+        self,
+        *,
+        context: ProxyRequestContext,
+        selected: SelectedAttempt,
+        error: Exception,
+    ) -> None:
+        """Retain bounded attempt cleanup when terminalization itself fails."""
+        local_error = self._local_dispatch_error(
+            context=context,
+            selected=selected,
+            stage="request_boundary_cleanup",
+            error=error,
+        )
+        cleanup_error = _RetryableUpstreamError(
+            "unexpected local cleanup",
+            status_code=500,
+            error_class=local_error.error_class,
+            failure_observation=local_error.failure_observation,
+            failure_effects=local_error.failure_effects,
+            source="local_preparation",
+        )
+        await self._cleanup_failed_attempt(
+            context=context,
+            selected=selected,
+            error=cleanup_error,
         )
 
     @staticmethod
