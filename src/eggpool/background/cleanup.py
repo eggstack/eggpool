@@ -53,6 +53,13 @@ async def _has_remaining_rows(
     return len(rows) > 0
 
 
+def _retention_cutoff(retain_days: int) -> str:
+    """Return a SQLite relative-date modifier for a valid retention period."""
+    if retain_days <= 0:
+        raise ValueError("retain_days must be greater than zero")
+    return f"-{retain_days}"
+
+
 async def cleanup_stale_reservations(
     db: Database,
     max_age_seconds: float = 600.0,
@@ -113,7 +120,7 @@ async def cleanup_old_requests(
     ``.rows_changed`` attribute for backward compatibility.
     """
     b = budget or _DEFAULT_BUDGET
-    cutoff = f"-{retain_days}"
+    cutoff = _retention_cutoff(retain_days)
     total_deleted = 0
     batches = 0
     start = time.monotonic()
@@ -185,7 +192,7 @@ async def cleanup_old_events(
 ) -> MaintenancePassResult:
     """Delete account events older than the retention period."""
     b = budget or _DEFAULT_BUDGET
-    cutoff = f"-{retain_days}"
+    cutoff = _retention_cutoff(retain_days)
     total_deleted = 0
     batches = 0
     start = time.monotonic()
@@ -396,7 +403,7 @@ async def cleanup_old_operational_events(
 ) -> MaintenancePassResult:
     """Delete operational events older than the retention period."""
     b = budget or _DEFAULT_BUDGET
-    cutoff = f"-{retain_days}"
+    cutoff = _retention_cutoff(retain_days)
     total_deleted = 0
     batches = 0
     start = time.monotonic()
@@ -460,7 +467,7 @@ async def cleanup_old_usage_rollups(
 ) -> MaintenancePassResult:
     """Delete usage rollups older than the retention period."""
     b = budget or _DEFAULT_BUDGET
-    cutoff = f"-{retain_days}"
+    cutoff = _retention_cutoff(retain_days)
     total_deleted = 0
     batches = 0
     start = time.monotonic()
@@ -524,7 +531,7 @@ async def cleanup_old_price_snapshots(
 ) -> MaintenancePassResult:
     """Delete model price snapshots older than the retention period."""
     b = budget or _DEFAULT_BUDGET
-    cutoff = f"-{retain_days}"
+    cutoff = _retention_cutoff(retain_days)
     total_deleted = 0
     batches = 0
     start = time.monotonic()
@@ -588,7 +595,7 @@ async def cleanup_old_model_info_observations(
 ) -> MaintenancePassResult:
     """Delete model info observations older than the retention period."""
     b = budget or _DEFAULT_BUDGET
-    cutoff = f"-{retain_days}"
+    cutoff = _retention_cutoff(retain_days)
     total_deleted = 0
     batches = 0
     start = time.monotonic()
@@ -652,7 +659,7 @@ async def cleanup_old_routing_decisions(
 ) -> MaintenancePassResult:
     """Delete routing decisions older than the retention period."""
     b = budget or _DEFAULT_BUDGET
-    cutoff = f"-{retain_days}"
+    cutoff = _retention_cutoff(retain_days)
     total_deleted = 0
     batches = 0
     start = time.monotonic()

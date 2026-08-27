@@ -294,10 +294,11 @@ class RoutingTraceWriter:
             self._queue.append(event)
             self._accepted += 1
             loop = self._loop
+            wake = self._wake
 
         if loop is not None and loop.is_running():
             with contextlib.suppress(RuntimeError):
-                loop.call_soon_threadsafe(self._wake.set)
+                loop.call_soon_threadsafe(wake.set)
         return "accepted"
 
     def configure(

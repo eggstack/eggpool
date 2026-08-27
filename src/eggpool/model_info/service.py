@@ -1132,6 +1132,7 @@ class ModelInfoService:
         async def _fetch_aa() -> SourceModelRecord | None:
             if self._artificial_analysis_source is None:
                 return None
+            aa_records: list[SourceModelRecord] = []
             try:
                 aa_records = await self._artificial_analysis_source.fetch_all()
                 await self.record_source_success(

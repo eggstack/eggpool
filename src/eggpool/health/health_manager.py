@@ -253,8 +253,10 @@ class HealthManager:
             if math.isfinite(cooldown_seconds) and cooldown_seconds >= 0.0
             else 300.0
         )
-        health.cooldown_until = self.clock() + min(
-            delay, MAX_NONTERMINAL_BACKOFF_SECONDS
+        now = self.clock()
+        health.cooldown_until = max(
+            health.cooldown_until,
+            now + min(delay, MAX_NONTERMINAL_BACKOFF_SECONDS),
         )
         health.is_healthy = False
 
@@ -266,8 +268,10 @@ class HealthManager:
             if math.isfinite(retry_after_seconds) and retry_after_seconds >= 0.0
             else 60.0
         )
-        health.cooldown_until = self.clock() + min(
-            delay, MAX_NONTERMINAL_BACKOFF_SECONDS
+        now = self.clock()
+        health.cooldown_until = max(
+            health.cooldown_until,
+            now + min(delay, MAX_NONTERMINAL_BACKOFF_SECONDS),
         )
         health.health_state = "rate_limited"
         health.is_healthy = False
@@ -519,6 +523,26 @@ class HealthManager:
         self._refresh_transient_state(health, now)
         return health.is_healthy and not health.is_disabled(now)
 
+    def is_account_healthy_read_only(self, account_name: str) -> bool:
+        """Check account health without creating or refreshing runtime state."""
+        health = self._accounts.get(account_name)
+        if health is None:
+            return True
+        now = self.clock()
+        if health.is_disabled(now):
+            return False
+        if health.is_healthy:
+            return True
+        return (
+            health.health_state
+            in (
+                "quota_exhausted",
+                "rate_limited",
+                "cooldown",
+            )
+            and now >= health.cooldown_until
+        )
+
     def is_model_healthy(self, account_name: str, model_id: str) -> bool:
         """Check if a model is healthy for an account.
 
@@ -535,6 +559,19 @@ class HealthManager:
             not health.is_model_disabled(model_id, now)
             and health.circuit_breaker.can_request()
         )
+
+    def is_model_healthy_read_only(self, account_name: str, model_id: str) -> bool:
+        """Check model health without mutating health or circuit-breaker state."""
+        health = self._accounts.get(account_name)
+        if health is None or not self.is_account_healthy_read_only(account_name):
+            return health is None
+        disabled_until = health.disabled_models.get(model_id)
+        if disabled_until is None and model_id in health.disabled_models:
+            return False
+        now = self.clock()
+        if disabled_until is not None and now < disabled_until:
+            return False
+        return health.circuit_breaker.can_request()
 
     def try_acquire_request(self, account_name: str, model_id: str) -> bool:
         """Attempt to acquire a circuit-breaker probe slot for dispatch.

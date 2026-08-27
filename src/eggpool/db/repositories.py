@@ -1332,11 +1332,12 @@ class AccountEventRepository:
         details: str = "{}",
     ) -> None:
         """Record an account event."""
-        await self._db.execute_write(
-            "INSERT INTO account_events (account_id, event_type, details) "
-            "VALUES (?, ?, ?)",
-            (account_id, event_type, details),
-        )
+        async with self._db.transaction():
+            await self._db.execute_write(
+                "INSERT INTO account_events (account_id, event_type, details) "
+                "VALUES (?, ?, ?)",
+                (account_id, event_type, details),
+            )
 
 
 class ProviderRepository:

@@ -1592,7 +1592,7 @@ class Router:
             # be rejected by the routing eligibility check.
             if (
                 self._health_manager is not None
-                and not self._health_manager.is_account_healthy(state.name)
+                and not self._health_manager.is_account_healthy_read_only(state.name)
             ):
                 continue
             # is_account_model_available performs support, freshness, and
@@ -1610,7 +1610,9 @@ class Router:
                 # and model-specific disable, matching routing behavior)
                 if (
                     self._health_manager is not None
-                    and not self._health_manager.is_model_healthy(state.name, model_id)
+                    and not self._health_manager.is_model_healthy_read_only(
+                        state.name, model_id
+                    )
                 ):
                     continue
                 return True

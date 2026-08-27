@@ -1197,6 +1197,13 @@ class TestAutoRefreshBootstrap:
         assert "initGroupedTimeseriesCharts" in script
         assert "reinitTimeseriesChart" in script
 
+    def test_auto_refresh_destroys_charts_and_avoids_inner_html_sink(self) -> None:
+        script = _render_auto_refresh_script(15)
+        assert "Chart.getChart" in script
+        assert "chart.destroy()" in script
+        assert "content.replaceChildren" in script
+        assert "content.innerHTML" not in script
+
 
 class TestDashboardJS:
     """Static assertions against ``dashboard.js`` source.

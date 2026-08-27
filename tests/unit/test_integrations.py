@@ -884,9 +884,11 @@ class TestResolveServerApiKey:
 
         with (
             patch.dict(os.environ, {}, clear=True),
-            pytest.raises(ConfigStartupAuthError, match="api_key_env is set to"),
+            pytest.raises(ConfigStartupAuthError) as exc_info,
         ):
             resolve_server_api_key(str(config_file))
+        assert "api_key_env is configured" in str(exc_info.value)
+        assert "TEST_EGGPOOL_KEY" not in str(exc_info.value)
 
     def test_generates_and_persists_when_nothing_configured(
         self, tmp_path: Path

@@ -196,11 +196,13 @@ class AccountQuota:
     """Quota state for a single account.
 
     Cost microdollar fields are retained for audit / dashboard display
-    only. The routing scorer consumes ``request_count`` and
+    only for scoring. The routing scorer consumes ``request_count`` and
     ``token_count`` from the persisted snapshot (and their
-    offsets/reservations) because cost is unreliable and we want
-    load balancing to track the metrics we actually care about:
-    requests served and tokens processed.
+    offsets/reservations) because cost is unreliable and we want load
+    balancing to track the metrics we actually care about: requests served
+    and tokens processed. Local hard-cap checks include active reservations
+    in every configured horizon so concurrent work cannot oversubscribe a
+    longer-lived limit.
     """
 
     account_name: str
@@ -273,22 +275,40 @@ class AccountQuota:
         cost_5h = (
             self.get_persisted_cost_5h() + self.five_hour_offset + self.reserved_cost
         )
-        cost_7d = self.get_persisted_cost_7d() + self.weekly_offset
-        cost_30d = self.get_persisted_cost_30d() + self.monthly_offset
+        cost_7d = self.get_persisted_cost_7d() + self.weekly_offset + self.reserved_cost
+        cost_30d = (
+            self.get_persisted_cost_30d() + self.monthly_offset + self.reserved_cost
+        )
         requests_5h = (
             self.get_persisted_request_count_5h()
             + self.reserved_requests
             + self.request_offset_5h
         )
-        requests_7d = self.get_persisted_request_count_7d() + self.request_offset_7d
-        requests_30d = self.get_persisted_request_count_30d() + self.request_offset_30d
+        requests_7d = (
+            self.get_persisted_request_count_7d()
+            + self.reserved_requests
+            + self.request_offset_7d
+        )
+        requests_30d = (
+            self.get_persisted_request_count_30d()
+            + self.reserved_requests
+            + self.request_offset_30d
+        )
         tokens_5h = (
             self.get_persisted_token_count_5h()
             + self.reserved_tokens
             + self.token_offset_5h
         )
-        tokens_7d = self.get_persisted_token_count_7d() + self.token_offset_7d
-        tokens_30d = self.get_persisted_token_count_30d() + self.token_offset_30d
+        tokens_7d = (
+            self.get_persisted_token_count_7d()
+            + self.reserved_tokens
+            + self.token_offset_7d
+        )
+        tokens_30d = (
+            self.get_persisted_token_count_30d()
+            + self.reserved_tokens
+            + self.token_offset_30d
+        )
 
         # Exhaustion semantics: ``>=`` matches the existing pre-extension
         # behaviour (an account exactly at capacity is reported as
@@ -353,13 +373,17 @@ class AccountQuota:
             capacities.append(max(0.0, 1.0 - used_ratio))
 
         if self.capacity_7d_microdollars is not None:
-            cost_7d = self.get_persisted_cost_7d() + self.weekly_offset
+            cost_7d = (
+                self.get_persisted_cost_7d() + self.weekly_offset + self.reserved_cost
+            )
             capacity = self.capacity_7d_microdollars
             used_ratio = cost_7d / capacity if capacity > 0 else float("inf")
             capacities.append(max(0.0, 1.0 - used_ratio))
 
         if self.capacity_30d_microdollars is not None:
-            cost_30d = self.get_persisted_cost_30d() + self.monthly_offset
+            cost_30d = (
+                self.get_persisted_cost_30d() + self.monthly_offset + self.reserved_cost
+            )
             capacity = self.capacity_30d_microdollars
             used_ratio = cost_30d / capacity if capacity > 0 else float("inf")
             capacities.append(max(0.0, 1.0 - used_ratio))
@@ -375,14 +399,20 @@ class AccountQuota:
             capacities.append(max(0.0, 1.0 - used_ratio))
 
         if self.capacity_7d_requests is not None:
-            requests_7d = self.get_persisted_request_count_7d() + self.request_offset_7d
+            requests_7d = (
+                self.get_persisted_request_count_7d()
+                + self.reserved_requests
+                + self.request_offset_7d
+            )
             capacity = self.capacity_7d_requests
             used_ratio = requests_7d / capacity if capacity > 0 else float("inf")
             capacities.append(max(0.0, 1.0 - used_ratio))
 
         if self.capacity_30d_requests is not None:
             requests_30d = (
-                self.get_persisted_request_count_30d() + self.request_offset_30d
+                self.get_persisted_request_count_30d()
+                + self.reserved_requests
+                + self.request_offset_30d
             )
             capacity = self.capacity_30d_requests
             used_ratio = requests_30d / capacity if capacity > 0 else float("inf")
@@ -399,13 +429,21 @@ class AccountQuota:
             capacities.append(max(0.0, 1.0 - used_ratio))
 
         if self.capacity_7d_tokens is not None:
-            tokens_7d = self.get_persisted_token_count_7d() + self.token_offset_7d
+            tokens_7d = (
+                self.get_persisted_token_count_7d()
+                + self.reserved_tokens
+                + self.token_offset_7d
+            )
             capacity = self.capacity_7d_tokens
             used_ratio = tokens_7d / capacity if capacity > 0 else float("inf")
             capacities.append(max(0.0, 1.0 - used_ratio))
 
         if self.capacity_30d_tokens is not None:
-            tokens_30d = self.get_persisted_token_count_30d() + self.token_offset_30d
+            tokens_30d = (
+                self.get_persisted_token_count_30d()
+                + self.reserved_tokens
+                + self.token_offset_30d
+            )
             capacity = self.capacity_30d_tokens
             used_ratio = tokens_30d / capacity if capacity > 0 else float("inf")
             capacities.append(max(0.0, 1.0 - used_ratio))
@@ -1052,6 +1090,7 @@ class QuotaEstimator:
             raise ValueError("pending claim tokens must be non-negative")
         if cost < 0:
             raise ValueError("pending claim cost must be non-negative")
+        self.accounts.setdefault(account_name, AccountQuota(account_name=account_name))
         self._account_pending_requests[account_name] = clamp_sqlite_integer(
             self._account_pending_requests.get(account_name, 0) + 1
         )

@@ -784,6 +784,9 @@ async def test_overview_auto_refresh_reinitializes_charts(
     assert "dash.bootstrap()" in body
     assert "initGroupedTimeseriesCharts" in body
     assert "reinitTimeseriesChart" in body
+    assert "Chart.getChart" in body
+    assert "chart.destroy()" in body
+    assert "content.replaceChildren" in body
 
 
 @pytest.mark.asyncio()

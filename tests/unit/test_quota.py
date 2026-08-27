@@ -113,6 +113,33 @@ class TestAccountQuota:
         capacity = quota.get_remaining_capacity()
         assert capacity == pytest.approx(0.5)
 
+    @pytest.mark.parametrize(
+        ("capacity_field", "snapshot_field", "reservation_field"),
+        [
+            ("capacity_7d_microdollars", "cost_7d", "reserved_cost"),
+            ("capacity_30d_requests", "request_count_30d", "reserved_requests"),
+            ("capacity_30d_tokens", "token_count_30d", "reserved_tokens"),
+        ],
+    )
+    def test_reservations_count_against_longer_horizons(
+        self,
+        capacity_field: str,
+        snapshot_field: str,
+        reservation_field: str,
+    ) -> None:
+        """Active reservations participate in every configured quota horizon."""
+        quota = AccountQuota(
+            account_name="test-account",
+            persisted_snapshot=PersistedWindowSnapshot(
+                account_id=1,
+                **{snapshot_field: 9},
+            ),
+            **{capacity_field: 10, reservation_field: 2},
+        )
+
+        assert not quota.is_within_limits()
+        assert quota.get_remaining_capacity() == 0.0
+
     def test_manual_offset_is_deprecated(self) -> None:
         """Deprecated ``manual_offset`` must not affect reported usage."""
         quota = AccountQuota(account_name="test-account")
@@ -589,6 +616,17 @@ class TestQuotaFairScorer:
         assert by_name["heavy"].reserved_tokens == 100
         assert estimator.accounts["heavy"].reserved_cost == 1_000
         assert by_name["heavy"].quota_score < by_name["baseline"].quota_score
+
+    def test_pending_claim_creates_diagnostic_quota_mirror(self) -> None:
+        """A claim for a not-yet-materialized account is visible to diagnostics."""
+        estimator = QuotaEstimator()
+
+        estimator.add_pending_claim("new-account", tokens=100, cost=1_000)
+
+        quota = estimator.accounts["new-account"]
+        assert quota.reserved_requests == 1
+        assert quota.reserved_tokens == 100
+        assert quota.reserved_cost == 1_000
 
     def test_pending_claim_release_underflow_is_observable(self) -> None:
         """A duplicate pending release must remain an observable invariant error."""

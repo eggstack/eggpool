@@ -80,6 +80,25 @@ async def _seed_account_and_model(db: Database) -> None:
         )
 
 
+@pytest.mark.asyncio()
+@pytest.mark.parametrize(
+    "cleanup",
+    [
+        cleanup_old_requests,
+        cleanup_old_events,
+        cleanup_old_operational_events,
+        cleanup_old_usage_rollups,
+        cleanup_old_price_snapshots,
+        cleanup_old_model_info_observations,
+        cleanup_old_routing_decisions,
+    ],
+)
+async def test_cleanup_rejects_non_positive_retention(cleanup: object) -> None:
+    """Retention cleanup must not interpret zero as "delete everything"."""
+    with pytest.raises(ValueError, match="retain_days"):
+        await cleanup(MagicMock(), retain_days=0)  # type: ignore[operator]
+
+
 # ---------------------------------------------------------------------------
 # 1. MaintenancePassResult basics
 # ---------------------------------------------------------------------------

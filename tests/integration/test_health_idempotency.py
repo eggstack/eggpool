@@ -7,6 +7,7 @@ import pytest
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
 from eggpool.db.repositories import (
+    AccountEventRepository,
     AttemptRepository,
     RequestRepository,
     ReservationRepository,
@@ -67,6 +68,31 @@ async def _seed_db(
         )
 
     return account_id, request_db_id, attempt_id, reservation_id
+
+
+@pytest.mark.asyncio
+async def test_account_event_repository_owns_standalone_write() -> None:
+    """Account events can be recorded outside a caller-owned transaction."""
+    db = Database(path=":memory:")
+    await db.connect()
+    try:
+        runner = MigrationRunner(db)
+        await runner.run()
+        async with db.transaction():
+            account_id = await db.execute_insert(
+                "INSERT INTO accounts (name, api_key_env) VALUES (?, ?)",
+                ("event-acct", "EVENT_KEY"),
+            )
+
+        await AccountEventRepository(db).record(account_id, "test")
+
+        rows = await db.fetch_all(
+            "SELECT event_type FROM account_events WHERE account_id = ?",
+            (account_id,),
+        )
+        assert [row["event_type"] for row in rows] == ["test"]
+    finally:
+        await db.disconnect()
 
 
 class _MockSelected:

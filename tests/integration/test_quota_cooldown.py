@@ -39,3 +39,27 @@ def test_quota_exhausted_account_becomes_eligible_after_cooldown() -> None:
     # Wait for cooldown to expire
     time.sleep(0.5)
     assert hm.is_account_healthy("acct-a")
+
+
+def test_quota_cooldown_is_not_shortened() -> None:
+    """Repeated quota signals preserve the longest active cooldown."""
+    now = [100.0]
+    hm = HealthManager(clock=lambda: now[0])
+
+    hm.record_quota_exhausted("acct-a", cooldown_seconds=300.0)
+    now[0] = 110.0
+    hm.record_quota_exhausted("acct-a", cooldown_seconds=1.0)
+
+    assert hm.get_account_health("acct-a").cooldown_until == 400.0
+
+
+def test_rate_limit_cooldown_is_not_shortened() -> None:
+    """Repeated rate-limit signals preserve the longest active cooldown."""
+    now = [100.0]
+    hm = HealthManager(clock=lambda: now[0])
+
+    hm.record_rate_limit("acct-a", retry_after_seconds=300.0)
+    now[0] = 110.0
+    hm.record_rate_limit("acct-a", retry_after_seconds=1.0)
+
+    assert hm.get_account_health("acct-a").cooldown_until == 400.0

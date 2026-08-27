@@ -472,6 +472,28 @@ class TestHealthManagerClock:
         now[0] = 110.0
         assert manager.is_account_healthy("acct")
 
+    def test_read_only_health_check_does_not_refresh_state(self) -> None:
+        now = [100.0]
+        manager = HealthManager(clock=lambda: now[0])
+        manager.record_rate_limit("acct", 10.0)
+        health = manager.get_account_health("acct")
+        now[0] = 110.0
+
+        assert manager.is_account_healthy_read_only("acct")
+        assert health.is_healthy is False
+        assert health.health_state == "rate_limited"
+        assert health.cooldown_until == 110.0
+
+    def test_read_only_model_check_does_not_remove_expired_disable(self) -> None:
+        now = [100.0]
+        manager = HealthManager(clock=lambda: now[0])
+        manager.disable_model("acct", "model", duration_seconds=10.0)
+        health = manager.get_account_health("acct")
+        now[0] = 110.0
+
+        assert manager.is_model_healthy_read_only("acct", "model")
+        assert "model" in health.disabled_models
+
 
 class TestRecordFailureWithPolicy:
     """HealthManager.record_failure_with_policy routing."""

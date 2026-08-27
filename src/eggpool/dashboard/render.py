@@ -582,7 +582,16 @@ def _render_auto_refresh_script(refresh_interval_s: int) -> str:
       const doc = new DOMParser().parseFromString(html, "text/html");
       const next = doc.getElementById("dashboard-content");
       if (next) {{
-        content.innerHTML = next.innerHTML;
+        if (window.Chart && typeof window.Chart.getChart === "function") {{
+          content.querySelectorAll("canvas").forEach((canvas) => {{
+            const chart = window.Chart.getChart(canvas);
+            if (chart) {{
+              chart.destroy();
+            }}
+          }});
+        }}
+        const replacement = document.importNode(next, true);
+        content.replaceChildren(...replacement.childNodes);
         updated.textContent = new Date().toLocaleTimeString();
         if (window.EggPoolDashboard) {{
           const dash = window.EggPoolDashboard;

@@ -501,7 +501,11 @@ def _clean_stale_socket(path: Path) -> None:
                 "Socket identity changed before unlink; not removing %s", path
             )
             return
-        path.unlink()
+        # The path may disappear after the final identity check if another
+        # process cleaned it first. Treat that race as successful cleanup;
+        # never follow a replacement symlink because unlink acts on the
+        # directory entry itself.
+        path.unlink(missing_ok=True)
         logger.info("Removed stale control socket %s", path)
     except OSError as exc:
         logger.warning("Could not remove stale socket %s: %s", path, exc)

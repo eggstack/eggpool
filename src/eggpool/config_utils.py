@@ -143,10 +143,10 @@ def resolve_server_api_key(config_path: str) -> ServerKeyResolution:
         from eggpool.config_validation import ConfigStartupAuthError
 
         raise ConfigStartupAuthError(
-            f"[server].api_key_env is set to {env_var}, but that environment "
-            f"variable is not available to this process. Export it before "
-            f"running configsetup, or run eggpool newkey to switch to an "
-            f"inline key."
+            "[server].api_key_env is configured, but the referenced environment "
+            "variable is not available to this process. Export it before "
+            "running configsetup, or run eggpool newkey to switch to an "
+            "inline key."
         )
 
     # Case 4: generate and persist
