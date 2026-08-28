@@ -192,6 +192,20 @@ def classify_failure_effects(obs: FailureObservation) -> FailureEffects:
             obs, client_outcome="client_error", evidence_class="http_400_validation"
         )
     if sc == 401:
+        # OpenCode Go returns HTTP 401 for model-not-found errors
+        # (error.type="ModelError", "Model X is not supported").
+        # The MODEL_ABSENT signal from the body pattern match takes
+        # precedence over the status-code heuristic so we treat the
+        # response as a transient client error rather than a terminal
+        # authentication failure that would permanently disable the
+        # account.
+        if obs.response_signal == FailureSignal.MODEL_ABSENT:
+            return _decision(
+                obs,
+                retry=True,
+                client_outcome="client_error",
+                evidence_class="http_401_model_absent",
+            )
         return _decision(
             obs,
             retry=True,

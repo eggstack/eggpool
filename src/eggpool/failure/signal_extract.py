@@ -47,6 +47,11 @@ _MODEL_ABSENT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bmodel\s+does\s+not\s+exist\b", re.IGNORECASE),
     re.compile(r"\bno\s+such\s+model\b", re.IGNORECASE),
     re.compile(r"\bmodel_id\s+not\s+found\b", re.IGNORECASE),
+    # OpenCode Go returns "Model X is not supported" with HTTP 401 for
+    # model-not-found; without this pattern the 401 status code would
+    # misclassify the response as an authentication failure and
+    # permanently disable the account.
+    re.compile(r"\bis\s+not\s+supported\b", re.IGNORECASE),
 )
 
 # Context limit signal patterns

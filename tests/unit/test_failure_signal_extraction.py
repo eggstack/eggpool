@@ -134,6 +134,25 @@ class TestSignalFromErrorClass:
             == FailureSignal.MODEL_ABSENT
         )
 
+    def test_opencode_go_model_not_supported_body(self) -> None:
+        """OpenCode Go returns 'Model X is not supported' with 401."""
+        body = (
+            b'{"type":"error","error":{"type":"ModelError",'
+            b'"message":"Model muse-spark-1.2-contributor/opencode-go'
+            b' is not supported"}}'
+        )
+        assert extract_failure_signal(body) == FailureSignal.MODEL_ABSENT
+
+    def test_opencode_go_model_not_supported_overrides_401(self) -> None:
+        """Body pattern takes precedence over status code 401."""
+        body = (
+            b'{"type":"error","error":{"type":"ModelError",'
+            b'"message":"Model X is not supported"}}'
+        )
+        assert (
+            extract_failure_signal(body, status_code=401) == FailureSignal.MODEL_ABSENT
+        )
+
     def test_auth_error_class(self) -> None:
         assert (
             extract_failure_signal(None, error_class="AuthenticationError")

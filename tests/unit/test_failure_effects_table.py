@@ -127,6 +127,27 @@ class TestFailureEffectsMatrix:
         assert fx.backoff_reason == "authentication_failed"
         assert fx.backoff_until is None  # terminal
 
+    def test_http_401_model_absent_opencode_go(self) -> None:
+        """OpenCode Go returns 401 for model-not-found errors.
+
+        The body contains 'Model X is not supported' which the signal
+        extractor recognises as MODEL_ABSENT.  The classifier must treat
+        this as a transient client error rather than a terminal auth
+        failure so the account is not permanently disabled.
+        """
+        obs = _obs(
+            status_code=401,
+            response_signal=FailureSignal.MODEL_ABSENT,
+        )
+        fx = classify_failure_effects(obs)
+        assert fx.retry is True
+        assert fx.retry_scope == "other_account"
+        assert fx.client_outcome == "client_error"
+        assert fx.account_effect == "none"
+        assert fx.model_effect == "none"
+        assert fx.circuit_penalty is False
+        assert fx.persist_backoff is False
+
     # --- HTTP 402 ---
 
     def test_http_402_quota(self) -> None:
