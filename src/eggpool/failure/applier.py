@@ -133,6 +133,17 @@ class EffectsApplier:
         Returns the :class:`AppliedEffects` record on first
         application, or ``None`` if the effects were already applied
         for this attempt key (idempotent no-op).
+
+        Each effect step marks its ``progress`` flag *before* calling
+        the side-effecting function and wraps the call in a bounded
+        ``except`` so an unexpected exception in one step does not
+        prevent the remaining steps from running.  The progress flag
+        is the idempotency boundary: a retried finalization will skip
+        any step that already attempted rather than double-penalizing
+        the routing state.  This preserves the routing-failure
+        isolation invariant — a request that mutates the global
+        routing state can never cause the next unrelated request to
+        see a half-applied effect for a previous failure.
         """
         if progress is None:
             progress = self._compat_progress.get(attempt_key)
@@ -153,19 +164,42 @@ class EffectsApplier:
             now = time.time()
 
         if not progress.account_applied:
-            self._apply_account_effect(observation, effects, now)
+            # Mark before the call: a raised exception in the side
+            # effect would otherwise replay the mutation on retry and
+            # could double-penalize the account.
             progress.account_applied = True
+            try:
+                self._apply_account_effect(observation, effects, now)
+            except Exception:
+                logger.exception(
+                    "effects_applier: account-effect application failed; "
+                    "continuing with remaining effects for attempt=%s",
+                    attempt_key,
+                )
         if not progress.model_applied:
-            self._apply_model_effect(observation, effects, now)
             progress.model_applied = True
+            try:
+                self._apply_model_effect(observation, effects, now)
+            except Exception:
+                logger.exception(
+                    "effects_applier: model-effect application failed; "
+                    "continuing with remaining effects for attempt=%s",
+                    attempt_key,
+                )
         if not progress.circuit_applied:
             # HealthManager.record_failure owns the circuit transition. The
             # former applier-side record_failure call double-counted the same
             # observation and could open a circuit one attempt early.
             progress.circuit_applied = True
         if not progress.probe_converged:
-            self._apply_probe_release(observation, effects)
             progress.probe_converged = True
+            try:
+                self._apply_probe_release(observation, effects)
+            except Exception:
+                logger.exception(
+                    "effects_applier: probe-release failed for attempt=%s",
+                    attempt_key,
+                )
         record = AppliedEffects(
             attempt_key=attempt_key,
             effects=effects,
@@ -174,8 +208,16 @@ class EffectsApplier:
         )
         progress.record = record
         if not progress.metrics_emitted:
-            self._emit_metrics(observation, effects)
+            # Metrics emission is fire-and-forget by design, but mark
+            # the flag first so retries never double-increment.
             progress.metrics_emitted = True
+            try:
+                self._emit_metrics(observation, effects)
+            except Exception:
+                logger.exception(
+                    "effects_applier: metrics emission failed for attempt=%s",
+                    attempt_key,
+                )
         return record
 
     def is_applied(self, attempt_key: str) -> bool:

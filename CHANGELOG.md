@@ -24,6 +24,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path uses process naming; the base package was tested and rejected. CI and
   development dependencies are split, and documentation-only workflow
   changes are filtered from CI.
+- **Routing-failure isolation hardening.** A single request's failure path can
+  no longer poison routing for unrelated models. `EffectsApplier.apply_once`
+  marks each effect-step flag *before* invoking the side-effecting function
+  and wraps every step in a bounded `except`, so an exception in one step
+  cannot leave the applier in a half-applied state on retry and cannot
+  prevent the remaining steps from running. `ModelCatalogCache.mark_model_unavailable`
+  short-circuits when the (account, model) pair is not present, so a
+  misclassified call cannot widen its blast radius. Tests:
+  `tests/unit/test_routing_isolation.py` cover scoped model quarantine, the
+  no-account-disable path for keyword false-positives in client-error bodies,
+  5xx cooldown non-extension to siblings, and applier resilience under partial
+  side-effect failure.
 
 ### Added
 

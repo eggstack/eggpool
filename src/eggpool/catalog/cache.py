@@ -622,9 +622,19 @@ class ModelCatalogCache:
                 self._account_support.pop(model_id, None)
 
     def mark_model_unavailable(self, account_name: str, model_id: str) -> None:
-        """Mark a specific model as unavailable for an account."""
+        """Mark a specific model as unavailable for an account.
+
+        Routing-failure isolation: this method mutates ONLY the
+        ``(account_name, model_id)`` pair.  Sibling models on the same
+        account and the same model on sibling accounts are not
+        touched.  Calling with an unknown account or model is a no-op
+        so a misclassified upstream failure cannot widen its blast
+        radius through this entry point.
+        """
         accounts = self._account_support.get(model_id)
         if accounts is None:
+            return
+        if account_name not in accounts:
             return
         updated = accounts - {account_name}
         if updated:
