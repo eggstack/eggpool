@@ -121,6 +121,13 @@ class RetryClassifier:
         decision = effects
         if getattr(decision, "account_effect", "none") == "disable_auth":
             return RetryCategory.AUTH_FAILURE
+        # Any model-scoped suppression (runtime 404 quarantine or
+        # authoritative terminal withdrawal) routes through the
+        # MODEL_UNAVAILABLE bucket: the caller should try the same
+        # model on a different account.  Transient per-model
+        # suppression from a 5xx/408 still carries a non-empty
+        # ``retry`` flag below, so the model-unavailable bucket
+        # correctly captures the "switch account" semantics here.
         if getattr(decision, "model_effect", "none") != "none":
             return RetryCategory.MODEL_UNAVAILABLE
         if getattr(decision, "account_effect", "none") in {"quota", "rate_limit"}:

@@ -108,7 +108,15 @@ class TestRequestLocalFailureIsolation:
 class TestProviderFailureIsolation:
     """Provider failures affect only the failing provider/account."""
 
-    def test_upstream_500_penalizes_only_failing_account(self) -> None:
+    def test_upstream_500_penalizes_only_failing_model(self) -> None:
+        """A 5xx on a single model must not blanket-disable the account.
+
+        Regression test for the routing-failure isolation invariant: an
+        upstream 500 for ``gpt-4o`` quarantines the (account, model)
+        pair but leaves sibling models on the same account routable so
+        the operator does not need a process restart to recover from a
+        single broken model.
+        """
         hm = HealthManager()
         quarantine = ModelQuarantine()
         applier = EffectsApplier(health_manager=hm, quarantine=quarantine)
@@ -117,8 +125,37 @@ class TestProviderFailureIsolation:
         effects = classify_failure_effects(obs)
         applier.apply_once("attempt-1", obs, effects)
 
-        assert hm.is_account_healthy("acct-failing") is False
+        # The account itself stays healthy — only the specific (account,
+        # model) pair is suppressed.  Sibling models on the same
+        # account keep routing.
+        assert hm.is_account_healthy("acct-failing") is True
         assert hm.is_account_healthy("acct-healthy") is True
+        assert hm.is_model_healthy("acct-failing", "gpt-4o") is False
+        assert hm.is_model_healthy("acct-failing", "gpt-4o-mini") is True
+        assert hm.is_model_healthy("acct-healthy", "gpt-4o") is True
+        # Quarantine observation is recorded so the bounded state
+        # machine tracks repeated failures.
+        assert (
+            quarantine.is_model_quarantined(
+                provider_id="openai",
+                account_id="acct-failing",
+                canonical_model_id="gpt-4o",
+                upstream_model_id=None,
+                upstream_protocol="openai",
+            )
+            is True
+        )
+        # Same model on a healthy account is not affected.
+        assert (
+            quarantine.is_model_quarantined(
+                provider_id="openai",
+                account_id="acct-healthy",
+                canonical_model_id="gpt-4o",
+                upstream_model_id=None,
+                upstream_protocol="openai",
+            )
+            is False
+        )
 
     def test_auth_failure_disables_only_failing_account(self) -> None:
         hm = HealthManager()

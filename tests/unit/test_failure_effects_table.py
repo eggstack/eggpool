@@ -249,8 +249,11 @@ class TestFailureEffectsMatrix:
         assert fx.retry is True
         assert fx.retry_scope == "other_account"
         assert fx.client_outcome == "timeout"
-        assert fx.account_effect == "cooldown"
-        assert fx.model_effect == "none"
+        # 408 is a per-model transient timeout; the account itself
+        # remains eligible so a single timed-out request does not
+        # block sibling models on the same account.
+        assert fx.account_effect == "failure"
+        assert fx.model_effect == "quarantine"
         assert fx.circuit_penalty is True
         assert fx.persist_backoff is True
         assert fx.backoff_reason == "connect_timeout"
@@ -318,7 +321,11 @@ class TestFailureEffectsMatrix:
         assert fx.retry is True
         assert fx.retry_scope == "other_account"
         assert fx.client_outcome == "upstream_error"
-        assert fx.account_effect == "cooldown"
+        # 5xx is now scoped to per-model quarantine, not account-wide
+        # cooldown, so a single bad model on an account does not block
+        # routing for sibling models that share the same account.
+        assert fx.account_effect == "failure"
+        assert fx.model_effect == "quarantine"
         assert fx.circuit_penalty is True
         assert fx.persist_backoff is True
         assert fx.backoff_reason == "upstream_server_error"
@@ -327,21 +334,24 @@ class TestFailureEffectsMatrix:
         obs = _obs(status_code=502)
         fx = classify_failure_effects(obs)
         assert fx.retry is True
-        assert fx.account_effect == "cooldown"
+        assert fx.account_effect == "failure"
+        assert fx.model_effect == "quarantine"
         assert fx.circuit_penalty is True
 
     def test_http_503_service_unavailable(self) -> None:
         obs = _obs(status_code=503)
         fx = classify_failure_effects(obs)
         assert fx.retry is True
-        assert fx.account_effect == "cooldown"
+        assert fx.account_effect == "failure"
+        assert fx.model_effect == "quarantine"
         assert fx.circuit_penalty is True
 
     def test_http_504_gateway_timeout(self) -> None:
         obs = _obs(status_code=504)
         fx = classify_failure_effects(obs)
         assert fx.retry is True
-        assert fx.account_effect == "cooldown"
+        assert fx.account_effect == "failure"
+        assert fx.model_effect == "quarantine"
         assert fx.circuit_penalty is True
 
     # --- Client cancellation ---

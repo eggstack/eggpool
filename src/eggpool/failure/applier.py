@@ -264,7 +264,34 @@ class EffectsApplier:
             )
             self._health_manager.record_rate_limit(account, retry_after)
             self._health_manager.release_request(account)
-        elif effects.account_effect in ("failure", "cooldown"):
+        elif effects.account_effect == "failure":
+            # Record the failure for the account's circuit breaker without
+            # applying an account-wide cooldown.  When the classifier also
+            # set ``model_effect = "quarantine"`` the per-model disable
+            # applied via ``_apply_model_effect`` is the only shared-state
+            # penalty; the account itself stays eligible so sibling models
+            # on the same account keep routing.
+            self._health_manager.record_failure(
+                account,
+                model_id=obs.model_id,
+                reason=effects.backoff_reason or "unknown",
+            )
+            if (
+                effects.model_effect == "none"
+                and effects.backoff_until
+                and effects.backoff_reason
+            ):
+                # Legacy/fallback path: no per-model suppression was
+                # requested, so fall back to the previous account-wide
+                # bounded cooldown.  This branch only fires for callers
+                # that opt into account-only failure handling.
+                delay = effects.backoff_until - now
+                if delay > 0:
+                    health = self._health_manager.get_account_health(account)
+                    health.cooldown_until = self._health_manager.clock() + delay
+                    health.health_state = "cooldown"
+                    health.is_healthy = False
+        elif effects.account_effect == "cooldown":
             self._health_manager.record_failure(
                 account,
                 model_id=obs.model_id,

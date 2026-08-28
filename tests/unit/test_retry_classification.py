@@ -55,22 +55,26 @@ class TestExplicitStatuses:
 
     def test_500_temporary(self, classifier: RetryClassifier) -> None:
         result = classifier.classify(500)
-        assert result.category == RetryCategory.TEMPORARY
+        # 5xx is model-scoped per the per-model quarantine fix: a
+        # single bad model must not blanket-blacklist sibling models on
+        # the same account.  ``MODEL_UNAVAILABLE`` here signals the
+        # caller to retry the same model on a different account.
+        assert result.category == RetryCategory.MODEL_UNAVAILABLE
         assert result.is_retryable
 
     def test_502_transient(self, classifier: RetryClassifier) -> None:
         result = classifier.classify(502)
-        assert result.category == RetryCategory.TRANSIENT
+        assert result.category == RetryCategory.MODEL_UNAVAILABLE
         assert result.is_retryable
 
     def test_503_temporary(self, classifier: RetryClassifier) -> None:
         result = classifier.classify(503)
-        assert result.category == RetryCategory.TEMPORARY
+        assert result.category == RetryCategory.MODEL_UNAVAILABLE
         assert result.is_retryable
 
     def test_504_transient(self, classifier: RetryClassifier) -> None:
         result = classifier.classify(504)
-        assert result.category == RetryCategory.TRANSIENT
+        assert result.category == RetryCategory.MODEL_UNAVAILABLE
         assert result.is_retryable
 
 
@@ -94,7 +98,11 @@ class TestArbitraryServerErrors:
         self, classifier: RetryClassifier, status: int
     ) -> None:
         result = classifier.classify(status)
-        assert result.category == RetryCategory.TEMPORARY
+        # 5xx is now classified as MODEL_UNAVAILABLE: the failure is
+        # scoped to the specific model on this account, so retrying on
+        # another account is the right semantics.  ``is_retryable``
+        # still returns True because MODEL_UNAVAILABLE is retryable.
+        assert result.category == RetryCategory.MODEL_UNAVAILABLE
         assert result.is_retryable
 
 
@@ -205,7 +213,10 @@ class TestPhase6StatusCodes:
 
     def test_408_maps_to_transient(self, classifier: RetryClassifier) -> None:
         result = classifier.classify(408)
-        assert result.category == RetryCategory.TRANSIENT
+        # 408 is also model-scoped per the per-model quarantine fix;
+        # ``MODEL_UNAVAILABLE`` correctly captures the "switch account"
+        # intent and remains retryable.
+        assert result.category == RetryCategory.MODEL_UNAVAILABLE
         assert result.is_retryable
 
     def test_409_maps_to_bad_request(self, classifier: RetryClassifier) -> None:

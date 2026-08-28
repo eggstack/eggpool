@@ -65,14 +65,17 @@ class TestRetryClassifier:
         """Test classification of 500 error."""
         classifier = RetryClassifier()
         error = classifier.classify(500)
-        assert error.category == RetryCategory.TEMPORARY
+        # 5xx is model-scoped per the per-model quarantine fix: the
+        # caller must retry on a different account, not just retry
+        # against the same account's circuit breaker.
+        assert error.category == RetryCategory.MODEL_UNAVAILABLE
         assert error.is_retryable
 
     def test_classify_503_with_retry_after(self) -> None:
         """Test classification of 503 with Retry-After."""
         classifier = RetryClassifier()
         error = classifier.classify(503, {"retry-after": "60"})
-        assert error.category == RetryCategory.TEMPORARY
+        assert error.category == RetryCategory.MODEL_UNAVAILABLE
         assert error.retry_after == 60.0
 
 
