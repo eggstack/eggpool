@@ -1,6 +1,6 @@
 [project]
 name = "eggpool"
-version = "0.6.9"
+version = "0.7.0"
 description = "A lightweight proxy that aggregates multiple LLM provider accounts behind an OpenAI Chat Completions-compatible endpoint"
 readme = "README.md"
 requires-python = ">=3.11"
