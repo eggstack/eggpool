@@ -625,6 +625,21 @@ async def _handle_proxy_request_inner(
     with _span(span_recorder, SPAN_MODEL_PARSE):
         model_id, provider_id = parse_model_provider(model_value, known_providers)
 
+    # Normalize the payload's model field to the parsed model_id BEFORE the
+    # transcode preflight runs. The preflight caches the translated payload
+    # and a JSON-encoded body so the coordinator can skip a duplicate encode
+    # on the hot path. If the cached body still carries a provider-suffixed
+    # ``model-id/provider-id`` value (which is how ``/v1/models`` exposes
+    # provider-scoped entries), the upstream receives the suffix and rejects
+    # the request with ``Model <model-id>/<provider-id> is not supported``
+    # because the upstream does not understand eggpool's namespace. Rewriting
+    # the in-memory snapshot here keeps both the preflight encoded body and
+    # the provider-bound payload consistent.
+    preflight_payload = payload
+    if model_id != model_value:
+        preflight_payload = dict(payload)
+        preflight_payload["model"] = model_id
+
     # Preflight context limit check (guardrail, not primary enforcement).
     catalog = lease.runtime.catalog
     transcoder_policy = lease.runtime.transcoder_policy
@@ -662,7 +677,7 @@ async def _handle_proxy_request_inner(
                 model_id=model_id,
                 provider_id=provider_id,
                 client_protocol=endpoint.protocol,
-                payload=payload,
+                payload=preflight_payload,
                 transcoder_policy=transcoder_policy,
             )
             if preflight is not None:

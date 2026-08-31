@@ -244,6 +244,30 @@ Documentation in `architecture/README.md`, `docs/live-config-rehash.md`,
   command inventory updated with slow-writer, extended soak, and soak
   runner commands.
 
+### Fixed
+
+- **Provider-suffixed model ids no longer leak the ``/provider-id``
+  suffix to upstream.** ``/v1/models`` exposes provider-scoped entries in
+  the form ``<model-id>/<provider-id>``. When a client used one of those
+  suffixed ids against an endpoint whose body is transcoded or rewritten
+  -- ``/v1/chat/completions`` for an Anthropic model, or any cross-
+  protocol retry -- the suffix leaked into the JSON body the upstream
+  received, which rejected the request with ``Model <model-id>/<provider-id>
+  is not supported``. The proxy layer now normalizes the in-memory
+  payload's ``model`` field to the parsed base id at every point where a
+  body is rebuilt for upstream dispatch: the transcode preflight cache
+  (`handle_proxy_request` in `src/eggpool/api/proxy_request.py`), the
+  coordinator's re-translation reset
+  (`_apply_selected_provider_transcode` in
+  `src/eggpool/request/coordinator.py`), and the legacy provider-request
+  adapter (`RequestCoordinator._legacy_provider_request`). The
+  immutable ``client_payload`` contract is preserved -- only the
+  provider-bound snapshot loses the suffix. Regression coverage is
+  parameterized across multiple model ids in
+  `tests/unit/test_prepared_transcode.py` (`TestCoordinatorResetStripsProviderSuffix`)
+  so the fix is model-agnostic and future model names are covered by
+  default.
+
 ## [0.6.0] - 2026-07-09
 
 ### Fixed

@@ -158,7 +158,7 @@ from eggpool.transcoder.protocol import BodyTranscoder, select_transcoder
 from eggpool.transcoder.streaming import select_streaming_transcoder
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Mapping
 
     from eggpool.catalog.capabilities import (
         ThinkingCapability,
@@ -4634,18 +4634,34 @@ class RequestCoordinator:
         Production dispatch always supplies the request from the context. This
         narrow adapter keeps older unit-level helper callers working while
         preventing the pipeline itself from creating a competing request.
+
+        The original body may carry a provider-namespace suffix on the
+        ``model`` field (the form ``/v1/models`` exposes for provider-scoped
+        entries). The upstream does not understand that suffix; the API
+        handler normalizes the in-memory payload at request entry, and this
+        helper mirrors that normalization so legacy embedders cannot
+        accidentally forward a suffixed body.
         """
         body = context.original_body
         payload = jsonx_loads(body)
         if not isinstance(payload, dict):
             raise ValueError("provider request payload must be an object")
         typed_payload = cast("dict[str, Any]", payload)
-        return ProviderBoundRequest(
+        bound = ProviderBoundRequest(
             client_bytes=context.original_body,
             client_payload=typed_payload,
             client_protocol=context.protocol,
             model_id=context.model_id,
         )
+        # Mirror the API handler's normalization: strip any ``/provider-id``
+        # suffix from the in-memory model field. ``set_provider_payload``
+        # detaches ``provider_payload`` from the aliased ``client_payload``
+        # so the immutable contract is preserved.
+        if context.model_id and typed_payload.get("model") != context.model_id:
+            normalized = dict(typed_payload)
+            normalized["model"] = context.model_id
+            bound.set_provider_payload(normalized, increment_generation=False)
+        return bound
 
     def _adapt_provider_thinking_controls(
         self,
@@ -4918,8 +4934,27 @@ class RequestCoordinator:
         # translated graph from a previous attempt is discarded; the
         # ``client_payload`` remains immutable per ProviderBoundRequest's
         # ownership contract.
+        #
+        # ``client_payload`` may still carry a provider-namespace suffix
+        # (``model-id/provider-id``) -- ``/v1/models`` exposes provider-
+        # scoped entries in that form. The transcoders copy the ``model``
+        # field verbatim, so passing the suffixed client payload straight
+        # to the encoder would forward the suffix to upstream, which
+        # rejects it. Strip the suffix here so any re-translation path
+        # -- cross-protocol transcoding with provider-sensitive media or
+        # thinking controls, or a retry that selects a different provider
+        # -- produces a body whose ``model`` field is the bare upstream id.
+        reset_payload: Mapping[str, Any] = provider_bound.client_payload
+        if (
+            provider_bound.model_id
+            and isinstance(reset_payload, dict)
+            and reset_payload.get("model") != provider_bound.model_id
+        ):
+            normalized = dict(reset_payload)
+            normalized["model"] = provider_bound.model_id
+            reset_payload = normalized
         provider_bound.set_provider_payload(
-            provider_bound.client_payload,
+            reset_payload,
             increment_generation=True,
         )
         _thinking_cap: ThinkingCapability | None = None
