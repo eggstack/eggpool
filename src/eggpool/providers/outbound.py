@@ -83,13 +83,14 @@ class OutboundClientManager:
 
     def _maybe_evict_host(self, host: str) -> None:
         """Evict the coldest tracked host when the cap is exceeded."""
-        if host in self._per_host_requests or host in self._per_host_errors:
+        tracked_hosts = set(self._per_host_requests) | set(self._per_host_errors)
+        if host in tracked_hosts:
             return
-        if len(self._per_host_requests) < self.MAX_TRACKED_HOSTS:
+        if len(tracked_hosts) < self.MAX_TRACKED_HOSTS:
             return
         smallest_host: str | None = None
         smallest_total: int | None = None
-        for tracked in self._per_host_requests:
+        for tracked in tracked_hosts:
             total = self._per_host_requests.get(tracked, 0) + self._per_host_errors.get(
                 tracked, 0
             )

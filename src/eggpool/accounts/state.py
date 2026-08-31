@@ -79,10 +79,12 @@ class AccountRuntimeState:
         if now is None:
             now = time.time()
         if self.health_state == "quota_exhausted":
-            if self.cooldown_until > 0 and now >= self.cooldown_until:
+            if self.cooldown_until == 0.0 or now >= self.cooldown_until:
                 self.health_state = "healthy"
                 self.cooldown_until = 0.0
                 self.consecutive_failures = 0
+            # Quota exhaustion has its own expiry semantics; do not fall
+            # through to the generic transient-state branch.
             return
         if self.health_state in ("rate_limited", "cooldown") and (
             self.cooldown_until == 0.0 or now >= self.cooldown_until
@@ -99,8 +101,6 @@ class AccountRuntimeState:
             return False
         if self.health_state in ("authentication_failed",):
             return False
-        if self.health_state == "quota_exhausted":
-            return self.cooldown_until > 0 and self.cooldown_until <= now
         return self.cooldown_until <= now
 
     def record_success(self) -> None:

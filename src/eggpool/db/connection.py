@@ -333,8 +333,8 @@ class Database:
         """Return a coarse category for the invalidation reason.
 
         Operators do not need the full repr; only the kind so
-            invalidation-reason diagnostics can be
-        filtered.  Unknown kinds collapse to ``"other"``.
+        invalidation-reason diagnostics can be filtered. Unknown kinds
+        collapse to ``"other"``.
         """
         if not reason:
             return "unspecified"

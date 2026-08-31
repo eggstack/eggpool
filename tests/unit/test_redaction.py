@@ -220,6 +220,26 @@ class TestSanitizeErrorObject:
         result = sanitize_error_object({"message": "x"}, byte_budget=1)
         assert result == REDACTED
 
+    def test_nested_values_receive_remaining_byte_budget(self, monkeypatch) -> None:
+        import eggpool.security.redaction as redaction
+
+        original = redaction.sanitize_error_object
+        budgets: list[int] = []
+
+        def tracking_sanitize(value, **kwargs):
+            if "byte_budget" in kwargs:
+                budgets.append(kwargs["byte_budget"])
+            return original(value, **kwargs)
+
+        monkeypatch.setattr(redaction, "sanitize_error_object", tracking_sanitize)
+        redaction.sanitize_error_object(
+            {"type": "error", "trace_id": {"trace_id": "nested"}},
+            byte_budget=100,
+        )
+
+        assert budgets[0] == 100
+        assert budgets[1] < budgets[0]
+
     def test_allowlist_budget_bound(self) -> None:
         # Lists nested under an allowlisted key still honor the
         # item budget and collapse to REDACTED on exhaustion.

@@ -185,6 +185,19 @@ class TestOutboundClientManager:
             manager.MAX_TRACKED_HOSTS = original_cap
 
     @pytest.mark.anyio
+    async def test_record_request_evicts_error_only_hosts(self) -> None:
+        manager = OutboundClientManager()
+        manager.MAX_TRACKED_HOSTS = 2
+        manager._per_host_errors["error-only.example"] = 0
+        manager._per_host_requests["request.example"] = 1
+
+        manager.record_request(host="new.example")
+
+        assert "error-only.example" not in manager._per_host_errors
+        assert len(set(manager._per_host_requests) | set(manager._per_host_errors)) == 2
+        await manager.aclose()
+
+    @pytest.mark.anyio
     async def test_metered_transport_records_successful_response(self) -> None:
         manager = OutboundClientManager()
 

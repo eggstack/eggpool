@@ -187,6 +187,20 @@ async def test_connect_rejects_non_integer_pragma_value(
 
 
 @pytest.mark.asyncio()
+async def test_read_only_connect_validates_synchronous_pragma(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    database = Database(
+        path=str(tmp_path / "invalid_read_only_pragma.sqlite3"),
+        read_only=True,
+        synchronous="FUUL",  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(DatabaseError, match="synchronous must be"):
+        await database.connect()
+
+
+@pytest.mark.asyncio()
 async def test_crash_recovery_marks_stale_pending(db: Database) -> None:
     """Stale pending requests are marked as interrupted."""
     async with db.transaction():

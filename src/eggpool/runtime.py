@@ -134,6 +134,7 @@ def wait_for_exit(pid: int, timeout: float = DEFAULT_SHUTDOWN_TIMEOUT_S) -> bool
     while time.monotonic() < deadline:
         if not is_process_running(pid):
             return True
+        # This helper is synchronous process-management code, never async work.
         time.sleep(0.1)
     return False
 
@@ -350,6 +351,7 @@ def _wait_for_pid_file(timeout_s: float) -> bool:
     while time.monotonic() < deadline:
         if read_pid_file(default_pid_file()) is not None:
             return True
+        # This helper is synchronous process-management code, never async work.
         time.sleep(0.05)
     return False
 

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 
 import pytest
 
 from eggpool.accounts.registry import AccountRegistry
 from eggpool.accounts.state import AccountRuntimeState
 from eggpool.catalog.cache import ModelCatalogCache
+from eggpool.health.health_manager import HealthManager
 from eggpool.models.config import AppConfig
 from eggpool.quota.estimation import AccountQuota, QuotaEstimator
 from eggpool.quota.scorer import QuotaFairScorer, RoutingScore
@@ -49,6 +51,29 @@ def test_eligible_accounts_excludes_cooldown() -> None:
     ]
     eligible = get_eligible_accounts(states, "gpt-4", cache)
     assert [state.name for state in eligible] == ["acct2"]
+
+
+def test_eligible_accounts_readmits_expired_quota_cooldown() -> None:
+    cache = ModelCatalogCache()
+    cache.update_from_account(
+        "acct1", "opencode-go", [{"model_id": "gpt-4", "protocol": "openai"}]
+    )
+    state = AccountRuntimeState(
+        name="acct1",
+        health_state="quota_exhausted",
+        cooldown_until=time.time() - 1,
+    )
+    health_manager = HealthManager()
+    health = health_manager.get_account_health("acct1")
+    health.health_state = "quota_exhausted"
+    health.is_healthy = False
+    health.cooldown_until = health_manager.clock() - 1
+
+    eligible = get_eligible_accounts(
+        [state], "gpt-4", cache, health_manager=health_manager
+    )
+
+    assert [candidate.name for candidate in eligible] == ["acct1"]
 
 
 def test_eligible_accounts_model_not_supported() -> None:

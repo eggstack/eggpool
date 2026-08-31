@@ -62,6 +62,7 @@ def _child_confirmed_alive(deadline_s: float | None = None) -> bool:
                 return True
         if time.monotonic() >= deadline:
             return False
+        # This helper is synchronous CLI/watchdog code, never event-loop work.
         time.sleep(_SPAWN_POLL_INTERVAL_S)
 
 

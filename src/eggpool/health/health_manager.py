@@ -211,10 +211,9 @@ class HealthManager:
         health.last_check = self.clock()
         # An in-flight request may succeed after an operator disables its
         # account. Do not let that completion undo an explicit disable.
-        if (
-            health.health_state != "authentication_failed"
-            and not health.disabled_reason
-        ):
+        authentication_failed = health.health_state == "authentication_failed"
+        operator_disabled = bool(health.disabled_reason)
+        if not authentication_failed and not operator_disabled:
             health.is_healthy = True
             health.health_state = "healthy"
             health.cooldown_until = 0.0
@@ -498,9 +497,9 @@ class HealthManager:
         """Restore transient health states after cooldown expiration."""
         now = self.clock() if current_time is None else current_time
         if (
-            health.cooldown_until > 0
-            and now >= health.cooldown_until
-            and health.health_state in ("quota_exhausted", "rate_limited", "cooldown")
+            health.health_state in ("quota_exhausted", "rate_limited", "cooldown")
+            and (health.cooldown_until == 0 or now >= health.cooldown_until)
+            and not health.disabled_reason
         ):
             health.health_state = "healthy"
             health.is_healthy = True

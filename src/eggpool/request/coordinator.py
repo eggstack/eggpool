@@ -3383,10 +3383,14 @@ class RequestCoordinator:
             prefetched_chunk: bytes | None = None
             if first_byte_timeout_s is not None:
                 first_byte_started = time.monotonic()
+                first_byte_deadline = first_byte_started + first_byte_timeout_s
                 try:
                     while True:
+                        remaining = first_byte_deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise TimeoutError
                         candidate = await asyncio.wait_for(
-                            anext(upstream_iterator), timeout=first_byte_timeout_s
+                            anext(upstream_iterator), timeout=remaining
                         )
                         if candidate:
                             prefetched_chunk = candidate

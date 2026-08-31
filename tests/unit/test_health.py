@@ -300,6 +300,32 @@ class TestHealthManager:
         assert health.cooldown_until == 0.0
         assert manager.is_account_healthy("account1")
 
+    def test_zero_quota_cooldown_recovers_immediately(self) -> None:
+        manager = HealthManager()
+        health = manager.get_account_health("account1")
+        health.health_state = "quota_exhausted"
+        health.is_healthy = False
+        health.cooldown_until = 0.0
+
+        assert manager.is_account_healthy("account1")
+        assert health.health_state == "healthy"
+
+    def test_record_success_preserves_quota_state_when_operator_disabled(self) -> None:
+        now = [100.0]
+        manager = HealthManager(clock=lambda: now[0])
+        manager.record_quota_exhausted("account1", cooldown_seconds=60.0)
+        health = manager.get_account_health("account1")
+        manager.disable_account("account1", "operator")
+        cooldown_until = health.cooldown_until
+
+        manager.record_success("account1")
+
+        assert health.health_state == "quota_exhausted"
+        assert health.cooldown_until == cooldown_until
+        assert health.disabled_reason == "operator"
+        now[0] = cooldown_until + 1
+        assert not manager.is_account_healthy("account1")
+
     def test_inflight_success_does_not_undo_operator_disable(self) -> None:
         manager = HealthManager()
         manager.disable_account("account1", "maintenance")

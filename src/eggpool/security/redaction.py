@@ -205,11 +205,15 @@ def sanitize_error_object(
             if item is None or isinstance(item, (bool, int, float)):
                 result[safe_key] = item
                 continue
+            try:
+                remaining_byte_budget = max(byte_budget - len(dumps_str(result)), 0)
+            except (TypeError, ValueError):
+                return REDACTED
             result[safe_key] = sanitize_error_object(
                 item,
                 depth=depth + 1,
                 item_budget=item_budget,
-                byte_budget=byte_budget,
+                byte_budget=remaining_byte_budget,
             )
             collapsed: Any = _enforce_byte_budget(result, byte_budget)
             if collapsed == REDACTED:
@@ -223,12 +227,18 @@ def sanitize_error_object(
             if item_budget <= 0:
                 break
             item_budget -= 1
+            try:
+                remaining_byte_budget = max(
+                    byte_budget - len(dumps_str(result_list)), 0
+                )
+            except (TypeError, ValueError):
+                return REDACTED
             result_list.append(
                 sanitize_error_object(
                     item,
                     depth=depth + 1,
                     item_budget=item_budget,
-                    byte_budget=byte_budget,
+                    byte_budget=remaining_byte_budget,
                 )
             )
             collapsed_list: Any = _enforce_byte_budget(result_list, byte_budget)

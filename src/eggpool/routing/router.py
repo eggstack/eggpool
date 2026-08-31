@@ -701,7 +701,7 @@ class Router:
                     f"authentication and is locked."
                 ),
             )
-        if state.health_state == "quota_exhausted":
+        if state.health_state == "quota_exhausted" and not state.is_eligible():
             return (
                 False,
                 "quota_exhausted",
@@ -710,7 +710,7 @@ class Router:
                     f"exhaustion; cooldown active."
                 ),
             )
-        if state.health_state == "cooldown":
+        if state.health_state == "cooldown" and not state.is_eligible():
             return (
                 False,
                 "cooldown",
@@ -719,7 +719,7 @@ class Router:
                     f"transient failures."
                 ),
             )
-        if state.health_state == "rate_limited":
+        if state.health_state == "rate_limited" and not state.is_eligible():
             return (
                 False,
                 "rate_limited",

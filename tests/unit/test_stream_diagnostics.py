@@ -288,6 +288,70 @@ async def test_idle_timeout_is_distinct_and_closes_upstream_response() -> None:
 
 
 @pytest.mark.asyncio()
+async def test_first_byte_timeout_is_an_overall_deadline_for_empty_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repeated empty chunks must not reset the first-byte timeout."""
+    from eggpool.request.coordinator import _RetryableUpstreamError
+
+    coordinator, context, selected = _timeout_stream_coordinator()
+    context.body_for_upstream = b"{}"
+    coordinator._config = SimpleNamespace(
+        providers={
+            "provider-a": SimpleNamespace(
+                stream_timeouts=SimpleNamespace(
+                    first_byte_timeout_s=0.03,
+                    idle_timeout_s=None,
+                )
+            )
+        }
+    )
+    coordinator._build_upstream_headers = MagicMock(return_value=[])
+    coordinator._get_upstream_url = MagicMock(return_value="https://example.test")
+    coordinator._serialize_provider_request = MagicMock()
+    coordinator._validate_serialized_request_size = MagicMock()
+    coordinator._classify_upstream_failure = MagicMock(
+        return_value=(
+            None,
+            SimpleNamespace(),
+            SimpleNamespace(retry_after_s=None),
+        )
+    )
+    monkeypatch.setattr(
+        "eggpool.request.transform_pipeline.run_provider_transforms",
+        lambda *_args: SimpleNamespace(rejection=None),
+    )
+    client = MagicMock()
+    client.build_request.return_value = object()
+    coordinator._get_client = MagicMock(return_value=client)
+
+    async def chunks() -> Any:
+        while True:
+            await asyncio.sleep(0.005)
+            yield b""
+
+    class Response:
+        status_code = 200
+        headers: dict[str, str] = {}
+
+        def aiter_bytes(self) -> Any:
+            return chunks()
+
+        async def aclose(self) -> None:
+            pass
+
+    coordinator._send_upstream_request = AsyncMock(return_value=Response())
+
+    with pytest.raises(_RetryableUpstreamError) as error:
+        await asyncio.wait_for(
+            coordinator._execute_streaming(context, selected, 1), timeout=0.2
+        )
+
+    assert isinstance(error.value.__cause__, ProviderStreamTimeoutError)
+    assert error.value.__cause__.outcome == "first_byte_timeout"
+
+
+@pytest.mark.asyncio()
 async def test_premature_eof_records_only_the_specific_outcome() -> None:
     """EOF classifications are not double-counted as generic midstream errors.
 

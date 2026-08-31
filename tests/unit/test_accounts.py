@@ -31,9 +31,11 @@ def test_account_runtime_state_auth_failed() -> None:
     assert state.is_eligible() is False
 
 
-def test_account_runtime_state_quota_exhausted() -> None:
+def test_account_runtime_state_quota_exhausted_without_deadline_is_eligible() -> None:
     state = AccountRuntimeState(name="test", health_state="quota_exhausted")
-    assert state.is_eligible() is False
+    assert state.is_eligible() is True
+    state.refresh_transient_state()
+    assert state.health_state == "healthy"
 
 
 def test_account_runtime_state_eligibility_does_not_refresh_state() -> None:
