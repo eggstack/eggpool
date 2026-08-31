@@ -229,6 +229,9 @@ class IncrementalSSEObserver:
         self._usage_result.cache_creation_tokens += incoming.cache_creation_tokens
         self._usage_result.reasoning_tokens += incoming.reasoning_tokens
         self._usage_result.thinking_characters += incoming.thinking_characters
+        self._usage_result.input_tokens_include_cache |= (
+            incoming.input_tokens_include_cache
+        )
         if incoming.is_complete:
             self._usage_result.is_complete = True
             if incoming.reported_cost_microdollars is not None:

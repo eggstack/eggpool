@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
-from eggpool.api.proxy_request import get_client_ip
+from eggpool.api.proxy_request import (
+    ProxyEndpointConfig,
+    get_client_ip,
+    handle_proxy_request,
+)
 from eggpool.proxy.client import (
     HOP_BY_HOP_HEADERS,
     filter_request_headers,
@@ -139,3 +148,45 @@ def test_hop_by_hop_headers_complete() -> None:
         "upgrade",
     }
     assert expected == HOP_BY_HOP_HEADERS
+
+
+@pytest.mark.asyncio
+async def test_lease_failure_log_uses_proxy_request_id(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    runtime_manager = SimpleNamespace(
+        acquire=AsyncMock(side_effect=RuntimeError("unavailable"))
+    )
+    app = SimpleNamespace(state=SimpleNamespace(runtime_manager=runtime_manager))
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "raw_path": b"/",
+        "query_string": b"",
+        "headers": [],
+        "app": app,
+    }
+    request = Request(scope, lambda: None)  # type: ignore[arg-type]
+    endpoint = ProxyEndpointConfig(
+        protocol="openai",
+        request_label="test",
+        error_response=lambda status_code, message, error_type="server_error": (
+            JSONResponse(
+                {"message": message, "type": error_type}, status_code=status_code
+            )
+        ),
+        not_found_error_type="not_found",
+        service_error_type="server_error",
+    )
+
+    with caplog.at_level("WARNING", logger="eggpool.api.proxy_request"):
+        response = await handle_proxy_request(request, endpoint)
+
+    assert response.status_code == 503
+    record = next(
+        record
+        for record in caplog.records
+        if record.message == "Runtime lease acquisition failed; returning 503"
+    )
+    assert record.proxy_request_id == request.state.proxy_request_id

@@ -474,7 +474,7 @@ async def handle_proxy_request(
     except Exception as exc:
         request_state = getattr(request, "state", None)
         request_id_or_none = (
-            getattr(request_state, "request_id", None)
+            getattr(request_state, "proxy_request_id", None)
             if request_state is not None
             else None
         )

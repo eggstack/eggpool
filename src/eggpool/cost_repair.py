@@ -13,8 +13,10 @@ from eggpool.catalog.pricing import (
     choose_bounded_estimated_cost,
     cost_per_token_is_implausible,
     total_billable_tokens,
+    usage_includes_cached_input,
 )
 from eggpool.constants import MAX_REQUEST_COST_MICRODOLLARS
+from eggpool.jsonx import loads as jsonx_loads
 
 if TYPE_CHECKING:
     from eggpool.db.connection import Database
@@ -31,6 +33,17 @@ _REQUEST_CAP_SUSPICION_THRESHOLD = MAX_REQUEST_COST_MICRODOLLARS * 9 // 10
 # events ``cost.reservation_fallback_suppressed`` so operators have
 # one consistent definition of "obviously wrong".
 _RESERVATION_OVER_LOCAL_SUSPICION_RATIO = 4
+
+
+def _raw_usage_includes_cache(value: object) -> bool:
+    """Read cache inclusion semantics from persisted usage when available."""
+    if not isinstance(value, str):
+        return False
+    try:
+        usage = jsonx_loads(value)
+    except (TypeError, ValueError):
+        return False
+    return usage_includes_cached_input(usage)
 
 
 @dataclass(frozen=True)
@@ -59,6 +72,7 @@ def _repair_reason(row: dict[str, Any]) -> str | None:
         int(row.get("output_tokens") or 0),
         int(row.get("cache_read_tokens") or 0),
         int(row.get("cache_write_tokens") or 0),
+        int(row.get("reasoning_tokens") or 0),
     )
     if old_cost >= _REQUEST_CAP_SUSPICION_THRESHOLD:
         return "near_request_cap"
@@ -104,6 +118,7 @@ def canonicalize_repaired_cost(
     output_tokens: int,
     cache_read_tokens: int = 0,
     cache_write_tokens: int = 0,
+    reasoning_tokens: int = 0,
 ) -> tuple[int, str, str]:
     """Pick the canonical repaired value using the same precedence as the finalizer.
 
@@ -132,6 +147,7 @@ def canonicalize_repaired_cost(
         output_tokens=output_tokens,
         cache_read_tokens=cache_read_tokens,
         cache_write_tokens=cache_write_tokens,
+        reasoning_tokens=reasoning_tokens,
     )
     if provenance == "unknown":
         return chosen, "unknown", provenance
@@ -175,10 +191,10 @@ async def repair_request_costs(
     rows = await db.fetch_all(
         "SELECT r.id, r.model_id, r.provider_id, a.name AS account_name, "
         "r.status, r.input_tokens, r.output_tokens, r.cache_read_tokens, "
-        "r.cache_write_tokens, r.cost_microdollars, r.exactness, "
+        "r.cache_write_tokens, r.reasoning_tokens, r.cost_microdollars, r.exactness, "
         "r.provider_cost_microdollars, r.reserved_microdollars, "
         "r.local_cost_microdollars, r.local_cost_exactness, "
-        "r.upstream_protocol "
+        "r.upstream_protocol, r.raw_usage_json "
         "FROM requests r "
         "LEFT JOIN accounts a ON a.id = r.account_id "
         f"WHERE {' AND '.join(where_clauses)} "
@@ -222,6 +238,7 @@ async def repair_request_costs(
         output_tokens = int(row["output_tokens"] or 0)
         cache_read_tokens = int(row["cache_read_tokens"] or 0)
         cache_write_tokens = int(row["cache_write_tokens"] or 0)
+        reasoning_tokens = int(row["reasoning_tokens"] or 0)
         reserved = int(row["reserved_microdollars"] or 0)
         # Prefer the persisted `local_cost_microdollars` /
         # `local_cost_exactness` columns so the repair is
@@ -244,15 +261,20 @@ async def repair_request_costs(
                 output_tokens=output_tokens,
                 cache_read_tokens=cache_read_tokens,
                 cache_write_tokens=cache_write_tokens,
+                reasoning_tokens=reasoning_tokens,
                 provider_id=provider_id or None,
                 # Mirror the finalizer: OpenAI-protocol rows store
                 # prompt tokens inclusive of cached tokens.
-                input_tokens_include_cache=(
-                    str(row["upstream_protocol"] or "") == "openai"
+                input_tokens_include_cache=_raw_usage_includes_cache(
+                    row["raw_usage_json"]
                 ),
             )
-        total_tokens = (
-            input_tokens + output_tokens + cache_read_tokens + cache_write_tokens
+        total_tokens = total_billable_tokens(
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+            cache_write_tokens,
+            reasoning_tokens,
         )
         may_have_billable_work = total_tokens > 0 or old_cost > 0 or reserved > 0
         new_cost, new_exactness, provenance = canonicalize_repaired_cost(
@@ -264,6 +286,7 @@ async def repair_request_costs(
             output_tokens=output_tokens,
             cache_read_tokens=cache_read_tokens,
             cache_write_tokens=cache_write_tokens,
+            reasoning_tokens=reasoning_tokens,
         )
         if provenance != "trusted_local":
             logger.info(

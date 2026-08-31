@@ -74,6 +74,7 @@ def _set_server_host(config_path: str, host: str) -> None:
     """Update the onboarding-selected server bind address."""
     from pathlib import Path
 
+    from eggpool.config_utils import atomic_write_text
     from eggpool.toml_edit import render_toml_string, update_section_value
 
     path = Path(config_path)
@@ -86,7 +87,7 @@ def _set_server_host(config_path: str, host: str) -> None:
         insert_missing_key=True,
         append_missing_section=True,
     )
-    path.write_text("\n".join(result.lines) + "\n", encoding="utf-8")
+    atomic_write_text(path, "\n".join(result.lines) + "\n")
 
 
 def _ensure_config_with_api_key(config_path: str) -> None:

@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from eggpool.transcoder.ids import ToolCallIdMap
     from eggpool.transcoder.policy import TranscoderFeatures
 
+from eggpool.catalog.pricing import coerce_token_count
 from eggpool.jsonx import dumps_bytes, loads
 from eggpool.proxy.sse import DecodedSSEFrame, SSEDecoder, SSEDecodeResult
 from eggpool.transcoder.policy import build_reasoning_fields
@@ -615,10 +616,44 @@ class OpenAIToAnthropicStreaming(_BaseStreamingTranscoder):
             "delta": {"stop_reason": stop_reason},
         }
         if usage is not None:
-            delta_payload["usage"] = {
+            prompt_details = usage.get("prompt_tokens_details")
+            completion_details = usage.get("completion_tokens_details")
+            translated_usage: dict[str, Any] = {
                 "input_tokens": usage.get("prompt_tokens", 0),
                 "output_tokens": usage.get("completion_tokens", 0),
             }
+            if isinstance(prompt_details, dict):
+                if "cached_tokens" in prompt_details:
+                    translated_usage["cache_read_input_tokens"] = prompt_details[
+                        "cached_tokens"
+                    ]
+                if "cache_write_tokens" in prompt_details:
+                    translated_usage["cache_creation_input_tokens"] = prompt_details[
+                        "cache_write_tokens"
+                    ]
+            if "cached_tokens" in usage:
+                translated_usage["cache_read_input_tokens"] = usage["cached_tokens"]
+            if "cache_read_input_tokens" in usage:
+                translated_usage["cache_read_input_tokens"] = usage[
+                    "cache_read_input_tokens"
+                ]
+            if "cache_creation_input_tokens" in usage:
+                translated_usage["cache_creation_input_tokens"] = usage[
+                    "cache_creation_input_tokens"
+                ]
+            if "cache_write_input_tokens" in usage:
+                translated_usage["cache_creation_input_tokens"] = usage[
+                    "cache_write_input_tokens"
+                ]
+            if isinstance(completion_details, dict) and (
+                "reasoning_tokens" in completion_details
+            ):
+                completion_details_dict = cast("dict[str, Any]", completion_details)
+                translated_usage["output_tokens"] = max(
+                    coerce_token_count(translated_usage["output_tokens"]),
+                    coerce_token_count(completion_details_dict["reasoning_tokens"]),
+                )
+            delta_payload["usage"] = translated_usage
         return self._anthropic_frame("message_delta", delta_payload)
 
 

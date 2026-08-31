@@ -52,6 +52,19 @@ class TestRedactErrorDetailRegex:
         result = redact_error_detail("api key is sk-abcdef012345")
         assert "sk-abcdef012345" not in (result or "")
 
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "xai-1234567890abcdef",
+            "gsk_1234567890abcdef",
+            "claude-" + "1234567890abcdef" * 2,
+        ],
+    )
+    def test_provider_key_prefixes(self, key: str) -> None:
+        result = redact_error_detail(f"provider key is {key}")
+        assert key not in (result or "")
+        assert REDACTED in (result or "")
+
     def test_password_keyvalue(self) -> None:
         result = redact_error_detail("password=hunter2")
         assert "hunter2" not in (result or "")

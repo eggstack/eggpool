@@ -30,6 +30,17 @@ _BEARER_RE = re.compile(r"(?i)(bearer\s+)([A-Za-z0-9._\-+/=]+)")
 # OpenAI/Anthropic style API keys beginning with sk- (with optional
 # suffix or separator).
 _SK_KEY_RE = re.compile(r"\bsk-[A-Za-z0-9_\-]{6,}\b")
+_PROVIDER_KEY_RE = re.compile(
+    r"\b(?:"
+    r"xai-[A-Za-z0-9_\-]{16,}|"
+    r"gsk_[A-Za-z0-9_\-]{16,}|"
+    r"key-[A-Za-z0-9_\-]{16,}|"
+    r"glpat-[A-Za-z0-9_\-]{16,}|"
+    r"ghp_[A-Za-z0-9]{16,}|"
+    r"claude-[A-Za-z0-9_\-]{32,}"
+    r")\b",
+    re.IGNORECASE,
+)
 
 # password=..., secret=..., api_key=... assignments
 _PASSWORD_RE = re.compile(r"(?i)(password\s*=\s*)([^\s,;\"'}]+)")
@@ -361,6 +372,7 @@ def redact_error_detail(value: str | None) -> str | None:
     redacted = _AUTH_HEADER_RE.sub(r"\1" + REDACTED, redacted)
     redacted = _BEARER_RE.sub(r"\1" + REDACTED, redacted)
     redacted = _SK_KEY_RE.sub(REDACTED, redacted)
+    redacted = _PROVIDER_KEY_RE.sub(REDACTED, redacted)
     redacted = _PASSWORD_RE.sub(r"\1" + REDACTED, redacted)
     redacted = _SECRET_RE.sub(r"\1" + REDACTED, redacted)
     redacted = _API_KEY_RE.sub(r"\1" + REDACTED, redacted)

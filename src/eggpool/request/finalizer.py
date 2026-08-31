@@ -161,6 +161,13 @@ class FinalizationData:
     effect_progress: FailureEffectProgress | None = None
 
 
+def _input_tokens_include_cache(data: FinalizationData) -> bool:
+    """Use the usage payload's cache dialect when it is available."""
+    if data.upstream_protocol != "openai":
+        return False
+    return bool(getattr(data.normalized_usage, "input_tokens_include_cache", False))
+
+
 @dataclass(frozen=True, slots=True)
 class DurableFinalizationResult:
     """Facts proven by one durable finalization transaction."""
@@ -308,6 +315,7 @@ class RequestFinalizer:
                 data.output_tokens,
                 data.cache_read_tokens,
                 data.cache_write_tokens,
+                data.reasoning_tokens,
             )
         )
         may_have_billable_work = (
@@ -337,12 +345,13 @@ class RequestFinalizer:
                 data.output_tokens,
                 data.cache_read_tokens,
                 data.cache_write_tokens,
+                reasoning_tokens=data.reasoning_tokens,
                 provider_id=selected.provider_id,
                 # OpenAI-protocol usage reports prompt tokens inclusive
                 # of cached tokens; Anthropic-protocol categories are
                 # disjoint. Pass the protocol semantics through so the
                 # calculator does not double-bill the cached subset.
-                input_tokens_include_cache=(data.upstream_protocol == "openai"),
+                input_tokens_include_cache=_input_tokens_include_cache(data),
             )
 
         reservation_microdollars = int(
@@ -380,6 +389,7 @@ class RequestFinalizer:
                 output_tokens=data.output_tokens,
                 cache_read_tokens=data.cache_read_tokens,
                 cache_write_tokens=data.cache_write_tokens,
+                reasoning_tokens=data.reasoning_tokens,
             )
             cost_microdollars = chosen
             exactness = "estimated"
@@ -445,6 +455,7 @@ class RequestFinalizer:
                 output_tokens=data.output_tokens,
                 cache_read_tokens=data.cache_read_tokens,
                 cache_write_tokens=data.cache_write_tokens,
+                reasoning_tokens=data.reasoning_tokens,
             )
             if not has_usage and reservation_microdollars > 0:
                 chosen = reservation_microdollars

@@ -6,13 +6,16 @@ import os
 import secrets
 import socket
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from eggpool.toml_edit import (
     render_toml_string,
     section_has_key,
     update_section_value,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def generate_api_key() -> str:
@@ -75,6 +78,23 @@ def detect_lan_ip() -> str:
         return "127.0.0.1"
 
 
+def atomic_write_text(path: Path, content: str) -> None:
+    """Replace a text file atomically after syncing its temporary copy."""
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp_path.write_text(content, encoding="utf-8")
+        fd = os.open(str(tmp_path), os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(str(tmp_path), str(path))
+    except BaseException:
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise
+
+
 @dataclass(frozen=True)
 class ServerKeyResolution:
     """Structured result of server API key resolution."""
@@ -113,19 +133,7 @@ def write_server_api_key(config_path: str, new_key: str) -> tuple[bool, str | No
         )
 
     new_content = "\n".join(result.lines) + "\n"
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    try:
-        tmp_path.write_text(new_content, encoding="utf-8")
-        fd = os.open(str(tmp_path), os.O_RDONLY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-        os.replace(str(tmp_path), str(path))
-    except BaseException:
-        if tmp_path.exists():
-            tmp_path.unlink()
-        raise
+    atomic_write_text(path, new_content)
     return True, None
 
 

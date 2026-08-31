@@ -248,6 +248,86 @@ class TestRequestFinalizerCostPrecedence:
         finally:
             await db.disconnect()
 
+    @pytest.mark.asyncio
+    async def test_reasoning_only_usage_reaches_cost_calculator(self) -> None:
+        db, request_repo, attempt_repo, reservation_repo = await _fresh_finalizer_db()
+        try:
+            selected, request_id = await _seed_request(
+                db,
+                request_repo,
+                attempt_repo,
+                reservation_repo,
+                proxy_request_id="finalizer-reasoning-only-1",
+                reservation_microdollars=0,
+            )
+            calculator = AsyncMock()
+            calculator.calculate_cost = AsyncMock(return_value=(1_500, "derived"))
+            finalizer = RequestFinalizer(
+                db=db,
+                request_repo=request_repo,
+                attempt_repo=attempt_repo,
+                reservation_repo=reservation_repo,
+                cost_calculator=calculator,
+            )
+
+            await finalizer.finalize(
+                selected,
+                FinalizationData(
+                    outcome=FinalizationOutcome.COMPLETED,
+                    reasoning_tokens=100,
+                ),
+            )
+
+            call = calculator.calculate_cost.await_args
+            assert call is not None
+            assert call.kwargs["reasoning_tokens"] == 100
+            row = await db.fetch_one(
+                "SELECT cost_microdollars FROM requests WHERE id = ?",
+                (request_id,),
+            )
+            assert row is not None
+            assert row["cost_microdollars"] == 1_500
+        finally:
+            await db.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_cache_pricing_uses_reported_usage_dialect(self) -> None:
+        db, request_repo, attempt_repo, reservation_repo = await _fresh_finalizer_db()
+        try:
+            selected, _request_id = await _seed_request(
+                db,
+                request_repo,
+                attempt_repo,
+                reservation_repo,
+                proxy_request_id="finalizer-cache-dialect-1",
+            )
+            calculator = AsyncMock()
+            calculator.calculate_cost = AsyncMock(return_value=(1_500, "derived"))
+            finalizer = RequestFinalizer(
+                db=db,
+                request_repo=request_repo,
+                attempt_repo=attempt_repo,
+                reservation_repo=reservation_repo,
+                cost_calculator=calculator,
+            )
+
+            await finalizer.finalize(
+                selected,
+                FinalizationData(
+                    outcome=FinalizationOutcome.COMPLETED,
+                    input_tokens=100,
+                    cache_read_tokens=80,
+                    upstream_protocol="openai",
+                    normalized_usage=SimpleNamespace(input_tokens_include_cache=False),
+                ),
+            )
+
+            call = calculator.calculate_cost.await_args
+            assert call is not None
+            assert call.kwargs["input_tokens_include_cache"] is False
+        finally:
+            await db.disconnect()
+
 
 @pytest.mark.asyncio
 async def test_first_finalization_avoids_convergence_selects() -> None:

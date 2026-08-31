@@ -32,6 +32,7 @@ class TestOpenAIStreamUsageExtractor:
         assert result.output_tokens == 50
         assert result.cache_read_tokens == 10
         assert result.reasoning_tokens == 5
+        assert result.input_tokens_include_cache is True
         assert result.is_complete is True
 
     def test_extract_no_usage(self) -> None:

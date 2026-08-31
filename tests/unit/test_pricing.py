@@ -101,6 +101,29 @@ class TestCostCalculator:
         assert cost > 0
 
     @pytest.mark.asyncio
+    async def test_reasoning_only_usage_is_priced_as_completion(self) -> None:
+        snapshot = PriceSnapshot(
+            model_id="reasoning-model",
+            input_price_per_1k=None,
+            output_price_per_1k=None,
+            captured_at="2026-08-31T00:00:00",
+            input_per_million_microdollars=3_000_000,
+            output_per_million_microdollars=15_000_000,
+        )
+        mock_repo = AsyncMock()
+        mock_repo.get_latest_snapshot = AsyncMock(return_value=snapshot)
+        calculator = CostCalculator(price_repo=mock_repo)
+
+        cost, exactness = await calculator.calculate_cost(
+            "reasoning-model",
+            input_tokens=0,
+            output_tokens=0,
+            reasoning_tokens=100,
+        )
+
+        assert (cost, exactness) == (1500, "derived")
+
+    @pytest.mark.asyncio
     async def test_latest_snapshot_is_cached_until_invalidated(self) -> None:
         first = PriceSnapshot(
             model_id="gpt-4",

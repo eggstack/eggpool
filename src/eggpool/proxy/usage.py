@@ -29,6 +29,10 @@ class StreamUsageResult:
     cache_creation_tokens: int = 0
     reasoning_tokens: int = 0
     thinking_characters: int = 0
+    # True when the OpenAI prompt token count is accompanied by the
+    # standard cached-token breakdown, which makes the cache count a
+    # subset of input_tokens rather than a disjoint category.
+    input_tokens_include_cache: bool = False
     is_complete: bool = False
     # Authoritative provider-reported billed cost, in microdollars.
     # ``None`` when the upstream did not expose an unambiguous value.
@@ -128,6 +132,9 @@ def extract_openai_response_usage(
             prompt_details.get("cached_tokens", 0) if prompt_details is not None else 0
         ),
         reasoning_tokens=reasoning_tokens,
+        input_tokens_include_cache=(
+            isinstance(prompt_details, dict) and "cached_tokens" in prompt_details
+        ),
         is_complete=True,
         reported_cost_microdollars=(
             reported.microdollars if reported is not None else None

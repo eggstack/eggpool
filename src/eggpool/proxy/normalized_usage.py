@@ -43,7 +43,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, cast
 
-from eggpool.catalog.pricing import coerce_token_count
+from eggpool.catalog.pricing import coerce_token_count, usage_includes_cached_input
 from eggpool.proxy.usage import (
     extract_anthropic_response_usage,
     extract_openai_response_usage,
@@ -91,6 +91,7 @@ class NormalizedUsage:
     cache_creation_input_tokens: int | None = None
     cache_write_input_tokens: int | None = None
     reasoning_tokens: int | None = None
+    input_tokens_include_cache: bool | None = None
     raw_usage: dict[str, Any] | None = None
     cache_counter_status: CacheCounterStatus = CacheCounterStatus.NOT_REPORTED
 
@@ -270,6 +271,7 @@ def _extract_openai(usage: dict[str, Any]) -> NormalizedUsage:
         cache_creation_input_tokens=cache_tokens["cache_creation_input_tokens"],
         cache_write_input_tokens=cache_tokens["cache_write_input_tokens"],
         reasoning_tokens=reasoning_tokens,
+        input_tokens_include_cache=usage_includes_cached_input(usage),
         raw_usage=dict(usage),
         cache_counter_status=cache_status,
     )
@@ -386,6 +388,7 @@ def normalize_from_stream_result(
 
     input_tokens = getattr(result, "input_tokens", 0) or 0
     output_tokens = getattr(result, "output_tokens", 0) or 0
+    input_tokens_include_cache = getattr(result, "input_tokens_include_cache", None)
     cache_read = getattr(result, "cache_read_tokens", 0) or 0
     cache_creation = getattr(result, "cache_creation_tokens", 0) or 0
 
@@ -422,6 +425,7 @@ def normalize_from_stream_result(
             cache_creation_input_tokens=cache_creation_value,
             cache_write_input_tokens=cache_creation_value,
             raw_usage=raw_usage,
+            input_tokens_include_cache=input_tokens_include_cache,
             cache_counter_status=cache_status,
         )
 
@@ -451,6 +455,7 @@ def normalize_from_stream_result(
         cache_creation_input_tokens=None,
         cache_write_input_tokens=None,
         raw_usage=raw_usage,
+        input_tokens_include_cache=input_tokens_include_cache,
         cache_counter_status=cache_status,
     )
 

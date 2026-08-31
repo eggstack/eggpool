@@ -17,8 +17,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from eggpool.catalog.pricing import CostCalculator, PriceRepository
+from eggpool.catalog.pricing import (
+    CostCalculator,
+    PriceRepository,
+    total_billable_tokens,
+    usage_includes_cached_input,
+)
 from eggpool.cost_repair import canonicalize_repaired_cost
+from eggpool.jsonx import loads as jsonx_loads
 
 if TYPE_CHECKING:
     from eggpool.db.connection import Database
@@ -36,6 +42,17 @@ class RecomputeSummary:
     cost_total_microdollars: int
     new_cost_total_microdollars: int
     changed_rows: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
+
+
+def _raw_usage_includes_cache(value: object) -> bool:
+    """Read cache inclusion semantics from persisted usage when available."""
+    if not isinstance(value, str):
+        return False
+    try:
+        usage = jsonx_loads(value)
+    except (TypeError, ValueError):
+        return False
+    return usage_includes_cached_input(usage)
 
 
 async def recompute_request_costs(
@@ -61,7 +78,7 @@ async def recompute_request_costs(
         f"input_tokens, output_tokens, cache_read_tokens, "
         f"cache_write_tokens, reasoning_tokens, "
         f"cost_microdollars, provider_cost_microdollars, "
-        f"reserved_microdollars, upstream_protocol "
+        f"reserved_microdollars, upstream_protocol, raw_usage_json "
         f"FROM requests "
         f"WHERE status != 'pending' "
         f"ORDER BY started_at DESC, id DESC{limit_clause}",
@@ -92,12 +109,14 @@ async def recompute_request_costs(
         output_tokens = int(row["output_tokens"] or 0)
         cache_read = int(row["cache_read_tokens"] or 0)
         cache_write = int(row["cache_write_tokens"] or 0)
+        reasoning = int(row["reasoning_tokens"] or 0)
         reserved = int(row["reserved_microdollars"] or 0)
         if (
             input_tokens == 0
             and output_tokens == 0
             and cache_read == 0
             and cache_write == 0
+            and reasoning == 0
         ):
             skipped_missing_tokens += 1
             continue
@@ -108,15 +127,17 @@ async def recompute_request_costs(
             output_tokens=output_tokens,
             cache_read_tokens=cache_read,
             cache_write_tokens=cache_write,
+            reasoning_tokens=reasoning,
             provider_id=provider_id,
             # Mirror the finalizer: OpenAI-protocol rows store prompt
             # tokens inclusive of cached tokens.
-            input_tokens_include_cache=(
-                str(row["upstream_protocol"] or "") == "openai"
-            ),
+            input_tokens_include_cache=_raw_usage_includes_cache(row["raw_usage_json"]),
         )
         may_have_billable_work = (
-            input_tokens + output_tokens + cache_read + cache_write > 0
+            total_billable_tokens(
+                input_tokens, output_tokens, cache_read, cache_write, reasoning
+            )
+            > 0
             or old_cost > 0
             or reserved > 0
         )
@@ -129,6 +150,7 @@ async def recompute_request_costs(
             output_tokens=output_tokens,
             cache_read_tokens=cache_read,
             cache_write_tokens=cache_write,
+            reasoning_tokens=reasoning,
         )
         old_exactness = str(row["exactness"] or "unknown")
         upgrade_eligible = old_exactness in {"estimated", "unknown"}

@@ -247,9 +247,9 @@ def _snapshot_existing_files(targets: Sequence[Path], staging_dir: Path) -> None
 
 
 def _restore_file(target: Path, contents: bytes) -> None:
-    """Restore one file, retaining private permissions for ``.env``."""
+    """Restore one file, retaining private permissions for credentials."""
     target.write_bytes(contents)
-    if target.name == ENV_BASENAME:
+    if target.name in {ENV_BASENAME, CONFIG_BASENAME}:
         target.chmod(0o600)
 
 
@@ -579,7 +579,7 @@ def restore_backup(
 
         if "config.toml" in plan.members:
             contents.config_path.parent.mkdir(parents=True, exist_ok=True)
-            contents.config_path.write_bytes(plan.members["config.toml"])
+            _restore_file(contents.config_path, plan.members["config.toml"])
 
         if contents.env_path is not None and ".env" in plan.members:
             contents.env_path.parent.mkdir(parents=True, exist_ok=True)

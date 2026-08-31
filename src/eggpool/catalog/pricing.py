@@ -7,7 +7,7 @@ import math
 import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from eggpool.constants import (
     DEFAULT_PROVIDER_ID,
@@ -250,11 +250,21 @@ _MAX_ESTIMATED_COST_PER_TOKEN_MICRODOLLARS = 100  # $0.10 / token
 MAX_RESERVATION_COST_MICRODOLLARS = 1_000_000  # $1.00 per reservation
 
 
+def usage_includes_cached_input(usage: object) -> bool:
+    """Return whether an OpenAI usage object reports cache as a subset."""
+    if not isinstance(usage, dict):
+        return False
+    usage_dict = cast("dict[str, Any]", usage)
+    prompt_details = usage_dict.get("prompt_tokens_details")
+    return isinstance(prompt_details, dict) and "cached_tokens" in prompt_details
+
+
 def total_billable_tokens(
     input_tokens: int,
     output_tokens: int,
     cache_read_tokens: int | None = None,
     cache_write_tokens: int | None = None,
+    reasoning_tokens: int | None = None,
 ) -> int:
     """Sum the billable token categories for a request.
 
@@ -265,7 +275,13 @@ def total_billable_tokens(
     """
     read = cache_read_tokens or 0
     write = cache_write_tokens or 0
-    return input_tokens + output_tokens + read + write
+    # Providers commonly report reasoning tokens as a breakdown of
+    # completion_tokens, but some compatible providers report the breakdown
+    # without including it in output_tokens.  Use the larger value so the
+    # reasoning-only shape is billable without double-counting the standard
+    # OpenAI shape.
+    output = max(output_tokens, reasoning_tokens or 0)
+    return input_tokens + output + read + write
 
 
 def is_plausible_request_cost(
@@ -275,6 +291,7 @@ def is_plausible_request_cost(
     output_tokens: int,
     cache_read_tokens: int | None = None,
     cache_write_tokens: int | None = None,
+    reasoning_tokens: int | None = None,
     max_cost_per_token: int = _MAX_TRUSTED_COST_PER_TOKEN_MICRODOLLARS,
 ) -> bool:
     """Whether a cost value is plausible for the billable tokens supplied.
@@ -291,6 +308,7 @@ def is_plausible_request_cost(
         output_tokens,
         cache_read_tokens,
         cache_write_tokens,
+        reasoning_tokens,
     )
     if total_tokens <= 0:
         return False
@@ -306,6 +324,7 @@ def choose_bounded_estimated_cost(
     output_tokens: int,
     cache_read_tokens: int | None = None,
     cache_write_tokens: int | None = None,
+    reasoning_tokens: int | None = None,
 ) -> tuple[int, str]:
     """Pick the most defensible bounded estimate for a request.
 
@@ -336,6 +355,7 @@ def choose_bounded_estimated_cost(
         output_tokens=output_tokens,
         cache_read_tokens=cache_read_tokens,
         cache_write_tokens=cache_write_tokens,
+        reasoning_tokens=reasoning_tokens,
         max_cost_per_token=_MAX_ESTIMATED_COST_PER_TOKEN_MICRODOLLARS,
     )
     reservation_bounded = (
@@ -355,6 +375,7 @@ def choose_bounded_estimated_cost(
             output_tokens=output_tokens,
             cache_read_tokens=cache_read_tokens,
             cache_write_tokens=cache_write_tokens,
+            reasoning_tokens=reasoning_tokens,
             max_cost_per_token=_MAX_ESTIMATED_COST_PER_TOKEN_MICRODOLLARS,
         )
     )
@@ -364,6 +385,7 @@ def choose_bounded_estimated_cost(
         output_tokens,
         cache_read_tokens,
         cache_write_tokens,
+        reasoning_tokens,
     )
     if total_tokens <= 0:
         return 0, "unknown"
@@ -622,6 +644,7 @@ class CostCalculator:
         provider_id: str | None = None,
         *,
         input_tokens_include_cache: bool = False,
+        reasoning_tokens: int = 0,
     ) -> tuple[int, str]:
         """Calculate cost in microdollars from token usage.
 
@@ -637,6 +660,11 @@ class CostCalculator:
                 token counts, so they are subtracted before pricing;
                 when ``False`` (Anthropic-protocol usage) all four
                 categories are disjoint and billed as given.
+            reasoning_tokens: Optional reasoning-token breakdown. Providers
+                usually include this in ``output_tokens``; when they do not,
+                the larger of the two values is priced to avoid dropping
+                reasoning-only usage without double-counting the standard
+                shape.
 
         Returns:
             Tuple of (cost_microdollars, exactness_level). Exactness is
@@ -651,6 +679,8 @@ class CostCalculator:
         output_tokens = _normalize_token_count(output_tokens)
         cache_read_tokens = _normalize_token_count(cache_read_tokens)
         cache_write_tokens = _normalize_token_count(cache_write_tokens)
+        reasoning_tokens = _normalize_token_count(reasoning_tokens)
+        output_tokens = max(output_tokens, reasoning_tokens)
 
         if input_tokens_include_cache:
             # OpenAI-protocol ``prompt_tokens`` includes the cached

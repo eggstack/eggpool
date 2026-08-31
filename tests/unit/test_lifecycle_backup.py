@@ -391,6 +391,7 @@ class TestRestoreBackup:
         restore_backup(archive, contents=targets)
 
         assert targets.config_path.read_bytes() == b"[server]\nport = 11300\n"
+        assert targets.config_path.stat().st_mode & 0o777 == 0o600
         assert targets.env_path is not None
         assert targets.env_path.read_bytes() == b"API_KEY=secret\n"
         db = targets.db_path

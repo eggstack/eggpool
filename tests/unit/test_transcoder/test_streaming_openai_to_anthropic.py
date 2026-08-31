@@ -248,6 +248,35 @@ class TestUsageChunk:
         assert "usage" in delta_data
         assert delta_data["usage"]["output_tokens"] == 5
 
+    def test_usage_chunk_preserves_cache_breakdown(self) -> None:
+        transcoder = OpenAIToAnthropicStreaming()
+        transcoder.feed(_openai_chunk(role="assistant", content="Hi"))
+
+        raw = transcoder.feed(
+            _openai_usage_chunk(
+                usage={
+                    "prompt_tokens": 100,
+                    "completion_tokens": 5,
+                    "prompt_tokens_details": {
+                        "cached_tokens": 80,
+                        "cache_write_tokens": 10,
+                    },
+                }
+            )
+        )
+
+        frames = _parse_sse_frames(b"".join(raw))
+        delta_data = json.loads(
+            next(f for f in frames if f["event"] == "message_delta")["data"]
+        )
+
+        assert delta_data["usage"] == {
+            "input_tokens": 100,
+            "output_tokens": 5,
+            "cache_read_input_tokens": 80,
+            "cache_creation_input_tokens": 10,
+        }
+
     def test_usage_chunk_before_done_emits_before_message_stop(self) -> None:
         transcoder = OpenAIToAnthropicStreaming()
         transcoder.feed(_openai_chunk(role="assistant", content="Hi"))
