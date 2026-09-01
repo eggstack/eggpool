@@ -59,8 +59,8 @@ prefer_native = true
 tools = true
 # Image / document content parts (default: false)
 vision = false
-# Extended thinking blocks ↔ reasoning_content (default: false)
-thinking = false
+# Extended thinking blocks ↔ reasoning_content (default: true)
+thinking = true
 # OpenAI response_format / json_schema coercion (default: false)
 structured_outputs = false
 # Anthropic-only primitives explicit handling (default: false)

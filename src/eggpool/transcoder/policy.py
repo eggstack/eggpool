@@ -97,12 +97,14 @@ class CapabilityPolicy(BaseModel):
 
 
 class TranscoderFeatures(BaseModel):
-    """Per-feature opt-in flags for Phase 6 sub-phases.
+    """Per-feature flags for Phase 6 sub-phases.
 
-    Optional semantic extensions are **off** by default. Tool calling is
-    baseline protocol compatibility and is always translated when a
-    cross-protocol request is selected; its legacy ``tools`` switch is kept
-    only so old configuration files continue to parse.
+    Thinking is enabled by default because it is part of the supported
+    cross-protocol reasoning path. Other optional semantic extensions remain
+    off by default. Tool calling is baseline protocol compatibility and is
+    always translated when a cross-protocol request is selected; its legacy
+    ``tools`` switch is kept only so old configuration files continue to
+    parse.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -123,11 +125,12 @@ class TranscoderFeatures(BaseModel):
         ),
     )
     thinking: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Extended thinking / reasoning blocks. When enabled, Anthropic "
             "thinking blocks are translated to OpenAI reasoning_content and "
-            "vice versa."
+            "vice versa. Enabled by default; set false to drop thinking "
+            "controls and content."
         ),
     )
     structured_outputs: bool = Field(
@@ -277,8 +280,8 @@ class TranscoderPolicy(BaseModel):
     features: TranscoderFeatures = Field(
         default_factory=TranscoderFeatures,
         description=(
-            "Per-feature opt-in flags for Phase 6 sub-phases. Each flag "
-            "defaults to false; enable individual features as needed."
+            "Per-feature flags for Phase 6 sub-phases. Thinking is enabled "
+            "by default; other optional features remain opt-in."
         ),
     )
 

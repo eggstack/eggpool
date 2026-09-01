@@ -28,16 +28,19 @@ Status values (`CapabilityStatus`):
 
 Source: `src/eggpool/catalog/capabilities.py:36-44`
 
-## 2. Enabling Thinking Transcoding
+## 2. Thinking Transcoding
 
-Thinking transcoding is **off by default**. The feature gate lives in `[transcoder.features]`:
+Thinking transcoding is **enabled by default**. No configuration is required.
+To disable it, set the feature gate in `[transcoder.features]`:
 
 ```toml
 [transcoder.features]
-thinking = true
+thinking = false
 ```
 
-When `thinking = false` (the default), the transcoder **drops** thinking-related fields with a structured `reasoning_content_dropped` warning rather than forwarding them. Specifically:
+When `thinking = false`, the transcoder **drops** thinking-related fields with a
+structured `reasoning_content_dropped` warning rather than forwarding them.
+Specifically:
 
 - **OpenAI → Anthropic**: `reasoning_content` in assistant messages is dropped.
 - **Anthropic → OpenAI**: `thinking` content blocks are dropped.
@@ -63,7 +66,7 @@ Source: `src/eggpool/transcoder/policy.py:217-225`
 
 ```toml
 [transcoder.features]
-thinking = true          # Enable thinking/reasoning transcoding (default: false)
+thinking = true          # Enable thinking/reasoning transcoding (default: true)
 ```
 
 ### Budget Defaults
@@ -500,9 +503,10 @@ Source: `src/eggpool/metrics/thinking.py`, `src/eggpool/api/stats.py:452-463`, `
 
 **Symptoms:** Client sends `reasoning_effort` but the upstream receives no thinking controls.
 
-**Cause:** Thinking transcoding is disabled. The feature gate `[transcoder.features]` defaults to `thinking = false`.
+**Cause:** Thinking transcoding was explicitly disabled with
+`[transcoder.features].thinking = false`.
 
-**Fix:** Enable the feature:
+**Fix:** Remove the override or enable the feature:
 
 ```toml
 [transcoder.features]
@@ -562,7 +566,7 @@ native_protocols = ["anthropic"]
 
 **Cause:** Thinking transcoding is likely disabled for streaming. The feature gate affects both streaming and non-streaming paths.
 
-**Fix:** Ensure `[transcoder.features] thinking = true` is set. Check `[transcoder.openai_reasoning_fields]` to verify the streaming delta field name matches your client's expectations (default: `"reasoning"`).
+**Fix:** Remove the disabling override or ensure `[transcoder.features] thinking = true` is set. Check `[transcoder.openai_reasoning_fields]` to verify the streaming delta field name matches your client's expectations (default: `"reasoning"`).
 
 ---
 

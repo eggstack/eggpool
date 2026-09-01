@@ -595,7 +595,8 @@ class TestConfigSetup:
         import json
 
         config_path = tmp_path / "config.toml"
-        config_path.write_text('[server]\napi_key = "ep_test_key"\nport = 11300\n')
+        server_key = "ep_" + "a" * 96
+        config_path.write_text(f'[server]\napi_key = "{server_key}"\nport = 11300\n')
 
         from click.testing import CliRunner
 
@@ -614,8 +615,56 @@ class TestConfigSetup:
         # stdout contains only the JSON snippet
         snippet = json.loads(result.stdout)
 
-        assert snippet["provider"]["eggpool"]["options"]["apiKey"] == "ep_test_key"
+        assert snippet["provider"]["eggpool"]["options"]["apiKey"] == server_key
         assert "11300" in snippet["provider"]["eggpool"]["options"]["baseURL"]
+
+    def test_configsetup_opencode_exposes_muse_spark_xhigh(self, tmp_path):
+        """The CLI emits every known Muse Spark thinking variant."""
+        import json
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            textwrap.dedent(
+                """\
+                [server]
+                api_key = "ep_test_key"
+                port = 11300
+
+                [providers.opencode-go]
+                id = "opencode-go"
+                base_url = "https://opencode.ai/zen/go/v1"
+                protocols = ["openai", "anthropic"]
+
+                [[providers.opencode-go.accounts]]
+                name = "go"
+                api_key = "sk-test"
+
+                [[providers.opencode-go.static_models]]
+                id = "muse-spark-1.2-contributor"
+                protocol = "anthropic"
+                """
+            )
+        )
+
+        from click.testing import CliRunner
+
+        result = CliRunner().invoke(
+            cli,
+            ["--config", str(config_path), "configsetup", "opencode"],
+        )
+
+        assert result.exit_code == 0, result.output
+        snippet = json.loads(result.stdout)
+        model = snippet["provider"]["eggpool"]["models"][
+            "muse-spark-1.2-contributor/opencode-go"
+        ]
+        assert list(model["variants"]) == [
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+        ]
 
     def test_configsetup_opencode_collapse_models_branch(self, tmp_path) -> None:
         """``configsetup opencode`` branches on ``models.collapse_models``:

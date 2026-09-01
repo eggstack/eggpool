@@ -337,6 +337,41 @@ def test_thinking_supported_model_gets_annotation() -> None:
     }
 
 
+def test_thinking_xhigh_model_gets_all_advertised_variants() -> None:
+    models = [
+        {
+            "model_id": "muse-spark-1.2-contributor/opencode-go",
+            "display_name": "Muse Spark 1.2 Contributor",
+            "provider_id": "opencode-go",
+            "capabilities": {
+                "thinking": {
+                    "status": "supported",
+                    "supported_efforts": [
+                        "minimal",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                    ],
+                }
+            },
+            "effective_limits": {},
+        }
+    ]
+
+    result = build_opencode_provider_config(
+        base_url="http://host:8080/v1",
+        api_key="ep_key",
+        models=models,
+    )
+
+    entry = result["provider"]["eggpool"]["models"][
+        "muse-spark-1.2-contributor/opencode-go"
+    ]
+    assert entry["reasoning"] is True
+    assert list(entry["variants"]) == ["minimal", "low", "medium", "high", "xhigh"]
+
+
 def test_thinking_unknown_model_no_annotation() -> None:
     """A model with thinking.status='unknown' does NOT get a thinking field."""
     models = [

@@ -21,6 +21,7 @@ MODELS_DEV_BASE_URL = "https://models.dev"
 OPENCODE_GO_MODELS_DEV_PROVIDER_ID = "opencode-go"
 OPENCODE_COMPATIBLE_EFFORTS = ["low", "medium", "high"]
 _EFFORT_BUDGET_DEFAULTS = {
+    "minimal": 1024,
     "low": 1024,
     "medium": 4096,
     "high": 16384,
@@ -116,6 +117,33 @@ def derive_opencode_go_supported_efforts(
     """
     if metadata.get("reasoning") is not True:
         return []
+
+    # models.dev mirrors OpenCode's provider catalog and can carry the exact
+    # effort set for newer models. Prefer it when present so newly released
+    # levels (for example Muse Spark's ``xhigh``) are not silently dropped.
+    reasoning_options = metadata.get("reasoning_options")
+    if isinstance(reasoning_options, list):
+        efforts: list[str] = []
+        for option in cast("list[object]", reasoning_options):
+            if not isinstance(option, dict):
+                continue
+            option_dict = cast("dict[str, object]", option)
+            if option_dict.get("type") != "effort":
+                continue
+            values = option_dict.get("values")
+            if not isinstance(values, list):
+                continue
+            for value in cast("list[object]", values):
+                if not isinstance(value, str):
+                    continue
+                effort = value.strip().lower()
+                if effort == "med":
+                    effort = "medium"
+                if effort and effort not in efforts:
+                    efforts.append(effort)
+        if efforts:
+            return efforts
+
     lowered = model_id.lower()
     if "deepseek-v4" in lowered:
         return [*OPENCODE_COMPATIBLE_EFFORTS, "max"]

@@ -62,6 +62,48 @@ class BuiltinProviderContract:
 
 
 # ---------------------------------------------------------------------------
+# OpenCode Go Muse Spark 1.2 Contributor contract
+# ---------------------------------------------------------------------------
+# The OpenCode Go model list does not include capability metadata, so this
+# endpoint needs a curated contract for the Anthropic Messages path. The
+# effort vocabulary is mirrored from the current models.dev/OpenCode model
+# record, including the newer ``minimal`` and ``xhigh`` levels.
+_OPENCODE_GO_MUSE_CONTRACT = BuiltinProviderContract(
+    key=ProviderContractKey(
+        provider_id_pattern=r"^opencode-go$",
+        model_id_pattern=r"^muse-spark-1\.2-contributor$",
+        protocol="anthropic",
+        priority=10,
+    ),
+    contract=ThinkingControlContract(
+        mode="effort_or_budget",
+        request_fields=["thinking", "reasoning_effort"],
+        accepted_efforts=["minimal", "low", "medium", "high", "xhigh"],
+        effort_to_budget_tokens={
+            "minimal": 1024,
+            "low": 1024,
+            "medium": 4096,
+            "high": 16384,
+            "xhigh": 24576,
+        },
+        explicit_budget_min=1024,
+        explicit_budget_max=131072,
+        historical_reasoning_content="accepted",
+        source="provider_catalog",
+    ),
+)
+
+_OPENCODE_GO_MUSE_URL_COMPAT_CONTRACT = BuiltinProviderContract(
+    key=ProviderContractKey(
+        provider_base_url_pattern=r".*opencode\.ai/zen/go/v1.*",
+        model_id_pattern=r"^muse-spark-1\.2-contributor$",
+        protocol="anthropic",
+        priority=10,
+    ),
+    contract=_OPENCODE_GO_MUSE_CONTRACT.contract,
+)
+
+# ---------------------------------------------------------------------------
 # OpenCode Go MiniMax-M3 contract
 # ---------------------------------------------------------------------------
 # OpenCode Go routes MiniMax-M3 through its own proxy.  The canonical
@@ -171,6 +213,8 @@ _OPENAI_NATIVE_CONTRACT = BuiltinProviderContract(
 
 # All built-in contracts, in declaration order (used for iteration).
 BUILTIN_CONTRACTS: tuple[BuiltinProviderContract, ...] = (
+    _OPENCODE_GO_MUSE_CONTRACT,
+    _OPENCODE_GO_MUSE_URL_COMPAT_CONTRACT,
     _OPENCODE_GO_MINIMAX_CONTRACT,
     _MINIMAX_NATIVE_CONTRACT,
     _OPENCODE_GO_URL_COMPAT_CONTRACT,

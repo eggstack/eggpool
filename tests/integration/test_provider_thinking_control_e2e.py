@@ -274,6 +274,33 @@ _OPENCODE_GO_REJECT_SPEC = RuntimeAppSpec(
     },
 )
 
+# Canonical OpenCode Go Muse Spark model with no capability metadata in the
+# provider /models response. The AppConfig built-in capability seed must make
+# the xhigh request routable before any optional metadata enrichment runs.
+_MUSE_SPARK_SPEC = RuntimeAppSpec(
+    account_names=("rt-acct-1",),
+    models=(
+        ModelSpec(
+            model_id="muse-spark-1.2-contributor",
+            protocol="anthropic",
+        ),
+    ),
+    providers=(
+        ProviderSpec(
+            provider_id="opencode-go",
+            base_url="https://opencode.ai/zen/go/v1",
+            protocols=("anthropic",),
+            static_models=(
+                ModelSpec(
+                    model_id="muse-spark-1.2-contributor",
+                    protocol="anthropic",
+                ),
+            ),
+            account_names=("rt-acct-1",),
+        ),
+    ),
+)
+
 
 @pytest_asyncio.fixture()
 async def opencode_go_reject_app(
@@ -287,9 +314,76 @@ async def opencode_go_reject_app(
     await result.httpx_client.aclose()
 
 
+@pytest_asyncio.fixture()
+async def muse_spark_app(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncGenerator[FastAPI, None]:
+    monkeypatch.setenv("REAL_RUNTIME_KEY", "rt-test-key")
+    result = await build_runtime_app(_MUSE_SPARK_SPEC, tmp_path=tmp_path)
+    yield result.application
+    await result.db.disconnect()
+    await result.httpx_client.aclose()
+
+
 # ---------------------------------------------------------------------------
 # Test: OpenCode Go warn-drop body capture
 # ---------------------------------------------------------------------------
+
+
+class TestMuseSparkThinkingControl:
+    """Muse Spark xhigh routes through the native Anthropic endpoint."""
+
+    @respx.mock
+    @pytest.mark.asyncio()
+    async def test_xhigh_is_routable_and_transcoded(
+        self,
+        muse_spark_app: FastAPI,
+    ) -> None:
+        from httpx import ASGITransport
+
+        captured_bodies: list[bytes] = []
+
+        async def _capture_handler(request: httpx.Request) -> httpx.Response:
+            captured_bodies.append(request.content)
+            return httpx.Response(
+                200,
+                json={
+                    "id": "msg-muse-spark",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "muse-spark-1.2-contributor",
+                    "content": [{"type": "text", "text": "pong"}],
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 5, "output_tokens": 1},
+                },
+            )
+
+        respx.post(f"{UPSTREAM_BASE}/messages").mock(side_effect=_capture_handler)
+
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=muse_spark_app),
+            base_url="http://testserver",
+        ) as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                headers={"Authorization": "Bearer rt-test-key"},
+                json={
+                    "model": "muse-spark-1.2-contributor",
+                    "messages": [{"role": "user", "content": "Reply pong"}],
+                    "max_tokens": 32768,
+                    "reasoning_effort": "xhigh",
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["choices"][0]["message"]["content"] == "pong"
+        assert len(captured_bodies) == 1
+        upstream_body = json.loads(captured_bodies[0])
+        assert upstream_body.get("thinking") == {
+            "type": "enabled",
+            "budget_tokens": 24576,
+        }, upstream_body
 
 
 class TestWarnDropBodyCapture:

@@ -1174,31 +1174,64 @@ class ModelCapabilitiesOverrideConfig(BaseModel):
 
 
 _OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"
-_OPENCODE_GO_THINKING_MODELS: frozenset[str] = frozenset({"mimo-v2.5", "minimax-m3"})
+_OPENCODE_GO_THINKING_MODELS: frozenset[str] = frozenset(
+    {"mimo-v2.5", "minimax-m3", "muse-spark-1.2-contributor"}
+)
+_OPENCODE_GO_THINKING_EFFORTS: dict[str, list[str]] = {
+    "muse-spark-1.2-contributor": ["minimal", "low", "medium", "high", "xhigh"],
+}
+_OPENCODE_GO_EFFORT_BUDGETS: dict[str, int] = {
+    "minimal": 1024,
+    "low": 1024,
+    "med": 4096,
+    "medium": 4096,
+    "high": 16384,
+    "xhigh": 24576,
+}
 
 
 def _default_opencode_go_thinking_capabilities() -> dict[
     str, ModelCapabilitiesOverrideConfig
 ]:
     """Return built-in capability metadata for the canonical OpenCode Go host."""
-    return {
-        model_id: ModelCapabilitiesOverrideConfig(
-            thinking=ThinkingCapabilityOverrideConfig(
-                status="supported",
-                source="provider_catalog",
-                native_protocols=["openai", "anthropic"],
-                supported_efforts=["low", "medium", "high"],
-                effort_to_budget_tokens={
-                    "low": 1024,
-                    "med": 4096,
-                    "medium": 4096,
-                    "high": 16384,
-                },
-                notes="OpenCode Go exposes low/medium/high thinking controls.",
-            )
+    model_efforts = {
+        model_id: _OPENCODE_GO_THINKING_EFFORTS.get(
+            model_id,
+            ["low", "medium", "high"],
         )
         for model_id in _OPENCODE_GO_THINKING_MODELS
     }
+    result: dict[str, ModelCapabilitiesOverrideConfig] = {}
+    for model_id, efforts in model_efforts.items():
+        effort_to_budget = {
+            effort: _OPENCODE_GO_EFFORT_BUDGETS[effort]
+            for effort in efforts
+            if effort in _OPENCODE_GO_EFFORT_BUDGETS
+        }
+        # Keep the historical ``med`` alias for the original built-in
+        # contracts. Muse's advertised set uses the canonical ``medium``.
+        if model_id != "muse-spark-1.2-contributor":
+            effort_to_budget["med"] = _OPENCODE_GO_EFFORT_BUDGETS["med"]
+        result[model_id] = ModelCapabilitiesOverrideConfig(
+            thinking=ThinkingCapabilityOverrideConfig(
+                status="supported",
+                source="provider_catalog",
+                native_protocols=(
+                    ["anthropic"]
+                    if model_id == "muse-spark-1.2-contributor"
+                    else ["openai", "anthropic"]
+                ),
+                supported_efforts=efforts,
+                effort_to_budget_tokens=effort_to_budget,
+                notes=(
+                    "OpenCode Go exposes minimal/low/medium/high/xhigh thinking "
+                    "controls."
+                    if model_id == "muse-spark-1.2-contributor"
+                    else "OpenCode Go exposes low/medium/high thinking controls."
+                ),
+            )
+        )
+    return result
 
 
 def _provider_is_canonical_opencode_go(provider: ProviderConfig) -> bool:

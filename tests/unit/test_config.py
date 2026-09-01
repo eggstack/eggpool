@@ -157,6 +157,32 @@ def test_explicit_opencode_go_provider_seeds_mimo_thinking_capability() -> None:
     assert thinking.status == "supported"
 
 
+def test_opencode_go_seeds_muse_spark_xhigh_thinking_capability() -> None:
+    config = AppConfig.from_dict(
+        {
+            "providers": {
+                "opencode-go": {
+                    "id": "opencode-go",
+                    "base_url": "https://opencode.ai/zen/go/v1",
+                    "protocols": ["openai", "anthropic"],
+                    "accounts": [{"name": "personal", "api_key": "sk-test"}],
+                }
+            }
+        }
+    )
+
+    thinking = (
+        config.providers["opencode-go"]
+        .model_capabilities["muse-spark-1.2-contributor"]
+        .thinking
+    )
+    assert thinking is not None
+    assert thinking.status == "supported"
+    assert thinking.supported_efforts == ["minimal", "low", "medium", "high", "xhigh"]
+    assert thinking.effort_to_budget_tokens is not None
+    assert thinking.effort_to_budget_tokens["xhigh"] == 24576
+
+
 def test_canonical_opencode_go_clone_seeds_mimo_thinking_capability() -> None:
     config = AppConfig.from_dict(
         {

@@ -183,6 +183,18 @@ def test_models_dev_derives_opencode_go_efforts_from_opencode_rules() -> None:
         "deepseek-v4-flash",
         {"reasoning": True},
     ) == ["low", "medium", "high", "max"]
+    assert derive_opencode_go_supported_efforts(
+        "muse-spark-1.2-contributor",
+        {
+            "reasoning": True,
+            "reasoning_options": [
+                {
+                    "type": "effort",
+                    "values": ["minimal", "low", "medium", "high", "xhigh"],
+                }
+            ],
+        },
+    ) == ["minimal", "low", "medium", "high", "xhigh"]
 
 
 def test_apply_supported_efforts_updates_capability_budget_map() -> None:

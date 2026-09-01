@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from eggpool.transcoder.policy import TranscoderPolicy
+from eggpool.transcoder.policy import TranscoderFeatures, TranscoderPolicy
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -19,6 +19,12 @@ def test_defaults() -> None:
     assert policy.enabled is True
     assert policy.loss_policy == "warn"
     assert policy.prefer_native is True
+    assert policy.features.thinking is True
+
+
+def test_thinking_can_be_explicitly_disabled() -> None:
+    policy = TranscoderPolicy(features=TranscoderFeatures(thinking=False))
+    assert policy.features.thinking is False
 
 
 def test_extra_forbid() -> None:

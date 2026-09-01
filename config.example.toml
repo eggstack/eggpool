@@ -109,6 +109,11 @@ catalog_withdrawal_policy = "preserve_until_health"
 loss_policy = "warn"      # "warn" or "reject" for loss-of-information
 prefer_native = true      # prefer native-protocol accounts in routing
 
+# Thinking/reasoning transcoding is enabled by default. Set this to false to
+# drop thinking controls and content instead of translating them.
+# [transcoder.features]
+# thinking = false
+
 # Global effort→budget token mapping for thinking/reasoning.
 # Values are used when the model's capability does not carry a
 # per-model effort_to_budget_tokens mapping.
@@ -449,7 +454,8 @@ enabled = false
 # header = "Authorization"
 # scheme = "Bearer"
 #
-# # OpenCode Go exposes low/medium/high thinking controls for mimo-v2.5.
+# # OpenCode Go exposes low/medium/high thinking controls for mimo-v2.5 and
+# # minimal/low/medium/high/xhigh for muse-spark-1.2-contributor.
 # [providers.opencode-go.model_capabilities."mimo-v2.5".thinking]
 # status = "supported"
 # source = "provider_catalog"
