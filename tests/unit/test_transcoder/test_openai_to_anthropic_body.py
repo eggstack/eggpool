@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from eggpool.catalog.capabilities import TranscodingCapabilities
+from eggpool.errors import CapabilityError
 from eggpool.transcoder.context import TranscodeContext
 from eggpool.transcoder.errors import TranscodeLossError
 from eggpool.transcoder.openai_to_anthropic import OpenAIToAnthropic
@@ -83,6 +84,47 @@ class TestBasicRequestTranslation:
         assert not any(
             w["kind"] == "cache_breakpoint_unsupported_target" for w in warnings
         )
+
+    def test_mixed_system_content_preserves_plain_text_and_cached_blocks(self) -> None:
+        payload = {
+            "model": "claude-3-7-sonnet",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Cached instruction",
+                            "prompt_cache_breakpoint": {"mode": "explicit"},
+                        },
+                        {"type": "text", "text": "Plain instruction"},
+                    ],
+                },
+                {"role": "user", "content": "Hello"},
+            ],
+        }
+        result, _ = OpenAIToAnthropic().encode_request(
+            payload,
+            _make_context(),
+            transcoding_capability=TranscodingCapabilities(
+                prompt_cache_breakpoints={
+                    "anthropic": {
+                        "dialect": "first_party",
+                        "supported_ttls": ["5m"],
+                        "default_ttl": "5m",
+                    }
+                }
+            ),
+        )
+
+        assert result["system"] == [
+            {
+                "type": "text",
+                "text": "Cached instruction",
+                "cache_control": {"type": "ephemeral"},
+            },
+            {"type": "text", "text": "Plain instruction"},
+        ]
 
     @pytest.mark.parametrize("role", ["user", "assistant"])
     def test_content_text_without_breakpoint_is_not_cache_loss(self, role: str) -> None:
@@ -392,6 +434,17 @@ class TestTemperatureClamping:
 
         assert result["temperature"] == 0
 
+    def test_negative_temperature_is_rejected(
+        self, transcoder: OpenAIToAnthropic
+    ) -> None:
+        payload = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "temperature": -0.1,
+        }
+        with pytest.raises(CapabilityError, match="temperature"):
+            transcoder.encode_request(payload, _make_context())
+
 
 class TestMaxTokens:
     def test_max_tokens_passthrough(self, transcoder: OpenAIToAnthropic) -> None:
@@ -469,6 +522,17 @@ class TestStopSequences:
         result, _ = transcoder.encode_request(payload, _make_context())
 
         assert result["stop_sequences"] == ["END", "STOP"]
+
+    def test_stop_list_over_anthropic_limit_is_rejected(
+        self, transcoder: OpenAIToAnthropic
+    ) -> None:
+        payload = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "stop": ["1", "2", "3", "4", "5"],
+        }
+        with pytest.raises(CapabilityError, match="at most 4"):
+            transcoder.encode_request(payload, _make_context())
 
 
 class TestDroppedFields:

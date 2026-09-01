@@ -421,14 +421,6 @@ def _handle_effort_budget_contract(
                 if "thinking" in new_payload:
                     emitted.append("thinking")
                 warnings.extend(result.warnings)
-            elif result.disposition == "rejected":
-                return _reject(
-                    new_payload,
-                    model_id,
-                    provider_id,
-                    "unsupported_nested_thinking_control",
-                    intent,
-                )
 
         elif field_name == "thinking_budget":
             result = _adapt_thinking_budget(
@@ -480,14 +472,6 @@ def _handle_effort_budget_contract(
             intent=intent,
             policy=policy,
         )
-        if result.disposition == "rejected":
-            return _reject(
-                new_payload,
-                model_id,
-                provider_id,
-                "unsupported_generated_thinking_control",
-                intent,
-            )
         if result.disposition in ("mapped", "dropped"):
             new_payload = result.payload
             changed = True

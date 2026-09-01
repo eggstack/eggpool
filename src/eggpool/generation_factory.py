@@ -30,6 +30,8 @@ from eggpool.errors import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from eggpool.accounts.registry import AccountRegistry
     from eggpool.background import TaskSupervisor
     from eggpool.catalog.pricing import CostCalculator
@@ -55,12 +57,6 @@ if TYPE_CHECKING:
     from eggpool.stats import StatsService
 
 logger = logging.getLogger(__name__)
-
-# Strong references for fire-and-forget recovery tasks. asyncio keeps only
-# weak references to tasks, so without this set the event loop may garbage
-# collect a pending one-shot refresh before it runs.
-_recovery_tasks: set[asyncio.Task[None]] = set()
-
 
 # ---------------------------------------------------------------------------
 # Factory result
@@ -281,13 +277,15 @@ class RuntimeGenerationFactory:
         catalog.set_price_change_callback(cost_calculator.invalidate_price)
 
         # -- Router ---------------------------------------------------------
-        router = self._build_router(
+        router, close_recovery_tasks = self._build_router(
             config,
             registry,
             catalog,
             health_manager,
             quarantine=quarantine,
         )
+        if _register is not None:
+            _register("missing_account_recovery", close_recovery_tasks)
 
         # -- Load model price overrides into estimator ----------------------
         self._load_model_price_overrides(config, router)
@@ -511,6 +509,7 @@ class RuntimeGenerationFactory:
             model_info=model_info,
             local_pre_upstream_recorder=local_pre_upstream_recorder,
             stream_diagnostics=stream_diagnostics,
+            generation_cleanup_callbacks=(close_recovery_tasks,),
         )
 
         return PreparedRuntimeGeneration(
@@ -546,10 +545,21 @@ class RuntimeGenerationFactory:
         catalog: CatalogService,
         health_manager: HealthManager,
         quarantine: Any | None = None,
-    ) -> Router:
+    ) -> tuple[Router, Callable[[], Awaitable[None]]]:
         """Construct and configure a Router from config."""
         from eggpool.routing.config import routing_stale_after_s  # noqa: PLC0415
         from eggpool.routing.router import Router  # noqa: PLC0415
+
+        recovery_tasks: set[asyncio.Task[None]] = set()
+
+        async def _close_recovery_tasks() -> None:
+            """Cancel one-shot recovery work before retiring this generation."""
+            tasks = tuple(recovery_tasks)
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
 
         def _schedule_missing_account_recovery(account_name: str) -> None:
             async def _run() -> None:
@@ -566,8 +576,8 @@ class RuntimeGenerationFactory:
             except RuntimeError:
                 return
             task = loop.create_task(_run())
-            _recovery_tasks.add(task)
-            task.add_done_callback(_recovery_tasks.discard)
+            recovery_tasks.add(task)
+            task.add_done_callback(recovery_tasks.discard)
 
         router = Router(
             registry,
@@ -606,7 +616,7 @@ class RuntimeGenerationFactory:
             config.transcoder.prefer_native
         )
 
-        return router
+        return router, _close_recovery_tasks
 
     def _load_model_price_overrides(
         self,

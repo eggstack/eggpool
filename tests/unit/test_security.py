@@ -481,7 +481,7 @@ async def test_proxy_endpoints_build_protocol_specific_context(
         response = await client.post(
             path,
             json={"model": f"{base_model}/opencode-go", "messages": []},
-            headers={"x-forwarded-for": "203.0.113.7, 10.0.0.1"},
+            headers={"x-forwarded-for": "203.0.113.7, 127.0.0.1"},
         )
 
     assert response.status_code == 200

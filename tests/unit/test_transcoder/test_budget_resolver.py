@@ -83,6 +83,25 @@ class TestResolveThinkingBudget:
         assert kinds.count("budget_clamp_skipped") == 1
         assert not any(w["kind"] == "budget_clamped" for w in result.warnings)
 
+    def test_explicit_budget_is_bounded_without_capability_metadata(self) -> None:
+        result = resolve_thinking_budget(
+            model_id="claude-3",
+            provider_id="anthropic",
+            requested_budget_tokens=200_000,
+        )
+        assert result.budget_tokens == 128_000
+        assert result.clamped is True
+
+    def test_invalid_external_bounds_do_not_disable_safety_ceiling(self) -> None:
+        cap = ThinkingCapability(budget_tokens_min=1_000_000)
+        result = resolve_thinking_budget(
+            model_id="claude-3",
+            provider_id="anthropic",
+            requested_budget_tokens=200_000,
+            capability=cap,
+        )
+        assert result.budget_tokens == 128_000
+
     def test_explicit_budget_clamped_to_max(self) -> None:
         cap = ThinkingCapability(budget_tokens_min=1024, budget_tokens_max=8192)
         result = resolve_thinking_budget(

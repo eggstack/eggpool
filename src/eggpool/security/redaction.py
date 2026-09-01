@@ -273,6 +273,67 @@ def sanitize_error_object(
     return _enforce_byte_budget(_truncate_string(redacted_text), byte_budget)
 
 
+def sanitize_log_extra(
+    value: Any,
+    *,
+    depth: int = 0,
+    item_budget: int = MAX_SANITIZE_ITEMS,
+    byte_budget: int = MAX_SANITIZE_BYTES,
+) -> Any:
+    """Recursively redact arbitrary structured logging context.
+
+    Unlike :func:`sanitize_error_object`, logging context is not restricted
+    to a diagnostic-key allowlist because operational fields such as a
+    runtime profile are useful to log consumers. Sensitive and user-content
+    keys still collapse to ``[REDACTED]`` and all values remain bounded.
+    """
+    if depth >= MAX_SANITIZE_DEPTH or item_budget <= 0 or byte_budget <= 0:
+        return REDACTED
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        items_view = cast("dict[Any, Any]", value).items()
+        for key, item in items_view:
+            if item_budget <= 0:
+                break
+            item_budget -= 1
+            safe_key = _truncate_key(key)
+            if _is_sensitive_key(key) or _is_user_content_key(key):
+                result[safe_key] = REDACTED
+                continue
+            result[safe_key] = sanitize_log_extra(
+                item,
+                depth=depth + 1,
+                item_budget=item_budget,
+                byte_budget=byte_budget,
+            )
+            if _enforce_byte_budget(result, byte_budget) == REDACTED:
+                return REDACTED
+        return _enforce_byte_budget(result, byte_budget)
+    if isinstance(value, list | tuple):
+        result_list = [
+            sanitize_log_extra(
+                item,
+                depth=depth + 1,
+                item_budget=item_budget - index,
+                byte_budget=byte_budget,
+            )
+            for index, item in enumerate(cast("list[Any] | tuple[Any, ...]", value))
+            if index < item_budget
+        ]
+        return _enforce_byte_budget(result_list, byte_budget)
+    if isinstance(value, str):
+        redacted = redact_error_detail(value)
+        return (
+            REDACTED
+            if redacted is None
+            else _enforce_byte_budget(_truncate_string(redacted), byte_budget)
+        )
+    if value is None or isinstance(value, (bool, int, float)):
+        return _enforce_byte_budget(value, byte_budget)
+    redacted = redact_error_detail(str(value))
+    return REDACTED if redacted is None else _truncate_string(redacted)
+
+
 def _try_parse_json(value: str) -> Any | None:
     """Attempt to parse ``value`` as JSON. Returns None on failure."""
     stripped = value.strip()

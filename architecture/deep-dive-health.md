@@ -47,6 +47,8 @@ Per-account health tracking:
 ### `health/circuit_breaker.py`
 
 Circuit breaker implementation:
+- Synchronous state transitions use a short-held `threading.Lock` so the
+  breaker remains safe at thread/diagnostic boundaries.
 - **Closed** (healthy): requests flow normally
 - **Open** (unhealthy): requests blocked, cooldown timer running
 - **Half-open** (probe): single probe request allowed

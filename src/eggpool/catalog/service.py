@@ -561,26 +561,37 @@ class CatalogService:
                 )
                 live_task_accounts.append(state.name)
 
-            if static_tasks:
-                await asyncio.gather(*static_tasks, return_exceptions=True)
-            if live_tasks:
-                fetch_results = await asyncio.gather(
-                    *live_tasks, return_exceptions=True
-                )
-                for account_name, fetch_result in zip(
-                    live_task_accounts, fetch_results, strict=True
-                ):
-                    if isinstance(fetch_result, BaseException):
-                        logger.warning(
-                            "Catalog refresh for account %r preserved prior "
-                            "support after exception: %s",
-                            account_name,
-                            fetch_result,
-                        )
-                        outcomes_by_account[account_name] = AccountCatalogOutcome.FAILED
-                        continue
-                    outcome, _update = fetch_result
-                    outcomes_by_account[account_name] = outcome
+            try:
+                if static_tasks:
+                    await asyncio.gather(*static_tasks, return_exceptions=True)
+                if live_tasks:
+                    fetch_results = await asyncio.gather(
+                        *live_tasks, return_exceptions=True
+                    )
+                    for account_name, fetch_result in zip(
+                        live_task_accounts, fetch_results, strict=True
+                    ):
+                        if isinstance(fetch_result, BaseException):
+                            logger.warning(
+                                "Catalog refresh for account %r preserved prior "
+                                "support after exception: %s",
+                                account_name,
+                                fetch_result,
+                            )
+                            outcomes_by_account[account_name] = (
+                                AccountCatalogOutcome.FAILED
+                            )
+                            continue
+                        outcome, _update = fetch_result
+                        outcomes_by_account[account_name] = outcome
+            finally:
+                pending_tasks: list[asyncio.Task[Any]] = [
+                    task for task in (*static_tasks, *live_tasks) if not task.done()
+                ]
+                for task in pending_tasks:
+                    task.cancel()
+                if pending_tasks:
+                    await asyncio.gather(*pending_tasks, return_exceptions=True)
 
             # Keep one outcome per enabled account.  In particular, an
             # account skipped before task creation must not shift the result

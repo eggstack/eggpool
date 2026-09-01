@@ -68,7 +68,7 @@ def sanitize_request_headers(headers: dict[str, str]) -> dict[str, str]:
         | connection_headers
         | _EXTRA_DROP_HEADERS
     )
-    return {key: value for key, value in headers.items() if key.lower() not in drop}
+    return {key: value for key, value in headers.items() if key.casefold() not in drop}
 
 
 def build_upstream_headers(
@@ -96,7 +96,7 @@ def build_upstream_headers(
     if extra_drop:
         drop = drop | extra_drop
     filtered: dict[str, str] = {
-        key: value for key, value in headers.items() if key.lower() not in drop
+        key: value for key, value in headers.items() if key.casefold() not in drop
     }
     filtered["Authorization"] = f"Bearer {upstream_api_key}"
     return filtered

@@ -569,6 +569,7 @@ class RuntimeGeneration:
             trusted_proxies=frozenset(),
         ),
     )
+    generation_cleanup_callbacks: tuple[Callable[[], Any], ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -1906,6 +1907,27 @@ class RuntimeManager:
                     "Runtime generation %d supervisor.stop_all failed",
                     generation.generation_id,
                 )
+        for cleanup in generation.generation_cleanup_callbacks:
+            record_close_attempt("generation_cleanup")
+            try:
+                result = cleanup()
+                if inspect.isawaitable(result):
+                    await asyncio.wait_for(result, timeout=_close_budget)
+            except TimeoutError:
+                slot.last_close_error = "generation_cleanup: timed out"
+                logger.warning(
+                    "Runtime generation %d cleanup callback timed out",
+                    generation.generation_id,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                slot.last_close_error = f"generation_cleanup: {exc!r}"
+                logger.exception(
+                    "Runtime generation %d cleanup callback failed",
+                    generation.generation_id,
+                )
+
         # Stop the generation-owned terminal scheduler only after
         #    every accepted job has released its terminal reference. The
         #    supervisor's scalar history is diagnostic and does not retain
@@ -2450,6 +2472,9 @@ class RuntimeGenerationBuilder:
             created_at_monotonic=services.get("created_at_monotonic", now_mono),
             created_at_epoch=services.get("created_at_epoch", now_epoch),
             immutable_request_state=immutable_request_state,
+            generation_cleanup_callbacks=services.get(
+                "generation_cleanup_callbacks", ()
+            ),
         )
         return GenerationBuildResult(
             generation=generation,

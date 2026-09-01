@@ -527,10 +527,11 @@ def aggregate_thinking_capabilities(
     ]
     budget_min = max(mins) if mins else None
     budget_max = min(maxes) if maxes else None
-    # Invariant: min <= max.  If violated, fall back to None.
+    # A collapsed model can span providers whose bounds do not overlap.  An
+    # aggregate minimum would then be unsafe for providers with a lower
+    # maximum, so retain the conservative upper bound and omit the minimum.
     if budget_min is not None and budget_max is not None and budget_min > budget_max:
         budget_min = None
-        budget_max = None
 
     # Merge effort metadata conservatively: retain the lowest budget for
     # each effort so the aggregate never promises more than one provider

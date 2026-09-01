@@ -43,6 +43,8 @@ logger = logging.getLogger(__name__)
 # resolver when a thinking control is present; it is never used for an
 # unknown effort.
 _DEFAULT_BUDGET = 4096
+_MIN_SAFE_BUDGET = 1
+_MAX_SAFE_BUDGET = 128_000
 
 # Canonical effort levels recognised by the resolver.
 _KNOWN_EFFORTS: frozenset[str] = frozenset({"low", "medium", "high"})
@@ -351,7 +353,48 @@ def _clamp_budget(
     budget_max = capability.budget_tokens_max
     clamped = False
 
+    # External model-info sources are not validated by the config model.
+    # Ignore impossible bounds and retain a process-wide safety ceiling so a
+    # malformed source cannot make an arbitrarily large budget routable.
+    if (
+        budget_min is not None
+        and not _MIN_SAFE_BUDGET <= budget_min <= _MAX_SAFE_BUDGET
+    ):
+        budget_min = None
+    if (
+        budget_max is not None
+        and not _MIN_SAFE_BUDGET <= budget_max <= _MAX_SAFE_BUDGET
+    ):
+        budget_max = None
+
     value = requested
+
+    if value < _MIN_SAFE_BUDGET:
+        value = _MIN_SAFE_BUDGET
+        clamped = True
+        warnings.append(
+            {
+                "kind": "budget_clamped",
+                "direction": "safety_min",
+                "requested": requested,
+                "resolved": value,
+                "model_id": model_id,
+                "provider_id": provider_label,
+            }
+        )
+    elif value > _MAX_SAFE_BUDGET:
+        value = _MAX_SAFE_BUDGET
+        clamped = True
+        warnings.append(
+            {
+                "kind": "budget_clamped",
+                "direction": "safety_max",
+                "requested": requested,
+                "resolved": value,
+                "model_id": model_id,
+                "provider_id": provider_label,
+            }
+        )
 
     if budget_min is not None and budget_max is not None and budget_min > budget_max:
         # Malformed capability shape (config validation rejects an

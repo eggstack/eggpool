@@ -361,6 +361,8 @@ cleanup_max_rows_per_pass = 5000
 allowed_hosts = []
 cors_origins = []
 # Honor X-Forwarded-For/X-Real-IP only when the immediate peer is listed here.
+# Configure only proxies that overwrite or correctly append these headers;
+# X-Forwarded-For uses the nearest untrusted hop in the chain.
 # An empty list ignores forwarded client-attribution headers.
 trusted_proxies = []
 redact_headers = ["authorization", "x-api-key"]
@@ -912,5 +914,4 @@ protocol = "anthropic"
 
 [model_overrides."claude-sonnet-4"]
 protocol = "anthropic"
-
 

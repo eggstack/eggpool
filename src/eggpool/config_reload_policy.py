@@ -29,6 +29,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Final, cast
 
+from eggpool.config_validation import ConfigInternalError
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -578,8 +580,11 @@ def _to_dict(value: object) -> dict[str, object]:
         try:
             dumped: object = dump()
             return dict(cast("Iterable[tuple[str, object]]", dumped))
-        except Exception:
-            return {}
+        except Exception as exc:
+            raise ConfigInternalError(
+                "configuration diff failed while serializing "
+                f"{type(value).__qualname__}: {type(exc).__qualname__}"
+            ) from exc
     if hasattr(value, "__dict__"):
         return {
             k: v

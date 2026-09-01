@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, Any, cast
 
+from eggpool.errors import CapabilityError
 from eggpool.jsonx import dumps_str, loads
 from eggpool.transcoder.cache_stability import (
     CACHE_BOUNDARY_KIND_REORDERED,
@@ -661,6 +662,13 @@ class OpenAIToAnthropic:
 
         temperature = payload.get("temperature")
         if temperature is not None:
+            if isinstance(temperature, (int, float)) and temperature < 0:
+                raise CapabilityError(
+                    model_id=str(payload.get("model", "unknown")),
+                    capability="temperature",
+                    requested_fields=["temperature"],
+                    message="temperature must be greater than or equal to 0",
+                )
             if temperature > 1.0:
                 warnings.append(
                     {
@@ -694,6 +702,13 @@ class OpenAIToAnthropic:
                 out["stop_sequences"] = [stop]
             elif isinstance(stop, list):
                 stop_values = cast("list[object]", stop)
+                if len(stop_values) > 4:
+                    raise CapabilityError(
+                        model_id=str(payload.get("model", "unknown")),
+                        capability="stop_sequences",
+                        requested_fields=["stop"],
+                        message="Anthropic supports at most 4 stop sequences",
+                    )
                 out["stop_sequences"] = [str(s) for s in stop_values]
 
         reasoning_effort = payload.get("reasoning_effort")
@@ -791,7 +806,12 @@ class OpenAIToAnthropic:
                     }
                 )
 
-        if system_blocks:
+        if system_blocks and system_parts:
+            out["system"] = [
+                *system_blocks,
+                {"type": "text", "text": "\n\n".join(system_parts)},
+            ]
+        elif system_blocks:
             out["system"] = system_blocks
         elif system_parts:
             out["system"] = "\n\n".join(system_parts)

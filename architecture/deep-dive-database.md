@@ -295,8 +295,11 @@ Error handling transitions to `FAILED_CLOSED` from `CONNECTING`, `READY`, or
 must close admission regardless of the current state.
 
 The `_invalidate_connection()` method detaches the connection, records the
-failure reason, and transitions to `FAILED_CLOSED`. It does not attempt
-reconnection — the deployment contract is a worker restart.
+failure reason, and transitions to `FAILED_CLOSED`. Transaction failures
+detach under the connection lock and close the old connection after the lock
+is released; direct callers perform the same handoff before awaiting close.
+It does not attempt reconnection — the deployment contract is a worker
+restart.
 
 ## Schema Baseline Decision (Plan 137)
 

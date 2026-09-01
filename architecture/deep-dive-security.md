@@ -21,8 +21,12 @@ Strips sensitive headers from upstream responses before they reach clients:
 
 `[security].trusted_proxies` is an exact immediate-peer allowlist. The proxy
 uses `X-Forwarded-For` or `X-Real-IP` only when the ASGI peer address is in
-that list, and accepts only the first bounded, control-character-free value.
-An empty list ignores forwarded attribution headers and falls back to the
+that list. For `X-Forwarded-For`, it walks from the EggPool-facing side and
+uses the first bounded, control-character-free hop that is not itself trusted,
+so a leftmost client-supplied value cannot override a proxy-appended client
+identity. Configured proxies must overwrite or correctly append these headers;
+`X-Real-IP` is necessarily trusted as supplied by that configured peer. An
+empty list ignores forwarded attribution headers and falls back to the
 immediate peer.
 
 ### `auth.py` — Local API Key Authentication

@@ -8,6 +8,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 from eggpool.jsonx import dumps_str
+from eggpool.security.redaction import sanitize_log_extra
+
+_STANDARD_LOG_RECORD_FIELDS = frozenset(
+    logging.LogRecord("", 0, "", 0, "", (), None).__dict__
+)
 
 
 class _HumanFormatter(logging.Formatter):
@@ -30,8 +35,15 @@ class _JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
         }
-        if record.__dict__.get("extra"):
-            payload["extra"] = record.extra  # type: ignore[attr-defined]
+        extra = record.__dict__.get("extra")
+        if extra is None:
+            extra = {
+                key: value
+                for key, value in record.__dict__.items()
+                if key not in _STANDARD_LOG_RECORD_FIELDS
+            }
+        if extra:
+            payload["extra"] = sanitize_log_extra(extra)
         return dumps_str(payload, default=str)
 
 

@@ -549,7 +549,13 @@ class ReloadManager:
         #: Strong references for fire-and-forget observation/event tasks.
         #: asyncio keeps only weak references to tasks; without this set
         #: a pending task can be garbage-collected before it runs.
-        self._background_tasks: set[asyncio.Task[None]] = set()
+        self._background_tasks: set[asyncio.Task[Any]] = set()
+
+    def _background_task_done(self, task: asyncio.Task[Any]) -> None:
+        """Release and observe a tracked fire-and-forget task."""
+        self._background_tasks.discard(task)
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            task.result()
 
     @property
     def operation_state(self) -> ReloadOperationState | None:
@@ -618,6 +624,8 @@ class ReloadManager:
             drain_task: asyncio.Task[AcceptedFinalizationOutcome] | None = None
             try:
                 drain_task = asyncio.create_task(job.run())
+                self._background_tasks.add(drain_task)
+                drain_task.add_done_callback(self._background_task_done)
                 outcome = await asyncio.wait_for(
                     asyncio.shield(drain_task),
                     timeout=per_job_timeout,

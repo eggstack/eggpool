@@ -47,9 +47,17 @@ def test_forwarded_client_ip_ignored_from_untrusted_peer() -> None:
 def test_forwarded_client_ip_honored_from_trusted_peer() -> None:
     request = _request_with_peer(
         "127.0.0.1",
-        [(b"x-forwarded-for", b"198.51.100.4, 10.0.0.8")],
+        [(b"x-forwarded-for", b"198.51.100.4, 127.0.0.1")],
     )
     assert get_client_ip(request, trusted_proxies=("127.0.0.1",)) == "198.51.100.4"
+
+
+def test_forwarded_client_ip_uses_nearest_untrusted_hop() -> None:
+    request = _request_with_peer(
+        "127.0.0.1",
+        [(b"x-forwarded-for", b"198.51.100.4, 10.0.0.8")],
+    )
+    assert get_client_ip(request, trusted_proxies=("127.0.0.1",)) == "10.0.0.8"
 
 
 def test_malformed_forwarded_client_ip_falls_back_to_peer() -> None:

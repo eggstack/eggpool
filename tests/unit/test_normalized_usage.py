@@ -106,6 +106,23 @@ def test_openai_cache_only_usage_has_total_tokens() -> None:
     assert result.total_tokens == 1_000
 
 
+def test_openai_total_fallback_does_not_double_count_cached_prompt_tokens() -> None:
+    result = normalize_usage(
+        {
+            "usage": {
+                "prompt_tokens": 50,
+                "completion_tokens": None,
+                "total_tokens": 0,
+                "prompt_tokens_details": {"cached_tokens": 100},
+            }
+        },
+        protocol=OPENAI_PROTOCOL,
+    )
+    assert result.input_tokens == 50
+    assert result.output_tokens == 0
+    assert result.total_tokens == 50
+
+
 def test_openai_marks_not_reported_when_prompt_details_present_but_no_cache() -> None:
     body = _payload(
         {

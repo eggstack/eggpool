@@ -39,6 +39,8 @@ class CircuitBreaker:
     _last_state_change: float = field(init=False)
     _half_open_in_flight: bool = False
     _half_open_acquired_at: float | None = None
+    # This synchronous lock is intentional: the breaker methods are also
+    # callable from thread-safe health/diagnostic boundaries.
     _lock: threading.Lock = field(
         default_factory=threading.Lock, init=False, repr=False, compare=False
     )

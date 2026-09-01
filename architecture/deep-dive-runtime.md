@@ -182,7 +182,8 @@ failed durable clear leaves the current in-memory suppression intact.
   guarantees exactly one asyncio loop regardless of `runtime_threads`, which
   only sizes the Rust-side I/O pool
 - All `asyncio.Lock` objects are loop-bound
-- `MetricsWriteCoalescer` is the only component using `threading.Lock`
+- `MetricsWriteCoalescer` and `CircuitBreaker` use short-held
+  `threading.Lock` guards for their synchronous cross-boundary methods
 - `fastcli` and `runtime_paths` are stdlib-only
 - PID file owned by supervisor
 - Generation swap never interrupts in-flight requests or accepted retained terminal jobs

@@ -234,18 +234,15 @@ def _extract_openai(usage: dict[str, Any]) -> NormalizedUsage:
         total_tokens = coerce_token_count(usage.get("total_tokens"))
     cache_tokens = _extract_openai_cache_tokens(usage)
     cached_input = cache_tokens["cached_input_tokens"]
-    if (
-        total_tokens == 0
-        and cached_input is not None
-        and not input_tokens
-        and not output_tokens
-    ) or (
-        total_tokens is None
-        and cached_input is not None
-        and input_tokens is None
-        and output_tokens is None
-    ):
-        total_tokens = cached_input
+    if total_tokens in (None, 0):
+        # OpenAI ``prompt_tokens`` includes the cached subset.  Restore a
+        # missing/zero total from the known prompt and completion counts
+        # without counting the cache breakdown twice.  Cache-only payloads
+        # still need the cache count as their total.
+        if input_tokens not in (None, 0) or output_tokens not in (None, 0):
+            total_tokens = (input_tokens or 0) + (output_tokens or 0)
+        elif cached_input is not None:
+            total_tokens = cached_input
     reasoning_tokens: int | None = None
     completion_details: Any = usage.get("completion_tokens_details")
     if (

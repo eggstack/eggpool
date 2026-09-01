@@ -257,13 +257,15 @@ def get_client_ip(
     if peer in trusted_proxies:
         forwarded_for = request.headers.get("x-forwarded-for")
         if forwarded_for is not None:
-            first_forwarded = next(
-                (part.strip() for part in forwarded_for.split(",") if part.strip()),
-                "",
-            )
-            forwarded_ip = _valid_forwarded_client_ip(first_forwarded)
-            if forwarded_ip is not None:
-                return forwarded_ip
+            # Walk from the EggPool-facing side of the chain.  The first
+            # valid hop that is not itself trusted is the nearest identity
+            # that the configured proxy chain can attest to; leftmost values
+            # remain client-controlled when a proxy appends rather than
+            # overwrites the header.
+            for part in reversed(forwarded_for.split(",")):
+                forwarded_ip = _valid_forwarded_client_ip(part)
+                if forwarded_ip is not None and forwarded_ip not in trusted_proxies:
+                    return forwarded_ip
 
         real_ip = _valid_forwarded_client_ip(request.headers.get("x-real-ip"))
         if real_ip is not None:

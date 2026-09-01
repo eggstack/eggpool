@@ -14,16 +14,27 @@ from eggpool.config_reload_policy import (
     ReloadResult,
     ReloadStage,
     _disposition_for,
+    _to_dict,
     compute_diff,
     diff_from_validation,
 )
 from eggpool.config_validation import (
+    ConfigInternalError,
     ConfigValidationWarning,
     validate_config_file,
 )
 
 SERVER_API_KEY = "ep_test_server_key_1234567890"
 ACCOUNT_API_KEY = "sk-test-account-key-1234567890"
+
+
+def test_to_dict_fails_closed_when_model_dump_fails() -> None:
+    class BrokenModel:
+        def model_dump(self) -> dict[str, object]:
+            raise RuntimeError("secret internal details")
+
+    with pytest.raises(ConfigInternalError, match="configuration diff failed"):
+        _to_dict(BrokenModel())
 
 
 def _config_body(**overrides: object) -> str:

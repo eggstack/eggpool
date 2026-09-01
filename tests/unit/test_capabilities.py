@@ -291,15 +291,16 @@ class TestAggregateThinkingCapabilities:
         assert result.budget_tokens_min == 500  # max of mins
         assert result.budget_tokens_max == 80000  # min of maxes
 
-    def test_budget_invariant_violation_resets(self) -> None:
+    def test_budget_invariant_violation_keeps_safe_upper_bound(self) -> None:
         caps = [
             ThinkingCapability(budget_tokens_min=100, budget_tokens_max=200),
             ThinkingCapability(budget_tokens_min=500, budget_tokens_max=600),
         ]
         result = aggregate_thinking_capabilities(caps)
-        # min(500) > max(200) => invariant violated => None
+        # min(500) > max(200) => omit the unsafe aggregate minimum but retain
+        # the conservative aggregate maximum.
         assert result.budget_tokens_min is None
-        assert result.budget_tokens_max is None
+        assert result.budget_tokens_max == 200
 
     def test_effort_budget_uses_conservative_minimum(self) -> None:
         caps = [

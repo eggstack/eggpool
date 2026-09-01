@@ -45,6 +45,34 @@ async def test_disconnect_transitions_to_shutting_down(test_db: Database) -> Non
     assert test_db.reads_admitted is False
 
 
+async def test_invalidation_defers_close_until_transaction_lock_is_released(
+    test_db: Database,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    close_started = asyncio.Event()
+    allow_close = asyncio.Event()
+
+    async def close_connection(_conn: object) -> None:
+        close_started.set()
+        await allow_close.wait()
+
+    monkeypatch.setattr(Database, "_close_connection", staticmethod(close_connection))
+
+    async with test_db._connection_lock:  # type: ignore[reportPrivateUsage]
+        detached = test_db._conn  # type: ignore[reportPrivateUsage]
+        await test_db._invalidate_connection("transaction failure")  # type: ignore[reportPrivateUsage]
+        assert test_db._conn is None  # type: ignore[reportPrivateUsage]
+        assert not close_started.is_set()
+
+    await asyncio.sleep(0)
+    assert close_started.is_set()
+    allow_close.set()
+    await asyncio.sleep(0)
+    monkeypatch.undo()
+    assert detached is not None
+    await Database._close_connection(detached)
+
+
 async def test_failed_closed_state_blocks_future_operations(test_db: Database) -> None:
     """A failed-closed instance cannot be reopened in process."""
     await test_db._invalidate_connection("test invalidation")  # type: ignore[reportPrivateUsage]

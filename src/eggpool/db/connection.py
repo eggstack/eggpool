@@ -222,6 +222,7 @@ class Database:
         self._read_only = read_only
         self._journal_size_limit = journal_size_limit
         self._conn: aiosqlite.Connection | None = None
+        self._invalidation_close_task: asyncio.Task[None] | None = None
         self._connection_lock = asyncio.Lock()
         self._canonical_loop: asyncio.AbstractEventLoop | None = None
         # Contention counters (in-memory only, never persisted)
@@ -502,25 +503,72 @@ class Database:
     async def disconnect(self) -> None:
         """Close the connection."""
         self._ensure_canonical_loop()
-        self._transition_state(DatabaseLifecycleState.SHUTTING_DOWN)
-        if self._conn is not None:
-            try:
-                await self._conn.close()
-            finally:
-                self._conn = None
-                self._writes_admitted = False
-                self._reads_admitted = False
-        else:
+        async with self._connection_lock:
+            self._transition_state(DatabaseLifecycleState.SHUTTING_DOWN)
+            conn_to_close, self._conn = self._conn, None
             self._writes_admitted = False
             self._reads_admitted = False
+
+        # The lock protects the connection handoff, while the potentially
+        # blocking aiosqlite close happens after the handoff. This prevents a
+        # close from interleaving with an operation that already acquired the
+        # lock and makes fixture teardown race-safe.
+        if conn_to_close is not None:
+            await self._close_connection(conn_to_close)
+        close_task = self._invalidation_close_task
+        if close_task is not None:
+            with suppress(asyncio.CancelledError):
+                await close_task
+
+    @staticmethod
+    async def _close_connection(conn: aiosqlite.Connection) -> None:
+        """Close a detached connection with bounded best-effort cleanup."""
+        with suppress(Exception):
+            await asyncio.wait_for(conn.close(), timeout=5.0)
+
+    def _detach_invalidated_connection(
+        self, reason: str
+    ) -> aiosqlite.Connection | None:
+        """Mark the database failed-closed and detach its connection.
+
+        The caller must hold ``_connection_lock``. Detaching is synchronous;
+        the detached connection is closed by the caller after releasing the
+        lock or by a scheduled close task when the caller is in a transaction.
+        """
+        if self._lifecycle_state is DatabaseLifecycleState.FAILED_CLOSED:
+            return None
+        conn_to_close = self._conn
+        self._conn = None
+        self._invalidated_reason = reason
+        self._invalidated_reason_class = self._classify_invalidation_reason(reason)
+        self._invalidated_at = time.monotonic()
+        self._writes_admitted = False
+        self._reads_admitted = False
+        self._transition_state(DatabaseLifecycleState.FAILED_CLOSED)
+        return conn_to_close
+
+    def _schedule_invalidation_close(self, conn: aiosqlite.Connection) -> None:
+        """Close an invalidated connection after the current lock holder exits."""
+        if self._invalidation_close_task is not None:
+            return
+        task = asyncio.create_task(self._close_connection(conn))
+        self._invalidation_close_task = task
+
+        def _clear_close_task(done: asyncio.Task[None]) -> None:
+            if self._invalidation_close_task is done:
+                self._invalidation_close_task = None
+            with suppress(asyncio.CancelledError, Exception):
+                done.result()
+
+        task.add_done_callback(_clear_close_task)
 
     async def _invalidate_connection(self, reason: str) -> None:
         """Detach and close the connection after indeterminate state.
 
-        Atomically removes the connection from ``_conn`` while the
-        connection lock is held (the caller must already hold the lock),
-        records the failure and closes the detached connection
-        with bounded best-effort. Future ``transaction()`` calls fail
+        Transaction failures detach synchronously while the transaction lock
+        is held, then schedule bounded close work for after that lock is
+        released. Direct callers acquire the lock before detaching and await
+        the close themselves. Future ``transaction()`` calls fail
         with ``DatabaseConnectionInvalidatedError``; the deployment
         contract is a worker restart, not same-process reconnection.
 
@@ -530,19 +578,19 @@ class Database:
         """
         if self._lifecycle_state is DatabaseLifecycleState.FAILED_CLOSED:
             return
-        if self._conn is None:
-            self._transition_state(DatabaseLifecycleState.FAILED_CLOSED)
-            return
-        conn_to_close = self._conn
-        self._conn = None
-        self._invalidated_reason = reason
-        self._invalidated_reason_class = self._classify_invalidation_reason(reason)
-        self._invalidated_at = time.monotonic()
-        self._writes_admitted = False
-        self._reads_admitted = False
-        with suppress(Exception):
-            await asyncio.wait_for(conn_to_close.close(), timeout=5.0)
-        self._transition_state(DatabaseLifecycleState.FAILED_CLOSED)
+        lock_held = self._connection_lock.locked()
+        if lock_held:
+            # Internal transaction failures arrive while the lock is held.
+            # Detach now and schedule close work so the lock can be released
+            # by the surrounding context manager before aiosqlite shutdown.
+            conn_to_close = self._detach_invalidated_connection(reason)
+            if conn_to_close is not None:
+                self._schedule_invalidation_close(conn_to_close)
+        else:
+            async with self._connection_lock:
+                conn_to_close = self._detach_invalidated_connection(reason)
+            if conn_to_close is not None:
+                await self._close_connection(conn_to_close)
         if self._fatal_handler is not None and not self._fatal_notified:
             self._fatal_notified = True
             with suppress(Exception):
