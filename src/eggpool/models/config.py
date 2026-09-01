@@ -1403,7 +1403,7 @@ class ModelInfoConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    enabled: bool = False
+    enabled: bool = True
     startup_refresh: bool = True
     refresh_interval_s: int = Field(default=21_600, ge=0)
     known_ttl_s: int = Field(default=86_400, gt=0)

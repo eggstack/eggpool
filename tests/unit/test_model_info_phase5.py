@@ -1644,7 +1644,7 @@ class TestConfig:
     def test_model_info_config_defaults(self) -> None:
         """ModelInfoConfig defaults are correct."""
         config = ModelInfoConfig()
-        assert config.enabled is False
+        assert config.enabled is True
         assert config.refresh_interval_s == 21_600
         assert config.known_ttl_s == 86_400
         assert config.partial_ttl_s == 43_200

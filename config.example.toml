@@ -240,7 +240,7 @@ ttl_seconds = 86400
 # metadata with display names, context limits, benchmarks, and pipeline
 # tags. Manual overrides and alias expansion are also supported.
 # [model_info]
-# enabled = false                  # optional metadata sidecar (default: false)
+# enabled = true                   # metadata sidecar (default: true)
 # include_in_models_endpoint = true  # compact fields in /v1/models (default: true)
 # refresh_interval_s = 3600        # global refresh cadence (seconds)
 # sparse_refresh_interval_s = 300  # accelerated refresh for sparse models (seconds)
@@ -296,7 +296,7 @@ ttl_seconds = 86400
 enabled = false
 
 [model_info]
-enabled = false
+enabled = true
 
 [update_checker]
 enabled = false

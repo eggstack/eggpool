@@ -350,9 +350,11 @@ production installation is documented below.
 
 ## Performance Profiles
 
-EggPool ships with a lean default and explicit fuller profiles. The default
-install uses one SQLite worker, low-wear analytics, loopback binding, and
-disabled optional enrichment/diagnostics. All profiles use the supported
+EggPool ships with a lean SBC default and a fuller standard default. The
+standard install uses one SQLite worker, low-wear analytics, loopback binding,
+and the metadata-enrichment sidecar (model_info) enabled by default. The SBC
+profile keeps optional enrichment/diagnostics disabled to bound resource
+use on Raspberry Pi class hardware. All profiles use the supported
 single-event-loop default (`threads = 1`).
 
 `eggpool onboard` asks whether to bind the API/dashboard to the LAN. Answering
@@ -360,10 +362,11 @@ yes writes `server.host = "0.0.0.0"`; noninteractive onboarding writes the safe
 loopback value. Dashboard authentication remains enabled by default through
 the generated server API key (`dashboard.public = false`).
 
-Optional background features are explicit: set `[model_info].enabled = true`
-for metadata enrichment, `[backup].enabled = true` for in-process archives,
-or `[update_checker].enabled = true` for the periodic PyPI status probe. Host
-DNS behavior is provided by the operating system; EggPool does not add a
+Optional background features that remain explicit: set `[backup].enabled = true`
+for in-process archives or `[update_checker].enabled = true` for the periodic
+PyPI status probe. Set `[model_info].enabled = false` to disable the
+metadata-enrichment sidecar (SBC profile does this by default). Host DNS
+behavior is provided by the operating system; EggPool does not add a
 process-local resolver cache.
 
 For a short deployment comparison, use the same host, Python, config shape,

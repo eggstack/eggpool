@@ -169,9 +169,11 @@ Plus `ProtocolMismatchError` (from `catalog.protocols`) — endpoint/model-proto
   stats connection
 - Readiness probe is process-owned (survives generation swaps) and disabled by
   default
-- The lean default binds to loopback, uses low-wear analytics, and leaves
+- The SBC profile binds to loopback, uses low-wear analytics, and leaves
   model-info, routing traces, detailed spans, backups, event-loop
-  lag, and the in-process PyPI checker dormant
+  lag, and the in-process PyPI checker dormant. The standard
+  default enables the model-info sidecar while keeping the other
+  optional diagnostics dormant
 - Optional diagnostics are genuinely dormant when disabled: their clients,
   writers, queues, recorders, and tasks are not instantiated. The canonical
   shipped template is `config.example.toml`; `config.sbc.example.toml` is a

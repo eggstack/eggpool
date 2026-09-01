@@ -339,7 +339,7 @@ async def test_model_info_repository_lists_due_rows() -> None:
 def test_model_info_config_defaults() -> None:
     """ModelInfoConfig has safe defaults."""
     config = ModelInfoConfig()
-    assert config.enabled is False
+    assert config.enabled is True
     assert config.startup_refresh is True
     assert config.refresh_interval_s == 21_600
     assert config.known_ttl_s == 86_400
@@ -389,7 +389,7 @@ def test_app_config_includes_model_info() -> None:
     )
     assert hasattr(config, "model_info")
     assert isinstance(config.model_info, ModelInfoConfig)
-    assert config.model_info.enabled is False
+    assert config.model_info.enabled is True
 
 
 # --- Source adapter tests ---

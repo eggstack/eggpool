@@ -153,7 +153,7 @@ class TestFactoryParity:
             assert result.router is not None
             assert result.coordinator is not None
             assert result.client_pool is not None
-            assert result.outbound_manager is None
+            assert result.outbound_manager is not None
             assert result.health_manager is not None
             assert result.cost_calculator is not None
             assert result.transcoder_policy is not None
@@ -164,7 +164,7 @@ class TestFactoryParity:
             assert result.supervisor is not None
             assert result.routing_trace_guard is None
             assert result.local_pre_upstream_recorder is None
-            assert result.model_info is None
+            assert result.model_info is not None
             assert result.stream_diagnostics is not None
         finally:
             await db.disconnect()
@@ -296,7 +296,7 @@ class TestFactoryParity:
             assert len(candidate._resources) > 0
             resource_names = [r.name for r in candidate._resources]
             assert "client_pool" in resource_names
-            assert "outbound_manager" not in resource_names
+            assert "outbound_manager" in resource_names
             assert "supervisor" in resource_names
         finally:
             await db.disconnect()
