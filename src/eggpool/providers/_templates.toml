@@ -90,6 +90,14 @@ probe_model = "MiniMax-M3"
 probe_protocol = "anthropic"
 require_models = true
 
+[providers.minimax.model_capabilities."MiniMax-M3".thinking]
+status = "supported"
+source = "provider_catalog"
+native_protocols = ["anthropic"]
+supported_efforts = ["low", "medium", "high"]
+effort_to_budget_tokens = { low = 1024, medium = 4096, high = 16384 }
+notes = "MiniMax accepts low/medium/high thinking effort on the Anthropic-compatible endpoint."
+
 # MiniMax International serves its catalog through the documented
 # /v1/models endpoint. The provider protocol constraint check accepts the
 # anthropic value that the family mapping produces, so no static seeds

@@ -220,8 +220,8 @@ class TestNativeUnknownContractSkip:
 class TestNativeContractResolution:
     """Verify contract resolution for native provider URLs."""
 
-    def test_opencode_go_native_resolves_fixed(self) -> None:
-        """OpenCode Go MiniMax-M3 → fixed contract (by provider ID)."""
+    def test_opencode_go_native_resolves_effort(self) -> None:
+        """OpenCode Go MiniMax-M3 → effort contract (by provider ID)."""
         cap = ThinkingCapability(status="supported")
         contract = resolve_control_contract(
             capability=cap,
@@ -229,7 +229,7 @@ class TestNativeContractResolution:
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        assert contract.mode == "fixed"
+        assert contract.mode == "effort"
 
     def test_minimax_native_resolves_effort(self) -> None:
         """MiniMax native provider ID → effort contract."""

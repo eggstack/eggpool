@@ -23,7 +23,7 @@ from eggpool.transcoder.builtin_contracts import (
 class TestOpenCodeGoProviderIdentity:
     """OpenCode Go contract resolves from provider identity, not URL."""
 
-    def test_canonical_provider_id_resolves_fixed(self) -> None:
+    def test_canonical_provider_id_resolves_effort(self) -> None:
         cap = ThinkingCapability(status="supported")
         contract = resolve_control_contract(
             capability=cap,
@@ -31,8 +31,8 @@ class TestOpenCodeGoProviderIdentity:
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        assert contract.mode == "fixed"
-        assert contract.accepted_efforts == []
+        assert contract.mode == "effort"
+        assert contract.accepted_efforts == ["low", "medium", "high"]
 
     def test_default_opencode_go_url_configures_correctly(self) -> None:
         """The default OpenCode Go URL resolves the OpenCode Go contract."""
@@ -43,7 +43,7 @@ class TestOpenCodeGoProviderIdentity:
             protocol="anthropic",
         )
         assert contract is not None
-        assert contract.mode == "fixed"
+        assert contract.mode == "effort"
 
     def test_opencode_go_resolves_without_url(self) -> None:
         """Provider ID match works even when URL is absent."""
@@ -53,7 +53,7 @@ class TestOpenCodeGoProviderIdentity:
             protocol="anthropic",
         )
         assert contract is not None
-        assert contract.mode == "fixed"
+        assert contract.mode == "effort"
 
 
 # ---------------------------------------------------------------------------
@@ -64,15 +64,15 @@ class TestOpenCodeGoProviderIdentity:
 class TestOpenCodeGoUrlFallback:
     """URL fallback for OpenCode Go matches when provider_id is absent."""
 
-    def test_url_fallback_resolves_fixed(self) -> None:
-        """URL pattern alone resolves the OpenCode Go fixed contract."""
+    def test_url_fallback_resolves_effort(self) -> None:
+        """URL pattern alone resolves the OpenCode Go effort contract."""
         contract = lookup_builtin_contract(
             provider_base_url="https://opencode.ai/zen/go/v1",
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
         assert contract is not None
-        assert contract.mode == "fixed"
+        assert contract.mode == "effort"
 
     def test_minimax_url_fallback_does_not_capture_native(self) -> None:
         """minimax.io URL fallback does NOT match OpenCode Go or native MiniMax."""
@@ -122,7 +122,10 @@ class TestNativeMiniMaxProviderIdentity:
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        assert contract_opencode.mode == "fixed"
+        # Both accept effort, but the underlying contract objects come from
+        # distinct built-in rules so the operator can override either side
+        # without affecting the other.
+        assert contract_opencode.mode == "effort"
         assert contract_minimax.mode == "effort"
         assert contract_opencode is not contract_minimax
 
@@ -236,7 +239,7 @@ class TestOperatorOverridePrecedence:
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        assert contract_fresh.mode == "fixed"
+        assert contract_fresh.mode == "effort"
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +258,7 @@ class TestCollapsedModelResolution:
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        assert contract.mode == "fixed"
+        assert contract.mode == "effort"
 
     def test_suffixed_minimax_m3(self) -> None:
         cap = ThinkingCapability(status="supported")
@@ -265,7 +268,27 @@ class TestCollapsedModelResolution:
             model_id="MiniMax-M3/opencode-go",
             protocol="anthropic",
         )
-        assert contract.mode == "fixed"
+        assert contract.mode == "effort"
+
+    def test_collapsed_minimax_m3_matches_native_lowercase(self) -> None:
+        """The builtin model_id_pattern is case-insensitive so the lowercase
+        upstream id (``minimax-m3``) used by opencode-go still resolves the
+        same effort contract as the canonical capitalised form."""
+        cap = ThinkingCapability(status="supported")
+        canonical = resolve_control_contract(
+            capability=cap,
+            provider_id="opencode-go",
+            model_id="MiniMax-M3",
+            protocol="anthropic",
+        )
+        lowercase = resolve_control_contract(
+            capability=cap,
+            provider_id="opencode-go",
+            model_id="minimax-m3",
+            protocol="anthropic",
+        )
+        assert canonical.mode == lowercase.mode == "effort"
+        assert canonical.accepted_efforts == lowercase.accepted_efforts
 
     def test_both_resolve_same_contract(self) -> None:
         cap = ThinkingCapability(status="supported")

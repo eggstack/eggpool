@@ -4529,23 +4529,39 @@ class RequestCoordinator:
     ) -> str | None:
         """Inspect the collapsed capability to attribute a thinking rejection.
 
-        Returns ``"unknown"`` or ``"unsupported"`` when the collapsed
-        model's thinking status matches the rejection reason. Returns
-        ``None`` when the status cannot be determined (caller falls
-        back to the generic ``no_eligible_providers`` reason).
+        Returns ``"unknown"`` or ``"unsupported"`` when the model's
+        thinking status matches the rejection reason. Returns ``None``
+        when the status cannot be determined (caller falls back to the
+        generic ``no_eligible_providers`` reason).
+
+        The collapsed ``models`` row only carries thinking metadata when
+        capability data was already merged into the global row. Many
+        provider-scoped thinking rows live in
+        ``provider_model_metadata`` and are applied on the per-candidate
+        eligibility check but never make it into the collapsed entry.
+        To avoid a false ``unknown`` reading that would mis-attribute a
+        rejection, also consult the provider-scoped entry when the
+        collapsed one reports ``unknown``.
         """
         from eggpool.catalog.capabilities import extract_thinking_status_from_entry
 
+        del thinking_req
         try:
-            collapsed_entry = self._catalog.cache.get_model(context.model_id)
+            cache = self._catalog.cache
+            collapsed_entry = cache.get_model(context.model_id)
             status = extract_thinking_status_from_entry(collapsed_entry)
+            if status == "unknown" and context.provider_id is not None:
+                provider_entry = cache.get_provider_model_entry(
+                    context.model_id,
+                    context.provider_id,
+                )
+                provider_status = extract_thinking_status_from_entry(provider_entry)
+                if provider_status != "unknown":
+                    status = provider_status
         except Exception:  # noqa: BLE001
             return None
         if status in ("unknown", "unsupported"):
             return status
-        # ``thinking_req`` is currently unused; reserved for future
-        # per-request overrides that may classify differently.
-        del thinking_req
         return None
 
     def _recompute_thinking_budget_for_selected_provider(

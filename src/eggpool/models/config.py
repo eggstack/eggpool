@@ -1174,7 +1174,7 @@ class ModelCapabilitiesOverrideConfig(BaseModel):
 
 
 _OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"
-_OPENCODE_GO_THINKING_MODELS: frozenset[str] = frozenset({"mimo-v2.5"})
+_OPENCODE_GO_THINKING_MODELS: frozenset[str] = frozenset({"mimo-v2.5", "minimax-m3"})
 
 
 def _default_opencode_go_thinking_capabilities() -> dict[

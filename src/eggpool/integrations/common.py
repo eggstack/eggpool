@@ -131,7 +131,11 @@ def _load_catalog(config: AppConfig, collapse_models: bool) -> list[dict[str, An
                     out.append(
                         {
                             "model_id": row["model_id"],
-                            "display_name": row["display_name"],
+                            "display_name": (
+                                row["display_name"]
+                                or meta.get("name")
+                                or row["model_id"]
+                            ),
                             "capabilities": caps,
                             "source_metadata": meta,
                             "effective_limits": {},
@@ -181,6 +185,7 @@ def _load_catalog(config: AppConfig, collapse_models: bool) -> list[dict[str, An
                 meta: dict[str, Any] = json.loads(meta_raw) if meta_raw else {}
                 base_model_id = row["model_id"]
                 provider_id = row["provider_id"]
+                display_name = row["display_name"] or meta.get("name") or base_model_id
                 out.append(
                     {
                         "model_id": (
@@ -190,7 +195,7 @@ def _load_catalog(config: AppConfig, collapse_models: bool) -> list[dict[str, An
                         ),
                         "base_model_id": base_model_id,
                         "provider_id": provider_id,
-                        "display_name": row["display_name"],
+                        "display_name": display_name,
                         "capabilities": caps,
                         "source_metadata": meta,
                         "effective_limits": {},

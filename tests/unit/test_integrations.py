@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import tomllib
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import patch
 
 import pytest
@@ -332,6 +332,121 @@ class TestCatalogLoadFailureSurfacing:
         self, exc: Exception, expected: bool
     ) -> None:
         assert _is_expected_catalog_absence(exc) is expected
+
+
+# ---------------------------------------------------------------------------
+# Display name fallback (Fix 4)
+# ---------------------------------------------------------------------------
+
+
+class TestCatalogDisplayNameFallback:
+    """OpenCode Go models have no upstream ``display_name``; rendering must
+    derive a stable name from ``source_metadata.name`` (the models.dev
+    field) or the model id as a last resort so the OpenCode CLI sees a
+    meaningful ``name`` field instead of nothing.
+
+    The fallback runs inside ``_load_catalog`` — when both
+    ``provider_model_metadata.display_name`` and
+    ``models.display_name`` are NULL we substitute
+    ``source_metadata.name`` or, failing that, ``model_id``.
+    """
+
+    @staticmethod
+    def _stub_config(tmp_path: Path) -> AppConfig:
+        db_path = tmp_path / "nope.sqlite3"
+        return AppConfig.model_validate(
+            {
+                "server": {"host": "127.0.0.1", "port": 8080},
+                "database": {"path": str(db_path)},
+                "providers": {},
+            }
+        )
+
+    def test_provider_scoped_falls_back_to_source_metadata_name(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The provider-scoped branch applies the metadata-name fallback."""
+
+        async def _fake_fetch(
+            *_args: object, **_kwargs: object
+        ) -> list[dict[str, Any]]:
+            return [
+                {
+                    "model_id": "minimax-m3",
+                    "display_name": None,
+                    "capabilities": None,
+                    "source_metadata": json.dumps({"name": "MiniMax-M3"}),
+                    "provider_id": "opencode-go",
+                }
+            ]
+
+        from eggpool.integrations.common import _load_catalog
+
+        monkeypatch.setattr(
+            "eggpool.db.connection.Database.fetch_all",
+            _fake_fetch,
+        )
+        result = _load_catalog(self._stub_config(tmp_path), collapse_models=False)
+        assert result[0]["display_name"] == "MiniMax-M3"
+
+    def test_provider_scoped_falls_back_to_model_id(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Without a metadata ``name`` we use the model_id itself."""
+
+        async def _fake_fetch(
+            *_args: object, **_kwargs: object
+        ) -> list[dict[str, Any]]:
+            return [
+                {
+                    "model_id": "minimax-m3",
+                    "display_name": None,
+                    "capabilities": None,
+                    "source_metadata": json.dumps({}),
+                    "provider_id": "opencode-go",
+                }
+            ]
+
+        from eggpool.integrations.common import _load_catalog
+
+        monkeypatch.setattr(
+            "eggpool.db.connection.Database.fetch_all",
+            _fake_fetch,
+        )
+        result = _load_catalog(self._stub_config(tmp_path), collapse_models=False)
+        assert result[0]["display_name"] == "minimax-m3"
+
+    def test_collapsed_falls_back_to_model_id(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The collapsed-mode SQL path also applies the fallback."""
+
+        async def _fake_fetch(
+            *_args: object, **_kwargs: object
+        ) -> list[dict[str, Any]]:
+            return [
+                {
+                    "model_id": "minimax-m3",
+                    "display_name": None,
+                    "capabilities": None,
+                    "source_metadata": json.dumps({}),
+                }
+            ]
+
+        from eggpool.integrations.common import _load_catalog
+
+        monkeypatch.setattr(
+            "eggpool.db.connection.Database.fetch_all",
+            _fake_fetch,
+        )
+        result = _load_catalog(self._stub_config(tmp_path), collapse_models=True)
+        assert result[0]["display_name"] == "minimax-m3"
 
 
 # ---------------------------------------------------------------------------

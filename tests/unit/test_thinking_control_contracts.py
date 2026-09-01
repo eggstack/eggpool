@@ -418,17 +418,22 @@ class TestSpecificityOutranksPriority:
 
 
 class TestOpenCodeGoUrlCompatibility:
-    """Defect 5: URL-based compatibility for OpenCode Go."""
+    """Defect 5: URL-based compatibility for OpenCode Go.
 
-    def test_opencode_go_url_resolves_fixed(self) -> None:
-        """OpenCode Go URL resolves the fixed contract without provider_id."""
+    Both the canonical ``opencode-go`` provider ID and a matching
+    ``opencode.ai`` upstream URL resolve the same effort contract.
+    """
+
+    def test_opencode_go_url_resolves_effort(self) -> None:
+        """OpenCode Go URL resolves the effort contract without provider_id."""
         contract = lookup_builtin_contract(
             provider_base_url="https://opencode.ai/zen/go/v1",
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
         assert contract is not None
-        assert contract.mode == "fixed"
+        assert contract.mode == "effort"
+        assert contract.accepted_efforts == ["low", "medium", "high"]
 
     def test_opencode_go_id_still_wins(self) -> None:
         """Exact provider_id match wins over URL match."""
@@ -439,7 +444,7 @@ class TestOpenCodeGoUrlCompatibility:
             protocol="anthropic",
         )
         assert contract is not None
-        assert contract.mode == "fixed"
+        assert contract.mode == "effort"
 
     def test_native_minimax_not_captured_by_opencode_url(self) -> None:
         """Native MiniMax URL does not match OpenCode Go URL rule."""
@@ -461,7 +466,7 @@ class TestOpenCodeGoUrlCompatibility:
         )
         # minimax-proxy doesn't match any ID rule; URL rule matches.
         assert contract is not None
-        assert contract.mode == "fixed"
+        assert contract.mode == "effort"
 
     def test_native_minimax_id_wins_over_opencode_url(self) -> None:
         """Native MiniMax ID wins over OpenCode URL when both could match."""
@@ -471,8 +476,7 @@ class TestOpenCodeGoUrlCompatibility:
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        # minimax ID matches at specificity 3, URL matches at specificity 1.
-        # ID wins → effort contract.
+        # Both rules match; native MiniMax ID wins at specificity 3.
         assert contract is not None
         assert contract.mode == "effort"
 

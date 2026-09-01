@@ -175,6 +175,46 @@ def test_eligible_accounts_can_filter_by_provider_protocol_policy() -> None:
     assert eligible == []
 
 
+def test_eligible_accounts_keeps_cross_protocol_when_transcoding_allowed() -> None:
+    """Cross-protocol requests remain eligible when transcoding is allowed.
+
+    When the client sends ``protocol="openai"`` but the upstream account
+    resolved to ``protocol="anthropic"`` (so the request will be
+    transcoded), the candidate must remain eligible. The
+    precomputed-support fast path must mirror the slower
+    ``is_account_model_available`` branch and honor
+    ``transcode_eligibility``.
+    """
+    cache = ModelCatalogCache()
+    cache.update_from_account(
+        "acct1",
+        "minimax",
+        [
+            {
+                "model_id": "MiniMax-M3",
+                "protocol": "anthropic",
+                "capabilities": {
+                    "thinking": {
+                        "status": "supported",
+                        "supported_efforts": ["low", "medium", "high"],
+                    }
+                },
+            }
+        ],
+    )
+    states = [AccountRuntimeState(name="acct1", enabled=True)]
+
+    eligible = get_eligible_accounts(
+        states,
+        "MiniMax-M3",
+        cache,
+        protocol="openai",
+        transcode_eligibility={"openai", "anthropic"},
+    )
+
+    assert [state.name for state in eligible] == ["acct1"]
+
+
 def test_eligible_accounts_keeps_above_local_quota_in_score_only_mode() -> None:
     """Above-local-quota accounts remain eligible in the default score_only mode.
 

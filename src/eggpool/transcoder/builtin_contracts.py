@@ -66,9 +66,11 @@ class BuiltinProviderContract:
 # ---------------------------------------------------------------------------
 # OpenCode Go routes MiniMax-M3 through its own proxy.  The canonical
 # provider ID is ``opencode-go`` and the default upstream URL is
-# ``https://opencode.ai/zen/go/v1``.  MiniMax-M3 does NOT accept
-# client-selectable effort or budget controls — reasoning is enabled
-# at a fixed level.
+# ``https://opencode.ai/zen/go/v1``.  Empirically the upstream accepts
+# both ``thinking`` (Anthropic Messages) and ``reasoning_effort``
+# (OpenAI Chat Completions) for low/medium/high, matching the native
+# MiniMax contract.  Treat the deployment as effort-selectable rather
+# than fixed; budget tokens map the same way the native endpoint does.
 _OPENCODE_GO_MINIMAX_CONTRACT = BuiltinProviderContract(
     key=ProviderContractKey(
         provider_id_pattern=r"^opencode-go$",
@@ -77,14 +79,13 @@ _OPENCODE_GO_MINIMAX_CONTRACT = BuiltinProviderContract(
         priority=10,
     ),
     contract=ThinkingControlContract(
-        mode="fixed",
-        request_fields=[],
-        accepted_efforts=[],
+        mode="effort",
+        request_fields=["thinking", "reasoning_effort"],
+        accepted_efforts=["low", "medium", "high"],
+        effort_aliases={"med": "medium"},
+        effort_to_budget_tokens={"low": 1024, "medium": 4096, "high": 16384},
         historical_reasoning_content="accepted",
         source="manual_override",
-        effort_to_budget_tokens=None,
-        explicit_budget_min=None,
-        explicit_budget_max=None,
     ),
 )
 
@@ -107,8 +108,8 @@ _MINIMAX_NATIVE_CONTRACT = BuiltinProviderContract(
     ),
 )
 
-# OpenCode Go URL compatibility — same fixed contract as the ID-based rule,
-# for providers configured with an OpenCode Go upstream URL but a
+# OpenCode Go URL compatibility — same effort contract as the ID-based
+# rule, for providers configured with an OpenCode Go upstream URL but a
 # non-canonical provider ID.
 _OPENCODE_GO_URL_COMPAT_CONTRACT = BuiltinProviderContract(
     key=ProviderContractKey(
@@ -118,14 +119,13 @@ _OPENCODE_GO_URL_COMPAT_CONTRACT = BuiltinProviderContract(
         priority=10,
     ),
     contract=ThinkingControlContract(
-        mode="fixed",
-        request_fields=[],
-        accepted_efforts=[],
+        mode="effort",
+        request_fields=["thinking", "reasoning_effort"],
+        accepted_efforts=["low", "medium", "high"],
+        effort_aliases={"med": "medium"},
+        effort_to_budget_tokens={"low": 1024, "medium": 4096, "high": 16384},
         historical_reasoning_content="accepted",
         source="manual_override",
-        effort_to_budget_tokens=None,
-        explicit_budget_min=None,
-        explicit_budget_max=None,
     ),
 )
 

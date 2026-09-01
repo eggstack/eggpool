@@ -190,8 +190,21 @@ def get_eligible_accounts(
                 continue
             model_info = catalog.get_model_for_account(model_id, state.name)
             resolved_protocol = model_info.get("protocol") if model_info else None
-            if not resolved_protocol or (
-                protocol is not None and resolved_protocol != protocol
+            if not resolved_protocol:
+                continue
+            # Protocol mismatch: only skip if the resolved protocol
+            # isn't a transcoding-eligible target. The earlier
+            # ``account_supports_protocol`` branch already factored in
+            # ``transcode_eligibility``; mirror that here so
+            # cross-protocol requests aren't silently dropped by the
+            # precomputed-support fast path.
+            if (
+                protocol is not None
+                and resolved_protocol != protocol
+                and (
+                    not transcode_eligibility
+                    or resolved_protocol not in transcode_eligibility
+                )
             ):
                 continue
         elif not catalog.is_account_model_available(

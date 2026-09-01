@@ -14,14 +14,14 @@ from eggpool.transcoder.builtin_contracts import (
 class TestLookupBuiltinContract:
     """Tests for lookup_builtin_contract."""
 
-    def test_opencode_go_minimax_m3_fixed(self) -> None:
+    def test_opencode_go_minimax_m3_effort(self) -> None:
         contract = lookup_builtin_contract(
             provider_id="opencode-go",
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
         assert contract is not None
-        assert contract.mode == "fixed"
+        assert contract.mode == "effort"
 
     def test_opencode_go_by_url_fallback(self) -> None:
         """OpenCode Go matches via URL fallback when provider_id is absent."""
@@ -30,9 +30,9 @@ class TestLookupBuiltinContract:
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        # URL-based rule for OpenCode Go matches the fixed contract.
+        # URL-based rule for OpenCode Go matches the effort contract.
         assert contract is not None
-        assert contract.mode == "fixed"
+        assert contract.mode == "effort"
 
     def test_minimax_native_effort(self) -> None:
         contract = lookup_builtin_contract(
