@@ -15,6 +15,7 @@ import pytest
 import pytest_asyncio
 import respx
 
+from eggpool.jsonx import loads as jsonx_loads
 from tests.helpers.real_runtime import (
     UPSTREAM_BASE,
     ModelSpec,
@@ -51,6 +52,7 @@ _MINIMAX_SPEC = RuntimeAppSpec(
                 },
             },
         ),
+        ModelSpec(model_id="minimax-m3", protocol="openai"),
     ),
     providers=(
         ProviderSpec(
@@ -70,6 +72,13 @@ _MINIMAX_SPEC = RuntimeAppSpec(
                             },
                         },
                     },
+                ),
+                # OpenCode Go's live catalog uses this lowercase ID. Keep
+                # the exact provider-suffixed client form in the regression
+                # path so native OpenAI dispatch is exercised.
+                ModelSpec(
+                    model_id="minimax-m3",
+                    protocol="openai",
                 ),
             ),
             account_names=("rt-acct-1",),
@@ -217,3 +226,52 @@ class TestMiniMaxOpenCodeGoRequestLocalIsolation:
             final_health = health_mgr.get_health_stats("rt-acct-1")
             assert final_health["is_healthy"] is True
             assert final_health["consecutive_failures"] == 0
+
+    @respx.mock
+    @pytest.mark.asyncio()
+    async def test_provider_suffixed_model_is_stripped_on_native_openai_path(
+        self,
+        minimax_isolation_app: FastAPI,
+    ) -> None:
+        """OpenCode Go must receive ``minimax-m3``, never its EggPool ID."""
+        from httpx import ASGITransport
+
+        upstream_response = {
+            "id": "minimax-suffixed-1",
+            "object": "chat.completion",
+            "model": "minimax-m3",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "OK"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 3,
+                "completion_tokens": 1,
+                "total_tokens": 4,
+            },
+        }
+        route = respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+            return_value=httpx.Response(200, json=upstream_response)
+        )
+
+        transport = ASGITransport(app=minimax_isolation_app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                headers={"Authorization": "Bearer rt-test-key"},
+                json={
+                    "model": "minimax-m3/opencode-go",
+                    "messages": [{"role": "user", "content": "Reply with OK"}],
+                    "max_tokens": 8,
+                },
+            )
+
+        assert response.status_code == 200
+        assert response.json()["choices"][0]["message"]["content"] == "OK"
+        assert route.called
+        assert jsonx_loads(route.calls[0].request.content)["model"] == "minimax-m3"

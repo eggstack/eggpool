@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, cast
 
 import pytest
@@ -74,6 +75,23 @@ class TestProviderBoundRequest:
             model_id="gpt-4",
         )
         assert pbr.provider_payload is pbr.client_payload
+
+    def test_provider_namespace_is_removed_from_upstream_model(self) -> None:
+        """Provider-scoped client IDs must never reach the upstream body."""
+        payload = {
+            "model": "minimax-m3/opencode-go",
+            "messages": [{"role": "user", "content": "Hi"}],
+        }
+        pbr = ProviderBoundRequest(
+            client_bytes=b"{}",
+            client_payload=payload,
+            client_protocol="openai",
+            model_id="minimax-m3",
+        )
+
+        assert pbr.client_payload["model"] == "minimax-m3/opencode-go"
+        assert pbr.provider_payload["model"] == "minimax-m3"
+        assert json.loads(pbr.serialize_provider_payload())["model"] == "minimax-m3"
 
     def test_set_provider_payload_increments_generation(self) -> None:
         pbr = ProviderBoundRequest(

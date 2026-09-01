@@ -162,6 +162,28 @@ class ProviderBoundRequest:
     _serialized_generation: int | None = field(default=None, repr=False)
     _frozen: bool = field(default=False, repr=False)
 
+    def __post_init__(self) -> None:
+        """Normalize EggPool's provider namespace out of the model field.
+
+        The public ``/v1/models`` surface exposes provider-scoped IDs such as
+        ``minimax-m3/opencode-go``. That suffix belongs to EggPool's routing
+        namespace; upstream providers only receive the base model ID. Keep
+        this invariant on the shared provider-bound object so native requests
+        (which do not run a transcode preflight) are protected as well as
+        translated and legacy requests.
+
+        ``client_payload`` remains untouched so the original client request
+        is still available for diagnostics and response adaptation.
+        """
+        model_value = self.client_payload.get("model")
+        if not isinstance(model_value, str) or not self.model_id:
+            return
+        if not model_value.startswith(f"{self.model_id}/"):
+            return
+        normalized = dict(self.client_payload)
+        normalized["model"] = self.model_id
+        self.set_provider_payload(normalized, increment_generation=False)
+
     @property
     def provider_payload(self) -> Mapping[str, Any]:
         """Return the decoded provider-bound payload.
