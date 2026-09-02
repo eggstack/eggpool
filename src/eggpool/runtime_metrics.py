@@ -246,6 +246,8 @@ class RuntimeMetricsService:
         # Plan 025 — typed failure effects and bounded quarantine counters
         result["failure_effects"] = await self._snapshot_failure_effects(probe_errors)
 
+        result["wire_negotiation"] = self._snapshot_wire_negotiation(probe_errors)
+
         result["model_info"] = await self._snapshot_model_info(probe_errors)
 
         result["dashboard_telemetry"] = self._snapshot_dashboard_telemetry(probe_errors)
@@ -832,6 +834,22 @@ class RuntimeMetricsService:
                 "label_breakdown": {},
                 "categories": {},
             }
+
+    def _snapshot_wire_negotiation(self, probe_errors: list[str]) -> dict[str, Any]:
+        """Return bounded process-owned wire resolver diagnostics."""
+        if not self._config.routing.wire_negotiation.enabled:
+            return {"enabled": False}
+        resolver = getattr(self._process, "wire_profile_resolver", None)
+        if resolver is None:
+            return {"enabled": False}
+        try:
+            snapshot = resolver.snapshot()
+        except Exception as exc:
+            _append_probe_error(
+                probe_errors, f"Wire negotiation snapshot failed: {exc}"
+            )
+            return {"enabled": True, "error": str(exc)}
+        return {"enabled": True, **snapshot}
 
     async def _snapshot_model_info(self, probe_errors: list[str]) -> dict[str, Any]:
         """Best-effort snapshot of the model-info subsystem."""

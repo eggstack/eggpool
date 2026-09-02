@@ -490,6 +490,7 @@ class ProcessRuntime:
     maintenance_state: Any = None  # noqa: ANN401 — MaintenanceState
     event_loop_lag_monitor: Any = None  # noqa: ANN401 — EventLoopLagMonitor
     readiness_probe: Any = None  # noqa: ANN401 — DatabaseWritableProbe
+    wire_profile_resolver: Any = None  # noqa: ANN401 — process-owned runtime state
     model_info: Any = None  # noqa: ANN401 — ModelInfoService
 
 

@@ -27,6 +27,14 @@ from eggpool.wire.registry import (
     load_wire_registry_text,
     resolve_provider_wire_profiles,
 )
+from eggpool.wire.resolver import (
+    CandidateRejection,
+    NegotiationHandle,
+    WireNegotiationResult,
+    WirePreferenceEntry,
+    WireProfileResolver,
+    WireResolution,
+)
 from eggpool.wire.types import (
     AuthHeaderShape,
     ResolvedAuthShape,
@@ -48,6 +56,12 @@ __all__ = [
     "WireRegistry",
     "WireRegistryError",
     "WireSurfaceName",
+    "CandidateRejection",
+    "NegotiationHandle",
+    "WireNegotiationResult",
+    "WirePreferenceEntry",
+    "WireProfileResolver",
+    "WireResolution",
     "load_wire_registry",
     "load_wire_registry_text",
     "render_wire_path_template",

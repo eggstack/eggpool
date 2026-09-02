@@ -48,6 +48,13 @@ Runtime generation ownership:
 - **`ProcessRuntime`**: holds process-owned containers (DB connections) that outlive generations
 - **Generation builder**: constructs candidate generations for live reload
 
+`ProcessRuntime.wire_profile_resolver` is a process-owned, bounded in-memory
+state container. It survives safe generation swaps, while each generation
+passes immutable resolved provider profiles to its coordinator. Candidate
+fingerprints include structural surface/path/auth-shape/header facts but never
+credential values, so a rehash with changed wire definitions cannot reuse the
+old learned preference.
+
 Request-path code obtains `GenerationLease` via `wrap_stream_with_lease` or `leased_runtime`. A generation swap never interrupts in-flight requests.
 
 Each generation also precomputes immutable request lookup sets, including
@@ -188,3 +195,5 @@ failed durable clear leaves the current in-memory suppression intact.
 - PID file owned by supervisor
 - Generation swap never interrupts in-flight requests or accepted retained terminal jobs
 - Process-owned containers outlive any generation
+- Wire preference learning is process-owned, bounded, and never persisted in
+  SQLite; generation changes replace the candidate definitions supplied to it.

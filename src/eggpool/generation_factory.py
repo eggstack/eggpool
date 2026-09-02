@@ -181,6 +181,12 @@ class RuntimeGenerationFactory:
         )
         from eggpool.runtime_manager import RuntimeGenerationBuilder  # noqa: PLC0415
         from eggpool.stats import StatsService  # noqa: PLC0415
+        from eggpool.wire.registry import (  # noqa: PLC0415
+            WireHint,
+            load_wire_registry,
+            resolve_provider_wire_profiles,
+        )
+        from eggpool.wire.resolver import WireProfileResolver  # noqa: PLC0415
 
         db = process.db
         config.validate_optional_dependencies()
@@ -219,6 +225,37 @@ class RuntimeGenerationFactory:
         # -- Account registry (generation-owned) ---------------------------
         registry = AccountRegistry(config)
         account_identities = await _load_account_identities(db, registry)
+
+        # Wire profiles are immutable generation facts.  Learned preference
+        # state stays in the process-owned resolver, while this map is
+        # replaced on every generation so rehash cannot use stale paths or
+        # auth shapes.
+        wire_registry = load_wire_registry()
+        wire_profiles_by_provider = {
+            provider_id: resolve_provider_wire_profiles(
+                provider, registry=wire_registry
+            )
+            for provider_id, provider in config.providers.items()
+        }
+        wire_bundled_hints_by_provider: dict[str, dict[str, WireHint]] = {}
+        for hint in wire_registry.hints:
+            wire_bundled_hints_by_provider.setdefault(hint.provider_id, {})[
+                hint.model_id
+            ] = hint
+        wire_profile_resolver = getattr(process, "wire_profile_resolver", None)
+        if not isinstance(wire_profile_resolver, WireProfileResolver):
+            wire_profile_resolver = WireProfileResolver(
+                cache_max_entries=config.routing.wire_negotiation.cache_max_entries
+            )
+            process.wire_profile_resolver = wire_profile_resolver
+        wire_config = config.routing.wire_negotiation
+        wire_profile_resolver.configure(
+            cache_max_entries=wire_config.cache_max_entries,
+            max_concurrent_per_provider=wire_config.max_concurrent_per_provider,
+            min_negotiation_interval_s=wire_config.min_negotiation_interval_s,
+            rejection_cooldown_s=wire_config.rejection_cooldown_s,
+            learned_preference_ttl_s=wire_config.learned_preference_ttl_s,
+        )
 
         # -- Transcoder policy snapshot -----------------------------------
         transcoder_policy = config.transcoder
@@ -406,6 +443,9 @@ class RuntimeGenerationFactory:
             quarantine=quarantine,
             account_identities=account_identities,
             finalization_supervisor=finalization_supervisor,
+            wire_profile_resolver=wire_profile_resolver,
+            wire_profiles_by_provider=wire_profiles_by_provider,
+            wire_bundled_hints_by_provider=wire_bundled_hints_by_provider,
         )
 
         # -- Routing trace guard --------------------------------------------

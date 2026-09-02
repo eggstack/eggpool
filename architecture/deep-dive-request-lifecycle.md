@@ -6,6 +6,15 @@ Back to [Overview](overview.md)
 
 The request lifecycle is the data-plane hot path: every chat completion and messages request flows through `RequestCoordinator` from endpoint to finalization.
 
+After account/provider selection and before provider-body serialization, the
+coordinator resolves the generation's declared wire profile through the
+process-owned `WireProfileResolver`. The selected profile supplies both the
+URL path template and surface-specific authentication shape. A successful
+ordinary request refreshes the provider/model preference. Alternate-surface
+enumeration is not inferred from HTTP status; it remains gated by the
+canonical failure-effects transition and shares the request's existing
+submission budget.
+
 ## Request Flow
 
 ```

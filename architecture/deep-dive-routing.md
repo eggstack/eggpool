@@ -100,11 +100,12 @@ Rotor position map capped at 4096 entries (`_ROTOR_HARD_CAP`). Eviction is LRU (
 
 Routing configuration helpers.
 
-`RoutingConfig.wire_negotiation` defines the bounded future negotiation
+`RoutingConfig.wire_negotiation` defines the bounded runtime negotiation
 surface: enablement, per-provider concurrency, minimum interval, deterministic
-rejection cooldown, learned-preference TTL, and cache size. Plan 148 only
-validates and fingerprints these settings; it does not dispatch alternate
-surfaces, probe in the background, or add a second retry budget.
+rejection cooldown, learned-preference TTL, and cache size. The process-owned
+`WireProfileResolver` uses these settings for in-memory ordering, candidate
+cooldowns, provider/model single-flight, and provider-wide abnormal-dispatch
+gating. It never probes in the background or adds a second retry budget.
 
 Wire candidate preference is separate from account scoring. Provider surface
 `priority` values and exact bundled/operator model preferences order possible

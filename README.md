@@ -174,7 +174,7 @@ Use `eggpool connect` for interactive provider setup. See [docs/providers.md](do
 | `[upstream]` | Upstream API base URL, timeouts, connection pool |
 | `[database]` | SQLite path, WAL mode, WAL size limit |
 | `[models]` | Catalog refresh, exposure mode, model collapse, withdrawal policy |
-| `[routing]` | Routing strategy, retry limits, quota mode, same-tier fairness |
+| `[routing]` | Routing strategy, retry limits, quota mode, same-tier fairness, bounded wire negotiation |
 | `[dashboard]` | Dashboard toggle, theme, refresh interval |
 | `[providers.*]` | Provider configs with accounts and routing priority |
 | `[network]` | Outbound transport and proxy settings |
@@ -191,6 +191,13 @@ Provider surfaces can be declared under `[providers.<id>.wire_surfaces.<surface>
 when one provider exposes different endpoint paths or auth headers. Existing
 `protocols`, `openai_path`, `responses_path`, and `anthropic_path` settings remain
 valid and are synthesized into equivalent candidates.
+
+EggPool keeps a bounded, in-memory preference for the last successful declared
+wire surface per provider/model. The preference is refreshed by ordinary
+successful requests and discarded naturally on restart or candidate-definition
+changes; it never stores credentials or upstream response bodies. Negotiation is
+reactive and only a separately classified, deterministic pre-inference failure
+may authorize an alternate-surface attempt.
 
 Full config reference: [`config.example.toml`](config.example.toml) | [docs/providers.md](docs/providers.md)
 

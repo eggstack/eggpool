@@ -9,7 +9,10 @@ protocols.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from eggpool.wire.types import WireProfile
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +32,9 @@ def get_upstream_url(
     *,
     config: Any | None = None,  # noqa: ANN401
     request_surface: str = "chat_completions",
+    wire_profile: WireProfile | None = None,
+    model_id: str | None = None,
+    streaming: bool = False,
 ) -> str:
     """Get the absolute upstream URL for a protocol and provider.
 
@@ -58,6 +64,15 @@ def get_upstream_url(
     if provider_id and config is not None:
         provider_cfg = config.providers.get(provider_id)
         if provider_cfg is not None:
+            if wire_profile is not None:
+                if model_id is None:
+                    raise RuntimeError(
+                        "A model ID is required to render a wire profile path"
+                    )
+                return compose_provider_url(
+                    provider_cfg,
+                    wire_profile.path_for(model_id, streaming=streaming),
+                )
             path = _resolve_path_for_surface(provider_cfg, protocol, request_surface)
             if path is not None:
                 return compose_provider_url(provider_cfg, path)

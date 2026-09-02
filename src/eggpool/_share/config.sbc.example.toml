@@ -36,7 +36,7 @@ startup_refresh = true
 [routing]
 strategy = "quota_fair"
 
-# Parsed now for the later reactive wire-surface negotiation phase.
+# Bounded in-memory wire-profile learning and negotiation governor settings.
 [routing.wire_negotiation]
 enabled = true
 max_concurrent_per_provider = 1

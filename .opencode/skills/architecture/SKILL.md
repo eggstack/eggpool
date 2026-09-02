@@ -78,6 +78,13 @@ IDs and carries advisory exact model hints. It cannot import code, retain
 account secrets, or trigger network/probe behavior. Surface auth is rendered
 with the selected account key only at dispatch-header construction time.
 
+`ProcessRuntime.wire_profile_resolver` owns bounded runtime preference learning,
+per-provider/model single-flight, and provider-only abnormal-dispatch gating.
+Generation-owned resolved profiles are keyed by a structural fingerprint that
+omits credential values. Ordinary success refreshes a preference; only the
+canonical failure-effects decision may authorize candidate suppression or an
+alternate-surface transition. No background probes or second retry budget.
+
 ## JSON Backend
 
 `src/eggpool/jsonx.py` — wire bodies, SSE frame helpers, and hot-path request body parsing.

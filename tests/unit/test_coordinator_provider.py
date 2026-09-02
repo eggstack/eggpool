@@ -12,13 +12,14 @@ import pytest
 from eggpool.catalog.cache import ModelCatalogCache
 from eggpool.catalog.protocols import ProtocolMismatchError
 from eggpool.errors import ModelUnavailableError, UpstreamError
-from eggpool.models.config import AppConfig, ProviderConfig
+from eggpool.models.config import AppConfig, ProviderConfig, ProviderWireSurfaceConfig
 from eggpool.providers.client_pool import ProviderClientPool
 from eggpool.request.coordinator import (
     ProxyRequestContext,
     RequestCoordinator,
     SelectedAttempt,
 )
+from eggpool.wire.registry import resolve_provider_wire_profiles
 
 
 def _make_context(**overrides: Any) -> ProxyRequestContext:
@@ -201,6 +202,31 @@ class TestGetUpstreamUrlProviderAware:
         coordinator = self._make_coordinator(config)
         result = coordinator._get_upstream_url("anthropic", "custom")
         assert result == "https://custom.example.com/v1/messages"
+
+    def test_uses_selected_wire_profile_path_template(self) -> None:
+        config = AppConfig(
+            providers={
+                "custom": ProviderConfig(
+                    id="custom",
+                    base_url="https://custom.example.com/v1",
+                    protocols=["openai"],
+                    wire_surfaces={
+                        "openai_chat_completions": ProviderWireSurfaceConfig(
+                            path_template="/models/{model}/chat"
+                        )
+                    },
+                )
+            }
+        )
+        profile = resolve_provider_wire_profiles(config.providers["custom"])[0]
+        coordinator = self._make_coordinator(config)
+        result = coordinator._get_upstream_url(
+            "openai",
+            "custom",
+            wire_profile=profile,
+            model_id="model/x",
+        )
+        assert result == "https://custom.example.com/v1/models/model%2Fx/chat"
 
     def test_falls_back_to_defaults_when_no_config(self) -> None:
         coordinator = self._make_coordinator(config=None)

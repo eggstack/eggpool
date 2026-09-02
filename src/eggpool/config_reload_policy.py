@@ -162,9 +162,15 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "routing.fairness_mode": ReloadDisposition.LIVE,
     "routing.fairness_epsilon": ReloadDisposition.LIVE,
     "routing.fairness_scope": ReloadDisposition.LIVE,
-    # Plan 148 defines these bounds for later negotiation but does not yet
-    # provide a live consumer, so keep the block fail-closed.
-    "routing.wire_negotiation": ReloadDisposition.RESTART_REQUIRED,
+    # The resolver is process-owned; these bounds are applied by each new
+    # generation without discarding learned state whose candidate fingerprint
+    # remains unchanged.
+    "routing.wire_negotiation.enabled": ReloadDisposition.LIVE,
+    "routing.wire_negotiation.max_concurrent_per_provider": ReloadDisposition.LIVE,
+    "routing.wire_negotiation.min_negotiation_interval_s": ReloadDisposition.LIVE,
+    "routing.wire_negotiation.rejection_cooldown_s": ReloadDisposition.LIVE,
+    "routing.wire_negotiation.learned_preference_ttl_s": ReloadDisposition.LIVE,
+    "routing.wire_negotiation.cache_max_entries": ReloadDisposition.LIVE,
     "routing.trace.mode": ReloadDisposition.LIVE,
     "routing.trace.sample_rate": ReloadDisposition.LIVE,
     "routing.trace.include_score_components": ReloadDisposition.LIVE,

@@ -185,8 +185,9 @@ fairness_mode = "round_robin"
 # "priority_model_protocol": co-balanced across providers sharing a model in the same priority tier.
 fairness_scope = "provider_model_protocol"
 
-# Bounded reactive wire-surface negotiation settings. This phase only parses
-# these values; automatic alternate-surface retries are introduced later.
+# Bounded reactive wire-surface negotiation settings. The runtime resolver
+# learns successful declared profiles in memory; alternate-surface retries
+# still require an explicit safe failure effect.
 [routing.wire_negotiation]
 enabled = true
 max_concurrent_per_provider = 1

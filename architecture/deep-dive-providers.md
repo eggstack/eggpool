@@ -53,12 +53,26 @@ profile. Surface-specific auth replaces the former need to send multiple
 credential headers on every request; existing `auth.additional` remains a
 legacy compatibility field.
 
+`WireProfileResolver` is process-owned and receives the generation's resolved
+profiles after account/provider selection. It orders fixed/operator, learned,
+verified catalog, bundled, and provider-priority candidates. A completed
+ordinary request refreshes the learned preference; deterministic rejection
+cooldowns and negotiation single-flight state are in memory only. The resolver
+does not inspect raw HTTP failures, start probes, or create alternate retries;
+the canonical failure-effects decision must authorize those transitions.
+
 ## Invariants
 
 - API credentials never appear in diagnostics or logs.
 - Provider/model capability data gates native protocol fields.
 - Wire surface, model, provider, and protocol-family metadata are separate
   facts; a surface priority or bundled hint is only a starting preference.
+- Learned wire preferences are hints, not health state. A deterministic
+  candidate rejection temporarily suppresses only that surface; 429, transport,
+  5xx, and midstream failures do not invalidate a surface.
+- Negotiation dispatches are single-flight per provider/model and separately
+  bounded per provider. Normal known-good provider inference is not serialized
+  behind this abnormal-dispatch guard.
 - Wire path templates support only the validated `{model}` placeholder and
   quote the canonical model ID before URL composition.
 - Upstream failures, not local quota estimates, suppress account routing.

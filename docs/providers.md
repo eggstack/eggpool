@@ -140,7 +140,10 @@ Surface-specific auth renders the same configured account key through one
 selected header shape, so a provider such as OpenCode Go need not send both
 `Authorization` and `x-api-key` on every request. Account credentials are not
 stored in wire profiles. This phase only prepares and validates candidates;
-automatic alternate-surface negotiation is a later runtime feature.
+runtime preference learning is bounded and reactive. A completed request can
+refresh the preferred declared surface in memory; alternate-surface retries
+require an explicit deterministic failure-effects decision and share the
+request's existing retry budget. No background endpoint probes are performed.
 
 OpenCode Go's current documented endpoint table places GPT 5.6 Luna and Muse
 Spark 1.2/1.3 Contributor on Responses, current GLM/Kimi/DeepSeek/MiMo models

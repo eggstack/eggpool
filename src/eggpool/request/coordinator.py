@@ -175,6 +175,8 @@ if TYPE_CHECKING:
     from eggpool.transcoder.policy import TranscoderPolicy
     from eggpool.transcoder.prepared import PreparedTranscode
     from eggpool.wire.ir import CanonicalRequest, ReasoningIntent
+    from eggpool.wire.registry import WireHint
+    from eggpool.wire.resolver import WireProfileResolver
     from eggpool.wire.types import WireProfile, WireSurfaceName
 
 logger = logging.getLogger(__name__)
@@ -462,6 +464,8 @@ class ProxyRequestContext:
     client_surface: str = "chat_completions"
     selected_wire_surface: WireSurfaceName | None = None
     wire_profile: WireProfile | None = None
+    wire_candidate_fingerprint: str | None = None
+    wire_selection_source: str | None = None
     canonical_request: CanonicalRequest | None = None
     reasoning_intent: ReasoningIntent | None = None
     semantic_adaptation_required: bool = False
@@ -653,6 +657,10 @@ class RequestCoordinator:
         effects_applier: EffectsApplier | None = None,
         quarantine: ModelQuarantine | None = None,
         account_identities: dict[str, AccountRuntimeIdentity] | None = None,
+        wire_profile_resolver: WireProfileResolver | None = None,
+        wire_profiles_by_provider: Mapping[str, tuple[WireProfile, ...]] | None = None,
+        wire_bundled_hints_by_provider: Mapping[str, Mapping[str, WireHint]]
+        | None = None,
     ) -> None:
         self._registry = registry
         self._catalog = catalog
@@ -685,6 +693,20 @@ class RequestCoordinator:
             for name, identity in self._account_identities.items()
         }
         self._account_identities_hydrated = account_identities is not None
+        self._wire_profile_resolver = wire_profile_resolver
+        self._wire_profiles_by_provider = MappingProxyType(
+            dict(wire_profiles_by_provider or {})
+        )
+        self._wire_bundled_hints_by_provider: Mapping[str, Mapping[str, WireHint]] = (
+            MappingProxyType(
+                {
+                    provider_id: MappingProxyType(dict(hints))
+                    for provider_id, hints in (
+                        wire_bundled_hints_by_provider or {}
+                    ).items()
+                }
+            )
+        )
         self._max_retry_attempts = max_retry_attempts
         self._quota_exhausted_cooldown_seconds = quota_exhausted_cooldown_seconds
         self._persist_error_detail = persist_error_detail
@@ -1531,6 +1553,7 @@ class RequestCoordinator:
                     context, selected, attempt_num, transcoder=transcoder
                 )
                 self._log_transcode_warnings(context, selected=selected)
+                self._record_wire_success(context, selected)
                 return result
             except _RetryableUpstreamError as err:
                 last_error = err
@@ -2513,6 +2536,10 @@ class RequestCoordinator:
                     api_key=api_key,
                     estimated_microdollars=estimated_microdollars,
                 )
+                self._resolve_wire_profile(
+                    context=context,
+                    provider_id=resolved_provider_id,
+                )
                 if self._quota_estimator is not None:
                     try:
                         self._quota_estimator.add_pending_claim(
@@ -2873,6 +2900,9 @@ class RequestCoordinator:
                 context.upstream_protocol,
                 selected.provider_id,
                 request_surface=getattr(context, "request_surface", "chat_completions"),
+                wire_profile=getattr(context, "wire_profile", None),
+                model_id=context.model_id,
+                streaming=getattr(context, "streaming", False),
             )
             from eggpool.request.transform_pipeline import (
                 run_provider_transforms,
@@ -3226,6 +3256,9 @@ class RequestCoordinator:
                 context.upstream_protocol,
                 selected.provider_id,
                 request_surface=getattr(context, "request_surface", "chat_completions"),
+                wire_profile=getattr(context, "wire_profile", None),
+                model_id=context.model_id,
+                streaming=getattr(context, "streaming", False),
             )
             from eggpool.request.transform_pipeline import (
                 run_provider_transforms,
@@ -3961,6 +3994,7 @@ class RequestCoordinator:
                         model_id=selected.model_id,
                         reasons=list(_SUCCESS_CLEAR_BACKOFF_REASONS),
                     )
+                self._record_wire_success(context, selected)
 
                 self._stream_diagnostics.record_outcome(
                     STREAM_OUTCOME_COMPLETED,
@@ -4538,6 +4572,9 @@ class RequestCoordinator:
         provider_id: str | None = None,
         *,
         request_surface: str = "chat_completions",
+        wire_profile: WireProfile | None = None,
+        model_id: str | None = None,
+        streaming: bool = False,
     ) -> str:
         """Get the absolute upstream URL for a protocol and provider.
 
@@ -4553,6 +4590,87 @@ class RequestCoordinator:
             provider_id,
             config=self._config,
             request_surface=request_surface,
+            wire_profile=wire_profile,
+            model_id=model_id,
+            streaming=streaming,
+        )
+
+    def _resolve_wire_profile(
+        self,
+        *,
+        context: ProxyRequestContext,
+        provider_id: str,
+    ) -> None:
+        """Select the configured preferred profile for this generation.
+
+        This is a synchronous lookup after account/provider selection.
+        Alternate-surface transitions remain owned by the canonical
+        failure-effects phase; this hook only consumes the current ordered
+        preference and makes URL/auth rendering use the same profile.
+        """
+        resolver = self._wire_profile_resolver
+        if resolver is None or self._config is None:
+            return
+        wire_config = self._config.routing.wire_negotiation
+        if not wire_config.enabled:
+            return
+        resolver.configure(
+            cache_max_entries=wire_config.cache_max_entries,
+            max_concurrent_per_provider=wire_config.max_concurrent_per_provider,
+            min_negotiation_interval_s=wire_config.min_negotiation_interval_s,
+            rejection_cooldown_s=wire_config.rejection_cooldown_s,
+            learned_preference_ttl_s=wire_config.learned_preference_ttl_s,
+        )
+        provider = self._config.providers.get(provider_id)
+        if provider is None:
+            return
+        profiles = self._wire_profiles_by_provider.get(provider_id)
+        if profiles is None:
+            from eggpool.wire.registry import resolve_provider_wire_profiles
+
+            profiles = resolve_provider_wire_profiles(provider)
+        if context.upstream_protocol == "anthropic":
+            allowed_surfaces = ("anthropic_messages",)
+        elif getattr(context, "request_surface", "chat_completions") == "responses":
+            allowed_surfaces = ("openai_responses",)
+        else:
+            allowed_surfaces = ("openai_chat_completions",)
+        bundled_hint: WireHint | None = self._wire_bundled_hints_by_provider.get(
+            provider_id, {}
+        ).get(context.model_id)
+        resolution = resolver.resolve(
+            provider,
+            context.model_id,
+            profiles=profiles,
+            allowed_surfaces=allowed_surfaces,
+            bundled_hint=bundled_hint,
+            learned_preference_ttl_s=wire_config.learned_preference_ttl_s,
+        )
+        profile = resolution.preferred
+        if profile is None:
+            return
+        context.wire_profile = profile
+        context.selected_wire_surface = profile.surface
+        context.wire_candidate_fingerprint = resolution.candidate_fingerprint
+        context.wire_selection_source = resolution.selected_source
+        if context.transcode_context is not None:
+            context.transcode_context.wire_profile = profile
+            context.transcode_context.selected_wire_surface = profile.surface
+
+    def _record_wire_success(
+        self, context: ProxyRequestContext, selected: SelectedAttempt
+    ) -> None:
+        """Refresh runtime wire learning after a completed ordinary request."""
+        resolver = self._wire_profile_resolver
+        profile = getattr(context, "wire_profile", None)
+        fingerprint = getattr(context, "wire_candidate_fingerprint", None)
+        if resolver is None or profile is None or fingerprint is None:
+            return
+        resolver.record_success(
+            selected.provider_id,
+            context.model_id,
+            fingerprint,
+            profile.surface,
         )
 
     def _resolve_selected_thinking_capability(
@@ -5224,10 +5342,15 @@ class RequestCoordinator:
                 provider_cfg,
                 selected.api_key,
                 protocol=context.upstream_protocol,
+                wire_profile=getattr(context, "wire_profile", None),
             )
             sanitized.update(auth_headers)
             if logger.isEnabledFor(logging.DEBUG):
-                auth_shape = build_auth_headers(provider_cfg, selected.api_key)
+                auth_shape = build_auth_headers(
+                    provider_cfg,
+                    selected.api_key,
+                    wire_profile=getattr(context, "wire_profile", None),
+                )
                 static_names = list(build_static_headers(provider_cfg).keys())
                 logger.debug(
                     "provider=%s account=%s auth=%s static_headers=%s",
