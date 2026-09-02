@@ -133,6 +133,7 @@ Non-obvious wiring:
 - **Responses passthrough**: `/v1/responses` is same-protocol only; surface selection is the `request_surface` field (`"chat_completions"` | `"responses"`), not a separate transcoder family → `architecture/deep-dive-request-lifecycle.md`
 - **Control plane**: live config reload (rehash) over a Unix-domain socket, `src/eggpool/control/`
 - **Routing**: load-based, never cost-based; tier-based via `routing_priority`; pieces split across `routing/`, `quota/`, `retry/`, `catalog/`, `health/`
+- **Wire surfaces**: `WireSurfaceName`/`WireProfile` in `src/eggpool/wire/` are independent of `ProtocolName`; `ProviderConfig.wire_surfaces` is synthesized from legacy paths when absent, and `_wire_profiles.toml` accepts only closed Python-registered codec IDs
 - **Process model**: supervisor + Granian worker, `workers=1` required (one process = one asyncio event loop); `[server].threads` maps to Granian `runtime_threads` (Rust I/O threads, safe above 1)
 
 ## Gotchas
@@ -150,6 +151,7 @@ Non-obvious wiring:
 - **`ProviderBoundRequest` dispatch-freeze**: `serialize_provider_payload()` freezes the body; `replace_provider_payload()` and `set_provider_payload(increment_generation=False)` reject when frozen. Only generation-incrementing methods (`set_provider_payload(increment_generation=True)`, `adopt_provider_payload(increment_generation=True)`) clear the freeze — the post-selection transcoder relies on this to replace a previously dispatched body on retry
 - **Thinking rejection error class**: `CapabilityError` (400) only when the aggregated thinking status is genuinely `unknown` or `unsupported`. When all supporting accounts are quarantined but the provider entry reports `supported`/`mixed`, a transient 503/502 is raised instead. Aggregation iterates `cache.get_provider_model_entries()` (which applies overrides), not `cache.get_model()` (which does not). See `RequestCoordinator._determine_thinking_rejection_status` and `architecture/deep-dive-request-lifecycle.md`
 - **Per-model quarantine suppresses account-wide circuit breaker**: when `effects.model_effect != "none"` (quarantine), `EffectsApplier._apply_account_effect` skips `HealthManager.record_failure()` for that account. The account-wide breaker advances only when the classifier sets `source="transport"` (genuine account-wide failure: DNS, TLS, persistent transport failure with no per-model cause). A per-model 5xx must quarantine the `(account, model)` pair, not the whole account. See `architecture/deep-dive-health.md`
+- **Wire profile credentials stay out of metadata**: `resolve_provider_wire_profiles()` carries auth shape only; call `build_wire_profile_headers()` with the selected account key at dispatch time. Surface priorities and bundled hints are revocable preferences, not endpoint truth. See `architecture/deep-dive-providers.md`
 
 ## Error Handling
 

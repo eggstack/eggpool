@@ -61,8 +61,11 @@ is used to hide a worker thread publishing after loop teardown.
 
 ## Providers and network
 
-Provider/model contracts define URLs, protocols, capabilities, authentication,
-and prompt-cache dialects. `compose_provider_url()` is the URL authority.
+Provider/model contracts define URLs, protocol families, wire surfaces,
+capabilities, authentication, and prompt-cache dialects. `compose_provider_url()`
+is the URL authority. `WireSurfaceName` and `WireProfile` keep concrete
+upstream endpoint/codec/auth facts independent from the compatibility
+`ProtocolName` values.
 `ProviderClientPool` and `OutboundClientManager` use bounded HTTPX connection
 pools. Per-account pproxy routing remains supported. Host resolution is
 delegated to the operating system; there is no EggPool process-local DNS cache.

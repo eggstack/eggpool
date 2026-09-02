@@ -210,22 +210,39 @@ _OPENCODE_GO_FALLBACK: dict[str, dict[str, Any]] = {
             "\n[providers.opencode-go.auth]\n"
             'mode = "api_key"\n'
             'header = "x-api-key"\n'
-            "\n[[providers.opencode-go.auth.additional]]\n"
+            "\n[providers.opencode-go.wire_surfaces.openai_chat_completions]\n"
+            'path_template = "/chat/completions"\n'
+            "\n[providers.opencode-go.wire_surfaces.openai_chat_completions.auth]\n"
             'mode = "bearer"\n'
-            'header = "Authorization"\n'
-            'scheme = "Bearer"'
+            "\n[providers.opencode-go.wire_surfaces.openai_responses]\n"
+            'path_template = "/responses"\n'
+            "\n[providers.opencode-go.wire_surfaces.openai_responses.auth]\n"
+            'mode = "bearer"\n'
+            "\n[providers.opencode-go.wire_surfaces.anthropic_messages]\n"
+            'path_template = "/messages"\n'
+            "\n[providers.opencode-go.wire_surfaces.anthropic_messages.auth]\n"
+            'mode = "api_key"\n'
+            'header = "x-api-key"'
         ),
         "data": {
             "id": DEFAULT_PROVIDER_ID,
             "base_url": "https://opencode.ai/zen/go/v1",
             "protocols": ["openai", "anthropic"],
             "api_key_env": "API_KEY",
-            "auth": {
-                "mode": "api_key",
-                "header": "x-api-key",
-                "additional": [
-                    {"mode": "bearer", "header": "Authorization", "scheme": "Bearer"},
-                ],
+            "auth": {"mode": "bearer"},
+            "wire_surfaces": {
+                "openai_chat_completions": {
+                    "path_template": "/chat/completions",
+                    "auth": {"mode": "bearer"},
+                },
+                "openai_responses": {
+                    "path_template": "/responses",
+                    "auth": {"mode": "bearer"},
+                },
+                "anthropic_messages": {
+                    "path_template": "/messages",
+                    "auth": {"mode": "api_key", "header": "x-api-key"},
+                },
             },
         },
     },

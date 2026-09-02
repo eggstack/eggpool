@@ -193,6 +193,16 @@ fairness_mode = "round_robin"
 # "priority_model_protocol": co-balanced across providers sharing a model in the same priority tier.
 fairness_scope = "provider_model_protocol"
 
+# Bounded reactive wire-surface negotiation settings. This phase only parses
+# these values; automatic alternate-surface retries are introduced later.
+[routing.wire_negotiation]
+enabled = true
+max_concurrent_per_provider = 1
+min_negotiation_interval_s = 1.0
+rejection_cooldown_s = 300.0
+learned_preference_ttl_s = 86400.0
+cache_max_entries = 2048
+
 # Routing trace write pressure.  Routing traces are diagnostic rows
 # written alongside every attempt; they answer "why this account?" on the
 # dashboard but have no effect on billing, retry, or crash-recovery.
@@ -441,18 +451,24 @@ enabled = false
 # # proxy_url_env = "GOROUTER_PERSONAL_PROXY_URL"
 #
 # [providers.opencode-go.auth]
-# # /v1/chat/completions accepts ``Authorization: Bearer`` while
-# # /v1/messages accepts ``x-api-key``; render both so the same account
-# # can serve either protocol without a reconnect. The canonical
-# # opencode-go template applies this automatically; only declare it
-# # explicitly if you are pointing a custom ``base_url`` at OpenCode Go.
+# The selected wire surface supplies endpoint-specific auth.
+# mode = "bearer"
+#
+# [providers.opencode-go.wire_surfaces.openai_chat_completions]
+# path_template = "/chat/completions"
+# [providers.opencode-go.wire_surfaces.openai_chat_completions.auth]
+# mode = "bearer"
+#
+# [providers.opencode-go.wire_surfaces.openai_responses]
+# path_template = "/responses"
+# [providers.opencode-go.wire_surfaces.openai_responses.auth]
+# mode = "bearer"
+#
+# [providers.opencode-go.wire_surfaces.anthropic_messages]
+# path_template = "/messages"
+# [providers.opencode-go.wire_surfaces.anthropic_messages.auth]
 # mode = "api_key"
 # header = "x-api-key"
-#
-# [[providers.opencode-go.auth.additional]]
-# mode = "bearer"
-# header = "Authorization"
-# scheme = "Bearer"
 #
 # # OpenCode Go exposes low/medium/high thinking controls for mimo-v2.5 and
 # # minimal/low/medium/high/xhigh for muse-spark-1.2-contributor.

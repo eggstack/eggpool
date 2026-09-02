@@ -4,7 +4,13 @@
 
 ## Eligibility
 
-A provider participates in `/v1/responses` only when its `responses_path` is configured (defaults to `None` for new templates). Bundled templates ship with `responses_path = "/responses"` for openai, ollama-local, llamacpp-local, and vllm-local; other providers can opt in explicitly. Chat Completions eligibility is unchanged.
+A provider participates in `/v1/responses` when its
+`wire_surfaces.openai_responses` candidate is configured. The legacy
+`responses_path` field remains supported and is synthesized into that
+candidate when `wire_surfaces` is absent. Bundled templates ship with
+`responses_path = "/responses"` for openai, ollama-local, llamacpp-local, and
+vllm-local; other providers can opt in explicitly. Chat Completions eligibility
+is unchanged.
 
 ## Constraints
 

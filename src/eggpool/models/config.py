@@ -29,6 +29,7 @@ from eggpool.constants import (
 from eggpool.errors import ConfigError
 from eggpool.providers.auth import has_auth_scheme_prefix
 from eggpool.transcoder.policy import TranscoderPolicy
+from eggpool.wire.types import WireSurfaceName, validate_wire_path_template
 
 _HTTP_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 _PROXY_MANAGED_HEADERS = frozenset(
@@ -297,6 +298,19 @@ class RoutingTraceConfig(BaseModel):
     )
 
 
+class WireNegotiationConfig(BaseModel):
+    """Bounded settings reserved for later reactive wire negotiation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    max_concurrent_per_provider: int = Field(default=1, ge=1, le=8)
+    min_negotiation_interval_s: float = Field(default=1.0, ge=0, le=1800.0)
+    rejection_cooldown_s: float = Field(default=300.0, ge=0, le=1800.0)
+    learned_preference_ttl_s: float = Field(default=86400.0, gt=0, le=604800.0)
+    cache_max_entries: int = Field(default=2048, ge=1, le=65536)
+
+
 class RoutingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -331,6 +345,9 @@ class RoutingConfig(BaseModel):
         "provider_model",
         "priority_model_protocol",
     ] = "provider_model_protocol"
+    wire_negotiation: WireNegotiationConfig = Field(
+        default_factory=WireNegotiationConfig
+    )
     trace: RoutingTraceConfig = Field(default_factory=RoutingTraceConfig)
 
 
@@ -700,6 +717,34 @@ class ProviderStaticHeaderConfig(BaseModel):
         return self
 
 
+class ProviderWireSurfaceConfig(BaseModel):
+    """One provider candidate for a concrete upstream wire surface."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path_template: str
+    stream_path_template: str | None = None
+    priority: int = Field(default=100, ge=0)
+    auth: ProviderAuthConfig | None = None
+    headers: list[ProviderStaticHeaderConfig] = Field(
+        default_factory=list[ProviderStaticHeaderConfig]
+    )
+
+    @field_validator("path_template", "stream_path_template")
+    @classmethod
+    def validate_path_template(cls, value: str | None) -> str | None:
+        return None if value is None else validate_wire_path_template(value)
+
+
+class ModelWirePreference(BaseModel):
+    """Operator preference for a model's initial wire-surface candidate."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    preferred_surface: WireSurfaceName
+    fixed: bool = False
+
+
 class ProviderModelsEndpointConfig(BaseModel):
     """Provider-specific model listing endpoint configuration."""
 
@@ -829,6 +874,12 @@ class ProviderConfig(BaseModel):
     model_capabilities: dict[str, ModelCapabilitiesOverrideConfig] = Field(
         default_factory=dict,
     )
+    wire_surfaces: dict[WireSurfaceName, ProviderWireSurfaceConfig] = Field(
+        default_factory=dict[WireSurfaceName, ProviderWireSurfaceConfig]
+    )
+    model_wire: dict[str, ModelWirePreference] = Field(
+        default_factory=dict[str, ModelWirePreference]
+    )
     auth: ProviderAuthConfig = Field(default_factory=ProviderAuthConfig)
     headers: list[ProviderStaticHeaderConfig] = Field(
         default_factory=list[ProviderStaticHeaderConfig]
@@ -926,6 +977,67 @@ class ProviderConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def synthesize_wire_surfaces(self) -> ProviderConfig:
+        """Build candidate surfaces from legacy provider fields when absent."""
+        if self.wire_surfaces:
+            return self
+        candidates: dict[WireSurfaceName, ProviderWireSurfaceConfig] = {}
+        if "openai" in self.protocols and self.openai_path:
+            candidates["openai_chat_completions"] = ProviderWireSurfaceConfig(
+                path_template=self.openai_path
+            )
+        if self.responses_path is not None:
+            candidates["openai_responses"] = ProviderWireSurfaceConfig(
+                path_template=self.responses_path
+            )
+        if "anthropic" in self.protocols and self.anthropic_path:
+            candidates["anthropic_messages"] = ProviderWireSurfaceConfig(
+                path_template=self.anthropic_path
+            )
+        self.wire_surfaces = candidates
+        return self
+
+    @model_validator(mode="after")
+    def validate_wire_surface_headers(self) -> ProviderConfig:
+        """Reject profile headers that could replace auth or static headers."""
+        provider_static_names = {header.name.casefold() for header in self.headers}
+        for surface, surface_config in self.wire_surfaces.items():
+            auth = surface_config.auth or self.auth
+            auth_names = {auth.header.casefold()}
+            auth_names.update(entry.header.casefold() for entry in auth.additional)
+            seen: set[str] = set()
+            for header in surface_config.headers:
+                name = header.name.casefold()
+                if name in seen:
+                    raise ConfigError(
+                        f"Provider {self.id!r} wire surface {surface!r} has "
+                        f"duplicate static header {header.name!r}"
+                    )
+                if name in auth_names:
+                    raise ConfigError(
+                        f"Provider {self.id!r} wire surface {surface!r} static "
+                        f"header {header.name!r} conflicts with selected auth"
+                    )
+                if name in provider_static_names:
+                    raise ConfigError(
+                        f"Provider {self.id!r} wire surface {surface!r} static "
+                        f"header {header.name!r} conflicts with provider headers"
+                    )
+                seen.add(name)
+        for model_id, preference in self.model_wire.items():
+            if not model_id or model_id != model_id.strip():
+                raise ConfigError(
+                    f"Provider {self.id!r} model_wire ID must be non-empty and trimmed"
+                )
+            if preference.preferred_surface not in self.wire_surfaces:
+                raise ConfigError(
+                    f"Provider {self.id!r} model_wire entry {model_id!r} "
+                    f"references unavailable wire surface "
+                    f"{preference.preferred_surface!r}"
+                )
+        return self
+
+    @model_validator(mode="after")
     def _validate_no_duplicate_version(self) -> ProviderConfig:
         """Reject base_url + path combinations that duplicate /v1 prefixes."""
         base = self.base_url.rstrip("/")
@@ -935,6 +1047,10 @@ class ProviderConfig(BaseModel):
                 paths_to_check = [self.openai_path, self.anthropic_path]
                 if self.responses_path is not None:
                     paths_to_check.append(self.responses_path)
+                for surface in self.wire_surfaces.values():
+                    paths_to_check.append(surface.path_template)
+                    if surface.stream_path_template is not None:
+                        paths_to_check.append(surface.stream_path_template)
                 if self.models_endpoint is not None:
                     paths_to_check.append(self.models_endpoint.path)
                 elif self.models_path:
@@ -947,6 +1063,16 @@ class ProviderConfig(BaseModel):
                             f"this creates a duplicate version prefix"
                         )
         return self
+
+    @property
+    def requires_account_credentials(self) -> bool:
+        """Return whether any configured candidate renders an account key."""
+        if self.auth.mode != "none":
+            return True
+        return any(
+            (surface.auth or self.auth).mode != "none"
+            for surface in self.wire_surfaces.values()
+        )
 
     @field_validator("id")
     @classmethod
@@ -1239,38 +1365,6 @@ def _provider_is_canonical_opencode_go(provider: ProviderConfig) -> bool:
     return provider.base_url.rstrip("/") == _OPENCODE_GO_BASE_URL
 
 
-def _apply_opencode_go_dual_auth(provider: ProviderConfig) -> None:
-    """Ensure the canonical opencode-go provider sends both auth headers.
-
-    OpenCode Go's ``/v1/chat/completions`` accepts ``Authorization: Bearer``
-    while its ``/v1/messages`` accepts ``x-api-key``. Operators using the
-    legacy flat ``[upstream]`` config (which synthesizes an implicit
-    provider with default ``mode="bearer"``) cannot dispatch to the
-    Anthropic endpoint without this dual-header treatment. The bundled
-    template and fallback block already include dual auth explicitly,
-    so synthesis only fires for the implicit provider, and only when
-    the operator has not declared a custom one.
-    """
-    if not _provider_is_canonical_opencode_go(provider):
-        return
-    if provider.auth.mode != "bearer" or provider.auth.additional:
-        return
-    if provider.auth.header.lower() != "authorization":
-        return
-    provider.auth = ProviderAuthConfig(
-        mode="api_key",
-        header="x-api-key",
-        scheme=provider.auth.scheme,
-        additional=[
-            ProviderAdditionalAuthConfig(
-                mode="bearer",
-                header="Authorization",
-                scheme=provider.auth.scheme,
-            ),
-        ],
-    )
-
-
 def _seed_builtin_provider_capabilities(provider: ProviderConfig) -> None:
     """Seed known provider capabilities without clobbering operator overrides."""
     if not _provider_is_canonical_opencode_go(provider):
@@ -1503,11 +1597,30 @@ class AppConfig(BaseModel):
                 models_path="/models",
                 accounts=self.accounts,
             )
-            _apply_opencode_go_dual_auth(provider)
             self.providers = {DEFAULT_PROVIDER_ID: provider}
             self.accounts = []
         for provider in self.providers.values():
             _seed_builtin_provider_capabilities(provider)
+        return self
+
+    @model_validator(mode="after")
+    def validate_wire_registry(self) -> AppConfig:
+        """Validate packaged wire definitions against configured providers."""
+        from eggpool.wire.registry import (
+            WireRegistryError,
+            load_wire_registry,
+            resolve_provider_wire_profiles,
+        )
+
+        try:
+            registry = load_wire_registry()
+            for provider in self.providers.values():
+                resolve_provider_wire_profiles(provider, registry=registry)
+                # Bundled hints are intentionally advisory. A hint for a
+                # surface unavailable to this provider is simply ignored.
+                registry.hints_for_provider(provider)
+        except WireRegistryError as exc:
+            raise ConfigError(f"Invalid wire profile registry: {exc}") from exc
         return self
 
     @model_validator(mode="after")
@@ -1529,7 +1642,7 @@ class AppConfig(BaseModel):
                 if acct.name in names:
                     raise ConfigError(f"Duplicate account name: {acct.name!r}")
                 names.add(acct.name)
-                if provider.auth.mode != "none" and not (
+                if provider.requires_account_credentials and not (
                     acct.api_key or acct.api_key_env
                 ):
                     raise ConfigError(
@@ -1563,7 +1676,7 @@ class AppConfig(BaseModel):
 
         for provider_id, provider in self.providers.items():
             for acct in provider.accounts:
-                if not acct.enabled or provider.auth.mode == "none":
+                if not acct.enabled or not provider.requires_account_credentials:
                     continue
                 raw_key = acct.api_key or os.environ.get(acct.api_key_env)
                 if not raw_key:
@@ -1582,18 +1695,27 @@ class AppConfig(BaseModel):
                         f"Provider {provider_id!r} account {acct.name!r}: "
                         f"{source} contains CR, LF, or NUL"
                     )
-                if provider.auth.mode == "bearer" and has_auth_scheme_prefix(
-                    raw_key, provider.auth.scheme
-                ):
-                    source = (
-                        "api_key" if acct.api_key else f"env var {acct.api_key_env!r}"
-                    )
-                    raise ConfigError(
-                        f"Provider {provider_id!r} account {acct.name!r}: "
-                        f"{source} must be the raw token, not "
-                        f"'{provider.auth.scheme} <token>'. EggPool adds the "
-                        f"{provider.auth.scheme} scheme automatically."
-                    )
+                bearer_auths: list[ProviderAuthConfig] = []
+                if provider.auth.mode == "bearer":
+                    bearer_auths.append(provider.auth)
+                bearer_auths.extend(
+                    surface.auth
+                    for surface in provider.wire_surfaces.values()
+                    if surface.auth is not None and surface.auth.mode == "bearer"
+                )
+                for auth in bearer_auths:
+                    if has_auth_scheme_prefix(raw_key, auth.scheme):
+                        source = (
+                            "api_key"
+                            if acct.api_key
+                            else f"env var {acct.api_key_env!r}"
+                        )
+                        raise ConfigError(
+                            f"Provider {provider_id!r} account {acct.name!r}: "
+                            f"{source} must be the raw token, not "
+                            f"'{auth.scheme} <token>'. EggPool adds the "
+                            f"{auth.scheme} scheme automatically."
+                        )
 
                 if not raw_key.strip():
                     source = (

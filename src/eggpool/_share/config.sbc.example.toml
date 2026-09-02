@@ -36,6 +36,15 @@ startup_refresh = true
 [routing]
 strategy = "quota_fair"
 
+# Parsed now for the later reactive wire-surface negotiation phase.
+[routing.wire_negotiation]
+enabled = true
+max_concurrent_per_provider = 1
+min_negotiation_interval_s = 1.0
+rejection_cooldown_s = 300.0
+learned_preference_ttl_s = 86400.0
+cache_max_entries = 512
+
 [routing.trace]
 mode = "off"
 sample_rate = 0.0

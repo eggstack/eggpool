@@ -52,9 +52,12 @@ class AppConfig(BaseModel):
 
 **Key nested models:**
 - `ServerConfig` — host, port, threads (constrained `le=1`), max_request_body_bytes
-- `ProviderConfig` — id, base_url, protocols, auth, accounts, models_endpoint, static_models, verify
+- `ProviderConfig` — id, base_url, legacy protocol paths, candidate
+  `wire_surfaces`, optional `model_wire` preferences, auth, accounts,
+  models_endpoint, static_models, verify
 - `AccountConfig` — name, api_key, api_key_env, enabled, weight, proxy, proxy_url
-- `RoutingConfig` — fairness_mode, fairness_epsilon, fairness_scope, trace
+- `RoutingConfig` — fairness_mode, fairness_epsilon, fairness_scope,
+  bounded `wire_negotiation`, trace
 - `TranscoderPolicy` — features, loss_policy, openai_reasoning_fields, thinking_budget_defaults
 - `DatabaseConfig` — path, busy_timeout_ms, wal, synchronous, worker_threads
 
@@ -62,6 +65,9 @@ class AppConfig(BaseModel):
 - `validate_account_credentials()` rejects API keys beginning with `Bearer` for `auth.mode = "bearer"` providers
 - HTTP header name regex validation
 - Provider URL validation (rejects duplicate `/v1` prefix)
+- Wire path-template validation (only `{model}` is supported)
+- Packaged wire-profile registry validation (closed codec IDs and advisory
+  hint references)
 - Config file parsing with `tomllib`
 
 ### API Models (`api.py`)

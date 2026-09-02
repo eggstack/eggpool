@@ -282,6 +282,7 @@ EXPECTED_INVENTORY_SNAPSHOT: tuple[tuple[str, str, bool], ...] = (
     ("routing.trace.shutdown_flush_timeout_s", "restart_required", False),
     ("routing.trace.skip_above_lock_wait_p95_ms", "live", False),
     ("routing.unknown_request_reservation_microdollars", "live", False),
+    ("routing.wire_negotiation", "restart_required", False),
     ("security.allowed_hosts", "restart_required", False),
     ("security.cors_origins", "restart_required", False),
     ("security.persist_redacted_error_detail", "live", False),

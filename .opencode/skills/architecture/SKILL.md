@@ -61,6 +61,18 @@ Native prompt-cache, thinking control, structured outputs, and tool
 calling are capability-gated. See `architecture/deep-dive-transcoder.md`
 for streaming hot path, ownership lifecycle, and full translation table.
 
+## Wire Profiles
+
+`src/eggpool/wire/` owns the closed `WireSurfaceName` and immutable
+`WireProfile` structural contract. Wire surfaces are independent of the
+compatibility `ProtocolName` values: a provider can expose multiple concrete
+paths/auth shapes for one protocol family. `ProviderConfig.wire_surfaces` is
+the explicit candidate map; absent maps are synthesized from legacy path
+fields. `providers/_wire_profiles.toml` selects only Python-registered codec
+IDs and carries advisory exact model hints. It cannot import code, retain
+account secrets, or trigger network/probe behavior. Surface auth is rendered
+with the selected account key only at dispatch-header construction time.
+
 ## JSON Backend
 
 `src/eggpool/jsonx.py` — wire bodies, SSE frame helpers, and hot-path request body parsing.

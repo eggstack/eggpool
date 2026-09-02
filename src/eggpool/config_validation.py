@@ -298,6 +298,39 @@ def _ordered_providers(config: AppConfig) -> list[object]:
             ),
             key=lambda row: row["id"] or "",
         )
+        wire_surfaces = {
+            surface: {
+                "path_template": surface_config.path_template,
+                "stream_path_template": surface_config.stream_path_template,
+                "priority": surface_config.priority,
+                "auth": {
+                    "mode": (surface_config.auth or provider.auth).mode,
+                    "header": (surface_config.auth or provider.auth).header,
+                    "scheme": (surface_config.auth or provider.auth).scheme,
+                    "additional": [
+                        {
+                            "mode": entry.mode,
+                            "header": entry.header,
+                            "scheme": entry.scheme,
+                        }
+                        for entry in (surface_config.auth or provider.auth).additional
+                    ],
+                },
+                "headers": [
+                    {
+                        "name": header.name,
+                        "value": (
+                            "<redacted>"
+                            if _looks_like_secret(header.name)
+                            else header.value
+                        ),
+                        "value_env": "<redacted>" if header.value_env else None,
+                    }
+                    for header in surface_config.headers
+                ],
+            }
+            for surface, surface_config in sorted(provider.wire_surfaces.items())
+        }
         rendered.append(
             {
                 "id": provider_id,
@@ -306,12 +339,26 @@ def _ordered_providers(config: AppConfig) -> list[object]:
                 "protocols": sorted(provider.protocols),
                 "openai_path": provider.openai_path,
                 "anthropic_path": provider.anthropic_path,
+                "responses_path": provider.responses_path,
                 "headers": headers,
                 "static_models": static_models,
+                "wire_surfaces": wire_surfaces,
+                "model_wire": {
+                    model_id: preference.model_dump()
+                    for model_id, preference in sorted(provider.model_wire.items())
+                },
                 "auth": {
                     "mode": provider.auth.mode,
                     "header": provider.auth.header,
                     "scheme": provider.auth.scheme,
+                    "additional": [
+                        {
+                            "mode": entry.mode,
+                            "header": entry.header,
+                            "scheme": entry.scheme,
+                        }
+                        for entry in provider.auth.additional
+                    ],
                 },
             }
         )

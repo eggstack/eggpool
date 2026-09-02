@@ -549,17 +549,8 @@ def test_bearer_mode_rejects_configured_scheme_prefix() -> None:
         config.validate_account_credentials()
 
 
-def test_legacy_upstream_opencode_go_synthesizes_dual_auth() -> None:
-    """Legacy ``[upstream]`` configs must emit x-api-key + Authorization.
-
-    OpenCode Go's ``/v1/chat/completions`` requires Bearer while
-    ``/v1/messages`` requires ``x-api-key``. Without dual auth the
-    Anthropic-protocol models on OpenCode Go (``muse-spark-1.2-contributor``
-    and others) would 401 upstream. The implicit provider built from
-    a flat ``[upstream]`` block must therefore enable both headers
-    automatically so legacy configs route every protocol without
-    requiring a migration.
-    """
+def test_legacy_upstream_synthesizes_wire_surfaces() -> None:
+    """Legacy flat configs gain equivalent candidate surface definitions."""
     config = AppConfig.from_dict(
         {
             "upstream": {"base_url": "https://opencode.ai/zen/go/v1"},
@@ -567,13 +558,15 @@ def test_legacy_upstream_opencode_go_synthesizes_dual_auth() -> None:
         }
     )
     provider = config.providers["opencode-go"]
-    assert provider.auth.mode == "api_key"
-    assert provider.auth.header == "x-api-key"
-    assert len(provider.auth.additional) == 1
-    extra = provider.auth.additional[0]
-    assert extra.mode == "bearer"
-    assert extra.header == "Authorization"
-    assert extra.scheme == "Bearer"
+    assert set(provider.wire_surfaces) == {
+        "openai_chat_completions",
+        "anthropic_messages",
+    }
+    assert provider.wire_surfaces["openai_chat_completions"].path_template == (
+        "/chat/completions"
+    )
+    assert provider.wire_surfaces["anthropic_messages"].path_template == "/messages"
+    assert provider.auth.mode == "bearer"
 
 
 def test_explicit_opencode_go_provider_keeps_explicit_auth() -> None:
@@ -598,7 +591,7 @@ def test_explicit_opencode_go_provider_keeps_explicit_auth() -> None:
 
 
 def test_legacy_upstream_non_opencode_go_keeps_default_auth() -> None:
-    """Dual auth synthesis only fires for the canonical opencode-go URL."""
+    """Legacy provider auth remains the fallback for synthesized surfaces."""
     config = AppConfig.from_dict(
         {
             "upstream": {"base_url": "https://api.example.com/v1"},

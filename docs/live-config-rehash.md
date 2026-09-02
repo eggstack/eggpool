@@ -28,9 +28,12 @@ The closure pass enables the following families of fields as `LIVE`:
   blocks (name, API key, weight, enabled flag). Adding, removing,
   or editing a provider or account publishes a new generation
   without restarting the process.
-- **Routing and scoring knobs**: every field under ``[routing]``
-  including strategy, fairness, scoring penalties, retry limits,
-  quota advisory mode, and routing trace policy.
+- **Routing and scoring knobs**: the fields explicitly listed in the reload
+  policy, including strategy, fairness, scoring penalties, retry limits,
+  quota advisory mode, and routing trace policy. The bounded
+  ``wire_negotiation`` settings are currently ``RESTART_REQUIRED`` because
+  Plan 148 only validates and fingerprints them; it does not activate
+  alternate-surface retries or a live negotiation consumer.
 - **Model overrides and per-model capability overrides**:
   ``[model_overrides.<id>]`` and ``[model_capabilities.<id>]``.
 

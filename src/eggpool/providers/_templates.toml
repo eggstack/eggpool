@@ -28,16 +28,30 @@ recommended = true
 notes = "Primary provider; OpenAI + Anthropic protocols"
 
 [providers.opencode-go.auth]
-# /v1/chat/completions accepts ``Authorization: Bearer`` and
-# /v1/messages accepts ``x-api-key``; render both so the same
-# account can serve either protocol without a reconnect.
+# The selected wire surface supplies the endpoint-specific auth shape.
+mode = "bearer"
+
+[providers.opencode-go.wire_surfaces.openai_chat_completions]
+path_template = "/chat/completions"
+priority = 100
+
+[providers.opencode-go.wire_surfaces.openai_chat_completions.auth]
+mode = "bearer"
+
+[providers.opencode-go.wire_surfaces.openai_responses]
+path_template = "/responses"
+priority = 90
+
+[providers.opencode-go.wire_surfaces.openai_responses.auth]
+mode = "bearer"
+
+[providers.opencode-go.wire_surfaces.anthropic_messages]
+path_template = "/messages"
+priority = 100
+
+[providers.opencode-go.wire_surfaces.anthropic_messages.auth]
 mode = "api_key"
 header = "x-api-key"
-
-[[providers.opencode-go.auth.additional]]
-mode = "bearer"
-header = "Authorization"
-scheme = "Bearer"
 
 [providers.opencode-go.verify]
 probe_model = "gpt-5.5-mini"
@@ -670,4 +684,3 @@ mode = "bearer"
 probe_model = "qwen-plus"
 probe_protocol = "openai"
 require_models = true
-

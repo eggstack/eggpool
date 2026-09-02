@@ -18,7 +18,7 @@ Messages. They are safe to configure with real API keys.
 
 | Provider | ID | Base URL | Protocols | Auth | API Key Env |
 |----------|----|----------|-----------|------|-------------|
-| OpenCode Go | `opencode-go` | `https://opencode.ai/zen/go/v1` | OpenAI + Anthropic | Bearer | `API_KEY` |
+| OpenCode Go | `opencode-go` | `https://opencode.ai/zen/go/v1` | OpenAI + Anthropic | Bearer (Chat/Responses), `x-api-key` (Messages) | `API_KEY` |
 | OpenAI | `openai` | `https://api.openai.com/v1` | OpenAI | Bearer | `OPENAI_API_KEY` |
 | Anthropic | `anthropic` | `https://api.anthropic.com/v1` | Anthropic | API Key (`x-api-key`) | `ANTHROPIC_API_KEY` |
 | OpenRouter | `openrouter` | `https://openrouter.ai/api/v1` | OpenAI | Bearer | `OPENROUTER_API_KEY` |
@@ -109,6 +109,43 @@ missing-marker diagnostic. Use compatibility modes only for a named provider
 whose terminal convention has been verified. A stream with payload but no
 valid terminal evidence is otherwise recorded as an incomplete/midstream
 failure and never emits a synthetic client terminal marker.
+
+### Wire-surface candidates
+
+`ProtocolName` values (`openai` and `anthropic`) describe compatibility
+families; they do not identify a concrete upstream endpoint. Providers may
+declare candidate wire surfaces with their own path, optional streaming path,
+priority, auth shape, and additive static headers:
+
+```toml
+[providers.example.wire_surfaces.openai_responses]
+path_template = "/responses"
+priority = 90
+
+[providers.example.wire_surfaces.openai_responses.auth]
+mode = "bearer"
+```
+
+The only supported path placeholder is `{model}`. It is URL-quoted before
+composition, which supports endpoints such as
+`/models/{model}:generateContent` without accepting arbitrary expressions.
+When `wire_surfaces` is omitted, EggPool synthesizes Chat Completions,
+Responses, and Anthropic Messages candidates from the existing `protocols`,
+`openai_path`, `responses_path`, and `anthropic_path` fields. The bundled
+`providers/_wire_profiles.toml` file supplies the closed codec registry and
+low-authority exact model hints; hints are ignored when a provider does not
+declare the hinted surface.
+
+Surface-specific auth renders the same configured account key through one
+selected header shape, so a provider such as OpenCode Go need not send both
+`Authorization` and `x-api-key` on every request. Account credentials are not
+stored in wire profiles. This phase only prepares and validates candidates;
+automatic alternate-surface negotiation is a later runtime feature.
+
+OpenCode Go's current documented endpoint table places GPT 5.6 Luna and Muse
+Spark 1.2/1.3 Contributor on Responses, current GLM/Kimi/DeepSeek/MiMo models
+on Chat Completions, and MiniMax M3/M2.7/M2.5 on Anthropic Messages. EggPool
+ships these as revocable exact hints, not provider-specific dispatch logic.
 
 ### Anthropic-Specific Configuration
 

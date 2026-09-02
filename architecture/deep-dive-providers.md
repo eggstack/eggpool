@@ -13,6 +13,8 @@ not add a process-local DNS cache.
 
 - `providers/contract.py` — provider URL, protocol, model, authentication, and
   capability contracts.
+- `wire/` — closed wire-surface names, packaged codec/profile definitions, and
+  immutable resolved dispatch facts.
 - `providers/client_pool.py` — provider/account client ownership and bounded
   HTTPX connection pools.
 - `providers/outbound.py` — shared outbound client manager and diagnostics.
@@ -33,10 +35,32 @@ Provider-suffixed model IDs use `model-id/provider-id`. `compose_provider_url()`
 is the single URL construction authority. Static model rows are the source of
 truth when a provider serves a non-default protocol or capability contract.
 
+`WireSurfaceName` is independent of `ProtocolName`. The built-in registry in
+`providers/_wire_profiles.toml` currently names OpenAI Chat Completions,
+OpenAI Responses, Anthropic Messages, Gemini Interactions, and Gemini
+generateContent. `ProviderConfig.wire_surfaces` maps a provider to one or more
+candidate paths, optional streaming paths, priorities, auth shapes, and static
+headers. When the field is absent, the legacy `protocols`, `openai_path`,
+`responses_path`, and `anthropic_path` fields synthesize equivalent candidates.
+The registry selects only Python-registered codec IDs; it never imports code
+from TOML. Bundled model hints are preferences with source/verification
+metadata, not permanent routing truth.
+
+Use `resolve_provider_wire_profiles()` to obtain immutable structural profiles
+and `build_wire_profile_headers()` to render the selected account credential.
+Account secrets remain in the account/config machinery and are not stored in a
+profile. Surface-specific auth replaces the former need to send multiple
+credential headers on every request; existing `auth.additional` remains a
+legacy compatibility field.
+
 ## Invariants
 
 - API credentials never appear in diagnostics or logs.
 - Provider/model capability data gates native protocol fields.
+- Wire surface, model, provider, and protocol-family metadata are separate
+  facts; a surface priority or bundled hint is only a starting preference.
+- Wire path templates support only the validated `{model}` placeholder and
+  quote the canonical model ID before URL composition.
 - Upstream failures, not local quota estimates, suppress account routing.
 - OS resolution and HTTP connection reuse are the default network behavior.
 - Proxy routing remains per-account and independent of normal resolution.

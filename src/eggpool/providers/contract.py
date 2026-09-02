@@ -24,6 +24,7 @@ PROVIDER_STATUS_DESCRIPTIONS: dict[str, str] = {
 
 if TYPE_CHECKING:
     from eggpool.models.config import ProviderConfig, ProviderStaticHeaderConfig
+    from eggpool.wire.types import ResolvedAuthShape, WireProfile
 
 
 def compose_provider_url(provider: ProviderConfig, endpoint_path: str) -> str:
@@ -61,7 +62,32 @@ def compose_provider_url(provider: ProviderConfig, endpoint_path: str) -> str:
     return f"{base}/{path}"
 
 
-def build_auth_headers(provider: ProviderConfig, api_key: str) -> dict[str, str]:
+def _render_resolved_auth_headers(
+    auth: ResolvedAuthShape, api_key: str
+) -> dict[str, str]:
+    """Render a profile's immutable auth shape without retaining the key."""
+    headers: dict[str, str] = {}
+    if auth.mode != "none":
+        if auth.mode in {"api_key", "raw_authorization"}:
+            headers[auth.header] = api_key
+        else:
+            headers[auth.header] = f"{auth.scheme} {api_key}"
+    for entry in auth.additional:
+        if entry.mode == "none":
+            continue
+        if entry.mode in {"api_key", "raw_authorization"}:
+            headers[entry.header] = api_key
+        else:
+            headers[entry.header] = f"{entry.scheme} {api_key}"
+    return headers
+
+
+def build_auth_headers(
+    provider: ProviderConfig,
+    api_key: str,
+    *,
+    wire_profile: WireProfile | None = None,
+) -> dict[str, str]:
     """Build upstream authentication headers from provider contract config.
 
     Returns an empty dict when auth mode is ``none`` and no additional
@@ -69,6 +95,8 @@ def build_auth_headers(provider: ProviderConfig, api_key: str) -> dict[str, str]
     same ``api_key`` so the same credential can satisfy two endpoints
     that expect different header names.
     """
+    if wire_profile is not None:
+        return _render_resolved_auth_headers(wire_profile.auth, api_key)
     auth = provider.auth
     return render_auth_headers(
         mode=auth.mode,
@@ -104,11 +132,51 @@ def build_static_headers(provider: ProviderConfig) -> dict[str, str]:
     return result
 
 
+def build_wire_profile_headers(
+    provider: ProviderConfig,
+    wire_profile: WireProfile,
+    api_key: str,
+    *,
+    protocol: str | None = None,
+) -> dict[str, str]:
+    """Build headers for one resolved profile and account credential."""
+    from eggpool.transcoder.static_headers import PROTOCOL_REQUIRED_STATIC_HEADERS
+
+    headers = build_static_headers(provider)
+    if protocol is not None:
+        required = PROTOCOL_REQUIRED_STATIC_HEADERS.get(protocol, {})
+        existing_names = {name.casefold() for name in headers}
+        for name, value in required.items():
+            if name.casefold() not in existing_names:
+                headers[name] = value
+    for header in wire_profile.headers:
+        value = header.value
+        if value is None and header.value_env is not None:
+            value = os.environ.get(header.value_env)
+        if value is not None and any(char in value for char in ("\r", "\n", "\x00")):
+            raise ConfigError(
+                f"Wire profile static header {header.name!r} from environment "
+                f"variable {header.value_env!r} contains CR, LF, or NUL"
+            )
+        if value is not None:
+            headers[header.name] = value
+    auth_headers = build_auth_headers(provider, api_key, wire_profile=wire_profile)
+    auth_names = {name.casefold() for name in auth_headers}
+    headers = {
+        name: value
+        for name, value in headers.items()
+        if name.casefold() not in auth_names
+    }
+    headers.update(auth_headers)
+    return headers
+
+
 def build_upstream_headers(
     provider: ProviderConfig,
     api_key: str,
     *,
     protocol: str | None = None,
+    wire_profile: WireProfile | None = None,
 ) -> dict[str, str]:
     """Build all upstream headers: auth + static provider headers.
 
@@ -118,6 +186,13 @@ def build_upstream_headers(
     """
     from eggpool.transcoder.static_headers import PROTOCOL_REQUIRED_STATIC_HEADERS
 
+    if wire_profile is not None:
+        return build_wire_profile_headers(
+            provider,
+            wire_profile,
+            api_key,
+            protocol=protocol,
+        )
     headers = build_static_headers(provider)
     # Inject protocol-required static headers when not already declared
     if protocol is not None:

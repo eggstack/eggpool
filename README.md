@@ -13,6 +13,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Single endpoint for OpenAI Chat Completions (`/v1/chat/completions`), Anthropic Messages (`/v1/messages`), and stateless Responses passthrough (`/v1/responses`)
 - Transparent bidirectional protocol transcoding between OpenAI and Anthropic
 - Dynamic model discovery with load-based routing across multiple providers and accounts
+- Provider/model wire-surface contracts with per-surface paths and auth shapes
 - Request, token, latency, error, and cost tracking in SQLite
 - Multi-page dashboard with 50 themes
 - Model metadata enrichment from provider catalogs, OpenRouter, Artificial Analysis, and Hugging Face
@@ -184,6 +185,11 @@ Use `eggpool connect` for interactive provider setup. See [docs/providers.md](do
 | `[pricing]` | Pricing catalog sources and missing-rate fallback |
 | `[model_info]` | Multi-source model metadata enrichment |
 | `[maintenance]` | Bounded maintenance budget, SQLite hygiene, contention guard |
+
+Provider surfaces can be declared under `[providers.<id>.wire_surfaces.<surface>]`
+when one provider exposes different endpoint paths or auth headers. Existing
+`protocols`, `openai_path`, `responses_path`, and `anthropic_path` settings remain
+valid and are synthesized into equivalent candidates.
 
 Full config reference: [`config.example.toml`](config.example.toml) | [docs/providers.md](docs/providers.md)
 

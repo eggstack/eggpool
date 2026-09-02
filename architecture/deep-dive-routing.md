@@ -100,6 +100,17 @@ Rotor position map capped at 4096 entries (`_ROTOR_HARD_CAP`). Eviction is LRU (
 
 Routing configuration helpers.
 
+`RoutingConfig.wire_negotiation` defines the bounded future negotiation
+surface: enablement, per-provider concurrency, minimum interval, deterministic
+rejection cooldown, learned-preference TTL, and cache size. Plan 148 only
+validates and fingerprints these settings; it does not dispatch alternate
+surfaces, probe in the background, or add a second retry budget.
+
+Wire candidate preference is separate from account scoring. Provider surface
+`priority` values and exact bundled/operator model preferences order possible
+wire profiles; they do not override catalog protocol compatibility, health, or
+later runtime evidence.
+
 ### `quota/scorer.py` — QuotaFairScorer
 
 Load-based scoring with four inputs:

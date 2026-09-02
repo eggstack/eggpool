@@ -162,6 +162,9 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "routing.fairness_mode": ReloadDisposition.LIVE,
     "routing.fairness_epsilon": ReloadDisposition.LIVE,
     "routing.fairness_scope": ReloadDisposition.LIVE,
+    # Plan 148 defines these bounds for later negotiation but does not yet
+    # provide a live consumer, so keep the block fail-closed.
+    "routing.wire_negotiation": ReloadDisposition.RESTART_REQUIRED,
     "routing.trace.mode": ReloadDisposition.LIVE,
     "routing.trace.sample_rate": ReloadDisposition.LIVE,
     "routing.trace.include_score_components": ReloadDisposition.LIVE,

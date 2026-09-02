@@ -453,8 +453,8 @@ class TestFormatProviderBlock:
             "high": 16384,
         }
 
-    def test_opencode_go_template_emits_dual_auth(self, tmp_path: Path) -> None:
-        """The bundled OpenCode Go template renders both auth headers."""
+    def test_opencode_go_template_emits_surface_auth(self, tmp_path: Path) -> None:
+        """The bundled OpenCode Go template renders auth per surface."""
         from eggpool.models.config import AppConfig
 
         data = load_provider_templates()["opencode-go"]["data"]
@@ -465,14 +465,12 @@ class TestFormatProviderBlock:
         config_file.write_text(block, encoding="utf-8")
 
         cfg = AppConfig.from_toml(str(config_file))
-        auth = cfg.providers["opencode-go"].auth
-        assert auth.mode == "api_key"
-        assert auth.header == "x-api-key"
-        assert len(auth.additional) == 1
-        extra = auth.additional[0]
-        assert extra.mode == "bearer"
-        assert extra.header == "Authorization"
-        assert extra.scheme == "Bearer"
+        provider = cfg.providers["opencode-go"]
+        assert provider.auth.mode == "bearer"
+        assert provider.wire_surfaces["openai_responses"].auth is not None
+        assert provider.wire_surfaces["openai_responses"].auth.header == "Authorization"
+        assert provider.wire_surfaces["anthropic_messages"].auth is not None
+        assert provider.wire_surfaces["anthropic_messages"].auth.header == "x-api-key"
 
     def test_emits_routing_priority_for_new_provider(self) -> None:
         """New provider blocks include a routing_priority = 0 default."""
