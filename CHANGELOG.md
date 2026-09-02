@@ -36,6 +36,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no-account-disable path for keyword false-positives in client-error bodies,
   5xx cooldown non-extension to siblings, and applier resilience under partial
   side-effect failure.
+- **muse-spark-1.2-contributor routing fix.** Three coordinated changes
+  restore the canonical ``OpenCode Go`` Muse Spark request path and stop
+  one model's failure from black-holing sibling models on the same
+  subscription:
+
+  1. `ProviderBoundRequest.set_provider_payload` and
+     `adopt_provider_payload` now clear the dispatch-freeze flag when a new
+     generation begins. Pre-fix, the post-selection transcoder's
+     `adopt_provider_payload` raised `RuntimeError: provider payload is
+     frozen` after the first attempt's serialization, breaking every retry
+     against a different selected provider.
+
+  2. `RequestCoordinator._determine_thinking_rejection_status` now
+     aggregates per-provider capability overrides when the collapsed
+     entry reports `unknown`. Built-in overrides (e.g. the canonical
+     OpenCode Go host capabilities for `muse-spark-1.2-contributor`) live
+     in the provider-scoped cache row, so the previous bare-model lookup
+     missed them and surfaced a misleading client-validation 400. The
+     capability-error path now requires `rejected_status` to be truly
+     `unknown`/`unsupported` before surfacing the 400; otherwise the
+     router falls through to a transient `No accounts available` (503).
+
+  3. `EffectsApplier._apply_account_effect` now skips
+     `HealthManager.record_failure` when the classifier set
+     `model_effect="quarantine"` — the per-model disable is the only
+     shared-state penalty in that case. Pre-fix, a single muse-spark 5xx
+     per account advanced the account-wide circuit breaker so five
+     per-model 5xxes tripped the breaker for ALL models on the same
+     subscription. Post-fix, sibling models on the same opencode-go
+     account keep routing while only muse-spark-1.2-contributor is
+     quarantined for the bounded TTL. Tests:
+  `tests/integration/test_muse_spark_live_e2e.py` (3 tests covering the
+  end-to-end live routing path with thinking controls and sibling-model
+  isolation), `tests/integration/test_muse_spark_capability_status_attribution.py`
+  (catalog + status attribution), and `tests/unit/test_provider_bound_request.py`
+  + `tests/unit/test_effects_idempotency.py` (per-fix unit coverage).
 
 ### Added
 

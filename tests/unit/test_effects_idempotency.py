@@ -39,6 +39,77 @@ def _obs(
     )
 
 
+# ---------------------------------------------------------------------------
+# Failure isolation: per-model failures must not advance the account-wide
+# circuit breaker.
+# ---------------------------------------------------------------------------
+
+
+class TestPerModelFailureIsolation:
+    """Plan: per-model 5xx must not advance the account circuit breaker.
+
+    The failure applier used to advance ``circuit_breaker.record_failure``
+    for HTTP 5xx even when ``model_effect="quarantine"`` was set.  This
+    caused a single broken model to black-hole sibling models on the
+    same account once five per-model 5xxes tripped the breaker.  The
+    fix: when ``model_effect != "none"`` the applier must skip the
+    ``record_failure`` call so sibling models keep routing.
+    """
+
+    def test_http_500_with_per_model_quarantine_does_not_advance_breaker(
+        self,
+    ) -> None:
+        hm = HealthManager()
+        applier = EffectsApplier(health_manager=hm)
+        obs = _obs(status_code=500, account_name="opencode-acct", model_id="muse-spark")
+        effects = classify_failure_effects(obs)
+        # Sanity check: the classifier does set model_effect="quarantine"
+        # for HTTP 5xx so this is the exact code path under test.
+        assert effects.model_effect == "quarantine"
+        assert effects.account_effect == "failure"
+
+        applier.apply_once("attempt-1", obs, effects)
+
+        # The model is quarantined (per-model disable is correct).
+        assert hm.is_model_healthy("opencode-acct", "muse-spark") is False
+        # The account itself stays healthy and the circuit breaker is
+        # NOT advanced because the failure is per-model scoped.
+        health = hm.get_account_health("opencode-acct")
+        assert health.is_healthy is True
+        assert health.circuit_breaker.state.value == "closed"
+        # Sibling models on the same account keep routing.
+        assert hm.is_model_healthy("opencode-acct", "minimax-m3") is True
+        assert hm.is_model_healthy("opencode-acct", "qwen3.7-max") is True
+
+    def test_account_wide_failure_still_advances_breaker(self) -> None:
+        """Account-wide failures (no per-model suppression) must still
+        advance the circuit breaker.  Transport failures and other
+        failures that lack ``model_effect="quarantine"`` keep the
+        historical account-wide penalty.
+        """
+        hm = HealthManager()
+        applier = EffectsApplier(health_manager=hm)
+        # transport failure: model_effect stays "none" by default.
+        obs = _obs(
+            source="transport",
+            account_name="opencode-acct",
+            model_id="muse-spark",
+            status_code=None,
+        )
+        effects = classify_failure_effects(obs)
+        assert effects.model_effect == "none"
+
+        applier.apply_once("attempt-1", obs, effects)
+
+        # Account circuit breaker IS advanced for transport failures.
+        health = hm.get_account_health("opencode-acct")
+        assert health.circuit_breaker.state.value == "closed"
+        # The breaker has counted one failure (may move toward OPEN at
+        # the configured threshold).
+        stats = health.circuit_breaker.get_stats()
+        assert stats["failure_count"] == 1
+
+
 class TestEffectsIdempotency:
     """apply_once must be idempotent for the same attempt key."""
 
@@ -90,7 +161,12 @@ class TestEffectsIdempotency:
     def test_circuit_failure_is_recorded_once(self) -> None:
         hm = HealthManager()
         applier = EffectsApplier(health_manager=hm)
-        obs = _obs(status_code=500)
+        # Transport failures carry ``model_effect="none"`` (no per-model
+        # suppression) so the applier advances the breaker exactly
+        # once.  HTTP 5xx now flows through the per-model quarantine
+        # path and explicitly skips the breaker advance — see
+        # ``TestPerModelFailureIsolation`` below.
+        obs = _obs(source="transport", status_code=None)
         effects = classify_failure_effects(obs)
         progress = FailureEffectProgress("request-1:1")
         applier.apply_once("request-1:1", obs, effects, progress=progress)

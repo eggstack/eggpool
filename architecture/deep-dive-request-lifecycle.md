@@ -192,6 +192,19 @@ re-raising.
 - `recompute_thinking_budget_for_provider()` — re-resolves budget against selected provider's capability
 - `adapt_provider_thinking_controls()` — validates and adapts controls against the provider contract
 
+`_determine_thinking_rejection_status()` (coordinator) — attributes a
+thinking rejection to an aggregated capability status when all
+eligible accounts are filtered out. Consults the collapsed
+`models` row first, then falls back to the provider-scoped row when
+`context.provider_id` is known, and otherwise iterates every
+provider entry returned by `cache.get_provider_model_entries()` —
+including quarantined accounts — and aggregates the most permissive
+status. Most-permissive order: `supported` > `mixed` >
+`unsupported` > `unknown`. Returns `"unknown"` or `"unsupported"`
+only when the aggregated status is genuinely authoritative;
+otherwise returns `None` so the caller falls through to the
+generic transient `no_eligible_providers` reason.
+
 ### `request/upstream_helpers.py` — Upstream URL and endpoint validation
 
 Extracted from `RequestCoordinator` in Plan 136 Phase 5.  Resolves the absolute
@@ -298,6 +311,42 @@ does not recursively copy the source first or rematerialize the translated
 graph afterward. `replace_provider_payload()` remains as a conservative
 conditional ownership primitive for compatibility callers; the former
 `provider_payload_copy()` transcode helper was removed in Plan 124.
+
+### Dispatch-freeze lifecycle
+
+`serialize_provider_payload()` serializes the current generation and
+sets a dispatch-freeze flag (`_frozen`). Once frozen, mutations that
+do **not** begin a new generation — `replace_provider_payload()` and
+`set_provider_payload(increment_generation=False)` — raise
+`RuntimeError("provider payload is frozen")` because they cannot
+safely overwrite a body that downstream dispatch already consumed.
+
+Methods that **begin a new generation** — `set_provider_payload(increment_generation=True)` and `adopt_provider_payload(increment_generation=True)` — reset `_frozen` alongside the cached serialized-bytes. The new generation is the canonical provider payload, and the next `serialize_provider_payload()` call re-encodes from scratch. This is what allows the post-selection cross-protocol transcoder (`_apply_selected_provider_transcode`) to replace a body that the previous attempt already serialized and dispatched — a retry that selects a different provider must rebuild from the original client payload, but the transcoder may also need to replace the previously adopted transcode result when account failover picks a different upstream. `adopt_provider_payload(increment_generation=False)` still raises when
+frozen: it does not begin a new generation.
+
+### Thinking rejection attribution
+
+When all eligible accounts are filtered out (including quarantine) and
+the request carries thinking controls,
+`_determine_thinking_rejection_status()` attributes the rejection to a
+capability status. Per-provider thinking overrides (e.g. the bundled
+OpenCode Go host capabilities for `muse-spark-1.2-contributor`)
+live in the provider-scoped cache row, **not** the collapsed
+`models` row. `cache.get_model()` deliberately does **not** apply
+overrides; `cache.get_provider_model_entry()` and
+`cache.get_provider_model_entries()` do.
+
+When `context.provider_id` is unset, the method iterates every
+provider entry for the model and aggregates the most permissive
+status. Quarantine does **not** erase a provider's capability —
+quarantined entries still contribute to the aggregated status. A
+400 (`CapabilityError`) is surfaced only when the aggregated status
+is genuinely `unknown` or `unsupported`; when the status is
+`supported` or `mixed` but every supporting account is currently
+quarantined, the caller falls through to `ModelUnavailableError`
+(503) / `UpstreamExhaustedError` so a transient retry is possible.
+This prevents a misleading `thinking capability status: unknown`
+400 from masking a recoverable quarantine-state failure.
 
 Prepared transcode results retain one request-local translated JSON generation
 without recursively freezing or rematerializing it. Valid unchanged reuse
@@ -463,3 +512,4 @@ Streaming usage accumulation across chunks.
 - Same URL composition rules for catalog fetch and chat dispatch
 - Selection-claim lock splits DB I/O from runtime publication (Milestone B)
 - Dispatch persistence is one direct per-request transaction
+- `ProviderBoundRequest` dispatch-freeze flag resets together with `payload_generation`; mutations that do not start a new generation (`replace_provider_payload`, `set_provider_payload(increment_generation=False)`, `adopt_provider_payload(increment_generation=False)`) reject when frozen. The post-selection transcoder relies on the generation-incrementing methods to replace a previously dispatched body on retry

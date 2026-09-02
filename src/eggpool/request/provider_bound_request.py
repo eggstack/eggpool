@@ -251,8 +251,17 @@ class ProviderBoundRequest:
         is the ownership boundary for path-level transformations such as
         safe compression.  Unknown or externally-owned graphs must use
         :meth:`set_provider_payload` instead.
+
+        When ``increment_generation=True`` the call begins a new generation
+        that supersedes any previously serialized/frozen dispatch body.
+        The dispatch-freeze flag is reset alongside the cached serialized
+        bytes so the next ``serialize_provider_payload`` call re-encodes
+        the freshly adopted graph. This is what allows the
+        post-selection cross-protocol transcoder to replace the
+        preflight-prepared body after a previous attempt has already
+        serialized and dispatched once.
         """
-        if self._frozen:
+        if self._frozen and not increment_generation:
             raise RuntimeError("provider payload is frozen")
         object.__setattr__(self, "_provider_payload", dict(payload))
         object.__setattr__(self, "mutated", True)
@@ -261,6 +270,9 @@ class ProviderBoundRequest:
             self.diagnostics.generation_changes += 1
             self.mutation_log.append(PayloadMutation(self.payload_generation, reason))
             del self.mutation_log[: -self.mutation_log_limit]
+            # A new generation invalidates the previous dispatch freeze;
+            # the newly adopted graph is the canonical provider payload.
+            object.__setattr__(self, "_frozen", False)
         object.__setattr__(self, "_provider_bytes", None)
         object.__setattr__(self, "_serialized_generation", None)
 
@@ -309,6 +321,15 @@ class ProviderBoundRequest:
         incremented so
         downstream caches (segmentation, prepared-transcode) can detect
         staleness.
+
+        When ``increment_generation=True`` the call begins a brand-new
+        generation that supersedes any previously serialized/frozen
+        dispatch body. The serialized-bytes cache and the dispatch-freeze
+        flag are both reset so the next ``serialize_provider_payload`` call
+        re-encodes the new graph; the retry path through
+        ``_apply_selected_provider_transcode`` relies on this so a
+        cross-protocol translation against a different selected provider
+        can replace a body that the previous attempt already serialized.
         """
         if not increment_generation and self._frozen:
             raise RuntimeError("provider payload is frozen")
@@ -321,6 +342,10 @@ class ProviderBoundRequest:
                 PayloadMutation(self.payload_generation, "set_provider_payload")
             )
             del self.mutation_log[: -self.mutation_log_limit]
+            # A new generation invalidates any prior serialized/frozen
+            # dispatch body — the new graph is the canonical provider
+            # payload until the next serialization call.
+            object.__setattr__(self, "_frozen", False)
         object.__setattr__(self, "_provider_bytes", None)
         object.__setattr__(self, "_serialized_generation", None)
 

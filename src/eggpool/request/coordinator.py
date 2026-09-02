@@ -2251,34 +2251,61 @@ class RequestCoordinator:
                     context=context,
                     thinking_req=thinking_req,
                 )
-                if rejected_status == "unknown":
-                    await _thinking_counter.increment_unknown_capability(
+                # ``rejected_status`` is ``"unknown"`` or
+                # ``"unsupported"`` when the capability row is
+                # truly authoritative (built-in override plus any
+                # provider-scoped row report the same status);
+                # ``None`` means every supporting provider has been
+                # quarantined or filtered for reasons unrelated to
+                # the thinking capability — the underlying provider
+                # still supports thinking, so do not surface a
+                # misleading client-validation 400.  Fall through to
+                # the standard ``UpstreamExhaustedError`` /
+                # ``ModelUnavailableError`` path so the operator
+                # observes a transient upstream unavailability.
+                if rejected_status in {"unknown", "unsupported"}:
+                    if rejected_status == "unknown":
+                        await _thinking_counter.increment_unknown_capability(
+                            client_protocol=thinking_req.client_protocol,
+                        )
+                    else:
+                        await _thinking_counter.increment_unsupported_capability(
+                            client_protocol=thinking_req.client_protocol,
+                        )
+                    await _thinking_counter.increment_rejected(
                         client_protocol=thinking_req.client_protocol,
+                        capability_status="no_eligible_providers",
                     )
-                elif rejected_status == "unsupported":
-                    await _thinking_counter.increment_unsupported_capability(
-                        client_protocol=thinking_req.client_protocol,
+                    if context.thinking_trace is not None:
+                        context.thinking_trace["decision"] = "rejected"
+                        context.thinking_trace["capability_status"] = rejected_status
+                    raise CapabilityError(
+                        model_id=context.model_id,
+                        capability="thinking",
+                        requested_fields=thinking_req.fields,
+                        message=(
+                            f"Model {context.model_id!r} is available, "
+                            f"but no eligible provider is known to "
+                            f"support requested thinking controls "
+                            f"(thinking capability status: "
+                            f"{rejected_status or 'unknown'})."
+                        ),
                     )
-                await _thinking_counter.increment_rejected(
-                    client_protocol=thinking_req.client_protocol,
-                    capability_status="no_eligible_providers",
-                )
-                if context.thinking_trace is not None:
-                    context.thinking_trace["decision"] = "rejected"
-                    context.thinking_trace["capability_status"] = (
-                        rejected_status or "no_eligible_providers"
+                # Capability status is genuinely ``supported`` (or
+                # ``mixed``) for the selected provider but every
+                # supporting account is currently filtered out
+                # (typically due to transient quarantine). Surface a
+                # 502/503 transient unavailability so the request
+                # can be retried after the upstream cools down.
+                if self._all_accounts_attempted(
+                    context, capability_policy=_capability_policy
+                ):
+                    raise UpstreamExhaustedError(
+                        f"All eligible accounts attempted for model "
+                        f"{context.model_id!r}"
                     )
-                raise CapabilityError(
-                    model_id=context.model_id,
-                    capability="thinking",
-                    requested_fields=thinking_req.fields,
-                    message=(
-                        f"Model {context.model_id!r} is available, "
-                        f"but no eligible provider is known to "
-                        f"support requested thinking controls "
-                        f"(thinking capability status: "
-                        f"{rejected_status or 'unknown'})."
-                    ),
+                raise ModelUnavailableError(
+                    f"No accounts available for model {context.model_id!r}"
                 )
             if self._all_accounts_attempted(
                 context, capability_policy=_capability_policy
@@ -4539,9 +4566,17 @@ class RequestCoordinator:
         provider-scoped thinking rows live in
         ``provider_model_metadata`` and are applied on the per-candidate
         eligibility check but never make it into the collapsed entry.
-        To avoid a false ``unknown`` reading that would mis-attribute a
-        rejection, also consult the provider-scoped entry when the
-        collapsed one reports ``unknown``.
+        To avoid a false ``"unknown"`` reading that would mis-attribute a
+        rejection, also consult the provider-scoped entries when the
+        collapsed one reports ``"unknown"`` — first the routing
+        ``context.provider_id`` if it is set, and otherwise every
+        provider with a known provider-scoped row. Built-in capability
+        overrides (e.g. the canonical OpenCode Go host capabilities for
+        ``muse-spark-1.2-contributor``) are applied at request time by
+        ``ModelCatalogCache.get_provider_model_entry``; the bare-model
+        request path therefore still resolves the correct
+        ``supported`` status even when ``provider_id`` was not parsed
+        out of the client request.
         """
         from eggpool.catalog.capabilities import extract_thinking_status_from_entry
 
@@ -4549,15 +4584,45 @@ class RequestCoordinator:
         try:
             cache = self._catalog.cache
             collapsed_entry = cache.get_model(context.model_id)
-            status = extract_thinking_status_from_entry(collapsed_entry)
-            if status == "unknown" and context.provider_id is not None:
+            collapsed_status = extract_thinking_status_from_entry(collapsed_entry)
+            if collapsed_status != "unknown":
+                status = collapsed_status
+            elif context.provider_id is not None:
                 provider_entry = cache.get_provider_model_entry(
                     context.model_id,
                     context.provider_id,
                 )
-                provider_status = extract_thinking_status_from_entry(provider_entry)
-                if provider_status != "unknown":
-                    status = provider_status
+                status = extract_thinking_status_from_entry(provider_entry)
+            else:
+                # No provider hint: aggregate every provider with a
+                # known provider-scoped entry for the model so per-
+                # provider built-in overrides still surface as
+                # ``supported`` rather than collapsing to a misleading
+                # ``unknown``. The router may have just marked every
+                # supporting account as quarantined for this model
+                # while the provider entry (and its built-in override)
+                # is still authoritative for the catalog.
+                # ``get_provider_model_entries`` returns the override-
+                # applied view for every ``(model_id, provider_id)``
+                # row in the cache, including rows whose accounts were
+                # removed from ``_account_support`` by quarantine. The
+                # most permissive status wins because the failure is
+                # attributed to the request, not to any specific
+                # provider.
+                statuses: set[str] = {collapsed_status}
+                for model_id, provider_id in cache.get_provider_model_entries():
+                    if model_id != context.model_id:
+                        continue
+                    entry = cache.get_provider_model_entry(model_id, provider_id)
+                    statuses.add(extract_thinking_status_from_entry(entry))
+                if "supported" in statuses:
+                    status = "supported"
+                elif "mixed" in statuses:
+                    status = "mixed"
+                elif "unsupported" in statuses:
+                    status = "unsupported"
+                else:
+                    status = collapsed_status
         except Exception:  # noqa: BLE001
             return None
         if status in ("unknown", "unsupported"):

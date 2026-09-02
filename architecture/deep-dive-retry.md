@@ -76,7 +76,11 @@ Upstream HTTP response
     → RetryClassifier().classify(status_code, headers, body)
     → RetryableError(category, retry_after)
     → RequestCoordinator._should_retry()
-    → HealthManager.record_failure() / record_success()
+    → EffectsApplier.apply_once()
+        - model_effect="quarantine": disable_model only;
+          record_failure() skipped (per-model failure isolation)
+        - source="transport" + model_effect="none":
+          record_failure() advances account-wide breaker
     → Retry with excluded accounts
 ```
 

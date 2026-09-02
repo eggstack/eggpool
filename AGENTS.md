@@ -147,6 +147,9 @@ Non-obvious wiring:
 - **`static_models` is source of truth for provider-specific protocol**: providers serving non-default protocols must ship `[[providers.<id>.static_models]]` rows
 - **No pre-commit hooks configured**: CI runs ruff, pyright, and pytest via GitHub Actions
 - **When constructing `RequestCoordinator` in tests**: pass an explicit `transcoder_policy` or assert the desired default
+- **`ProviderBoundRequest` dispatch-freeze**: `serialize_provider_payload()` freezes the body; `replace_provider_payload()` and `set_provider_payload(increment_generation=False)` reject when frozen. Only generation-incrementing methods (`set_provider_payload(increment_generation=True)`, `adopt_provider_payload(increment_generation=True)`) clear the freeze — the post-selection transcoder relies on this to replace a previously dispatched body on retry
+- **Thinking rejection error class**: `CapabilityError` (400) only when the aggregated thinking status is genuinely `unknown` or `unsupported`. When all supporting accounts are quarantined but the provider entry reports `supported`/`mixed`, a transient 503/502 is raised instead. Aggregation iterates `cache.get_provider_model_entries()` (which applies overrides), not `cache.get_model()` (which does not). See `RequestCoordinator._determine_thinking_rejection_status` and `architecture/deep-dive-request-lifecycle.md`
+- **Per-model quarantine suppresses account-wide circuit breaker**: when `effects.model_effect != "none"` (quarantine), `EffectsApplier._apply_account_effect` skips `HealthManager.record_failure()` for that account. The account-wide breaker advances only when the classifier sets `source="transport"` (genuine account-wide failure: DNS, TLS, persistent transport failure with no per-model cause). A per-model 5xx must quarantine the `(account, model)` pair, not the whole account. See `architecture/deep-dive-health.md`
 
 ## Error Handling
 

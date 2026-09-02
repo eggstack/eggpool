@@ -383,3 +383,145 @@ class TestThinkingControlAdoption:
         # A no-op passthrough must not call any adoption setter.
         # (The adapter's ``result.changed`` is the authoritative signal;
         # the coordinator honors it by skipping the adopt call.)
+
+
+# ---------------------------------------------------------------------------
+# Generation-increment must reset the dispatch-freeze state so retries can
+# translate from the original client payload through a different provider.
+# ---------------------------------------------------------------------------
+
+
+class TestGenerationIncrementResetsFreeze:
+    """Plan: a retry that picks a different selected provider must
+    retranslate the request body from scratch. The previous attempt
+    serialized and dispatched the body, which freezes dispatch — but
+    ``set_provider_payload(increment_generation=True)`` and
+    ``adopt_provider_payload`` legitimately start a brand-new generation
+    that supersedes the previously serialized one. Both calls must
+    therefore clear the dispatch-freeze flag alongside the cached
+    serialized bytes; ``replace_provider_payload`` (the conservative
+    ownership path) still rejects a frozen body so its stricter
+    contract is preserved.
+    """
+
+    def _frozen_pbr(self) -> ProviderBoundRequest:
+        pbr = ProviderBoundRequest(
+            client_bytes=b'{"model":"muse-spark-1.2-contributor"}',
+            client_payload={"model": "muse-spark-1.2-contributor"},
+            client_protocol="openai",
+            model_id="muse-spark-1.2-contributor",
+        )
+        pbr.set_provider_payload(
+            {"model": "muse-spark-1.2-contributor", "thinking": {"type": "enabled"}}
+        )
+        # ``serialize_provider_payload`` freezes dispatch.
+        pbr.serialize_provider_payload()
+        assert pbr.frozen is True
+        return pbr
+
+    def test_set_provider_payload_with_generation_clears_freeze(self) -> None:
+        pbr = self._frozen_pbr()
+        # ``set_provider_payload`` with the default
+        # ``increment_generation=True`` begins a new generation. It must
+        # succeed despite the dispatch-freeze flag and reset the flag
+        # so the next ``serialize_provider_payload`` call re-encodes
+        # the freshly replaced graph.
+        pbr.set_provider_payload({"model": "muse-spark-1.2-contributor"})
+        assert pbr.frozen is False
+        assert pbr.payload_generation == 2
+        assert pbr.provider_bytes is None
+        # The new body round-trips through serialization.
+        body = pbr.serialize_provider_payload()
+        assert b"muse-spark-1.2-contributor" in body
+        assert pbr.frozen is True
+
+    def test_adopt_provider_payload_with_generation_clears_freeze(self) -> None:
+        pbr = self._frozen_pbr()
+        # ``adopt_provider_payload`` with the default
+        # ``increment_generation=True`` is the legitimate boundary used
+        # by the post-selection transcoder when a retry must
+        # retranslate the request. It must succeed even when the body
+        # has been previously frozen for dispatch.
+        pbr.adopt_provider_payload(
+            {
+                "model": "muse-spark-1.2-contributor",
+                "thinking": {"type": "enabled", "budget_tokens": 1024},
+            },
+            reason="protocol_transcode",
+        )
+        assert pbr.frozen is False
+        assert pbr.payload_generation == 2
+        assert pbr.provider_bytes is None
+        # Re-serializing freezes again with the new graph.
+        pbr.serialize_provider_payload()
+        assert pbr.frozen is True
+
+    def test_replace_provider_payload_still_rejects_when_frozen(self) -> None:
+        """``replace_provider_payload`` is the conservative path and
+        must still raise when the body has been frozen for dispatch —
+        its callers own the body, so silent mutations could break
+        downstream consumers that hold the original graph.
+        """
+        pbr = self._frozen_pbr()
+        with pytest.raises(RuntimeError, match="provider payload is frozen"):
+            pbr.replace_provider_payload(
+                {"model": "muse-spark-1.2-contributor"}, reason="late_replace"
+            )
+
+    def test_set_provider_payload_without_generation_still_rejects(self) -> None:
+        """``set_provider_payload`` with ``increment_generation=False``
+        must still raise when frozen — the caller's intent is to swap
+        the body without bumping the generation, which would corrupt
+        the cached serialized bytes.
+        """
+        pbr = self._frozen_pbr()
+        with pytest.raises(RuntimeError, match="provider payload is frozen"):
+            pbr.set_provider_payload({"model": "x"}, increment_generation=False)
+
+    def test_retry_after_dispatch_retranslates_from_client_payload(self) -> None:
+        """End-to-end pin: the post-selection transcoder must be able to
+        retranslate the body for a retry against a different selected
+        provider after the first attempt's serialization frozen the body.
+        This is the actual hot-path sequence that broke before the fix.
+        """
+        pbr = ProviderBoundRequest(
+            client_bytes=b'{"model":"shared-model","messages":[{"role":"user","content":"hi"}]}',
+            client_payload={
+                "model": "shared-model",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+            client_protocol="openai",
+            model_id="shared-model",
+        )
+        # First attempt: the preflight path adopts the preflight
+        # translated payload and serializes it for dispatch, freezing
+        # dispatch in the process.
+        pbr.adopt_provider_payload(
+            {
+                "model": "shared-model",
+                "messages": [{"role": "user", "content": "provider-a"}],
+            },
+            reason="prepared_transcode",
+        )
+        pbr.serialize_provider_payload()
+        assert pbr.frozen is True
+        # Retry against a different provider: reset to the client
+        # payload (incrementing generation) and retranslate.
+        pbr.set_provider_payload(
+            {
+                "model": "shared-model",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+        assert pbr.frozen is False
+        pbr.adopt_provider_payload(
+            {
+                "model": "shared-model",
+                "messages": [{"role": "user", "content": "provider-b"}],
+            },
+            reason="protocol_transcode",
+        )
+        assert pbr.payload_generation == 3
+        body = pbr.serialize_provider_payload()
+        assert b"provider-b" in body
+        assert pbr.frozen is True

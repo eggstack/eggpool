@@ -126,6 +126,24 @@ records the circuit failure; the effects applier never records that same
 transition a second time. Request-local errors and cancellation release a
 half-open probe without provider penalties.
 
+### Per-model quarantine suppresses account-wide circuit advance
+
+When the classifier sets `model_effect = "quarantine"` on a 5xx, the
+effects applier (`EffectsApplier._apply_account_effect`) skips the
+`HealthManager.record_failure()` call for that account. The per-model
+disable (`disable_model`) is the **sole** shared-state penalty in that
+case; the account-wide circuit breaker stays closed. The breaker
+advances only when the classifier sets `source = "transport"`
+(genuine account-wide failure: DNS failure, TLS error, persistent 503
+with no model-specific cause) **and** `model_effect = "none"`.
+
+This isolation prevents N per-model 5xx failures from tripping the
+breaker for all models on the same subscription. A single model's
+upstream anomaly must not black-hole sibling models on the same
+account. The `effects.account_effect` is still `"failure"` in the
+quarantined case; the `model_effect` flag gates whether the breaker
+call fires.
+
 ## Key Invariants
 
 - Health driven solely by upstream-observed failures, operator disablement, and catalog/protocol incompatibility
@@ -138,3 +156,4 @@ half-open probe without provider penalties.
 - Half-open probe acquisition always converges through success, failure, cancellation, or local release
 - Cooldown timers are monotonic
 - `AccountHealth` fields: `consecutive_failures`, `disabled_models`, `disabled_until`, `disabled_reason`, `cooldown_until`
+- Per-model quarantine (`model_effect != "none"`) is the SOLE shared-state penalty; the account-wide circuit breaker advances only when `source="transport"` AND `model_effect="none"` (genuine account-wide failure). A single model's 5xx must not black-hole sibling models on the same account

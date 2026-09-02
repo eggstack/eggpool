@@ -50,3 +50,13 @@ truth when a provider serves a non-default protocol or capability contract.
   provider's capability row. Speculative universal ceilings (such as a
   universal 5 MiB local-runtime ceiling) are not encoded in bundled templates;
   only verified provider-defined limits are advertised.
+- Per-provider capability overrides (e.g. `thinking.status`) live in the
+  provider-scoped cache row and are applied by
+  `ModelCatalogCache.get_provider_model_entry()` /
+  `ModelCatalogCache.get_provider_model_entries()`. The collapsed `models`
+  row (`get_model()`) deliberately does **not** apply overrides — it
+  represents the raw catalog state. Capability rejection attribution must
+  consult provider-scoped entries, not just the collapsed row, to avoid
+  false `"unknown"` readings when overrides are present. Quarantine does
+  **not** erase a provider's capability — quarantined entries still
+  contribute to the aggregated status.
