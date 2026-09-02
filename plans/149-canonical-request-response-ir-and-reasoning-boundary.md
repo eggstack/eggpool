@@ -1,7 +1,7 @@
 # Plan 149 — Canonical Request/Response IR and Reasoning Boundary
 
 Date: 2026-09-02
-Status: ready after Plan 148
+Status: complete
 Parent roadmap: `plans/147-dynamic-wire-surface-negotiation-roadmap.md`
 Depends on: `plans/148-wire-profile-registry-and-provider-contracts.md`
 Planning baseline: `0bc0e02bbea5eebae70b247542d084e6fa6b122f`
@@ -496,3 +496,38 @@ A useful implementation checkpoint is to run the existing Chat↔Messages tests 
 6. Preserve same-surface passthrough.
 7. Add focused parity/fast-path tests.
 8. Run the ordinary project gate and record implementation SHA/results here.
+
+---
+
+# Closure record
+
+Implementation commit: `2d5f12d` (`Add canonical wire request and response IR`)
+
+The implementation adds the immutable canonical request/response/event types
+under `src/eggpool/wire/ir.py`, the explicit codec contract and executable
+Chat/Messages compatibility adapters under `src/eggpool/wire/codecs/`, and
+source-owned canonical/reasoning intent fields on request/transcode context.
+The existing mature Chat↔Messages translators remain the production
+compatibility path during migration; they capture the canonical source and
+continue to use the bounded, incremental stream machinery. Canonical usage is
+now shared with the existing `transcoder.usage` accounting path. No provider
+SDK, runtime dependency, or database schema change was introduced.
+
+Focused verification: `634 passed` across the wire IR, wire profile,
+provider-bound, prepared-transcode, and full transcoder suites.
+
+CI-equivalent verification (Python 3.11 environment, `PYTHONHASHSEED=0`,
+`TZ=UTC`):
+
+- `uv sync --frozen --extra ci`
+- `uv run ruff format --check src/ tests/ scripts/`
+- `uv run ruff check src/ tests/ scripts/`
+- `uv run pyright src/ scripts/`
+- `uv run pytest tests/smoke/ -q --tb=short --maxfail=1` — `14 passed`
+- `uv run eggpool --config config.example.toml check-config` — passed
+- `uv run eggpool --config config.sbc.example.toml check-config` — passed
+
+The unfiltered repository-wide pytest invocation was attempted as an
+additional diagnostic but stopped after entering a long-running lifecycle
+test; it produced no failure. The required CI gate and all changed-boundary
+tests completed successfully.
