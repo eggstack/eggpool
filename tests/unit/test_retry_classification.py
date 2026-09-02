@@ -20,8 +20,10 @@ class TestExplicitStatuses:
         assert result.category == RetryCategory.BAD_REQUEST
         assert not result.is_retryable
 
-    def test_401_auth_failure(self, classifier: RetryClassifier) -> None:
-        result = classifier.classify(401)
+    def test_401_auth_failure_requires_explicit_credential_evidence(
+        self, classifier: RetryClassifier
+    ) -> None:
+        result = classifier.classify(401, body=b"Invalid API key")
         assert result.category == RetryCategory.AUTH_FAILURE
         assert result.is_retryable
         assert result.should_disable_account

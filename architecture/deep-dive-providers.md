@@ -61,6 +61,13 @@ cooldowns and negotiation single-flight state are in memory only. The resolver
 does not inspect raw HTTP failures, start probes, or create alternate retries;
 the canonical failure-effects decision must authorize those transitions.
 
+Failure effects distinguish explicit credential invalidity from an ambiguous
+401. Only the former disables the selected account. Deterministic
+auth-header, surface, or schema rejection can suppress the selected wire
+candidate and authorize a same-account alternate before response handoff;
+429, quota, model, transport, generic validation, and 5xx outcomes do not
+invalidate a wire candidate.
+
 ## Invariants
 
 - API credentials never appear in diagnostics or logs.

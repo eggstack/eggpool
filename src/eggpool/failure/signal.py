@@ -19,7 +19,12 @@ class FailureSignal(StrEnum):
     with quota signal vs. 403 without evidence).
     """
 
-    AUTHENTICATION_FAILED = "authentication_failed"
+    CREDENTIAL_INVALID = "credential_invalid"
+    # Compatibility alias for the former vocabulary.
+    AUTHENTICATION_FAILED = "credential_invalid"
+    WIRE_AUTH_MISMATCH = "wire_auth_mismatch"
+    WIRE_SURFACE_UNSUPPORTED = "wire_surface_unsupported"
+    WIRE_SCHEMA_MISMATCH = "wire_schema_mismatch"
     QUOTA_EXHAUSTED = "quota_exhausted"
     RATE_LIMITED = "rate_limited"
     MODEL_ABSENT = "model_absent"

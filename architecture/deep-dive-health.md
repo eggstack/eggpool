@@ -116,6 +116,14 @@ Response bodies are reduced to bounded `FailureSignal` values before
 classification, and transport failures use `source="transport"` so they do
 not fall through the upstream-HTTP path.
 
+The classifier is deliberately conservative about authentication. A bare or
+unknown HTTP 401 is not credential evidence and does not disable an account,
+advance its circuit, or trigger account failover. Only explicit invalid,
+expired, or revoked credential evidence produces `disable_auth`. A missing
+credential-header or endpoint/surface/schema mismatch can produce a resolver-
+only wire rejection when an alternate candidate exists and the failure was
+observed before downstream response handoff; it never changes account health.
+
 Effect identity is the durable `(proxy_request_id, attempt_id)` pair. Component
 progress (`account`, `model`, `circuit`, `probe`, and durable backoff
 persistence) is retained by the attempt cleanup or finalization owner and is

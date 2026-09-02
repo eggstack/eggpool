@@ -1,7 +1,8 @@
 """Integration tests for failover and health behavior (Section 6).
 
 Tests that:
-- Retryable errors (401, 402, 429, 500, connect fail) failover to another account
+- Retryable errors (explicit credential 401, 402, 429, 500, connect fail)
+  failover to another account
 - Same account is never attempted twice
 - Client 400 does not retry
 - Exhausted retries return final upstream status/body
@@ -179,13 +180,13 @@ async def test_failover_401_to_success(
     coordinator: RequestCoordinator,
     two_account_db: Database,
 ) -> None:
-    """Account A returns 401, B returns 200."""
+    """An explicitly invalid credential on A fails over to B."""
     call_count = [0]
 
     def _handler(request: httpx.Request) -> httpx.Response:
         call_count[0] += 1
         if call_count[0] == 1:
-            return _error_response(401, '{"error": "unauthorized"}')
+            return _error_response(401, '{"error": "Invalid API key"}')
         return _success_response
 
     with respx.mock:
@@ -404,7 +405,7 @@ async def test_same_account_never_attempted_twice(
         call_count[0] += 1
         # First call fails (account-a), second succeeds (account-b)
         if call_count[0] == 1:
-            return _error_response(401, '{"error": "unauthorized"}')
+            return _error_response(500, '{"error": "upstream failure"}')
         return _success_response
 
     with respx.mock:

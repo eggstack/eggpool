@@ -28,6 +28,9 @@ def _obs(
     response_signal: FailureSignal | None = None,
     retry_after_s: float | None = None,
     response_started: bool = True,
+    downstream_started: bool = False,
+    alternate_wire_available: bool = False,
+    dispatch_phase: str = "response_status",
 ) -> FailureObservation:
     return FailureObservation(
         source=source,
@@ -42,6 +45,9 @@ def _obs(
         response_signal=response_signal,
         retry_after_s=retry_after_s,
         response_started=response_started,
+        downstream_started=downstream_started,
+        alternate_wire_available=alternate_wire_available,
+        dispatch_phase=dispatch_phase,
     )
 
 
@@ -114,18 +120,52 @@ class TestFailureEffectsMatrix:
 
     # --- HTTP 401 ---
 
-    def test_http_401_auth_failure(self) -> None:
+    def test_http_401_without_evidence_is_not_auth_failure(self) -> None:
         obs = _obs(status_code=401)
         fx = classify_failure_effects(obs)
-        assert fx.retry is True
-        assert fx.retry_scope == "other_account"
+        assert fx.retry is False
+        assert fx.retry_scope == "none"
         assert fx.client_outcome == "client_error"
+        assert fx.account_effect == "none"
+        assert fx.circuit_penalty is False
+        assert fx.persist_backoff is False
+        assert fx.evidence_class == "http_401_ambiguous"
+
+    def test_explicit_credential_invalid_disables_only_account(self) -> None:
+        obs = _obs(
+            status_code=401,
+            response_signal=FailureSignal.CREDENTIAL_INVALID,
+        )
+        fx = classify_failure_effects(obs)
+        assert fx.retry_action == "other_account_same_wire"
+        assert fx.retry_scope == "other_account"
         assert fx.account_effect == "disable_auth"
-        assert fx.model_effect == "none"
-        assert fx.circuit_penalty is True
-        assert fx.persist_backoff is True
-        assert fx.backoff_reason == "authentication_failed"
-        assert fx.backoff_until is None  # terminal
+        assert fx.wire_effect == "none"
+
+    def test_wire_auth_mismatch_retries_same_account_on_alternate(self) -> None:
+        obs = _obs(
+            status_code=401,
+            response_signal=FailureSignal.WIRE_AUTH_MISMATCH,
+            alternate_wire_available=True,
+        )
+        fx = classify_failure_effects(obs)
+        assert fx.retry_action == "alternate_wire_same_account"
+        assert fx.retry_scope == "same_account_other_wire"
+        assert fx.wire_effect == "reject_candidate"
+        assert fx.account_effect == "none"
+        assert fx.circuit_penalty is False
+
+    def test_wire_rejection_after_handoff_cannot_retry(self) -> None:
+        obs = _obs(
+            status_code=400,
+            response_signal=FailureSignal.WIRE_SCHEMA_MISMATCH,
+            alternate_wire_available=True,
+            downstream_started=True,
+        )
+        fx = classify_failure_effects(obs)
+        assert fx.retry is False
+        assert fx.retry_action == "none"
+        assert fx.wire_effect == "none"
 
     def test_http_401_model_absent_opencode_go(self) -> None:
         """OpenCode Go returns 401 for model-not-found errors.
@@ -241,6 +281,12 @@ class TestFailureEffectsMatrix:
         assert fx.persist_backoff is False
         assert fx.release_probe_only is True
 
+    def test_http_404_with_alternate_wire_rejects_candidate(self) -> None:
+        obs = _obs(status_code=404, alternate_wire_available=True)
+        fx = classify_failure_effects(obs)
+        assert fx.retry_action == "alternate_wire_same_account"
+        assert fx.wire_effect == "reject_candidate"
+
     # --- HTTP 408 ---
 
     def test_http_408_timeout(self) -> None:
@@ -307,6 +353,8 @@ class TestFailureEffectsMatrix:
         assert fx.persist_backoff is True
         assert fx.backoff_reason == "rate_limited"
         assert fx.backoff_until is not None
+        assert fx.retry_action == "other_account_same_wire"
+        assert fx.wire_effect == "none"
 
     def test_http_429_with_retry_after(self) -> None:
         obs = _obs(status_code=429, retry_after_s=120.0)

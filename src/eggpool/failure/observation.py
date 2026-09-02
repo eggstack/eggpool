@@ -73,6 +73,18 @@ class FailureObservation:
     downstream_started: bool = False
     """Whether the response was handed to the downstream client."""
 
+    credential_configured: bool = False
+    """Whether the selected account had a configured credential."""
+
+    alternate_wire_available: bool = False
+    """Whether another configured wire candidate can serve this request."""
+
+    dispatch_phase: str = "response_status"
+    """Bounded transport phase for retry-safety decisions.
+
+    Only ``response_status`` can authorize an alternate-wire transition.
+    """
+
     @property
     def attempt_identity(self) -> tuple[str, int] | None:
         """Return the durable attempt identity used for effect ownership."""

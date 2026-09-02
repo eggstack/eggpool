@@ -48,6 +48,9 @@ def build_failure_observation(
     source: str = "upstream_http",
     response_started: bool = False,
     downstream_started: bool = False,
+    credential_configured: bool = False,
+    alternate_wire_available: bool = False,
+    dispatch_phase: str = "response_status",
 ) -> Any:  # FailureObservation
     """Normalize one upstream failure without retaining raw wire data."""
     from eggpool.failure import FailureObservation
@@ -74,12 +77,17 @@ def build_failure_observation(
             body,
             error_class=error_class,
             status_code=status_code,
+            credential_configured=credential_configured,
+            alternate_wire_available=alternate_wire_available,
         ),
         retry_after_s=retry_after,
         response_started=response_started,
         proxy_request_id=context.request_id if context is not None else None,
         attempt_id=selected.attempt_id if selected is not None else None,
         downstream_started=downstream_started,
+        credential_configured=credential_configured,
+        alternate_wire_available=alternate_wire_available,
+        dispatch_phase=dispatch_phase,
     )
 
 

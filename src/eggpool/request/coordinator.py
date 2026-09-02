@@ -707,7 +707,12 @@ class RequestCoordinator:
                 }
             )
         )
-        self._max_retry_attempts = max_retry_attempts
+        # This parameter is the compatibility name for the one shared
+        # upstream-submission budget. Generation construction passes
+        # ``max_retries_before_stream + 1``; negotiation never adds another
+        # counter on top of it.
+        self._total_allowed_upstream_submissions = max(1, max_retry_attempts)
+        self._max_retry_attempts = self._total_allowed_upstream_submissions
         self._quota_exhausted_cooldown_seconds = quota_exhausted_cooldown_seconds
         self._persist_error_detail = persist_error_detail
         self._account_backoff_repo = account_backoff_repo
@@ -1393,7 +1398,7 @@ class RequestCoordinator:
         last_converged_selected: SelectedAttempt | None = None
         health_applied = False
 
-        for attempt_num in range(1, self._max_retry_attempts + 1):
+        for attempt_num in range(1, self._total_allowed_upstream_submissions + 1):
             try:
                 selected = await self._select_and_persist_attempt(context, attempt_num)
             except asyncio.CancelledError:
@@ -1595,10 +1600,26 @@ class RequestCoordinator:
                         )
                     raise
                 last_converged_selected = selected
+                effects = err.failure_effects
+                wire_transitioned = False
+                if effects is not None:
+                    wire_transitioned = self._apply_wire_failure_effect(
+                        context=context,
+                        effects=effects,
+                    )
+                    if (
+                        effects.retry_action == "alternate_wire_same_account"
+                        and wire_transitioned
+                    ):
+                        context.client_metadata["_retry_same_account"] = (
+                            selected.account_name
+                        )
+                    else:
+                        context.client_metadata.pop("_retry_same_account", None)
                 for key in _ATTEMPT_SELECTION_METADATA_KEYS:
                     context.client_metadata.pop(key, None)
                 health_applied = True
-                if err.failure_effects is not None and not err.failure_effects.retry:
+                if effects is not None and not effects.retry:
                     break
                 # If no other accounts are eligible, don't retry — pass
                 # the error directly to the client.
@@ -1615,9 +1636,14 @@ class RequestCoordinator:
                         else None
                     ),
                 )
-                if not remaining:
+                same_account_wire_retry = (
+                    effects is not None
+                    and effects.retry_action == "alternate_wire_same_account"
+                    and wire_transitioned
+                )
+                if not remaining and not same_account_wire_retry:
                     break
-                if attempt_num >= self._max_retry_attempts:
+                if attempt_num >= self._total_allowed_upstream_submissions:
                     if remaining:
                         context.client_metadata["attempt_ceiling_reached"] = True
                         logger.info(
@@ -2249,9 +2275,15 @@ class RequestCoordinator:
                 estimated_tokens = estimate_reservation_tokens(context.original_body)
                 context.estimated_reservation_tokens = estimated_tokens
 
+        retry_same_account = context.client_metadata.get("_retry_same_account")
         exclude: set[str] = (
             set(context.attempted_accounts) if context.attempted_accounts else set()
         )
+        if isinstance(retry_same_account, str):
+            # A wire rejection is scoped to the selected account. Re-open
+            # only that account for the next submission; all other attempted
+            # accounts remain excluded by the one shared attempt loop.
+            exclude.discard(retry_same_account)
         with _maybe_span(self._dispatch_span_recorder, SPAN_ROUTING_PLAN):
             plan = await self._router.build_routing_plan(
                 context.model_id,
@@ -2271,6 +2303,11 @@ class RequestCoordinator:
             )
         eligible_account_names = plan.eligible_names
         ranked_candidates = plan.ranked_candidates
+        if isinstance(retry_same_account, str):
+            ranked_candidates = sorted(
+                ranked_candidates,
+                key=lambda item: item[0].name != retry_same_account,
+            )
 
         # Plan 025: surface quarantine exclusions in the routing
         # trace so the dashboard distinguishes bounded quarantine
@@ -4496,6 +4533,7 @@ class RequestCoordinator:
         source: str = "upstream_http",
         response_started: bool = False,
         downstream_started: bool = False,
+        dispatch_phase: str = "response_status",
     ) -> FailureObservation:
         """Normalize one upstream failure without retaining raw wire data.
 
@@ -4513,6 +4551,9 @@ class RequestCoordinator:
             source=source,
             response_started=response_started,
             downstream_started=downstream_started,
+            credential_configured=bool(selected is not None and selected.api_key),
+            alternate_wire_available=self._alternate_wire_available(context),
+            dispatch_phase=dispatch_phase,
         )
 
     @staticmethod
@@ -4608,7 +4649,7 @@ class RequestCoordinator:
         failure-effects phase; this hook only consumes the current ordered
         preference and makes URL/auth rendering use the same profile.
         """
-        resolver = self._wire_profile_resolver
+        resolver = getattr(self, "_wire_profile_resolver", None)
         if resolver is None or self._config is None:
             return
         wire_config = self._config.routing.wire_negotiation
@@ -4630,11 +4671,19 @@ class RequestCoordinator:
 
             profiles = resolve_provider_wire_profiles(provider)
         if context.upstream_protocol == "anthropic":
-            allowed_surfaces = ("anthropic_messages",)
+            requested_surface = "anthropic_messages"
+            family_surfaces = ("anthropic_messages",)
         elif getattr(context, "request_surface", "chat_completions") == "responses":
-            allowed_surfaces = ("openai_responses",)
+            requested_surface = "openai_responses"
+            family_surfaces = ("openai_responses", "openai_chat_completions")
         else:
-            allowed_surfaces = ("openai_chat_completions",)
+            requested_surface = "openai_chat_completions"
+            family_surfaces = ("openai_chat_completions", "openai_responses")
+        allowed_surfaces = (
+            family_surfaces
+            if context.client_metadata.get("_wire_negotiating")
+            else (requested_surface,)
+        )
         bundled_hint: WireHint | None = self._wire_bundled_hints_by_provider.get(
             provider_id, {}
         ).get(context.model_id)
@@ -4646,6 +4695,25 @@ class RequestCoordinator:
             bundled_hint=bundled_hint,
             learned_preference_ttl_s=wire_config.learned_preference_ttl_s,
         )
+        # Keep the complete family resolution separate from the normal
+        # request-surface resolution. It is used only after a canonical,
+        # deterministic wire rejection and therefore cannot turn a 429,
+        # timeout, or generic 5xx into surface enumeration.
+        family_resolution = resolver.resolve(
+            provider,
+            context.model_id,
+            profiles=profiles,
+            allowed_surfaces=family_surfaces,
+            bundled_hint=bundled_hint,
+            learned_preference_ttl_s=wire_config.learned_preference_ttl_s,
+        )
+        context.client_metadata["_wire_family_fingerprint"] = (
+            family_resolution.candidate_fingerprint
+        )
+        context.client_metadata["_wire_provider_id"] = provider_id
+        context.client_metadata["_wire_family_surfaces"] = tuple(
+            profile.surface for profile in family_resolution.candidates
+        )
         profile = resolution.preferred
         if profile is None:
             return
@@ -4656,6 +4724,49 @@ class RequestCoordinator:
         if context.transcode_context is not None:
             context.transcode_context.wire_profile = profile
             context.transcode_context.selected_wire_surface = profile.surface
+
+    def _alternate_wire_available(self, context: ProxyRequestContext | None) -> bool:
+        """Return whether deterministic rejection may move to another profile."""
+        if context is None or getattr(self, "_wire_profile_resolver", None) is None:
+            return False
+        surfaces = context.client_metadata.get("_wire_family_surfaces")
+        typed_surfaces = cast("tuple[object, ...]", surfaces)
+        return (
+            isinstance(surfaces, tuple)
+            and sum(isinstance(surface, str) for surface in typed_surfaces) > 1
+        )
+
+    def _apply_wire_failure_effect(
+        self,
+        *,
+        context: ProxyRequestContext,
+        effects: FailureEffects,
+    ) -> bool:
+        """Apply the resolver-only part of a canonical wire decision."""
+        if effects.wire_effect != "reject_candidate":
+            return False
+        resolver = getattr(self, "_wire_profile_resolver", None)
+        profile = getattr(context, "wire_profile", None)
+        fingerprint = context.client_metadata.get("_wire_family_fingerprint")
+        if resolver is None or profile is None or not isinstance(fingerprint, str):
+            return False
+        wire_negotiation = getattr(
+            getattr(self._config, "routing", None), "wire_negotiation", None
+        )
+        resolver.record_deterministic_rejection(
+            str(
+                context.client_metadata.get(
+                    "_wire_provider_id", context.provider_id or ""
+                )
+            ),
+            context.model_id,
+            fingerprint,
+            profile.surface,
+            rejection_class=effects.evidence_class,
+            cooldown_s=float(getattr(wire_negotiation, "rejection_cooldown_s", 300.0)),
+        )
+        context.client_metadata["_wire_negotiating"] = True
+        return True
 
     def _record_wire_success(
         self, context: ProxyRequestContext, selected: SelectedAttempt
@@ -4672,6 +4783,8 @@ class RequestCoordinator:
             fingerprint,
             profile.surface,
         )
+        context.client_metadata.pop("_wire_negotiating", None)
+        context.client_metadata.pop("_retry_same_account", None)
 
     def _resolve_selected_thinking_capability(
         self,

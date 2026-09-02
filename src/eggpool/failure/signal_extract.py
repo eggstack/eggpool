@@ -1,73 +1,95 @@
-"""Bounded response signal extraction.
-
-Extracts conservative, bounded signals from upstream failure responses.
-Inspects a bounded response prefix and structured JSON fields, then
-discards content.  Raw response bodies are never stored or propagated
-in observations.
-"""
+"""Bounded and conservative extraction of upstream failure signals."""
 
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
+from typing import Any, cast
 
 from eggpool.failure.signal import FailureSignal
 from eggpool.health.health_manager import AUTH_FAILURE_ERROR_CLASSES
+from eggpool.jsonx import loads as jsonx_loads
 
-# Maximum bytes to inspect from response body
 _MAX_SIGNAL_INSPECT_BYTES = 4096
-
-# Quota-related signal patterns
-_QUOTA_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bquota\s*(exhausted|exceeded|limit)\b", re.IGNORECASE),
-    re.compile(r"\bout\s*of\s*(credits?|tokens?|quota)\b", re.IGNORECASE),
-    re.compile(r"\binsufficient[_\s-]?(credits?|balance|quota)\b", re.IGNORECASE),
-    re.compile(r"\baccount[_\s-]?(limit|suspended)\b", re.IGNORECASE),
+_QUOTA_PATTERNS = (
+    re.compile(r"\bquota\s*(exhausted|exceeded|limit)\b", re.I),
+    re.compile(r"\bout\s*of\s*(credits?|tokens?|quota)\b", re.I),
+    re.compile(r"\binsufficient[_\s-]?(credits?|balance|quota)\b", re.I),
+    re.compile(r"\baccount[_\s-]?(limit|suspended)\b", re.I),
 )
-
-# Rate-limit signal patterns
-_RATE_LIMIT_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\brate[_\s-]?limit(?:ed)?\b", re.IGNORECASE),
-    re.compile(r"\btoo\s*many\s*requests\b(?![_\s-]?in[_\s-]?queue)", re.IGNORECASE),
-    re.compile(r"\bslow[_\s-]?down\b", re.IGNORECASE),
+_RATE_LIMIT_PATTERNS = (
+    re.compile(r"\brate[_\s-]?limit(?:ed)?\b", re.I),
+    re.compile(r"\btoo\s*many\s*requests\b(?![_\s-]?in[_\s-]?queue)", re.I),
+    re.compile(r"\bslow[_\s-]?down\b", re.I),
 )
-
-# Auth failure signal patterns
-_AUTH_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bunauthorized\b", re.IGNORECASE),
-    re.compile(r"\bauthentication\s*(failed|error|invalid)\b", re.IGNORECASE),
-    re.compile(r"\binvalid[_\s-]?(api[_\s-]?key|token|credential)\b", re.IGNORECASE),
-)
-
-# Model-specific signal patterns
-_MODEL_ABSENT_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bmodel\s+not\s+found\b", re.IGNORECASE),
-    re.compile(r"\bunknown\s+model\b", re.IGNORECASE),
-    re.compile(r"\bunsupported\s+model\b", re.IGNORECASE),
-    re.compile(r"\bmodel\s+is\s+not\s+available\b", re.IGNORECASE),
-    re.compile(r"\bmodel\s+does\s+not\s+exist\b", re.IGNORECASE),
-    re.compile(r"\bno\s+such\s+model\b", re.IGNORECASE),
-    re.compile(r"\bmodel_id\s+not\s+found\b", re.IGNORECASE),
-    # OpenCode Go returns "Model X is not supported" with HTTP 401 for
-    # model-not-found; without this pattern the 401 status code would
-    # misclassify the response as an authentication failure and
-    # permanently disable the account.
-    re.compile(r"\bis\s+not\s+supported\b", re.IGNORECASE),
-)
-
-# Context limit signal patterns
-_CONTEXT_LIMIT_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bcontext[_\s-]?limit[_\s-]?exceeded\b", re.IGNORECASE),
-    re.compile(r"\bcontext[_\s-]?length[_\s-]?(exceeded|too\s+long)\b", re.IGNORECASE),
-    re.compile(r"\bmaximum\s+context\s+length\b", re.IGNORECASE),
-    re.compile(r"\btoken\s+limit\s+exceeded\b", re.IGNORECASE),
-)
-
-# Unsupported control signal patterns
-_CONTROL_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bunsupported[_\s-]?(thinking|reasoning|control)\b", re.IGNORECASE),
+# Generic unauthorized/authentication text is intentionally excluded: it can
+# describe a wrong endpoint/header contract rather than a bad credential.
+_CREDENTIAL_INVALID_PATTERNS = (
+    re.compile(r"\binvalid[_\s-]?(api[_\s-]?key|token|credential)\b", re.I),
+    re.compile(r"\b(expired|revoked)\s+(api[_\s-]?key|token|credential)\b", re.I),
     re.compile(
-        r"\bthinking[_\s-]?(mode|control)\s+not[_\s-]?supported\b", re.IGNORECASE
+        r"\b(api[_\s-]?key|token|credential)\s+(is\s+)?(expired|revoked)\b", re.I
     ),
+)
+_WIRE_AUTH_PATTERNS = (
+    re.compile(r"\bmissing\s+(api[_\s-]?key|token|credential|authentication)\b", re.I),
+    re.compile(
+        r"\b(api[_\s-]?key|authorization|authentication)\s+header\s+(is\s+)?required\b",
+        re.I,
+    ),
+    re.compile(r"\bx-api-key\s+required\b", re.I),
+)
+_MODEL_ABSENT_PATTERNS = (
+    re.compile(r"\bmodel\s+not\s+found\b", re.I),
+    re.compile(r"\bunknown\s+model\b", re.I),
+    re.compile(r"\bunsupported\s+model\b", re.I),
+    re.compile(r"\bmodel\s+is\s+not\s+available\b", re.I),
+    re.compile(r"\bmodel\s+does\s+not\s+exist\b", re.I),
+    re.compile(r"\bno\s+such\s+model\b", re.I),
+    re.compile(r"\bmodel_id\s+not\s+found\b", re.I),
+    re.compile(r"\bis\s+not\s+supported\b", re.I),
+)
+_CONTEXT_LIMIT_PATTERNS = (
+    re.compile(r"\bcontext[_\s-]?limit[_\s-]?exceeded\b", re.I),
+    re.compile(r"\bcontext[_\s-]?length[_\s-]?(exceeded|too\s+long)\b", re.I),
+    re.compile(r"\bmaximum\s+context\s+length\b", re.I),
+    re.compile(r"\btoken\s+limit\s+exceeded\b", re.I),
+)
+_CONTROL_PATTERNS = (
+    re.compile(r"\bunsupported[_\s-]?(thinking|reasoning|control)\b", re.I),
+    re.compile(r"\bthinking[_\s-]?(mode|control)\s+not[_\s-]?supported\b", re.I),
+    re.compile(
+        r"\b(unknown|unsupported|unrecognized)\s+(parameter|field)\b.*"
+        r"\b(thinking|reasoning|response[_\s-]?format)\b",
+        re.I,
+    ),
+)
+_WIRE_SCHEMA_PATTERNS = (
+    re.compile(
+        r"\b(expected|expects)\s+(a\s+)?(different\s+)?(request|payload|body|schema)\b",
+        re.I,
+    ),
+    re.compile(
+        r"\b(endpoint|api|surface)\s+(expects|requires)\s+.*\b(request|payload|body|schema)\b",
+        re.I,
+    ),
+    re.compile(
+        r"\b(invalid|unsupported)\s+(request\s+)?(shape|schema)\s+"
+        r"(for\s+this\s+endpoint|on\s+this\s+surface)\b",
+        re.I,
+    ),
+    re.compile(
+        r"\b(request|payload|body)\s+(shape|schema)\s+(mismatch|does\s+not\s+match)\b",
+        re.I,
+    ),
+    re.compile(
+        r"\b(chat\s+completions|responses|messages)\s+(endpoint|api)\b.*\b(expected|requires|only)\b",
+        re.I,
+    ),
+)
+_UNSUPPORTED_SURFACE_PATTERNS = (
+    re.compile(r"\b(unsupported|unknown|unavailable)\s+(api|endpoint|surface)\b", re.I),
+    re.compile(r"\bmethod\s+not\s+allowed\b", re.I),
 )
 
 
@@ -76,65 +98,73 @@ def extract_failure_signal(
     *,
     error_class: str | None = None,
     status_code: int | None = None,
+    credential_configured: bool = False,
+    alternate_wire_available: bool = False,
 ) -> FailureSignal | None:
-    """Extract a conservative signal from a failure response body.
-
-    Inspects at most ``_MAX_SIGNAL_INSPECT_BYTES`` from the response.
-    Returns ``None`` when no signal can be extracted, letting the
-    caller fall through to the default classification.
-    """
+    """Extract one bounded signal, never retaining raw response content."""
     if body is None:
-        return _signal_from_error_class(error_class, status_code)
-
+        return _signal_from_error_class(
+            error_class, status_code, alternate_wire_available=alternate_wire_available
+        )
     try:
         text = body[:_MAX_SIGNAL_INSPECT_BYTES].decode("utf-8", errors="replace")
     except Exception:
-        return _signal_from_error_class(error_class, status_code)
+        return _signal_from_error_class(
+            error_class, status_code, alternate_wire_available=alternate_wire_available
+        )
+    evidence = " ".join((*_structured_error_values(text), text))
 
-    # Check quota signals first (highest priority)
-    for pattern in _QUOTA_PATTERNS:
-        if pattern.search(text):
-            return FailureSignal.QUOTA_EXHAUSTED
+    # Model absence wins over generic path/surface and auth evidence.
+    if _matches(_MODEL_ABSENT_PATTERNS, evidence):
+        return FailureSignal.MODEL_ABSENT
+    if _matches(_QUOTA_PATTERNS, evidence):
+        return FailureSignal.QUOTA_EXHAUSTED
+    if _matches(_RATE_LIMIT_PATTERNS, evidence):
+        return FailureSignal.RATE_LIMITED
+    if _matches(_CREDENTIAL_INVALID_PATTERNS, evidence):
+        return FailureSignal.CREDENTIAL_INVALID
+    if (
+        credential_configured
+        and alternate_wire_available
+        and _matches(_WIRE_AUTH_PATTERNS, evidence)
+    ):
+        return FailureSignal.WIRE_AUTH_MISMATCH
+    if _matches(_CONTEXT_LIMIT_PATTERNS, evidence):
+        return FailureSignal.CONTEXT_LIMIT_EXCEEDED
+    if _matches(_CONTROL_PATTERNS, evidence):
+        return FailureSignal.UNSUPPORTED_REQUEST_CONTROL
+    if _matches(_WIRE_SCHEMA_PATTERNS, evidence):
+        return FailureSignal.WIRE_SCHEMA_MISMATCH
+    if status_code in {404, 405} and alternate_wire_available:
+        return FailureSignal.WIRE_SURFACE_UNSUPPORTED
+    if alternate_wire_available and _matches(_UNSUPPORTED_SURFACE_PATTERNS, evidence):
+        return FailureSignal.WIRE_SURFACE_UNSUPPORTED
+    if status_code in {400, 422}:
+        return FailureSignal.GENERIC_CLIENT_VALIDATION
+    return _signal_from_error_class(
+        error_class, status_code, alternate_wire_available=alternate_wire_available
+    )
 
-    # Rate limit signals
-    for pattern in _RATE_LIMIT_PATTERNS:
-        if pattern.search(text):
-            return FailureSignal.RATE_LIMITED
 
-    # Auth failure signals
-    for pattern in _AUTH_PATTERNS:
-        if pattern.search(text):
-            return FailureSignal.AUTHENTICATION_FAILED
-
-    # Model-specific signals
-    for pattern in _MODEL_ABSENT_PATTERNS:
-        if pattern.search(text):
-            return FailureSignal.MODEL_ABSENT
-
-    # Context limit signals
-    for pattern in _CONTEXT_LIMIT_PATTERNS:
-        if pattern.search(text):
-            return FailureSignal.CONTEXT_LIMIT_EXCEEDED
-
-    # Unsupported control signals
-    for pattern in _CONTROL_PATTERNS:
-        if pattern.search(text):
-            return FailureSignal.UNSUPPORTED_REQUEST_CONTROL
-
-    return _signal_from_error_class(error_class, status_code)
+def _matches(patterns: tuple[re.Pattern[str], ...], text: str) -> bool:
+    return any(pattern.search(text) for pattern in patterns)
 
 
 def _signal_from_error_class(
     error_class: str | None,
     status_code: int | None,
+    *,
+    alternate_wire_available: bool = False,
 ) -> FailureSignal | None:
-    """Derive a signal from the error class string and status code.
-
-    Used as a fallback when no body is available or the body did not
-    match any known pattern.
-    """
+    """Use exact known classes and safe status hints only."""
     if error_class is not None:
         ec = error_class.lower()
+        if "wire_auth_mismatch" in ec:
+            return FailureSignal.WIRE_AUTH_MISMATCH
+        if "wire_surface_unsupported" in ec:
+            return FailureSignal.WIRE_SURFACE_UNSUPPORTED
+        if "wire_schema_mismatch" in ec:
+            return FailureSignal.WIRE_SCHEMA_MISMATCH
         if "contextlimitexceeded" in ec or "context_limit_exceeded" in ec:
             return FailureSignal.CONTEXT_LIMIT_EXCEEDED
         if "quotaexhausted" in ec or "quota_exhausted" in ec:
@@ -143,19 +173,38 @@ def _signal_from_error_class(
             return FailureSignal.RATE_LIMITED
         if "modelunavailable" in ec or "model_not_found" in ec:
             return FailureSignal.MODEL_ABSENT
-        # Exact-match vocabulary shared with
-        # ``classify_failure_category`` — substring matching would map
-        # transient classes like ``authorization_pending`` onto a
-        # terminal auth signal.
         if ec in AUTH_FAILURE_ERROR_CLASSES:
-            return FailureSignal.AUTHENTICATION_FAILED
+            return FailureSignal.CREDENTIAL_INVALID
         if "capability" in ec or "unsupported" in ec:
             return FailureSignal.UNSUPPORTED_REQUEST_CONTROL
-    # Status code hints (only for well-known codes)
-    if status_code == 401:
-        return FailureSignal.AUTHENTICATION_FAILED
+    # A bare 401 is deliberately not evidence of invalid credentials.
     if status_code == 402:
         return FailureSignal.QUOTA_EXHAUSTED
     if status_code == 429:
         return FailureSignal.RATE_LIMITED
+    if status_code in {404, 405} and alternate_wire_available:
+        return FailureSignal.WIRE_SURFACE_UNSUPPORTED
     return None
+
+
+def _structured_error_values(text: str) -> tuple[str, ...]:
+    """Extract bounded structured error fields without retaining the body."""
+    try:
+        payload: Any = jsonx_loads(text)
+    except (TypeError, ValueError):
+        return ()
+    values: list[str] = []
+
+    def visit(value: object, *, key: str | None = None) -> None:
+        if isinstance(value, Mapping):
+            mapping = cast("Mapping[object, object]", value)
+            for child_key, child_value in mapping.items():
+                if child_key in {"type", "code", "error", "message", "status"}:
+                    if not isinstance(child_key, str):
+                        continue
+                    visit(child_value, key=child_key)
+        elif isinstance(value, str) and key in {"type", "code", "message", "status"}:
+            values.append(value)
+
+    visit(payload)
+    return tuple(values)

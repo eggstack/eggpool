@@ -123,7 +123,8 @@ facade.  Implementation details are delegated to focused helper modules:
 **Key invariants**:
 - Request persisted before upstream dispatch
 - Dispatch stages have narrow exception ownership: local preparation, request construction/serialization, and client-facing adaptation faults are local terminal errors; only typed HTTPX transport faults are retry candidates.
-- Retry uses distinct accounts only, converges failed-attempt cleanup before reselection, and stops at `min(distinct eligible accounts, 1 + max_retries_before_stream)` without sleeping. A ceiling-truncated traversal records `attempt_ceiling_reached`.
+- Retry consumes one shared upstream-submission budget of `1 + max_retries_before_stream`, including alternate-wire submissions. The normal destination is another account on the same wire; a deterministic wire rejection may instead reopen the same account for the next wire candidate. Failed-attempt cleanup converges before reselection, and a ceiling-truncated traversal records `attempt_ceiling_reached`.
+- A bare or unknown 401 is not credential evidence: it is returned without account disablement, health penalty, or failover. Explicit credential invalidity may disable only the selected account; deterministic auth/surface/schema mismatch may reject only the selected wire candidate before downstream handoff.
 - Response handoff is an explicit `downstream_started` fact marked immediately before forwarding ASGI `http.response.start`; no retry occurs after handoff, even when zero payload bytes have been emitted. Body-byte accounting is separate.
 - Non-streaming response adaptation completes before durable `COMPLETED`; native pass-through may retain invalid JSON, but required transcoded response adaptation must succeed first.
 - Every retryable failed attempt reaches terminal state before next attempt

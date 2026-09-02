@@ -198,8 +198,9 @@ When investigating worker-thread teardown warnings, promote the exact
 `PytestUnhandledThreadExceptionWarning` to an error in the focused suite rather
 than adding a repository-wide suppression.
 
-Dispatch-boundary regressions should cover distinct-account failover, the
-configured attempt ceiling, cleanup-before-reselection, local request
+Dispatch-boundary regressions should cover explicit-credential versus
+ambiguous-401 handling, same-account alternate-wire retry, distinct-account
+failover, the shared configured attempt ceiling, cleanup-before-reselection, local request
 construction failures without provider health changes, response adaptation
 before durable success, native invalid-JSON pass-through, and cancellation
 propagation. Run the focused coordinator/proxy/transcoder suites before the

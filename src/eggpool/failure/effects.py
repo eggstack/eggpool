@@ -20,10 +20,11 @@ class FailureEffects:
     """
 
     retry: bool
-    """Whether the request may be retried on a different account."""
+    """Whether the request may be retried at the selected destination."""
 
     retry_scope: str
-    """``none``, ``same_account``, or ``other_account``."""
+    """Compatibility scope: ``none``, ``same_account_other_wire``, or
+    ``other_account``."""
 
     client_outcome: str
     """``client_error``, ``upstream_error``, ``service_unavailable``,
@@ -73,6 +74,11 @@ class FailureEffects:
     source: str = "unknown"
     response_signal: FailureSignal | None = None
     retry_after_s: float | None = None
+    retry_action: str = "none"
+    """Canonical retry destination."""
+
+    wire_effect: str = "none"
+    """Canonical wire-cache effect: ``none`` or ``reject_candidate``."""
 
 
 FailureDecision = FailureEffects

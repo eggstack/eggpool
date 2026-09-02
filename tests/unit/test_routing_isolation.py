@@ -123,7 +123,7 @@ class TestRoutingStateIsolation:
         obs = _obs(
             status_code=400,
             model_id="muse-spark",
-            response_signal=FailureSignal.AUTHENTICATION_FAILED,
+            response_signal=None,
         )
         effects = classify_failure_effects(obs)
         applier.apply_once("req-1:1", obs, effects)

@@ -837,7 +837,9 @@ class RuntimeMetricsService:
 
     def _snapshot_wire_negotiation(self, probe_errors: list[str]) -> dict[str, Any]:
         """Return bounded process-owned wire resolver diagnostics."""
-        if not self._config.routing.wire_negotiation.enabled:
+        routing = getattr(self._config, "routing", None)
+        wire_negotiation = getattr(routing, "wire_negotiation", None)
+        if not getattr(wire_negotiation, "enabled", False):
             return {"enabled": False}
         resolver = getattr(self._process, "wire_profile_resolver", None)
         if resolver is None:

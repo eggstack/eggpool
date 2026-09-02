@@ -196,8 +196,11 @@ EggPool keeps a bounded, in-memory preference for the last successful declared
 wire surface per provider/model. The preference is refreshed by ordinary
 successful requests and discarded naturally on restart or candidate-definition
 changes; it never stores credentials or upstream response bodies. Negotiation is
-reactive and only a separately classified, deterministic pre-inference failure
-may authorize an alternate-surface attempt.
+reactive and only a separately classified, deterministic pre-handoff
+auth/surface/schema failure may authorize an alternate-surface attempt on the
+same account. Bare or unknown 401 responses do not disable credentials or
+trigger failover; explicit credential failures affect only the selected account.
+Alternate-wire and account retries share the same upstream-submission budget.
 
 Full config reference: [`config.example.toml`](config.example.toml) | [docs/providers.md](docs/providers.md)
 

@@ -51,6 +51,8 @@ def _decision(
     obs: FailureObservation,
     *,
     retry: bool = False,
+    retry_action: str | None = None,
+    wire_effect: str = "none",
     client_outcome: str | None = None,
     account_effect: str = "none",
     model_effect: str = "none",
@@ -63,9 +65,18 @@ def _decision(
     provider_attributable: bool = False,
 ) -> FailureEffects:
     """Construct a complete decision and derive its component metadata."""
+    action = retry_action or ("other_account_same_wire" if retry else "none")
+    if obs.downstream_started:
+        action = "none"
+    scope = {
+        "none": "none",
+        "alternate_wire_same_account": "same_account_other_wire",
+        "other_account_same_wire": "other_account",
+        "existing_route_retry": "other_account",
+    }.get(action, "none")
     return FailureEffects(
-        retry=retry and not obs.downstream_started,
-        retry_scope="other_account" if retry and not obs.downstream_started else "none",
+        retry=action != "none",
+        retry_scope=scope,
         client_outcome=client_outcome or _client_outcome(obs),
         account_effect=account_effect,
         model_effect=model_effect,
@@ -85,6 +96,8 @@ def _decision(
         source=obs.source,
         response_signal=obs.response_signal,
         retry_after_s=obs.retry_after_s,
+        retry_action=action,
+        wire_effect=wire_effect if action == "alternate_wire_same_account" else "none",
     )
 
 
@@ -187,6 +200,46 @@ def classify_failure_effects(obs: FailureObservation) -> FailureEffects:
         )
 
     sc = obs.status_code
+    signal = obs.response_signal
+    signal_value = signal.value if signal is not None else "wire"
+
+    if signal == FailureSignal.CREDENTIAL_INVALID:
+        return _decision(
+            obs,
+            retry=True,
+            retry_action="other_account_same_wire",
+            client_outcome="client_error",
+            account_effect="disable_auth",
+            circuit_penalty=True,
+            persist_backoff=True,
+            backoff_reason="authentication_failed",
+            release_probe_only=False,
+            evidence_class="explicit_credential_invalid",
+            provider_attributable=True,
+        )
+
+    # Alternate-wire transitions require deterministic rejection after the
+    # request reached the upstream HTTP boundary. Never negotiate on an
+    # ambiguous transport phase or after response handoff.
+    if (
+        signal
+        in {
+            FailureSignal.WIRE_AUTH_MISMATCH,
+            FailureSignal.WIRE_SURFACE_UNSUPPORTED,
+            FailureSignal.WIRE_SCHEMA_MISMATCH,
+        }
+        and obs.alternate_wire_available
+        and obs.dispatch_phase == "response_status"
+    ):
+        return _decision(
+            obs,
+            retry=True,
+            retry_action="alternate_wire_same_account",
+            client_outcome="client_error",
+            wire_effect="reject_candidate",
+            evidence_class=f"{signal_value}_rejection",
+        )
+
     if sc == 400:
         return _decision(
             obs, client_outcome="client_error", evidence_class="http_400_validation"
@@ -207,16 +260,7 @@ def classify_failure_effects(obs: FailureObservation) -> FailureEffects:
                 evidence_class="http_401_model_absent",
             )
         return _decision(
-            obs,
-            retry=True,
-            client_outcome="client_error",
-            account_effect="disable_auth",
-            circuit_penalty=True,
-            persist_backoff=True,
-            backoff_reason="authentication_failed",
-            release_probe_only=False,
-            evidence_class="http_401_auth_failure",
-            provider_attributable=True,
+            obs, client_outcome="client_error", evidence_class="http_401_ambiguous"
         )
     if sc == 402:
         return _decision(
@@ -244,7 +288,7 @@ def classify_failure_effects(obs: FailureObservation) -> FailureEffects:
                 evidence_class="http_403_quota_signal",
                 provider_attributable=True,
             )
-        if obs.response_signal == FailureSignal.AUTHENTICATION_FAILED:
+        if obs.response_signal == FailureSignal.CREDENTIAL_INVALID:
             return _decision(
                 obs,
                 retry=True,
@@ -281,6 +325,15 @@ def classify_failure_effects(obs: FailureObservation) -> FailureEffects:
                     else "runtime_model_absent_404"
                 ),
                 provider_attributable=True,
+            )
+        if obs.alternate_wire_available and obs.dispatch_phase == "response_status":
+            return _decision(
+                obs,
+                retry=True,
+                retry_action="alternate_wire_same_account",
+                client_outcome="client_error",
+                wire_effect="reject_candidate",
+                evidence_class="http_404_wire_surface",
             )
         return _decision(
             obs, client_outcome="client_error", evidence_class="http_404_generic"

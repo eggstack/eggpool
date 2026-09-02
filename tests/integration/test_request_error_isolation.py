@@ -157,11 +157,15 @@ class TestProviderFailureIsolation:
             is False
         )
 
-    def test_auth_failure_disables_only_failing_account(self) -> None:
+    def test_explicit_auth_failure_disables_only_failing_account(self) -> None:
         hm = HealthManager()
         applier = EffectsApplier(health_manager=hm)
 
-        obs = _obs(status_code=401, account_name="acct-bad")
+        obs = _obs(
+            status_code=401,
+            account_name="acct-bad",
+            response_signal=FailureSignal.CREDENTIAL_INVALID,
+        )
         effects = classify_failure_effects(obs)
         applier.apply_once("attempt-1", obs, effects)
 

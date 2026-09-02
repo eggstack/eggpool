@@ -526,6 +526,8 @@ def _failure_effects_key(effects: object) -> tuple[object, ...] | None:
             "source",
             "response_signal",
             "retry_after_s",
+            "retry_action",
+            "wire_effect",
         )
     )
 

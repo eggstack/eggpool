@@ -28,9 +28,9 @@ class TestRetryClassifier:
         assert not error.is_retryable
 
     def test_classify_401(self) -> None:
-        """Test classification of 401 error."""
+        """Explicit credential evidence classifies 401 as auth failure."""
         classifier = RetryClassifier()
-        error = classifier.classify(401)
+        error = classifier.classify(401, body=b'{"error": "Invalid API key"}')
         assert error.category == RetryCategory.AUTH_FAILURE
         assert error.is_retryable
         assert error.should_disable_account

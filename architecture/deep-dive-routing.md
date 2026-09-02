@@ -107,6 +107,12 @@ rejection cooldown, learned-preference TTL, and cache size. The process-owned
 cooldowns, provider/model single-flight, and provider-wide abnormal-dispatch
 gating. It never probes in the background or adds a second retry budget.
 
+The request coordinator owns one upstream-submission budget shared by normal
+account failover and alternate-wire retries. A deterministic wire rejection
+may retry the same account on another candidate; quota, rate-limit, model,
+credential, transport, and server failures retain their explicit account or
+model destinations and never trigger surface roulette.
+
 Wire candidate preference is separate from account scoring. Provider surface
 `priority` values and exact bundled/operator model preferences order possible
 wire profiles; they do not override catalog protocol compatibility, health, or

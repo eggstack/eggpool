@@ -46,17 +46,64 @@ class TestSignalExtraction:
         body = b"Slow down. You are sending too many requests."
         assert extract_failure_signal(body) == FailureSignal.RATE_LIMITED
 
-    def test_auth_failed(self) -> None:
+    def test_generic_auth_failed_is_not_credential_evidence(self) -> None:
         body = b"Authentication failed. Check your API key."
-        assert extract_failure_signal(body) == FailureSignal.AUTHENTICATION_FAILED
+        assert extract_failure_signal(body) is None
 
-    def test_unauthorized(self) -> None:
+    def test_generic_unauthorized_is_not_credential_evidence(self) -> None:
         body = b"Unauthorized access."
-        assert extract_failure_signal(body) == FailureSignal.AUTHENTICATION_FAILED
+        assert extract_failure_signal(body) is None
 
     def test_invalid_api_key(self) -> None:
         body = b"Invalid API key provided."
-        assert extract_failure_signal(body) == FailureSignal.AUTHENTICATION_FAILED
+        assert extract_failure_signal(body) == FailureSignal.CREDENTIAL_INVALID
+
+    def test_missing_api_key_is_wire_mismatch_only_with_alternate(self) -> None:
+        body = b"Missing API key."
+        assert extract_failure_signal(body, status_code=401) is None
+        assert (
+            extract_failure_signal(
+                body,
+                status_code=401,
+                credential_configured=True,
+                alternate_wire_available=True,
+            )
+            == FailureSignal.WIRE_AUTH_MISMATCH
+        )
+
+    def test_invalid_and_missing_api_key_are_distinct(self) -> None:
+        assert (
+            extract_failure_signal(b"invalid api key")
+            == FailureSignal.CREDENTIAL_INVALID
+        )
+        assert (
+            extract_failure_signal(
+                b"x-api-key required",
+                credential_configured=True,
+                alternate_wire_available=True,
+            )
+            == FailureSignal.WIRE_AUTH_MISMATCH
+        )
+
+    def test_generic_invalid_payload_is_not_wire_schema_evidence(self) -> None:
+        assert (
+            extract_failure_signal(
+                b"Invalid request payload.",
+                status_code=400,
+                alternate_wire_available=True,
+            )
+            == FailureSignal.GENERIC_CLIENT_VALIDATION
+        )
+
+    def test_endpoint_schema_mismatch_is_wire_evidence(self) -> None:
+        assert (
+            extract_failure_signal(
+                b"Endpoint expects a different request schema.",
+                status_code=400,
+                alternate_wire_available=True,
+            )
+            == FailureSignal.WIRE_SCHEMA_MISMATCH
+        )
 
     def test_model_not_found(self) -> None:
         body = b"Model not found: gpt-4o-nonexistent"
@@ -181,10 +228,7 @@ class TestSignalFromErrorClass:
         )
 
     def test_status_code_401(self) -> None:
-        assert (
-            extract_failure_signal(None, status_code=401)
-            == FailureSignal.AUTHENTICATION_FAILED
-        )
+        assert extract_failure_signal(None, status_code=401) is None
 
     def test_status_code_402(self) -> None:
         assert (
