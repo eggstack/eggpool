@@ -1,7 +1,7 @@
 # Plan 148 — Wire-Profile Registry and Provider Contracts
 
 Date: 2026-09-02
-Status: ready after Plan 147
+Status: complete
 Parent roadmap: `plans/147-dynamic-wire-surface-negotiation-roadmap.md`
 Planning baseline: `0bc0e02bbea5eebae70b247542d084e6fa6b122f`
 Priority: P0 foundational correctness
@@ -481,3 +481,29 @@ No live provider traffic is required for this configuration phase.
 7. Migrate only bundled templates that benefit from explicit surfaces.
 8. Add focused tests and run the normal gate.
 9. Record implementation SHA and any schema deviations in this file's closure section when complete.
+
+---
+
+# Closure
+
+Status: complete
+Implementation commit: `ede00515f82469cacbdfb26dadf8fa7836c0128e`
+Completed: 2026-09-02
+
+Implemented the independent wire-surface types, packaged closed registry and
+advisory hints, explicit provider candidate surfaces, legacy synthesis,
+surface-specific auth/static-header validation, safe `{model}` path rendering,
+operator model preferences, and bounded negotiation configuration. OpenCode Go
+is represented by generic surface configuration and data hints; no
+provider-specific URL/auth dispatch branch or runtime negotiation was added.
+
+Schema deviations: codec IDs currently resolve to registered structural codec
+placeholders; later phases will attach request/response/stream behavior. The
+negotiation settings are validated and fingerprinted but remain
+`RESTART_REQUIRED` until a live negotiation consumer exists. No database
+migration, background probe, alternate-surface retry, or new dependency was
+introduced.
+
+Verification: focused wire/config/provider tests, full suite (`7734 passed,
+36 skipped`), Ruff format/check, Pyright, deterministic smoke suite, both
+example `check-config` commands, and package-data build verification passed.
