@@ -4,17 +4,16 @@ Back to [Overview](overview.md)
 
 ## Purpose
 
-Transparently translates request/response bodies between OpenAI Chat Completions and Anthropic Messages protocols. When a client sends Anthropic-format requests but the routed provider only speaks OpenAI Chat Completions (or vice versa), the transcoder bridges the gap.
+Transparently translates request/response bodies between OpenAI Chat Completions and Anthropic Messages protocols. When a client sends Anthropic-format requests but the routed provider only speaks OpenAI Chat Completions (or vice versa), the transcoder bridges the gap through a small canonical semantic boundary.
 
 ## Architecture
 
 ```
-Client Protocol          Upstream Protocol
-─────────────            ─────────────────
-OpenAI Chat    ───────►  Anthropic Messages
-Anthropic Msg  ───────►  OpenAI Chat
-OpenAI Chat    ───────►  OpenAI Chat (passthrough)
-Anthropic Msg  ───────►  Anthropic Msg (passthrough)
+Client surface        Canonical boundary       Upstream surface
+──────────────        ──────────────────       ────────────────
+OpenAI Chat    ───►   request intent      ───►  Anthropic Messages
+Anthropic Msg  ───►   request intent      ───►  OpenAI Chat
+Native surface ───►   byte passthrough    ───►  same surface
 ```
 
 ## Key Modules
@@ -70,6 +69,29 @@ Phase 9 optimization: one shared bounded decoder, synchronous
 ### `transcoder/context.py`
 
 `TranscodeContext` — per-request transcoding state dataclass carrying loss warnings, cache boundary tracker, tool-call ID map, and upstream protocol.
+
+It also carries `client_surface`, the optional selected `WireProfile`, the
+canonical request, and `ReasoningIntent`. Historical `client_protocol` and
+`upstream_protocol` remain compatibility-family metadata while concrete wire
+surface negotiation is staged. The canonical request is captured from the
+original client payload and is never replaced by a previously translated
+provider payload.
+
+### `wire/ir.py` and `wire/codecs/`
+
+The IR is intentionally small: typed messages/content blocks, portable
+function tools and choices, normalized usage, response blocks, and bounded
+streaming events. `ReasoningIntent` distinguishes unspecified, disabled,
+effort, fixed-budget, adaptive, and toggle semantics. An effort label remains
+an effort label until the selected provider/model capability supplies a
+verified target encoding; codecs must not invent a budget.
+
+`wire/codecs/base.py` defines the operations concrete codecs need: request
+encoding, response/event decoding, and client response/event encoding.
+`wire/codecs/compat.py` currently supplies executable Chat and Messages
+adapters for the common subset. The coordinator's established tested
+transcoders remain the compatibility implementation during migration, while
+native same-surface requests continue to use the low-copy byte path.
 
 ### `transcoder/static_headers.py`
 

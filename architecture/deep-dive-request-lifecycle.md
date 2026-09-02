@@ -119,6 +119,9 @@ facade.  Implementation details are delegated to focused helper modules:
 - Non-streaming response adaptation completes before durable `COMPLETED`; native pass-through may retain invalid JSON, but required transcoded response adaptation must succeed first.
 - Every retryable failed attempt reaches terminal state before next attempt
 - Same URL composition rules for catalog fetch and chat dispatch
+- Canonical request and reasoning intent are captured before provider-specific
+  adaptation; retries rebuild from the original client source, never from a
+  prior translated payload.
 
 ### Dispatch exception boundaries
 

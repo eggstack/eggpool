@@ -2,6 +2,21 @@
 
 from __future__ import annotations
 
+from eggpool.wire.ir import (
+    CanonicalContentBlock,
+    CanonicalEvent,
+    CanonicalMessage,
+    CanonicalOutputBlock,
+    CanonicalRequest,
+    CanonicalResponse,
+    CanonicalTool,
+    CanonicalToolChoice,
+    CanonicalUsage,
+    ReasoningIntent,
+    canonical_request_from_mapping,
+    canonical_request_to_mapping,
+    reasoning_intent_from_mapping,
+)
 from eggpool.wire.registry import (
     BUILTIN_CODEC_FACTORIES,
     WireHint,
@@ -38,4 +53,17 @@ __all__ = [
     "render_wire_path_template",
     "resolve_provider_wire_profiles",
     "validate_wire_path_template",
+    "CanonicalContentBlock",
+    "CanonicalEvent",
+    "CanonicalMessage",
+    "CanonicalOutputBlock",
+    "CanonicalRequest",
+    "CanonicalResponse",
+    "CanonicalTool",
+    "CanonicalToolChoice",
+    "CanonicalUsage",
+    "ReasoningIntent",
+    "canonical_request_from_mapping",
+    "canonical_request_to_mapping",
+    "reasoning_intent_from_mapping",
 ]

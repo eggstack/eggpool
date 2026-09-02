@@ -104,6 +104,16 @@ event is the only successful terminal marker — `response.failed` and
 `response.incomplete` are classified as terminal non-success outcomes and
 do not trigger a provider retry after downstream handoff.
 
+`wire/ir.py` defines the deliberately small canonical request, response,
+content, tool, usage, reasoning-intent, and streaming-event vocabulary. The
+API captures the original semantic request before provider adaptation, so a
+future alternate-surface attempt can encode from the same source intent.
+`wire/codecs/base.py` defines the light codec contract and
+`wire/codecs/compat.py` provides Chat/Messages adapters for the portable
+subset. The mature field-level transcoders remain the production compatibility
+path during this staged migration; they attach the canonical source context
+without buffering streams or changing same-surface byte passthrough.
+
 See [deep-dive-transcoder.md](deep-dive-transcoder.md).
 
 ## Routing and health

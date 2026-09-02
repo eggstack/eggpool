@@ -52,11 +52,16 @@ All data-plane requests flow through `RequestCoordinator`:
 ## Protocol Transcoding
 
 OpenAI Chat Completions ↔ Anthropic Messages conversion lives in
-`src/eggpool/transcoder/`. The Responses surface (`/v1/responses`) is
+`src/eggpool/transcoder/` with the canonical semantic boundary in
+`src/eggpool/wire/ir.py`. The Responses surface (`/v1/responses`) is
 strictly same-protocol passthrough — no transcoding. Controlled by
 `[transcoder]` config; on by default. Provider payload is
 `ProviderBoundRequest` with copy-on-write ownership; cross-protocol
 encoders receive a read-only `Mapping` and return fresh target graphs.
+`ReasoningIntent` is captured before target selection; effort labels are not
+converted to guessed budgets. The compatibility Chat/Messages codecs in
+`wire/codecs/compat.py` are the staged boundary adapters; mature field-level
+translators remain production-owned until later surface migration.
 Native prompt-cache, thinking control, structured outputs, and tool
 calling are capability-gated. See `architecture/deep-dive-transcoder.md`
 for streaming hot path, ownership lifecycle, and full translation table.

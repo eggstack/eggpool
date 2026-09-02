@@ -320,6 +320,7 @@ class OpenAIToAnthropic:
         budget_resolution_policy: str = "lenient",
         loss_policy: str = "warn",
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        context.ensure_canonical_request(payload)
         warnings: list[dict[str, Any]] = []
         out: dict[str, Any] = {}
 

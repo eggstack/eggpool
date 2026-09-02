@@ -174,6 +174,8 @@ if TYPE_CHECKING:
     from eggpool.routing.router import Router
     from eggpool.transcoder.policy import TranscoderPolicy
     from eggpool.transcoder.prepared import PreparedTranscode
+    from eggpool.wire.ir import CanonicalRequest, ReasoningIntent
+    from eggpool.wire.types import WireProfile, WireSurfaceName
 
 logger = logging.getLogger(__name__)
 
@@ -454,6 +456,15 @@ class ProxyRequestContext:
     upstream_protocol: str = ""
     transcode_required: bool = False
     transcode_context: TranscodeContext | None = None
+    # Concrete endpoint identity is separate from compatibility-family
+    # protocol metadata.  A later negotiation phase can replace the selected
+    # profile without reparsing or chaining a previously translated payload.
+    client_surface: str = "chat_completions"
+    selected_wire_surface: WireSurfaceName | None = None
+    wire_profile: WireProfile | None = None
+    canonical_request: CanonicalRequest | None = None
+    reasoning_intent: ReasoningIntent | None = None
+    semantic_adaptation_required: bool = False
     # Plan 143: wire endpoint surface for OpenAI-family requests.
     # ``"chat_completions"`` is the historical default and the only
     # surface that triggers ``stream_options.include_usage`` injection
@@ -1211,6 +1222,20 @@ class RequestCoordinator:
             # always supplies the canonical object from its single parse.
             provider_bound = self._legacy_provider_request(context)
             context.provider_bound = provider_bound
+
+        # Direct coordinator embedders/tests may construct a context without
+        # the API preflight. Capture the original semantic request at this
+        # boundary so the same source remains available for every retry.
+        if context.canonical_request is None:
+            context.canonical_request = (
+                context.transcode_context.ensure_canonical_request(
+                    provider_bound.client_payload
+                )
+                if context.transcode_context is not None
+                else None
+            )
+            if context.canonical_request is not None:
+                context.reasoning_intent = context.canonical_request.reasoning
 
         # Phase 2: select the body transcoder when client and upstream
         # protocols differ and transcoding is enabled.

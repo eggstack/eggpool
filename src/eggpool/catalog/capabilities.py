@@ -23,9 +23,12 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    from eggpool.wire.ir import ReasoningIntent
 
 logger = logging.getLogger(__name__)
 
@@ -1264,6 +1267,23 @@ class ThinkingRequestIntent:
     has_historical_reasoning_content: bool = False
     client_requests_new_reasoning: bool = False
     client_protocol: str = ""
+
+    def to_reasoning_intent(self) -> ReasoningIntent:
+        """Return the canonical reasoning intent for surface encoding.
+
+        This adapter keeps the historical capability/routing fields stable
+        while giving wire codecs one semantic object to carry forward.  In
+        particular, it never turns an effort name into a numeric budget.
+        """
+        from eggpool.wire.ir import ReasoningIntent
+
+        if self.requested_effort is not None:
+            return ReasoningIntent.from_openai_effort(self.requested_effort)
+        if self.requested_budget_tokens is not None:
+            return ReasoningIntent.fixed(self.requested_budget_tokens)
+        if self.client_requests_new_reasoning:
+            return ReasoningIntent(requested=True, mode="toggle")
+        return ReasoningIntent()
 
 
 _REASONING_DISABLED_EFFORTS: frozenset[str] = frozenset({"none"})

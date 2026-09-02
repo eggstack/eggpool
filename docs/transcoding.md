@@ -1,6 +1,6 @@
 # Protocol Transcoding
 
-EggPool transparently translates between OpenAI Chat Completions and Anthropic Messages protocols, letting clients speak one protocol while the upstream provider speaks the other.
+EggPool transparently translates between OpenAI Chat Completions and Anthropic Messages protocols, letting clients speak one protocol while the upstream provider speaks the other. The request path now captures a small canonical semantic intent before provider-specific encoding; the existing mature transcoders remain the compatibility implementation while additional wire surfaces are staged.
 
 ## Overview
 
@@ -14,6 +14,21 @@ The transcoder sits in the request path and:
 2. **Decodes the response body** back to the client's expected format.
 3. **Re-renders non-retryable errors** in the client protocol so error handling stays uniform.
 4. **Translates streaming SSE events** from one shared bounded frame stream in real time.
+
+### Canonical request and reasoning boundary
+
+`src/eggpool/wire/ir.py` contains the portable subset used for cross-surface
+replay: ordered messages/content blocks, function tools and choices, response
+format intent, normalized usage, response blocks, and bounded stream events.
+`ReasoningIntent` records `unspecified`, explicit disable, named effort,
+fixed budget, adaptive, or toggle semantics. Named effort is not converted to
+a guessed token budget; the selected provider/model capability owns the final
+wire encoding.
+
+The original canonical request is retained in `TranscodeContext` and
+`ProxyRequestContext`. A retry or future alternate-surface attempt must start
+from that source, not from the body emitted for an earlier provider. Native
+same-surface requests retain the existing byte-preserving fast path.
 
 ### Request ownership and media validation
 
@@ -106,7 +121,7 @@ When set, EggPool boots with a `WARNING` and reverts to the pre-default behaviou
 | `logprobs` | — | Dropped, warning emitted |
 | `top_logprobs` | — | Dropped, warning emitted |
 | `response_format` | `output_config.format` or `system` | A verified Anthropic target receives native `json_schema`; otherwise the configured loss policy governs the explicitly lossy prompt fallback. `json_object` remains prompt-based because it has no schema to send. |
-| `reasoning_effort` | `thinking` | Feature-gated: `low` → 1024 tokens, `medium` → 4096, `high` → 16384 budget_tokens |
+| `reasoning_effort` | `thinking` | Feature-gated: the canonical effort intent is resolved only after target capability selection; verified low/medium/high mappings remain supported and unknown labels are never assigned a guessed budget |
 | `seed` | — | Dropped, warning emitted |
 | `user` | — | Dropped, warning emitted |
 | `logit_bias` | — | Dropped, warning emitted |

@@ -64,6 +64,11 @@ from eggpool.runtime_manager import GenerationLease, wrap_stream_with_lease
 from eggpool.transcoder.context import TranscodeContext
 from eggpool.transcoder.errors import TranscodeLossError
 from eggpool.transcoder.prepared import PreparedTranscode
+from eggpool.wire.ir import (
+    CanonicalRequest,
+    CanonicalSurface,
+    canonical_request_from_mapping,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Collection
@@ -214,6 +219,16 @@ class TranscodePreflightResult:
     translated_payload: dict[str, Any]
     warnings: list[dict[str, Any]]
     tool_token_padding: int = 0
+    canonical_request: CanonicalRequest | None = None
+
+
+def _canonical_surface_for_endpoint(endpoint: ProxyEndpointConfig) -> CanonicalSurface:
+    """Map public endpoint naming to the canonical client-surface name."""
+    if endpoint.protocol == "anthropic":
+        return "messages"
+    if endpoint.request_surface == "responses":
+        return "responses"
+    return "chat_completions"
 
 
 def _tool_token_padding(payload: dict[str, Any]) -> int:
@@ -352,6 +367,8 @@ def _prepare_transcode_preflight(
     client_protocol: ProtocolName,
     payload: dict[str, Any],
     transcoder_policy: Any,  # noqa: ANN401
+    client_surface: CanonicalSurface = "chat_completions",
+    canonical_request: CanonicalRequest | None = None,
 ) -> TranscodePreflightResult | None:
     """Translate once for preflight checks when transcoding is active.
 
@@ -387,6 +404,12 @@ def _prepare_transcode_preflight(
         request_id="preflight",
         client_protocol=client_protocol,
         upstream_protocol=upstream_protocol,
+        client_surface=client_surface,
+        canonical_request=canonical_request,
+        reasoning_intent=(
+            canonical_request.reasoning if canonical_request is not None else None
+        ),
+        transcode_required=True,
     )
     _features = getattr(transcoder_policy, "features", None)
     _transcoding_capability = None
@@ -413,6 +436,7 @@ def _prepare_transcode_preflight(
         translated_payload=translated,
         warnings=warnings,
         tool_token_padding=_tool_token_padding(translated),
+        canonical_request=canonical_request,
     )
 
 
@@ -642,6 +666,24 @@ async def _handle_proxy_request_inner(
         preflight_payload = dict(payload)
         preflight_payload["model"] = model_id
 
+    # Capture semantic client intent once, before any provider-specific
+    # encoder can rewrite reasoning controls.  Retries and alternate target
+    # surfaces must start from this canonical request, never from a prior
+    # provider payload generation.
+    client_surface = _canonical_surface_for_endpoint(endpoint)
+    try:
+        canonical_request = canonical_request_from_mapping(
+            preflight_payload,
+            client_surface=client_surface,
+            protocol=endpoint.protocol,
+        )
+    except ValueError as exc:
+        return endpoint.error_response(
+            status_code=400,
+            message=str(exc),
+            error_type="invalid_request_error",
+        )
+
     # Preflight context limit check (guardrail, not primary enforcement).
     catalog = lease.runtime.catalog
     transcoder_policy = lease.runtime.transcoder_policy
@@ -681,6 +723,8 @@ async def _handle_proxy_request_inner(
                 client_protocol=endpoint.protocol,
                 payload=preflight_payload,
                 transcoder_policy=transcoder_policy,
+                client_surface=client_surface,
+                canonical_request=canonical_request,
             )
             if preflight is not None:
                 if (
@@ -772,6 +816,16 @@ async def _handle_proxy_request_inner(
         request_id=request_id,
         client_protocol=endpoint.protocol,
         upstream_protocol=endpoint.protocol,
+        client_surface=client_surface,
+        selected_wire_surface=(
+            "anthropic_messages"
+            if endpoint.protocol == "anthropic"
+            else "openai_responses"
+            if endpoint.request_surface == "responses"
+            else "openai_chat_completions"
+        ),
+        canonical_request=canonical_request,
+        reasoning_intent=canonical_request.reasoning,
     )
 
     # Semantic compression has been removed.  Segmentation and
@@ -838,6 +892,10 @@ async def _handle_proxy_request_inner(
             ),
             upstream_protocol=endpoint.protocol,
             request_surface=endpoint.request_surface,
+            client_surface=client_surface,
+            selected_wire_surface=transcode_ctx.selected_wire_surface,
+            canonical_request=canonical_request,
+            reasoning_intent=canonical_request.reasoning,
             transcode_required=False,
             transcode_context=transcode_ctx,
             segmentation=segmentation_result,

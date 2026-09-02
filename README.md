@@ -12,6 +12,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 
 - Single endpoint for OpenAI Chat Completions (`/v1/chat/completions`), Anthropic Messages (`/v1/messages`), and stateless Responses passthrough (`/v1/responses`)
 - Transparent bidirectional protocol transcoding between OpenAI and Anthropic
+- Canonical request/reasoning/response-event boundary for safe cross-surface translation
 - Dynamic model discovery with load-based routing across multiple providers and accounts
 - Provider/model wire-surface contracts with per-surface paths and auth shapes
 - Request, token, latency, error, and cost tracking in SQLite

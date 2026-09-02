@@ -7,10 +7,10 @@ cost calculator and quota tracker can operate uniformly.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
 from eggpool.transcoder.json_helpers import token_count_from
+from eggpool.wire.ir import CanonicalUsage
 
 _ANTHROPIC_USAGE_TOKEN_FIELDS = (
     "input_tokens",
@@ -18,27 +18,6 @@ _ANTHROPIC_USAGE_TOKEN_FIELDS = (
     "cache_creation_input_tokens",
     "cache_read_input_tokens",
 )
-
-
-@dataclass(frozen=True, slots=True)
-class CanonicalUsage:
-    """Normalised usage counts for a completed request."""
-
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    total_tokens: int = 0
-    cache_creation_tokens: int = 0
-    cache_read_tokens: int = 0
-
-    def to_dict(self) -> dict[str, int]:
-        """Serialise to a dict suitable for persistence."""
-        return {
-            "prompt_tokens": self.prompt_tokens,
-            "completion_tokens": self.completion_tokens,
-            "total_tokens": self.total_tokens,
-            "cache_creation_tokens": self.cache_creation_tokens,
-            "cache_read_tokens": self.cache_read_tokens,
-        }
 
 
 def canonicalise_usage(

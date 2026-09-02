@@ -14,6 +14,15 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def _wire_surface_for(protocol: str, request_surface: str) -> str:
+    """Return the concrete built-in surface for legacy dispatch metadata."""
+    if protocol == "anthropic":
+        return "anthropic_messages"
+    if request_surface == "responses":
+        return "openai_responses"
+    return "openai_chat_completions"
+
+
 def get_upstream_url(
     protocol: str,
     provider_id: str | None = None,
@@ -185,6 +194,10 @@ def validate_endpoint_or_transcode(
         )
 
     if context.protocol in model_protocols:
+        context.selected_wire_surface = _wire_surface_for(
+            context.protocol,
+            getattr(context, "request_surface", "chat_completions"),
+        )
         return
 
     # Plan 144 (B2): Responses never uses Anthropic transcoding fallback.
@@ -204,10 +217,20 @@ def validate_endpoint_or_transcode(
     if upstream_protocol is not None:
         context.upstream_protocol = upstream_protocol
         context.transcode_required = True
+        context.semantic_adaptation_required = True
+        context.selected_wire_surface = _wire_surface_for(
+            upstream_protocol,
+            getattr(context, "request_surface", "chat_completions"),
+        )
         # Sync the transcode_context so execute() can detect the
         # protocol mismatch and select the correct transcoder.
         if context.transcode_context is not None:
             context.transcode_context.upstream_protocol = upstream_protocol
+            context.transcode_context.selected_wire_surface = (
+                context.selected_wire_surface
+            )
+            context.transcode_context.transcode_required = True
+            context.transcode_context.semantic_adaptation_required = True
         return
 
     resolver = ModelProtocolResolver()

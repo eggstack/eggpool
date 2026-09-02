@@ -216,6 +216,13 @@ source message/tool graph unchanged. Media tests should cover strict invalid
 base64, URL sources, size boundaries, and obvious encoded-size rejection before
 decode; do not add permanent memory thresholds.
 
+Canonical wire-boundary changes should run `tests/unit/test_wire_ir.py` with
+the focused transcoder and prepared-transcode suites. Verify reasoning effort,
+fixed-budget, adaptive/toggle, and explicit-disable intents remain distinct;
+Chat/Messages body and event adapters remain incremental; usage reuses the
+shared canonical usage type; and same-surface passthrough does not invoke
+decode/re-encode work.
+
 Request-estimation changes should run the request-limit, proxy-admission,
 prepared-transcode/tool-padding, and body-limit suites. Verify that an
 enforced canonical context estimate is counted once and carried into
