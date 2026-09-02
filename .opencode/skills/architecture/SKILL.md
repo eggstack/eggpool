@@ -87,6 +87,12 @@ omits credential values. Ordinary success refreshes a preference; only the
 canonical failure-effects decision may authorize candidate suppression or an
 alternate-surface transition. No background probes or second retry budget.
 
+The optional `RequestCoordinator.outbound_observer` runs after a real upstream
+`client.send` returns and receives only a sanitized structural observation. It
+is intended for explicit live diagnostics, never stores raw bodies or
+credential values, and must not affect retry/finalization behavior. See
+`docs/live-wire-e2e.md` and `architecture/deep-dive-providers.md`.
+
 ## JSON Backend
 
 `src/eggpool/jsonx.py` — wire bodies, SSE frame helpers, and hot-path request body parsing.

@@ -147,6 +147,12 @@ refresh the preferred declared surface in memory; alternate-surface retries
 require an explicit deterministic failure-effects decision and share the
 request's existing retry budget. No background endpoint probes are performed.
 
+Live provider validation is intentionally separate from ordinary CI. For the
+current OpenCode Go path/surface matrix and the isolated temporary-state test
+command, see [Live Wire-Surface Verification](live-wire-e2e.md). A provider
+hint remains revocable runtime preference even when it was checked against
+the current provider documentation.
+
 OpenCode Go's current documented endpoint table places GPT 5.6 Luna and Muse
 Spark 1.2/1.3 Contributor on Responses, current GLM/Kimi/DeepSeek/MiMo models
 on Chat Completions, and MiniMax M3/M2.7/M2.5 on Anthropic Messages. EggPool

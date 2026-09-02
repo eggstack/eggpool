@@ -136,6 +136,7 @@ def classify_upstream_failure(
     status_code: int,
     headers: list[tuple[str, str]],
     body: bytes | None,
+    alternate_wire_available: bool = False,
 ) -> tuple[UpstreamError | None, Any, Any]:
     """Classify an upstream response once for retry and shared effects.
 
@@ -148,6 +149,7 @@ def classify_upstream_failure(
         status_code=status_code,
         headers=headers,
         body=body,
+        alternate_wire_available=alternate_wire_available,
     )
     effects = classify_failure_effects(observation)
     return (

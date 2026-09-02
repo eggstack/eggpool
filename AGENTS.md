@@ -60,11 +60,15 @@ uv run pytest -m integration -v
 # Network-dependent tests
 uv run pytest -m network -v
 
+# Opt-in live provider verification (requires test-only credentials)
+uv run pytest tests/live/test_opencode_go_wire_live.py -m live_opencode_go -v
+
 # Lint auto-fix
 uv run ruff check --fix src/
 ```
 
-Markers registered in `pyproject.toml`: `unit`, `integration`, `network`, `live`, `performance`, `slow`.
+Markers registered in `pyproject.toml`: `unit`, `integration`, `network`, `live`,
+`live_provider`, `live_opencode_go`, `live_gemini`, `performance`, `slow`.
 
 ## Code Style
 
@@ -156,6 +160,7 @@ Non-obvious wiring:
 - **Canonical wire intent is source-owned**: `wire/ir.py` captures the original request, reasoning intent, normalized usage, response blocks, and bounded streaming events before provider adaptation. Alternate targets must encode from that canonical source; never chain a previously translated provider payload. `ReasoningIntent` keeps effort labels separate from numeric budgets and explicit disable. See `architecture/deep-dive-transcoder.md`
 - **Default wire codecs are concrete and terminal-aware**: the closed registry owns executable codecs for `openai_chat_completions`, `openai_responses`, `anthropic_messages`, `gemini_interactions`, and `gemini_generate_content`. Streaming adapters forward native grammar and require native terminal evidence; transport EOF never synthesizes a client terminal event. See `architecture/deep-dive-transcoder.md` and `architecture/deep-dive-providers.md`
 - **Negotiation-safe failure effects**: a bare/unknown 401 never disables credentials, advances health, or cascades; only explicit invalid/expired/revoked credential evidence disables the selected account. Deterministic auth/surface/schema mismatches may reject only the selected wire candidate and retry the same account before downstream handoff. All account and wire retries consume one shared `1 + max_retries_before_stream` upstream-submission budget. See `architecture/deep-dive-retry.md` and `architecture/deep-dive-request-lifecycle.md`
+- **Live wire verification is opt-in**: `tests/live/test_opencode_go_wire_live.py` uses `EGGPOOL_E2E_OPENCODE_GO_API_KEY`, temporary state, bounded prompts, and sanitized outbound observations. It is excluded from default pytest, smoke, and CI; deterministic migration and failure-isolation coverage is mandatory locally.
 
 ## Error Handling
 

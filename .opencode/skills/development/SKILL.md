@@ -117,6 +117,9 @@ Defined in `pyproject.toml`:
 - **`slow`** — marks tests as slow (deselect with `-m "not slow"`)
 - **`performance`** — manually invoked real-runtime performance checks
 - **`live`** — opt-in live provider/network verification tests
+- **`live_provider`** — opt-in real upstream provider verification
+- **`live_opencode_go`** — opt-in OpenCode Go wire-surface verification
+- **`live_gemini`** — opt-in Gemini provider verification
 - **`network`** — tests requiring network access or external services
 - **`integration`** — integration tests requiring full component wiring
 - **`unit`** — unit tests
@@ -178,6 +181,18 @@ Performance tests under `tests/perf/` remain manually invoked diagnostics. They
 must not become CI gates or imply universal timing/resource thresholds; compare
 fixed request shapes and report local proxy timing separately from upstream
 latency.
+
+Live provider tests under `tests/live/` are never part of default pytest, smoke,
+or CI. They require explicit test-only environment variables, use temporary
+state and bounded requests, and record only sanitized structural outbound
+observations. Run the OpenCode Go acceptance manually with:
+
+```bash
+uv run pytest tests/live/test_opencode_go_wire_live.py -m live_opencode_go -v
+```
+
+When credentials are unavailable, a clean skip is expected; deterministic
+fake-upstream migration and failure-isolation tests remain the ordinary gate.
 
 Streaming completion regressions should include both the pure EOF decision table
 and the real response path. Verify that canonical `[DONE]`/`message_stop` streams

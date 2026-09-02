@@ -18,9 +18,11 @@ async def send_upstream_request(
     client: httpx.AsyncClient,
     request: httpx.Request,
     context: ProxyRequestContext,
+    selected: Any | None = None,  # noqa: ANN401 — avoids a coordinator cycle
     *,
     local_pre_upstream_recorder: Any | None = None,  # noqa: ANN401
     dispatch_overhead_recorder: Any | None = None,  # noqa: ANN401
+    outbound_observer: Any | None = None,  # noqa: ANN401
 ) -> httpx.Response:
     """Send an upstream request and capture shared dispatch timing.
 
@@ -64,6 +66,16 @@ async def send_upstream_request(
         )
     connect_start = time.monotonic()
     response = await client.send(request, stream=True)
+    if outbound_observer is not None and selected is not None:
+        try:
+            from eggpool.observability.outbound import build_outbound_observation
+
+            outbound_observer(
+                build_outbound_observation(request, response, context, selected)
+            )
+        except Exception:
+            # Observability must never change request behavior or retry policy.
+            logger.debug("Outbound observation hook failed", exc_info=True)
     context.upstream_connect_ms = int((time.monotonic() - connect_start) * 1000)
     # Compute upstream_headers_ms using the same monotonic clock as elapsed_ms
     context.upstream_headers_ms = max(

@@ -659,6 +659,7 @@ class RequestCoordinator:
         routing_trace_guard: Any | None = None,  # noqa: ANN401
         routing_trace_enabled: bool = True,
         routing_trace_writer: Any | None = None,  # noqa: ANN401
+        outbound_observer: Any | None = None,  # noqa: ANN401
         selection_claim_diagnostics: SelectionClaimDiagnostics | None = None,
         effects_applier: EffectsApplier | None = None,
         quarantine: ModelQuarantine | None = None,
@@ -740,6 +741,7 @@ class RequestCoordinator:
             routing_trace_guard = RoutingTraceGuard()
         self._routing_trace_guard = routing_trace_guard
         self._routing_trace_writer = routing_trace_writer
+        self._outbound_observer = outbound_observer
 
         # Plan 025: typed failure effects applier + bounded quarantine.
         # The factory constructs and injects these; legacy tests may
@@ -3043,7 +3045,7 @@ class RequestCoordinator:
             # and the upstream handler accept — everything before the
             # upstream has produced any output.
             response = await self._send_upstream_request(
-                client, upstream_request, context
+                client, upstream_request, context, selected
             )
             # Headers available immediately after send(); capture
             # first-byte time before reading the body.
@@ -3423,7 +3425,9 @@ class RequestCoordinator:
         generator_created = False
         try:
             try:
-                response = await self._send_upstream_request(client, request, context)
+                response = await self._send_upstream_request(
+                    client, request, context, selected
+                )
             except httpx.TransportError as err:
                 if isinstance(err, httpx.ReadTimeout):
                     self._stream_diagnostics.record_outcome(
@@ -4419,6 +4423,7 @@ class RequestCoordinator:
         client: httpx.AsyncClient,
         request: httpx.Request,
         context: ProxyRequestContext,
+        selected: SelectedAttempt,
     ) -> httpx.Response:
         """Send an upstream request and capture shared dispatch timing.
 
@@ -4430,8 +4435,10 @@ class RequestCoordinator:
             client,
             request,
             context,
+            selected,
             local_pre_upstream_recorder=self._local_pre_upstream_recorder,
             dispatch_overhead_recorder=self._dispatch_overhead_recorder,
+            outbound_observer=self._outbound_observer,
         )
 
     @staticmethod
@@ -4653,6 +4660,7 @@ class RequestCoordinator:
             status_code=status_code,
             headers=headers,
             body=body,
+            alternate_wire_available=self._alternate_wire_available(context),
         )
 
     def _classify_upstream_error(

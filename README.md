@@ -225,6 +225,7 @@ See [Live Configuration Rehash](docs/live-config-rehash.md) for the full reload 
 | Per-account outbound proxy | [docs/proxy.md](docs/proxy.md) |
 | Model context limits | [docs/model-limits.md](docs/model-limits.md) |
 | Thinking & reasoning | [docs/thinking.md](docs/thinking.md) |
+| Live wire-surface verification | [docs/live-wire-e2e.md](docs/live-wire-e2e.md) |
 | Raspberry Pi setup | [docs/raspberry-pi.md](docs/raspberry-pi.md) |
 | Copyable SBC configuration | [config.sbc.example.toml](config.sbc.example.toml) |
 | Configuration profiles | [docs/config-profiles.md](docs/config-profiles.md) |

@@ -69,6 +69,18 @@ candidate and authorize a same-account alternate before response handoff;
 429, quota, model, transport, generic validation, and 5xx outcomes do not
 invalidate a wire candidate.
 
+## Live provider verification
+
+The opt-in live acceptance suite in
+`tests/live/test_opencode_go_wire_live.py` calls the public EggPool API against
+OpenCode Go using a temporary runtime/database. Its optional outbound hook is
+attached at the real `client.send` boundary and emits only sanitized
+structural observations; it is not a persisted event table or a second
+routing system. Deterministic stale-profile migration, single-flight, rate
+limit, and failure-isolation behavior remains covered by fake-upstream tests.
+Live provider calls are excluded from smoke tests and CI and must never be
+required for ordinary installation or release automation.
+
 ## Invariants
 
 - API credentials never appear in diagnostics or logs.

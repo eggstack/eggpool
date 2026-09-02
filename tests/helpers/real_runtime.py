@@ -40,6 +40,8 @@ from eggpool.runtime_manager import (
     attach_runtime_manager,
 )
 from eggpool.stats import StatsService
+from eggpool.wire.registry import load_wire_registry, resolve_provider_wire_profiles
+from eggpool.wire.resolver import WireProfileResolver
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -73,6 +75,9 @@ class ProviderSpec:
     protocols: tuple[str, ...] = ("openai",)
     static_models: tuple[ModelSpec, ...] = ()
     account_names: tuple[str, ...] = ()
+    wire_surfaces: dict[str, dict[str, Any]] = field(default_factory=dict)
+    model_wire: dict[str, dict[str, Any]] = field(default_factory=dict)
+    account_api_key_envs: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +92,8 @@ class RuntimeAppSpec:
     models: tuple[ModelSpec, ...] = (ModelSpec(model_id="gpt-4", protocol="openai"),)
     providers: tuple[ProviderSpec, ...] = ()
     transcoder_overrides: dict[str, Any] = field(default_factory=dict)
+    outbound_observer: Any | None = None
+    wire_runtime_enabled: bool = False
 
 
 # Default spec matching the original real_runtime_app behavior
@@ -120,13 +127,19 @@ def _build_config_from_spec(
             "accounts": [
                 {
                     "name": name,
-                    "api_key_env": "REAL_RUNTIME_KEY",
+                    "api_key_env": prov.account_api_key_envs.get(
+                        name, "REAL_RUNTIME_KEY"
+                    ),
                     "enabled": True,
                     "weight": 1.0,
                 }
                 for name in prov.account_names
             ],
         }
+        if prov.wire_surfaces:
+            providers_dict[prov.provider_id]["wire_surfaces"] = prov.wire_surfaces
+        if prov.model_wire:
+            providers_dict[prov.provider_id]["model_wire"] = prov.model_wire
 
     config_dict: dict[str, Any] = {
         "server": {
@@ -260,11 +273,16 @@ async def build_runtime_app(
     await runner.run()
 
     async with db.transaction():
+        account_api_key_envs = {
+            name: provider.account_api_key_envs.get(name, env_key)
+            for provider in spec.providers
+            for name in provider.account_names
+        }
         for name in spec.account_names:
             await db.execute_write(
                 "INSERT INTO accounts (name, api_key_env, enabled, weight) "
                 "VALUES (?, ?, 1, 1.0)",
-                (name, env_key),
+                (name, account_api_key_envs.get(name, env_key)),
             )
         for model in spec.models:
             await db.execute_write(
@@ -303,6 +321,22 @@ async def build_runtime_app(
     health_manager = HealthManager()
     application.state.health_manager = health_manager
 
+    wire_profiles_by_provider: dict[str, tuple[Any, ...]] = {}
+    wire_bundled_hints_by_provider: dict[str, dict[str, Any]] = {}
+    if spec.wire_runtime_enabled:
+        wire_registry = load_wire_registry()
+        wire_profiles_by_provider = {
+            provider_id: resolve_provider_wire_profiles(provider)
+            for provider_id, provider in config.providers.items()
+        }
+        wire_bundled_hints_by_provider = {
+            provider_id: {
+                hint.model_id: hint
+                for hint in wire_registry.hints_for_provider(provider)
+            }
+            for provider_id, provider in config.providers.items()
+        }
+
     request_repo = RequestRepository(db)
     reservation_repo = ReservationRepository(db)
     attempt_repo = AttemptRepository(db)
@@ -319,7 +353,14 @@ async def build_runtime_app(
         attempt_repo=attempt_repo,
         usage_window_repo=usage_window_repo,
         health_manager=health_manager,
+        config=config if spec.wire_runtime_enabled else None,
         transcoder_policy=config.transcoder,
+        wire_profile_resolver=(
+            WireProfileResolver() if spec.wire_runtime_enabled else None
+        ),
+        wire_profiles_by_provider=wire_profiles_by_provider,
+        wire_bundled_hints_by_provider=wire_bundled_hints_by_provider,
+        outbound_observer=spec.outbound_observer,
     )
     runtime_manager = await install_test_runtime_manager(
         application,
@@ -331,7 +372,6 @@ async def build_runtime_app(
         coordinator=coordinator,
         client_pool=httpx_client,
     )
-
     # Seed catalog with models
     for model in spec.models:
         catalog.cache.load_model(
