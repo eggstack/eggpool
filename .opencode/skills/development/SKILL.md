@@ -217,12 +217,15 @@ source message/tool graph unchanged. Media tests should cover strict invalid
 base64, URL sources, size boundaries, and obvious encoded-size rejection before
 decode; do not add permanent memory thresholds.
 
-Canonical wire-boundary changes should run `tests/unit/test_wire_ir.py` with
-the focused transcoder and prepared-transcode suites. Verify reasoning effort,
-fixed-budget, adaptive/toggle, and explicit-disable intents remain distinct;
-Chat/Messages body and event adapters remain incremental; usage reuses the
-shared canonical usage type; and same-surface passthrough does not invoke
-decode/re-encode work.
+Canonical wire-boundary changes should run `tests/unit/test_wire_ir.py` and
+`tests/unit/test_wire_codecs.py` with the focused transcoder and
+prepared-transcode suites. Verify reasoning effort, fixed-budget,
+adaptive/toggle, and explicit-disable intents remain distinct; all five
+surface codecs (Chat, Responses, Messages, Gemini Interactions, and Gemini
+`generateContent`) preserve their request/response/event grammar; usage
+reuses the shared canonical usage type; and same-surface passthrough does not
+invoke decode/re-encode work. Streaming tests must cover native terminal
+evidence and markerless EOF without synthetic completion.
 
 Runtime wire-negotiation changes should also run
 `tests/unit/test_wire_resolver.py`. Verify learned preference migration,

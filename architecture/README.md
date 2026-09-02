@@ -4,20 +4,14 @@ This directory is the current design index. Historical implementation plans
 remain under `plans/`; this index describes the runtime that is shipped today.
 
 EggPool's public protocol scope is OpenAI Chat Completions at
-`POST /v1/chat/completions`, the stateless OpenAI Responses passthrough at
+`POST /v1/chat/completions`, the stateless OpenAI Responses surface at
 `POST /v1/responses`, Anthropic Messages at `POST /v1/messages`, and
-OpenAI-style model listing at `GET /v1/models`. The service does not claim
-full OpenAI API parity — `/v1/responses` is a stateless same-protocol
-passthrough that rejects stateful fields (`previous_response_id`,
-conversation references including empty objects, `store=true`, omitted
-`store` (must be `false` explicitly), `background=true`) before any
-provider selection and does not implement retrieval, cancellation,
-background jobs, or WebSocket transport. `response.completed` is the
-only successful canonical Responses terminal event; `response.failed`
-and `response.incomplete` are terminal non-success outcomes forwarded
-unchanged to the client without provider/account failover after
-downstream handoff. Upstream provider protocol labels do not expand
-this public surface.
+OpenAI-style model listing at `GET /v1/models`. Responses rejects stateful
+fields before provider selection, but its canonical payload and stream
+grammar can be adapted to eligible upstream Chat, Messages, Responses, or
+native Gemini profiles. `response.completed` is the only successful Responses
+terminal; native Gemini terminals are `interaction.completed` or a candidate
+`finishReason`. Transport EOF never manufactures a terminal event.
 
 For repository work, start here and follow the relevant deep dive. Active
 plans provide scope and sequencing when needed; completed plans are historical
@@ -89,30 +83,24 @@ fields warn or reject. Strict image/PDF base64 validation rejects obvious
 encoded-size overflow before decoding and releases the temporary validation
 buffer before translated output is built.
 
-The Responses surface is a passthrough, not a third transcoder family. The
-wire endpoint is selected by the `request_surface` field on
-`ProxyEndpointConfig` and `ProxyRequestContext` (`"chat_completions"` or
-`"responses"`); `ProtocolName` still records the OpenAI translation
-family. Providers must declare `responses_path` to participate in
-`POST /v1/responses`; the URL is composed by the same
-`compose_provider_url()` used for chat and messages routes. Chat-specific
-transforms (`stream_options.include_usage` injection) and the generic
-thinking-control adapter are both skipped for Responses; the API
-boundary skips `_prepare_transcode_preflight()` so no BodyTranscoder or
-StreamingTranscoder is ever selected. The upstream `response.completed`
-event is the only successful terminal marker — `response.failed` and
-`response.incomplete` are classified as terminal non-success outcomes and
-do not trigger a provider retry after downstream handoff.
+The Responses surface is a stateless client surface, not a byte-only
+passthrough. `request_surface` identifies the client grammar while the
+selected `WireProfile.surface` identifies the concrete upstream endpoint and
+codec. The canonical request is captured before provider adaptation; concrete
+codecs in `wire/codecs/defaults.py` encode alternate requests and translate
+typed response/stream events back to the client grammar. Chat-specific
+transforms remain scoped to Chat, and native terminal evidence is required for
+successful streaming completion. `responses_path` remains a legacy shorthand
+for an `openai_responses` candidate.
 
 `wire/ir.py` defines the deliberately small canonical request, response,
-content, tool, usage, reasoning-intent, and streaming-event vocabulary. The
-API captures the original semantic request before provider adaptation, so a
-future alternate-surface attempt can encode from the same source intent.
-`wire/codecs/base.py` defines the light codec contract and
-`wire/codecs/compat.py` provides Chat/Messages adapters for the portable
-subset. The mature field-level transcoders remain the production compatibility
-path during this staged migration; they attach the canonical source context
-without buffering streams or changing same-surface byte passthrough.
+content, tool, usage, reasoning-intent, and streaming-event vocabulary.
+`wire/codecs/base.py` defines the codec contract; `compat.py` covers Chat and
+Messages, and `defaults.py` implements Responses, Gemini Interactions, and
+Gemini `generateContent`. `wire/codecs/runtime.py` adapts selected upstream
+responses and streams back to the public client surface. Alternate targets
+always encode from the original canonical request, never from a prior target
+payload.
 
 See [deep-dive-transcoder.md](deep-dive-transcoder.md).
 

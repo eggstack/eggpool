@@ -1,4 +1,4 @@
-"""Live end-to-end test for muse-spark-1.2-contributor through eggpool router.
+"""Deterministic mocked integration test for Muse Spark through EggPool.
 
 The acceptance criteria from the bug report require that:
 
@@ -14,8 +14,9 @@ The acceptance criteria from the bug report require that:
   next request must be a transient 503 (``No accounts available``),
   not a misleading 400 (``thinking capability status: unknown``).
 
-This module runs the entire request flow through the real Eggpool
-ASGI surface with respx mocking the upstream.  The OpenCode Go Muse
+This module runs the entire request flow through the real EggPool
+ASGI surface with respx mocking the upstream; it never calls a live service.
+The OpenCode Go Muse
 Spark contract is mirrored from the bundled builtin in
 ``models/config.py`` so the test exercises the same capability rows
 that production sees for the canonical opencode-go provider.
@@ -57,7 +58,7 @@ _MUSE_SPARK_THINKING_CAPABILITY = {
     "thinking": {
         "status": "supported",
         "source": "provider_catalog",
-        "native_protocols": ["anthropic"],
+        "native_protocols": ["openai"],
         "supported_efforts": ["minimal", "low", "medium", "high", "xhigh"],
         "effort_to_budget_tokens": {
             "minimal": 1024,
@@ -74,7 +75,7 @@ _SIBLING_THINKING_CAPABILITY = {
     "thinking": {
         "status": "supported",
         "source": "provider_catalog",
-        "native_protocols": ["openai", "anthropic"],
+        "native_protocols": ["openai"],
         "supported_efforts": ["low", "medium", "high"],
         "effort_to_budget_tokens": {
             "low": 1024,
@@ -91,12 +92,12 @@ _MUSE_SPEC = RuntimeAppSpec(
     models=(
         ModelSpec(
             model_id="muse-spark-1.2-contributor",
-            protocol="anthropic",
+            protocol="openai",
             capabilities=_MUSE_SPARK_THINKING_CAPABILITY,
         ),
         ModelSpec(
             model_id="sibling-model",
-            protocol="anthropic",
+            protocol="openai",
             capabilities=_SIBLING_THINKING_CAPABILITY,
         ),
     ),
@@ -104,16 +105,16 @@ _MUSE_SPEC = RuntimeAppSpec(
         ProviderSpec(
             provider_id="opencode-go",
             base_url=UPSTREAM_BASE,
-            protocols=("openai", "anthropic"),
+            protocols=("openai",),
             static_models=(
                 ModelSpec(
                     model_id="muse-spark-1.2-contributor",
-                    protocol="anthropic",
+                    protocol="openai",
                     capabilities=_MUSE_SPARK_THINKING_CAPABILITY,
                 ),
                 ModelSpec(
                     model_id="sibling-model",
-                    protocol="anthropic",
+                    protocol="openai",
                     capabilities=_SIBLING_THINKING_CAPABILITY,
                 ),
             ),
@@ -139,24 +140,27 @@ async def muse_app(
         await result.httpx_client.aclose()
 
 
-def _anthropic_success(model_id: str, content: str) -> dict[str, Any]:
+def _openai_success(model_id: str, content: str) -> dict[str, Any]:
     return {
-        "id": f"msg-{model_id}-ok",
-        "type": "message",
-        "role": "assistant",
+        "id": f"chat-{model_id}-ok",
+        "object": "chat.completion",
         "model": model_id,
-        "stop_reason": "end_turn",
-        "content": [{"type": "text", "text": content}],
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": "stop",
+            }
+        ],
         "usage": {
-            "input_tokens": 3,
-            "output_tokens": 2,
-            "cache_creation_input_tokens": 0,
-            "cache_read_input_tokens": 0,
+            "prompt_tokens": 3,
+            "completion_tokens": 2,
+            "total_tokens": 5,
         },
     }
 
 
-def _anthropic_500() -> dict[str, Any]:
+def _openai_500() -> dict[str, Any]:
     return {
         "type": "error",
         "error": {"type": "error", "message": "Internal server error"},
@@ -168,8 +172,8 @@ def _anthropic_500() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-class TestMuseSparkLiveRouting:
-    """End-to-end live routing for muse-spark-1.2-contributor."""
+class TestMuseSparkRouting:
+    """End-to-end mocked routing for muse-spark-1.2-contributor."""
 
     @respx.mock
     @pytest.mark.asyncio()
@@ -184,9 +188,9 @@ class TestMuseSparkLiveRouting:
         async with httpx.AsyncClient(
             transport=transport, base_url="http://testserver"
         ) as client:
-            respx.post(f"{UPSTREAM_BASE}/messages").mock(
+            respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
                 return_value=httpx.Response(
-                    200, json=_anthropic_success("muse-spark-1.2-contributor", "Hi!")
+                    200, json=_openai_success("muse-spark-1.2-contributor", "Hi!")
                 )
             )
 
@@ -231,15 +235,14 @@ class TestMuseSparkLiveRouting:
             health_mgr = muse_app.state.health_manager
 
             # All upstream calls for muse-spark return 500.
-            respx.post(f"{UPSTREAM_BASE}/messages").mock(
-                return_value=httpx.Response(500, json=_anthropic_500())
+            respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+                return_value=httpx.Response(500, json=_openai_500())
             )
 
             muse_resp = await client.post(
                 "/v1/messages",
                 headers={
                     "Authorization": "Bearer rt-test-key",
-                    "anthropic-version": "2023-06-01",
                 },
                 json={
                     "model": "muse-spark-1.2-contributor",
@@ -280,16 +283,15 @@ class TestMuseSparkLiveRouting:
                 assert health_mgr.is_model_healthy(acct, "sibling-model") is True
 
             # --- Sibling model actually works end-to-end ---
-            respx.post(f"{UPSTREAM_BASE}/messages").mock(
+            respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
                 return_value=httpx.Response(
-                    200, json=_anthropic_success("sibling-model", "Sibling OK")
+                    200, json=_openai_success("sibling-model", "Sibling OK")
                 )
             )
             sibling_resp = await client.post(
                 "/v1/messages",
                 headers={
                     "Authorization": "Bearer rt-test-key",
-                    "anthropic-version": "2023-06-01",
                 },
                 json={
                     "model": "sibling-model",
@@ -322,8 +324,8 @@ class TestMuseSparkLiveRouting:
         async with httpx.AsyncClient(
             transport=transport, base_url="http://testserver"
         ) as client:
-            respx.post(f"{UPSTREAM_BASE}/messages").mock(
-                return_value=httpx.Response(500, json=_anthropic_500())
+            respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+                return_value=httpx.Response(500, json=_openai_500())
             )
 
             # First request — both accounts fail.
@@ -331,7 +333,6 @@ class TestMuseSparkLiveRouting:
                 "/v1/messages",
                 headers={
                     "Authorization": "Bearer rt-test-key",
-                    "anthropic-version": "2023-06-01",
                 },
                 json={
                     "model": "muse-spark-1.2-contributor",
@@ -349,7 +350,6 @@ class TestMuseSparkLiveRouting:
                 "/v1/messages",
                 headers={
                     "Authorization": "Bearer rt-test-key",
-                    "anthropic-version": "2023-06-01",
                 },
                 json={
                     "model": "muse-spark-1.2-contributor",

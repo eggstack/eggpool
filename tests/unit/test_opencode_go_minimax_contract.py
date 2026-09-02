@@ -48,12 +48,12 @@ def _opencode_go_capability() -> tuple[ThinkingCapability, ThinkingControlContra
     return adapted, contract
 
 
-def test_muse_spark_contract_includes_xhigh() -> None:
+def test_muse_spark_responses_contract_includes_xhigh() -> None:
     contract = resolve_control_contract(
         capability=ThinkingCapability(status="supported"),
         provider_id="opencode-go",
         model_id="muse-spark-1.2-contributor",
-        protocol="anthropic",
+        protocol="openai",
     )
 
     assert contract.mode == "effort_or_budget"
@@ -72,7 +72,7 @@ def test_muse_spark_contract_includes_xhigh() -> None:
         provider_id="custom-opencode-go",
         provider_base_url="https://opencode.ai/zen/go/v1",
         model_id="muse-spark-1.2-contributor",
-        protocol="anthropic",
+        protocol="openai",
     )
     assert url_compat.accepted_efforts == contract.accepted_efforts
 

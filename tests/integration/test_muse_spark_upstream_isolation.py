@@ -1,6 +1,6 @@
 """End-to-end regression test for the muse-spark 5xx blanket-suppression bug.
 
-Repro scenario (live):
+Repro scenario (mocked):
 
 - The router is configured with two accounts under the ``opencode-go``
   provider.  Two models are advertised: ``muse-spark-1.2-contributor``
@@ -23,7 +23,8 @@ Repro scenario (live):
   bounded quarantine expires.
 
 This module asserts the post-fix behavior end-to-end through the real
-Eggpool ASGI surface with respx mocking the upstream.
+Eggpool ASGI surface with respx mocking the upstream; it never calls a
+live service.
 """
 
 from __future__ import annotations
@@ -61,7 +62,7 @@ _MUSE_SPARK_SPEC = RuntimeAppSpec(
     models=(
         ModelSpec(
             model_id="muse-spark-1.2-contributor",
-            protocol="anthropic",
+            protocol="openai",
         ),
         ModelSpec(
             model_id="qwen3.7-max",
@@ -72,11 +73,11 @@ _MUSE_SPARK_SPEC = RuntimeAppSpec(
         ProviderSpec(
             provider_id="opencode-go",
             base_url=UPSTREAM_BASE,
-            protocols=("openai", "anthropic"),
+            protocols=("openai",),
             static_models=(
                 ModelSpec(
                     model_id="muse-spark-1.2-contributor",
-                    protocol="anthropic",
+                    protocol="openai",
                 ),
                 ModelSpec(
                     model_id="qwen3.7-max",
@@ -105,8 +106,8 @@ async def muse_spark_app(
         await result.httpx_client.aclose()
 
 
-def _anthropic_500(model_id: str) -> dict[str, Any]:
-    """Anthropic-style upstream 500 (the real muse-spark-1.2-contributor shape)."""
+def _openai_500(model_id: str) -> dict[str, Any]:
+    """OpenAI-family upstream 500 for muse-spark-1.2-contributor."""
     return {
         "type": "error",
         "error": {
@@ -165,8 +166,8 @@ class TestMuseSparkUpstreamIsolation:
             assert pre["disabled_models"] == []
 
             # --- Both accounts return 500 for muse-spark ---
-            respx.post(f"{UPSTREAM_BASE}/messages").mock(
-                return_value=httpx.Response(500, json=_anthropic_500("muse-spark"))
+            respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+                return_value=httpx.Response(500, json=_openai_500("muse-spark"))
             )
 
             resp = await client.post(
@@ -260,7 +261,7 @@ class TestMuseSparkUpstreamIsolation:
                     "provider_id": "opencode-go",
                     "model_id": "muse-spark-1.2-contributor",
                     "upstream_model_id": "muse-spark-1.2-contributor",
-                    "upstream_protocol": "anthropic",
+                    "upstream_protocol": "openai",
                     "status_code": 500,
                     "error_class": None,
                     "source": "upstream_http",

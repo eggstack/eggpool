@@ -1,9 +1,9 @@
 """Minimal protocol for request/response/event wire codecs.
 
 Concrete codecs are deliberately small objects selected by the closed wire
-profile registry.  This module contains no vendor schema and no import-by-name
-mechanism; later codec implementations can reuse the existing transcoder
-helpers while sharing these canonical boundaries.
+profile registry. This module contains no vendor schema and no import-by-name
+mechanism; each registered codec shares these canonical request, response, and
+stream-event boundaries.
 """
 
 from __future__ import annotations
@@ -67,6 +67,31 @@ class PassthroughCodec:
         return client_surface == selected_surface and not semantic_adaptation_required
 
 
+class CodecAlias:
+    """Expose one codec implementation under a registry-specific ID."""
+
+    def __init__(self, codec: CanonicalCodec, codec_id: str) -> None:
+        self._codec = codec
+        self.codec_id = codec_id
+
+    def encode_request(self, *args: object, **kwargs: object) -> Mapping[str, object]:
+        return self._codec.encode_request(*args, **kwargs)  # type: ignore[arg-type]
+
+    def decode_response(self, payload: Mapping[str, object]) -> CanonicalResponse:
+        return self._codec.decode_response(payload)
+
+    def decode_stream_frame(
+        self, frame: Mapping[str, object]
+    ) -> tuple[CanonicalEvent, ...]:
+        return self._codec.decode_stream_frame(frame)
+
+    def encode_response(self, response: CanonicalResponse) -> Mapping[str, object]:
+        return self._codec.encode_response(response)
+
+    def encode_event(self, event: CanonicalEvent) -> bytes:
+        return self._codec.encode_event(event)
+
+
 class CodecRegistry:
     """Small explicit registry used by tests and future concrete codecs."""
 
@@ -97,6 +122,7 @@ class CodecRegistry:
 
 __all__ = [
     "CanonicalCodec",
+    "CodecAlias",
     "CodecRegistry",
     "PassthroughCodec",
     "WireCodecError",

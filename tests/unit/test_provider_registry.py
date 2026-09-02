@@ -44,6 +44,7 @@ class TestRegistryStructure:
             "deepseek",
             "fireworks",
             "gemini",
+            "gemini-native",
             "groq",
             "llamacpp-local",
             "lmstudio-local",

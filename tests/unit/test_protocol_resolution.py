@@ -275,11 +275,11 @@ class TestOpenCodeGoFamilyMappings:
         assert result.protocol == "openai"
         assert result.source == "family_mapping"
 
-    def test_muse_spark_contributor_to_anthropic(
+    def test_muse_spark_contributor_to_openai(
         self, resolver_no_config: ModelProtocolResolver
     ) -> None:
         result = resolver_no_config.resolve_from_catalog("muse-spark-1.2-contributor")
-        assert result.protocol == "anthropic"
+        assert result.protocol == "openai"
         assert result.source == "family_mapping"
 
     def test_longcat_2_to_openai(

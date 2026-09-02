@@ -256,8 +256,8 @@ def _make_thinking_control_adapter(
             or not getattr(selected, "provider_id", None)
         ):
             return TransformResult()
-        # Plan 144 (C1): Responses is a passthrough surface — never
-        # mutate the body with Chat/Anthropic thinking-control
+        # Responses is a stateless client surface — never mutate its selected
+        # provider payload with legacy Chat/Anthropic thinking-control
         # normalization.
         surface = getattr(context, "request_surface", None)
         if surface == "responses":
@@ -300,9 +300,54 @@ def build_provider_transforms(
     :func:`run_transform_pipeline`.
     """
     return [
+        _make_wire_surface_adapter(),
         _make_thinking_control_adapter(coordinator),
         _make_stream_options_adapter(),
     ]
+
+
+def _make_wire_surface_adapter() -> tuple[TransformMeta, TransformFnAny]:
+    """Encode canonical intent for Responses and Gemini profiles."""
+
+    def _apply(request: ProviderBoundRequest, ctx: TransformContext) -> TransformResult:
+        context = ctx.proxy_context
+        profile = getattr(context, "wire_profile", None)
+        if profile is None:
+            return TransformResult(decision=TransformDecision.SKIPPED)
+        from eggpool.wire.codecs.runtime import (
+            encode_selected_request,
+            needs_wire_codec_adaptation,
+        )
+
+        if not needs_wire_codec_adaptation(
+            client_surface=getattr(context, "client_surface", "chat_completions"),
+            selected_surface=profile.surface,
+        ):
+            return TransformResult(decision=TransformDecision.SKIPPED)
+        canonical = getattr(context, "canonical_request", None)
+        if canonical is None and ctx.transcode_context is not None:
+            canonical = ctx.transcode_context.ensure_canonical_request(
+                request.client_payload
+            )
+        if canonical is None:
+            raise ValueError("canonical request is required for wire adaptation")
+        encoded = encode_selected_request(canonical, profile)
+        request.adopt_provider_payload(encoded, reason="wire_surface_codec")
+        return TransformResult(
+            decision=TransformDecision.MUTATED,
+            category="wire_surface_codec",
+        )
+
+    return (
+        TransformMeta(
+            name="wire_surface_codec",
+            requires_decoded_payload=True,
+            can_return_unchanged=True,
+            changes_token_estimates=True,
+            diagnostic_category="wire_surface_codec",
+        ),
+        _apply,
+    )
 
 
 def _make_stream_options_adapter() -> tuple[TransformMeta, TransformFnAny]:
@@ -326,12 +371,17 @@ def _make_stream_options_adapter() -> tuple[TransformMeta, TransformFnAny]:
                 )
             return TransformResult(decision=TransformDecision.SKIPPED)
 
-        # Plan 143: ``stream_options.include_usage`` is a Chat
-        # Completions transform. The Responses surface uses native
-        # ``response.completed`` terminal events to surface usage,
-        # so the mutation must be skipped entirely for that surface.
+        # ``stream_options.include_usage`` is a Chat Completions transform.
+        # The Responses surface uses native terminal events, and an alternate
+        # Responses/Gemini target has no Chat-specific field to mutate, so the
+        # mutation must be skipped for either case.
         surface = getattr(ctx.proxy_context, "request_surface", None)
-        if surface == "responses":
+        wire_surface = getattr(
+            getattr(ctx.proxy_context, "wire_profile", None), "surface", None
+        )
+        if surface == "responses" or (
+            wire_surface is not None and wire_surface != "openai_chat_completions"
+        ):
             if ctx.proxy_context is not None:
                 ctx.proxy_context.client_metadata["upstream_include_usage"] = (
                     client_include_usage

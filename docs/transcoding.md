@@ -1,19 +1,28 @@
 # Protocol Transcoding
 
-EggPool transparently translates between OpenAI Chat Completions and Anthropic Messages protocols, letting clients speak one protocol while the upstream provider speaks the other. The request path now captures a small canonical semantic intent before provider-specific encoding; the existing mature transcoders remain the compatibility implementation while additional wire surfaces are staged.
+EggPool transparently translates between OpenAI Chat Completions, OpenAI
+Responses, Anthropic Messages, and selected native provider wire surfaces,
+letting clients keep their public grammar while upstream contracts vary. The
+request path captures a small canonical semantic intent before
+provider-specific encoding. The mature field-level transcoders remain the
+compatibility implementation for Chat/Messages semantics; concrete wire
+codecs cover Responses and native Gemini Interactions/`generateContent`.
 
 ## Overview
 
-Protocol transcoding exists because the AI ecosystem has settled on two incompatible wire formats — OpenAI's Chat Completions API and Anthropic's Messages API. Most providers serve only one. Without transcoding, an OpenAI Chat Completions client can only reach OpenAI Chat Completions-compatible providers, and an Anthropic Messages client can only reach Anthropic Messages-compatible providers, even when the underlying model is the same.
+Protocol transcoding exists because providers expose several incompatible wire
+formats — OpenAI Chat Completions/Responses, Anthropic Messages, and native
+Gemini APIs. Most providers serve only one. Without the canonical boundary, a
+client would be limited to providers exposing its exact request grammar.
 
 **Transcoding is on by default.** Every EggPool data plane normalises the client request to the appropriate upstream wire format automatically: an OpenAI Chat Completions client posting to `/v1/chat/completions` reaches Anthropic upstreams (and vice versa) without any operator configuration. This is the primary behaviour of the router — clients should always see their expected protocol, regardless of the upstream provider's protocol.
 
 The transcoder sits in the request path and:
 
-1. **Rewrites the request body** before dispatch (OpenAI fields → Anthropic fields or vice versa).
+1. **Rewrites the request body** before dispatch using the selected surface codec.
 2. **Decodes the response body** back to the client's expected format.
 3. **Re-renders non-retryable errors** in the client protocol so error handling stays uniform.
-4. **Translates streaming SSE events** from one shared bounded frame stream in real time.
+4. **Translates streaming SSE events** from one shared bounded frame stream in real time, preserving native terminal semantics.
 
 ### Canonical request and reasoning boundary
 

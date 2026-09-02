@@ -4,16 +4,21 @@ Back to [Overview](overview.md)
 
 ## Purpose
 
-Transparently translates request/response bodies between OpenAI Chat Completions and Anthropic Messages protocols. When a client sends Anthropic-format requests but the routed provider only speaks OpenAI Chat Completions (or vice versa), the transcoder bridges the gap through a small canonical semantic boundary.
+Transparently translates request/response bodies between the public OpenAI
+Chat, OpenAI Responses, and Anthropic Messages surfaces and the selected
+provider wire surface. Native Gemini Interactions and `generateContent` are
+also represented as concrete codecs. All alternate targets use a small
+canonical semantic boundary.
 
 ## Architecture
 
 ```
 Client surface        Canonical boundary       Upstream surface
 ──────────────        ──────────────────       ────────────────
-OpenAI Chat    ───►   request intent      ───►  Anthropic Messages
-Anthropic Msg  ───►   request intent      ───►  OpenAI Chat
-Native surface ───►   byte passthrough    ───►  same surface
+OpenAI Chat    ───►   request intent      ───►  Chat / Responses / Messages
+OpenAI Responses──►   response + events   ───►  Chat / Messages / Gemini
+Anthropic Msg  ───►   source-owned IR     ───►  Chat / Responses
+Native surface ───►   byte path or codec   ───►  same concrete surface
 ```
 
 ## Key Modules
@@ -88,10 +93,11 @@ verified target encoding; codecs must not invent a budget.
 
 `wire/codecs/base.py` defines the operations concrete codecs need: request
 encoding, response/event decoding, and client response/event encoding.
-`wire/codecs/compat.py` currently supplies executable Chat and Messages
-adapters for the common subset. The coordinator's established tested
-transcoders remain the compatibility implementation during migration, while
-native same-surface requests continue to use the low-copy byte path.
+`wire/codecs/compat.py` supplies executable Chat and Messages adapters;
+`wire/codecs/defaults.py` supplies Responses, Gemini Interactions, and Gemini
+`generateContent`. `wire/codecs/runtime.py` composes these codecs into the
+selected-profile request/response/stream bridge. Same-surface native traffic
+can still use the low-copy byte path when no semantic adaptation is needed.
 
 ### `transcoder/static_headers.py`
 
@@ -265,7 +271,7 @@ General-purpose JSON helpers for loose-typed protocol payloads (`as_object`, `it
 | 140 | Local + multimodal closure | Corrected Ollama discovery, selected-provider capability resolution, provider-sensitive preflight reuse guard, canonical 413 lifecycle, audited local capability metadata, content IR removed |
 | 141 | Final corrective closure | Post-selection provider-sensitive translation, 413 renderer, oversize finalization as proof-of-convergence, Responses deferral rationale, corrected vLLM image URL capability |
 | 142 | Typed media rejections | Typed `CapabilityError` / `TranscodeLossError` at the attempt-loop seam, fail-closed durable finalization for selected-rejection paths, provider-bound 413, provider metadata URL-image facts |
-| 144 | Final Responses closure | Responses strictly same-protocol passthrough; transcode preflight and Chat/Anthropic body transforms skipped for `request_surface == "responses"`; stateless admission tightened (`store=false` required, any conversation/`previous_response_id` rejected); distinct terminal kinds for `response.completed` / `response.failed` / `response.incomplete` with only `response.completed` mapping to canonical success |
+| 144 | Final Responses closure | Established stateless Responses admission and terminal event semantics; superseded by the concrete multi-surface codecs in Plan 152 |
 
 ## Loss Warning Kinds
 

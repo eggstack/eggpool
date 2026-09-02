@@ -8,7 +8,7 @@ EggPool exposes OpenAI Chat Completions- and Anthropic Messages-compatible paths
 |--------|------|-------------|
 | `GET` | `/v1/models` | List available models |
 | `POST` | `/v1/chat/completions` | OpenAI Chat Completions-compatible requests |
-| `POST` | `/v1/responses` | Stateless OpenAI Responses-compatible requests (passthrough only) |
+| `POST` | `/v1/responses` | Stateless OpenAI Responses-compatible requests; canonical adaptation is allowed to eligible upstream surfaces |
 | `POST` | `/v1/messages` | Anthropic Messages-compatible requests |
 
 ## Health & Readiness

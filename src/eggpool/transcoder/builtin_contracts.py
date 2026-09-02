@@ -65,14 +65,14 @@ class BuiltinProviderContract:
 # OpenCode Go Muse Spark 1.2 Contributor contract
 # ---------------------------------------------------------------------------
 # The OpenCode Go model list does not include capability metadata, so this
-# endpoint needs a curated contract for the Anthropic Messages path. The
+# model needs a curated contract for its Responses/OpenAI-family path. The
 # effort vocabulary is mirrored from the current models.dev/OpenCode model
 # record, including the newer ``minimal`` and ``xhigh`` levels.
 _OPENCODE_GO_MUSE_CONTRACT = BuiltinProviderContract(
     key=ProviderContractKey(
         provider_id_pattern=r"^opencode-go$",
         model_id_pattern=r"^muse-spark-1\.2-contributor$",
-        protocol="anthropic",
+        protocol="openai",
         priority=10,
     ),
     contract=ThinkingControlContract(
@@ -97,7 +97,7 @@ _OPENCODE_GO_MUSE_URL_COMPAT_CONTRACT = BuiltinProviderContract(
     key=ProviderContractKey(
         provider_base_url_pattern=r".*opencode\.ai/zen/go/v1.*",
         model_id_pattern=r"^muse-spark-1\.2-contributor$",
-        protocol="anthropic",
+        protocol="openai",
         priority=10,
     ),
     contract=_OPENCODE_GO_MUSE_CONTRACT.contract,

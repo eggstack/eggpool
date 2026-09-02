@@ -560,6 +560,29 @@ enabled = false
 # # probe_protocol = "openai"
 # # require_models = true
 
+# Google Gemini native APIs — stateless Interactions and generateContent.
+# [providers.gemini-native]
+# id = "gemini-native"
+# base_url = "https://generativelanguage.googleapis.com/v1beta"
+# protocols = ["openai"]
+#
+# [[providers.gemini-native.accounts]]
+# name = "default"
+# api_key_env = "GEMINI_NATIVE_API_KEY"
+#
+# [providers.gemini-native.auth]
+# mode = "api_key"
+# header = "x-goog-api-key"
+#
+# [providers.gemini-native.wire_surfaces.gemini_interactions]
+# path_template = "/interactions"
+# priority = 90
+#
+# [providers.gemini-native.wire_surfaces.gemini_generate_content]
+# path_template = "/models/{model}:generateContent"
+# stream_path_template = "/models/{model}:streamGenerateContent"
+# priority = 100
+
 # Anthropic — direct Claude API
 # Status: verified — Anthropic Messages API with x-api-key auth and required version header
 # [providers.anthropic]
@@ -839,8 +862,7 @@ enabled = false
 
 # Ollama (local) — OpenAI compatible, no auth required.
 # Ollama 0.13.3+ exposes a stateless /v1/responses surface used by
-# Codex; uncomment responses_path to make this provider eligible for
-# POST /v1/responses traffic.
+# Codex; uncomment responses_path to add an explicit Responses candidate.
 # Status: verified (well-known local service)
 # [providers.ollama-local]
 # id = "ollama-local"

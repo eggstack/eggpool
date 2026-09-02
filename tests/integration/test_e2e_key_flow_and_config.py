@@ -639,9 +639,9 @@ class TestConfigSetup:
                 name = "go"
                 api_key = "sk-test"
 
-                [[providers.opencode-go.static_models]]
-                id = "muse-spark-1.2-contributor"
-                protocol = "anthropic"
+[[providers.opencode-go.static_models]]
+id = "muse-spark-1.2-contributor"
+protocol = "openai"
                 """
             )
         )

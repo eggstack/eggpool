@@ -47,16 +47,17 @@ All data-plane requests flow through `RequestCoordinator`:
 - Non-streaming response adaptation completes before durable `COMPLETED`; native invalid JSON may pass through when usage is optional, while required transcoded responses must adapt successfully.
 - Every retryable failed attempt must reach terminal state through retained attempt cleanup before the next attempt
 - Each attempt reservation is released exactly once via `AttemptFinalizer`
-- Streaming success requires upstream protocol terminal evidence: OpenAI `[DONE]`, Anthropic `message_stop`, or Responses `response.completed`. Use `StreamCompletionSnapshot` and `classify_stream_eof()`. Responses `response.failed` / `response.incomplete` are terminal non-success outcomes forwarded unchanged; they do not retry after downstream handoff.
+- Streaming success requires native upstream terminal evidence: OpenAI `[DONE]`, Anthropic `message_stop`, Responses `response.completed`, Gemini Interactions `interaction.completed`, or Gemini `finishReason=STOP`. Use `StreamCompletionSnapshot` and `classify_stream_eof()`. Non-success terminal events are forwarded in the client's grammar; transport EOF never synthesizes a terminal marker.
 - `_crash_recovery` runs at every startup and repairs pending requests and active reservations left by a previous process. Normal request handling has no age-only stale sweep.
 
 ## Protocol Transcoding
 
 OpenAI Chat Completions ↔ Anthropic Messages conversion lives in
 `src/eggpool/transcoder/` with the canonical semantic boundary in
-`src/eggpool/wire/ir.py`. The Responses surface (`/v1/responses`) is
-strictly same-protocol passthrough — no transcoding. Controlled by
-`[transcoder]` config; on by default. Provider payload is
+`src/eggpool/wire/ir.py`. The closed wire registry provides concrete
+Responses, Gemini Interactions, and Gemini `generateContent` codecs alongside
+the Chat/Messages adapters. Controlled by `[transcoder]` config where the
+legacy field-level transcoder applies; on by default. Provider payload is
 `ProviderBoundRequest` with copy-on-write ownership; cross-protocol
 encoders receive a read-only `Mapping` and return fresh target graphs.
 `ReasoningIntent` is captured before target selection; effort labels are not

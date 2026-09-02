@@ -156,6 +156,11 @@ from eggpool.transcoder.context import TranscodeContext
 from eggpool.transcoder.errors import TranscodeLossError
 from eggpool.transcoder.protocol import BodyTranscoder, select_transcoder
 from eggpool.transcoder.streaming import select_streaming_transcoder
+from eggpool.wire.codecs.runtime import (
+    CanonicalWireStreamingAdapter,
+    adapt_response,
+    needs_wire_codec_adaptation,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Mapping
@@ -472,8 +477,9 @@ class ProxyRequestContext:
     # Plan 143: wire endpoint surface for OpenAI-family requests.
     # ``"chat_completions"`` is the historical default and the only
     # surface that triggers ``stream_options.include_usage`` injection
-    # or any Chat Completions-specific transform. ``"responses"`` marks
-    # a stateless same-protocol passthrough.
+    # or any Chat Completions-specific transform. ``"responses"`` is
+    # a stateless public surface whose payload may be adapted to a
+    # selected provider wire surface.
     request_surface: str = "chat_completions"
     thinking_trace: dict[str, Any] | None = None
     thinking_intent: Any | None = None  # ThinkingRequestIntent | None
@@ -1481,6 +1487,21 @@ class RequestCoordinator:
                 break
 
             last_selected = selected
+            # A concrete alternate wire surface (Responses or Gemini) is
+            # adapted from the canonical client request directly. The mature
+            # protocol transcoders remain authoritative for the established
+            # Chat <-> Messages pair, but must not be allowed to turn a
+            # Responses request into Chat-shaped provider data.
+            from eggpool.wire.codecs.runtime import needs_wire_codec_adaptation
+
+            if (
+                needs_wire_codec_adaptation(
+                    client_surface=context.client_surface,
+                    selected_surface=getattr(context.wire_profile, "surface", None),
+                )
+                and context.wire_profile is not None
+            ):
+                transcoder = None
             # Plan 141/142: after ``SelectedAttempt`` exists, perform the
             # definitive cross-protocol translation against the selected
             # provider's capability row. This applies when the preflight
@@ -3172,7 +3193,35 @@ class RequestCoordinator:
                 read_ms=upstream_read_ms,
             )
             # Finalize via RequestFinalizer
-            if transcoder is not None and context.transcode_context is not None:
+            wire_profile = getattr(context, "wire_profile", None)
+            if wire_profile is not None and needs_wire_codec_adaptation(
+                client_surface=context.client_surface,
+                selected_surface=wire_profile.surface,
+            ):
+                upstream_payload = parsed_response.parsed_dict
+                if not isinstance(upstream_payload, dict):
+                    raise self._local_dispatch_error(
+                        context=context,
+                        selected=selected,
+                        stage="response_adaptation",
+                        error=ValueError("wire codec response is not a JSON object"),
+                    )
+                try:
+                    body = encode_json_body(
+                        adapt_response(
+                            upstream_payload,
+                            wire_profile,
+                            client_surface=context.client_surface,
+                        )
+                    )
+                except Exception as err:
+                    raise self._local_dispatch_error(
+                        context=context,
+                        selected=selected,
+                        stage="response_adaptation",
+                        error=err,
+                    ) from err
+            elif transcoder is not None and context.transcode_context is not None:
                 upstream_payload = parsed_response.parsed_dict
                 if not isinstance(upstream_payload, dict):
                     raise self._local_dispatch_error(
@@ -3682,6 +3731,9 @@ class RequestCoordinator:
             context.upstream_protocol,
             provider_id=selected.provider_id,
             request_surface=getattr(context, "request_surface", "chat_completions"),
+            wire_surface=getattr(
+                getattr(context, "wire_profile", None), "surface", None
+            ),
         )
         shared_decoder = SSEDecoder()
         bytes_emitted = 0
@@ -3705,27 +3757,37 @@ class RequestCoordinator:
         async def _stream() -> AsyncIterator[bytes]:
             nonlocal bytes_emitted, first_byte_ms
             try:
-                streaming_transcoder = select_streaming_transcoder(
-                    client_protocol=context.protocol,
-                    upstream_protocol=context.upstream_protocol,
-                    include_usage=include_usage,
-                    transcode_context=context.transcode_context,
-                    features=(
-                        self._transcoder_policy.features
-                        if self._transcoder_policy is not None
-                        else None
-                    ),
-                    reasoning_field_names=(
-                        self._transcoder_policy.openai_reasoning_fields.stream_delta
-                        if self._transcoder_policy is not None
-                        else None
-                    ),
-                    emit_compat_aliases=(
-                        self._transcoder_policy.openai_reasoning_fields.emit_compat_aliases
-                        if self._transcoder_policy is not None
-                        else False
-                    ),
-                )
+                wire_profile = getattr(context, "wire_profile", None)
+                if wire_profile is not None and needs_wire_codec_adaptation(
+                    client_surface=context.client_surface,
+                    selected_surface=wire_profile.surface,
+                ):
+                    streaming_transcoder = CanonicalWireStreamingAdapter(
+                        wire_profile,
+                        client_surface=context.client_surface,
+                    )
+                else:
+                    streaming_transcoder = select_streaming_transcoder(
+                        client_protocol=context.protocol,
+                        upstream_protocol=context.upstream_protocol,
+                        include_usage=include_usage,
+                        transcode_context=context.transcode_context,
+                        features=(
+                            self._transcoder_policy.features
+                            if self._transcoder_policy is not None
+                            else None
+                        ),
+                        reasoning_field_names=(
+                            self._transcoder_policy.openai_reasoning_fields.stream_delta
+                            if self._transcoder_policy is not None
+                            else None
+                        ),
+                        emit_compat_aliases=(
+                            self._transcoder_policy.openai_reasoning_fields.emit_compat_aliases
+                            if self._transcoder_policy is not None
+                            else False
+                        ),
+                    )
                 iterator = upstream_iterator or upstream_response.aiter_bytes()
                 pending_chunk = prefetched_chunk
                 stream_started_at = time.monotonic()
@@ -4671,19 +4733,26 @@ class RequestCoordinator:
 
             profiles = resolve_provider_wire_profiles(provider)
         if context.upstream_protocol == "anthropic":
-            requested_surface = "anthropic_messages"
             family_surfaces = ("anthropic_messages",)
         elif getattr(context, "request_surface", "chat_completions") == "responses":
-            requested_surface = "openai_responses"
-            family_surfaces = ("openai_responses", "openai_chat_completions")
+            family_surfaces = (
+                "openai_responses",
+                "openai_chat_completions",
+                "gemini_interactions",
+                "gemini_generate_content",
+            )
         else:
-            requested_surface = "openai_chat_completions"
-            family_surfaces = ("openai_chat_completions", "openai_responses")
-        allowed_surfaces = (
-            family_surfaces
-            if context.client_metadata.get("_wire_negotiating")
-            else (requested_surface,)
-        )
+            family_surfaces = (
+                "openai_chat_completions",
+                "openai_responses",
+                "gemini_interactions",
+                "gemini_generate_content",
+            )
+        # The client surface is a grammar, not an upstream endpoint
+        # requirement. Resolve the full compatible family so a Responses or
+        # Chat client can use the provider's declared Chat, Responses, or
+        # native Gemini candidate; provider/model hints still determine order.
+        allowed_surfaces = family_surfaces
         bundled_hint: WireHint | None = self._wire_bundled_hints_by_provider.get(
             provider_id, {}
         ).get(context.model_id)

@@ -67,3 +67,10 @@ model_id = "minimax-m2.5"
 preferred_surface = "anthropic_messages"
 verified_on = "2026-09-02"
 source = "provider_docs"
+
+[[hints]]
+provider_id = "opencode-go"
+model_id = "mimo-v2.5"
+preferred_surface = "openai_chat_completions"
+verified_on = "2026-09-02"
+source = "provider_docs"

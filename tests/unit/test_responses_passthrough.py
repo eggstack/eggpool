@@ -1,14 +1,13 @@
-"""Focused tests for the Responses passthrough introduced by Plan 143.
+"""Focused tests for the stateless Responses client surface.
 
-The Responses surface is a stateless same-protocol OpenAI passthrough.
-These tests verify the four narrow guarantees Plan 143 requires:
+These tests verify the stateless admission, URL, and stream guarantees:
 
 * stateless request validation rejects stateful Responses features
   (``previous_response_id``, ``conversation``, ``store = true``,
   ``background = true``) with a 400 before any upstream I/O;
 * provider eligibility excludes accounts whose provider has not
-  declared ``responses_path`` while leaving Chat Completions eligibility
-  unchanged;
+  declared a compatible Responses wire surface while leaving Chat
+  Completions eligibility unchanged;
 * the Responses URL is composed from ``responses_path`` via
   ``compose_provider_url()`` — there is no second URL joiner;
 * Chat Completions-specific transforms (``stream_options.include_usage``
@@ -332,7 +331,9 @@ def test_account_registry_supports_request_surface_predicate() -> None:
     assert (
         registry.account_supports_request_surface("primary", "chat_completions") is True
     )
-    assert registry.account_supports_request_surface("local", "responses") is False
+    # A Chat-only provider is eligible for the stateless Responses client
+    # surface because the canonical bridge can adapt Responses to Chat.
+    assert registry.account_supports_request_surface("local", "responses") is True
     assert (
         registry.account_supports_request_surface("local", "chat_completions") is True
     )
@@ -377,10 +378,8 @@ class TestResponsesUrlResolution:
         )
         assert url == "https://api.openai.com/v1/chat/completions"
 
-    def test_anthropic_with_responses_surface_raises(self) -> None:
-        """Plan 144 (B3): Responses + anthropic protocol is impossible."""
-        import pytest
-
+    def test_anthropic_with_responses_surface_uses_messages_path(self) -> None:
+        """Responses clients can be adapted to an Anthropic wire surface."""
         from eggpool.request.upstream_helpers import get_upstream_url
 
         cfg = ProviderConfig(
@@ -390,10 +389,12 @@ class TestResponsesUrlResolution:
         )
         config = type("_Cfg", (), {"providers": {"anthropic": cfg}})()
 
-        with pytest.raises(RuntimeError, match="Responses surface requires openai"):
+        assert (
             get_upstream_url(
                 "anthropic", "anthropic", config=config, request_surface="responses"
             )
+            == "https://api.anthropic.com/v1/messages"
+        )
 
     def test_missing_responses_path_raises(self) -> None:
         from eggpool.request.upstream_helpers import get_upstream_url

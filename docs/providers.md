@@ -12,9 +12,9 @@ EggPool supports multiple upstream AI providers behind a unified API. This docum
 
 ## Verified Providers
 
-These providers have clean API-key auth and implement one or both of EggPool's
-supported upstream wire protocols: OpenAI Chat Completions or Anthropic
-Messages. They are safe to configure with real API keys.
+These providers have clean API-key auth and implement one or more of EggPool's
+supported upstream wire surfaces. They are safe to configure with real API
+keys unless noted otherwise.
 
 | Provider | ID | Base URL | Protocols | Auth | API Key Env |
 |----------|----|----------|-----------|------|-------------|
@@ -28,6 +28,7 @@ Messages. They are safe to configure with real API keys.
 | Groq | `groq` | `https://api.groq.com/openai/v1` | OpenAI | Bearer | `GROQ_API_KEY` |
 | DeepInfra | `deepinfra` | `https://api.deepinfra.com/v1/openai` | OpenAI | Bearer | `DEEPINFRA_TOKEN` |
 | Google Gemini | `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai` | OpenAI | Bearer | `GEMINI_API_KEY` |
+| Google Gemini (native) | `gemini-native` | `https://generativelanguage.googleapis.com/v1beta` | Gemini Interactions + generateContent | `x-goog-api-key` | `GEMINI_NATIVE_API_KEY` |
 | xAI | `xai` | `https://api.x.ai/v1` | OpenAI | Bearer | `XAI_API_KEY` |
 | Mistral | `mistral` | `https://api.mistral.ai/v1` | OpenAI | Bearer | `MISTRAL_API_KEY` |
 | SiliconFlow | `siliconflow` | `https://api.siliconflow.cn/v1` | OpenAI | Bearer | `SILICONFLOW_API_KEY` |
@@ -102,8 +103,9 @@ export GROQ_API_KEY="gsk_..."
 ```
 
 `stream_completion_policy` is provider-bound and controls clean upstream EOF:
-`strict` requires OpenAI `[DONE]` or Anthropic `message_stop`; `compatible`
-allows markerless completion only when a complete usage signal is present; and
+`strict` requires the native surface terminal (`[DONE]`, `message_stop`, a
+Responses terminal event, `interaction.completed`, or Gemini `finishReason`);
+`compatible` allows markerless completion only when a complete usage signal is present; and
 `permissive_observe` preserves that compatibility behavior while exposing the
 missing-marker diagnostic. Use compatibility modes only for a named provider
 whose terminal convention has been verified. A stream with payload but no
@@ -149,6 +151,11 @@ OpenCode Go's current documented endpoint table places GPT 5.6 Luna and Muse
 Spark 1.2/1.3 Contributor on Responses, current GLM/Kimi/DeepSeek/MiMo models
 on Chat Completions, and MiniMax M3/M2.7/M2.5 on Anthropic Messages. EggPool
 ships these as revocable exact hints, not provider-specific dispatch logic.
+
+The native Gemini template exposes both `/interactions` and
+`/models/{model}:generateContent` (with `:streamGenerateContent?alt=sse` for
+streams). The Interactions codec sends `store = false`; neither native surface
+persists EggPool conversation state.
 
 ### Anthropic-Specific Configuration
 
@@ -472,6 +479,14 @@ uv run python scripts/verify_upstream_auth.py --config config.toml --provider gr
 - Base URL includes `/v1beta/openai`; path composition must produce `.../openai/chat/completions`.
 - Do not add Google-specific `extra_body.google.thinking_config` defaults.
 - Model names change frequently; verify with live API key.
+
+### Google Gemini (native)
+
+- `gemini-native` uses the documented `x-goog-api-key` header and native
+  `generateContent`/Interactions request and response grammars.
+- Streaming `generateContent` requires the `alt=sse` query parameter.
+- Native Interactions requests are stateless (`store = false`); model access
+  and current model IDs must be verified with a live key.
 
 ### xAI
 

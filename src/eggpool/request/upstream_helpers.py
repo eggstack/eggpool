@@ -44,23 +44,12 @@ def get_upstream_url(
     paths share the same URL composition rules as catalog fetch.
     Falls back to bare paths when no provider config is loaded.
 
-    ``request_surface`` selects which OpenAI-family endpoint the
-    coordinator dispatches to. ``"responses"`` (Plan 143) requires
-    the provider to declare ``responses_path``. The eligibility gate
-    in ``routing.eligibility`` already excludes providers that lack
-    the surface path; this resolver additionally raises a typed
-    ``RuntimeError`` when a selected provider somehow has no path
-    so a wrong URL is never constructed. ``"chat_completions"`` is
-    the historical default and uses ``openai_path``.
+    ``request_surface`` identifies the client surface. A concrete
+    ``WireProfile`` selects the upstream grammar; the legacy fallback uses
+    the matching configured path for OpenAI Responses or Anthropic Messages.
     """
     from eggpool.providers.contract import compose_provider_url
 
-    # Plan 144 (B3): Responses is OpenAI-family only.  Never construct
-    # an Anthropic /messages URL for a Responses request.
-    if request_surface == "responses" and protocol != "openai":
-        raise RuntimeError(
-            f"Responses surface requires openai protocol, got {protocol!r}"
-        )
     if provider_id and config is not None:
         provider_cfg = config.providers.get(provider_id)
         if provider_cfg is not None:
@@ -69,10 +58,13 @@ def get_upstream_url(
                     raise RuntimeError(
                         "A model ID is required to render a wire profile path"
                     )
-                return compose_provider_url(
+                url = compose_provider_url(
                     provider_cfg,
                     wire_profile.path_for(model_id, streaming=streaming),
                 )
+                if wire_profile.surface == "gemini_generate_content" and streaming:
+                    return f"{url}?alt=sse"
+                return url
             path = _resolve_path_for_surface(provider_cfg, protocol, request_surface)
             if path is not None:
                 return compose_provider_url(provider_cfg, path)
@@ -101,15 +93,11 @@ def _resolve_path_for_surface(
     decide whether this is fatal (Responses) or a fall-through (other
     surfaces).
 
-    Plan 144 (B3): when ``request_surface == "responses"`` the protocol
-    must be ``openai`` — the Anthropic ``/messages`` path is never
-    returned for a Responses surface.
+    Responses and Messages are separate client grammars. Without an explicit
+    profile, a Responses request targeting Anthropic uses the configured
+    Anthropic path and is adapted at the canonical boundary.
     """
-    if request_surface == "responses":
-        if protocol != "openai":
-            raise RuntimeError(
-                f"Responses surface requires openai protocol, got {protocol!r}"
-            )
+    if request_surface == "responses" and protocol == "openai":
         return getattr(provider_cfg, "responses_path", None)
     if protocol == "anthropic":
         return provider_cfg.anthropic_path
@@ -186,11 +174,8 @@ def validate_endpoint_or_transcode(
     the wrong endpoint is used for a known model and no transcodable
     route exists.
 
-    Plan 144 (B2): Responses is strictly same-protocol.  When
-    ``request_surface == "responses"`` the function never sets
-    ``transcode_required = True`` and never resolves an upstream
-    ``anthropic`` protocol.  An Anthropic-only model is rejected
-    locally before any durable state.
+    Responses remains stateless, but its canonical request/response grammar
+    may be adapted to an eligible Chat or Messages upstream surface.
     """
     from eggpool.catalog.protocols import ModelProtocolResolver
     from eggpool.errors import ModelNotFoundError, ModelUnavailableError
@@ -214,16 +199,6 @@ def validate_endpoint_or_transcode(
             getattr(context, "request_surface", "chat_completions"),
         )
         return
-
-    # Plan 144 (B2): Responses never uses Anthropic transcoding fallback.
-    request_surface = getattr(context, "request_surface", "chat_completions")
-    if request_surface == "responses":
-        # The model only supports a protocol the Responses surface cannot
-        # provide.  Reject with the existing typed error rather than
-        # falling through to the generic transcodable-route path.
-        resolver = ModelProtocolResolver()
-        model_protocol = sorted(model_protocols)[0]
-        resolver.validate_endpoint(model_protocol, context.protocol, context.model_id)
 
     # Check if transcoding can bridge the protocol gap.
     upstream_protocol = resolve_upstream_protocol(

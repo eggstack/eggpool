@@ -20,6 +20,7 @@ EOFClassification = Literal[
     "compatibility_eof",
     "terminal_failure",
     "terminal_incomplete",
+    "gemini_incomplete",
 ]
 
 
@@ -56,8 +57,14 @@ def classify_stream_eof(
             classification = "terminal_failure"
         elif snapshot.terminal_kind == "responses_incomplete":
             classification = "terminal_incomplete"
-        elif snapshot.terminal_kind in ("openai_done", "anthropic_message_stop"):
+        elif snapshot.terminal_kind in (
+            "openai_done",
+            "anthropic_message_stop",
+            "gemini_completed",
+        ):
             classification = "complete"
+        elif snapshot.terminal_kind == "gemini_incomplete":
+            classification = "terminal_incomplete"
         else:
             # Unknown terminal kind — treat as malformed if parser errors
             # occurred, otherwise assume complete (conservative).

@@ -126,8 +126,8 @@ class ErrorResponseFactory(Protocol):
 def _validate_responses_stateless(payload: dict[str, Any]) -> str | None:
     """Return a rejection message when a Responses payload is not stateless.
 
-    EggPool exposes ``POST /v1/responses`` only as a stateless same-protocol
-    passthrough. Stateful Responses features (``previous_response_id``,
+    EggPool exposes ``POST /v1/responses`` as a stateless client surface.
+    Stateful Responses features (``previous_response_id``,
     conversation references, ``store = true``, ``background = true``) bind
     a request to a specific upstream's response identity and cannot be
     safely failed over across accounts. This helper detects those fields
@@ -192,8 +192,8 @@ class ProxyEndpointConfig:
         Identifies the wire endpoint surface served by this handler.
         Defaults to ``"chat_completions"`` so existing call sites keep
         their current dispatch behavior. ``"responses"`` selects the
-        stateless OpenAI Responses passthrough introduced by
-        Plan 143; the field is a *surface* declaration, not a new
+        stateless OpenAI Responses surface; the field is a *surface*
+        declaration, not a new
         ``ProtocolName``.
     request_label:
         Human-readable label used for logging.
@@ -708,9 +708,10 @@ async def _handle_proxy_request_inner(
                 error_type="invalid_request_error",
             )
 
-    # Second pass: when transcoding is active, also validate the translated
-    # payload against upstream limits.  Responses is strictly same-protocol
-    # passthrough — skip transcode preflight entirely (Plan 144, B1).
+    # Second pass: when legacy transcoding is active, also validate the
+    # translated payload against upstream limits. Responses skips that
+    # preflight, but alternate wire profiles are encoded from canonical intent
+    # after provider selection.
     with _span(span_recorder, SPAN_TRANSCODE_PREFLIGHT):
         if endpoint.request_surface == "responses":
             preflight = None
@@ -796,9 +797,8 @@ async def _handle_proxy_request_inner(
         )
     is_stream = bool(stream_value)
 
-    # Plan 143: the Responses surface is a stateless same-protocol
-    # passthrough. Stateful Responses features would tie a request to a
-    # single upstream's response identity, which cannot survive
+    # The Responses surface is stateless. Stateful Responses features would
+    # tie a request to a single upstream's response identity, which cannot survive
     # EggPool's account failover. Reject them explicitly before durable
     # account selection so the client never silently believes provider
     # state is being preserved.

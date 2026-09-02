@@ -847,10 +847,9 @@ class ProviderConfig(BaseModel):
     """Provider family (e.g. ``"anthropic"``, ``"openai"``)."""
     openai_path: str = "/chat/completions"
     anthropic_path: str = "/messages"
-    # Plan 143: stateless OpenAI Responses endpoint surface. ``None``
-    # means the provider does not advertise a Responses endpoint and
-    # cannot receive ``POST /v1/responses`` traffic. The field is a
-    # *surface* declaration rather than a new ``ProtocolName`` value;
+    # Legacy shorthand for an OpenAI Responses wire-surface candidate.
+    # ``None`` means no explicit Responses endpoint is synthesized. The field
+    # is a *surface* declaration rather than a new ``ProtocolName`` value;
     # ``protocols`` still records the OpenAI family.
     responses_path: str | None = None
     models_method: Literal["GET", "POST"] = "GET"

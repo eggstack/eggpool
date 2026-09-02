@@ -282,18 +282,18 @@ _MUSE_SPARK_SPEC = RuntimeAppSpec(
     models=(
         ModelSpec(
             model_id="muse-spark-1.2-contributor",
-            protocol="anthropic",
+            protocol="openai",
         ),
     ),
     providers=(
         ProviderSpec(
             provider_id="opencode-go",
             base_url="https://opencode.ai/zen/go/v1",
-            protocols=("anthropic",),
+            protocols=("openai",),
             static_models=(
                 ModelSpec(
                     model_id="muse-spark-1.2-contributor",
-                    protocol="anthropic",
+                    protocol="openai",
                 ),
             ),
             account_names=("rt-acct-1",),
@@ -332,7 +332,7 @@ async def muse_spark_app(
 
 
 class TestMuseSparkThinkingControl:
-    """Muse Spark xhigh routes through the native Anthropic endpoint."""
+    """Muse Spark xhigh routes through the OpenAI-family endpoint."""
 
     @respx.mock
     @pytest.mark.asyncio()
@@ -349,17 +349,27 @@ class TestMuseSparkThinkingControl:
             return httpx.Response(
                 200,
                 json={
-                    "id": "msg-muse-spark",
-                    "type": "message",
-                    "role": "assistant",
+                    "id": "chat-muse-spark",
+                    "object": "chat.completion",
                     "model": "muse-spark-1.2-contributor",
-                    "content": [{"type": "text", "text": "pong"}],
-                    "stop_reason": "end_turn",
-                    "usage": {"input_tokens": 5, "output_tokens": 1},
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "pong"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 5,
+                        "completion_tokens": 1,
+                        "total_tokens": 6,
+                    },
                 },
             )
 
-        respx.post(f"{UPSTREAM_BASE}/messages").mock(side_effect=_capture_handler)
+        respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+            side_effect=_capture_handler
+        )
 
         async with httpx.AsyncClient(
             transport=ASGITransport(app=muse_spark_app),
@@ -380,10 +390,7 @@ class TestMuseSparkThinkingControl:
         assert response.json()["choices"][0]["message"]["content"] == "pong"
         assert len(captured_bodies) == 1
         upstream_body = json.loads(captured_bodies[0])
-        assert upstream_body.get("thinking") == {
-            "type": "enabled",
-            "budget_tokens": 24576,
-        }, upstream_body
+        assert upstream_body.get("reasoning_effort") == "xhigh", upstream_body
 
 
 class TestWarnDropBodyCapture:

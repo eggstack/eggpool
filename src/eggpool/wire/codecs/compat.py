@@ -1,11 +1,11 @@
 # pyright: reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownVariableType=false
 
-"""Canonical adapters for the currently supported Chat and Messages surfaces.
+"""Canonical adapters for the OpenAI Chat and Anthropic Messages surfaces.
 
 These adapters cover the common semantic subset and deliberately accept
-already-decoded frames.  The production coordinator continues to use its
-tested protocol-specific streaming translators during this migration; these
-objects provide the shared contract that the next codec phase can plug into.
+already-decoded frames. They are the public/client-side Chat and Messages
+codecs used by the canonical wire bridge; the mature field-level transcoders
+remain responsible for their richer legacy compatibility behavior.
 """
 
 from __future__ import annotations
@@ -14,12 +14,12 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, cast
 
 from eggpool.jsonx import dumps_bytes
-from eggpool.transcoder.usage import canonicalise_usage
 from eggpool.wire.ir import (
     CanonicalEvent,
     CanonicalOutputBlock,
     CanonicalRequest,
     CanonicalResponse,
+    CanonicalUsage,
     canonical_request_to_mapping,
 )
 
@@ -40,7 +40,12 @@ class OpenAIChatCodec:
         capability: Mapping[str, object] | None = None,
     ) -> Mapping[str, object]:
         del profile, capability
-        return canonical_request_to_mapping(request, surface="chat_completions")
+        result = canonical_request_to_mapping(request, surface="chat_completions")
+        if request.reasoning.requested is True and request.reasoning.effort:
+            result["reasoning_effort"] = request.reasoning.effort
+        elif request.reasoning.requested is False:
+            result.pop("reasoning_effort", None)
+        return result
 
     def decode_response(self, payload: Mapping[str, object]) -> CanonicalResponse:
         choices = payload.get("choices")
@@ -188,7 +193,10 @@ class AnthropicMessagesCodec:
         capability: Mapping[str, object] | None = None,
     ) -> Mapping[str, object]:
         del profile, capability
-        return canonical_request_to_mapping(request, surface="messages")
+        result = canonical_request_to_mapping(request, surface="messages")
+        if request.reasoning.requested is False:
+            result["thinking"] = {"type": "disabled"}
+        return result
 
     def decode_response(self, payload: Mapping[str, object]) -> CanonicalResponse:
         output: list[CanonicalOutputBlock] = []
@@ -331,7 +339,7 @@ class AnthropicMessagesCodec:
                         "type": "tool_use",
                         "id": block.call_id or "",
                         "name": block.name or "",
-                        "input": {},
+                        "input": _json_input(block.arguments),
                     }
                 )
         result: dict[str, object] = {
@@ -438,7 +446,29 @@ def _frame_payload(frame: Mapping[str, object]) -> Mapping[str, object]:
 def _usage(value: object, *, protocol: str):
     if not isinstance(value, Mapping):
         return None
-    return canonicalise_usage(cast("dict[str, Any]", value), protocol=protocol)
+    raw = cast("Mapping[str, Any]", value)
+    if protocol == "anthropic":
+        prompt = _token_count(raw.get("input_tokens"))
+        completion = _token_count(raw.get("output_tokens"))
+        return CanonicalUsage(
+            prompt_tokens=prompt,
+            completion_tokens=completion,
+            total_tokens=prompt + completion,
+            cache_creation_tokens=_token_count(raw.get("cache_creation_input_tokens")),
+            cache_read_tokens=_token_count(raw.get("cache_read_input_tokens")),
+        )
+    prompt = _token_count(raw.get("prompt_tokens"))
+    completion = _token_count(raw.get("completion_tokens"))
+    total = _token_count(raw.get("total_tokens")) or prompt + completion
+    return CanonicalUsage(prompt, completion, total)
+
+
+def _token_count(value: object) -> int:
+    return (
+        value
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0
+        else 0
+    )
 
 
 def _string(value: object) -> str | None:
@@ -453,6 +483,18 @@ def _json_arguments(value: object) -> str:
     if isinstance(value, Mapping):
         return dumps_bytes(dict(value)).decode("utf-8")
     return "" if value is None else str(value)
+
+
+def _json_input(value: str | None) -> dict[str, object]:
+    if not value:
+        return {}
+    import json
+
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return {}
+    return cast("dict[str, object]", parsed) if isinstance(parsed, dict) else {}
 
 
 def _anthropic_sse(event: str, data: Mapping[str, object]) -> bytes:

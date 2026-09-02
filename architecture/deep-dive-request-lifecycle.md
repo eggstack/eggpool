@@ -4,7 +4,9 @@ Back to [Overview](overview.md)
 
 ## Purpose
 
-The request lifecycle is the data-plane hot path: every chat completion and messages request flows through `RequestCoordinator` from endpoint to finalization.
+The request lifecycle is the data-plane hot path: every Chat Completions,
+Responses, and Messages request flows through `RequestCoordinator` from
+endpoint to finalization.
 
 After account/provider selection and before provider-body serialization, the
 coordinator resolves the generation's declared wire profile through the
@@ -126,7 +128,7 @@ facade.  Implementation details are delegated to focused helper modules:
 - Retry consumes one shared upstream-submission budget of `1 + max_retries_before_stream`, including alternate-wire submissions. The normal destination is another account on the same wire; a deterministic wire rejection may instead reopen the same account for the next wire candidate. Failed-attempt cleanup converges before reselection, and a ceiling-truncated traversal records `attempt_ceiling_reached`.
 - A bare or unknown 401 is not credential evidence: it is returned without account disablement, health penalty, or failover. Explicit credential invalidity may disable only the selected account; deterministic auth/surface/schema mismatch may reject only the selected wire candidate before downstream handoff.
 - Response handoff is an explicit `downstream_started` fact marked immediately before forwarding ASGI `http.response.start`; no retry occurs after handoff, even when zero payload bytes have been emitted. Body-byte accounting is separate.
-- Non-streaming response adaptation completes before durable `COMPLETED`; native pass-through may retain invalid JSON, but required transcoded response adaptation must succeed first.
+- Non-streaming response adaptation completes before durable `COMPLETED`; same-surface byte paths may retain invalid JSON, but a selected alternate wire codec must decode and re-encode successfully first.
 - Every retryable failed attempt reaches terminal state before next attempt
 - Same URL composition rules for catalog fetch and chat dispatch
 - Canonical request and reasoning intent are captured before provider-specific
@@ -144,8 +146,9 @@ classified from their type and can fail over only before handoff;
 
 For non-streaming responses, `ParsedUpstreamResponse` is built once after the
 body read. Usage extraction is best effort, native protocol bodies can remain
-pass-through, and required response transcoding happens before durable success
-finalization. For streams, the upstream response is closed on success,
+pass-through when no adaptation is required, and a selected wire codec must
+adapt alternate response grammars before durable success finalization. For
+streams, the upstream response is closed on success,
 cancellation, premature EOF, transport failure, or local frame translation
 failure.
 

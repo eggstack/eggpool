@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Any, cast
 
+from eggpool.catalog.pricing import coerce_token_count
 from eggpool.jsonx import loads as jsonx_loads  # compatibility patch surface
 from eggpool.proxy.sse import (
     MAX_SSE_FRAME_BYTES,
@@ -24,6 +27,27 @@ from eggpool.proxy.usage import (
 
 logger = logging.getLogger(__name__)
 MAX_INCOMPLETE_FRAME_BYTES = MAX_SSE_FRAME_BYTES
+
+
+def _gemini_stream_usage(value: object) -> StreamUsageResult | None:
+    """Normalize native Gemini usage metadata from a terminal event."""
+    if not isinstance(value, Mapping):
+        return None
+    raw = cast("Mapping[str, Any]", value)
+    prompt = coerce_token_count(
+        raw.get("total_input_tokens", raw.get("promptTokenCount", 0))
+    )
+    completion = coerce_token_count(
+        raw.get("total_output_tokens", raw.get("candidatesTokenCount", 0))
+    )
+    total = coerce_token_count(raw.get("total_tokens", raw.get("totalTokenCount", 0)))
+    if not prompt and not completion and not total:
+        return None
+    return StreamUsageResult(
+        input_tokens=prompt,
+        output_tokens=completion,
+        is_complete=True,
+    )
 
 
 @dataclass(slots=True)
@@ -82,6 +106,7 @@ class IncrementalSSEObserver:
         *,
         provider_id: str | None = None,
         request_surface: str = "chat_completions",
+        wire_surface: str | None = None,
     ) -> None:
         self._protocol = protocol
         # Plan 143: ``request_surface == "responses"`` swaps the
@@ -91,6 +116,7 @@ class IncrementalSSEObserver:
         # marker. Stream completion classification downstream treats
         # ``response.completed`` exactly like ``openai_done``.
         self._request_surface = request_surface
+        self._wire_surface = wire_surface
         self._usage_result = StreamUsageResult()
         self._extractor = (
             AnthropicStreamUsageExtractor(provider_id=provider_id)
@@ -151,7 +177,10 @@ class IncrementalSSEObserver:
                 self._saw_terminal_event = True
                 self._terminal_kind = "anthropic_message_stop"
             return
-        if self._request_surface == "responses" and frame.frame.event in (
+        if (
+            self._request_surface == "responses"
+            or self._wire_surface == "openai_responses"
+        ) and frame.frame.event in (
             "response.completed",
             "response.incomplete",
         ):
@@ -170,8 +199,8 @@ class IncrementalSSEObserver:
             return
         if (
             self._request_surface == "responses"
-            and frame.frame.event == "response.failed"
-        ):
+            or self._wire_surface == "openai_responses"
+        ) and frame.frame.event == "response.failed":
             if not self._saw_terminal_event:
                 self._saw_terminal_event = True
                 # Plan 144 (E1): distinct terminal kind for failure.
@@ -190,6 +219,56 @@ class IncrementalSSEObserver:
         if parsed is None:
             self._error_count += 1
             return
+        parsed = cast("Mapping[str, object]", parsed)
+        if self._wire_surface == "gemini_interactions":
+            event_type = parsed.get("event_type")
+            if event_type == "interaction.completed":
+                interaction = parsed.get("interaction")
+                if isinstance(interaction, Mapping):
+                    usage = _gemini_stream_usage(
+                        cast("Mapping[str, object]", interaction).get("usage")
+                    )
+                    if usage is not None:
+                        self._merge_usage(usage)
+                status = (
+                    cast("Mapping[str, object]", interaction).get("status")
+                    if isinstance(interaction, Mapping)
+                    else None
+                )
+                if not self._saw_terminal_event:
+                    self._saw_terminal_event = True
+                    self._terminal_kind = (
+                        "gemini_completed"
+                        if status in {"completed", "requires_action"}
+                        else "gemini_incomplete"
+                    )
+                return
+        if self._wire_surface == "gemini_generate_content":
+            candidates = parsed.get("candidates")
+            candidate_items = (
+                cast("list[object]", candidates) if isinstance(candidates, list) else []
+            )
+            candidate = candidate_items[0] if candidate_items else None
+            finish_reason = (
+                cast("Mapping[str, object]", candidate).get("finishReason")
+                if isinstance(candidate, Mapping)
+                else None
+            )
+            if isinstance(finish_reason, str):
+                usage = _gemini_stream_usage(parsed.get("usageMetadata"))
+                if usage is not None:
+                    self._merge_usage(usage)
+                if not self._saw_terminal_event:
+                    self._saw_terminal_event = True
+                    self._terminal_kind = (
+                        "gemini_completed"
+                        if finish_reason == "STOP"
+                        else "gemini_incomplete"
+                    )
+                return
+            usage = _gemini_stream_usage(parsed.get("usageMetadata"))
+            if usage is not None:
+                self._merge_usage(usage)
         try:
             usage = self._extractor.extract(safe_dict(parsed) or {})
         except (ValueError, TypeError, AttributeError):

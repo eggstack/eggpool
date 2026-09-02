@@ -1,21 +1,11 @@
-"""OpenAI Responses-compatible ``/v1/responses`` endpoint.
+"""Stateless OpenAI Responses-compatible ``/v1/responses`` endpoint.
 
-Stateless same-protocol passthrough introduced by Plan 143. EggPool does
-not implement Responses ↔ Anthropic translation, conversation
-persistence, response retrieval, cancellation, background jobs, or
-WebSocket transport. Stateful Responses fields
-(``previous_response_id``, ``conversation``, ``store = true``,
-``background = true``) are rejected locally in
-:mod:`eggpool.api.proxy_request` so the client never believes provider
-state is being preserved across account failover.
-
-The endpoint shares the OpenAI protocol family with Chat Completions
-because the upstream wire format is byte-for-byte passthrough. Only
-the ``request_surface`` field distinguishes the dispatch path: the
-provider-bound URL resolver picks ``responses_path`` instead of
-``openai_path``, the Chat Completions ``stream_options`` transform is
-skipped, and the streaming observer recognises Responses terminal
-events.
+The handler preserves the Responses client grammar while the coordinator may
+adapt through the canonical wire boundary to a selected provider surface.
+Stateful fields (``previous_response_id``, ``conversation``, ``store = true``,
+and ``background = true``) are rejected locally in
+:mod:`eggpool.api.proxy_request`; no response identity or conversation state
+is persisted across account or wire-surface changes.
 """
 
 from __future__ import annotations

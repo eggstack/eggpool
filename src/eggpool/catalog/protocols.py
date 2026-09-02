@@ -49,11 +49,10 @@ FAMILY_PROTOCOLS: dict[str, str] = {
     "deepseek-": "openai",
     "minimax-": "anthropic",
     "qwen3": "anthropic",
-    # OpenCode Go families that only expose protocol on a single endpoint.
-    # Verified live: ``muse-spark-1.2-contributor`` accepts
-    # ``POST /v1/messages`` with ``x-api-key``; ``longcat-2.0`` and
-    # ``hy3`` accept ``POST /v1/chat/completions`` with Bearer.
-    "muse-": "anthropic",
+    # OpenCode Go families with curated endpoint hints. Muse Spark is an
+    # OpenAI-family model whose preferred concrete wire surface is Responses;
+    # the surface registry, not this family label, selects its endpoint.
+    "muse-": "openai",
     "longcat-": "openai",
     "hy3": "openai",
 }

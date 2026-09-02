@@ -194,8 +194,9 @@ class AccountRegistry:
 
         ``"chat_completions"`` is always supported on providers that ship
         OpenAI Chat Completions, matching historical behaviour. The
-        ``"responses"`` surface requires the provider to declare a
-        non-null ``responses_path``. Unknown surfaces default to False so
+        ``"responses"`` client surface requires at least one declared
+        compatible wire profile; the selected profile may be Chat, Responses,
+        Messages, or native Gemini. Unknown surfaces default to False so
         future additions cannot silently widen eligibility.
         """
         provider_id = self.get_provider_for_account(account_name)
@@ -207,9 +208,16 @@ class AccountRegistry:
         if request_surface == "chat_completions":
             return "openai" in provider.protocols
         if request_surface == "responses":
-            if "openai" not in provider.protocols:
-                return False
-            return getattr(provider, "responses_path", None) is not None
+            return bool(
+                set(provider.wire_surfaces)
+                & {
+                    "openai_chat_completions",
+                    "openai_responses",
+                    "anthropic_messages",
+                    "gemini_interactions",
+                    "gemini_generate_content",
+                }
+            )
         return False
 
     def get_accounts_for_provider(self, provider_id: str) -> list[AccountRuntimeState]:

@@ -43,8 +43,9 @@ candidate paths, optional streaming paths, priorities, auth shapes, and static
 headers. When the field is absent, the legacy `protocols`, `openai_path`,
 `responses_path`, and `anthropic_path` fields synthesize equivalent candidates.
 The registry selects only Python-registered codec IDs; it never imports code
-from TOML. Bundled model hints are preferences with source/verification
-metadata, not permanent routing truth.
+from TOML. `wire/codecs/defaults.py` owns the Responses and Gemini codecs,
+while `compat.py` owns the Chat and Messages codecs. Bundled model hints are
+preferences with source/verification metadata, not permanent routing truth.
 
 Use `resolve_provider_wire_profiles()` to obtain immutable structural profiles
 and `build_wire_profile_headers()` to render the selected account credential.
@@ -82,6 +83,10 @@ invalidate a wire candidate.
   behind this abnormal-dispatch guard.
 - Wire path templates support only the validated `{model}` placeholder and
   quote the canonical model ID before URL composition.
+- Gemini `generateContent` streaming uses its explicit
+  `:streamGenerateContent?alt=sse` endpoint; the native Interactions stream
+  uses typed `event:` names. Each adapter preserves native terminal evidence
+  and never invents a terminal event at transport EOF.
 - Upstream failures, not local quota estimates, suppress account routing.
 - OS resolution and HTTP connection reuse are the default network behavior.
 - Proxy routing remains per-account and independent of normal resolution.

@@ -168,6 +168,9 @@ def test_hints_for_unavailable_provider_surface_are_ignored() -> None:
         id="opencode-go",
         base_url="https://example.test/v1",
         protocols=["openai"],
+        wire_surfaces={
+            "gemini_interactions": {"path_template": "/interactions"},
+        },
     )
     registry = load_wire_registry()
     assert registry.hints_for_provider(provider) == ()

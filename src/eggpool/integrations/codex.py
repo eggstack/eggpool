@@ -4,10 +4,10 @@ Plan 143 rewrites this module to match the current Codex CLI schema:
 
 * Codex selects providers through the ``[model_providers.<id>]`` table,
   not the legacy ``[provider.<id>]`` block.
-* The wire API is selected with ``wire_api = "responses"``; Codex
-  rejects ``wire_api = "chat"`` and EggPool's ``POST /v1/responses``
-  is the supported stateless surface (no Responses ↔ Chat translation
-  is implemented).
+* The wire API is selected with ``wire_api = "responses"``; EggPool's
+  ``POST /v1/responses`` is the supported stateless client surface. The
+  selected provider may use another registered wire profile through the
+  canonical codec boundary.
 * API keys are referenced through ``env_key`` rather than embedded
   directly in the generated TOML. Operators who already have
   ``EGGPOOL_API_KEY`` exported do not need to edit the snippet.

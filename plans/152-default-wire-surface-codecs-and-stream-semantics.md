@@ -1,7 +1,7 @@
 # Plan 152 — Default Wire-Surface Codecs and Streaming Semantics
 
 Date: 2026-09-02
-Status: ready after Plans 148–151
+Status: implemented
 Parent roadmap: `plans/147-dynamic-wire-surface-negotiation-roadmap.md`
 Depends on: Plans 148–151
 Planning baseline: `0bc0e02bbea5eebae70b247542d084e6fa6b122f`
@@ -547,22 +547,22 @@ Use property/invariant tests where cheap:
 
 # Acceptance criteria
 
-- [ ] Five default surface codec IDs are implemented and registered.
-- [ ] OpenAI Responses uses its own request and typed SSE semantics, not Chat emulation internally.
-- [ ] Anthropic Messages retains correct named SSE semantics.
-- [ ] Gemini Interactions supports the stateless model subset with `store=false` and no provider SDK dependency.
-- [ ] Gemini generateContent supports both unary and streaming path templates.
-- [ ] Gemini Interactions/generateContent can be selected as upstreams without adding public Gemini endpoints.
-- [ ] Same-surface passthrough remains available where no adaptation is needed.
-- [ ] Cross-surface client output always uses the client's real wire grammar.
-- [ ] Reasoning controls are encoded from canonical intent and selected model capability, not from surface guesses.
-- [ ] Stateful Responses/Interactions features remain rejected/outside generic failover.
-- [ ] OpenCode Go candidate mapping is data-driven and Muse currently prefers Responses when verified.
-- [ ] OpenCode Go Muse is no longer encoded as Anthropic merely because it exposes reasoning tiers.
-- [ ] Surface-specific auth/header rendering replaces the current need to send multiple auth schemes indiscriminately where provider config supports it.
-- [ ] The mocked Muse test no longer claims to be live and no longer bakes the wrong `/messages` contract.
-- [ ] No Cohere/Bedrock/Ollama/vLLM native codec is added without necessity.
-- [ ] No SDK/runtime dependency is added for OpenAI/Anthropic/Google codec support.
+- [x] Five default surface codec IDs are implemented and registered.
+- [x] OpenAI Responses uses its own request and typed SSE semantics, not Chat emulation internally.
+- [x] Anthropic Messages retains correct named SSE semantics.
+- [x] Gemini Interactions supports the stateless model subset with `store=false` and no provider SDK dependency.
+- [x] Gemini generateContent supports both unary and streaming path templates.
+- [x] Gemini Interactions/generateContent can be selected as upstreams without adding public Gemini endpoints.
+- [x] Same-surface passthrough remains available where no adaptation is needed.
+- [x] Cross-surface client output always uses the client's real wire grammar.
+- [x] Reasoning controls are encoded from canonical intent and selected model capability, not from surface guesses.
+- [x] Stateful Responses/Interactions features remain rejected/outside generic failover.
+- [x] OpenCode Go candidate mapping is data-driven and Muse currently prefers Responses when verified.
+- [x] OpenCode Go Muse is no longer encoded as Anthropic merely because it exposes reasoning tiers.
+- [x] Surface-specific auth/header rendering replaces the current need to send multiple auth schemes indiscriminately where provider config supports it.
+- [x] The mocked Muse test no longer claims to be live and no longer bakes the wrong `/messages` contract.
+- [x] No Cohere/Bedrock/Ollama/vLLM native codec is added without necessity.
+- [x] No SDK/runtime dependency is added for OpenAI/Anthropic/Google codec support.
 
 ---
 
@@ -587,7 +587,19 @@ Reject implementation if it:
 
 Before implementation closure, record the exact official documentation versions/URLs checked for each of the five surfaces and the provider mappings updated in `_templates.toml` / `_wire_profiles.toml`.
 
-Run focused codec/transcoder/stream/provider-template tests plus the ordinary lean gate. Live behavior is verified separately under Plan 153.
+Implementation verification completed 2026-09-02. Official references re-checked:
+
+- OpenAI Chat Completions: <https://platform.openai.com/docs/api-reference/chat>
+- OpenAI Responses: <https://platform.openai.com/docs/api-reference/responses>
+- Anthropic Messages and streaming: <https://platform.claude.com/docs/en/api/messages> and <https://platform.claude.com/docs/en/build-with-claude/streaming>
+- Gemini Interactions: <https://ai.google.dev/api/interactions-api-v1>
+- Gemini generateContent: <https://ai.google.dev/api/generate-content>
+
+The local CI-equivalent gate passed (`ruff format --check`, `ruff check`,
+`pyright`, and the smoke suite), as did the full unit suite and focused
+codec/provider integration coverage. Stateful Responses/Interactions
+continuations, managed agents, and full-duplex transports remain outside the
+generic failover path. Live behavior is verified separately under Plan 153.
 
 ---
 

@@ -1,19 +1,22 @@
 # EggPool Architecture Overview
 
-EggPool is a lightweight, LAN-hosted proxy that aggregates multiple LLM provider accounts behind OpenAI Chat Completions- and Anthropic Messages-compatible paths. Designed for Raspberry Pi and SBC deployments, it provides protocol transcoding, quota-aware routing, and a self-updating dashboard.
+EggPool is a lightweight, LAN-hosted proxy that aggregates multiple LLM provider accounts behind OpenAI Chat, OpenAI Responses, and Anthropic Messages-compatible paths. Designed for Raspberry Pi and SBC deployments, it provides protocol transcoding, quota-aware routing, native Gemini wire codecs, and a self-updating dashboard.
 
 The public OpenAI contract is intentionally limited to Chat Completions
-(`POST /v1/chat/completions`), the stateless Responses passthrough
+(`POST /v1/chat/completions`), the stateless Responses surface
 (`POST /v1/responses`), and model listing (`GET /v1/models`), alongside
 Anthropic Messages (`POST /v1/messages`). EggPool does not claim full OpenAI
-API parity — `/v1/responses` is a stateless same-protocol passthrough that
-rejects `previous_response_id`, conversation references (including empty
-objects), omitted `store` (must be `false` explicitly), `store=true`, and
-`background=true` before any provider selection and does not implement
+API parity. Responses rejects `previous_response_id`, conversation
+references (including empty objects), omitted `store` (must be `false`
+explicitly), `store=true`, and `background=true` before any provider
+selection, but may adapt through the canonical boundary to an eligible
+upstream wire surface. It does not implement
 retrieval, cancellation, background jobs, or WebSocket transport.
 `response.completed` is the only successful terminal Responses event;
 `response.failed` and `response.incomplete` are terminal non-success
 outcomes that do not trigger provider failover after downstream handoff.
+Gemini streams use their native interaction or candidate finish evidence;
+transport EOF never creates a terminal event.
 
 ## Quick Navigation
 
@@ -23,7 +26,7 @@ outcomes that do not trigger provider failover after downstream handoff.
 | 2 | [Request Lifecycle](#2-request-lifecycle) | Coordinator, API endpoints, proxy, finalization | [deep-dive-request-lifecycle.md](deep-dive-request-lifecycle.md) |
 | 3 | [Protocol Transcoding](#3-protocol-transcoding) | OpenAI ↔ Anthropic body + streaming translation | [deep-dive-transcoder.md](deep-dive-transcoder.md) |
 | 4 | [Routing & Quota](#4-routing--quota) | Priority tiers, fairness rotor, quota estimation | [deep-dive-routing.md](deep-dive-routing.md) |
-| 5 | [Provider Architecture](#5-provider-architecture) | Client pool, contracts, auth, 22 bundled providers | [deep-dive-providers.md](deep-dive-providers.md) |
+| 5 | [Provider Architecture](#5-provider-architecture) | Client pool, contracts, auth, 23 bundled providers | [deep-dive-providers.md](deep-dive-providers.md) |
 | 6 | [Database Layer](#6-database-layer) | SQLite WAL, migrations, repositories | [deep-dive-database.md](deep-dive-database.md) |
 | 7 | [Runtime & Process Mgmt](#7-runtime--process-management) | Generations, supervisor, Granian worker | [deep-dive-runtime.md](deep-dive-runtime.md) |
 | 8 | [Health Management](#8-health-management) | Circuit breaker, cooldown, failure effects, quarantine | [deep-dive-health.md](deep-dive-health.md) |
@@ -76,7 +79,7 @@ outcomes that do not trigger provider failover after downstream handoff.
                                 │
                     ┌───────────▼───────────┐
                     │   Upstream Providers   │
-                    │   (22 bundled providers)  │
+                    │   (23 bundled providers)  │
                     └───────────────────────┘
 ```
 
@@ -86,9 +89,9 @@ outcomes that do not trigger provider failover after downstream handoff.
 2. **Routing** — `Router` selects best account via priority tiers + `QuotaFairScorer`
 3. **Persistence** — Attempt + routing decision written to SQLite before dispatch
 4. **Provider Contract** — `compose_provider_url()` + `build_upstream_headers()` from provider config
-5. **Transcoding** — Body translated if client protocol ≠ upstream protocol
+5. **Wire Codec** — Canonical source intent encoded for the selected concrete upstream surface
 6. **Proxy** — Request sent via `ProviderClientPool` httpx client
-7. **Streaming** — One bounded `SSEDecoder` frames each upstream stream; shared frames are observed and transcoded if needed
+7. **Streaming** — One bounded `SSEDecoder` frames each upstream stream; shared frames are observed and codec-translated if needed, with native terminal evidence required
 8. **Finalization** — Usage recorded, reservations released, health updated
 
 ## Module Overview
@@ -114,7 +117,7 @@ The CLI entry point is a two-phase bootstrap: `cli.py` (73 lines) first tries `f
 | **Path** | `src/eggpool/request/`, `src/eggpool/api/`, `src/eggpool/proxy/` |
 | **Deep Dive** | [deep-dive-request-lifecycle.md](deep-dive-request-lifecycle.md) |
 
-The request lifecycle is orchestrated by `RequestCoordinator` in `request/coordinator.py`. API handlers (`api/chat_completions.py` for OpenAI Chat Completions, `api/responses.py` for the stateless OpenAI Responses passthrough, `api/messages.py` for Anthropic) parse the request and call `handle_proxy_request()` — a shared pipeline in `api/proxy_request.py` that handles auth, body parsing, model/provider resolution, capability checks, context-limit enforcement, transcoding preflight, dispatch, and response handling. The coordinator persists each attempt to SQLite before dispatch, manages retry with failover, and ensures every terminal outcome is owned by exactly one `RequestFinalizationJob`. Dispatch retries are limited to typed HTTPX transport failures before an explicit response-handoff fact; local preparation and response-adaptation faults are isolated as local errors. Non-streaming adaptation precedes durable success, while streaming responses flow through `proxy/sse.py` (bounded SSE decoder) and `proxy/sse_observer.py` (diagnostic observation). The wire surface is selected by the `request_surface` field on
+The request lifecycle is orchestrated by `RequestCoordinator` in `request/coordinator.py`. API handlers (`api/chat_completions.py` for OpenAI Chat Completions, `api/responses.py` for the stateless OpenAI Responses surface, `api/messages.py` for Anthropic) parse the request and call `handle_proxy_request()` — a shared pipeline in `api/proxy_request.py` that handles auth, body parsing, model/provider resolution, capability checks, context-limit enforcement, transcoding preflight, dispatch, and response handling. The coordinator persists each attempt to SQLite before dispatch, manages retry with failover, and ensures every terminal outcome is owned by exactly one `RequestFinalizationJob`. Dispatch retries are limited to typed HTTPX transport failures before an explicit response-handoff fact; local preparation and response-adaptation faults are isolated as local errors. Non-streaming adaptation precedes durable success, while streaming responses flow through `proxy/sse.py` (bounded SSE decoder) and `proxy/sse_observer.py` (diagnostic observation). The wire surface is selected by the `request_surface` field on
 `ProxyEndpointConfig` and `ProxyRequestContext` (`"chat_completions"` or
 `"responses"`), so the same coordinator dispatches both surfaces without
 adding a third protocol family.
@@ -150,7 +153,7 @@ Quota-aware account routing with tiered priority, fairness rotation, and eligibi
 | **Path** | `src/eggpool/providers/`, `src/eggpool/accounts/` |
 | **Deep Dive** | [deep-dive-providers.md](deep-dive-providers.md) |
 
-Supports 22 bundled upstream providers (OpenCode Go, OpenAI, Anthropic, Groq, DeepInfra, Gemini, xAI, Mistral, SiliconFlow, DeepSeek, Together, Fireworks, OpenRouter, Alibaba, MiniMax, MiniMax-CN, Ollama, LM Studio, llama.cpp, vLLM, LocalAI, and a generic custom-compatible endpoint). Additional providers are supportable through the generic custom-compatible path when they implement the OpenAI Chat Completions or Anthropic Messages contract. `ProviderClientPool` (`providers/client_pool.py`) manages per-provider `httpx.AsyncClient` instances with independent connection pools. `providers/contract.py` centralizes URL composition (`compose_provider_url()`), provider auth, and resolved wire-profile header construction; `wire/` keeps concrete endpoint and codec identities independent from `ProtocolName`. `providers/outbound.py` manages a shared HTTP client for non-provider network paths. Models are exposed with provider-suffixed IDs (`model-id/provider-id`); `parse_model_provider()` in `routing/provider.py` is the canonical suffix parser. `accounts/registry.py` maintains the in-memory account registry; `accounts/state.py` tracks per-account runtime state (active requests, health, quota).
+Supports 23 bundled upstream providers (including OpenCode Go, native Gemini, and a generic custom-compatible endpoint). Additional providers are supportable through the generic custom-compatible path when they implement a declared EggPool wire surface. `ProviderClientPool` (`providers/client_pool.py`) manages per-provider `httpx.AsyncClient` instances with independent connection pools. `providers/contract.py` centralizes URL composition (`compose_provider_url()`), provider auth, and resolved wire-profile header construction; `wire/` keeps concrete endpoint and codec identities independent from `ProtocolName`. `providers/outbound.py` manages a shared HTTP client for non-provider network paths. Models are exposed with provider-suffixed IDs (`model-id/provider-id`); `parse_model_provider()` in `routing/provider.py` is the canonical suffix parser. `accounts/registry.py` maintains the in-memory account registry; `accounts/state.py` tracks per-account runtime state (active requests, health, quota).
 
 **Related**: [deep-dive-catalog.md](deep-dive-catalog.md), [deep-dive-routing.md](deep-dive-routing.md), [deep-dive-request-lifecycle.md](deep-dive-request-lifecycle.md)
 
@@ -389,7 +392,7 @@ src/eggpool/
 │                          #   scheduler, dedup/identity/normalization
 ├── models/                # Pydantic v2: config, api, database, domain models
 ├── observability/         # Routing trace writer (micro-batched, opt-in)
-├── providers/             # _templates.toml (22 bundled providers), client
+├── providers/             # _templates.toml (23 bundled providers), client
 │                          #   pool, URL/auth contracts, outbound, pproxy
 ├── proxy/                 # SSE decoder/observer, usage normalization, cost
 │                          #   reporting, shared upstream client

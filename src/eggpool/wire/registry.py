@@ -14,6 +14,13 @@ from importlib.resources import files
 from types import MappingProxyType
 from typing import TYPE_CHECKING, cast
 
+from eggpool.wire.codecs.base import CanonicalCodec, CodecAlias
+from eggpool.wire.codecs.compat import AnthropicMessagesCodec, OpenAIChatCodec
+from eggpool.wire.codecs.defaults import (
+    GeminiGenerateContentCodec,
+    GeminiInteractionsCodec,
+    OpenAIResponsesCodec,
+)
 from eggpool.wire.types import (
     WIRE_SURFACE_NAMES,
     AuthHeaderShape,
@@ -60,42 +67,34 @@ class WireHint:
     source: str
 
 
-@dataclass(frozen=True, slots=True)
-class RegisteredWireCodec:
-    """Placeholder binding proving a codec ID is Python-registered.
-
-    Codec behavior is intentionally implemented by later wire-codec phases;
-    the registry never turns TOML strings into imports or callables.
-    """
-
-    codec_id: str
+CodecFactory = Callable[[], CanonicalCodec]
 
 
-CodecFactory = Callable[[], RegisteredWireCodec]
-
-
-def _codec_factory(codec_id: str) -> CodecFactory:
-    def factory() -> RegisteredWireCodec:
-        return RegisteredWireCodec(codec_id)
-
-    return factory
+def _aliased_factory(factory: type[CanonicalCodec], codec_id: str) -> CodecFactory:
+    """Create a codec factory whose public ID matches the registry entry."""
+    return lambda: CodecAlias(factory(), codec_id)
 
 
 BUILTIN_CODEC_FACTORIES: Mapping[str, CodecFactory] = MappingProxyType(
     {
-        codec_id: _codec_factory(codec_id)
-        for codec_id in (
-            "openai_chat",
-            "openai_chat_sse",
-            "openai_responses",
-            "openai_responses_sse",
-            "anthropic_messages",
-            "anthropic_messages_sse",
-            "gemini_interactions",
-            "gemini_interactions_sse",
-            "gemini_generate_content",
-            "gemini_generate_content_sse",
-        )
+        "openai_chat": OpenAIChatCodec,
+        "openai_chat_sse": _aliased_factory(OpenAIChatCodec, "openai_chat_sse"),
+        "openai_responses": OpenAIResponsesCodec,
+        "openai_responses_sse": _aliased_factory(
+            OpenAIResponsesCodec, "openai_responses_sse"
+        ),
+        "anthropic_messages": AnthropicMessagesCodec,
+        "anthropic_messages_sse": _aliased_factory(
+            AnthropicMessagesCodec, "anthropic_messages_sse"
+        ),
+        "gemini_interactions": GeminiInteractionsCodec,
+        "gemini_interactions_sse": _aliased_factory(
+            GeminiInteractionsCodec, "gemini_interactions_sse"
+        ),
+        "gemini_generate_content": GeminiGenerateContentCodec,
+        "gemini_generate_content_sse": _aliased_factory(
+            GeminiGenerateContentCodec, "gemini_generate_content_sse"
+        ),
     }
 )
 
@@ -274,3 +273,11 @@ def resolve_provider_wire_profiles(
             )
         )
     return tuple(result)
+
+
+def build_wire_codec(codec_id: str) -> CanonicalCodec:
+    """Construct one Python-owned codec selected by a wire profile."""
+    factory = BUILTIN_CODEC_FACTORIES.get(codec_id)
+    if factory is None:
+        raise WireRegistryError(f"Wire codec {codec_id!r} is not registered")
+    return factory()

@@ -1,6 +1,6 @@
 """End-to-end regression test for the muse-spark capability status attribution bug.
 
-Repro scenario (live):
+Repro scenario (mocked):
 
 - The router is configured with two accounts under the ``opencode-go``
   provider.  Both accounts advertise ``muse-spark-1.2-contributor`` with
@@ -27,7 +27,8 @@ Repro scenario (live):
   exposure and the routing trace metrics.
 
 This module asserts the post-fix behavior end-to-end through the real
-Eggpool ASGI surface with respx mocking the upstream.
+Eggpool ASGI surface with respx mocking the upstream; it never calls a
+live service.
 """
 
 from __future__ import annotations
@@ -70,7 +71,7 @@ _MUSE_SPARK_THINKING_CAPABILITY = {
     "thinking": {
         "status": "supported",
         "source": "provider_catalog",
-        "native_protocols": ["anthropic"],
+        "native_protocols": ["openai"],
         "supported_efforts": ["minimal", "low", "medium", "high", "xhigh"],
         "effort_to_budget_tokens": {
             "minimal": 1024,
@@ -88,7 +89,7 @@ _MUSE_SPARK_SPEC = RuntimeAppSpec(
     models=(
         ModelSpec(
             model_id="muse-spark-1.2-contributor",
-            protocol="anthropic",
+            protocol="openai",
             capabilities=_MUSE_SPARK_THINKING_CAPABILITY,
         ),
     ),
@@ -96,11 +97,11 @@ _MUSE_SPARK_SPEC = RuntimeAppSpec(
         ProviderSpec(
             provider_id="opencode-go",
             base_url=UPSTREAM_BASE,
-            protocols=("openai", "anthropic"),
+            protocols=("openai",),
             static_models=(
                 ModelSpec(
                     model_id="muse-spark-1.2-contributor",
-                    protocol="anthropic",
+                    protocol="openai",
                     capabilities=_MUSE_SPARK_THINKING_CAPABILITY,
                 ),
             ),
@@ -126,8 +127,8 @@ async def muse_spark_status_app(
         await result.httpx_client.aclose()
 
 
-def _anthropic_500(model_id: str) -> dict[str, Any]:
-    """Anthropic-style upstream 500 (the muse-spark-1.2-contributor shape)."""
+def _openai_500(model_id: str) -> dict[str, Any]:
+    """OpenAI-family upstream 500 for muse-spark-1.2-contributor."""
     return {
         "type": "error",
         "error": {
@@ -166,8 +167,8 @@ class TestMuseSparkCapabilityStatusAttribution:
             transport=transport, base_url="http://testserver"
         ) as client:
             # --- Both accounts return 500 for muse-spark ---
-            respx.post(f"{UPSTREAM_BASE}/messages").mock(
-                return_value=httpx.Response(500, json=_anthropic_500("muse-spark"))
+            respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+                return_value=httpx.Response(500, json=_openai_500("muse-spark"))
             )
 
             # First request: both attempts fail upstream; the response
@@ -246,8 +247,8 @@ class TestMuseSparkCapabilityStatusAttribution:
                     f"catalog must report the supported override; row={row!r}"
                 )
             # Now trigger quarantine and confirm the failure-mode behavior
-            respx.post(f"{UPSTREAM_BASE}/messages").mock(
-                return_value=httpx.Response(500, json=_anthropic_500("muse-spark"))
+            respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+                return_value=httpx.Response(500, json=_openai_500("muse-spark"))
             )
             for _ in range(3):
                 await client.post(
