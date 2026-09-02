@@ -582,3 +582,21 @@ Never paste API keys or raw auth/error payloads into the closure record.
 8. Verify legacy/new config and rehash behavior.
 9. Run the ordinary lean gate.
 10. Append exact closure evidence here and stop this planning line unless a genuinely new defect is found.
+
+---
+
+# Closure record
+
+Implementation SHA(s): `e34cd9ef8dd26ca07ac367b2604859b1d29f92c3`
+Implementation date: 2026-09-02
+Official docs re-verified: [OpenCode Go endpoint table](https://dev.opencode.ai/docs/go/); the representative model/surface assignments in `docs/live-wire-e2e.md` match the current table.
+Focused deterministic tests: `tests/integration/test_wire_negotiation_e2e.py`, resolver, failure-effects, and signal-extraction coverage — 90 passed; the broader focused wire/failure/reload selection also passed with 146 passed and 5 skipped.
+Ordinary project gate: `uv sync --frozen --extra ci`, Ruff format/check, Pyright, both example-config `check-config` commands, and smoke tests (`14 passed`) all passed. The full repository suite passed with `7769 passed, 40 skipped`; one existing FastAPI/Starlette deprecation warning was emitted by the installed test dependency.
+OpenCode Go live command: `uv run pytest tests/live/test_opencode_go_wire_live.py -m live_opencode_go -q`
+OpenCode Go model/surface results: skipped cleanly because `EGGPOOL_E2E_OPENCODE_GO_API_KEY` was not set in the execution environment; no provider call was made.
+Live stream results: skipped for the same missing credential; the suite contains Responses, Chat Completions, and Anthropic Messages terminal-evidence checks without a mocked HTTP layer.
+401/failure isolation result: deterministic failure-isolation coverage passed; credentialed live invalid-key isolation remains pending because no live key was supplied.
+Stale-profile relearning result: the new deterministic integration test passed; the same account moved from `/responses` to `/chat/completions`, retried within the shared attempt budget, learned the alternate, and used it on the next request without restart or database reset.
+Single-flight concurrency result: existing deterministic resolver/reload concurrency coverage remained green in the focused and full suites; no live concurrency probe was run.
+Gemini live result (run/skipped + reason): skipped; `EGGPOOL_E2E_GEMINI_API_KEY` was unset and direct Gemini live verification is optional. Deterministic Gemini codec/path coverage remains in the ordinary suite.
+Known intentional limitations: credentialed OpenCode Go evidence, including live MiniMax reasoning acceptance and live invalid-key isolation, must be run manually before release when a test-only key is available. Live provider calls remain excluded from CI, and the official model list may change.
