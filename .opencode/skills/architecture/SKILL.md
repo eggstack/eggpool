@@ -91,6 +91,13 @@ their own inference requests. Rate pressure completes the flight without
 candidate suppression, and cancellation releases only coordination state owned
 by that request. No background probes or second retry budget.
 
+Failure classification gives typed, context-qualified wire signals precedence
+over generic `capability`/`unsupported` error-class fallbacks; those class
+names alone never authorize migration. Strong model absence remains
+model-scoped. Bounded `model ... is not available` wording is ambiguous and
+can be treated as endpoint-local only when provider-scoped model knowledge and
+pre-handoff alternate-surface context support that conclusion.
+
 The optional `RequestCoordinator.outbound_observer` runs after a real upstream
 `client.send` returns and receives only a sanitized structural observation. It
 is intended for explicit live diagnostics, never stores raw bodies or

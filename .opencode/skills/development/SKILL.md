@@ -251,7 +251,9 @@ migration, structural fingerprint invalidation, cooldown/TTL behavior without
 proactive traffic, provider/model single-flight, cancellation ownership,
 provider-only abnormal-dispatch gating, bounded cache eviction, real
 alternate-surface dispatch, unhinted known-model migration, strong model
-absence controls, cross-surface streaming adaptation, and 429 throttling. Keep
+absence controls, endpoint-qualified ambiguous availability, explicit wire
+signal precedence over generic unsupported classes, cross-surface streaming
+adaptation, and 429 throttling. Keep
 alternate-surface retry integration behind the canonical failure-effects gate
 and the shared attempt budget. Live provider tests remain opt-in; record runs
 and skips separately when closing a live acceptance plan.

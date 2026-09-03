@@ -153,13 +153,6 @@ def classify_failure_effects(obs: FailureObservation) -> FailureEffects:
             client_outcome="client_error",
             evidence_class="request_local_context_or_capability",
         )
-    if "capability" in ec or "unsupported" in ec:
-        return _decision(
-            obs,
-            client_outcome="client_error",
-            evidence_class="request_local_capability",
-        )
-
     # Cancellation is represented explicitly by newer callers and by the
     # legacy stream/no-response-start fact.
     if (
@@ -239,6 +232,17 @@ def classify_failure_effects(obs: FailureObservation) -> FailureEffects:
             client_outcome="client_error",
             wire_effect="reject_candidate",
             evidence_class=f"{signal_value}_rejection",
+        )
+
+    # Generic error-class compatibility fallbacks are intentionally evaluated
+    # after explicit wire signals.  A provider may label a structured wire
+    # rejection ``Unsupported...`` without making it a request-local error.
+    # The class name alone never authorizes wire negotiation.
+    if "capability" in ec or "unsupported" in ec:
+        return _decision(
+            obs,
+            client_outcome="client_error",
+            evidence_class="request_local_capability",
         )
 
     if sc == 400:

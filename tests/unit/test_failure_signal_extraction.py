@@ -212,6 +212,50 @@ class TestSignalFromErrorClass:
             == FailureSignal.MODEL_UNSUPPORTED_ON_SURFACE
         )
 
+    def test_known_model_endpoint_unavailable_is_wire_evidence(self) -> None:
+        body = (
+            b'{"error":{"type":"ModelError","message":"Model example '
+            b'is not available on this endpoint"}}'
+        )
+        assert (
+            extract_failure_signal(
+                body,
+                status_code=401,
+                alternate_wire_available=True,
+                provider_model_presence="known",
+                dispatch_phase="response_status",
+            )
+            == FailureSignal.MODEL_UNSUPPORTED_ON_SURFACE
+        )
+
+    def test_unknown_model_endpoint_unavailable_remains_model_absent(self) -> None:
+        assert (
+            extract_failure_signal(
+                b"Model example is not available on this endpoint",
+                status_code=401,
+                alternate_wire_available=True,
+                provider_model_presence="unknown",
+            )
+            == FailureSignal.MODEL_ABSENT
+        )
+
+    @pytest.mark.parametrize(
+        "body",
+        [b"Model not found: example", b"Model example does not exist"],
+    )
+    def test_strong_model_absence_remains_authoritative_for_known_model(
+        self, body: bytes
+    ) -> None:
+        assert (
+            extract_failure_signal(
+                body,
+                status_code=404,
+                alternate_wire_available=True,
+                provider_model_presence="known",
+            )
+            == FailureSignal.MODEL_ABSENT
+        )
+
     def test_strong_model_absence_wins_over_provider_presence(self) -> None:
         assert (
             extract_failure_signal(

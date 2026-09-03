@@ -157,6 +157,49 @@ class TestFailureEffectsMatrix:
         assert fx.account_effect == "none"
         assert fx.circuit_penalty is False
 
+    def test_explicit_model_surface_signal_beats_unsupported_error_class(self) -> None:
+        obs = _obs(
+            status_code=401,
+            error_class="UnsupportedModelError",
+            response_signal=FailureSignal.MODEL_UNSUPPORTED_ON_SURFACE,
+            alternate_wire_available=True,
+            provider_model_presence="known",
+        )
+        fx = classify_failure_effects(obs)
+        assert fx.retry is True
+        assert fx.retry_action == "alternate_wire_same_account"
+        assert fx.wire_effect == "reject_candidate"
+        assert fx.account_effect == "none"
+        assert fx.model_effect == "none"
+        assert fx.circuit_penalty is False
+
+    def test_explicit_wire_schema_signal_beats_unsupported_error_class(self) -> None:
+        obs = _obs(
+            status_code=400,
+            error_class="UnsupportedRequestSchemaError",
+            response_signal=FailureSignal.WIRE_SCHEMA_MISMATCH,
+            alternate_wire_available=True,
+        )
+        fx = classify_failure_effects(obs)
+        assert fx.retry_action == "alternate_wire_same_account"
+        assert fx.wire_effect == "reject_candidate"
+        assert fx.account_effect == "none"
+        assert fx.model_effect == "none"
+
+    def test_generic_unsupported_error_class_does_not_negotiate(self) -> None:
+        fx = classify_failure_effects(
+            _obs(
+                status_code=400,
+                error_class="UnsupportedParameterError",
+                alternate_wire_available=True,
+            )
+        )
+        assert fx.retry is False
+        assert fx.retry_action == "none"
+        assert fx.wire_effect == "none"
+        assert fx.account_effect == "none"
+        assert fx.model_effect == "none"
+
     def test_wire_rejection_after_handoff_cannot_retry(self) -> None:
         obs = _obs(
             status_code=400,
@@ -165,6 +208,21 @@ class TestFailureEffectsMatrix:
             downstream_started=True,
         )
         fx = classify_failure_effects(obs)
+        assert fx.retry is False
+        assert fx.retry_action == "none"
+        assert fx.wire_effect == "none"
+
+    def test_model_surface_signal_after_handoff_cannot_retry(self) -> None:
+        fx = classify_failure_effects(
+            _obs(
+                status_code=401,
+                error_class="UnsupportedModelError",
+                response_signal=FailureSignal.MODEL_UNSUPPORTED_ON_SURFACE,
+                alternate_wire_available=True,
+                provider_model_presence="known",
+                downstream_started=True,
+            )
+        )
         assert fx.retry is False
         assert fx.retry_action == "none"
         assert fx.wire_effect == "none"

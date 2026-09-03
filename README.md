@@ -202,6 +202,9 @@ reactive and only a separately classified, deterministic pre-handoff
 auth/surface/schema failure, or weak endpoint-local model rejection for a model
 known by the selected provider, may authorize an alternate-surface attempt on
 the same account. Strong model absence remains model-scoped failure behavior.
+Bounded endpoint-qualified `model ... is not available` wording is treated as
+weak only with the same known-model context. Generic `Unsupported*` error
+classes alone never authorize wire migration.
 Concurrent requests share one provider/model discovery flight;
 the provider-wide negotiation gate bounds only those abnormal alternate-surface
 submissions, not ordinary known-good inference. Rate pressure ends discovery

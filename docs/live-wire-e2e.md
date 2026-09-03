@@ -34,7 +34,8 @@ uv run pytest tests/live/test_opencode_go_wire_live.py \
 The suite covers non-streaming path selection and learned steady state,
 Responses/Chat/Messages streaming terminal evidence, a public
 Messages-to-Responses cross-surface request, surface-native Muse and MiMo
-reasoning shapes, and invalid-key isolation. The invalid-key fixture uses
+reasoning shapes, a MiniMax-M3 Chat `reasoning_effort` request adapted to
+Anthropic Messages `thinking`, and invalid-key isolation. The invalid-key fixture uses
 ordinary account weights to make the bad account the first candidate; it does
 not add a production-only routing hook. It uses bounded, low-token requests;
 it is not a load test or billing benchmark. Without the environment variable,

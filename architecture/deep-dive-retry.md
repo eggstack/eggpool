@@ -100,7 +100,11 @@ Upstream HTTP response
   candidate and retry the same account on an alternate candidate; the
   transition is allowed only before downstream response handoff. Strong
   model absence remains `MODEL_UNAVAILABLE`/quarantine and does not trigger
-  surface enumeration.
+  surface enumeration. A typed, context-qualified wire signal takes
+  precedence over a generic `capability`/`unsupported` error-class fallback;
+  those class names alone never authorize negotiation. Endpoint-qualified
+  ambiguous availability wording is wire-local only when provider-scoped
+  model knowledge confirms the model and an alternate candidate exists.
 - `MODEL_UNAVAILABLE` retries across accounts — different accounts may have the model
 - `QUOTA_EXCEEDED` respects `retry_after` — no premature retry
 - Every upstream submission, including an alternate-wire submission, consumes the one shared budget of `1 + max_retries_before_stream`

@@ -341,6 +341,51 @@ async def test_opencode_go_reasoning_shapes_are_surface_native(
 
 
 @pytest.mark.asyncio()
+async def test_opencode_go_minimax_chat_reasoning_reaches_messages(
+    live_app: tuple[FastAPI, list[Any]],
+) -> None:
+    """OpenAI reasoning intent becomes an Anthropic-native MiniMax request."""
+    app, observations = live_app
+    api_key = os.environ["EGGPOOL_E2E_OPENCODE_GO_API_KEY"]
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        timeout=httpx.Timeout(180.0),
+    ) as client:
+        thinking_payload = _payload("minimax-m3")
+        thinking_payload["reasoning_effort"] = "low"
+        response = await client.post(
+            "/v1/chat/completions",
+            headers=_headers(api_key),
+            json=thinking_payload,
+        )
+        assert response.status_code == 200, response.text
+
+        follow_up = await client.post(
+            "/v1/chat/completions",
+            headers=_headers(api_key),
+            json=_payload("minimax-m3"),
+        )
+        assert follow_up.status_code == 200, follow_up.text
+
+    model_observations = [
+        item for item in observations if item.model_id == "minimax-m3"
+    ]
+    assert len(model_observations) >= 2
+    thinking_observation, follow_up_observation = model_observations[-2:]
+    assert thinking_observation.wire_surface == "anthropic_messages"
+    assert thinking_observation.path.endswith("/messages")
+    assert thinking_observation.auth_scheme == "api_key"
+    assert "thinking" in thinking_observation.semantic_fields
+    assert "reasoning_effort" not in thinking_observation.semantic_fields
+    assert "reasoning" not in thinking_observation.semantic_fields
+    assert follow_up_observation.wire_surface == "anthropic_messages"
+    assert follow_up_observation.path.endswith("/messages")
+    assert app.state.health_manager.is_account_healthy("live-account")
+
+
+@pytest.mark.asyncio()
 async def test_opencode_go_invalid_key_isolated_from_valid_account(
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,

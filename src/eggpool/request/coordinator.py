@@ -4837,9 +4837,14 @@ class RequestCoordinator:
 
     def _alternate_wire_available(self, context: ProxyRequestContext | None) -> bool:
         """Return whether deterministic rejection may move to another profile."""
-        if context is None or context.wire_family_resolution is None:
+        resolution = (
+            getattr(context, "wire_family_resolution", None)
+            if context is not None
+            else None
+        )
+        if resolution is None:
             return False
-        return len(context.wire_family_resolution.candidates) > 1
+        return len(resolution.candidates) > 1
 
     def _apply_wire_failure_effect(
         self,

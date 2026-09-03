@@ -43,16 +43,22 @@ _WIRE_AUTH_PATTERNS = (
     re.compile(r"\bx-api-key\s+required\b", re.I),
 )
 _STRONG_MODEL_ABSENT_PATTERNS = (
-    re.compile(r"\bmodel\s+not\s+found\b", re.I),
+    re.compile(r"\bmodel(?:\s+[\w./:-]+)?\s+not\s+found\b", re.I),
     re.compile(r"\bunknown\s+model\b", re.I),
-    re.compile(r"\bmodel\s+is\s+not\s+available\b", re.I),
-    re.compile(r"\bmodel\s+does\s+not\s+exist\b", re.I),
+    re.compile(
+        r"\bmodel(?:\s+[\w./:-]+)?\s+does\s+not\s+exist\b",
+        re.I,
+    ),
     re.compile(r"\bno\s+such\s+model\b", re.I),
     re.compile(r"\bmodel_id\s+not\s+found\b", re.I),
 )
 _WEAK_MODEL_UNSUPPORTED_PATTERNS = (
     re.compile(r"\bmodel\b.*\bis\s+not\s+supported\b", re.I),
     re.compile(r"\bunsupported\s+model\b", re.I),
+    re.compile(
+        r"\bmodel(?:\s+[\w./:-]+)?\s+is\s+not\s+available\b",
+        re.I,
+    ),
 )
 _CONTEXT_LIMIT_PATTERNS = (
     re.compile(r"\bcontext[_\s-]?limit[_\s-]?exceeded\b", re.I),
@@ -129,9 +135,10 @@ def extract_failure_signal(
         )
     evidence = " ".join((*_structured_error_values(text), text))
 
-    # Strong model withdrawal remains authoritative.  The weak unsupported
-    # wording is only surface-local when the selected provider advertises the
-    # model and the response arrived before downstream handoff.
+    # Strong model withdrawal remains authoritative.  Unsupported and
+    # ambiguous availability wording is only surface-local when the selected
+    # provider advertises the model and the response arrived before downstream
+    # handoff.
     if _matches(_STRONG_MODEL_ABSENT_PATTERNS, evidence):
         return FailureSignal.MODEL_ABSENT
     if (

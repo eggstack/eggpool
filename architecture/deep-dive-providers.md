@@ -73,9 +73,13 @@ auth-header, surface, schema, or weak endpoint-local model rejection can
 suppress the selected wire candidate and authorize a same-account alternate
 before response handoff. Weak model wording is eligible only when the
 provider-scoped catalog/config entry knows the model; strong model absence and
-authoritative withdrawal retain model-unavailable behavior. 429, quota,
-transport, generic validation, and 5xx outcomes do not invalidate a wire
-candidate.
+authoritative withdrawal retain model-unavailable behavior. The bounded
+`model ... is not available` wording is treated as ambiguous availability: it
+can be endpoint-local under that same known-model/pre-handoff context, but
+otherwise remains conservative model-absence evidence. A typed wire signal
+also outranks a generic `Unsupported...` error class; the class name alone
+does not invalidate or migrate a wire candidate. 429, quota, transport,
+generic validation, and 5xx outcomes do not invalidate a wire candidate.
 
 ## Live provider verification
 
@@ -87,9 +91,10 @@ structural observations; it is not a persisted event table or a second
 routing system. Deterministic stale-profile migration, unhinted-model
 classification, cross-surface coordinator paths, single-flight, rate-limit,
 and failure-isolation behavior remains covered by fake-upstream tests. The
-live suite includes a public Messages-to-Responses cross-surface check and
-deterministically routes its invalid-key account first using ordinary account
-weight configuration.
+live suite includes a public Messages-to-Responses cross-surface check, a
+MiniMax-M3 Chat reasoning request that verifies Anthropic Messages field
+adaptation, and deterministically routes its invalid-key account first using
+ordinary account weight configuration.
 Live provider calls are excluded from smoke tests and CI and must never be
 required for ordinary installation or release automation.
 
