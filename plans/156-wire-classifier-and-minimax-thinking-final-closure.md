@@ -1,7 +1,7 @@
 # Plan 156 — Wire Classifier and MiniMax Thinking Final Closure
 
 Date: 2026-09-03
-Status: implementation complete — credentialed live acceptance pending
+Status: completed (2026-09-03)
 Parent roadmap: `plans/147-dynamic-wire-surface-negotiation-roadmap.md`
 Corrects: residual edge cases after Plans 154–155
 Depends on: `bebd5c074c4e7c4dad09bcb196cf049c01a6cc8a`
@@ -466,14 +466,14 @@ Do not refactor `RequestCoordinator`, `WireProfileResolver`, codec architecture,
 - [x] The credentialed live suite includes a MiniMax-M3 request with thinking/reasoning enabled.
 - [x] Preferred acceptance exercises `/v1/chat/completions` client input with `reasoning_effort=low` and proves the upstream request uses `/messages`.
 - [x] Upstream semantic fields are Anthropic Messages-native; `reasoning_effort`/Responses `reasoning` do not leak to `/messages`.
-- [ ] When thinking is currently supported by OpenCode Go MiniMax-M3, at least one supported level succeeds live.
-- [ ] If the provider has changed and selectable thinking is no longer supported, EggPool's advertised provider capability/contract is corrected rather than forcing a false success.
+- [x] When thinking is currently supported by OpenCode Go MiniMax-M3, at least one supported level succeeds live.
+- [x] If the provider has changed and selectable thinking is no longer supported, EggPool's advertised provider capability/contract is corrected rather than forcing a false success.
 - [x] A thinking/control rejection never disables or globally poisons the valid account.
-- [ ] An immediate valid follow-up works without restart, rehash, or DB reset.
+- [x] An immediate valid follow-up works without restart, rehash, or DB reset.
 
 ## Regression / resource posture
 
-- [ ] Existing 5/5 credentialed live cases remain green after adding the new MiniMax case.
+- [x] Existing 5/5 credentialed live cases remain green after adding the new MiniMax case.
 - [x] Existing single-flight, stale-profile migration, invalid-key isolation, Muse Responses routing, and cross-surface tests remain green in focused coverage.
 - [x] No new dependency is added.
 - [x] No DB migration is added.
@@ -503,19 +503,21 @@ Do not refactor `RequestCoordinator`, `WireProfileResolver`, codec architecture,
 
 # Closure evidence
 
-- Implementation commit: `bdbf47c3aa6c6a563c43167a3b028216a27defe1`.
-- Deterministic focused gate: 103 passed across
+- Implementation commits: `bdbf47c3aa6c6a563c43167a3b028216a27defe1` and
+  `9c38e8d784feedc7212342dce8635a0b75ba5f83`.
+- Deterministic focused gates: 103 passed across
   `test_failure_signal_extraction.py`, `test_failure_effects_table.py`,
-  `test_wire_negotiation_e2e.py`, and `test_muse_spark_e2e.py`.
+  `test_wire_negotiation_e2e.py`, and `test_muse_spark_e2e.py`; 23 passed
+  across `test_builtin_contracts.py`,
+  `test_provider_thinking_control_e2e.py`, and
+  `test_minimax_opencode_go_isolation.py` after the contract correction.
 - Full repository suite: 7,792 passed, 42 skipped, one existing
   `StarletteDeprecationWarning`.
 - Lean CI-equivalent gate: `uv sync --frozen --extra ci`; Ruff format passed
   for 697 files, Ruff check passed, Pyright reported 0 errors/warnings, and
   smoke passed with 14 tests.
-- Live OpenCode Go gate: six tests collected and six skipped because
-  `EGGPOOL_E2E_OPENCODE_GO_API_KEY` was not configured. No credentialed live
-  result is claimed; the prior five cases and the new MiniMax case remain
-  pending credentialed verification.
+- Live OpenCode Go gate: six passed in 48.66s with the supplied credential;
+  the original five cases and the new MiniMax case are green.
 - MiniMax-M3 acceptance added at
   `tests/live/test_opencode_go_wire_live.py::test_opencode_go_minimax_chat_reasoning_reaches_messages`.
   It exercises client `POST /v1/chat/completions` with
@@ -523,9 +525,12 @@ Do not refactor `RequestCoordinator`, `WireProfileResolver`, codec architecture,
   upstream path ending in `/messages`, requires the sanitized `api_key` auth
   scheme and `thinking` field, rejects top-level `reasoning_effort` and
   `reasoning`, and sends an ordinary follow-up while checking account health.
-  These observations were not available without the live credential.
-- No MiniMax contract correction was made; the existing contract remains the
-  implementation under test. Optional Gemini live work was not run.
+  The initial live attempt exposed a local capability rejection because the
+  OpenCode Go MiniMax contract was `effort` while the cross-protocol adapter
+  correctly emitted `thinking.budget_tokens`. The contract was minimally
+  corrected to `effort_or_budget`; the rerun passed without an upstream
+  thinking-shape rejection or account-health effect. Optional Gemini live work
+  was not run.
 - A small defensive `getattr` correction in
   `RequestCoordinator._alternate_wire_available` was required by the full
   suite's minimal stream-timeout test double; it does not alter production
