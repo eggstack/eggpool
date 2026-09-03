@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from eggpool.catalog.capabilities import (
     ThinkingCapability,
@@ -118,6 +118,7 @@ def adapt_thinking_controls(
     capability: ThinkingCapability,
     intent: ThinkingRequestIntent,
     policy: ProviderControlPolicy,
+    upstream_protocol: str | None = None,
 ) -> ProviderRequestAdaptation:
     """Validate and adapt thinking controls against the provider contract.
 
@@ -140,6 +141,8 @@ def adapt_thinking_controls(
         capability: the selected provider's ``ThinkingCapability``.
         intent: the original client thinking intent (Workstream D).
         policy: the operator-configured adaptation policy.
+        upstream_protocol: the selected target protocol, when known.  It is
+            used only for an explicitly supported binary-toggle mapping.
 
     Returns:
         A :class:`ProviderRequestAdaptation` describing the adaptation
@@ -210,6 +213,7 @@ def adapt_thinking_controls(
         contract=contract,
         intent=intent,
         policy=policy,
+        upstream_protocol=upstream_protocol,
     )
 
 
@@ -363,6 +367,7 @@ def _handle_effort_budget_contract(
     contract: ThinkingControlContract,
     intent: ThinkingRequestIntent,
     policy: ProviderControlPolicy,
+    upstream_protocol: str | None,
 ) -> ProviderRequestAdaptation:
     """Handle effort/budget/effort_or_budget contracts."""
     requested = list(intent.request_fields)
@@ -422,6 +427,33 @@ def _handle_effort_budget_contract(
                     emitted.append("thinking")
                 warnings.extend(result.warnings)
 
+        elif field_name == "reasoning":
+            result = _adapt_reasoning_toggle(
+                new_payload=new_payload,
+                contract=contract,
+                model_id=model_id,
+                provider_id=provider_id,
+                intent=intent,
+                policy=policy,
+                upstream_protocol=upstream_protocol,
+            )
+            if result.disposition == "unchanged":
+                emitted.append(result.emitted_field or "reasoning")
+            elif result.disposition in ("mapped", "dropped"):
+                new_payload = result.payload
+                changed = True
+                if result.emitted_field is not None:
+                    emitted.append(result.emitted_field)
+                warnings.extend(result.warnings)
+            elif result.disposition == "rejected":
+                return _reject(
+                    new_payload,
+                    model_id,
+                    provider_id,
+                    "unsupported_toggle",
+                    intent,
+                )
+
         elif field_name == "thinking_budget":
             result = _adapt_thinking_budget(
                 new_payload=new_payload,
@@ -464,20 +496,50 @@ def _handle_effort_budget_contract(
         and "thinking" in new_payload
         and "thinking" not in requested
     ):
-        result = _adapt_thinking_block(
-            new_payload=new_payload,
-            contract=contract,
-            model_id=model_id,
-            provider_id=provider_id,
-            intent=intent,
-            policy=policy,
-        )
-        if result.disposition in ("mapped", "dropped"):
-            new_payload = result.payload
-            changed = True
-            warnings.extend(result.warnings)
-            if "thinking" in new_payload:
-                emitted.append("thinking")
+        # The compatibility OpenAI→Anthropic translator may create a
+        # budgeted ``thinking`` block from ``reasoning_effort`` before this
+        # provider-bound stage runs.  Never leave that generated block as a
+        # toggle when the selected target is toggle-only (or its effort
+        # contract is unknown).  A lossy policy may drop it; the default
+        # policy rejects locally.
+        if (
+            intent.control_kind == "effort" or intent.requested_effort is not None
+        ) and contract.effort != "supported":
+            if policy.unsupported_control == "warn_drop":
+                modified = dict(new_payload)
+                del modified["thinking"]
+                new_payload = modified
+                changed = True
+                warnings.append(
+                    AdaptationWarning(
+                        kind="thinking_control_dropped",
+                        field_name="thinking",
+                        detail="effort intent cannot be represented by target contract",
+                    )
+                )
+            else:
+                return _reject(
+                    new_payload,
+                    model_id,
+                    provider_id,
+                    "unsupported_effort",
+                    intent,
+                )
+        else:
+            result = _adapt_thinking_block(
+                new_payload=new_payload,
+                contract=contract,
+                model_id=model_id,
+                provider_id=provider_id,
+                intent=intent,
+                policy=policy,
+            )
+            if result.disposition in ("mapped", "dropped"):
+                new_payload = result.payload
+                changed = True
+                warnings.extend(result.warnings)
+                if "thinking" in new_payload:
+                    emitted.append("thinking")
 
     decision: Literal["passthrough", "mapped", "dropped", "rejected"] = "passthrough"
     if changed:
@@ -607,7 +669,9 @@ def _adapt_thinking_block(
         thinking_dict.pop(field.removeprefix("thinking."), None)
         removed_fields.append(field)
 
-    if "type" in thinking_dict and contract.effort != "supported":
+    if "type" in thinking_dict and not (
+        contract.toggle == "supported" or contract.effort == "supported"
+    ):
         unsupported("thinking.type", "thinking type is not selectable")
 
     if "effort" in thinking_dict:
@@ -707,6 +771,89 @@ def _adapt_thinking_block(
         requested_field="thinking",
         emitted_field="thinking" if thinking_dict else None,
         warnings=tuple(warnings),
+    )
+
+
+def _adapt_reasoning_toggle(
+    *,
+    new_payload: Mapping[str, Any],
+    contract: ThinkingControlContract,
+    model_id: str,
+    provider_id: str,
+    intent: ThinkingRequestIntent,
+    policy: ProviderControlPolicy,
+    upstream_protocol: str | None,
+) -> ControlFieldAdaptation:
+    """Validate the canonical binary toggle without inventing effort."""
+    if contract.toggle == "unknown":
+        if policy.unknown_contract == "allow_with_warning":
+            return ControlFieldAdaptation(
+                disposition="unchanged",
+                payload=new_payload,
+                emitted_field="reasoning",
+                warnings=(
+                    AdaptationWarning(
+                        kind="unknown_toggle_forwarded",
+                        detail=f"toggle support unknown for {provider_id}/{model_id}",
+                    ),
+                ),
+            )
+        return ControlFieldAdaptation(
+            disposition="rejected", payload=new_payload, requested_field="reasoning"
+        )
+    if contract.toggle != "supported":
+        if policy.unsupported_control != "warn_drop":
+            return ControlFieldAdaptation(
+                disposition="rejected", payload=new_payload, requested_field="reasoning"
+            )
+        modified = dict(new_payload)
+        modified.pop("reasoning", None)
+        return ControlFieldAdaptation(
+            disposition="dropped",
+            payload=modified,
+            requested_field="reasoning",
+            warnings=(
+                AdaptationWarning(
+                    kind="thinking_control_dropped",
+                    field_name="reasoning",
+                    detail="toggle is not accepted by target contract",
+                ),
+            ),
+        )
+
+    if upstream_protocol not in {"anthropic", "openai"}:
+        return ControlFieldAdaptation(
+            disposition="unchanged",
+            payload=new_payload,
+            emitted_field="reasoning",
+        )
+    raw_toggle = new_payload.get("reasoning")
+    enabled = (
+        cast("dict[str, Any]", raw_toggle).get("enabled")
+        if isinstance(raw_toggle, dict)
+        else raw_toggle
+    )
+    if not isinstance(enabled, bool) or upstream_protocol == "openai":
+        return ControlFieldAdaptation(
+            disposition="unchanged",
+            payload=new_payload,
+            emitted_field="reasoning",
+        )
+    modified = dict(new_payload)
+    modified.pop("reasoning", None)
+    modified["thinking"] = {"type": "enabled" if enabled else "disabled"}
+    return ControlFieldAdaptation(
+        disposition="mapped",
+        payload=modified,
+        requested_field="reasoning",
+        emitted_field="thinking",
+        warnings=(
+            AdaptationWarning(
+                kind="toggle_mapped",
+                field_name="reasoning",
+                detail="binary reasoning toggle mapped to target thinking form",
+            ),
+        ),
     )
 
 

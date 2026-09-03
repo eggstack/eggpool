@@ -326,6 +326,10 @@ Catalog source authority is field-level: manual operator overrides outrank
 explicit live provider metadata, which outranks verified provider-scoped
 model-info metadata; omitted facts remain unknown. Model-family names and
 provider identity alone never supply reasoning-control defaults.
+Routing and post-selection adaptation match each requested toggle, exact effort
+label, or numeric budget against the selected provider/model row. A supported
+reasoning status does not authorize every caller control, and a rejected
+control is request-local rather than an upstream health failure.
 
 ## Failure Effects and Quarantine
 

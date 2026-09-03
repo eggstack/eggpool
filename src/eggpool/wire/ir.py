@@ -96,9 +96,12 @@ class ReasoningIntent:
 
     @classmethod
     def from_openai_effort(cls, effort: str) -> ReasoningIntent:
-        """Create an intent without mapping the effort to a guessed budget."""
-        if effort.strip().lower() == "none":
-            return cls(requested=False, mode="toggle")
+        """Create an effort intent without mapping it to a budget.
+
+        ``none`` is an OpenAI effort value, so it remains an effort intent.
+        A target may only reinterpret it as a binary disable when an
+        explicit verified mapping says that is faithful.
+        """
         return cls(requested=True, mode="effort", effort=effort)
 
     @classmethod
@@ -240,8 +243,11 @@ def reasoning_intent_from_mapping(payload: Mapping[str, Any]) -> ReasoningIntent
         effort_value = reasoning.get("effort")
         if isinstance(effort_value, str):
             return ReasoningIntent.from_openai_effort(effort_value)
-        if reasoning.get("enabled") is False:
-            return ReasoningIntent.disabled()
+        enabled = reasoning.get("enabled")
+        if isinstance(enabled, bool):
+            return ReasoningIntent(requested=enabled, mode="toggle")
+    elif isinstance(reasoning, bool):
+        return ReasoningIntent(requested=reasoning, mode="toggle")
 
     thinking = payload.get("thinking")
     if isinstance(thinking, Mapping):

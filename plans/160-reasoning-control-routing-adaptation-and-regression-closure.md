@@ -1,7 +1,7 @@
 # Plan 160 — Reasoning-Control Routing, Adaptation, and Regression Closure
 
 Date: 2026-09-03
-Status: implementation handoff
+Status: complete
 Parent roadmap: `plans/157-provider-bound-reasoning-control-discovery-roadmap.md`
 Depends on:
 - `plans/158-compositional-reasoning-capability-schema-and-metadata-normalization.md`
@@ -524,3 +524,12 @@ The full retained suite remains optional/manual unless focused failures show a s
 ## Closure rule
 
 When these criteria pass, mark Plans 157–160 complete and stop. If a future provider publishes incomplete metadata and a real request demonstrates that metadata + operator override are insufficient, create a separate narrowly evidenced plan for passive runtime control learning. Do not preemptively add that complexity here.
+
+## Implementation closure (2026-09-03)
+
+- Deterministic and full retained suites pass locally: `7818 passed, 42 skipped`.
+- The CI-equivalent format, lint, type, smoke, and standard/SBC config checks
+  pass locally under `PYTHONHASHSEED=0 TZ=UTC`.
+- Credentialed OpenCode Go verification is blocked in this environment because
+  `EGGPOOL_E2E_OPENCODE_GO_API_KEY` is unavailable. The live suite remains
+  opt-in and skipped; no live success is claimed here.

@@ -213,6 +213,12 @@ re-raising.
 - `recompute_thinking_budget_for_provider()` — re-resolves budget against selected provider's capability
 - `adapt_provider_thinking_controls()` — validates and adapts controls against the provider contract
 
+Routing and post-selection adaptation use the same exact provider/model
+contract. Toggle, effort, and numeric budget requests are checked
+independently; an effort label is never downgraded to a binary toggle merely
+because the target can reason. Known control mismatches are local 400
+validation outcomes and do not enter retry, health, or quarantine handling.
+
 `_determine_thinking_rejection_status()` (coordinator) — attributes a
 thinking rejection to an aggregated capability status when all
 eligible accounts are filtered out. Consults the collapsed
@@ -365,8 +371,11 @@ is genuinely `unknown` or `unsupported`; when the status is
 `supported` or `mixed` but every supporting account is currently
 quarantined, the caller falls through to `ModelUnavailableError`
 (503) / `UpstreamExhaustedError` so a transient retry is possible.
-This prevents a misleading `thinking capability status: unknown`
-400 from masking a recoverable quarantine-state failure.
+An authoritative unsupported status or an exact unsupported/unknown control
+dimension produces a local 400. A valid control on a supported or mixed
+provider remains a transient 502/503 when every account is quarantined. This
+prevents a misleading `thinking capability status: unknown` 400 from masking
+a recoverable quarantine-state failure.
 
 Prepared transcode results retain one request-local translated JSON generation
 without recursively freezing or rematerializing it. Valid unchanged reuse

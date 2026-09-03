@@ -43,9 +43,11 @@ class TestClassifyThinkingRequest:
         assert req.requested_effort == "high"
         assert req.client_protocol == "openai"
 
-    def test_openai_none_does_not_require_thinking_capability(self) -> None:
+    def test_openai_none_is_an_effort_control_without_reasoning_output(self) -> None:
         req = classify_thinking_request({"reasoning_effort": "none"}, "openai")
         assert req.required is False
+        assert req.requires_capability_routing is True
+        assert req.control_kind == "effort"
         assert req.reasoning_disabled is True
         assert req.requested_effort == "none"
 
@@ -336,7 +338,9 @@ class TestEligibilityWithThinking:
         eligible = get_eligible_accounts(states, "m1", cache, thinking_requirement=req)
         assert len(eligible) == 1
 
-    def test_reasoning_disabled_effort_passes_unsupported_account(self) -> None:
+    def test_reasoning_disabled_effort_still_requires_exact_effort_support(
+        self,
+    ) -> None:
         cache = self._make_cache_with_thinking("acct1", "p1", "m1", "unsupported")
         states = [
             __import__(
@@ -346,7 +350,7 @@ class TestEligibilityWithThinking:
         req = classify_thinking_request({"reasoning_effort": "none"}, "openai")
         assert req.required is False
         eligible = get_eligible_accounts(states, "m1", cache, thinking_requirement=req)
-        assert len(eligible) == 1
+        assert len(eligible) == 0
 
     def test_thinking_required_warn_drop_policy_allows(self) -> None:
         cache = self._make_cache_with_thinking("acct1", "p1", "m1", "unsupported")
@@ -571,6 +575,165 @@ class TestEligibilityWithThinking:
         )
 
         assert [state.name for state in eligible] == ["acct1"]
+
+    def test_toggle_only_candidate_rejects_effort_but_accepts_toggle(self) -> None:
+        """A supported reasoning model is not universally controllable."""
+        from eggpool.accounts.state import AccountRuntimeState
+
+        cache = MagicMock()
+        cache.get_provider_for_account.return_value = "opencode-go"
+        cache.is_account_model_available.return_value = True
+        cache.get_provider_model_entry.return_value = {
+            "model_id": "minimax-m3",
+            "provider_id": "opencode-go",
+            "capabilities": {
+                "thinking": {
+                    "status": "supported",
+                    "control_contract": {
+                        "toggle": "supported",
+                        "effort": "unsupported",
+                        "budget": "unsupported",
+                    },
+                }
+            },
+        }
+        state = AccountRuntimeState(name="acct1", enabled=True)
+
+        effort_request = classify_thinking_request(
+            {"reasoning_effort": "high"}, "openai"
+        )
+        toggle_request = classify_thinking_request(
+            {"reasoning": {"enabled": True}}, "openai"
+        )
+
+        assert (
+            get_eligible_accounts(
+                [state], "minimax-m3", cache, thinking_requirement=effort_request
+            )
+            == []
+        )
+        assert [
+            item.name
+            for item in get_eligible_accounts(
+                [state], "minimax-m3", cache, thinking_requirement=toggle_request
+            )
+        ] == ["acct1"]
+
+    def test_fixed_reasoning_candidate_rejects_effort_without_controls(self) -> None:
+        """A fixed/no-control model does not satisfy an effort request."""
+        from eggpool.accounts.state import AccountRuntimeState
+
+        cache = MagicMock()
+        cache.get_provider_for_account.return_value = "opencode-go"
+        cache.is_account_model_available.return_value = True
+        cache.get_provider_model_entry.return_value = {
+            "model_id": "mimo-v2.5",
+            "capabilities": {
+                "thinking": {
+                    "status": "supported",
+                    "control_contract": {
+                        "toggle": "unsupported",
+                        "effort": "unsupported",
+                        "budget": "unsupported",
+                    },
+                }
+            },
+        }
+        request = classify_thinking_request({"reasoning_effort": "low"}, "openai")
+
+        assert (
+            get_eligible_accounts(
+                [AccountRuntimeState(name="acct1", enabled=True)],
+                "mimo-v2.5",
+                cache,
+                thinking_requirement=request,
+            )
+            == []
+        )
+
+    def test_exact_effort_set_accepts_none_only_when_advertised(self) -> None:
+        """The explicit OpenAI ``none`` value remains an effort label."""
+        from eggpool.accounts.state import AccountRuntimeState
+
+        cache = MagicMock()
+        cache.get_provider_for_account.return_value = "opencode-go"
+        cache.is_account_model_available.return_value = True
+        cache.get_provider_model_entry.return_value = {
+            "model_id": "muse",
+            "capabilities": {
+                "thinking": {
+                    "status": "supported",
+                    "control_contract": {
+                        "toggle": "unsupported",
+                        "effort": "supported",
+                        "budget": "unsupported",
+                        "accepted_efforts": ["none", "low", "high"],
+                    },
+                }
+            },
+        }
+        request = classify_thinking_request({"reasoning_effort": "none"}, "openai")
+
+        eligible = get_eligible_accounts(
+            [AccountRuntimeState(name="acct1", enabled=True)],
+            "muse",
+            cache,
+            thinking_requirement=request,
+        )
+        assert [item.name for item in eligible] == ["acct1"]
+
+    def test_same_model_provider_rows_do_not_share_control_capabilities(self) -> None:
+        """Collapsed model identity never borrows controls across providers."""
+        from eggpool.accounts.state import AccountRuntimeState
+
+        entries = {
+            "toggle-provider": {
+                "model_id": "shared-model",
+                "capabilities": {
+                    "thinking": {
+                        "status": "supported",
+                        "control_contract": {
+                            "toggle": "supported",
+                            "effort": "unsupported",
+                            "budget": "unsupported",
+                        },
+                    }
+                },
+            },
+            "effort-provider": {
+                "model_id": "shared-model",
+                "capabilities": {
+                    "thinking": {
+                        "status": "supported",
+                        "control_contract": {
+                            "toggle": "unsupported",
+                            "effort": "supported",
+                            "budget": "unsupported",
+                            "accepted_efforts": ["low", "high"],
+                        },
+                    }
+                },
+            },
+        }
+        cache = MagicMock()
+        cache.get_provider_for_account.side_effect = {
+            "toggle-acct": "toggle-provider",
+            "effort-acct": "effort-provider",
+        }.get
+        cache.get_provider_model_entry.side_effect = lambda _model_id, provider_id: (
+            entries.get(provider_id)
+        )
+        cache.is_account_model_available.return_value = True
+        request = classify_thinking_request({"reasoning_effort": "high"}, "openai")
+        states = [
+            AccountRuntimeState(name="toggle-acct", enabled=True),
+            AccountRuntimeState(name="effort-acct", enabled=True),
+        ]
+
+        eligible = get_eligible_accounts(
+            states, "shared-model", cache, thinking_requirement=request
+        )
+        assert [item.name for item in eligible] == ["effort-acct"]
 
 
 # ---------------------------------------------------------------------------

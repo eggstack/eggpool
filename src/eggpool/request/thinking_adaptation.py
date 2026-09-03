@@ -305,6 +305,7 @@ def adapt_provider_thinking_controls(
         capability=adapted_capability,
         intent=intent,
         policy=policy,
+        upstream_protocol=context.upstream_protocol or context.protocol,
     )
 
     # Update the thinking trace with adaptation results.

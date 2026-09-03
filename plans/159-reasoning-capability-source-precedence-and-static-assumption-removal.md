@@ -1,7 +1,7 @@
 # Plan 159 — Reasoning Capability Source Precedence and Static-Assumption Removal
 
 Date: 2026-09-03
-Status: implementation handoff
+Status: complete
 Parent roadmap: `plans/157-provider-bound-reasoning-control-discovery-roadmap.md`
 Depends on: `plans/158-compositional-reasoning-capability-schema-and-metadata-normalization.md`
 Planning baseline: `df64a5e3e33964b1c811f04e2ed79e12473a3db4`

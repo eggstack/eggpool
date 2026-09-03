@@ -50,6 +50,7 @@ CapabilitySource = Literal[
 
 ControlSupport = Literal["supported", "unsupported", "unknown"]
 ControlSummary = Literal["supported", "unsupported", "unknown", "mixed"]
+ReasoningControlKind = Literal["none", "toggle", "effort", "budget", "unknown"]
 
 # Legacy mode values are accepted as compatibility input only.  They are not
 # the canonical representation and are excluded from serialized capability
@@ -1659,14 +1660,43 @@ def model_capabilities_to_dict(capabilities: ModelCapabilities) -> dict[str, obj
 
 @dataclass(frozen=True, slots=True)
 class ThinkingRequestRequirement:
-    """Result of classifying whether a request needs thinking support."""
+    """Canonical request-side reasoning requirements.
+
+    ``required`` remains the compatibility name for the feature requirement
+    (the request needs reasoning output).  ``control_kind`` and
+    ``requested_toggle`` carry the independent caller-control requirement so
+    a reasoning-capable provider is not treated as universally controllable.
+    ``unknown`` is reserved for malformed/ambiguous legacy field shapes; it
+    is still distinct from no caller preference.
+    """
 
     required: bool
     client_protocol: str
     fields: list[str]
+    control_kind: ReasoningControlKind = "none"
+    requested_toggle: bool | None = None
     requested_effort: str | None = None
     requested_budget_tokens: int | None = None
     reasoning_disabled: bool = False
+
+    @property
+    def needs_reasoning(self) -> bool:
+        """Return whether the request requires reasoning output."""
+        return self.required
+
+    @property
+    def has_control_requirement(self) -> bool:
+        """Return whether routing must validate a caller control."""
+        return bool(self.fields) and (
+            self.control_kind != "none"
+            or self.requested_toggle is not None
+            or not self.reasoning_disabled
+        )
+
+    @property
+    def requires_capability_routing(self) -> bool:
+        """Return whether feature or control capability must be checked."""
+        return self.required or self.has_control_requirement
 
 
 @dataclass(frozen=True, slots=True)
@@ -1682,10 +1712,19 @@ class ThinkingRequestIntent:
     requested_effort: str | None = None
     requested_effort_original: str | None = None
     requested_budget_tokens: int | None = None
+    control_kind: ReasoningControlKind = "none"
+    requested_toggle: bool | None = None
     request_fields: tuple[str, ...] = ()
     has_historical_reasoning_content: bool = False
     client_requests_new_reasoning: bool = False
     client_protocol: str = ""
+
+    @property
+    def has_control_requirement(self) -> bool:
+        """Return whether a new caller control was explicitly requested."""
+        return self.client_requests_new_reasoning and (
+            self.control_kind != "none" or self.requested_toggle is not None
+        )
 
     def to_reasoning_intent(self) -> ReasoningIntent:
         """Return the canonical reasoning intent for surface encoding.
@@ -1700,6 +1739,8 @@ class ThinkingRequestIntent:
             return ReasoningIntent.from_openai_effort(self.requested_effort)
         if self.requested_budget_tokens is not None:
             return ReasoningIntent.fixed(self.requested_budget_tokens)
+        if self.requested_toggle is not None:
+            return ReasoningIntent(requested=self.requested_toggle, mode="toggle")
         if self.client_requests_new_reasoning:
             return ReasoningIntent(requested=True, mode="toggle")
         return ReasoningIntent()
@@ -1728,6 +1769,7 @@ def classify_thinking_request(
     fields: list[str] = []
     effort: str | None = None
     budget: int | None = None
+    requested_toggle: bool | None = None
 
     # OpenAI indicators
     if "reasoning_effort" in request_body:
@@ -1738,6 +1780,17 @@ def classify_thinking_request(
 
     if "reasoning" in request_body:
         fields.append("reasoning")
+        reasoning_val: object = request_body["reasoning"]
+        if isinstance(reasoning_val, Mapping):
+            reasoning_dict = cast("Mapping[str, object]", reasoning_val)
+            enabled = reasoning_dict.get("enabled")
+            if isinstance(enabled, bool):
+                requested_toggle = enabled
+            nested_effort = reasoning_dict.get("effort")
+            if isinstance(nested_effort, str):
+                effort = nested_effort
+        elif isinstance(reasoning_val, bool):
+            requested_toggle = reasoning_val
 
     # Anthropic indicators
     if "thinking" in request_body:
@@ -1745,6 +1798,11 @@ def classify_thinking_request(
         thinking_val: object = request_body["thinking"]
         if isinstance(thinking_val, dict):
             thinking_dict = cast("dict[str, object]", thinking_val)
+            thinking_type = thinking_dict.get("type")
+            if thinking_type in {"enabled", "adaptive"}:
+                requested_toggle = True
+            elif thinking_type in {"disabled", "none"}:
+                requested_toggle = False
             budget_val: object = thinking_dict.get("budget_tokens")
             if isinstance(budget_val, int) and not isinstance(budget_val, bool):
                 budget = int(budget_val)
@@ -1796,17 +1854,30 @@ def classify_thinking_request(
                 ):
                     fields.append("reasoning_content")
 
+    has_history = "reasoning_content" in fields
+    if effort is not None:
+        control_kind: ReasoningControlKind = "effort"
+    elif budget is not None:
+        control_kind = "budget"
+    elif requested_toggle is not None:
+        control_kind = "toggle"
+    elif fields and not has_history:
+        control_kind = "unknown"
+    else:
+        control_kind = "none"
+
+    requires_reasoning = has_history or (
+        control_kind == "unknown"
+        or requested_toggle is True
+        or (effort is not None and not is_reasoning_disabled_effort(effort))
+        or budget is not None
+    )
     return ThinkingRequestRequirement(
-        required=bool(fields)
-        and not (
-            is_reasoning_disabled_effort(effort)
-            and not any(
-                field in {"reasoning", "thinking", "thinking_budget"}
-                for field in fields
-            )
-        ),
+        required=requires_reasoning,
         client_protocol=client_protocol,
         fields=fields,
+        control_kind=control_kind,
+        requested_toggle=requested_toggle,
         requested_effort=effort,
         requested_budget_tokens=budget,
         reasoning_disabled=is_reasoning_disabled_effort(effort),
@@ -1988,8 +2059,9 @@ def candidate_supports_requested_effort(
 ) -> bool:
     """Return whether a catalog entry supports the requested effort level.
 
-    An empty ``supported_efforts`` list means the provider did not expose
-    effort-level metadata, so the caller falls back to status-only routing.
+    A known supported effort contract with an empty accepted set is malformed
+    metadata and is not permissive.  An unknown effort dimension remains
+    unknown and is handled by the caller's unknown-control policy.
     """
     if requested_effort is None:
         return True
@@ -2004,12 +2076,130 @@ def candidate_supports_requested_effort(
         return True
     thinking_raw: dict[str, object] = thinking_raw_obj  # pyright: ignore[reportUnknownVariableType]
     caps = dict_to_model_capabilities({"thinking": thinking_raw})
-    supported = caps.thinking.supported_efforts
-    if not supported:
+    contract = infer_control_contract(caps.thinking)
+    if contract.effort == "unknown":
         return True
+    if contract.effort != "supported" or not contract.accepted_efforts:
+        return False
     requested = _normalize_effort_label(requested_effort)
-    supported_normalized = {_normalize_effort_label(value) for value in supported}
+    supported_normalized = {
+        _normalize_effort_label(value) for value in contract.accepted_efforts
+    }
+    supported_normalized.update(
+        _normalize_effort_label(value) for value in contract.effort_aliases
+    )
     return requested in supported_normalized
+
+
+def extract_thinking_capability_from_entry(
+    entry: Mapping[str, object] | None,
+) -> ThinkingCapability:
+    """Decode the provider-scoped thinking capability from a catalog row."""
+    if entry is None:
+        return ThinkingCapability()
+    caps_raw_obj: object = entry.get("capabilities")
+    if not isinstance(caps_raw_obj, dict):
+        return ThinkingCapability()
+    caps_raw: dict[str, object] = cast("dict[str, object]", caps_raw_obj)
+    thinking_raw = caps_raw.get("thinking")
+    if not isinstance(thinking_raw, dict):
+        return ThinkingCapability()
+    return dict_to_model_capabilities({"thinking": thinking_raw}).thinking
+
+
+def candidate_supports_thinking_requirement(
+    entry: Mapping[str, object] | None,
+    requirement: ThinkingRequestRequirement,
+    *,
+    unsupported_action: str = "reject",
+    unsupported_control_action: str = "reject",
+    unknown_action: str = "allow_with_warning",
+) -> tuple[bool, str | None]:
+    """Check feature and control dimensions for one provider/model row.
+
+    The returned reason is a stable diagnostic label, not an upstream health
+    classification.  Control mismatches are request-local and do not imply
+    provider failure.
+    """
+    capability = extract_thinking_capability_from_entry(entry)
+    contract = infer_control_contract(capability)
+
+    if requirement.required and not check_candidate_thinking_eligibility(
+        capability.status,
+        unsupported_action=unsupported_action,
+        unknown_action=unknown_action,
+    ):
+        return False, f"thinking_{capability.status}"
+
+    checks: list[tuple[str, ControlSummary, bool]] = []
+    if requirement.requested_toggle is not None:
+        checks.append(("toggle", contract.toggle, True))
+    if requirement.requested_effort is not None:
+        checks.append(
+            (
+                "effort",
+                contract.effort,
+                contract.effort == "supported"
+                and bool(contract.accepted_efforts)
+                and (
+                    _normalize_effort_label(requirement.requested_effort)
+                    in {
+                        _normalize_effort_label(value)
+                        for value in contract.accepted_efforts
+                    }
+                    or _normalize_effort_label(requirement.requested_effort)
+                    in {
+                        _normalize_effort_label(value)
+                        for value in contract.effort_aliases
+                    }
+                ),
+            )
+        )
+    if requirement.requested_budget_tokens is not None:
+        budget = requirement.requested_budget_tokens
+        checks.append(
+            (
+                "budget",
+                contract.budget,
+                contract.budget == "supported"
+                and (
+                    contract.explicit_budget_min is None
+                    or budget >= contract.explicit_budget_min
+                )
+                and (
+                    contract.explicit_budget_max is None
+                    or budget <= contract.explicit_budget_max
+                ),
+            )
+        )
+
+    for dimension, state, valid in checks:
+        if state == "unsupported":
+            return (
+                unsupported_control_action != "reject",
+                f"thinking_{dimension}_unsupported",
+            )
+        if state == "unknown":
+            if unknown_action == "reject":
+                return False, f"thinking_{dimension}_unknown"
+            if unknown_action == "allow_with_warning":
+                logger.warning(
+                    "capability_routing: model=%s control=%s support=unknown "
+                    "policy=allow_with_warning",
+                    entry.get("model_id") if entry else "unknown",
+                    dimension,
+                )
+            continue
+        if state == "mixed":
+            if unknown_action == "reject":
+                return False, f"thinking_{dimension}_mixed"
+            continue
+        if not valid:
+            return (
+                unsupported_control_action != "reject",
+                f"thinking_{dimension}_unsupported",
+            )
+    return True, None
 
 
 def check_candidate_thinking_eligibility(

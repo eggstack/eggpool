@@ -1465,6 +1465,25 @@ class RequestCoordinator:
                                 ),
                             )
                 break
+            except CapabilityError as err:
+                # A request-local capability mismatch discovered before an
+                # attempt is selected is a client-validation result.  Close
+                # the durable request without creating provider effects and
+                # preserve the typed error for the API's 400 renderer.
+                context.thinking_trace = context.thinking_trace or {}
+                context.thinking_trace["decision"] = "rejected"
+                db_request_id = context.client_metadata.get("db_request_id")
+                if db_request_id is not None and self._request_repo is not None:
+                    async with self._db.transaction():
+                        await self._request_repo.finalize_if_pending(
+                            request_id=db_request_id,
+                            status="error",
+                            error_class=type(err).__name__,
+                            thinking_trace_json=_serialize_thinking_trace(
+                                context.thinking_trace
+                            ),
+                        )
+                raise
             except AuthenticationError as err:
                 last_error = err
                 logger.warning(
@@ -2267,7 +2286,7 @@ class RequestCoordinator:
                 thinking_req = classify_thinking_request(body_dict, context.protocol)
                 context.thinking_requirement = thinking_req
             # Record thinking observability trace
-            if thinking_req.required:
+            if thinking_req.requires_capability_routing:
                 _thinking_counter = get_counter()
                 await _thinking_counter.increment_requested(
                     client_protocol=thinking_req.client_protocol,
@@ -2289,9 +2308,16 @@ class RequestCoordinator:
                     requested_effort=thinking_req.requested_effort,
                     requested_effort_original=thinking_req.requested_effort,
                     requested_budget_tokens=thinking_req.requested_budget_tokens,
+                    control_kind=thinking_req.control_kind,
+                    requested_toggle=thinking_req.requested_toggle,
                     request_fields=tuple(thinking_req.fields),
                     has_historical_reasoning_content=_has_history,
-                    client_requests_new_reasoning=_has_new_reasoning,
+                    client_requests_new_reasoning=(
+                        _has_new_reasoning
+                        or thinking_req.requested_toggle is not None
+                        or thinking_req.requested_effort is not None
+                        or thinking_req.requested_budget_tokens is not None
+                    ),
                     client_protocol=thinking_req.client_protocol,
                 )
                 context.thinking_trace = {
@@ -2319,6 +2345,14 @@ class RequestCoordinator:
                     "unknown_thinking": cp.unknown_thinking,
                     "mixed_collapsed_thinking": cp.mixed_collapsed_thinking,
                 }
+                if hasattr(self._transcoder_policy, "provider_control_policy"):
+                    pcp = self._transcoder_policy.provider_control_policy
+                    _capability_policy.update(
+                        {
+                            "unsupported_control": pcp.unsupported_control,
+                            "unknown_control": pcp.unknown_contract,
+                        }
+                    )
 
         with _maybe_span(self._dispatch_span_recorder, SPAN_RESERVATION_ESTIMATE):
             if context.estimated_reservation_tokens is not None:
@@ -2348,7 +2382,9 @@ class RequestCoordinator:
                     else None
                 ),
                 client_protocol=context.protocol,
-                thinking_requirement=thinking_req if thinking_req.required else None,
+                thinking_requirement=(
+                    thinking_req if thinking_req.requires_capability_routing else None
+                ),
                 capability_policy=_capability_policy,
                 estimated_tokens=int(estimated_tokens),
                 request_surface=getattr(context, "request_surface", "chat_completions"),
@@ -2378,7 +2414,7 @@ class RequestCoordinator:
             # accounts at all (503). An empty result after at
             # least one attempt means every eligible candidate has
             # been tried in this request (502).
-            if thinking_req.required:
+            if thinking_req.requires_capability_routing:
                 # Record thinking rejection. Phase D: also
                 # bump capability-specific counters when the
                 # collapsed model status explains the
@@ -2526,7 +2562,7 @@ class RequestCoordinator:
                     # attempted in this request" (502 UpstreamExhausted)
                     # from "no enabled accounts at all" (503
                     # ModelUnavailable).
-                    if thinking_req.required:
+                    if thinking_req.requires_capability_routing:
                         _thinking_counter = get_counter()
                         rejected_status = (
                             await self._determine_thinking_rejection_status(
@@ -4988,20 +5024,29 @@ class RequestCoordinator:
         """
         from eggpool.catalog.capabilities import extract_thinking_status_from_entry
 
-        del thinking_req
         try:
+            from eggpool.catalog.capabilities import (
+                candidate_supports_thinking_requirement,
+                extract_thinking_status_from_entry,
+            )
+
             cache = self._catalog.cache
             collapsed_entry = cache.get_model(context.model_id)
             collapsed_status = extract_thinking_status_from_entry(collapsed_entry)
+            status = collapsed_status
+            provider_entries: list[Mapping[str, object] | None] = []
             if collapsed_status != "unknown":
                 status = collapsed_status
-            elif context.provider_id is not None:
-                provider_entry = cache.get_provider_model_entry(
-                    context.model_id,
-                    context.provider_id,
+            if context.provider_id is not None:
+                provider_entries.append(
+                    cache.get_provider_model_entry(
+                        context.model_id,
+                        context.provider_id,
+                    )
                 )
-                status = extract_thinking_status_from_entry(provider_entry)
-            else:
+                if collapsed_status == "unknown":
+                    status = extract_thinking_status_from_entry(provider_entries[0])
+            elif context.provider_id is None:
                 # No provider hint: aggregate every provider with a
                 # known provider-scoped entry for the model so provider
                 # metadata still surfaces as ``supported`` rather than
@@ -5022,15 +5067,44 @@ class RequestCoordinator:
                     if model_id != context.model_id:
                         continue
                     entry = cache.get_provider_model_entry(model_id, provider_id)
+                    provider_entries.append(entry)
                     statuses.add(extract_thinking_status_from_entry(entry))
-                if "supported" in statuses:
-                    status = "supported"
-                elif "mixed" in statuses:
-                    status = "mixed"
-                elif "unsupported" in statuses:
-                    status = "unsupported"
-                else:
-                    status = collapsed_status
+                if collapsed_status == "unknown":
+                    if "supported" in statuses:
+                        status = "supported"
+                    elif "mixed" in statuses:
+                        status = "mixed"
+                    elif "unsupported" in statuses:
+                        status = "unsupported"
+                    else:
+                        status = collapsed_status
+
+            # A known reasoning model can still reject the requested control
+            # dimension (for example MiniMax-M3 accepts a binary toggle but
+            # not an effort label).  Attribute an empty candidate set to a
+            # local capability rejection when every provider row rejects the
+            # exact control.  A valid control on a quarantined provider stays
+            # transient and follows the normal 502/503 path below.
+            if status in ("supported", "mixed") and provider_entries:
+                control_results = [
+                    candidate_supports_thinking_requirement(
+                        entry,
+                        thinking_req,
+                        unsupported_action="reject",
+                        unsupported_control_action="reject",
+                        unknown_action="reject",
+                    )
+                    for entry in provider_entries
+                ]
+                if control_results and all(
+                    not allowed for allowed, _ in control_results
+                ):
+                    if any(
+                        reason is not None and reason.endswith("_unknown")
+                        for _, reason in control_results
+                    ):
+                        return "unknown"
+                    return "unsupported"
         except Exception:  # noqa: BLE001
             return None
         if status in ("unknown", "unsupported"):
@@ -6327,7 +6401,7 @@ class RequestCoordinator:
             thinking_requirement=(
                 context.thinking_requirement
                 if context.thinking_requirement is not None
-                and context.thinking_requirement.required
+                and context.thinking_requirement.requires_capability_routing
                 else None
             ),
             capability_policy=capability_policy,

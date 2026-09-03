@@ -367,6 +367,9 @@ top-level capability fields are compatibility inputs/projections only.
 Authority is field-level: operator overrides, explicit live provider metadata,
 verified provider-scoped model-info metadata, then unknown. Model-family names
 never provide reasoning-control defaults.
+Routing matches toggle, exact effort, and numeric budget requests against the
+selected provider/model row independently; a supported reasoning status does
+not imply support for every caller control.
 
 ### Request Finalization
 Every live terminal outcome is owned by one kind-qualified command in the generation-owned `RequestFinalizationSupervisor`: selected request finalization, failed-attempt cleanup, or post-commit claim compensation. Each accepted command retains one terminal reference on its generation until durable and required runtime convergence.

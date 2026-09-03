@@ -206,8 +206,9 @@ unchanged.
 
 The hard-coded fallback is a legacy translation-policy compatibility fallback,
 not discovered provider metadata.
-`none` is an explicit disable signal and emits no Anthropic thinking block.
-Other effort labels, including current provider values such as `xhigh` or
+`none` remains an effort intent during routing; it emits no budget and is only
+mapped to an explicit target disable when that target contract verifies the
+mapping. It is never silently rewritten as a binary toggle. Other effort labels, including current provider values such as `xhigh` or
 `max`, require an explicit verified capability mapping. With no mapping,
 `strict` rejects locally; `lenient` omits the target control and emits a
 bounded `unknown_effort` warning rather than guessing a budget. Budgets are
@@ -319,8 +320,8 @@ OpenAI `reasoning_effort` is mapped to Anthropic `thinking.budget_tokens` only
 through the existing target thinking capability budget mapping or the legacy
 low/medium/high compatibility defaults. The catalog contract keeps effort
 support independent from budget support. OpenAI's effort values are
-model-dependent; `none` disables reasoning and is never converted into a
-positive Anthropic budget. Unmapped values are rejected or dropped according
+model-dependent; `none` remains an effort value and is never converted into a
+positive Anthropic budget or an invented toggle. Unmapped values are rejected or dropped according
 to policy, never assigned a guessed medium budget. Anthropic manual thinking
 budgets are not converted into fabricated OpenAI effort
 values; only an explicit Anthropic effort value with a verified OpenAI target

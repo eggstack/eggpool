@@ -54,6 +54,9 @@ provider-scoped models.dev metadata uses the same parser as live catalog data.
 Explicit live facts take precedence over models.dev facts at the individual
 control dimension, and operator overrides remain highest authority. A missing
 fact stays unknown; EggPool does not infer controls from model-family names.
+Routing then matches the request's toggle, exact effort, or numeric budget
+requirement against that provider/model row. Reasoning support alone does not
+authorize an unadvertised caller control.
 
 Use `resolve_provider_wire_profiles()` to obtain immutable structural profiles
 and `build_wire_profile_headers()` to render the selected account credential.
@@ -100,8 +103,8 @@ routing system. Deterministic stale-profile migration, unhinted-model
 classification, cross-surface coordinator paths, single-flight, rate-limit,
 and failure-isolation behavior remains covered by fake-upstream tests. The
 live suite includes a public Messages-to-Responses cross-surface check, a
-MiniMax-M3 Chat reasoning request that verifies Anthropic Messages field
-adaptation, and deterministically routes its invalid-key account first using
+MiniMax-M3 Chat binary reasoning-toggle request that verifies Anthropic
+Messages field adaptation, and deterministically routes its invalid-key account first using
 ordinary account weight configuration.
 Live provider calls are excluded from smoke tests and CI and must never be
 required for ordinary installation or release automation.

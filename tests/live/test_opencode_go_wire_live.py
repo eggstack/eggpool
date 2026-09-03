@@ -79,17 +79,25 @@ _MODEL_PROTOCOLS = {
 }
 
 
-def _thinking_capability(efforts: list[str]) -> dict[str, Any]:
+def _thinking_capability(
+    *,
+    toggle: bool = False,
+    efforts: list[str] | None = None,
+) -> dict[str, Any]:
+    control_contract: dict[str, Any] = {
+        "toggle": "supported" if toggle else "unsupported",
+        "effort": "supported" if efforts else "unsupported",
+        "budget": "unsupported",
+        "source": "provider_catalog",
+    }
+    if efforts:
+        control_contract["accepted_efforts"] = efforts
     return {
         "thinking": {
             "status": "supported",
             "source": "provider_catalog",
-            "native_protocols": ["openai"],
-            "supported_efforts": efforts,
-            "effort_to_budget_tokens": {
-                effort: 1024 if effort in {"minimal", "low"} else 4096
-                for effort in efforts
-            },
+            "native_protocols": ["openai", "anthropic"],
+            "control_contract": control_contract,
         }
     }
 
@@ -100,10 +108,14 @@ def _live_spec(observer: list[Any]) -> RuntimeAppSpec:
             model_id=model_id,
             protocol=_MODEL_PROTOCOLS[model_id],
             capabilities=(
-                _thinking_capability(["minimal", "low", "medium", "high", "xhigh"])
+                _thinking_capability(
+                    efforts=["minimal", "low", "medium", "high", "xhigh"]
+                )
                 if model_id == "muse-spark-1.2-contributor"
                 or model_id == "muse-spark-1.3-contributor"
-                else _thinking_capability(["low", "medium", "high"])
+                else _thinking_capability(toggle=True)
+                if model_id == "minimax-m3"
+                else _thinking_capability()
                 if model_id == "mimo-v2.5"
                 else {}
             ),
@@ -319,7 +331,6 @@ async def test_opencode_go_reasoning_shapes_are_surface_native(
     cases = (
         ("muse-spark-1.2-contributor", {"reasoning"}),
         ("muse-spark-1.3-contributor", {"reasoning"}),
-        ("mimo-v2.5", {"reasoning_effort"}),
     )
     async with httpx.AsyncClient(
         transport=transport,
@@ -333,18 +344,10 @@ async def test_opencode_go_reasoning_shapes_are_surface_native(
                 "muse-spark-1.3-contributor",
             }:
                 payload["reasoning"] = {"effort": "low"}
-            else:
-                payload["reasoning_effort"] = "low"
             response = await client.post(
                 _endpoint(model_id), headers=_headers(api_key), json=payload
             )
-            if model_id in {
-                "muse-spark-1.2-contributor",
-                "muse-spark-1.3-contributor",
-            }:
-                assert response.status_code == 200, response.text
-            else:
-                assert response.status_code in {200, 400}, response.text
+            assert response.status_code == 200, response.text
             item = next(
                 item for item in reversed(observations) if item.model_id == model_id
             )
@@ -352,12 +355,22 @@ async def test_opencode_go_reasoning_shapes_are_surface_native(
             assert "thinking" not in item.semantic_fields
             assert app.state.health_manager.is_account_healthy("live-account")
 
+        before_invalid = len(observations)
+        invalid = _payload("mimo-v2.5")
+        invalid["reasoning_effort"] = "low"
+        response = await client.post(
+            _endpoint("mimo-v2.5"), headers=_headers(api_key), json=invalid
+        )
+        assert response.status_code == 400, response.text
+        assert len(observations) == before_invalid
+        assert app.state.health_manager.is_account_healthy("live-account")
+
 
 @pytest.mark.asyncio()
-async def test_opencode_go_minimax_chat_reasoning_reaches_messages(
+async def test_opencode_go_minimax_toggle_and_invalid_effort_are_isolated(
     live_app: tuple[FastAPI, list[Any]],
 ) -> None:
-    """OpenAI reasoning intent becomes an Anthropic-native MiniMax request."""
+    """MiniMax accepts a binary toggle but rejects effort before dispatch."""
     app, observations = live_app
     api_key = os.environ["EGGPOOL_E2E_OPENCODE_GO_API_KEY"]
     transport = httpx.ASGITransport(app=app)
@@ -367,13 +380,24 @@ async def test_opencode_go_minimax_chat_reasoning_reaches_messages(
         timeout=httpx.Timeout(180.0),
     ) as client:
         thinking_payload = _payload("minimax-m3")
-        thinking_payload["reasoning_effort"] = "low"
+        thinking_payload["reasoning"] = {"enabled": True}
         response = await client.post(
             "/v1/chat/completions",
             headers=_headers(api_key),
             json=thinking_payload,
         )
         assert response.status_code == 200, response.text
+
+        before_invalid = len(observations)
+        invalid_payload = _payload("minimax-m3")
+        invalid_payload["reasoning_effort"] = "xhigh"
+        invalid = await client.post(
+            "/v1/chat/completions",
+            headers=_headers(api_key),
+            json=invalid_payload,
+        )
+        assert invalid.status_code == 400, invalid.text
+        assert len(observations) == before_invalid
 
         follow_up = await client.post(
             "/v1/chat/completions",

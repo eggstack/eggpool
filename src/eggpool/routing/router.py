@@ -616,7 +616,10 @@ class Router:
         # as ``unknown`` so the dashboard/explanation surfaces capability
         # uncertainty rather than silently hiding it.
         thinking_support: str | None = None
-        if thinking_requirement is not None and thinking_requirement.required:
+        if (
+            thinking_requirement is not None
+            and thinking_requirement.requires_capability_routing
+        ):
             account_provider = cache.get_provider_for_account(state.name)
             if account_provider is not None:
                 entry = cache.get_provider_model_entry(model_id, account_provider)
@@ -878,11 +881,12 @@ class Router:
         # Capability-aware routing: check thinking support. Missing metadata
         # is treated as ``status="unknown"`` so the configured policy decides
         # whether the candidate stays eligible or is rejected up-front.
-        if thinking_requirement is not None and thinking_requirement.required:
+        if (
+            thinking_requirement is not None
+            and thinking_requirement.requires_capability_routing
+        ):
             from eggpool.catalog.capabilities import (
-                candidate_supports_requested_effort,
-                check_candidate_thinking_eligibility,
-                extract_thinking_status_from_entry,
+                candidate_supports_thinking_requirement,
             )
 
             account_provider = self._catalog.cache.get_provider_for_account(state.name)
@@ -890,38 +894,25 @@ class Router:
                 entry = self._catalog.cache.get_provider_model_entry(
                     model_id, account_provider
                 )
-                status = extract_thinking_status_from_entry(entry)
                 policy = capability_policy or {}
-                if not check_candidate_thinking_eligibility(
-                    status,
-                    unsupported_action=policy.get("unsupported_thinking", "reject"),
-                    unknown_action=policy.get("unknown_thinking", "reject"),
-                    mixed_action=policy.get("mixed_collapsed_thinking", "filter"),
-                ):
-                    label = status.replace(" ", "_")
-                    return (
-                        False,
-                        f"thinking_{label}",
-                        (
-                            f"Account {state.name!r} has thinking "
-                            f"status {status!r} for model "
-                            f"{model_id!r}; client requested "
-                            f"thinking controls "
-                            f"({thinking_requirement.fields!r})."
-                        ),
-                    )
-                if not candidate_supports_requested_effort(
+                allowed, control_reason = candidate_supports_thinking_requirement(
                     entry,
-                    thinking_requirement.requested_effort,
-                ):
+                    thinking_requirement,
+                    unsupported_action=policy.get("unsupported_thinking", "reject"),
+                    unsupported_control_action=policy.get(
+                        "unsupported_control", "reject"
+                    ),
+                    unknown_action=policy.get(
+                        "unknown_control", policy.get("unknown_thinking", "reject")
+                    ),
+                )
+                if not allowed:
                     return (
                         False,
-                        "thinking_effort_unsupported",
+                        control_reason or "thinking_unsupported",
                         (
-                            f"Account {state.name!r} does not advertise "
-                            f"thinking effort "
-                            f"{thinking_requirement.requested_effort!r} "
-                            f"for model {model_id!r}."
+                            f"Account {state.name!r} cannot honor the requested "
+                            f"thinking control for model {model_id!r}."
                         ),
                     )
 
@@ -1349,7 +1340,10 @@ class Router:
         the original unfiltered list so the request falls through to the
         standard rejection path.
         """
-        if thinking_requirement is None or not thinking_requirement.required:
+        if (
+            thinking_requirement is None
+            or not thinking_requirement.requires_capability_routing
+        ):
             return eligible
 
         policy = capability_policy or {}

@@ -1,7 +1,7 @@
 # Plan 158 — Compositional Reasoning Capability Schema and Metadata Normalization
 
 Date: 2026-09-03
-Status: implementation handoff
+Status: complete
 Parent roadmap: `plans/157-provider-bound-reasoning-control-discovery-roadmap.md`
 Depends on planning baseline: `df64a5e3e33964b1c811f04e2ed79e12473a3db4`
 Priority: P0 semantic correctness

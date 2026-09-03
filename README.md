@@ -220,6 +220,9 @@ Reasoning support and caller controls are discovered per provider/model from
 explicit upstream or verified model-info metadata. EggPool does not infer
 effort levels from model-family names; use a model capability override only
 for intentional provider-specific evidence.
+Routing and provider adaptation validate toggle, exact effort, and numeric
+budget controls independently; a reasoning-capable model is not assumed to
+accept every control shape.
 
 ### Live Config Changes
 

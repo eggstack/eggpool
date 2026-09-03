@@ -113,11 +113,14 @@ budget_resolution_policy = "lenient"   # default
 - `"lenient"`: preserves an unmapped effort safely by omitting the target thinking control and emitting a bounded warning; it allows budget clamping.
 - `"strict"`: rejects unknown effort levels and clamped budgets with `BudgetResolutionError` (HTTP 400) before dispatch.
 
-OpenAI effort values are model-dependent. A verified `reasoning_effort =
-"none"` explicitly disables reasoning and never creates an Anthropic thinking
-block. Current or future values such as `xhigh` and `max` are translated only
-when the selected capability provides an explicit mapping; otherwise lenient
-mode drops the target control rather than guessing a 4096-token budget.
+OpenAI effort values are model-dependent. `reasoning_effort = "none"` remains
+an explicit effort intent during routing; it is accepted only when the
+selected provider advertises `none` in its effort set. A target may map it to
+an explicit disable only through a verified target contract, and it must never
+become a positive budget or an invented toggle. Current or future values such
+as `xhigh` and `max` are translated only when the selected capability provides
+an explicit mapping; otherwise lenient mode drops the target control rather
+than guessing a 4096-token budget.
 
 ### OpenAI Chat Completions Reasoning Fields
 
@@ -219,6 +222,14 @@ combination. When `status = None`, the entire override is a no-op — all other
 fields are cleared. Existing `supported_efforts`, budget bounds, and explicit
 effort maps continue to decode into the corresponding canonical dimensions;
 an explicitly empty `supported_efforts` list means effort is unsupported.
+
+Routing checks the exact selected provider/model contract for every requested
+dimension. A toggle request can use a toggle-only target; an effort request
+must match the target's advertised effort set; a numeric budget request must
+fit its advertised budget bounds. A supported reasoning model with no caller
+controls (for example a fixed-reasoning target) does not satisfy an explicit
+effort or budget request. Known mismatches are rejected or dropped locally by
+the provider-control policy and never count as upstream health failures.
 
 ### Provider metadata normalization
 
@@ -416,8 +427,8 @@ The resolver evaluates these sources in order, stopping at the first match:
    - `"strict"` mode: raises `BudgetResolutionError` (HTTP 400).
 
 The legacy hard-coded compatibility values apply only to `low`, `medium`, and
-`high`. The explicit `none` disable value produces no budget and no enabled
-thinking block.
+`high`. The explicit `none` effort value produces no budget; it is not
+silently rewritten as a binary toggle.
 
 ### Clamping
 

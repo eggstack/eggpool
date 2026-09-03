@@ -205,9 +205,11 @@ or authoritative model reappearance.
 
 When all eligible accounts are excluded (including quarantine) and the
 request carries thinking controls, the error class depends on the
-aggregated capability status across every provider entry for the model,
-not just the collapsed row. A 400 (`CapabilityError`) is returned only
-when the aggregated status is genuinely `unknown` or `unsupported`.
+aggregated capability status and exact control match across every provider
+entry for the model, not just the collapsed row. A 400 (`CapabilityError`)
+is returned for an authoritative unsupported status or an exact unsupported
+control dimension; unknown control metadata follows the configured unknown
+policy.
 When the aggregated status is `supported` or `mixed` but every
 supporting account is quarantined, a transient 502/503 (`UpstreamError`,
 `ModelUnavailableError`) is returned so the client can retry. This

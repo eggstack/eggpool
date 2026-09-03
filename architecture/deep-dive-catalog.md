@@ -150,6 +150,10 @@ Catalog service ─────────────────────�
   is operator override, explicit live provider metadata, verified provider-
   scoped models.dev metadata, then unknown; model-family names never supply
   control defaults.
+- Request routing matches each requested control against the selected
+  provider/model row: toggle, exact effort labels, and numeric budget bounds
+  are independent dimensions. A supported reasoning status does not imply
+  support for every caller control.
 
 ## Configuration
 

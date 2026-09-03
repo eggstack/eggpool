@@ -83,8 +83,7 @@ def get_eligible_accounts(
     """
     from eggpool.catalog.cache import ModelCatalogCache as RuntimeModelCatalogCache
     from eggpool.catalog.capabilities import (
-        candidate_supports_requested_effort,
-        check_candidate_thinking_eligibility,
+        candidate_supports_thinking_requirement,
         extract_thinking_status_from_entry,
     )
 
@@ -93,7 +92,6 @@ def get_eligible_accounts(
     policy = capability_policy or {}
     unsupported_action = policy.get("unsupported_thinking", "reject")
     unknown_action = policy.get("unknown_thinking", "reject")
-    mixed_action = policy.get("mixed_collapsed_thinking", "filter")
     # All candidates in this decision share one model and freshness window.
     # Compute the support set once instead of rebuilding it inside
     # ``is_account_model_available`` for every account.  Keep a fallback for
@@ -107,7 +105,7 @@ def get_eligible_accounts(
             if stale_after_s is not None
             else catalog.get_supporting_accounts(model_id)
         )
-    capability_by_provider: dict[str, tuple[Any, str, bool]] = {}
+    capability_by_provider: dict[str, tuple[Any, str, bool, str | None]] = {}
 
     for state in all_states:
         if not state.is_eligible():
@@ -220,26 +218,31 @@ def get_eligible_accounts(
         # metadata semantically equals an explicit ``unknown`` status — the
         # configured ``unknown_thinking`` policy decides whether to reject,
         # warn, or allow best-effort.
-        if thinking_requirement is not None and thinking_requirement.required:
+        if (
+            thinking_requirement is not None
+            and thinking_requirement.requires_capability_routing
+        ):
             account_provider = catalog.get_provider_for_account(state.name)
             if account_provider is not None:
                 cached_capability = capability_by_provider.get(account_provider)
                 if cached_capability is None:
                     entry = catalog.get_provider_model_entry(model_id, account_provider)
                     status = extract_thinking_status_from_entry(entry)
-                    allowed = check_candidate_thinking_eligibility(
-                        status,
-                        unsupported_action=unsupported_action,
-                        unknown_action=unknown_action,
-                        mixed_action=mixed_action,
-                    ) and candidate_supports_requested_effort(
+                    allowed, control_reason = candidate_supports_thinking_requirement(
                         entry,
-                        thinking_requirement.requested_effort,
+                        thinking_requirement,
+                        unsupported_action=unsupported_action,
+                        unsupported_control_action=policy.get(
+                            "unsupported_control", "reject"
+                        ),
+                        unknown_action=policy.get("unknown_control", unknown_action),
                     )
-                    cached_capability = (entry, status, allowed)
+                    cached_capability = (entry, status, allowed, control_reason)
                     capability_by_provider[account_provider] = cached_capability
-                entry, status, allowed = cached_capability
+                entry, status, allowed, control_reason = cached_capability
                 if not allowed:
+                    if exclusion_sink is not None and control_reason is not None:
+                        exclusion_sink.append((state.name, control_reason))
                     continue
                 _log_capability_warning(
                     state=state,

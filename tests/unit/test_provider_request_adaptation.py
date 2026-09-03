@@ -79,6 +79,85 @@ class TestPassthrough:
         assert result.decision == "passthrough"
         assert result.changed is False
 
+
+class TestIndependentControlDimensions:
+    """Control adaptation must honor each provider contract dimension."""
+
+    @staticmethod
+    def _toggle_only() -> ThinkingCapability:
+        return ThinkingCapability(
+            status="supported",
+            control_contract=ThinkingControlContract(
+                toggle="supported",
+                effort="unsupported",
+                budget="unsupported",
+                request_fields=["reasoning"],
+                source="provider_catalog",
+            ),
+        )
+
+    def test_toggle_only_maps_binary_openai_shape_to_anthropic(self) -> None:
+        result = adapt_thinking_controls(
+            payload={"model": "test", "reasoning": {"enabled": True}},
+            client_protocol="openai",
+            model_id="test-model",
+            provider_id="opencode-go",
+            capability=self._toggle_only(),
+            intent=ThinkingRequestIntent(
+                control_kind="toggle",
+                requested_toggle=True,
+                request_fields=("reasoning",),
+                client_requests_new_reasoning=True,
+            ),
+            policy=ProviderControlPolicy(),
+            upstream_protocol="anthropic",
+        )
+
+        assert result.decision == "mapped"
+        assert result.payload.get("thinking") == {"type": "enabled"}
+        assert "reasoning" not in result.payload
+
+    def test_effort_is_rejected_by_toggle_only_contract(self) -> None:
+        with pytest.raises(CapabilityError):
+            adapt_thinking_controls(
+                payload={"model": "test", "reasoning_effort": "high"},
+                client_protocol="openai",
+                model_id="test-model",
+                provider_id="opencode-go",
+                capability=self._toggle_only(),
+                intent=ThinkingRequestIntent(
+                    control_kind="effort",
+                    requested_effort="high",
+                    request_fields=("reasoning_effort",),
+                    client_requests_new_reasoning=True,
+                ),
+                policy=ProviderControlPolicy(),
+            )
+
+    def test_effort_never_degrades_to_generated_toggle(self) -> None:
+        result = adapt_thinking_controls(
+            payload={
+                "model": "test",
+                "reasoning_effort": "high",
+                "thinking": {"type": "enabled"},
+            },
+            client_protocol="openai",
+            model_id="test-model",
+            provider_id="opencode-go",
+            capability=self._toggle_only(),
+            intent=ThinkingRequestIntent(
+                control_kind="effort",
+                requested_effort="high",
+                request_fields=("reasoning_effort",),
+                client_requests_new_reasoning=True,
+            ),
+            policy=ProviderControlPolicy(unsupported_control="warn_drop"),
+        )
+
+        assert result.decision == "dropped"
+        assert "reasoning_effort" not in result.payload
+        assert "thinking" not in result.payload
+
     def test_historical_only_no_new_reasoning(self) -> None:
         cap = _capability(mode="none")
         intent = _intent(

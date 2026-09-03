@@ -1,7 +1,7 @@
 # Plan 157 — Provider-Bound Reasoning-Control Discovery Roadmap
 
 Date: 2026-09-03
-Status: implementation handoff
+Status: complete
 Planning baseline: `df64a5e3e33964b1c811f04e2ed79e12473a3db4`
 Priority: P0 correctness / provider interoperability
 Execution target: GPT-5.6 Luna or comparable implementation model

@@ -254,7 +254,7 @@ async def test_openai_chat_client_bridges_to_anthropic_messages_upstream(
             "thinking": {
                 "status": "supported",
                 "native_protocols": ["openai"],
-                "supported_efforts": ["high"],
+                "supported_efforts": ["none", "high"],
             }
         },
     )

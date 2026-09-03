@@ -30,7 +30,25 @@ def test_reasoning_intent_keeps_effort_separate_from_budget() -> None:
     assert effort.budget_tokens is None
 
     disabled = ReasoningIntent.from_openai_effort("none")
-    assert disabled == ReasoningIntent.disabled()
+    assert disabled.requested is True
+    assert disabled.mode == "effort"
+    assert disabled.effort == "none"
+
+
+def test_binary_toggle_preserves_explicit_disable() -> None:
+    enabled = canonical_request_from_mapping(
+        {"model": "model-a", "reasoning": {"enabled": True}},
+        client_surface="chat_completions",
+        protocol="openai",
+    )
+    disabled = canonical_request_from_mapping(
+        {"model": "model-a", "reasoning": {"enabled": False}},
+        client_surface="chat_completions",
+        protocol="openai",
+    )
+
+    assert enabled.reasoning == ReasoningIntent(requested=True, mode="toggle")
+    assert disabled.reasoning == ReasoningIntent(requested=False, mode="toggle")
 
 
 def test_fixed_budget_is_not_accepted_as_effort() -> None:
