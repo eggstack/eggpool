@@ -221,9 +221,15 @@ Full config reference: [`config.example.toml`](config.example.toml) | [docs/prov
 Model routers are optional and disabled by default. A `[model_routers.<id>]`
 block defines a virtual model alias, selector model, default concrete model,
 and labelled concrete targets. Definitions are structurally validated and
-compiled into each runtime generation; this foundation does not yet redirect
-client requests through the selector. Virtual aliases are exact and cannot
-contain `/`, and router targets must remain concrete model references.
+compiled into each runtime generation. The Plan 164 selector component can be
+called directly by the later virtual-dispatch integration: it builds a small
+deterministic prompt, accepts only an exact compact route ID, permits one
+repair request, and falls back to `default_model` on any selector failure.
+Selector calls are ordinary concrete EggPool requests, so remote selector
+usage remains visible in request, quota, and cost accounting. Public client
+requests are not redirected through virtual aliases until the later
+integration phase. Virtual aliases are exact and cannot contain `/`, and router
+targets must remain concrete model references.
 
 When `[model_info].enabled = true`, startup performs one bounded external
 enrichment pass when `model_info.startup_refresh = true`. Later enrichment uses

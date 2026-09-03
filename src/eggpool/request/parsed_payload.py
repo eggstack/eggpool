@@ -43,6 +43,11 @@ class ParsedRequestPayload:
                 self._parse_failed = True
         return self._parsed_dict
 
+    def set_parsed_dict(self, value: dict[str, Any]) -> None:
+        """Seed the cache with a payload already decoded by the caller."""
+        self._parsed_dict = value
+        self._parse_failed = False
+
     @property
     def model_id(self) -> str | None:
         if self._model_id is None and self.parsed_dict is not None:

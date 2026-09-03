@@ -118,6 +118,26 @@ facade.  Implementation details are delegated to focused helper modules:
 - Handles streaming via `_build_stream_generator`
 - Finalizes via `RequestFinalizer`
 - Post-selection thinking control adaptation delegates to `thinking_adaptation.py`
+
+### Internal model-router selection
+
+`model_router/selector.py` is an optional pre-routing semantic component. It
+uses `model_router/prompt.py` to compile a bounded Chat Completions-shaped
+request from the immutable compiled route policy and a small canonical view of
+the client request. `request/internal_dispatch.py` builds that request's
+concrete `ProxyRequestContext` directly; `ModelRouterSelector` then calls
+`RequestCoordinator.execute()` with a fresh child UUID.
+
+Selector execution is non-streaming, uses a small `max_tokens` allowance, and
+permits at most one fixed repair request. Response parsing accepts only one
+exact compact route ID from the compiled registry. Selector model absence,
+transport/server/rate failures, malformed output, repair failure, and internal
+timeout all resolve to the configured default route. Parent
+`asyncio.CancelledError` propagates, allowing the coordinator's normal
+reservation/attempt cleanup to complete without dispatching a default request.
+Selector child requests are ordinary durable usage/accounting events; semantic
+selection diagnostics do not replace or double-count the eventual target
+request. Public virtual-model dispatch remains a later integration phase.
 - Upstream failure observation/classification delegates to `failure_helpers.py`
 - Endpoint validation and protocol resolution delegate to `upstream_helpers.py`
 - Static/timing helpers delegate to `static_helpers.py`

@@ -18,7 +18,11 @@ src/eggpool/models/
 
 src/eggpool/model_router/
 ├── config.py           # Structural virtual-router config models
-└── registry.py         # Immutable compiled generation registry
+├── registry.py         # Immutable compiled generation registry
+├── prompt.py           # Bounded deterministic selector prompt/parser
+└── selector.py         # Coordinator-backed selector service
+
+src/eggpool/request/internal_dispatch.py # Internal concrete context builder
 ```
 
 ## Key Components
@@ -79,7 +83,8 @@ class AppConfig(BaseModel):
 - Model-router validation rejects empty/control-containing/slashed virtual IDs,
   missing routes, invalid defaults, virtual-to-virtual targets, and oversized
   compiled policies; it preserves exact alias spelling and does not query the
-  model catalog
+  model catalog. Selector prompt compilation is deterministic and bounded;
+  selector execution uses child request IDs and ordinary coordinator accounting.
 - Config file parsing with `tomllib`
 
 ### API Models (`api.py`)

@@ -35,7 +35,10 @@ it atomically; leases keep in-flight requests on the generation they acquired.
 The optional `ModelRouterRegistry` is also generation-owned. It contains only
 compiled configuration for exact virtual model aliases, so changing
 `[model_routers.<id>]` publishes a fresh registry atomically without adding
-catalog, health, quota, database, network, or background-task work.
+catalog, health, quota, database, network, or background-task work. The
+generation-independent `ModelRouterSelector` consumes one compiled router
+through a child `ProxyRequestContext` and the same `RequestCoordinator`; it
+does not create a loopback HTTP request or selector-specific client.
 
 ## Request lifecycle
 
@@ -44,6 +47,11 @@ account routing, durable request/attempt/reservation state, provider dispatch,
 response adaptation, and terminal finalization. Local preparation and response
 adaptation failures are terminal local errors. Only typed HTTPX transport
 failures may retry, and only across distinct accounts before downstream handoff.
+The optional Plan 164 selector is a pre-routing semantic helper: its bounded
+non-streaming selector and optional repair requests are concrete child requests
+with independent IDs and ordinary accounting. Invalid output, unavailable
+selector models, and selector errors return the compiled router's default route;
+parent cancellation remains cancellation.
 
 The database uses SQLite WAL, one serialized primary connection, and caller-owned
 `async with db.transaction()` boundaries for DML. Durable identities are created

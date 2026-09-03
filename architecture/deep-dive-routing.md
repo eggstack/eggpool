@@ -6,6 +6,12 @@ Back to [Overview](overview.md)
 
 Quota-aware routing selects the best upstream account for each request, balancing load across multiple accounts within the same provider and across providers with different priority tiers.
 
+Semantic model-router selection is a separate pre-routing concern. When used,
+`ModelRouterSelector` chooses a configured concrete model with a bounded exact
+route-ID protocol; the coordinator then routes that selector request and the
+eventual concrete target through the ordinary account/quota path. Selector
+policy, prompt content, and route outcomes never enter `QuotaFairScorer`.
+
 ## Routing Architecture
 
 ```

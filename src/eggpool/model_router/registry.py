@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar
@@ -61,29 +60,19 @@ def _length_delimited_hash(fields: tuple[str, ...]) -> str:
 
 def _compile_policy(
     virtual_model: str,
-    router: ModelRouterConfig,
     routes: tuple[CompiledModelRoute, ...],
 ) -> bytes:
-    policy = {
-        "default_model": router.default_model,
-        "protocol_version": SELECTOR_PROTOCOL_VERSION,
-        "routes": [
-            {
-                "description": route.description,
-                "id": route.route_id,
-                "label": route.label,
-                "model": route.model,
-            }
-            for route in routes
-        ],
-        "selector_model": router.selector_model,
-        "virtual_model": virtual_model,
-    }
-    encoded = json.dumps(
-        policy,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
+    # Keep this policy as the selector's actual static prompt prefix.  Route
+    # targets are intentionally absent: descriptions are the operator's
+    # semantic policy and exposing concrete model names would invite model
+    # family priors to override it.  The protocol version makes prompt
+    # changes explicit and gives future phases a stable cache boundary.
+    encoded = "|".join(
+        (
+            SELECTOR_PROTOCOL_VERSION,
+            "choose id;reply id only",
+            *(f"{route.route_id}={route.description}" for route in routes),
+        )
     ).encode("utf-8")
     if len(encoded) > COMPILED_POLICY_MAX_BYTES:
         raise ConfigError(
@@ -111,7 +100,7 @@ def compile_model_router(
     route_by_id: Mapping[str, CompiledModelRoute] = MappingProxyType(
         {route.route_id: route for route in routes}
     )
-    static_policy = _compile_policy(virtual_model, router, routes)
+    static_policy = _compile_policy(virtual_model, routes)
     fingerprint = _length_delimited_hash(
         (
             SELECTOR_PROTOCOL_VERSION,

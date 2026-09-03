@@ -9,6 +9,7 @@ from eggpool.model_router.registry import (
     ModelRouterRegistry,
     compile_model_router,
 )
+from eggpool.model_router.selector import ModelRouterSelector, ModelSelection
 
 __all__ = [
     "CompiledModelRoute",
@@ -16,5 +17,7 @@ __all__ = [
     "ModelRouteConfig",
     "ModelRouterConfig",
     "ModelRouterRegistry",
+    "ModelRouterSelector",
+    "ModelSelection",
     "compile_model_router",
 ]

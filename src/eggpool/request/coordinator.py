@@ -6516,6 +6516,11 @@ class RequestCoordinator:
         else:
             self._account_id_cache.pop(account_name, None)
 
+    @property
+    def known_provider_ids(self) -> frozenset[str]:
+        """Return provider IDs available to internal concrete dispatchers."""
+        return frozenset(self._registry.get_provider_ids())
+
     @staticmethod
     def _error_status_code(err: Exception | None) -> int:
         """Map an exception to an HTTP status code.

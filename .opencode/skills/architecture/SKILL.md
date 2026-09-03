@@ -109,7 +109,11 @@ The empty configuration uses a shared empty registry and adds no model-router-
 specific DB, catalog, health, quota, provider-client, or background-task work.
 The complete
 `model_routers` mapping is one atomic `LIVE` reload field; client dispatch does
-not consume it until the later model-router phases.
+not consume virtual aliases until the later public integration phase. The
+independently callable `ModelRouterSelector` compiles a deterministic bounded
+prompt and invokes `RequestCoordinator.execute()` with a child concrete
+context; exact route IDs, one optional repair, default fallback, and parent
+cancellation semantics are owned by that component.
 
 Failure classification gives typed, context-qualified wire signals precedence
 over generic `capability`/`unsupported` error-class fallbacks; those class

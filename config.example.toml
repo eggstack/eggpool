@@ -89,8 +89,8 @@ catalog_withdrawal_policy = "preserve_until_health"
 
 # Optional model-router definitions. These create exact client-visible virtual
 # model IDs and compile immutable selector policies during generation builds.
-# This foundation validates and publishes the registry; request dispatch will
-# consume it in a later model-router phase.
+# The selector component consumes this registry directly; public virtual-model
+# request dispatch is added in a later model-router phase.
 # [model_routers.implementer]
 # selector_model = "qwen3-0.6b/local"
 # default_model = "muse-spark-1.3"

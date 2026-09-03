@@ -5,6 +5,7 @@ from eggpool.request.coordinator import (
     ProxyRequestContext,
     RequestCoordinator,
 )
+from eggpool.request.internal_dispatch import prepare_internal_concrete_request
 from eggpool.request.parsed_payload import ParsedRequestPayload
 from eggpool.request.parsed_upstream_response import (
     ParsedUpstreamResponse,
@@ -37,6 +38,7 @@ __all__ = [
     "ProviderBoundRequest",
     "ProxyRequestContext",
     "RequestCoordinator",
+    "prepare_internal_concrete_request",
     "ResponseHandoffState",
     "SegmentationValidityKey",
     "TransformContext",

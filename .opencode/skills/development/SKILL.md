@@ -62,6 +62,14 @@ aggregate policy bounds, collision precedence, and the shared empty registry.
 The generation factory must compile candidates before publication, while the
 feature-off path adds no DB migration or background task.
 
+Model-router selector changes should also run
+`tests/unit/test_model_router_selector.py`. Verify deterministic static-policy
+and semantic-view bytes, UTF-8 head/tail bounds, omission of tool schemas,
+tool results, and binary content, exact route-ID parsing, one bounded repair,
+normal coordinator child dispatch, default fallback after selector errors or
+timeouts, and propagation of parent cancellation. Selector tests must use fake
+coordinator/provider responses; no live local model is required.
+
 Model-info lifecycle changes should run the model-info source/enrichment suites,
 the runtime-task inventory, and the integration lifecycle path. Verify both
 halves of the task contract: no standalone `model_info_refresh` task exists,
