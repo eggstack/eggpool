@@ -401,5 +401,4 @@ pyright src/ scripts/ passed (0 errors, 0 warnings, 0 informations)
 pytest tests/smoke/ -q --tb=short --maxfail=1: 14 passed
 ```
 
-Implementation commit: `c881f99` (final amended SHA may differ only because this
-closure line is part of the commit).
+Implementation commit: `672e5fa9c85fb066a0aea7c5aa740cbd391aa5c8`.
