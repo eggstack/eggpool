@@ -18,6 +18,17 @@ if TYPE_CHECKING:
 MODEL_INFO_STATUS_DISPLAY = _MODEL_INFO_STATUS_DISPLAY
 
 
+def serialize_virtual_model(model_id: str) -> dict[str, Any]:
+    """Serialize a truthful, capability-free virtual model entry."""
+    return {
+        "id": model_id,
+        "object": "model",
+        "owned_by": "eggpool",
+        "name": model_id,
+        "eggpool": {"virtual": True, "model_router": True},
+    }
+
+
 def serialize_openai_model(
     model: Mapping[str, Any],
     *,

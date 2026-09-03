@@ -248,6 +248,8 @@ class RuntimeMetricsService:
 
         result["wire_negotiation"] = self._snapshot_wire_negotiation(probe_errors)
 
+        result["model_router"] = self._snapshot_model_router_metrics(probe_errors)
+
         result["model_info"] = await self._snapshot_model_info(probe_errors)
 
         result["dashboard_telemetry"] = self._snapshot_dashboard_telemetry(probe_errors)
@@ -852,6 +854,17 @@ class RuntimeMetricsService:
             )
             return {"enabled": True, "error": str(exc)}
         return {"enabled": True, **snapshot}
+
+    def _snapshot_model_router_metrics(self, probe_errors: list[str]) -> dict[str, Any]:
+        """Return bounded semantic model-router counters."""
+        metrics = getattr(self._process, "model_router_metrics", None)
+        if metrics is None:
+            return {"virtual_requests": 0}
+        try:
+            return metrics.snapshot()
+        except Exception as exc:
+            _append_probe_error(probe_errors, f"Model-router metrics failed: {exc}")
+            return {"virtual_requests": 0}
 
     async def _snapshot_model_info(self, probe_errors: list[str]) -> dict[str, Any]:
         """Best-effort snapshot of the model-info subsystem."""

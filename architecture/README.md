@@ -155,7 +155,7 @@ Live-reloadable settings are explicitly listed in
 its structural validation does not check current catalog availability.
 
 See [deep-dive-deployment.md](deep-dive-deployment.md), `docs/deployment.md`,
-and `docs/live-config-rehash.md`.
+`docs/live-config-rehash.md`, and [the model-routing guide](../docs/model-routing.md).
 
 ## Manual SBC characterization
 

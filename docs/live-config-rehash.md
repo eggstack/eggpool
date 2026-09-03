@@ -49,7 +49,8 @@ router's semantic fingerprint is unchanged. Changing the selector, default,
 route descriptions/targets, sticky or affinity policy, input bounds, repair
 policy, or selector protocol version changes that fingerprint; the next
 request for the session selects again. Removing the alias makes old entries
-unreachable. No cache rewrite, SQLite row, or background cleanup task is used.
+unreachable. A process restart intentionally loses all affinity. No cache
+rewrite, SQLite row, or background cleanup task is used.
 An invalid candidate is rejected before publication, so the active generation
 and its existing affinity behavior remain intact.
 

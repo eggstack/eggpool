@@ -131,6 +131,12 @@ is intended for explicit live diagnostics, never stores raw bodies or
 credential values, and must not affect retry/finalization behavior. See
 `docs/live-wire-e2e.md` and `architecture/deep-dive-providers.md`.
 
+Semantic model-router decisions are separate from provider/account routing.
+Exact virtual aliases resolve before concrete model checks; the resolved target
+then follows the ordinary coordinator lifecycle. Process-local router metrics
+are bounded structural counters only, and `X-EggPool-Route-Session` is hashed
+and dropped before upstream dispatch.
+
 ## JSON Backend
 
 `src/eggpool/jsonx.py` — wire bodies, SSE frame helpers, and hot-path request body parsing.

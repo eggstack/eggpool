@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Optional semantic model routing closure.** Configured virtual model aliases
+  now resolve across Chat Completions, stateless Responses, and Anthropic
+  Messages before concrete-model validation. Virtual aliases appear in
+  `/v1/models`, sticky affinity remains process-local and header-local, and
+  bounded routing diagnostics are available from `/api/stats/runtime`.
+
 - **Model-info enrichment lifecycle correction.** Model-info startup now runs
   one bounded external pass, and the existing generation-leased
   `catalog_refresh` event now performs bounded due enrichment on every

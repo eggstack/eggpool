@@ -11,6 +11,20 @@ EggPool exposes OpenAI Chat Completions- and Anthropic Messages-compatible paths
 | `POST` | `/v1/responses` | Stateless OpenAI Responses-compatible requests; canonical adaptation is allowed to eligible upstream surfaces |
 | `POST` | `/v1/messages` | Anthropic Messages-compatible requests |
 
+Configured virtual model routers are included in `/v1/models` as compact,
+capability-free entries with `owned_by = "eggpool"` and
+`eggpool.virtual = true`. They do not expose selector prompts, route
+descriptions, affinity state, prices, or concrete target capabilities. A
+virtual request is resolved to a concrete model before normal context,
+capability, transcoding, provider, account, and retry handling; only the
+resolved concrete model is sent upstream.
+
+`X-EggPool-Route-Session: <opaque-stable-id>` is an optional EggPool-local
+header. On sticky virtual routers it provides the strongest cross-request
+affinity signal, especially for stateless Responses calls. It is hashed for
+the bounded process-local cache and is never persisted, logged, used as a
+metric label, or forwarded upstream. See [Model routing](model-routing.md).
+
 ## Health & Readiness
 
 | Method | Path | Description |

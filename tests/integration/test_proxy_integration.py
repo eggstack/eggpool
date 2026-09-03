@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import httpx
@@ -21,6 +22,8 @@ from eggpool.db.repositories import (
     ReservationRepository,
 )
 from eggpool.health.health_manager import HealthManager
+from eggpool.model_router.config import ModelRouterConfig
+from eggpool.model_router.registry import ModelRouterRegistry
 from eggpool.models.config import AppConfig
 from eggpool.request.coordinator import RequestCoordinator
 from eggpool.routing.router import Router
@@ -235,6 +238,131 @@ async def test_openai_non_streaming_success(
     row = await db.fetch_one("SELECT COUNT(*) as cnt FROM requests")
     assert row is not None
     assert row["cnt"] == 1
+
+
+@pytest.mark.asyncio
+async def test_models_endpoint_exposes_virtual_alias_without_capabilities(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    app: FastAPI,
+) -> None:
+    router = ModelRouterConfig.model_validate(
+        {
+            "selector_model": "small-selector/local",
+            "default_model": "gpt-4",
+            "routes": {
+                "default": {
+                    "model": "gpt-4",
+                    "description": "General fallback.",
+                },
+                "fast": {
+                    "model": "gpt-4",
+                    "description": "Fast implementation.",
+                },
+            },
+        }
+    )
+    manager = app.state.runtime_manager
+    manager._active.generation = replace(  # pyright: ignore[reportPrivateUsage]
+        manager._active.generation,  # pyright: ignore[reportPrivateUsage]
+        model_router_registry=ModelRouterRegistry.from_config({"implementer": router}),
+    )
+
+    response = await client.get("/v1/models", headers=auth_headers)
+
+    assert response.status_code == 200
+    virtual = next(
+        item for item in response.json()["data"] if item["id"] == "implementer"
+    )
+    assert virtual == {
+        "id": "implementer",
+        "object": "model",
+        "owned_by": "eggpool",
+        "name": "implementer",
+        "eggpool": {"virtual": True, "model_router": True},
+    }
+
+
+@pytest.mark.asyncio
+async def test_models_endpoint_feature_off_has_no_virtual_entries(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    app: FastAPI,
+) -> None:
+    """Feature-off catalog output must not contain synthetic rows (Plan 166 §6)."""
+    manager = app.state.runtime_manager
+    manager._active.generation = replace(  # pyright: ignore[reportPrivateUsage]
+        manager._active.generation,  # pyright: ignore[reportPrivateUsage]
+        model_router_registry=ModelRouterRegistry.empty(),
+    )
+
+    response = await client.get("/v1/models", headers=auth_headers)
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert all(item.get("eggpool", {}).get("virtual") is not True for item in data)
+    assert all(item.get("eggpool", {}).get("model_router") is not True for item in data)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("collapse_models", [False, True])
+async def test_models_endpoint_virtual_entries_stable_across_collapse(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    app: FastAPI,
+    collapse_models: bool,
+) -> None:
+    """Virtual entries append deterministically under both collapse modes."""
+    router = ModelRouterConfig.model_validate(
+        {
+            "selector_model": "small-selector/local",
+            "default_model": "gpt-4",
+            "routes": {
+                "default": {
+                    "model": "gpt-4",
+                    "description": "General fallback.",
+                },
+                "fast": {
+                    "model": "gpt-4",
+                    "description": "Fast implementation.",
+                },
+            },
+        }
+    )
+    manager = app.state.runtime_manager
+    manager._active.generation = replace(  # pyright: ignore[reportPrivateUsage]
+        manager._active.generation,  # pyright: ignore[reportPrivateUsage]
+        model_router_registry=ModelRouterRegistry.from_config(
+            {"b-router": router, "a-router": router}
+        ),
+    )
+    config = app.state.config
+    new_config = config.model_copy(
+        update={
+            "models": config.models.model_copy(
+                update={"collapse_models": collapse_models}
+            )
+        }
+    )
+    app.state.config = new_config
+    app.state.catalog._config = new_config  # type: ignore[attr-defined]
+
+    response = await client.get("/v1/models", headers=auth_headers)
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    virtual_ids = [
+        item["id"] for item in data if item.get("eggpool", {}).get("virtual") is True
+    ]
+    # Deterministic sorted order, appended after concrete entries.
+    assert virtual_ids == ["a-router", "b-router"]
+    assert data[-2]["id"] == "a-router"
+    assert data[-1]["id"] == "b-router"
+    for item in data[-2:]:
+        assert item["owned_by"] == "eggpool"
+        assert item["eggpool"] == {"virtual": True, "model_router": True}
+        assert "context_length" not in item
+        assert "pricing" not in item.get("eggpool", {})
 
 
 # ── 2. Successful Anthropic non-streaming response ───────────────────────────

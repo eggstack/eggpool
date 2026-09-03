@@ -50,6 +50,10 @@ class AffinityDecision:
     concrete_model: str
     source: AffinityDecisionSource
     expires_at_monotonic: float
+    selector_attempts: int = 0
+    fallback_reason: str | None = None
+    repair_attempted: bool = False
+    repair_succeeded: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -290,6 +294,10 @@ class ModelRouterAffinity:
             concrete_model=route.model,
             source=selection.source,
             expires_at_monotonic=expires_at,
+            selector_attempts=selection.selector_attempts,
+            fallback_reason=selection.fallback_reason,
+            repair_attempted=selection.repair_attempted,
+            repair_succeeded=selection.repair_succeeded,
         )
 
     async def resolve(

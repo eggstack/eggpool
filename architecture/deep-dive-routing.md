@@ -124,6 +124,12 @@ one selector call per key; cancelled leaders release followers to retry. A
 concrete target's downstream health or availability never changes the cached
 semantic decision.
 
+Semantic decisions also feed a process-local bounded metrics object. It counts
+virtual requests, selector/default decisions, affinity hits/misses, fixed
+fallback reasons, repair attempts/successes, resolution latency, and bounded
+virtual-to-concrete selection pairs. It never records prompt text, selector
+output, descriptions, raw session identities, or provider/account score data.
+
 ### `routing/config.py`
 
 Routing configuration helpers.
@@ -257,6 +263,7 @@ Every `routing_decisions` row carries `score_components_json`:
 
 - `QuotaFairScorer.score_accounts` accepts only 4 inputs: `account_names`, `model_name`, `active_requests`, `request_estimates`
 - Cache metrics NEVER enter routing
+- Semantic affinity and model-router metrics NEVER enter `QuotaFairScorer`
 - Same-provider fairness preserved across adversarial cache profiles
 - Priority tier boundaries are strict: lower-priority never advance ahead of higher-priority
 - `weight` scales effective request/token capacity within a tier;

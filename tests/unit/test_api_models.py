@@ -2,7 +2,18 @@
 
 from __future__ import annotations
 
-from eggpool.api.models import serialize_openai_model
+from eggpool.api.models import serialize_openai_model, serialize_virtual_model
+
+
+def test_virtual_model_serialization_is_capability_free() -> None:
+    result = serialize_virtual_model("implementer")
+    assert result == {
+        "id": "implementer",
+        "object": "model",
+        "owned_by": "eggpool",
+        "name": "implementer",
+        "eggpool": {"virtual": True, "model_router": True},
+    }
 
 
 def test_basic_model_serialization() -> None:

@@ -93,7 +93,7 @@ catalog_withdrawal_policy = "preserve_until_health"
 # X-EggPool-Route-Session request header when clients have a stable conversation
 # ID; the value is hashed and is never forwarded to providers.
 # [model_routers.implementer]
-# selector_model = "qwen3-0.6b/local"
+# selector_model = "qwen3-0.6b/llamacpp-local"
 # default_model = "muse-spark-1.3"
 # sticky = true
 # affinity_ttl_s = 43200
@@ -101,9 +101,21 @@ catalog_withdrawal_policy = "preserve_until_health"
 # max_input_bytes = 2048
 # repair_attempts = 1
 #
-# [model_routers.implementer.routes.Implementer-hard]
+# [model_routers.implementer.routes.default]
 # model = "muse-spark-1.3"
-# description = "Use for the most difficult queries."
+# description = "Use for general implementation requests and as the fallback."
+#
+# [model_routers.implementer.routes.hard]
+# model = "gpt-5.6-luna"
+# description = "Use for the most difficult implementation and reasoning tasks."
+#
+# [model_routers.implementer.routes.research]
+# model = "research-model"
+# description = "Use for research-heavy synthesis and long technical reading."
+#
+# These example models are illustrative, not bundled availability guarantees.
+# Selector and route targets use ordinary EggPool concrete model IDs and may
+# include a provider suffix such as "model/provider".
 
 # ─── Protocol Transcoding ────────────────────────────────────────────
 # Transcoding is **on by default**. Requests from clients using one

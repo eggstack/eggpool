@@ -541,6 +541,11 @@ async def handle_proxy_request(
         "model_router_affinity",
         None,
     )
+    model_router_metrics = getattr(
+        getattr(request.app.state, "process", None),
+        "model_router_metrics",
+        None,
+    )
 
     # Plan 029, Workstream H: request-coherent span sampling.
     # The sampling decision is deterministic and stable per request ID
@@ -560,6 +565,7 @@ async def handle_proxy_request(
             span_recorder,
             lease,
             model_router_affinity=model_router_affinity,
+            model_router_metrics=model_router_metrics,
             request_received_monotonic_ns=(
                 getattr(
                     getattr(request, "state", None),
@@ -608,6 +614,7 @@ async def _handle_proxy_request_inner(
     lease: GenerationLease,
     *,
     model_router_affinity: ModelRouterAffinity | None = None,
+    model_router_metrics: Any | None = None,
     request_received_monotonic_ns: int | None = None,
     proxy_request_id: str | None = None,
 ) -> Response:
@@ -669,36 +676,55 @@ async def _handle_proxy_request_inner(
                 error_type="invalid_request_error",
             )
 
+    client_surface = _canonical_surface_for_endpoint(endpoint)
     # Provider id parsing relies on the leased generation's precomputed
     # provider set (built from the registry when the generation was
     # constructed).  Reading through ``request.app.state.config`` would
     # bypass the lease and use a generation that may already be retired.
     known_providers = lease.runtime.immutable_request_state.provider_ids
-    with _span(span_recorder, SPAN_MODEL_PARSE):
-        model_id, provider_id = parse_model_provider(model_value, known_providers)
+    model_id = model_value
+    provider_id: str | None = None
+    registry = getattr(lease.runtime, "model_router_registry", None)
+    router = (
+        registry.get(model_value) if isinstance(registry, ModelRouterRegistry) else None
+    )
 
-    client_surface = _canonical_surface_for_endpoint(endpoint)
-    try:
-        canonical_request = canonical_request_from_mapping(
-            payload,
-            client_surface=client_surface,
-            protocol=endpoint.protocol,
-        )
-    except ValueError as exc:
-        return endpoint.error_response(
-            status_code=400,
-            message=str(exc),
-            error_type="invalid_request_error",
-        )
-
-    router = None
-    if provider_id is None:
-        registry = getattr(lease.runtime, "model_router_registry", None)
-        if isinstance(registry, ModelRouterRegistry):
-            router = registry.get(model_id)
+    if router is None:
+        # Keep the feature-off concrete path in its original order and shape.
+        with _span(span_recorder, SPAN_MODEL_PARSE):
+            model_id, provider_id = parse_model_provider(model_value, known_providers)
+        try:
+            canonical_request = canonical_request_from_mapping(
+                payload,
+                client_surface=client_surface,
+                protocol=endpoint.protocol,
+            )
+        except ValueError as exc:
+            return endpoint.error_response(
+                status_code=400,
+                message=str(exc),
+                error_type="invalid_request_error",
+            )
+    else:
+        # The virtual branch is the only path that builds an early canonical
+        # view. It resolves the exact alias before concrete parsing and all
+        # target-specific capability/context/transcode checks.
+        try:
+            canonical_request = canonical_request_from_mapping(
+                payload,
+                client_surface=client_surface,
+                protocol=endpoint.protocol,
+            )
+        except ValueError as exc:
+            return endpoint.error_response(
+                status_code=400,
+                message=str(exc),
+                error_type="invalid_request_error",
+            )
 
     router_metadata: dict[str, Any] = {}
     if router is not None:
+        semantic_started = time.perf_counter()
         selector = ModelRouterSelector(
             coordinator,
             known_provider_ids=known_providers,
@@ -732,6 +758,21 @@ async def _handle_proxy_request_inner(
             route_id = resolution.decision.route_id
             route_label = resolution.decision.route_label
             source = resolution.decision.source
+            if resolution.cache_hit or resolution.single_flight_join:
+                # No new selector inference ran for this request (cache hit
+                # or single-flight follower), so repair/fallback work belongs
+                # to the leader's own request and must not be recounted here.
+                selector_attempts = 0
+                fallback_reason = None
+                repair_attempted = False
+                repair_succeeded = False
+            else:
+                # Sticky miss: the leader just ran the selector for this
+                # request; attribute its bounded attempt/repair outcome.
+                selector_attempts = resolution.decision.selector_attempts
+                fallback_reason = resolution.decision.fallback_reason
+                repair_attempted = resolution.decision.repair_attempted
+                repair_succeeded = resolution.decision.repair_succeeded
             router_metadata = {
                 "virtual_model": router.virtual_model,
                 "route_id": route_id,
@@ -748,6 +789,11 @@ async def _handle_proxy_request_inner(
                 protocol=endpoint.protocol,
             )
             selected_model = selected.concrete_model
+            source = selected.source
+            selector_attempts = selected.selector_attempts
+            fallback_reason = selected.fallback_reason
+            repair_attempted = selected.repair_attempted
+            repair_succeeded = selected.repair_succeeded
             router_metadata = {
                 "virtual_model": router.virtual_model,
                 "route_id": selected.route_id,
@@ -758,14 +804,38 @@ async def _handle_proxy_request_inner(
                     identity.source if identity is not None else "no_session"
                 ),
             }
+        if model_router_metrics is not None and hasattr(
+            model_router_metrics, "record_resolution"
+        ):
+            model_router_metrics.record_resolution(
+                virtual_model=router.virtual_model,
+                concrete_model=selected_model,
+                source=source,
+                affinity_hit=bool(router_metadata.get("affinity_hit", False)),
+                selector_attempts=selector_attempts,
+                fallback_reason=fallback_reason,
+                repair_attempted=repair_attempted,
+                repair_succeeded=repair_succeeded,
+                latency_ms=(time.perf_counter() - semantic_started) * 1000.0,
+            )
         payload = dict(payload)
         payload["model"] = selected_model
-        model_id, provider_id = parse_model_provider(selected_model, known_providers)
-        canonical_request = canonical_request_from_mapping(
-            payload,
-            client_surface=client_surface,
-            protocol=endpoint.protocol,
-        )
+        with _span(span_recorder, SPAN_MODEL_PARSE):
+            model_id, provider_id = parse_model_provider(
+                selected_model, known_providers
+            )
+        try:
+            canonical_request = canonical_request_from_mapping(
+                payload,
+                client_surface=client_surface,
+                protocol=endpoint.protocol,
+            )
+        except ValueError as exc:
+            return endpoint.error_response(
+                status_code=400,
+                message=str(exc),
+                error_type="invalid_request_error",
+            )
 
     # Normalize the payload's model field to the parsed model_id BEFORE the
     # transcode preflight runs. The preflight caches the translated payload

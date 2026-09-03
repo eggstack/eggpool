@@ -504,6 +504,7 @@ class ProcessRuntime:
     readiness_probe: Any = None  # noqa: ANN401 — DatabaseWritableProbe
     wire_profile_resolver: Any = None  # noqa: ANN401 — process-owned runtime state
     model_router_affinity: Any = None  # noqa: ANN401 — process-owned route cache
+    model_router_metrics: Any = None  # noqa: ANN401 — process-owned route metrics
     model_info: Any = None  # noqa: ANN401 — ModelInfoService
 
 

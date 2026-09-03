@@ -269,6 +269,9 @@ async def test_selector_invalid_repair_or_disabled_repair_falls_back() -> None:
     assert selection.concrete_model == "model-default"
     assert selection.source == "default"
     assert selection.selector_attempts == 2
+    assert selection.fallback_reason == "repair_failed"
+    assert selection.repair_attempted is True
+    assert selection.repair_succeeded is False
 
     no_repair = _FakeCoordinator([_response("still bad")])
     selection = await ModelRouterSelector(no_repair).select(
@@ -277,6 +280,7 @@ async def test_selector_invalid_repair_or_disabled_repair_falls_back() -> None:
     )
     assert selection.source == "default"
     assert selection.selector_attempts == 1
+    assert selection.fallback_reason == "invalid_output"
 
 
 @pytest.mark.asyncio
@@ -290,6 +294,7 @@ async def test_selector_failures_and_timeout_fall_back_without_default_dispatch(
     )
     assert selection.source == "default"
     assert selection.selector_attempts == 1
+    assert selection.fallback_reason == "unavailable"
 
     coordinator = _FakeCoordinator()
     coordinator.wait = True
@@ -303,6 +308,7 @@ async def test_selector_failures_and_timeout_fall_back_without_default_dispatch(
     selection = await task
     assert selection.source == "default"
     assert selection.selector_attempts == 1
+    assert selection.fallback_reason == "timeout"
     assert len(coordinator.contexts) == 1
 
 

@@ -241,6 +241,9 @@ when the router's semantic fingerprint is unchanged; policy changes naturally
 invalidate old decisions. Virtual aliases are exact and cannot contain `/`,
 and router targets remain concrete model references.
 
+See the copyable [Model routing guide](docs/model-routing.md) for the complete
+schema, fallback behavior, and troubleshooting guidance.
+
 When `[model_info].enabled = true`, startup performs one bounded external
 enrichment pass when `model_info.startup_refresh = true`. Later enrichment uses
 the existing `[models].refresh_interval_s` catalog event; model-info
@@ -271,6 +274,7 @@ See [Live Configuration Rehash](docs/live-config-rehash.md) for the full reload 
 |-------|------|
 | Deployment (install, systemd, production) | [docs/deployment.md](docs/deployment.md) |
 | Provider catalog & configuration | [docs/providers.md](docs/providers.md) |
+| Semantic model routing | [docs/model-routing.md](docs/model-routing.md) |
 | API endpoints | [docs/api-reference.md](docs/api-reference.md) |
 | Agent configuration (OpenCode, Claude Code, Aider, etc.) | [docs/agent-configuration.md](docs/agent-configuration.md) |
 | Stateless Responses support | [docs/stateless-responses.md](docs/stateless-responses.md) |

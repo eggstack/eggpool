@@ -26,6 +26,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+FallbackReason = Literal["timeout", "unavailable", "invalid_output", "repair_failed"]
+
 
 @dataclass(frozen=True, slots=True)
 class ModelSelection:
@@ -38,6 +40,9 @@ class ModelSelection:
     source: Literal["selector", "default"]
     selector_attempts: int
     selector_latency_ms: float | None
+    fallback_reason: FallbackReason | None = None
+    repair_attempted: bool = False
+    repair_succeeded: bool = False
 
 
 class ModelRouterSelector:
@@ -76,6 +81,9 @@ class ModelRouterSelector:
         """
         started = time.monotonic()
         attempts = 0
+        fallback_reason: FallbackReason | None = None
+        repair_attempted = False
+        repair_succeeded = False
         try:
             async with asyncio.timeout(router.selector_timeout_s):
                 prompt = compile_selector_prompt(
@@ -92,6 +100,7 @@ class ModelRouterSelector:
                     max_response_bytes=self._max_response_bytes,
                 )
                 if route_id is None and router.repair_attempts:
+                    repair_attempted = True
                     repair = compile_repair_prompt(router)
                     attempts = 2
                     result = await self._execute_selector(router, repair)
@@ -100,6 +109,12 @@ class ModelRouterSelector:
                         router,
                         max_response_bytes=self._max_response_bytes,
                     )
+                    if route_id is not None:
+                        repair_succeeded = True
+                    else:
+                        fallback_reason = "repair_failed"
+                elif route_id is None:
+                    fallback_reason = "invalid_output"
                 if route_id is not None:
                     route = router.route_by_id[route_id]
                     return self._selection(
@@ -108,9 +123,14 @@ class ModelRouterSelector:
                         source="selector",
                         attempts=attempts,
                         started=started,
+                        fallback_reason=None,
+                        repair_attempted=repair_attempted,
+                        repair_succeeded=repair_succeeded,
                     )
         except asyncio.CancelledError:
             raise
+        except TimeoutError:
+            fallback_reason = "timeout"
         except Exception as exc:
             # Diagnostics intentionally contain only a type, never prompt,
             # response, provider, credential, or request content.
@@ -121,6 +141,7 @@ class ModelRouterSelector:
                 type(exc).__name__,
                 attempts,
             )
+            fallback_reason = "unavailable"
         route = self._default_route(router)
         return self._selection(
             router,
@@ -128,6 +149,9 @@ class ModelRouterSelector:
             source="default",
             attempts=attempts,
             started=started,
+            fallback_reason=fallback_reason or "unavailable",
+            repair_attempted=repair_attempted,
+            repair_succeeded=repair_succeeded,
         )
 
     async def resolve(
@@ -181,6 +205,9 @@ class ModelRouterSelector:
         source: Literal["selector", "default"],
         attempts: int,
         started: float,
+        fallback_reason: FallbackReason | None,
+        repair_attempted: bool,
+        repair_succeeded: bool,
     ) -> ModelSelection:
         return ModelSelection(
             virtual_model=router.virtual_model,
@@ -190,6 +217,9 @@ class ModelRouterSelector:
             source=source,
             selector_attempts=attempts,
             selector_latency_ms=(time.monotonic() - started) * 1000.0,
+            fallback_reason=fallback_reason,
+            repair_attempted=repair_attempted,
+            repair_succeeded=repair_succeeded,
         )
 
 

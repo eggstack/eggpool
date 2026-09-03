@@ -144,6 +144,9 @@ only the derived concrete route. The parent then enters ordinary concrete
 catalog, health, account, quota, persistence, and retry handling. A target
 failure does not trigger semantic reselection, and the local session header is
 removed from upstream request headers.
+Resolution counters and bounded latency are process-local diagnostics exposed
+in the runtime snapshot; they do not become request rows or routing-score
+inputs.
 - Upstream failure observation/classification delegates to `failure_helpers.py`
 - Endpoint validation and protocol resolution delegate to `upstream_helpers.py`
 - Static/timing helpers delegate to `static_helpers.py`

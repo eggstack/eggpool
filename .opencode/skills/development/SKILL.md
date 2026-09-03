@@ -70,6 +70,15 @@ normal coordinator child dispatch, default fallback after selector errors or
 timeouts, and propagation of parent cancellation. Selector tests must use fake
 coordinator/provider responses; no live local model is required.
 
+Model-router request-path closure changes should also run
+`tests/unit/test_proxy.py`, `tests/unit/test_api_models.py`, and the focused
+model-router metrics tests. Verify exact virtual aliases resolve before
+concrete target checks across Chat Completions, stateless Responses, and
+Messages; provider-qualified targets remain unchanged; feature-off requests do
+not invoke selector/affinity work; virtual `/v1/models` entries are compact and
+capability-free; and `X-EggPool-Route-Session` is absent from upstream headers.
+Run the relevant proxy integration tests before the smoke gate.
+
 Model-router affinity changes should also run
 `tests/unit/test_model_router_affinity.py` and the header-forwarding suite.
 Verify explicit identities are hashed and bounded, automatic Chat/Messages

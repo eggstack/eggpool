@@ -22,7 +22,7 @@ from eggpool.accounts.registry import AccountRegistry, account_config_rows
 from eggpool.api.backoff import register_backoff_routes
 from eggpool.api.chat_completions import handle_chat_completions
 from eggpool.api.messages import handle_messages
-from eggpool.api.models import serialize_openai_model
+from eggpool.api.models import serialize_openai_model, serialize_virtual_model
 from eggpool.api.responses import handle_responses
 from eggpool.api.stats import register_stats_routes
 from eggpool.auth import require_auth, require_auth_at_startup
@@ -912,9 +912,11 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     process.wire_profile_resolver = WireProfileResolver(
         cache_max_entries=config.routing.wire_negotiation.cache_max_entries
     )
+    from eggpool.metrics.model_router import ModelRouterMetrics  # noqa: PLC0415
     from eggpool.model_router.affinity import ModelRouterAffinity  # noqa: PLC0415
 
     process.model_router_affinity = ModelRouterAffinity()
+    process.model_router_metrics = ModelRouterMetrics()
     app.state.process = process
 
     # Indeterminate runtime SQLite state is terminal for this worker. The
@@ -1953,6 +1955,7 @@ def create_app(
         runtime_manager: RuntimeManager | None = getattr(
             request.app.state, "runtime_manager", None
         )
+        gen: Any | None = None
         if runtime_manager is not None and runtime_manager.has_active_generation():
             try:
                 gen = runtime_manager.active_snapshot()
@@ -1968,6 +1971,41 @@ def create_app(
             health_mgr = getattr(request.app.state, "health_manager", None)
             mi_service = getattr(request.app.state, "model_info", None)
         models = catalog.get_models_for_exposure(health_manager=health_mgr)
+        model_router_registry = getattr(gen, "model_router_registry", None)
+        if model_router_registry is None:
+            model_router_registry = getattr(
+                request.app.state, "model_router_registry", None
+            )
+        virtual_model_ids = (
+            getattr(model_router_registry, "virtual_model_ids", ())
+            if model_router_registry is not None
+            else ()
+        )
+        collisions = [
+            virtual_model
+            for virtual_model in virtual_model_ids
+            if any(
+                model.get("model_id") == virtual_model
+                and model.get("provider_id") is None
+                for model in models
+            )
+        ]
+        if collisions:
+            collision_set = set(collisions)
+            models = [
+                model
+                for model in models
+                if not (
+                    model.get("model_id") in collision_set
+                    and model.get("provider_id") is None
+                )
+            ]
+            logger.warning(
+                "Virtual model aliases replace colliding unsuffixed catalog IDs: "
+                "aliases=%s total=%d",
+                collisions[:8],
+                len(collisions),
+            )
 
         # Build model-info summary map when enabled and available.
         # A single DB read avoids per-model queries inside the loop.
@@ -2031,6 +2069,8 @@ def create_app(
                     model_info=mi_summary,
                 )
             )
+
+        data.extend(serialize_virtual_model(model_id) for model_id in virtual_model_ids)
 
         return {"object": "list", "data": data}
 

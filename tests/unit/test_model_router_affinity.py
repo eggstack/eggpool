@@ -236,3 +236,35 @@ async def test_router_fingerprint_partitions_decisions() -> None:
     assert changed.cache_hit is False
     assert changed.decision.source == "default"
     assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_affinity_decision_preserves_selector_repair_metadata() -> None:
+    """Sticky misses must retain bounded selector outcome for metrics."""
+    cache = ModelRouterAffinity()
+    router = _router()
+    identity = session_identity_from_header("repair-session")
+    assert identity is not None
+    route = router.route_by_id["1"]
+    selection = ModelSelection(
+        virtual_model=router.virtual_model,
+        route_id=route.route_id,
+        route_label=route.label,
+        concrete_model=route.model,
+        source="selector",
+        selector_attempts=2,
+        selector_latency_ms=1.0,
+        fallback_reason=None,
+        repair_attempted=True,
+        repair_succeeded=True,
+    )
+
+    async def selector() -> Any:
+        return selection
+
+    resolution = await cache.resolve(router, identity, selector)
+    assert resolution.cache_hit is False
+    assert resolution.decision.selector_attempts == 2
+    assert resolution.decision.repair_attempted is True
+    assert resolution.decision.repair_succeeded is True
+    assert resolution.decision.fallback_reason is None
