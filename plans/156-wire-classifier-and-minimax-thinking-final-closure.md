@@ -1,7 +1,7 @@
 # Plan 156 — Wire Classifier and MiniMax Thinking Final Closure
 
 Date: 2026-09-03
-Status: ready
+Status: implementation complete — credentialed live acceptance pending
 Parent roadmap: `plans/147-dynamic-wire-surface-negotiation-roadmap.md`
 Corrects: residual edge cases after Plans 154–155
 Depends on: `bebd5c074c4e7c4dad09bcb196cf049c01a6cc8a`
@@ -446,43 +446,43 @@ Do not refactor `RequestCoordinator`, `WireProfileResolver`, codec architecture,
 
 ## Classifier precedence
 
-- [ ] `MODEL_UNSUPPORTED_ON_SURFACE` cannot be masked by an `Unsupported*` error class.
-- [ ] Explicit safe wire auth/surface/schema signals retain precedence over generic error-class fallbacks.
-- [ ] Generic `unsupported` error classes alone do not authorize wire negotiation.
-- [ ] Post-handoff wire signals still cannot retry.
-- [ ] Bare/ambiguous 401 remains non-poisoning.
-- [ ] Explicit credential-invalid evidence still disables only the selected credential/account.
+- [x] `MODEL_UNSUPPORTED_ON_SURFACE` cannot be masked by an `Unsupported*` error class.
+- [x] Explicit safe wire auth/surface/schema signals retain precedence over generic error-class fallbacks.
+- [x] Generic `unsupported` error classes alone do not authorize wire negotiation.
+- [x] Post-handoff wire signals still cannot retry.
+- [x] Bare/ambiguous 401 remains non-poisoning.
+- [x] Explicit credential-invalid evidence still disables only the selected credential/account.
 
 ## Model availability wording
 
-- [ ] `model not found`, `unknown model`, `does not exist`, `no such model`, and equivalent strong absence remain model-scoped.
-- [ ] `model is not available` is no longer unconditionally treated as strong global absence before provider/surface context can be considered.
-- [ ] Known model + alternate declared surface + pre-handoff ambiguous availability can migrate safely.
-- [ ] Unknown model + ambiguous availability does not blindly enumerate surfaces.
-- [ ] The existing unhinted-model 401 migration regression remains green.
+- [x] `model not found`, `unknown model`, `does not exist`, `no such model`, and equivalent strong absence remain model-scoped.
+- [x] `model is not available` is no longer unconditionally treated as strong global absence before provider/surface context can be considered.
+- [x] Known model + alternate declared surface + pre-handoff ambiguous availability can migrate safely.
+- [x] Unknown model + ambiguous availability does not blindly enumerate surfaces.
+- [x] The existing unhinted-model 401 migration regression remains green.
 
 ## MiniMax-M3 thinking
 
-- [ ] The credentialed live suite includes a MiniMax-M3 request with thinking/reasoning enabled.
-- [ ] Preferred acceptance exercises `/v1/chat/completions` client input with `reasoning_effort=low` and proves the upstream request uses `/messages`.
-- [ ] Upstream semantic fields are Anthropic Messages-native; `reasoning_effort`/Responses `reasoning` do not leak to `/messages`.
+- [x] The credentialed live suite includes a MiniMax-M3 request with thinking/reasoning enabled.
+- [x] Preferred acceptance exercises `/v1/chat/completions` client input with `reasoning_effort=low` and proves the upstream request uses `/messages`.
+- [x] Upstream semantic fields are Anthropic Messages-native; `reasoning_effort`/Responses `reasoning` do not leak to `/messages`.
 - [ ] When thinking is currently supported by OpenCode Go MiniMax-M3, at least one supported level succeeds live.
 - [ ] If the provider has changed and selectable thinking is no longer supported, EggPool's advertised provider capability/contract is corrected rather than forcing a false success.
-- [ ] A thinking/control rejection never disables or globally poisons the valid account.
+- [x] A thinking/control rejection never disables or globally poisons the valid account.
 - [ ] An immediate valid follow-up works without restart, rehash, or DB reset.
 
 ## Regression / resource posture
 
 - [ ] Existing 5/5 credentialed live cases remain green after adding the new MiniMax case.
-- [ ] Existing single-flight, stale-profile migration, invalid-key isolation, Muse Responses routing, and cross-surface tests remain green in focused coverage.
-- [ ] No new dependency is added.
-- [ ] No DB migration is added.
-- [ ] No new background task is added.
-- [ ] No new live-provider CI gate is added.
-- [ ] No provider-specific retry loop is added.
-- [ ] No full OpenCode Go model table is hard-coded into dispatch logic.
-- [ ] The ordinary lean project gate passes.
-- [ ] Exact closure evidence is recorded in this plan.
+- [x] Existing single-flight, stale-profile migration, invalid-key isolation, Muse Responses routing, and cross-surface tests remain green in focused coverage.
+- [x] No new dependency is added.
+- [x] No DB migration is added.
+- [x] No new background task is added.
+- [x] No new live-provider CI gate is added.
+- [x] No provider-specific retry loop is added.
+- [x] No full OpenCode Go model table is hard-coded into dispatch logic.
+- [x] The ordinary lean project gate passes.
+- [x] Exact closure evidence is recorded in this plan.
 
 ---
 
@@ -498,3 +498,35 @@ Do not refactor `RequestCoordinator`, `WireProfileResolver`, codec architecture,
 8. Run the repository's existing lean gate.
 9. Append exact closure evidence and implementation SHA to this plan.
 10. Stop this wire/thinking workstream unless the live MiniMax result exposes a distinct reproducible defect.
+
+---
+
+# Closure evidence
+
+- Implementation commit: `bdbf47c3aa6c6a563c43167a3b028216a27defe1`.
+- Deterministic focused gate: 103 passed across
+  `test_failure_signal_extraction.py`, `test_failure_effects_table.py`,
+  `test_wire_negotiation_e2e.py`, and `test_muse_spark_e2e.py`.
+- Full repository suite: 7,792 passed, 42 skipped, one existing
+  `StarletteDeprecationWarning`.
+- Lean CI-equivalent gate: `uv sync --frozen --extra ci`; Ruff format passed
+  for 697 files, Ruff check passed, Pyright reported 0 errors/warnings, and
+  smoke passed with 14 tests.
+- Live OpenCode Go gate: six tests collected and six skipped because
+  `EGGPOOL_E2E_OPENCODE_GO_API_KEY` was not configured. No credentialed live
+  result is claimed; the prior five cases and the new MiniMax case remain
+  pending credentialed verification.
+- MiniMax-M3 acceptance added at
+  `tests/live/test_opencode_go_wire_live.py::test_opencode_go_minimax_chat_reasoning_reaches_messages`.
+  It exercises client `POST /v1/chat/completions` with
+  `reasoning_effort=low`, expects the `anthropic_messages` surface and an
+  upstream path ending in `/messages`, requires the sanitized `api_key` auth
+  scheme and `thinking` field, rejects top-level `reasoning_effort` and
+  `reasoning`, and sends an ordinary follow-up while checking account health.
+  These observations were not available without the live credential.
+- No MiniMax contract correction was made; the existing contract remains the
+  implementation under test. Optional Gemini live work was not run.
+- A small defensive `getattr` correction in
+  `RequestCoordinator._alternate_wire_available` was required by the full
+  suite's minimal stream-timeout test double; it does not alter production
+  wire negotiation behavior.
