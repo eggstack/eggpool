@@ -31,6 +31,8 @@ worker_threads = 1
 journal_size_limit = 67108864
 
 [models]
+# This creates the recurring catalog/model-info opportunity; per-row model-info
+# TTLs and source cooldowns decide whether external work is due.
 refresh_interval_s = 300
 startup_refresh = true
 

@@ -1408,7 +1408,7 @@ class TestSourceHealth:
 
 class TestSummaryGeneration:
     def test_summary_sparse_model_message(self) -> None:
-        """Sparse model gets accelerated refresh note."""
+        """Sparse model describes TTL priority and catalog opportunities."""
         summary = _generate_summary(
             model_id="new-model",
             status="sparse_new",
@@ -1416,7 +1416,7 @@ class TestSummaryGeneration:
             detail={"providers": ["openai"]},
         )
         assert "metadata sparse" in summary.lower()
-        assert "refresh external sources more frequently" in summary.lower()
+        assert "next catalog refresh opportunity" in summary.lower()
 
     def test_summary_benchmark_available_message(self) -> None:
         """AA benchmarks mentioned in summary."""

@@ -30,6 +30,8 @@ worker_threads = 1
 [models]
 # Five-minute discovery does not rewrite unchanged catalog metadata. Successful
 # ping samples are coarsened internally; failures remain immediately durable.
+# It also creates model-info enrichment opportunities; per-row TTLs and source
+# cooldowns decide whether external work is due.
 refresh_interval_s = 300
 startup_refresh = true
 

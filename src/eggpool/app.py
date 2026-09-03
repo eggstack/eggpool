@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import logging
 import os
 import time
@@ -1040,10 +1041,10 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             config.models.stale_after_s,
         )
 
-    # 15. Optional model-info startup work.  Construction and cache loading
+    # 15. Optional model-info startup work. Construction and cache loading
     # happen in the generation factory so reload candidates have the same
-    # graph as startup.  External reconciliation remains a startup-only
-    # operation and is skipped entirely while the feature is disabled.
+    # graph as startup. The bounded external pass is the first enrichment
+    # opportunity; recurring work is driven by catalog_refresh ticks.
     model_info = gen_result.model_info
     app.state.model_info = model_info
     if model_info is not None and config.model_info.startup_refresh:
@@ -1066,6 +1067,18 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
                 logger.info("Model info legacy detail backfill: %s", legacy_repair)
         except Exception:
             logger.exception("Model info legacy detail backfill failed")
+        try:
+            refresh_result = await model_info.refresh_due_models(force=True)
+            log_refresh_result = getattr(model_info, "log_refresh_result", None)
+            if callable(log_refresh_result):
+                logged = log_refresh_result(refresh_result)
+                if inspect.isawaitable(logged):
+                    await logged
+            else:
+                logger.debug("Model info startup enrichment: %s", refresh_result)
+        except Exception:
+            # External metadata is advisory and must never gate readiness.
+            logger.exception("Model info startup enrichment failed")
 
     # 16. Event-loop lag monitor (process-owned).
     # Measures event-loop starvation via periodic callback drift.
@@ -1548,28 +1561,25 @@ async def _catalog_refresh_loop(  # pyright: ignore[reportUnusedFunction]
     """Inner-loop catalog refresh body, retained for test compatibility.
 
     Historical lifecycle: a ``while True`` coroutine that slept for
-    ``interval_s`` between refreshes and reconciled model-info state
-    after every refresh.
+    ``interval_s`` between refreshes.
 
     Production registration now uses
     :meth:`TaskSupervisor.register_periodic` via a one-shot tick
     wrapper registered in :func:`_lifespan_runtime` so the supervisor
     owns cadence + heartbeat.  This legacy loop is kept around only so
-    existing tests (which directly invoke it with a small interval
-    and cancel after one cycle) continue to compile and exercise the
-    catalog.refresh + model_info.reconcile_catalog_refresh seam.
+    existing tests (which directly invoke it with a small interval and
+    cancel after one cycle) continue to exercise the same catalog/model-info
+    one-shot helper as production.
     """
+    from types import SimpleNamespace
+
+    from eggpool.runtime_tasks import run_catalog_refresh_once
+
+    generation = SimpleNamespace(catalog=catalog, model_info=model_info)
     while True:
         try:
             await asyncio.sleep(interval_s)
-            result = await catalog.refresh()
-            if model_info is not None:
-                try:
-                    await model_info.reconcile_catalog_refresh(result)
-                except Exception:
-                    logger.exception(
-                        "Model info reconciliation after catalog refresh failed"
-                    )
+            await run_catalog_refresh_once(generation)
         except asyncio.CancelledError:
             break
         except Exception:

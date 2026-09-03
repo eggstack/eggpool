@@ -18,7 +18,9 @@ Eggpool catalog rows are unsuffixed base IDs, and the existing
 identity resolver refuses to match without a configured alias.
 
 This file acts as a regression test for the fix; without the fix,
-``test_every_model_detail_populates`` fails for all 33 models.
+``test_every_model_detail_populates`` fails for all 33 models. The fixture
+uses the normal catalog lifecycle helper, so the enrichment is automatic and
+does not depend on the manual refresh endpoint.
 """
 
 from __future__ import annotations
@@ -35,6 +37,7 @@ import pytest_asyncio
 
 from eggpool.app import create_app
 from eggpool.catalog.cache import ModelCatalogCache
+from eggpool.catalog.service import CatalogRefreshResult
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
 from eggpool.model_info.service import ModelInfoService
@@ -154,6 +157,22 @@ async def _seed_models(db: Database, model_ids: list[str]) -> None:
             )
 
 
+class _CatalogTick:
+    """Deterministic catalog service stand-in for one normal catalog tick."""
+
+    def __init__(self, model_ids: list[str]) -> None:
+        self._result = CatalogRefreshResult(
+            live_model_ids=frozenset(model_ids),
+            new_model_ids=frozenset(model_ids),
+            withdrawn_model_ids=frozenset(),
+            changed_provider_keys=frozenset(),
+            refreshed_at=datetime.now(UTC).timestamp(),
+        )
+
+    async def refresh(self) -> CatalogRefreshResult:
+        return self._result
+
+
 class _AsyncAppClient:
     """Keep ASGI requests on the database fixture's event loop."""
 
@@ -223,13 +242,18 @@ async def app_with_real_models_async(
     application.state.model_info = service
 
     await service.refresh_provider_catalog_observations()
-    await service.reconcile_catalog_snapshot(reason="test_e2e")
-    # This mirrors the supervisor's first startup tick.  Reconciliation
-    # assigns normal future TTLs, so the first tick must use the explicit
-    # force path or every model would remain benchmark-empty until later.
-    refresh_result = await service.refresh_due_models(force=True)
-    assert refresh_result["total"] == len(base_ids)
-    assert refresh_result["openrouter_matched"] == len(base_ids)
+
+    # Exercise the same one-shot catalog lifecycle used by both startup task
+    # registration and reload-time callback construction.  No manual model
+    # info refresh is involved; new rows are due from reconciliation and the
+    # normal ``force=False`` due selector performs the enrichment.
+    from types import SimpleNamespace
+
+    from eggpool.runtime_tasks import run_catalog_refresh_once
+
+    await run_catalog_refresh_once(
+        SimpleNamespace(catalog=_CatalogTick(base_ids), model_info=service)
+    )
 
     try:
         yield application, base_ids

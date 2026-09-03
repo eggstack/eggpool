@@ -151,6 +151,14 @@ Non-obvious wiring:
 - **`eggpool update` does a live PyPI lookup**: bare update uses freshness-aware latest check; explicit `VERSION` uses the exact release endpoint and permits deliberate downgrades
 - **`static_models` is source of truth for provider-specific protocol**: providers serving non-default protocols must ship `[[providers.<id>.static_models]]` rows
 - **No pre-commit hooks configured**: CI runs ruff, pyright, and pytest via GitHub Actions
+- **Model-info enrichment lifecycle**: startup performs one bounded external pass
+  when enabled; recurring due work runs from the generation-leased
+  `catalog_refresh` tick. There is no standalone `model_info_refresh` task.
+  `[models].refresh_interval_s` controls opportunities, while canonical
+  `next_refresh_at`/status TTLs and source cooldowns control due work.
+  `model_info.refresh_interval_s` is deprecated compatibility-only; with
+  `models.refresh_interval_s = 0`, later enrichment requires manual refresh or
+  restart.
 - **When constructing `RequestCoordinator` in tests**: pass an explicit `transcoder_policy` or assert the desired default
 - **`ProviderBoundRequest` dispatch-freeze**: `serialize_provider_payload()` freezes the body; `replace_provider_payload()` and `set_provider_payload(increment_generation=False)` reject when frozen. Only generation-incrementing methods (`set_provider_payload(increment_generation=True)`, `adopt_provider_payload(increment_generation=True)`) clear the freeze — the post-selection transcoder relies on this to replace a previously dispatched body on retry
 - **Thinking rejection error class**: `CapabilityError` (400) only when the aggregated thinking status is genuinely `unknown` or `unsupported`. When all supporting accounts are quarantined but the provider entry reports `supported`/`mixed`, a transient 503/502 is raised instead. Aggregation iterates `cache.get_provider_model_entries()` (which applies overrides), not `cache.get_model()` (which does not). Reasoning support and caller controls are discovered per provider/model from explicit catalog or verified model-info metadata; EggPool does not infer effort levels from model names. Operator overrides remain the intentional escape hatch. See `RequestCoordinator._determine_thinking_rejection_status` and `architecture/deep-dive-request-lifecycle.md`

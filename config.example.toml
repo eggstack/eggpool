@@ -263,13 +263,20 @@ ttl_seconds = 86400
 # tags. Manual overrides and alias expansion are also supported.
 # [model_info]
 # enabled = true                   # metadata sidecar (default: true)
+# startup_refresh = true           # bounded external pass during startup
 # include_in_models_endpoint = true  # compact fields in /v1/models (default: true)
-# refresh_interval_s = 3600        # global refresh cadence (seconds)
-# sparse_refresh_interval_s = 300  # accelerated refresh for sparse models (seconds)
-# sparse_refresh_window_s = 86400  # how long sparse models get accelerated refresh (seconds)
-# default_ttl_s = 604800           # default TTL for fresh models (7 days)
+# known_ttl_s = 86400               # refresh TTL for known/fresh rows
 # partial_ttl_s = 259200           # TTL for partially-known models (3 days)
-# sparse_ttl_s = 86400             # TTL for sparse models (1 day)
+# sparse_new_initial_ttl_s = 3600   # first sparse-row retry (1 hour)
+# sparse_new_later_ttl_s = 21600    # later sparse-row retry (6 hours)
+# sparse_new_accelerated_days = 7   # sparse acceleration window
+# conflict_ttl_s = 7200             # retry TTL for conflicting rows
+# max_models_per_cycle = 50         # bound per startup/catalog tick
+# Recurring opportunities come from [models].refresh_interval_s. The
+# model-info next_refresh_at/status TTLs and source TTL/cooldown state decide
+# whether external work is due at each opportunity. If models.refresh_interval_s
+# = 0, only the bounded startup pass runs automatically; use the manual
+# refresh endpoint or restart for later enrichment.
 #
 # [model_info.sources.openrouter]
 # enabled = true                   # source used when model_info is enabled

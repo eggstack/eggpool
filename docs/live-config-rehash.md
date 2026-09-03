@@ -82,20 +82,23 @@ D2 LIVE families:
 - **Backup scheduling**: ``backup.enabled``, ``backup.interval_s``,
   ``backup.retain_count``, ``backup.startup_delay_s``.  Toggling
   ``enabled`` adds/removes the task.
-- **Model-info scheduling**: ``model_info.enabled``,
-  ``model_info.refresh_interval_s``.  Toggling ``enabled`` adds/removes
-  the tasks; changing ``refresh_interval_s`` replaces the schedule.
 
 The ``_run_periodic_loop`` in ``src/eggpool/background/__init__.py``
 re-reads ``self._interval_s`` and ``self._initial_delay_s`` each
 iteration so live interval changes take effect at the next tick
 boundary — not from the last completion time.  For tasks changed via
 ``apply_spec_diff``, the old task is stopped and a new one is started
-immediately with the new interval.  Toggling ``model_info.enabled`` or
-``backup.enabled`` adds/removes the corresponding task; ``apply_spec_diff``
+immediately with the new interval. Toggling ``backup.enabled`` adds/removes
+the corresponding task; ``apply_spec_diff``
 logs the transition (added/removed/changed) at INFO level.  Process-owned
 task resources retain identity across reloads — no duplicated schedules,
 no orphaned tasks.
+
+Model-info enrichment deliberately has no standalone reloadable scheduler.
+`model_info.refresh_interval_s` remains accepted for compatibility but is
+deprecated and does not control a task. The existing `catalog_refresh` task
+provides recurring opportunities, and the model-info service selects due
+rows using per-row TTLs and source cooldowns.
 
 ``ProcessRuntime`` (``src/eggpool/runtime_manager.py``) now carries
 ``process_supervisor``, ``task_spec_version``, and
@@ -306,7 +309,9 @@ background-task cadences and retention durations:
 `dashboard.retain_request_stats_days`, `dashboard.retain_event_days`,
 `models.ping_retain_days`, `upstream.read_timeout_s`,
 `metrics.flush_interval_s`, `backup.interval_s`, `backup.retain_count`,
-and `backup.startup_delay_s`. Every other field remains
+and `backup.startup_delay_s`. Model-info service construction and its
+per-source/row policy remain restart-required, except for the existing
+generation-owned `model_info.enabled` switch. Every other field remains
 `RESTART_REQUIRED` because it is owned by the supervisor process
 (Granian construction, DB connection, middleware, JSON backend,
 deployment paths, `[upstream]` registry, `[model_info]` service

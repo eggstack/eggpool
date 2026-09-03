@@ -4,6 +4,21 @@ This document walks an operator through the live verification flow for
 the model-info OpenRouter enrichment.  It complements the broader
 [architecture](../architecture/README.md).
 
+## Automatic lifecycle
+
+When `[model_info].enabled = true` and `startup_refresh = true`, startup runs
+one bounded external enrichment pass. The batch is capped by
+`max_models_per_cycle`; external catalog sources are fetched once per pass.
+After startup, the existing `catalog_refresh` task creates recurring
+opportunities. `ModelInfoService` selects only rows whose `next_refresh_at` is
+due, while source TTL and cooldown state provide the remaining bounds.
+
+The manual endpoint and this script are forced diagnostic/recovery tools. They
+are not required to populate ordinary dashboard metadata on a healthy
+installation. If `[models].refresh_interval_s = 0`, there is no recurring
+automatic opportunity after the bounded startup pass; use a manual refresh or
+restart when enrichment is needed.
+
 ## One-shot verification script
 
 The repository ships a single-command helper at

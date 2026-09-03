@@ -216,6 +216,16 @@ upstream-submission budget.
 
 Full config reference: [`config.example.toml`](config.example.toml) | [docs/providers.md](docs/providers.md)
 
+When `[model_info].enabled = true`, startup performs one bounded external
+enrichment pass when `model_info.startup_refresh = true`. Later enrichment uses
+the existing `[models].refresh_interval_s` catalog event; model-info
+`next_refresh_at`, status TTLs, source TTLs, and cooldowns select the due rows.
+There is no separate model-info scheduler. With `models.refresh_interval_s = 0`,
+only the bounded startup pass is automatic; use the authenticated manual
+refresh endpoint or restart for later enrichment. The legacy
+`model_info.refresh_interval_s` field remains accepted for compatibility but is
+deprecated and does not control scheduling.
+
 Reasoning support and caller controls are discovered per provider/model from
 explicit upstream or verified model-info metadata. EggPool does not infer
 effort levels from model-family names; use a model capability override only

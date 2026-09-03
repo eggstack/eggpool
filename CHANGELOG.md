@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Model-info enrichment lifecycle correction.** Model-info startup now runs
+  one bounded external pass, and the existing generation-leased
+  `catalog_refresh` event now performs bounded due enrichment on every
+  opportunity. Both runtime callback-construction paths share the same leased
+  generation helper; source failures remain isolated from catalog discovery
+  and routing. The legacy `model_info.refresh_interval_s` field is retained
+  for compatibility but is deprecated and no longer represents a scheduler.
 - **Plan 159 reasoning capability source precedence.** Removed static
   OpenCode Go reasoning seeds and model-family effort inference. Live
   provider metadata, verified provider-scoped model-info metadata, and

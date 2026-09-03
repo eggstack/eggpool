@@ -120,6 +120,12 @@ redacted; request bodies, credential values, cache keys, and raw tool content
 are not persisted. `/readyz` reads a process-owned cached probe snapshot and
 never writes.
 
+Model-info external enrichment piggybacks on the generation-leased
+`catalog_refresh` event. Startup performs one bounded pass when enabled;
+subsequent ticks select due canonical rows by `next_refresh_at` and status/source
+TTL state. No standalone `model_info_refresh` scheduler exists, and a source
+failure cannot fail catalog discovery or routing.
+
 ## Configuration and deployment
 
 `config.toml` plus `.env` configure the service. The copyable profiles bind to

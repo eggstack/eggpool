@@ -290,14 +290,14 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     # a fresh policy; no shared module-level singleton survives the
     # swap.
     "transcoder": ReloadDisposition.LIVE,
-    # Milestone D2: model-info scheduling fields consumed by the
-    # ``model_info_refresh`` and ``model_info_canonical_backfill``
-    # tasks; the process supervisor reconfigures the tasks with the
-    # candidate config on reload.
+    # Model-info service construction is generation-owned. Its recurring
+    # opportunity comes from ``catalog_refresh``; the compatibility-only
+    # model-info interval is not a live scheduling control.
     "model_info.enabled": ReloadDisposition.LIVE,
     "update_checker.enabled": ReloadDisposition.RESTART_REQUIRED,
     "model_info.startup_refresh": ReloadDisposition.RESTART_REQUIRED,
-    "model_info.refresh_interval_s": ReloadDisposition.LIVE,
+    # Retained for config compatibility; no live task consumes this field.
+    "model_info.refresh_interval_s": ReloadDisposition.RESTART_REQUIRED,
     "model_info.known_ttl_s": ReloadDisposition.RESTART_REQUIRED,
     "model_info.partial_ttl_s": ReloadDisposition.RESTART_REQUIRED,
     "model_info.sparse_new_initial_ttl_s": ReloadDisposition.RESTART_REQUIRED,

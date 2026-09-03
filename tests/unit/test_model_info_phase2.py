@@ -593,6 +593,16 @@ async def test_refresh_due_models_respects_max_per_cycle() -> None:
         result = await service.refresh_due_models()
         assert result["refreshed"] <= 3
         assert result["total"] == result["refreshed"] + result["skipped"]
+
+        later_result = await service.refresh_due_models()
+        assert later_result["total"] == 2
+
+        # Startup's forced path has the same batch bound.
+        forced_result = await service.refresh_due_models(force=True)
+        assert forced_result["total"] <= 3
+        assert forced_result["total"] == (
+            forced_result["refreshed"] + forced_result["skipped"]
+        )
     finally:
         await db.disconnect()
 
@@ -813,41 +823,6 @@ async def test_catalog_refresh_loop_skips_reconcile_when_none() -> None:
 
     await run_one_cycle()
     mock_catalog.refresh.assert_called()
-
-
-@pytest.mark.asyncio()
-async def test_supervisor_registration_disabled() -> None:
-    """model_info_refresh task is not registered when disabled."""
-    from eggpool.background import TaskSupervisor
-    from eggpool.models.config import AppConfig
-
-    config = AppConfig()
-    config.model_info.enabled = False
-    supervisor = TaskSupervisor()
-    # When disabled, the registration block should not execute
-    if config.model_info.enabled and config.model_info.refresh_interval_s > 0:
-        supervisor.register(
-            "model_info_refresh", lambda: AsyncMock().run_periodic_refresh()
-        )
-    assert supervisor.get_task("model_info_refresh") is None
-
-
-@pytest.mark.asyncio()
-async def test_supervisor_registration_enabled() -> None:
-    """model_info_refresh task is registered when enabled."""
-    from eggpool.background import TaskSupervisor
-    from eggpool.models.config import AppConfig
-
-    config = AppConfig()
-    config.model_info.enabled = True
-    config.model_info.refresh_interval_s = 100
-    supervisor = TaskSupervisor()
-    if config.model_info.enabled and config.model_info.refresh_interval_s > 0:
-        mock_service = AsyncMock()
-        supervisor.register(
-            "model_info_refresh", lambda: mock_service.run_periodic_refresh()
-        )
-    assert supervisor.get_task("model_info_refresh") is not None
 
 
 @pytest.mark.asyncio()

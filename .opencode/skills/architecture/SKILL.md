@@ -225,6 +225,14 @@ Plus `ProtocolMismatchError` (from `catalog.protocols`) — endpoint/model-proto
   shipped template is `config.example.toml`; `config.sbc.example.toml` is a
   loopback-by-default SBC profile. Change its bind only deliberately and with
   server API-key authentication configured.
+- Model-info external enrichment is generation-owned and piggybacks on the
+  leased `catalog_refresh` event. Startup runs one bounded pass when
+  `model_info.startup_refresh` is enabled; recurring work uses per-row
+  `next_refresh_at`, status TTLs, source TTLs, and cooldowns. There is no
+  standalone `model_info_refresh` task. The compatibility-only
+  `model_info.refresh_interval_s` field must not become a second scheduler;
+  disabling `models.refresh_interval_s` removes recurring opportunities after
+  startup.
 
 ## Runtime Generations
 

@@ -108,7 +108,7 @@ RUNTIME_TASK_INVENTORY: tuple[RuntimeTaskSpec, ...] = (
         enabled=True,
         description="Periodically refresh the model catalog from enabled accounts",
         reloadable_fields=("models.refresh_interval_s",),
-        generation_dependencies=("catalog",),
+        generation_dependencies=("catalog", "model_info", "registry", "health_manager"),
         process_dependencies=("db",),
         callback_kind="catalog_refresh",
     ),

@@ -17,6 +17,7 @@ import respx
 from eggpool.app import _verify_startup_integrity, create_app
 from eggpool.db.connection import Database
 from eggpool.errors import DatabaseError
+from eggpool.model_info.service import ModelInfoService
 from eggpool.models.config import AppConfig
 
 UPSTREAM_BASE = "https://test-upstream.example.com"
@@ -543,3 +544,37 @@ class TestAutomaticBackupRegistration:
                 # Update checker and backup both registered on process supervisor.
                 assert psup.get_task("update_checker") is not None
                 assert psup.get_task("automatic_backup") is not None
+
+
+@pytest.mark.asyncio
+async def test_model_info_startup_pass_is_bounded_and_runs_without_catalog_task(
+    config_file_db: AppConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Startup enrichment runs once, bounded, even when catalog ticks are off."""
+    calls: list[tuple[bool, int]] = []
+
+    async def fake_refresh_due_models(
+        service: ModelInfoService, *, force: bool = False
+    ) -> dict[str, object]:
+        calls.append((force, service.config.max_models_per_cycle))
+        return {"total": service.config.max_models_per_cycle, "refreshed": 0}
+
+    monkeypatch.setattr(ModelInfoService, "refresh_due_models", fake_refresh_due_models)
+    config_file_db.model_info.max_models_per_cycle = 3
+    app = create_app(config_file_db)
+
+    with respx.mock:
+        respx.get(f"{UPSTREAM_BASE}/models").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "data": [{"id": "gpt-4", "object": "model"}],
+                },
+            )
+        )
+        async with app.router.lifespan_context(app):
+            assert calls == [(True, 3)]
+            assert app.state.supervisor.get_task("catalog_refresh") is None
+            assert app.state.supervisor.get_task("model_info_refresh") is None

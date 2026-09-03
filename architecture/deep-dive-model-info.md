@@ -127,12 +127,28 @@ Non-exact matches persist evidence rows in `model_info_match_evidence`.
 ## Refresh Lifecycle
 
 1. Startup: `seed_configured_aliases()` inserts `[model_info.aliases]` entries
-2. Background: successful catalog refreshes reconcile model-info state; due
-   external-source work is handled by the model-info service without a
-   separate high-frequency scheduler
-3. Catalog refresh: reconciliation runs after successful catalog refreshes
+2. Startup enrichment: when `startup_refresh` is enabled, one bounded
+   `refresh_due_models(force=True)` pass runs after catalog reconciliation;
+   `max_models_per_cycle` bounds the batch and external catalogs are fetched
+   once per pass
+3. Background: successful `catalog_refresh` ticks reconcile model-info state,
+   backfill missing rows, and call `refresh_due_models(force=False)` on the
+   leased generation; due selection remains per-row
 4. External sources: fetched once per cycle, matched via identity resolution
-5. Single-model: `POST /api/model-info/refresh?model_id=<id>` for immediate refresh
+5. Single-model: `POST /api/model-info/refresh?model_id=<id>` is a forced
+   operator diagnostic/recovery path, not a prerequisite for ordinary
+   enrichment
+
+The cadence has two levels: `[models].refresh_interval_s` determines how often
+the provider catalog creates an opportunity, while each canonical row's
+`next_refresh_at`, status TTL, and source TTL/cooldown state determine whether
+external work is due. There is intentionally no `model_info_refresh` task.
+When `models.refresh_interval_s = 0`, the bounded startup pass can still run,
+but later automatic enrichment requires a manual refresh or process restart.
+
+`ModelInfoConfig.refresh_interval_s` is retained as a deprecated compatibility
+field. It is not a scheduler control and must not be used to reintroduce a
+second periodic task.
 
 ## API Endpoints
 
@@ -148,6 +164,10 @@ Non-exact matches persist evidence rows in `model_info_match_evidence`.
 ## Key Invariants
 
 - Source adapters never break startup, catalog refresh, or routing
+- External model-info failures are isolated from catalog task success and
+  remain visible through source-health diagnostics
+- A successful source fetch with no local match is recorded as source success,
+  not as a source outage
 - Identity matching is exact only (no fuzzy matching by default)
 - Non-exact matches persist evidence rows
 - Source health tracks cooldown backoff

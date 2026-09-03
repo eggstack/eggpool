@@ -87,7 +87,9 @@ table and ``_RUNTIME_OWNED_APP_STATE_ATTRS``.
 
 **Closures that capture startup services** (reload hazard):
 
-- ``_catalog_refresh_once`` captures ``catalog``, ``effective_model_info``.
+- Catalog refresh callbacks lease the active generation and use the shared
+  model-info lifecycle helper; they do not capture ``catalog`` or
+  ``effective_model_info`` from startup.
 - ``_retention_cleanup_once`` captures ``db``, ``config``, ``router``.
 - ``_refresh_usage_windows_once`` captures ``router``.
 - ``_health_disabled_models_prune_once`` captures ``app`` (reads ``app.state``).

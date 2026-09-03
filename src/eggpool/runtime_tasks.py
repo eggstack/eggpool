@@ -45,6 +45,7 @@ duplicated copies.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -61,6 +62,56 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+
+async def run_catalog_refresh_once(gen: Any) -> None:  # noqa: ANN401
+    """Run one catalog tick against the generation that owns the lease.
+
+    Catalog discovery is the recurring event source for model-info
+    enrichment. Keep the complete one-shot lifecycle here so initial task
+    registration and reload-time callback factories cannot drift apart.
+    External model-info work is advisory: each follow-up step is isolated so
+    a source or sidecar failure never turns a successful catalog refresh into
+    a failed task.
+    """
+    result = await gen.catalog.refresh()
+    await _clear_quarantine_on_catalog_reappearance(gen, result)
+
+    from eggpool.app import prune_health_disabled_models_once  # noqa: PLC0415
+
+    await prune_health_disabled_models_once(gen)
+
+    model_info = getattr(gen, "model_info", None)
+    if model_info is None:
+        return
+
+    try:
+        reconciliation = await model_info.reconcile_catalog_refresh(result)
+        logger.debug("Model info catalog reconciliation: %s", reconciliation)
+    except Exception:
+        logger.exception("Model info catalog reconciliation failed")
+
+    try:
+        backfill = await model_info.backfill_missing_canonical()
+        if isinstance(backfill, dict):
+            backfill_summary = cast("dict[str, object]", backfill)
+            backfilled = backfill_summary.get("backfilled")
+            if isinstance(backfilled, (int, float)) and backfilled > 0:
+                logger.info("Model info catalog backfill: %s", backfill_summary)
+    except Exception:
+        logger.exception("Model info catalog backfill failed")
+
+    try:
+        refresh = await model_info.refresh_due_models(force=False)
+        log_refresh_result = getattr(model_info, "log_refresh_result", None)
+        if callable(log_refresh_result):
+            logged = log_refresh_result(refresh)
+            if inspect.isawaitable(logged):
+                await logged
+        else:
+            logger.debug("Model info due refresh: %s", refresh)
+    except Exception:
+        logger.exception("Model info due refresh failed")
 
 
 @dataclass(frozen=True)
@@ -125,22 +176,7 @@ def register_runtime_tasks(
             from eggpool.runtime_manager import leased_runtime  # noqa: PLC0415
 
             async with leased_runtime(runtime_manager) as gen:
-                result = await gen.catalog.refresh()
-                await _clear_quarantine_on_catalog_reappearance(gen, result)
-                from eggpool.app import (
-                    prune_health_disabled_models_once,  # noqa: PLC0415
-                )
-
-                await prune_health_disabled_models_once(gen)
-                model_info = getattr(gen, "model_info", None)
-                if model_info is not None:
-                    try:
-                        await model_info.reconcile_catalog_refresh(result)
-                        backfill = await model_info.backfill_missing_canonical()
-                        if backfill.get("backfilled", 0) > 0:
-                            logger.info("Model info catalog backfill: %s", backfill)
-                    except Exception:
-                        logger.exception("Model info catalog reconciliation failed")
+                await run_catalog_refresh_once(gen)
 
         supervisor.register_periodic(
             "catalog_refresh",
@@ -471,22 +507,7 @@ def build_callback_factories_for_specs(
                 )
 
                 async with leased_runtime(runtime_manager) as gen:
-                    result = await gen.catalog.refresh()
-                    await _clear_quarantine_on_catalog_reappearance(gen, result)
-                    from eggpool.app import (
-                        prune_health_disabled_models_once,  # noqa: PLC0415
-                    )
-
-                    await prune_health_disabled_models_once(gen)
-                    model_info = getattr(gen, "model_info", None)
-                    if model_info is not None:
-                        try:
-                            await model_info.reconcile_catalog_refresh(result)
-                            backfill = await model_info.backfill_missing_canonical()
-                            if backfill.get("backfilled", 0) > 0:
-                                logger.info("Model info catalog backfill: %s", backfill)
-                        except Exception:
-                            logger.exception("Model info catalog reconciliation failed")
+                    await run_catalog_refresh_once(gen)
 
             factories[name] = _catalog_refresh_factory
 

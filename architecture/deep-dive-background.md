@@ -74,9 +74,15 @@ Retired when their generation is retired:
 - **`catalog_refresh`** — Upstream model catalog refresh
 - **`retention_cleanup`** — Bounded daily retention and reservation reconciliation
 
-Catalog refresh is also the event source for model-info reconciliation and
-health/model recovery. Usage windows are hydrated while constructing a
-generation, so neither concern needs a periodic reload task.
+Catalog refresh is also the event source for model-info reconciliation,
+bounded due external enrichment, and health/model recovery. Each tick uses
+the leased generation's model-info service; reconciliation, canonical
+backfill, and due refresh are isolated so external metadata failures cannot
+fail catalog discovery or routing. `models.refresh_interval_s` controls the
+opportunity cadence, while model-info row TTLs and source cooldowns control
+the actual work. There is no separate `model_info_refresh` task. Usage
+windows are hydrated while constructing a generation, so neither concern
+needs a second periodic reload task.
 
 The five-minute default discovery cadence is a fetch cadence, not a full
 SQLite catalog rewrite. Successful refresh freshness is written to compact

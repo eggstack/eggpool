@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
@@ -541,11 +540,11 @@ class ModelInfoService:
         where the computed payload is byte-identical to the existing row.
         When ``force`` is true, refreshes the first bounded canonical batch
         regardless of its scheduled TTL; the application uses this only for
-        the first supervisor tick after startup.
+        the bounded startup enrichment pass.
         """
         now = datetime.now(UTC)
         if force:
-            # The startup supervisor tick is intentionally immediate.  A
+            # The startup enrichment pass is intentionally immediate. A
             # startup reconciliation assigns a normal future refresh time to
             # newly-created rows, so using ``list_due`` here would make that
             # first tick a no-op and defer all external enrichment for hours.
@@ -1556,8 +1555,7 @@ class ModelInfoService:
     def log_refresh_result(self, result: dict[str, object]) -> None:
         """Log a periodic refresh result with appropriate severity.
 
-        Called from both the supervisor-owned periodic task and the legacy
-        ``run_periodic_refresh`` background loop.  Logs at WARNING when
+        Called by the catalog lifecycle helper. Logs at WARNING when
         OpenRouter was attempted but matched nothing (all-miss cycle),
         and at INFO when any match or refresh occurred.
         """
@@ -1671,34 +1669,6 @@ class ModelInfoService:
             }
         return snapshot_sources
 
-    async def run_periodic_refresh(self) -> None:
-        """Background loop that refreshes due models periodically."""
-        while True:
-            await asyncio.sleep(self._config.refresh_interval_s)
-            try:
-                result = await self.refresh_due_models()
-                self.log_refresh_result(result)
-            except asyncio.CancelledError:
-                break
-            except Exception:
-                logger.exception("Model info periodic refresh failed")
-
-    async def run_backfill_missing_canonical(self) -> None:
-        """Background loop that fills canonical rows for orphaned models."""
-        while True:
-            await asyncio.sleep(60)
-            try:
-                result = await self.backfill_missing_canonical()
-                if result["backfilled"] > 0:
-                    logger.info(
-                        "Model info backfill: created %d canonical row(s)",
-                        result["backfilled"],
-                    )
-            except asyncio.CancelledError:
-                break
-            except Exception:
-                logger.exception("Model info backfill failed")
-
     async def record_source_success(
         self,
         source_name: str,
@@ -1790,9 +1760,9 @@ class ModelInfoService:
           provenance ``traffic_observation`` so it cannot be confused
           with a catalog-confirmed model.
 
-        The next periodic refresh (``run_periodic_refresh``) will
-        attempt to enrich the row from external sources if any are
-        enabled, and a subsequent catalog refresh will upgrade it.
+        The next catalog refresh opportunity will attempt to enrich the row
+        from external sources if any are enabled, and a subsequent catalog
+        refresh will upgrade it.
         Callers must handle exceptions — a database failure here is
         not recoverable inside the service, but the dashboard's
         ``try/except`` swallows it and falls back to the empty-state
@@ -2165,7 +2135,7 @@ class ModelInfoService:
         if status == "conflicting":
             return now + timedelta(seconds=self._config.conflict_ttl_s)
         if status == "stale":
-            return now + timedelta(seconds=self._config.refresh_interval_s)
+            return now + timedelta(seconds=self._config.known_ttl_s)
         return now + timedelta(seconds=self._config.known_ttl_s)
 
     def _build_detail(self, model_id: str) -> dict[str, object]:
@@ -3350,7 +3320,8 @@ def _generate_summary(
     if sparse:
         parts.append(
             "New model detected; metadata sparse. "
-            "Eggpool will refresh external sources more frequently for now."
+            "Sparse-model TTLs prioritize it for the next catalog refresh "
+            "opportunity."
         )
 
     providers = detail.get("providers")

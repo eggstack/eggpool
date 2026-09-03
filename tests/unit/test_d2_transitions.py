@@ -2,7 +2,7 @@
 
 Covers:
 - Interval changes (single schedule, no overlapping ticks)
-- Enable/disable transitions (model_info, backup)
+- Enable/disable transitions (generic optional task, backup)
 - Retention policy live changes
 - Metrics flush cadence reconfiguration
 - Backup cadence changes
@@ -187,11 +187,11 @@ class TestIntervalChanges:
 
 
 # ---------------------------------------------------------------------------
-# 2. Enable/disable: model_info
+# 2. Model-info inventory and generic enable/disable transition
 # ---------------------------------------------------------------------------
 
 
-class TestModelInfoEnableDisable:
+class TestModelInfoTaskInventory:
     def test_inventory_omits_model_info_tasks(self) -> None:
         """Model-info work is not represented by the periodic task inventory."""
         config = _make_config()
@@ -205,23 +205,24 @@ class TestModelInfoEnableDisable:
         assert "model_info_canonical_backfill" not in names
 
     @pytest.mark.asyncio
-    async def test_model_info_disable_enable_via_supervisor(self) -> None:
-        """End-to-end: register, remove via spec diff, re-add via spec diff.
-        Uses explicit active/candidate specs (not inventory) to simulate
-        the process_supervisor filtering in reload_manager."""
+    async def test_generic_optional_task_disable_enable_via_supervisor(self) -> None:
+        """The generic task diff can remove and re-add an optional task.
+
+        This deliberately uses a synthetic task name. Model-info enrichment
+        is piggybacked on ``catalog_refresh`` and must not be represented by
+        this transition test.
+        """
         supervisor = TaskSupervisor()
 
-        # Register and start model_info_refresh initially
+        task_name = "optional_test_task"
         task = supervisor.register_periodic(
-            "model_info_refresh", _noop_tick, interval_s=21600.0, run_immediately=True
+            task_name, _noop_tick, interval_s=21600.0, run_immediately=True
         )
         await task.start()
         assert task.is_running
 
         # Build active specs from what's registered
-        active_specs = (
-            _make_spec("model_info_refresh", 21600.0, run_immediately=True),
-        )
+        active_specs = (_make_spec(task_name, 21600.0, run_immediately=True),)
 
         # Candidate: task disabled (not in the enabled set, like reload_manager does)
         candidate_specs: tuple[RuntimeTaskSpec, ...] = ()
@@ -232,21 +233,19 @@ class TestModelInfoEnableDisable:
             candidate_specs=candidate_specs,
             callback_factories={},
         )
-        assert "model_info_refresh" in result.removed
-        assert supervisor.get_task("model_info_refresh") is None
+        assert task_name in result.removed
+        assert supervisor.get_task(task_name) is None
 
         # Re-enable: add back
-        new_candidate = (
-            _make_spec("model_info_refresh", 21600.0, run_immediately=True),
-        )
+        new_candidate = (_make_spec(task_name, 21600.0, run_immediately=True),)
         result2 = await apply_spec_diff(
             supervisor,
             active_specs=(),
             candidate_specs=new_candidate,
-            callback_factories={"model_info_refresh": _noop_tick},
+            callback_factories={task_name: _noop_tick},
         )
-        assert "model_info_refresh" in result2.added
-        assert supervisor.get_task("model_info_refresh") is not None
+        assert task_name in result2.added
+        assert supervisor.get_task(task_name) is not None
 
         await supervisor.stop_all()
 

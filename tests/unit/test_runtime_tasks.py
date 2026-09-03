@@ -9,14 +9,21 @@ always be present for a healthy runtime.
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
 from eggpool.background import TaskSupervisor
 from eggpool.config_reload_policy import ReloadDisposition
 from eggpool.runtime_manager import ProcessRuntime, RuntimeManager
-from eggpool.runtime_tasks import TaskRegistrationContext, register_runtime_tasks
+from eggpool.runtime_tasks import (
+    TaskRegistrationContext,
+    build_callback_factories_for_specs,
+    register_runtime_tasks,
+    run_catalog_refresh_once,
+)
 
 
 def _make_process(db: Any) -> ProcessRuntime:
@@ -139,6 +146,121 @@ async def _register_with_process_supervisor(
 class AsyncMockNoop:
     async def __call__(self, *args: object, **kwargs: object) -> None:
         return None
+
+
+@pytest.mark.asyncio
+async def test_catalog_tick_runs_bounded_model_info_follow_up() -> None:
+    """A catalog tick performs due model-info work without a new task."""
+    result = SimpleNamespace(
+        new_model_ids=frozenset(),
+        changed_provider_keys=frozenset(),
+    )
+    catalog = SimpleNamespace(refresh=AsyncMock(return_value=result))
+    model_info = SimpleNamespace(
+        reconcile_catalog_refresh=AsyncMock(return_value={"updated": 1}),
+        backfill_missing_canonical=AsyncMock(return_value={"backfilled": 0}),
+        refresh_due_models=AsyncMock(return_value={"total": 1, "refreshed": 1}),
+        log_refresh_result=lambda _result: None,
+    )
+
+    await run_catalog_refresh_once(
+        SimpleNamespace(catalog=catalog, model_info=model_info)
+    )
+
+    catalog.refresh.assert_awaited_once()
+    model_info.reconcile_catalog_refresh.assert_awaited_once_with(result)
+    model_info.backfill_missing_canonical.assert_awaited_once_with()
+    model_info.refresh_due_models.assert_awaited_once_with(force=False)
+
+
+@pytest.mark.asyncio
+async def test_catalog_tick_isolates_model_info_follow_up_failures() -> None:
+    """A model-info error cannot fail the catalog tick or skip later steps."""
+    result = SimpleNamespace(
+        new_model_ids=frozenset(),
+        changed_provider_keys=frozenset(),
+    )
+    catalog = SimpleNamespace(refresh=AsyncMock(return_value=result))
+    model_info = SimpleNamespace(
+        reconcile_catalog_refresh=AsyncMock(side_effect=RuntimeError("sidecar")),
+        backfill_missing_canonical=AsyncMock(return_value={"backfilled": 0}),
+        refresh_due_models=AsyncMock(side_effect=RuntimeError("source")),
+    )
+
+    await run_catalog_refresh_once(
+        SimpleNamespace(catalog=catalog, model_info=model_info)
+    )
+
+    catalog.refresh.assert_awaited_once()
+    model_info.backfill_missing_canonical.assert_awaited_once_with()
+    model_info.refresh_due_models.assert_awaited_once_with(force=False)
+
+
+@pytest.mark.asyncio
+async def test_catalog_callbacks_use_current_leased_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both callback-construction paths read model-info from the lease."""
+    from contextlib import asynccontextmanager
+
+    import eggpool.runtime_manager as runtime_manager_module
+    from eggpool.runtime_task_inventory import inventory_for_config
+
+    result = SimpleNamespace(
+        new_model_ids=frozenset(),
+        changed_provider_keys=frozenset(),
+    )
+
+    def make_generation() -> tuple[Any, Any]:
+        model_info = SimpleNamespace(
+            reconcile_catalog_refresh=AsyncMock(return_value={}),
+            backfill_missing_canonical=AsyncMock(return_value={"backfilled": 0}),
+            refresh_due_models=AsyncMock(return_value={}),
+            log_refresh_result=lambda _result: None,
+        )
+        catalog = SimpleNamespace(refresh=AsyncMock(return_value=result))
+        return SimpleNamespace(catalog=catalog, model_info=model_info), model_info
+
+    old_generation, old_model_info = make_generation()
+    current_generation, current_model_info = make_generation()
+    active_generation = current_generation
+
+    @asynccontextmanager
+    async def fake_lease(_runtime_manager: Any):
+        yield active_generation
+
+    monkeypatch.setattr(runtime_manager_module, "leased_runtime", fake_lease)
+
+    config = _make_config()
+    manager = RuntimeManager()
+    process = _make_process(SimpleNamespace())
+
+    supervisor = TaskSupervisor()
+    register_runtime_tasks(
+        supervisor,
+        TaskRegistrationContext(
+            process=process,
+            runtime_manager=manager,
+            config=config,
+            update_checker_outbound=None,
+        ),
+    )
+    task = supervisor.get_task("catalog_refresh")
+    assert task is not None and task._tick_factory is not None  # noqa: SLF001
+    await task._tick_factory()  # noqa: SLF001
+
+    specs = inventory_for_config(config, include_update_checker=False)
+    factories = build_callback_factories_for_specs(
+        specs,
+        process=process,
+        runtime_manager=manager,
+        config=config,
+    )
+    await factories["catalog_refresh"]()
+
+    assert old_model_info.reconcile_catalog_refresh.await_count == 0
+    assert current_model_info.reconcile_catalog_refresh.await_count == 2
+    assert current_model_info.refresh_due_models.await_count == 2
 
 
 class TestParity:

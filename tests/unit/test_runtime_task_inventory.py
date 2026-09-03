@@ -140,6 +140,7 @@ class TestOwnershipClassification:
 
 class TestInventoryForConfig:
     def test_model_info_disabled_does_not_add_periodic_tasks(self) -> None:
+        """Disabled model-info remains dormant and has no standalone task."""
         config = _make_config()
         config.model_info.enabled = False  # type: ignore[union-attr]
         specs = inventory_for_config(config, include_update_checker=False)
@@ -148,6 +149,7 @@ class TestInventoryForConfig:
         assert "model_info_canonical_backfill" not in by_name
 
     def test_model_info_refresh_interval_does_not_add_periodic_task(self) -> None:
+        """Compatibility interval cannot resurrect a model-info task."""
         config = _make_config()
         config.model_info.refresh_interval_s = 0  # type: ignore[union-attr]
         specs = inventory_for_config(config, include_update_checker=False)

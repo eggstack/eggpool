@@ -215,7 +215,7 @@ EXPECTED_INVENTORY_SNAPSHOT: tuple[tuple[str, str, bool], ...] = (
     ("model_info.max_models_per_cycle", "restart_required", False),
     ("model_info.overrides", "restart_required", False),
     ("model_info.partial_ttl_s", "restart_required", False),
-    ("model_info.refresh_interval_s", "live", False),
+    ("model_info.refresh_interval_s", "restart_required", False),
     ("model_info.sources", "restart_required", False),
     ("model_info.sparse_new_accelerated_days", "restart_required", False),
     ("model_info.sparse_new_initial_ttl_s", "restart_required", False),

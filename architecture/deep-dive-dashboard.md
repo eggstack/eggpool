@@ -126,6 +126,14 @@ Plus advanced diagnostics disclosure.
 
 Full model-info detail with status cards, summary, provider/callability, metadata, benchmarks, Hugging Face metadata, conflicts, and provenance.
 
+Model-info cards render persisted canonical and source-health truth. A sparse
+row remains sparse when external sources have not been attempted, failed, or
+did not match; the dashboard does not synthesize benchmark or metadata claims.
+Source health and match-evidence surfaces distinguish source outages from
+successful catalogs with a model-level identity miss. Automatic enrichment is
+driven by catalog refresh opportunities and per-row due state; the manual
+refresh endpoint is an operator diagnostic.
+
 ## Stats Service
 
 ### `stats/service.py` — StatsService

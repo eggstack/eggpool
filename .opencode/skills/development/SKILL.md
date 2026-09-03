@@ -52,6 +52,13 @@ unresolved-model, and migration compatibility suites before the smoke gate. The
 focused assertions should inspect durable rows/application DML effects, not
 SQLite page-write counts.
 
+Model-info lifecycle changes should run the model-info source/enrichment suites,
+the runtime-task inventory, and the integration lifecycle path. Verify both
+halves of the task contract: no standalone `model_info_refresh` task exists,
+while `catalog_refresh` performs bounded due model-info work against its leased
+generation. Also cover the bounded startup `force=True` pass and failure
+isolation from catalog/routing behavior.
+
 Analytics index changes should run the attempt-stats and migration compatibility
 tests. Query-plan assertions should cover only the critical retained filtered
 index shape; do not turn workstation timing or page counts into CI thresholds.

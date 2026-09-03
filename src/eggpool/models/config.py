@@ -1456,13 +1456,26 @@ class ModelInfoOverrideConfig(BaseModel):
 
 
 class ModelInfoConfig(BaseModel):
-    """Configuration for the model-info subsystem."""
+    """Configuration for the model-info subsystem.
+
+    ``refresh_interval_s`` is retained for configuration compatibility with
+    older releases. It is not a scheduler interval: recurring enrichment is
+    offered by the provider catalog tick, while each canonical row's
+    ``next_refresh_at`` and source TTLs decide whether work is due.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
     startup_refresh: bool = True
-    refresh_interval_s: int = Field(default=21_600, ge=0)
+    refresh_interval_s: int = Field(
+        default=21_600,
+        ge=0,
+        description=(
+            "Deprecated compatibility field; catalog ticks and per-row TTLs "
+            "drive automatic enrichment."
+        ),
+    )
     known_ttl_s: int = Field(default=86_400, gt=0)
     partial_ttl_s: int = Field(default=43_200, gt=0)
     sparse_new_initial_ttl_s: int = Field(default=3_600, gt=0)

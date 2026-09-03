@@ -164,10 +164,10 @@ class TestPolicyDefaults:
             "maintenance.p0_max_rows_per_batch",
             "maintenance.p0_max_batches_per_tick",
             "maintenance.p0_max_tick_duration_ms",
-            # Model-info enablement and cadence are applied by the
-            # generation-owned service; catalog refresh is the event source.
+            # Model-info enablement is generation-owned. Recurring work is
+            # offered by catalog refresh; the compatibility interval is not
+            # a live scheduling control.
             "model_info.enabled",
-            "model_info.refresh_interval_s",
         }
         actual_live = {
             path
@@ -289,7 +289,7 @@ class TestDispositionCoverage:
             # RESTART_REQUIRED because they are read from
             # app.state.config which is process-owned and not swapped.
             # backup.enabled and model_info.enabled moved to LIVE
-            # (task scheduling reconfigured via process supervisor).
+            # (generation-owned resources are rebuilt; no model-info task).
         }
         for path in must_be_restart:
             assert _disposition_for(path) is ReloadDisposition.RESTART_REQUIRED, (
@@ -1220,16 +1220,9 @@ LIVE_FIELD_CONSUMERS: dict[str, tuple[str, ...]] = {
     # ``DispatchSpanRecorder`` rebuilt on config change.
     "metrics.detailed_span_sample_rate": ("DispatchSpanRecorder",),
     "metrics.dispatch_spans.sample_rate": ("DispatchSpanRecorder",),
-    # Milestone D2: model-info scheduling fields reconfigured via the
-    # process supervisor; toggling ``enabled`` adds/removes the task,
-    # changing ``refresh_interval_s`` replaces it with the new cadence.
-    "model_info.enabled": (
-        "model_info_refresh (process supervisor reconfigure)",
-        "model_info_canonical_backfill (process supervisor reconfigure)",
-    ),
-    "model_info.refresh_interval_s": (
-        "model_info_refresh (process supervisor reconfigure)",
-    ),
+    # Model-info enablement is generation-owned; recurring enrichment is
+    # piggybacked on catalog_refresh and has no separate task.
+    "model_info.enabled": ("generation-owned ModelInfoService",),
     # Backup enabled state and scheduling fields reconfigured via the
     # process supervisor.
     "backup.enabled": ("automatic_backup (process supervisor reconfigure)",),
