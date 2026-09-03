@@ -912,6 +912,9 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     process.wire_profile_resolver = WireProfileResolver(
         cache_max_entries=config.routing.wire_negotiation.cache_max_entries
     )
+    from eggpool.model_router.affinity import ModelRouterAffinity  # noqa: PLC0415
+
+    process.model_router_affinity = ModelRouterAffinity()
     app.state.process = process
 
     # Indeterminate runtime SQLite state is terminal for this worker. The

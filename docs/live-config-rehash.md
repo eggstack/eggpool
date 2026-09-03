@@ -43,6 +43,16 @@ The closure pass enables the following families of fields as `LIVE`:
   compiled policy reject the candidate while the active generation continues
   serving.
 
+Sticky model-router affinity is process-owned and therefore survives a safe
+generation swap. An unrelated live change preserves a decision when the
+router's semantic fingerprint is unchanged. Changing the selector, default,
+route descriptions/targets, sticky or affinity policy, input bounds, repair
+policy, or selector protocol version changes that fingerprint; the next
+request for the session selects again. Removing the alias makes old entries
+unreachable. No cache rewrite, SQLite row, or background cleanup task is used.
+An invalid candidate is rejected before publication, so the active generation
+and its existing affinity behavior remain intact.
+
 ### Closure pass D1 — request-policy expansion
 
 The D1 milestone adds the request-path policy fields that the

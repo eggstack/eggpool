@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
     from eggpool.model_router.registry import CompiledModelRoute, CompiledModelRouter
     from eggpool.request.coordinator import PreparedProxyResponse, RequestCoordinator
+    from eggpool.wire.ir import CanonicalSurface
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,9 @@ class ModelRouterSelector:
         self,
         router: CompiledModelRouter,
         payload: Mapping[str, Any],
+        *,
+        client_surface: CanonicalSurface = "chat_completions",
+        protocol: str | None = None,
     ) -> ModelSelection:
         """Return a selector route or the configured default route.
 
@@ -74,7 +78,12 @@ class ModelRouterSelector:
         attempts = 0
         try:
             async with asyncio.timeout(router.selector_timeout_s):
-                prompt = compile_selector_prompt(router, payload)
+                prompt = compile_selector_prompt(
+                    router,
+                    payload,
+                    client_surface=client_surface,
+                    protocol=protocol,
+                )
                 attempts = 1
                 result = await self._execute_selector(router, prompt.payload)
                 route_id = parse_route_id(
@@ -125,9 +134,17 @@ class ModelRouterSelector:
         self,
         router: CompiledModelRouter,
         payload: Mapping[str, Any],
+        *,
+        client_surface: CanonicalSurface = "chat_completions",
+        protocol: str | None = None,
     ) -> ModelSelection:
         """Compatibility verb for callers treating selection as resolution."""
-        return await self.select(router, payload)
+        return await self.select(
+            router,
+            payload,
+            client_surface=client_surface,
+            protocol=protocol,
+        )
 
     async def _execute_selector(
         self,

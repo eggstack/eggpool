@@ -38,7 +38,12 @@ compiled configuration for exact virtual model aliases, so changing
 catalog, health, quota, database, network, or background-task work. The
 generation-independent `ModelRouterSelector` consumes one compiled router
 through a child `ProxyRequestContext` and the same `RequestCoordinator`; it
-does not create a loopback HTTP request or selector-specific client.
+does not create a loopback HTTP request or selector-specific client. Public
+virtual aliases resolve before concrete catalog/provider routing. Sticky
+routers use `ProcessRuntime.model_router_affinity`, a bounded process-local
+TTL/LRU cache keyed by virtual model, semantic router fingerprint, and a
+hashed explicit or conservative automatic session identity. It never pins an
+account/provider or stores raw request/header data.
 
 ## Request lifecycle
 
@@ -47,11 +52,13 @@ account routing, durable request/attempt/reservation state, provider dispatch,
 response adaptation, and terminal finalization. Local preparation and response
 adaptation failures are terminal local errors. Only typed HTTPX transport
 failures may retry, and only across distinct accounts before downstream handoff.
-The optional Plan 164 selector is a pre-routing semantic helper: its bounded
+The optional model-router selector is a pre-routing semantic helper: its bounded
 non-streaming selector and optional repair requests are concrete child requests
 with independent IDs and ordinary accounting. Invalid output, unavailable
 selector models, and selector errors return the compiled router's default route;
-parent cancellation remains cancellation.
+parent cancellation remains cancellation. Sticky virtual routers can reuse a
+process-owned concrete-model affinity decision keyed by a hashed session
+identity and the router fingerprint; the selector is skipped on a hit.
 
 The database uses SQLite WAL, one serialized primary connection, and caller-owned
 `async with db.transaction()` boundaries for DML. Durable identities are created

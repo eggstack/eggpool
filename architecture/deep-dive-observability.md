@@ -53,6 +53,15 @@ Router._select_account()
 
 ## Configuration
 
+### Model-router affinity diagnostics
+
+Sticky virtual-model requests carry only low-cardinality, request-local
+metadata for future metrics: `affinity_hit`/miss, `explicit_session`,
+`automatic_session`, or `no_session`, plus the selector/default decision
+source. `ModelRouterAffinity.stats` exposes aggregate hit, miss, expiration,
+eviction, and single-flight leader/join counters. Session digests, raw header
+values, prompts, and request bodies are never diagnostic fields.
+
 ```toml
 [routing.trace]
 mode = "off"             # Opt-in; default off ("off" | "sampled" | "all")

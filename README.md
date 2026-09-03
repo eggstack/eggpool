@@ -14,7 +14,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Transparent bidirectional protocol transcoding between OpenAI and Anthropic, plus native Gemini wire codecs
 - Canonical request/reasoning/response-event boundary for safe cross-surface translation and stream termination
 - Dynamic model discovery with load-based routing across multiple providers and accounts
-- Optional model-router configuration with exact virtual model IDs and stable route policies
+- Optional sticky model-router aliases with bounded selector affinity and live-reload continuity
 - Provider/model wire-surface contracts with per-surface paths and auth shapes
 - Request, token, latency, error, and cost tracking in SQLite
 - Multi-page dashboard with 50 themes
@@ -221,15 +221,25 @@ Full config reference: [`config.example.toml`](config.example.toml) | [docs/prov
 Model routers are optional and disabled by default. A `[model_routers.<id>]`
 block defines a virtual model alias, selector model, default concrete model,
 and labelled concrete targets. Definitions are structurally validated and
-compiled into each runtime generation. The Plan 164 selector component can be
-called directly by the later virtual-dispatch integration: it builds a small
-deterministic prompt, accepts only an exact compact route ID, permits one
-repair request, and falls back to `default_model` on any selector failure.
-Selector calls are ordinary concrete EggPool requests, so remote selector
-usage remains visible in request, quota, and cost accounting. Public client
-requests are not redirected through virtual aliases until the later
-integration phase. Virtual aliases are exact and cannot contain `/`, and router
-targets must remain concrete model references.
+compiled into each runtime generation. A virtual request builds a bounded
+deterministic selector prompt, accepts only an exact compact route ID, permits
+one repair request, and falls back to `default_model` on selector failure.
+Selector calls are ordinary concrete EggPool requests, so their usage remains
+visible in request, quota, and cost accounting.
+
+With `sticky = true` (the default), EggPool keeps a process-local bounded
+TTL/LRU affinity from a conversation to the selected concrete model. Clients
+should send `X-EggPool-Route-Session: <opaque-id>` when they have a stable
+conversation ID; the value is hashed immediately, never logged, persisted, or
+forwarded upstream. Chat/Messages requests without that header may use a
+conservative hash of the system/developer instructions and first user turn.
+Responses is stateless and should use the explicit header for stickiness across
+independent requests. `sticky = false` invokes the selector for every request.
+Affinity never pins an account/provider, bypasses health/quota routing, or
+reselects after a concrete target failure. The cache survives live rehash only
+when the router's semantic fingerprint is unchanged; policy changes naturally
+invalidate old decisions. Virtual aliases are exact and cannot contain `/`,
+and router targets remain concrete model references.
 
 When `[model_info].enabled = true`, startup performs one bounded external
 enrichment pass when `model_info.startup_refresh = true`. Later enrichment uses

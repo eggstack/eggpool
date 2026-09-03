@@ -108,8 +108,11 @@ SHA-256 semantic fingerprint and bounded static selector policy.
 The empty configuration uses a shared empty registry and adds no model-router-
 specific DB, catalog, health, quota, provider-client, or background-task work.
 The complete
-`model_routers` mapping is one atomic `LIVE` reload field; client dispatch does
-not consume virtual aliases until the later public integration phase. The
+`model_routers` mapping is one atomic `LIVE` reload field. Exact virtual aliases
+are resolved before concrete request preflight. Sticky routers use the
+process-owned bounded `ModelRouterAffinity` cache keyed by virtual model,
+semantic fingerprint, and hashed explicit/automatic session identity; it never
+pins provider/account state or stores raw identity/request data. The
 independently callable `ModelRouterSelector` compiles a deterministic bounded
 prompt and invokes `RequestCoordinator.execute()` with a child concrete
 context; exact route IDs, one optional repair, default fallback, and parent

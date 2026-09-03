@@ -133,6 +133,12 @@ class TestHostAndContentLengthRemoval:
         result = sanitize_request_headers({"Content-Length": "1024"})
         assert "Content-Length" not in result
 
+    def test_eggpool_route_session_removed(self) -> None:
+        result = sanitize_request_headers(
+            {"X-EggPool-Route-Session": "conversation-42"}
+        )
+        assert not any(k.lower() == "x-eggpool-route-session" for k in result)
+
     def test_case_insensitive_removal(self) -> None:
         result = sanitize_request_headers(
             {"host": "example.com", "content-length": "0"}
@@ -256,6 +262,16 @@ class TestCaseInsensitivity:
     def test_mixed_case_host(self) -> None:
         result = sanitize_request_headers({"HOST": "x.com"})
         assert not any(k.lower() == "host" for k in result)
+
+    def test_eggpool_route_session_is_local_only(self) -> None:
+        result = sanitize_request_headers(
+            {
+                "X-EggPool-Route-Session": "conversation-42",
+                "Accept": "application/json",
+            }
+        )
+        assert "X-EggPool-Route-Session" not in result
+        assert result["Accept"] == "application/json"
 
 
 class TestEmptyHeaders:

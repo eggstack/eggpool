@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -14,11 +15,16 @@ from eggpool.api.proxy_request import (
     get_client_ip,
     handle_proxy_request,
 )
+from eggpool.model_router.affinity import ModelRouterAffinity
+from eggpool.model_router.config import ModelRouterConfig
+from eggpool.model_router.registry import ModelRouterRegistry
+from eggpool.models.config import AppConfig
 from eggpool.proxy.client import (
     HOP_BY_HOP_HEADERS,
     filter_request_headers,
     filter_response_headers,
 )
+from eggpool.request.coordinator import PreparedProxyResponse
 
 
 def _request_with_peer(peer: str, headers: list[tuple[bytes, bytes]]) -> Request:
@@ -156,6 +162,152 @@ def test_hop_by_hop_headers_complete() -> None:
         "upgrade",
     }
     assert expected == HOP_BY_HOP_HEADERS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("sticky", "expected_selector_calls", "expected_hits"),
+    [(True, 1, 1), (False, 2, 0)],
+)
+async def test_sticky_virtual_request_reuses_concrete_target(
+    monkeypatch: pytest.MonkeyPatch,
+    sticky: bool,
+    expected_selector_calls: int,
+    expected_hits: int,
+) -> None:
+    router_config = ModelRouterConfig.model_validate(
+        {
+            "selector_model": "selector/local",
+            "default_model": "model-default",
+            "sticky": sticky,
+            "routes": {
+                "default": {"model": "model-default", "description": "Default"},
+                "fast": {"model": "model-fast", "description": "Fast"},
+            },
+        }
+    )
+    router_registry = ModelRouterRegistry.from_config({"virtual": router_config})
+    affinity = ModelRouterAffinity()
+    selector_calls = 0
+    parent_models: list[str] = []
+
+    class FakeCoordinator:
+        async def execute(self, context: Any) -> PreparedProxyResponse:
+            nonlocal selector_calls
+            model_id = context.model_id
+            if model_id == "selector/local":
+                selector_calls += 1
+                return PreparedProxyResponse(
+                    status_code=200,
+                    headers=[],
+                    body=b'{"choices":[{"message":{"content":"1"}}]}',
+                )
+            parent_models.append(model_id)
+            return PreparedProxyResponse(status_code=200, headers=[], body=b"ok")
+
+    class FakeLease:
+        def __init__(self) -> None:
+            self.runtime = type(
+                "Runtime",
+                (),
+                {
+                    "coordinator": FakeCoordinator(),
+                    "dispatch_span_recorder": None,
+                    "model_router_registry": router_registry,
+                    "immutable_request_state": type(
+                        "ImmutableState",
+                        (),
+                        {"provider_ids": frozenset(), "trusted_proxies": frozenset()},
+                    )(),
+                    "config": AppConfig(),
+                    "catalog": type("Catalog", (), {"cache": object()})(),
+                    "transcoder_policy": object(),
+                },
+            )()
+            self.released = False
+
+        async def release(self) -> None:
+            self.released = True
+
+    leases: list[FakeLease] = []
+
+    async def acquire() -> FakeLease:
+        lease = FakeLease()
+        lease.runtime.coordinator = coordinator
+        leases.append(lease)
+        return lease
+
+    coordinator = FakeCoordinator()
+    process = SimpleNamespace(model_router_affinity=affinity)
+    manager = SimpleNamespace(acquire=acquire)
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            runtime_manager=manager,
+            config=AppConfig(),
+            process=process,
+        )
+    )
+
+    monkeypatch.setattr(
+        "eggpool.api.proxy_request._check_context_limits",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "eggpool.api.proxy_request._prepare_transcode_preflight",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "eggpool.api.proxy_request.classify_thinking_request",
+        lambda *args: None,
+    )
+    monkeypatch.setattr(
+        "eggpool.api.proxy_request.estimate_reservation_tokens",
+        lambda body: 1,
+    )
+
+    async def request_body() -> dict[str, object]:
+        return {
+            "type": "http.request",
+            "body": (
+                b'{"model":"virtual","messages":[{"role":"user","content":"hello"}]}'
+            ),
+            "more_body": False,
+        }
+
+    endpoint = ProxyEndpointConfig(
+        protocol="openai",
+        request_label="test",
+        error_response=lambda status_code, message, error_type="server_error": (
+            JSONResponse(
+                {"message": message, "type": error_type}, status_code=status_code
+            )
+        ),
+        not_found_error_type="not_found",
+        service_error_type="server_error",
+    )
+
+    for _ in range(2):
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/v1/chat/completions",
+                "raw_path": b"/v1/chat/completions",
+                "query_string": b"",
+                "headers": [(b"content-type", b"application/json")],
+                "client": ("127.0.0.1", 1234),
+                "server": ("127.0.0.1", 11300),
+                "scheme": "http",
+                "app": app,
+            },
+            request_body,
+        )
+        response = await handle_proxy_request(request, endpoint)
+        assert response.status_code == 200
+
+    assert selector_calls == expected_selector_calls
+    assert parent_models == ["model-fast", "model-fast"]
+    assert affinity.stats.hits == expected_hits
 
 
 @pytest.mark.asyncio

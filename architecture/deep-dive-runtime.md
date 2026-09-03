@@ -45,7 +45,7 @@ Runtime generation ownership:
 - **`RuntimeManager`**: owns active/retiring generation slots
 - **`RuntimeGeneration`**: immutable frozen-dataclass snapshot
 - **`GenerationLease`**: request-path access to a generation
-- **`ProcessRuntime`**: holds process-owned containers (DB connections) that outlive generations
+- **`ProcessRuntime`**: holds process-owned containers (DB connections and bounded learned/affinity state) that outlive generations
 - **Generation builder**: constructs candidate generations for live reload
 
 `ModelRouterRegistry` is generation-owned and compiled by
@@ -60,6 +60,16 @@ passes immutable resolved provider profiles to its coordinator. Candidate
 fingerprints include structural surface/path/auth-shape/header facts but never
 credential values, so a rehash with changed wire definitions cannot reuse the
 old learned preference.
+
+`ProcessRuntime.model_router_affinity` is a separate process-owned bounded
+TTL/LRU cache for sticky virtual-model decisions. It stores only a route ID,
+route label, concrete model, router fingerprint, hashed session identity, and
+monotonic expiry. The 4096-entry default and keyed single-flight map are
+event-loop-local; no sweeper, database table, external cache, or cross-process
+lock exists. A generation swap keeps an entry reachable only when the new
+compiled router has the same semantic fingerprint. An invalid candidate never
+publishes a new registry, so the active generation and affinity behavior stay
+unchanged.
 
 Request-path code obtains `GenerationLease` via `wrap_stream_with_lease` or `leased_runtime`. A generation swap never interrupts in-flight requests.
 
@@ -188,6 +198,7 @@ failed durable clear leaves the current in-memory suppression intact.
 | Health manager | `RuntimeGeneration` | No (rebuilt) |
 | Quota estimator | `RuntimeGeneration` | No (rebuilt) |
 | Model-router registry | `RuntimeGeneration` | No (rebuilt) |
+| Model-router affinity | `ProcessRuntime` | Yes, fingerprint-partitioned |
 | Finalization supervisor and accepted terminal jobs | `RuntimeGeneration` | No (retained until convergence) |
 
 ## Key Invariants

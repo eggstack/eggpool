@@ -1,7 +1,7 @@
 # Plan 165 — Model-Router Affinity, Cache Locality, and Rehash Continuity
 
 Date: 2026-09-03
-Status: ready for implementation
+Status: complete (verified 2026-09-03)
 Planning baseline: `525189763a3a6d506e9e8001e2426c9bd9a247fe`
 Parent roadmap: `plans/162-optional-llm-model-router-selection-roadmap.md`
 Depends on: `plans/163-model-router-config-registry-and-virtual-foundations.md`, `plans/164-model-router-selector-dispatch-and-minified-prompt.md`
@@ -338,3 +338,22 @@ Plan 165 is complete when:
 7. Downstream target failures do not trigger semantic model spray.
 8. The EggPool-only session header cannot leak upstream.
 9. No DB migration, dependency, cross-process protocol, or production-style distributed cache has been added.
+
+## Closure evidence
+
+Implemented the process-owned bounded model-router affinity cache, explicit and
+conservative automatic session identities, keyed single-flight selection, and
+public virtual-model dispatch through the existing concrete coordinator path.
+The EggPool-only session header is removed before upstream dispatch. Staged
+rehash integration verifies unchanged fingerprints retain affinity, semantic
+router changes invalidate it, and invalid candidates leave the active
+generation unchanged. Documentation and agent guidance were updated for the
+ownership, privacy, routing, and reload contracts.
+
+Local verification passed:
+
+- `ruff format --check src/ tests/ scripts/`
+- `ruff check src/ tests/ scripts/`
+- `pyright src/ scripts/`
+- `pytest tests/smoke/ -q --tb=short --maxfail=1` — 14 passed
+- Full suite — 7,878 passed, 42 skipped

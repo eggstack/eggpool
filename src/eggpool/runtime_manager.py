@@ -65,6 +65,8 @@ table and ``_RUNTIME_OWNED_APP_STATE_ATTRS``.
 - ``RuntimeMetricsService`` -- reads manager diagnostics.
 - ``DashboardTelemetry`` -- 30s in-memory cache.
 - ``UpdateChecker`` -- 24h PyPI probe.
+- ``ModelRouterAffinity`` -- bounded process-local semantic route cache;
+  survives generation swaps and is never persisted.
 
 **Generation-owned** (rebuilt/closed on config change):
 
@@ -501,6 +503,7 @@ class ProcessRuntime:
     event_loop_lag_monitor: Any = None  # noqa: ANN401 — EventLoopLagMonitor
     readiness_probe: Any = None  # noqa: ANN401 — DatabaseWritableProbe
     wire_profile_resolver: Any = None  # noqa: ANN401 — process-owned runtime state
+    model_router_affinity: Any = None  # noqa: ANN401 — process-owned route cache
     model_info: Any = None  # noqa: ANN401 — ModelInfoService
 
 

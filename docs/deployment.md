@@ -261,6 +261,11 @@ use `eggpool restart` for those. A mixed live + restart-required
 change is rejected entirely (exit code `2`); no partial application.
 The CLI is fail-closed and never implicitly restarts the service.
 
+Sticky model-router affinity remains process-local across these live swaps only
+when the router's semantic fingerprint is unchanged. Policy edits naturally
+make prior decisions unreachable; no persisted cache state or restart step is
+required.
+
 **Control socket**: The running server listens on a Unix-domain socket
 at `~/.local/state/eggpool/eggpool.sock` with `0o600` permissions
 (owner read/write only). The CLI connects to this socket to issue

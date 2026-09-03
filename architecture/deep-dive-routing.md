@@ -6,11 +6,15 @@ Back to [Overview](overview.md)
 
 Quota-aware routing selects the best upstream account for each request, balancing load across multiple accounts within the same provider and across providers with different priority tiers.
 
-Semantic model-router selection is a separate pre-routing concern. When used,
-`ModelRouterSelector` chooses a configured concrete model with a bounded exact
-route-ID protocol; the coordinator then routes that selector request and the
-eventual concrete target through the ordinary account/quota path. Selector
-policy, prompt content, and route outcomes never enter `QuotaFairScorer`.
+Semantic model-router selection is a separate pre-routing concern. When a
+request names an exact virtual alias, `ModelRouterSelector` chooses a
+configured concrete model with a bounded exact route-ID protocol; the
+coordinator then routes that selector request and the eventual concrete target
+through the ordinary account/quota path. Sticky routers may satisfy that
+semantic decision from the process-owned affinity cache, but the cache never
+pins an account/provider and never enters `QuotaFairScorer`. Selector policy,
+prompt content, session identities, and route outcomes are not routing-score
+inputs.
 
 ## Routing Architecture
 
@@ -18,6 +22,12 @@ policy, prompt content, and route outcomes never enter `QuotaFairScorer`.
 Request arrives with model ID
     │
     ▼
+┌────────────────────────────┐
+│ Exact virtual alias?       │
+│ affinity hit, or selector  │
+│ → concrete model target    │
+└──────────────┬─────────────┘
+               │
 ┌──────────────────────────┐
 │ parse_model_provider()   │
 │ → model_id, provider_id  │
@@ -101,6 +111,18 @@ Rotor position map capped at 4096 entries (`_ROTOR_HARD_CAP`). Eviction is LRU (
 ### `routing/provider.py`
 
 `parse_model_provider()` — canonical model/provider suffix parser. Input: `model-id/provider-id`. Output: `(model_id, provider_id)`.
+
+### `model_router/affinity.py` — Semantic affinity
+
+`ModelRouterAffinity` is a process-owned, event-loop-local TTL/LRU cache with a
+hard cap of 4096 entries and bounded lazy cleanup. Keys are
+`(virtual_model, router_fingerprint, session_digest)`. Explicit session headers
+are SHA-256 digests; automatic identities use only bounded system/developer
+text and the first user text on Chat/Messages surfaces. Responses requires the
+explicit header for cross-request stickiness. Concurrent misses single-flight
+one selector call per key; cancelled leaders release followers to retry. A
+concrete target's downstream health or availability never changes the cached
+semantic decision.
 
 ### `routing/config.py`
 

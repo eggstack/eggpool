@@ -137,7 +137,13 @@ timeout all resolve to the configured default route. Parent
 reservation/attempt cleanup to complete without dispatching a default request.
 Selector child requests are ordinary durable usage/accounting events; semantic
 selection diagnostics do not replace or double-count the eventual target
-request. Public virtual-model dispatch remains a later integration phase.
+request. Exact virtual aliases are resolved before the parent request's
+concrete model preflight. For sticky routers, a process-owned affinity hit
+skips selector inference; a miss single-flights the first selection and stores
+only the derived concrete route. The parent then enters ordinary concrete
+catalog, health, account, quota, persistence, and retry handling. A target
+failure does not trigger semantic reselection, and the local session header is
+removed from upstream request headers.
 - Upstream failure observation/classification delegates to `failure_helpers.py`
 - Endpoint validation and protocol resolution delegate to `upstream_helpers.py`
 - Static/timing helpers delegate to `static_helpers.py`

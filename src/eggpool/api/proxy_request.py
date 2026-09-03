@@ -34,6 +34,14 @@ from eggpool.errors import (
     UpstreamExhaustedError,
 )
 from eggpool.jsonx import loads as jsonx_loads
+from eggpool.model_router.affinity import (
+    AFFINITY_SESSION_HEADER,
+    ModelRouterAffinity,
+    automatic_session_identity,
+    session_identity_from_header,
+)
+from eggpool.model_router.registry import ModelRouterRegistry
+from eggpool.model_router.selector import ModelRouterSelector
 from eggpool.request.body import encode_json_body, read_body_limited
 from eggpool.request.coordinator import (
     PreparedProxyResponse,
@@ -528,6 +536,11 @@ async def handle_proxy_request(
         )
     coordinator = lease.runtime.coordinator
     span_recorder = getattr(lease.runtime, "dispatch_span_recorder", None)
+    model_router_affinity = getattr(
+        getattr(request.app.state, "process", None),
+        "model_router_affinity",
+        None,
+    )
 
     # Plan 029, Workstream H: request-coherent span sampling.
     # The sampling decision is deterministic and stable per request ID
@@ -546,6 +559,7 @@ async def handle_proxy_request(
             coordinator,
             span_recorder,
             lease,
+            model_router_affinity=model_router_affinity,
             request_received_monotonic_ns=(
                 getattr(
                     getattr(request, "state", None),
@@ -593,6 +607,7 @@ async def _handle_proxy_request_inner(
     span_recorder: DispatchSpanRecorder | None,
     lease: GenerationLease,
     *,
+    model_router_affinity: ModelRouterAffinity | None = None,
     request_received_monotonic_ns: int | None = None,
     proxy_request_id: str | None = None,
 ) -> Response:
@@ -643,6 +658,17 @@ async def _handle_proxy_request_inner(
             error_type="invalid_request_error",
         )
 
+    # Responses is intentionally stateless. Reject stateful fields before a
+    # virtual router can spend selector work or create a child request.
+    if endpoint.request_surface == "responses":
+        rejection = _validate_responses_stateless(payload)
+        if rejection is not None:
+            return endpoint.error_response(
+                status_code=400,
+                message=rejection,
+                error_type="invalid_request_error",
+            )
+
     # Provider id parsing relies on the leased generation's precomputed
     # provider set (built from the registry when the generation was
     # constructed).  Reading through ``request.app.state.config`` would
@@ -650,6 +676,96 @@ async def _handle_proxy_request_inner(
     known_providers = lease.runtime.immutable_request_state.provider_ids
     with _span(span_recorder, SPAN_MODEL_PARSE):
         model_id, provider_id = parse_model_provider(model_value, known_providers)
+
+    client_surface = _canonical_surface_for_endpoint(endpoint)
+    try:
+        canonical_request = canonical_request_from_mapping(
+            payload,
+            client_surface=client_surface,
+            protocol=endpoint.protocol,
+        )
+    except ValueError as exc:
+        return endpoint.error_response(
+            status_code=400,
+            message=str(exc),
+            error_type="invalid_request_error",
+        )
+
+    router = None
+    if provider_id is None:
+        registry = getattr(lease.runtime, "model_router_registry", None)
+        if isinstance(registry, ModelRouterRegistry):
+            router = registry.get(model_id)
+
+    router_metadata: dict[str, Any] = {}
+    if router is not None:
+        selector = ModelRouterSelector(
+            coordinator,
+            known_provider_ids=known_providers,
+        )
+        identity = None
+        session_header = request.headers.get(AFFINITY_SESSION_HEADER)
+        if session_header is not None:
+            identity = session_identity_from_header(session_header)
+        else:
+            identity = automatic_session_identity(
+                canonical_request,
+                client_surface=client_surface,
+            )
+
+        if (
+            router.sticky
+            and identity is not None
+            and isinstance(model_router_affinity, ModelRouterAffinity)
+        ):
+            resolution = await model_router_affinity.resolve(
+                router,
+                identity,
+                lambda: selector.select(
+                    router,
+                    payload,
+                    client_surface=client_surface,
+                    protocol=endpoint.protocol,
+                ),
+            )
+            selected_model = resolution.decision.concrete_model
+            route_id = resolution.decision.route_id
+            route_label = resolution.decision.route_label
+            source = resolution.decision.source
+            router_metadata = {
+                "virtual_model": router.virtual_model,
+                "route_id": route_id,
+                "route_label": route_label,
+                "decision_source": source,
+                "affinity_hit": resolution.cache_hit,
+                "session_source": identity.source,
+            }
+        else:
+            selected = await selector.select(
+                router,
+                payload,
+                client_surface=client_surface,
+                protocol=endpoint.protocol,
+            )
+            selected_model = selected.concrete_model
+            router_metadata = {
+                "virtual_model": router.virtual_model,
+                "route_id": selected.route_id,
+                "route_label": selected.route_label,
+                "decision_source": selected.source,
+                "affinity_hit": False,
+                "session_source": (
+                    identity.source if identity is not None else "no_session"
+                ),
+            }
+        payload = dict(payload)
+        payload["model"] = selected_model
+        model_id, provider_id = parse_model_provider(selected_model, known_providers)
+        canonical_request = canonical_request_from_mapping(
+            payload,
+            client_surface=client_surface,
+            protocol=endpoint.protocol,
+        )
 
     # Normalize the payload's model field to the parsed model_id BEFORE the
     # transcode preflight runs. The preflight caches the translated payload
@@ -670,20 +786,6 @@ async def _handle_proxy_request_inner(
     # encoder can rewrite reasoning controls.  Retries and alternate target
     # surfaces must start from this canonical request, never from a prior
     # provider payload generation.
-    client_surface = _canonical_surface_for_endpoint(endpoint)
-    try:
-        canonical_request = canonical_request_from_mapping(
-            preflight_payload,
-            client_surface=client_surface,
-            protocol=endpoint.protocol,
-        )
-    except ValueError as exc:
-        return endpoint.error_response(
-            status_code=400,
-            message=str(exc),
-            error_type="invalid_request_error",
-        )
-
     # Preflight context limit check (guardrail, not primary enforcement).
     catalog = lease.runtime.catalog
     transcoder_policy = lease.runtime.transcoder_policy
@@ -797,20 +899,6 @@ async def _handle_proxy_request_inner(
         )
     is_stream = bool(stream_value)
 
-    # The Responses surface is stateless. Stateful Responses features would
-    # tie a request to a single upstream's response identity, which cannot survive
-    # EggPool's account failover. Reject them explicitly before durable
-    # account selection so the client never silently believes provider
-    # state is being preserved.
-    if endpoint.request_surface == "responses":
-        rejection = _validate_responses_stateless(payload)
-        if rejection is not None:
-            return endpoint.error_response(
-                status_code=400,
-                message=rejection,
-                error_type="invalid_request_error",
-            )
-
     request_id = proxy_request_id or str(uuid.uuid4())
     transcode_ctx = TranscodeContext(
         request_id=request_id,
@@ -906,6 +994,9 @@ async def _handle_proxy_request_inner(
             estimated_context_input_tokens=precomputed_context_input_tokens,
             parsed_payload=parsed_payload,
             provider_bound=provider_bound,
+            client_metadata=(
+                {"model_router": router_metadata} if router_metadata else {}
+            ),
         )
 
     logger.debug(

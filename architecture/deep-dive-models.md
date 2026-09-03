@@ -20,7 +20,8 @@ src/eggpool/model_router/
 ├── config.py           # Structural virtual-router config models
 ├── registry.py         # Immutable compiled generation registry
 ├── prompt.py           # Bounded deterministic selector prompt/parser
-└── selector.py         # Coordinator-backed selector service
+├── selector.py         # Coordinator-backed selector service
+└── affinity.py         # Process-local bounded sticky-route cache
 
 src/eggpool/request/internal_dispatch.py # Internal concrete context builder
 ```
@@ -85,6 +86,10 @@ class AppConfig(BaseModel):
   compiled policies; it preserves exact alias spelling and does not query the
   model catalog. Selector prompt compilation is deterministic and bounded;
   selector execution uses child request IDs and ordinary coordinator accounting.
+- Affinity identities are explicit SHA-256 header digests or conservative
+  automatic Chat/Messages prefix digests; raw session values and request text
+  are never retained or persisted. TTL/LRU entries are process-owned and
+  fingerprint-partitioned across generations.
 - Config file parsing with `tomllib`
 
 ### API Models (`api.py`)

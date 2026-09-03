@@ -71,6 +71,15 @@ Orchestrates the staged reload sequence:
 
 The reload manager coordinates with `RuntimeManager`, `ReloadTransaction`, and `RequestFinalizationSupervisor` to ensure zero-downtime transitions.
 
+Model-router affinity is process-owned, so an unrelated live configuration
+change preserves existing sticky decisions when the newly compiled router has
+the same semantic fingerprint. Changing a router's selector, default, target
+set, descriptions, or other fingerprint input makes old entries unreachable
+without a cache rewrite. Removing a router makes its old entries unreachable
+because the new generation no longer resolves the alias. A candidate that
+fails validation or construction is never published and cannot disturb the
+active generation or its affinity cache.
+
 ### Accepted Finalization (`accepted_finalization.py`)
 
 Tracks post-acceptance finalization lifecycle for committed reloads. For each accepted reload, a process-owned `AcceptedReloadFinalizationJob` executes idempotent steps (ownership transfer, mirror update, transition finalization, observer reporting, retirement scheduling, transaction completion) in order. Completed steps are not repeated on retry; failure leaves the job registered at the exact failed step; cancellation preserves the job so retry can resume.

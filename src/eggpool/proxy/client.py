@@ -49,7 +49,15 @@ def build_upstream_auth_headers(
     return {"Authorization": f"Bearer {upstream_api_key}"}
 
 
-_EXTRA_DROP_HEADERS = frozenset({"host", "content-length"})
+_EXTRA_DROP_HEADERS = frozenset(
+    {
+        "host",
+        "content-length",
+        # EggPool's semantic affinity identity is local control-plane input;
+        # never forward it to a provider even when the client supplied it.
+        "x-eggpool-route-session",
+    }
+)
 
 
 def sanitize_request_headers(headers: dict[str, str]) -> dict[str, str]:

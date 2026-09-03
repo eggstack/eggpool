@@ -84,8 +84,9 @@ catalog_withdrawal_policy = "preserve_until_health"
 
 # Optional model-router definitions. These create exact client-visible virtual
 # model IDs and compile immutable selector policies during generation builds.
-# The selector component consumes this registry directly; public virtual-model
-# request dispatch is added in a later model-router phase.
+# Sticky routers retain only bounded process-local model affinity. Use the
+# X-EggPool-Route-Session request header when clients have a stable conversation
+# ID; the value is hashed and is never forwarded to providers.
 # [model_routers.implementer]
 # selector_model = "qwen3-0.6b/local"
 # default_model = "muse-spark-1.3"

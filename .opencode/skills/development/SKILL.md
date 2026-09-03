@@ -70,6 +70,16 @@ normal coordinator child dispatch, default fallback after selector errors or
 timeouts, and propagation of parent cancellation. Selector tests must use fake
 coordinator/provider responses; no live local model is required.
 
+Model-router affinity changes should also run
+`tests/unit/test_model_router_affinity.py` and the header-forwarding suite.
+Verify explicit identities are hashed and bounded, automatic Chat/Messages
+prefixes remain stable as histories grow, Responses uses explicit identity,
+TTL/LRU cleanup is bounded, router fingerprints partition decisions, sticky
+false bypasses the cache, and concurrent misses single-flight without leaked
+coordination state. Rehash integration must exercise the staged generation
+publication path and prove unchanged fingerprints retain affinity while policy
+changes and invalid candidates do not.
+
 Model-info lifecycle changes should run the model-info source/enrichment suites,
 the runtime-task inventory, and the integration lifecycle path. Verify both
 halves of the task contract: no standalone `model_info_refresh` task exists,

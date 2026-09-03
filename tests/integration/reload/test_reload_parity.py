@@ -10,6 +10,13 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from eggpool.model_router.affinity import (
+    ModelRouterAffinity,
+    session_identity_from_header,
+)
+from eggpool.model_router.config import ModelRouterConfig
+from eggpool.model_router.registry import ModelRouterRegistry
+from eggpool.model_router.selector import ModelSelection
 from tests.support.reload_faults import FaultType, ReloadFaultInjector
 from tests.support.runtime_snapshot import RuntimeSnapshot
 
@@ -111,3 +118,143 @@ async def test_reload_generator_id_is_monotonic(
 
     for i in range(1, len(ids)):
         assert ids[i] > ids[i - 1], f"Generation IDs not monotonic: {ids}"
+
+
+@pytest.mark.asyncio()
+@pytest.mark.integration()
+async def test_staged_rehash_preserves_and_invalidates_router_affinity(
+    reload_harness: ReloadHarness,
+) -> None:
+    """Generation publication preserves only semantically compatible affinity."""
+    from tests.support.reload_harness import make_initial_config
+
+    router_config = ModelRouterConfig.model_validate(
+        {
+            "selector_model": "selector/local",
+            "default_model": "model-default",
+            "routes": {
+                "default": {"model": "model-default", "description": "Default"},
+                "fast": {"model": "model-fast", "description": "Fast"},
+            },
+        }
+    )
+    configured = reload_harness.candidate_config.model_copy(
+        update={"model_routers": {"virtual": router_config}}
+    )
+    cache = ModelRouterAffinity()
+    reload_harness.process.model_router_affinity = cache
+    identity = session_identity_from_header("rehash-session")
+    assert identity is not None
+    initial_router = ModelRouterRegistry.from_config(configured.model_routers).get(
+        "virtual"
+    )
+    assert initial_router is not None
+    route = initial_router.route_by_id["1"]
+    calls = 0
+
+    async def select_initial() -> ModelSelection:
+        nonlocal calls
+        calls += 1
+        return ModelSelection(
+            virtual_model="virtual",
+            route_id=route.route_id,
+            route_label=route.label,
+            concrete_model=route.model,
+            source="selector",
+            selector_attempts=1,
+            selector_latency_ms=0.1,
+        )
+
+    await cache.resolve(initial_router, identity, select_initial)
+    assert calls == 1
+
+    assert (await reload_harness.reload(configured)).ok is True
+    active_router = (
+        reload_harness.runtime_manager.active_snapshot().model_router_registry.get(
+            "virtual"
+        )
+    )
+    assert active_router is not None
+
+    async def must_not_select() -> ModelSelection:
+        raise AssertionError("unchanged router fingerprint should hit affinity")
+
+    unchanged = await cache.resolve(active_router, identity, must_not_select)
+    assert unchanged.cache_hit is True
+
+    unrelated_change = configured.model_copy(
+        update={"routing": make_initial_config().routing}
+    )
+    assert (await reload_harness.reload(unrelated_change)).ok is True
+    active_router = (
+        reload_harness.runtime_manager.active_snapshot().model_router_registry.get(
+            "virtual"
+        )
+    )
+    assert active_router is not None
+    assert (
+        await cache.resolve(active_router, identity, must_not_select)
+    ).cache_hit is True
+
+    changed_router_config = ModelRouterConfig.model_validate(
+        {
+            **router_config.model_dump(),
+            "routes": {
+                "default": {
+                    "model": "model-default",
+                    "description": "Changed policy",
+                },
+                "fast": {"model": "model-fast", "description": "Fast"},
+            },
+        }
+    )
+    changed_config = configured.model_copy(
+        update={"model_routers": {"virtual": changed_router_config}}
+    )
+    assert (await reload_harness.reload(changed_config)).ok is True
+    changed_router = (
+        reload_harness.runtime_manager.active_snapshot().model_router_registry.get(
+            "virtual"
+        )
+    )
+    assert changed_router is not None
+    reselected = await cache.resolve(changed_router, identity, select_initial)
+    assert reselected.cache_hit is False
+    assert calls == 2
+
+    invalid_routes = {
+        f"route-{index:03d}": {
+            "model": "model-default",
+            "description": "x" * 512,
+        }
+        for index in range(140)
+    }
+    invalid_config = changed_config.model_copy(
+        update={
+            "model_routers": {
+                "virtual": ModelRouterConfig.model_validate(
+                    {
+                        "selector_model": "selector/local",
+                        "default_model": "model-default",
+                        "routes": invalid_routes,
+                    }
+                )
+            }
+        }
+    )
+    assert (await reload_harness.reload(invalid_config)).ok is False
+    assert (
+        reload_harness.runtime_manager.active_snapshot().model_router_registry.get(
+            "virtual"
+        )
+        is changed_router
+    )
+
+    removed_config = changed_config.model_copy(update={"model_routers": {}})
+    assert (await reload_harness.reload(removed_config)).ok is True
+    assert (
+        reload_harness.runtime_manager.active_snapshot().model_router_registry.get(
+            "virtual"
+        )
+        is None
+    )

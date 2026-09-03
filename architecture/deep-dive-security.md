@@ -52,6 +52,15 @@ Constant-time API key comparison to prevent timing attacks:
 - `raw_authorization` mode: verbatim value
 - `none` mode: no auth header
 
+### Model-router session identity
+
+`X-EggPool-Route-Session` is an EggPool-only request header. It is accepted
+only as a bounded, control-character-free opaque value for sticky virtual
+routers, hashed immediately with SHA-256, and never logged or persisted. The
+upstream request sanitizer drops it case-insensitively, so it cannot leak to a
+provider. Invalid or oversized values simply disable explicit affinity for
+that request; they do not turn into a fallback identity.
+
 ### Bearer-Prefix Guard
 
 `AppConfig.validate_account_credentials()` rejects API keys beginning with `Bearer` for providers using `auth.mode = "bearer"`. Prevents double-scheme auth errors.
