@@ -86,6 +86,14 @@ _SIBLING_THINKING_CAPABILITY = {
     },
 }
 
+_MUSE_WIRE_SURFACES = {
+    "openai_responses": {
+        "path_template": "/responses",
+        "priority": 10,
+        "auth": {"mode": "bearer"},
+    },
+}
+
 
 _MUSE_SPEC = RuntimeAppSpec(
     account_names=("rt-acct-1", "rt-acct-2"),
@@ -119,8 +127,10 @@ _MUSE_SPEC = RuntimeAppSpec(
                 ),
             ),
             account_names=("rt-acct-1", "rt-acct-2"),
+            wire_surfaces=_MUSE_WIRE_SURFACES,
         ),
     ),
+    wire_runtime_enabled=True,
 )
 
 
@@ -140,16 +150,17 @@ async def muse_app(
         await result.httpx_client.aclose()
 
 
-def _openai_success(model_id: str, content: str) -> dict[str, Any]:
+def _responses_success(model_id: str, content: str) -> dict[str, Any]:
     return {
-        "id": f"chat-{model_id}-ok",
-        "object": "chat.completion",
+        "id": f"response-{model_id}-ok",
+        "object": "response",
+        "status": "completed",
         "model": model_id,
-        "choices": [
+        "output": [
             {
-                "index": 0,
-                "message": {"role": "assistant", "content": content},
-                "finish_reason": "stop",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": content}],
             }
         ],
         "usage": {
@@ -188,9 +199,10 @@ class TestMuseSparkRouting:
         async with httpx.AsyncClient(
             transport=transport, base_url="http://testserver"
         ) as client:
-            respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+            respx.post(f"{UPSTREAM_BASE}/responses").mock(
                 return_value=httpx.Response(
-                    200, json=_openai_success("muse-spark-1.2-contributor", "Hi!")
+                    200,
+                    json=_responses_success("muse-spark-1.2-contributor", "Hi!"),
                 )
             )
 
@@ -235,7 +247,7 @@ class TestMuseSparkRouting:
             health_mgr = muse_app.state.health_manager
 
             # All upstream calls for muse-spark return 500.
-            respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+            respx.post(f"{UPSTREAM_BASE}/responses").mock(
                 return_value=httpx.Response(500, json=_openai_500())
             )
 
@@ -283,9 +295,9 @@ class TestMuseSparkRouting:
                 assert health_mgr.is_model_healthy(acct, "sibling-model") is True
 
             # --- Sibling model actually works end-to-end ---
-            respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+            respx.post(f"{UPSTREAM_BASE}/responses").mock(
                 return_value=httpx.Response(
-                    200, json=_openai_success("sibling-model", "Sibling OK")
+                    200, json=_responses_success("sibling-model", "Sibling OK")
                 )
             )
             sibling_resp = await client.post(
@@ -324,7 +336,7 @@ class TestMuseSparkRouting:
         async with httpx.AsyncClient(
             transport=transport, base_url="http://testserver"
         ) as client:
-            respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(
+            respx.post(f"{UPSTREAM_BASE}/responses").mock(
                 return_value=httpx.Response(500, json=_openai_500())
             )
 

@@ -42,6 +42,9 @@ pytestmark = [
 ]
 
 _OPENCODE_GO_BASE = "https://opencode.ai/zen/go/v1"
+# Re-verified against https://dev.opencode.ai/docs/go/ on 2026-09-03.
+# These are acceptance fixtures, not production dispatch tables; the
+# provider's catalog and declared wire profiles remain authoritative.
 _SURFACE_CONFIG = {
     "openai_chat_completions": {
         "path_template": "/chat/completions",
@@ -270,6 +273,40 @@ async def test_opencode_go_streams_have_native_terminal_evidence(
 
 
 @pytest.mark.asyncio()
+async def test_opencode_go_anthropic_client_reaches_muse_responses(
+    live_app: tuple[FastAPI, list[Any]],
+) -> None:
+    """A public Messages request proves the real cross-surface path."""
+    app, observations = live_app
+    api_key = os.environ["EGGPOOL_E2E_OPENCODE_GO_API_KEY"]
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        timeout=httpx.Timeout(180.0),
+    ) as client:
+        response = await client.post(
+            "/v1/messages",
+            headers=_headers(api_key),
+            json={
+                "model": "muse-spark-1.2-contributor",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "Say live ok."}],
+            },
+        )
+    assert response.status_code == 200, response.text
+    observation = next(
+        item
+        for item in reversed(observations)
+        if item.model_id == "muse-spark-1.2-contributor"
+    )
+    assert observation.path == "/responses"
+    assert observation.wire_surface == "openai_responses"
+    assert observation.streaming is False
+    assert app.state.health_manager.is_account_healthy("live-account")
+
+
+@pytest.mark.asyncio()
 async def test_opencode_go_reasoning_shapes_are_surface_native(
     live_app: tuple[FastAPI, list[Any]],
 ) -> None:
@@ -330,10 +367,13 @@ async def test_opencode_go_invalid_key_isolated_from_valid_account(
                     "good-account": "REAL_RUNTIME_KEY",
                 },
                 wire_surfaces=_SURFACE_CONFIG,
+                account_weights={"bad-account": 1000.0, "good-account": 0.001},
             ),
         ),
         outbound_observer=observations.append,
         wire_runtime_enabled=True,
+        # The large weight difference makes the deliberately invalid account
+        # the first routing candidate without adding a production test hook.
     )
     result = await build_runtime_app(spec, tmp_path=tmp_path)
     try:
@@ -348,20 +388,29 @@ async def test_opencode_go_invalid_key_isolated_from_valid_account(
                 headers=_headers(good_key),
                 json=_payload("mimo-v2.5"),
             )
-            if not any(item.account_id == "bad-account" for item in observations):
-                pytest.skip("routing selected the valid account before the bad account")
-            assert response.status_code == 200, response.text
-            follow_up = await client.post(
-                "/v1/chat/completions",
-                headers=_headers(good_key),
-                json=_payload("mimo-v2.5"),
-            )
-            assert follow_up.status_code == 200, follow_up.text
-
-        bad_health = result.health_manager.get_health_stats("bad-account")
-        good_health = result.health_manager.get_health_stats("good-account")
-        assert bad_health["health_state"] == "authentication_failed"
-        assert good_health["is_healthy"] is True
+            assert observations, "the invalid account must be attempted first"
+            assert observations[0].account_id == "bad-account"
+            bad_health = result.health_manager.get_health_stats("bad-account")
+            good_health = result.health_manager.get_health_stats("good-account")
+            assert good_health["is_healthy"] is True
+            if bad_health["health_state"] == "authentication_failed":
+                assert response.status_code == 200, response.text
+                assert any(item.account_id == "good-account" for item in observations)
+                assert bad_health["is_healthy"] is False
+                assert bad_health["disabled_reason"] == "authentication_failed"
+                follow_up = await client.post(
+                    "/v1/chat/completions",
+                    headers=_headers(good_key),
+                    json=_payload("mimo-v2.5"),
+                )
+                assert follow_up.status_code == 200, follow_up.text
+            else:
+                # Some provider deployments return only an ambiguous 401 for
+                # an invalid key. Preserve that observed behavior: neither
+                # account may be poisoned, and no classifier assertion should
+                # manufacture explicit credential evidence.
+                assert response.status_code == 401, response.text
+                assert bad_health["is_healthy"] is True
     finally:
         await result.runtime_manager.shutdown()
         await result.db.disconnect()

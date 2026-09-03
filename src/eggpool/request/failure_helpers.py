@@ -19,7 +19,7 @@ Design rules
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from eggpool.errors import (
     AuthenticationError,
@@ -36,6 +36,9 @@ from eggpool.retry.classification import RetryClassifier
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    from eggpool.failure.observation import ProviderModelPresence
+
 
 def build_failure_observation(
     *,
@@ -51,6 +54,7 @@ def build_failure_observation(
     credential_configured: bool = False,
     alternate_wire_available: bool = False,
     dispatch_phase: str = "response_status",
+    provider_model_presence: ProviderModelPresence = "unknown",
 ) -> Any:  # FailureObservation
     """Normalize one upstream failure without retaining raw wire data."""
     from eggpool.failure import FailureObservation
@@ -61,6 +65,8 @@ def build_failure_observation(
         header_map,
         default=None,
     )
+    if source == "provider_catalog":
+        provider_model_presence = "absent_authoritative"
     return FailureObservation(
         source=source,
         status_code=status_code,
@@ -79,6 +85,8 @@ def build_failure_observation(
             status_code=status_code,
             credential_configured=credential_configured,
             alternate_wire_available=alternate_wire_available,
+            provider_model_presence=provider_model_presence,
+            dispatch_phase=dispatch_phase,
         ),
         retry_after_s=retry_after,
         response_started=response_started,
@@ -87,6 +95,7 @@ def build_failure_observation(
         downstream_started=downstream_started,
         credential_configured=credential_configured,
         alternate_wire_available=alternate_wire_available,
+        provider_model_presence=provider_model_presence,
         dispatch_phase=dispatch_phase,
     )
 
@@ -137,6 +146,7 @@ def classify_upstream_failure(
     headers: list[tuple[str, str]],
     body: bytes | None,
     alternate_wire_available: bool = False,
+    provider_model_presence: ProviderModelPresence = "unknown",
 ) -> tuple[UpstreamError | None, Any, Any]:
     """Classify an upstream response once for retry and shared effects.
 
@@ -150,6 +160,7 @@ def classify_upstream_failure(
         headers=headers,
         body=body,
         alternate_wire_available=alternate_wire_available,
+        provider_model_presence=provider_model_presence,
     )
     effects = classify_failure_effects(observation)
     return (

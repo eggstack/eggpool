@@ -250,9 +250,11 @@ Runtime wire-negotiation changes should also run
 migration, structural fingerprint invalidation, cooldown/TTL behavior without
 proactive traffic, provider/model single-flight, cancellation ownership,
 provider-only abnormal-dispatch gating, bounded cache eviction, real
-alternate-surface dispatch, and 429 throttling. Keep alternate-surface retry
-integration behind the canonical failure-effects gate and the shared attempt
-budget.
+alternate-surface dispatch, unhinted known-model migration, strong model
+absence controls, cross-surface streaming adaptation, and 429 throttling. Keep
+alternate-surface retry integration behind the canonical failure-effects gate
+and the shared attempt budget. Live provider tests remain opt-in; record runs
+and skips separately when closing a live acceptance plan.
 
 Request-estimation changes should run the request-limit, proxy-admission,
 prepared-transcode/tool-padding, and body-limit suites. Verify that an

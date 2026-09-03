@@ -25,6 +25,7 @@ class FailureSignal(StrEnum):
     WIRE_AUTH_MISMATCH = "wire_auth_mismatch"
     WIRE_SURFACE_UNSUPPORTED = "wire_surface_unsupported"
     WIRE_SCHEMA_MISMATCH = "wire_schema_mismatch"
+    MODEL_UNSUPPORTED_ON_SURFACE = "model_unsupported_on_surface"
     QUOTA_EXHAUSTED = "quota_exhausted"
     RATE_LIMITED = "rate_limited"
     MODEL_ABSENT = "model_absent"

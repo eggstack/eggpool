@@ -16,7 +16,7 @@ from eggpool.failure.applier import (
     FailureEffectProgress,
 )
 from eggpool.failure.effects import FailureDecision, FailureEffects
-from eggpool.failure.observation import FailureObservation
+from eggpool.failure.observation import FailureObservation, ProviderModelPresence
 from eggpool.failure.quarantine import (
     EvidenceProvenance,
     ModelQuarantine,
@@ -34,6 +34,7 @@ __all__ = [
     "FailureEffects",
     "FailureDecision",
     "FailureObservation",
+    "ProviderModelPresence",
     "FailureSignal",
     "ModelQuarantine",
     "QuarantineEntry",

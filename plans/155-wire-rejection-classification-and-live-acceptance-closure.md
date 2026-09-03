@@ -1,7 +1,7 @@
 # Plan 155 — Wire Rejection Classification and Live Acceptance Closure
 
 Date: 2026-09-03
-Status: ready after / alongside Plan 154
+Status: deterministic implementation and local CI closure complete; credentialed live acceptance pending
 Parent roadmap: `plans/147-dynamic-wire-surface-negotiation-roadmap.md`
 Corrects: Plans 151–153 acceptance gaps
 Depends on: current Plans 148–153 implementation; Plan 154 should land before final closure
@@ -488,3 +488,32 @@ Do not declare the wire-negotiation line complete if any of these remain true:
 9. Run focused + ordinary gates.
 10. Run the real OpenCode Go live suite with a supplied test key.
 11. Record exact closure evidence and stop this line unless live provider behavior reveals a new concrete defect.
+
+---
+
+# Closure record — 2026-09-03
+
+Deterministic implementation and verification completed:
+
+- Provider-scoped model presence now distinguishes a known model with a
+  surface-local unsupported response from strong/authoritative model absence.
+- Unhinted known-model relearning, strong-absence non-enumeration, both
+  coordinator-level cross-surface paths, cross-surface streaming, and the
+  Responses-native Muse fixture are covered by integration tests.
+- The OpenCode Go live matrix now includes a public Messages-to-Responses
+  request, weighted deterministic invalid-account ordering, and an immediate
+  valid follow-up. The current provider table was re-verified against the
+  official [OpenCode Go documentation](https://dev.opencode.ai/docs/go/) before
+  updating the acceptance fixture.
+
+Local evidence:
+
+- Focused regression suite: 103 passed.
+- Contract, URL, transcoder/proxy, and resolver suites: 180 passed.
+- Pyright (`src/`, `scripts/`): 0 errors, 0 warnings, 0 informations.
+- Opt-in OpenCode Go live command: 5 skipped because
+  `EGGPOOL_E2E_OPENCODE_GO_API_KEY` was not configured.
+
+Credentialed OpenCode Go and Gemini live acceptance remain pending until the
+corresponding test-only credentials are supplied. No live-provider claim is
+made from the clean skip.

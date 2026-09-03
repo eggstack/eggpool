@@ -38,7 +38,10 @@ Eight categories of upstream failure outcomes:
 
 - **Quota/rate-limit effects** (429, 402, and 403/409/422 with matching response signals) → `QUOTA_EXCEEDED`
 - **Auth effect** (`disable_auth`, only with explicit invalid/expired/revoked credential evidence) → `AUTH_FAILURE`; a bare or unknown 401 is client-visible and has no health effect
-- **Wire negotiation** (deterministic auth/surface/schema mismatch before response handoff) → an alternate wire candidate on the same account; it does not penalize account health
+- **Wire negotiation** (deterministic auth/surface/schema mismatch or weak
+  endpoint-local model rejection before response handoff) → an alternate wire
+  candidate on the same account; weak model wording requires provider-scoped
+  catalog knowledge that the model exists. It does not penalize account health.
 - **Model effect** → `MODEL_UNAVAILABLE`
 - **Retryable without those effects**: `TRANSIENT` when status ∈ {408, 502, 504}, otherwise `TEMPORARY`; transport failures classify as `TEMPORARY`
 - **Remaining 4xx**: `BAD_REQUEST`; anything else: `NEVER`
@@ -92,7 +95,12 @@ Upstream HTTP response
 - Retry decisions are attempt-scoped — each attempt independently classified
 - `AUTH_FAILURE` requires explicit credential evidence, disables only the failing account's credential state, and retries on another account with the same wire
 - A bare/unknown 401 never disables credentials, advances health, or cascades across accounts
-- `WIRE_AUTH_MISMATCH`, `WIRE_SURFACE_UNSUPPORTED`, and `WIRE_SCHEMA_MISMATCH` may reject only the selected wire candidate and retry the same account on an alternate candidate; the transition is allowed only before downstream response handoff
+- `WIRE_AUTH_MISMATCH`, `WIRE_SURFACE_UNSUPPORTED`, `WIRE_SCHEMA_MISMATCH`,
+  and `MODEL_UNSUPPORTED_ON_SURFACE` may reject only the selected wire
+  candidate and retry the same account on an alternate candidate; the
+  transition is allowed only before downstream response handoff. Strong
+  model absence remains `MODEL_UNAVAILABLE`/quarantine and does not trigger
+  surface enumeration.
 - `MODEL_UNAVAILABLE` retries across accounts — different accounts may have the model
 - `QUOTA_EXCEEDED` respects `retry_after` — no premature retry
 - Every upstream submission, including an alternate-wire submission, consumes the one shared budget of `1 + max_retries_before_stream`

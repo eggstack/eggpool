@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from eggpool.failure.signal import FailureSignal
+
+ProviderModelPresence = Literal["known", "unknown", "absent_authoritative"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +80,15 @@ class FailureObservation:
 
     alternate_wire_available: bool = False
     """Whether another configured wire candidate can serve this request."""
+
+    provider_model_presence: ProviderModelPresence = "unknown"
+    """Provider-scoped catalog/config knowledge for the requested model.
+
+    ``known`` means the selected provider currently advertises the model;
+    ``absent_authoritative`` is reserved for an explicit provider/catalog
+    withdrawal.  The default is ``unknown`` so generic callers cannot turn
+    incomplete metadata into surface negotiation.
+    """
 
     dispatch_phase: str = "response_status"
     """Bounded transport phase for retry-safety decisions.

@@ -30,6 +30,7 @@ def _obs(
     response_started: bool = True,
     downstream_started: bool = False,
     alternate_wire_available: bool = False,
+    provider_model_presence: str = "unknown",
     dispatch_phase: str = "response_status",
 ) -> FailureObservation:
     return FailureObservation(
@@ -47,6 +48,7 @@ def _obs(
         response_started=response_started,
         downstream_started=downstream_started,
         alternate_wire_available=alternate_wire_available,
+        provider_model_presence=provider_model_presence,  # type: ignore[arg-type]
         dispatch_phase=dispatch_phase,
     )
 
@@ -186,7 +188,32 @@ class TestFailureEffectsMatrix:
         assert fx.account_effect == "none"
         assert fx.model_effect == "none"
         assert fx.circuit_penalty is False
-        assert fx.persist_backoff is False
+
+    def test_known_model_unsupported_surface_retries_same_account(self) -> None:
+        obs = _obs(
+            status_code=401,
+            response_signal=FailureSignal.MODEL_UNSUPPORTED_ON_SURFACE,
+            alternate_wire_available=True,
+            provider_model_presence="known",
+        )
+        fx = classify_failure_effects(obs)
+        assert fx.retry_action == "alternate_wire_same_account"
+        assert fx.retry_scope == "same_account_other_wire"
+        assert fx.wire_effect == "reject_candidate"
+        assert fx.account_effect == "none"
+        assert fx.model_effect == "none"
+
+    def test_strong_model_absence_does_not_enumerate_surfaces(self) -> None:
+        obs = _obs(
+            status_code=404,
+            response_signal=FailureSignal.MODEL_ABSENT,
+            alternate_wire_available=True,
+        )
+        fx = classify_failure_effects(obs)
+        assert fx.retry_action == "other_account_same_wire"
+        assert fx.wire_effect == "none"
+        assert fx.model_effect == "quarantine"
+        assert fx.persist_backoff is True
 
     # --- HTTP 402 ---
 

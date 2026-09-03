@@ -227,6 +227,7 @@ def classify_failure_effects(obs: FailureObservation) -> FailureEffects:
             FailureSignal.WIRE_AUTH_MISMATCH,
             FailureSignal.WIRE_SURFACE_UNSUPPORTED,
             FailureSignal.WIRE_SCHEMA_MISMATCH,
+            FailureSignal.MODEL_UNSUPPORTED_ON_SURFACE,
         }
         and obs.alternate_wire_available
         and obs.dispatch_phase == "response_status"

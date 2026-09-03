@@ -69,10 +69,13 @@ failure-effects decision must authorize those transitions.
 
 Failure effects distinguish explicit credential invalidity from an ambiguous
 401. Only the former disables the selected account. Deterministic
-auth-header, surface, or schema rejection can suppress the selected wire
-candidate and authorize a same-account alternate before response handoff;
-429, quota, model, transport, generic validation, and 5xx outcomes do not
-invalidate a wire candidate.
+auth-header, surface, schema, or weak endpoint-local model rejection can
+suppress the selected wire candidate and authorize a same-account alternate
+before response handoff. Weak model wording is eligible only when the
+provider-scoped catalog/config entry knows the model; strong model absence and
+authoritative withdrawal retain model-unavailable behavior. 429, quota,
+transport, generic validation, and 5xx outcomes do not invalidate a wire
+candidate.
 
 ## Live provider verification
 
@@ -81,8 +84,12 @@ The opt-in live acceptance suite in
 OpenCode Go using a temporary runtime/database. Its optional outbound hook is
 attached at the real `client.send` boundary and emits only sanitized
 structural observations; it is not a persisted event table or a second
-routing system. Deterministic stale-profile migration, single-flight, rate
-limit, and failure-isolation behavior remains covered by fake-upstream tests.
+routing system. Deterministic stale-profile migration, unhinted-model
+classification, cross-surface coordinator paths, single-flight, rate-limit,
+and failure-isolation behavior remains covered by fake-upstream tests. The
+live suite includes a public Messages-to-Responses cross-surface check and
+deterministically routes its invalid-key account first using ordinary account
+weight configuration.
 Live provider calls are excluded from smoke tests and CI and must never be
 required for ordinary installation or release automation.
 

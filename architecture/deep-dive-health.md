@@ -124,6 +124,14 @@ credential-header or endpoint/surface/schema mismatch can produce a resolver-
 only wire rejection when an alternate candidate exists and the failure was
 observed before downstream response handoff; it never changes account health.
 
+Weak model wording is also negotiation-aware. When the selected provider's
+scoped catalog/config entry knows the model and the pre-handoff response says
+the model is unsupported on the selected endpoint, the observation carries
+`MODEL_UNSUPPORTED_ON_SURFACE` and may reject only that wire candidate. Strong
+absence wording (`model not found`, `unknown model`, `does not exist`, and
+equivalent authoritative withdrawal) remains model quarantine/withdrawal
+evidence and never enumerates alternate surfaces merely because they exist.
+
 Effect identity is the durable `(proxy_request_id, attempt_id)` pair. Component
 progress (`account`, `model`, `circuit`, `probe`, and durable backoff
 persistence) is retained by the attempt cleanup or finalization owner and is

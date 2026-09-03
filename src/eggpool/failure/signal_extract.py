@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from eggpool.failure.signal import FailureSignal
+
+if TYPE_CHECKING:
+    from eggpool.failure.observation import ProviderModelPresence
 from eggpool.health.health_manager import AUTH_FAILURE_ERROR_CLASSES
 from eggpool.jsonx import loads as jsonx_loads
 
@@ -39,15 +42,17 @@ _WIRE_AUTH_PATTERNS = (
     ),
     re.compile(r"\bx-api-key\s+required\b", re.I),
 )
-_MODEL_ABSENT_PATTERNS = (
+_STRONG_MODEL_ABSENT_PATTERNS = (
     re.compile(r"\bmodel\s+not\s+found\b", re.I),
     re.compile(r"\bunknown\s+model\b", re.I),
-    re.compile(r"\bunsupported\s+model\b", re.I),
     re.compile(r"\bmodel\s+is\s+not\s+available\b", re.I),
     re.compile(r"\bmodel\s+does\s+not\s+exist\b", re.I),
     re.compile(r"\bno\s+such\s+model\b", re.I),
     re.compile(r"\bmodel_id\s+not\s+found\b", re.I),
-    re.compile(r"\bis\s+not\s+supported\b", re.I),
+)
+_WEAK_MODEL_UNSUPPORTED_PATTERNS = (
+    re.compile(r"\bmodel\b.*\bis\s+not\s+supported\b", re.I),
+    re.compile(r"\bunsupported\s+model\b", re.I),
 )
 _CONTEXT_LIMIT_PATTERNS = (
     re.compile(r"\bcontext[_\s-]?limit[_\s-]?exceeded\b", re.I),
@@ -100,22 +105,43 @@ def extract_failure_signal(
     status_code: int | None = None,
     credential_configured: bool = False,
     alternate_wire_available: bool = False,
+    provider_model_presence: ProviderModelPresence = "unknown",
+    dispatch_phase: str = "response_status",
 ) -> FailureSignal | None:
     """Extract one bounded signal, never retaining raw response content."""
     if body is None:
         return _signal_from_error_class(
-            error_class, status_code, alternate_wire_available=alternate_wire_available
+            error_class,
+            status_code,
+            alternate_wire_available=alternate_wire_available,
+            provider_model_presence=provider_model_presence,
+            dispatch_phase=dispatch_phase,
         )
     try:
         text = body[:_MAX_SIGNAL_INSPECT_BYTES].decode("utf-8", errors="replace")
     except Exception:
         return _signal_from_error_class(
-            error_class, status_code, alternate_wire_available=alternate_wire_available
+            error_class,
+            status_code,
+            alternate_wire_available=alternate_wire_available,
+            provider_model_presence=provider_model_presence,
+            dispatch_phase=dispatch_phase,
         )
     evidence = " ".join((*_structured_error_values(text), text))
 
-    # Model absence wins over generic path/surface and auth evidence.
-    if _matches(_MODEL_ABSENT_PATTERNS, evidence):
+    # Strong model withdrawal remains authoritative.  The weak unsupported
+    # wording is only surface-local when the selected provider advertises the
+    # model and the response arrived before downstream handoff.
+    if _matches(_STRONG_MODEL_ABSENT_PATTERNS, evidence):
+        return FailureSignal.MODEL_ABSENT
+    if (
+        provider_model_presence == "known"
+        and alternate_wire_available
+        and dispatch_phase == "response_status"
+        and _matches(_WEAK_MODEL_UNSUPPORTED_PATTERNS, evidence)
+    ):
+        return FailureSignal.MODEL_UNSUPPORTED_ON_SURFACE
+    if _matches(_WEAK_MODEL_UNSUPPORTED_PATTERNS, evidence):
         return FailureSignal.MODEL_ABSENT
     if _matches(_QUOTA_PATTERNS, evidence):
         return FailureSignal.QUOTA_EXHAUSTED
@@ -142,7 +168,11 @@ def extract_failure_signal(
     if status_code in {400, 422}:
         return FailureSignal.GENERIC_CLIENT_VALIDATION
     return _signal_from_error_class(
-        error_class, status_code, alternate_wire_available=alternate_wire_available
+        error_class,
+        status_code,
+        alternate_wire_available=alternate_wire_available,
+        provider_model_presence=provider_model_presence,
+        dispatch_phase=dispatch_phase,
     )
 
 
@@ -155,6 +185,8 @@ def _signal_from_error_class(
     status_code: int | None,
     *,
     alternate_wire_available: bool = False,
+    provider_model_presence: ProviderModelPresence = "unknown",
+    dispatch_phase: str = "response_status",
 ) -> FailureSignal | None:
     """Use exact known classes and safe status hints only."""
     if error_class is not None:
@@ -165,6 +197,13 @@ def _signal_from_error_class(
             return FailureSignal.WIRE_SURFACE_UNSUPPORTED
         if "wire_schema_mismatch" in ec:
             return FailureSignal.WIRE_SCHEMA_MISMATCH
+        if (
+            provider_model_presence == "known"
+            and alternate_wire_available
+            and dispatch_phase == "response_status"
+            and ("unsupported model" in ec or "model_not_supported" in ec)
+        ):
+            return FailureSignal.MODEL_UNSUPPORTED_ON_SURFACE
         if "contextlimitexceeded" in ec or "context_limit_exceeded" in ec:
             return FailureSignal.CONTEXT_LIMIT_EXCEEDED
         if "quotaexhausted" in ec or "quota_exhausted" in ec:

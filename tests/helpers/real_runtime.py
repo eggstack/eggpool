@@ -78,6 +78,7 @@ class ProviderSpec:
     wire_surfaces: dict[str, dict[str, Any]] = field(default_factory=dict)
     model_wire: dict[str, dict[str, Any]] = field(default_factory=dict)
     account_api_key_envs: dict[str, str] = field(default_factory=dict)
+    account_weights: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,7 +133,7 @@ def _build_config_from_spec(
                         name, "REAL_RUNTIME_KEY"
                     ),
                     "enabled": True,
-                    "weight": 1.0,
+                    "weight": prov.account_weights.get(name, 1.0),
                 }
                 for name in prov.account_names
             ],
@@ -281,11 +282,20 @@ async def build_runtime_app(
             for provider in spec.providers
             for name in provider.account_names
         }
+        account_weights = {
+            name: provider.account_weights.get(name, 1.0)
+            for provider in spec.providers
+            for name in provider.account_names
+        }
         for name in spec.account_names:
             await db.execute_write(
                 "INSERT INTO accounts (name, api_key_env, enabled, weight) "
-                "VALUES (?, ?, 1, 1.0)",
-                (name, account_api_key_envs.get(name, env_key)),
+                "VALUES (?, ?, 1, ?)",
+                (
+                    name,
+                    account_api_key_envs.get(name, env_key),
+                    account_weights.get(name, 1.0),
+                ),
             )
         for model in spec.models:
             await db.execute_write(

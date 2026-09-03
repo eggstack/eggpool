@@ -172,6 +172,7 @@ if TYPE_CHECKING:
     from eggpool.catalog.pricing import CostCalculator
     from eggpool.catalog.service import CatalogService
     from eggpool.db.connection import Database
+    from eggpool.failure.observation import ProviderModelPresence
     from eggpool.health.health_manager import HealthManager
     from eggpool.models.config import AppConfig
     from eggpool.proxy.usage import StreamUsageResult
@@ -4650,8 +4651,29 @@ class RequestCoordinator:
             downstream_started=downstream_started,
             credential_configured=bool(selected is not None and selected.api_key),
             alternate_wire_available=self._alternate_wire_available(context),
+            provider_model_presence=self._provider_model_presence(context, selected),
             dispatch_phase=dispatch_phase,
         )
+
+    def _provider_model_presence(
+        self,
+        context: ProxyRequestContext | None,
+        selected: SelectedAttempt | None,
+    ) -> ProviderModelPresence:
+        """Return exact provider-scoped model knowledge for failure context."""
+        if context is None or selected is None:
+            return "unknown"
+        try:
+            return (
+                "known"
+                if self._catalog.cache.get_provider_model_entry(
+                    context.model_id, selected.provider_id
+                )
+                is not None
+                else "unknown"
+            )
+        except Exception:  # noqa: BLE001
+            return "unknown"
 
     @staticmethod
     def _error_from_failure_effects(
@@ -4689,6 +4711,7 @@ class RequestCoordinator:
             headers=headers,
             body=body,
             alternate_wire_available=self._alternate_wire_available(context),
+            provider_model_presence=self._provider_model_presence(context, selected),
         )
 
     def _classify_upstream_error(

@@ -188,7 +188,9 @@ Use `eggpool connect` for interactive provider setup. See [docs/providers.md](do
 | `[maintenance]` | Bounded maintenance budget, SQLite hygiene, contention guard |
 
 Provider surfaces can be declared under `[providers.<id>.wire_surfaces.<surface>]`
-when one provider exposes different endpoint paths or auth headers. Existing
+when one provider exposes different endpoint paths or auth headers. A declared
+surface may differ from the public client endpoint; EggPool adapts through its
+canonical wire boundary. Existing
 `protocols`, `openai_path`, `responses_path`, and `anthropic_path` settings remain
 valid and are synthesized into equivalent candidates.
 
@@ -197,8 +199,10 @@ wire surface per provider/model. The preference is refreshed by ordinary
 successful requests and discarded naturally on restart or candidate-definition
 changes; it never stores credentials or upstream response bodies. Negotiation is
 reactive and only a separately classified, deterministic pre-handoff
-auth/surface/schema failure may authorize an alternate-surface attempt on the
-same account. Concurrent requests share one provider/model discovery flight;
+auth/surface/schema failure, or weak endpoint-local model rejection for a model
+known by the selected provider, may authorize an alternate-surface attempt on
+the same account. Strong model absence remains model-scoped failure behavior.
+Concurrent requests share one provider/model discovery flight;
 the provider-wide negotiation gate bounds only those abnormal alternate-surface
 submissions, not ordinary known-good inference. Rate pressure ends discovery
 without trying another surface. Bare or unknown 401 responses do not disable

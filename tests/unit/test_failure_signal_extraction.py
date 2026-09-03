@@ -200,6 +200,29 @@ class TestSignalFromErrorClass:
             extract_failure_signal(body, status_code=401) == FailureSignal.MODEL_ABSENT
         )
 
+    def test_known_model_unsupported_on_declared_surface_is_wire_evidence(self) -> None:
+        body = b"Model unhinted-model is not supported on this endpoint"
+        assert (
+            extract_failure_signal(
+                body,
+                status_code=401,
+                alternate_wire_available=True,
+                provider_model_presence="known",
+            )
+            == FailureSignal.MODEL_UNSUPPORTED_ON_SURFACE
+        )
+
+    def test_strong_model_absence_wins_over_provider_presence(self) -> None:
+        assert (
+            extract_failure_signal(
+                b"Model not found: unhinted-model",
+                status_code=404,
+                alternate_wire_available=True,
+                provider_model_presence="known",
+            )
+            == FailureSignal.MODEL_ABSENT
+        )
+
     def test_auth_error_class(self) -> None:
         assert (
             extract_failure_signal(None, error_class="AuthenticationError")
