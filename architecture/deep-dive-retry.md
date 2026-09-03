@@ -83,6 +83,7 @@ Upstream HTTP response
         - source="transport" + model_effect="none":
           record_failure() advances account-wide breaker
     → apply resolver-only wire effect when authorized
+    → admit one provider/model negotiation flight when alternate wire is allowed
     → Retry with the explicit destination and the shared submission budget
 ```
 
@@ -95,6 +96,14 @@ Upstream HTTP response
 - `MODEL_UNAVAILABLE` retries across accounts — different accounts may have the model
 - `QUOTA_EXCEEDED` respects `retry_after` — no premature retry
 - Every upstream submission, including an alternate-wire submission, consumes the one shared budget of `1 + max_retries_before_stream`
+- An authorized alternate-wire transition has one leader per provider/model;
+  followers wait for its accepted, rejected, throttled, or rate-limited wire
+  decision and never share model output. The provider-wide gate applies only
+  while leaders submit abnormal discovery candidates.
+- A rate-limited negotiation leader ends the flight without rejecting the
+  candidate or probing a third surface. Cancellation releases only a permit
+  actually acquired by that leader and cannot cancel the shared follower
+  decision.
 - Retry cleanup converges before reselection — all owned resources released
 
 ## Configuration

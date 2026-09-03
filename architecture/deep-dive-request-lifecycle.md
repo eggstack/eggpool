@@ -15,7 +15,12 @@ URL path template and surface-specific authentication shape. A successful
 ordinary request refreshes the provider/model preference. Alternate-surface
 enumeration is not inferred from HTTP status; it remains gated by the
 canonical failure-effects transition and shares the request's existing
-submission budget.
+submission budget. The authorized transition enters a provider/model
+single-flight: one leader holds the provider-wide abnormal-dispatch permit
+while submitting alternate candidates, while followers wait for only the wire
+decision before issuing their own inference requests. A 429/rate-limit result
+ends the flight without suppressing the candidate or enumerating another
+surface. Cancellation releases only owned coordination state.
 
 ## Request Flow
 

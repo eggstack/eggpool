@@ -112,8 +112,21 @@ class _ProviderGate:
             await waiter
         except asyncio.CancelledError:
             async with self._lock:
-                with suppress(ValueError):
-                    self._waiters.remove(waiter)
+                if waiter.done() and not waiter.cancelled():
+                    # The gate handed this waiter a permit just before the
+                    # task was cancelled.  Return that permit here because
+                    # ownership has not yet reached NegotiationHandle.
+                    self._active = max(0, self._active - 1)
+                    while self._waiters and self._active < self._limit:
+                        next_waiter = self._waiters.popleft()
+                        if next_waiter.cancelled():
+                            continue
+                        self._active += 1
+                        next_waiter.set_result(None)
+                        break
+                else:
+                    with suppress(ValueError):
+                        self._waiters.remove(waiter)
             raise
 
     async def release(self) -> None:
@@ -153,12 +166,15 @@ class NegotiationHandle:
         if self.is_leader and not self._entered:
             self._entered = True
             gate = self._resolver.provider_gate(self.provider_id)
-            self._gate = gate
             try:
                 await gate.acquire(self._max_concurrent_per_provider)
             except asyncio.CancelledError:
                 await self.finish(result="rejected")
                 raise
+            # The handle owns a releasable permit only after acquire() has
+            # completed successfully.  A cancelled waiter must never release
+            # capacity acquired by another negotiation.
+            self._gate = gate
             self._resolver.mark_negotiation_started(
                 self.provider_id, self._min_interval_s
             )
@@ -226,7 +242,10 @@ class NegotiationHandle:
 
     async def wait_for_acceptance(self) -> WireNegotiationResult:
         """Wait for the leader's wire decision, never its model response."""
-        return await self.future
+        # A request cancellation belongs to this follower, not to the shared
+        # provider/model flight.  Shielding keeps the leader's decision alive
+        # for the remaining followers.
+        return await asyncio.shield(self.future)
 
 
 @dataclass(slots=True)

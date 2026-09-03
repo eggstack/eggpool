@@ -92,6 +92,7 @@ class RuntimeAppSpec:
     models: tuple[ModelSpec, ...] = (ModelSpec(model_id="gpt-4", protocol="openai"),)
     providers: tuple[ProviderSpec, ...] = ()
     transcoder_overrides: dict[str, Any] = field(default_factory=dict)
+    wire_negotiation_overrides: dict[str, Any] = field(default_factory=dict)
     outbound_observer: Any | None = None
     wire_runtime_enabled: bool = False
 
@@ -155,6 +156,8 @@ def _build_config_from_spec(
     }
     if spec.transcoder_overrides:
         config_dict["transcoder"] = spec.transcoder_overrides
+    if spec.wire_negotiation_overrides:
+        config_dict["routing"] = {"wire_negotiation": spec.wire_negotiation_overrides}
     if providers_dict:
         config_dict["providers"] = providers_dict
 

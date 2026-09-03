@@ -66,8 +66,11 @@ def build_outbound_observation(
         attempt_ordinal=selected.attempt_number,
         wire_selection_source=context.wire_selection_source,
         candidate_surfaces=tuple(
-            surface
-            for surface in context.client_metadata.get("_wire_family_surfaces", ())
-            if isinstance(surface, str)
+            profile.surface
+            for profile in (
+                context.wire_family_resolution.candidates
+                if context.wire_family_resolution is not None
+                else ()
+            )
         ),
     )

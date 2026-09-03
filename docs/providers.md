@@ -141,11 +141,14 @@ declare the hinted surface.
 Surface-specific auth renders the same configured account key through one
 selected header shape, so a provider such as OpenCode Go need not send both
 `Authorization` and `x-api-key` on every request. Account credentials are not
-stored in wire profiles. This phase only prepares and validates candidates;
-runtime preference learning is bounded and reactive. A completed request can
-refresh the preferred declared surface in memory; alternate-surface retries
-require an explicit deterministic failure-effects decision and share the
-request's existing retry budget. No background endpoint probes are performed.
+stored in wire profiles. Runtime preference learning is bounded and reactive.
+A completed request can refresh the preferred declared surface in memory.
+Alternate-surface discovery is admitted through one provider/model single-flight
+and a provider-wide gate that applies only to abnormal discovery submissions;
+followers share the wire decision, never a model response. Rate pressure stops
+discovery without invalidating the candidate. Alternate-surface retries require
+an explicit deterministic failure-effects decision and share the request's
+existing retry budget. No background endpoint probes are performed.
 
 Live provider validation is intentionally separate from ordinary CI. For the
 current OpenCode Go path/surface matrix and the isolated temporary-state test

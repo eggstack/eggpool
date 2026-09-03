@@ -1,7 +1,7 @@
 # Plan 154 — Production Wire Single-Flight and Governor Corrective Pass
 
 Date: 2026-09-03
-Status: ready
+Status: complete
 Parent roadmap: `plans/147-dynamic-wire-surface-negotiation-roadmap.md`
 Corrects: Plans 150–151 implementation gap
 Depends on: Plans 148–153 implementation currently on `main`
@@ -370,3 +370,36 @@ This plan is complete only when all are true:
 9. Record implementation SHA and test evidence in this file or the final corrective closure record from Plan 155.
 
 Do not begin broader provider-surface heuristic changes in this plan; those belong to Plan 155.
+
+## Closure evidence
+
+Implemented the resolver ownership corrections and connected the production
+coordinator's canonical alternate-wire failure-effects transition to
+provider/model single-flight admission. Leaders own only acquired provider
+gate permits, followers wait through shielded decisions, rate pressure ends
+discovery without candidate suppression, and all alternate/account submissions
+remain within the existing shared request ceiling. Redundant coordinator wire
+family metadata and duplicate resolution were removed; outbound diagnostics now
+read the typed family resolution.
+
+Deterministic coverage added or strengthened:
+
+- resolver cancellation, follower isolation, multi-follower acceptance,
+  provider gate, ordinary-resolution, and rate-pressure tests;
+- coordinator-level concurrent stale-profile migration;
+- coordinator-level rate-limited leader/follower behavior;
+- provider-wide abnormal-dispatch serialization versus concurrent learned
+  ordinary inference.
+
+Verification completed:
+
+```text
+97 focused tests passed
+ruff format --check src/ tests/ scripts/ passed
+ruff check src/ tests/ scripts/ passed
+pyright src/ scripts/ passed (0 errors, 0 warnings, 0 informations)
+pytest tests/smoke/ -q --tb=short --maxfail=1: 14 passed
+```
+
+Implementation commit: `c881f99` (final amended SHA may differ only because this
+closure line is part of the commit).

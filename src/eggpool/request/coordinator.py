@@ -181,7 +181,11 @@ if TYPE_CHECKING:
     from eggpool.transcoder.prepared import PreparedTranscode
     from eggpool.wire.ir import CanonicalRequest, ReasoningIntent
     from eggpool.wire.registry import WireHint
-    from eggpool.wire.resolver import WireProfileResolver
+    from eggpool.wire.resolver import (
+        NegotiationHandle,
+        WireProfileResolver,
+        WireResolution,
+    )
     from eggpool.wire.types import WireProfile, WireSurfaceName
 
 logger = logging.getLogger(__name__)
@@ -471,6 +475,8 @@ class ProxyRequestContext:
     wire_profile: WireProfile | None = None
     wire_candidate_fingerprint: str | None = None
     wire_selection_source: str | None = None
+    wire_family_resolution: WireResolution | None = None
+    wire_negotiation_handle: NegotiationHandle | None = field(default=None, repr=False)
     canonical_request: CanonicalRequest | None = None
     reasoning_intent: ReasoningIntent | None = None
     semantic_adaptation_required: bool = False
@@ -1236,6 +1242,16 @@ class RequestCoordinator:
                             selected.attempt_id,
                         )
             return self._build_local_error_response(context, status_code=500)
+        finally:
+            # A leader may be cancelled or fail during the alternate request
+            # before the normal success/failure transition closes its flight.
+            # Keep this cleanup at the request boundary so no provider gate
+            # permit or follower decision can leak across requests.
+            handle = context.wire_negotiation_handle
+            if handle is not None:
+                context.wire_negotiation_handle = None
+                with contextlib.suppress(asyncio.CancelledError):
+                    await asyncio.shield(handle.finish(result="rejected"))
 
     async def _execute_impl(
         self, context: ProxyRequestContext
@@ -1581,7 +1597,7 @@ class RequestCoordinator:
                     context, selected, attempt_num, transcoder=transcoder
                 )
                 self._log_transcode_warnings(context, selected=selected)
-                self._record_wire_success(context, selected)
+                await self._record_wire_success(context, selected)
                 return result
             except _RetryableUpstreamError as err:
                 last_error = err
@@ -1631,9 +1647,21 @@ class RequestCoordinator:
                         effects=effects,
                     )
                     if (
+                        context.wire_negotiation_handle is not None
+                        and effects.account_effect == "rate_limit"
+                    ):
+                        await self._finish_wire_negotiation(context, rate_limited=True)
+                    elif (
                         effects.retry_action == "alternate_wire_same_account"
                         and wire_transitioned
                     ):
+                        wire_transitioned = await self._admit_wire_negotiation(
+                            context=context,
+                            selected=selected,
+                        )
+                    elif context.wire_negotiation_handle is not None:
+                        await self._finish_wire_negotiation(context)
+                    if wire_transitioned:
                         context.client_metadata["_retry_same_account"] = (
                             selected.account_name
                         )
@@ -4097,7 +4125,7 @@ class RequestCoordinator:
                         model_id=selected.model_id,
                         reasons=list(_SUCCESS_CLEAR_BACKOFF_REASONS),
                     )
-                self._record_wire_success(context, selected)
+                await self._record_wire_success(context, selected)
 
                 self._stream_diagnostics.record_outcome(
                     STREAM_OUTCOME_COMPLETED,
@@ -4764,7 +4792,7 @@ class RequestCoordinator:
         bundled_hint: WireHint | None = self._wire_bundled_hints_by_provider.get(
             provider_id, {}
         ).get(context.model_id)
-        resolution = resolver.resolve(
+        family_resolution = resolver.resolve(
             provider,
             context.model_id,
             profiles=profiles,
@@ -4772,46 +4800,23 @@ class RequestCoordinator:
             bundled_hint=bundled_hint,
             learned_preference_ttl_s=wire_config.learned_preference_ttl_s,
         )
-        # Keep the complete family resolution separate from the normal
-        # request-surface resolution. It is used only after a canonical,
-        # deterministic wire rejection and therefore cannot turn a 429,
-        # timeout, or generic 5xx into surface enumeration.
-        family_resolution = resolver.resolve(
-            provider,
-            context.model_id,
-            profiles=profiles,
-            allowed_surfaces=family_surfaces,
-            bundled_hint=bundled_hint,
-            learned_preference_ttl_s=wire_config.learned_preference_ttl_s,
-        )
-        context.client_metadata["_wire_family_fingerprint"] = (
-            family_resolution.candidate_fingerprint
-        )
-        context.client_metadata["_wire_provider_id"] = provider_id
-        context.client_metadata["_wire_family_surfaces"] = tuple(
-            profile.surface for profile in family_resolution.candidates
-        )
-        profile = resolution.preferred
+        context.wire_family_resolution = family_resolution
+        profile = family_resolution.preferred
         if profile is None:
             return
         context.wire_profile = profile
         context.selected_wire_surface = profile.surface
-        context.wire_candidate_fingerprint = resolution.candidate_fingerprint
-        context.wire_selection_source = resolution.selected_source
+        context.wire_candidate_fingerprint = family_resolution.candidate_fingerprint
+        context.wire_selection_source = family_resolution.selected_source
         if context.transcode_context is not None:
             context.transcode_context.wire_profile = profile
             context.transcode_context.selected_wire_surface = profile.surface
 
     def _alternate_wire_available(self, context: ProxyRequestContext | None) -> bool:
         """Return whether deterministic rejection may move to another profile."""
-        if context is None or getattr(self, "_wire_profile_resolver", None) is None:
+        if context is None or context.wire_family_resolution is None:
             return False
-        surfaces = context.client_metadata.get("_wire_family_surfaces")
-        typed_surfaces = cast("tuple[object, ...]", surfaces)
-        return (
-            isinstance(surfaces, tuple)
-            and sum(isinstance(surface, str) for surface in typed_surfaces) > 1
-        )
+        return len(context.wire_family_resolution.candidates) > 1
 
     def _apply_wire_failure_effect(
         self,
@@ -4824,28 +4829,67 @@ class RequestCoordinator:
             return False
         resolver = getattr(self, "_wire_profile_resolver", None)
         profile = getattr(context, "wire_profile", None)
-        fingerprint = context.client_metadata.get("_wire_family_fingerprint")
-        if resolver is None or profile is None or not isinstance(fingerprint, str):
+        fingerprint = context.wire_family_resolution
+        if resolver is None or profile is None or fingerprint is None:
             return False
         wire_negotiation = getattr(
             getattr(self._config, "routing", None), "wire_negotiation", None
         )
         resolver.record_deterministic_rejection(
-            str(
-                context.client_metadata.get(
-                    "_wire_provider_id", context.provider_id or ""
-                )
-            ),
+            fingerprint.provider_id,
             context.model_id,
-            fingerprint,
+            fingerprint.candidate_fingerprint,
             profile.surface,
             rejection_class=effects.evidence_class,
             cooldown_s=float(getattr(wire_negotiation, "rejection_cooldown_s", 300.0)),
         )
-        context.client_metadata["_wire_negotiating"] = True
         return True
 
-    def _record_wire_success(
+    async def _admit_wire_negotiation(
+        self,
+        *,
+        context: ProxyRequestContext,
+        selected: SelectedAttempt,
+    ) -> bool:
+        """Admit the canonical alternate-wire transition to the resolver."""
+        resolver = self._wire_profile_resolver
+        resolution = context.wire_family_resolution
+        if resolver is None or resolution is None:
+            return False
+
+        active = context.wire_negotiation_handle
+        if active is not None:
+            # The leader owns this flight while it enumerates alternatives.
+            # A second deterministic rejection advances the same bounded
+            # candidate list; it must not recursively join its own flight.
+            return active.is_leader
+
+        handle = await resolver.begin_negotiation(resolution)
+        if handle.role == "leader":
+            await handle.__aenter__()
+            context.wire_negotiation_handle = handle
+            return True
+
+        decision = await handle.wait_for_acceptance()
+        return decision.result == "accepted"
+
+    async def _finish_wire_negotiation(
+        self,
+        context: ProxyRequestContext,
+        *,
+        rate_limited: bool = False,
+    ) -> None:
+        """Publish a terminal decision for the request's active leader."""
+        handle = context.wire_negotiation_handle
+        if handle is None:
+            return
+        context.wire_negotiation_handle = None
+        if rate_limited:
+            await handle.rate_limited()
+        else:
+            await handle.finish(result="rejected")
+
+    async def _record_wire_success(
         self, context: ProxyRequestContext, selected: SelectedAttempt
     ) -> None:
         """Refresh runtime wire learning after a completed ordinary request."""
@@ -4854,13 +4898,17 @@ class RequestCoordinator:
         fingerprint = getattr(context, "wire_candidate_fingerprint", None)
         if resolver is None or profile is None or fingerprint is None:
             return
-        resolver.record_success(
-            selected.provider_id,
-            context.model_id,
-            fingerprint,
-            profile.surface,
-        )
-        context.client_metadata.pop("_wire_negotiating", None)
+        handle = context.wire_negotiation_handle
+        if handle is not None and handle.is_leader:
+            context.wire_negotiation_handle = None
+            await handle.accept(profile.surface)
+        else:
+            resolver.record_success(
+                selected.provider_id,
+                context.model_id,
+                fingerprint,
+                profile.surface,
+            )
         context.client_metadata.pop("_retry_same_account", None)
 
     def _resolve_selected_thinking_capability(

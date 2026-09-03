@@ -243,10 +243,14 @@ invoke decode/re-encode work. Streaming tests must cover native terminal
 evidence and markerless EOF without synthetic completion.
 
 Runtime wire-negotiation changes should also run
-`tests/unit/test_wire_resolver.py`. Verify learned preference migration,
-structural fingerprint invalidation, cooldown/TTL behavior without proactive
-traffic, provider/model single-flight, provider-only abnormal-dispatch gating,
-bounded cache eviction, and 429 throttling. Keep alternate-surface retry
+`tests/unit/test_wire_resolver.py`,
+`tests/integration/test_wire_negotiation_e2e.py`,
+`tests/unit/test_failure_effects_table.py`, and
+`tests/unit/test_failure_signal_extraction.py`. Verify learned preference
+migration, structural fingerprint invalidation, cooldown/TTL behavior without
+proactive traffic, provider/model single-flight, cancellation ownership,
+provider-only abnormal-dispatch gating, bounded cache eviction, real
+alternate-surface dispatch, and 429 throttling. Keep alternate-surface retry
 integration behind the canonical failure-effects gate and the shared attempt
 budget.
 

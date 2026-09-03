@@ -85,7 +85,11 @@ per-provider/model single-flight, and provider-only abnormal-dispatch gating.
 Generation-owned resolved profiles are keyed by a structural fingerprint that
 omits credential values. Ordinary success refreshes a preference; only the
 canonical failure-effects decision may authorize candidate suppression or an
-alternate-surface transition. No background probes or second retry budget.
+alternate-surface transition. The leader owns the gate permit while submitting
+discovery candidates; followers wait on a shielded wire decision and then send
+their own inference requests. Rate pressure completes the flight without
+candidate suppression, and cancellation releases only coordination state owned
+by that request. No background probes or second retry budget.
 
 The optional `RequestCoordinator.outbound_observer` runs after a real upstream
 `client.send` returns and receives only a sanitized structural observation. It

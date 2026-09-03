@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 from eggpool.models.config import (
     ModelWirePreference,
@@ -210,13 +211,106 @@ def test_singleflight_shares_acceptance_decision() -> None:
         follower = await resolver.begin_negotiation(
             resolution, max_concurrent_per_provider=1, min_negotiation_interval_s=0
         )
+        second_follower = await resolver.begin_negotiation(
+            resolution, max_concurrent_per_provider=1, min_negotiation_interval_s=0
+        )
         assert leader.is_leader is True
         assert follower.is_leader is False
+        assert second_follower.is_leader is False
         async with leader:
             result = await leader.accept("openai_responses")
         assert result.accepted_surface == "openai_responses"
         assert (await follower.wait_for_acceptance()).result == "accepted"
+        assert (await second_follower.wait_for_acceptance()).result == "accepted"
         assert resolver.snapshot()["inflight"] == 0
+
+    asyncio.run(scenario())
+
+
+def test_cancelled_waiting_leader_does_not_release_gate_capacity() -> None:
+    async def scenario() -> None:
+        provider = _provider()
+        resolver = WireProfileResolver()
+        first = await resolver.begin_negotiation(
+            resolver.resolve(provider, "model-a"),
+            max_concurrent_per_provider=1,
+            min_negotiation_interval_s=0,
+        )
+        second = await resolver.begin_negotiation(
+            resolver.resolve(provider, "model-b"),
+            max_concurrent_per_provider=1,
+            min_negotiation_interval_s=0,
+        )
+        third = await resolver.begin_negotiation(
+            resolver.resolve(provider, "model-c"),
+            max_concurrent_per_provider=1,
+            min_negotiation_interval_s=0,
+        )
+        await first.__aenter__()
+        second_task = asyncio.create_task(second.__aenter__())
+        await asyncio.sleep(0)
+        second_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await second_task
+
+        third_task = asyncio.create_task(third.__aenter__())
+        await asyncio.sleep(0)
+        assert third_task.done() is False
+        await first.finish(result="accepted", surface="openai_responses")
+        await third_task
+        await third.finish(result="accepted", surface="openai_responses")
+
+    asyncio.run(scenario())
+
+
+def test_cancelled_follower_does_not_cancel_shared_decision() -> None:
+    async def scenario() -> None:
+        provider = _provider()
+        resolver = WireProfileResolver()
+        resolution = resolver.resolve(provider, "model-x")
+        leader = await resolver.begin_negotiation(
+            resolution, max_concurrent_per_provider=1, min_negotiation_interval_s=0
+        )
+        cancelled_follower = await resolver.begin_negotiation(resolution)
+        remaining_follower = await resolver.begin_negotiation(resolution)
+        wait_task = asyncio.create_task(cancelled_follower.wait_for_acceptance())
+        await asyncio.sleep(0)
+        wait_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await wait_task
+        assert leader.future.cancelled() is False
+        assert remaining_follower.future.cancelled() is False
+        await leader.accept("openai_responses")
+        assert (await remaining_follower.wait_for_acceptance()).result == "accepted"
+        assert resolver.snapshot()["inflight"] == 0
+
+    asyncio.run(scenario())
+
+
+def test_cancelled_leader_publishes_rejection_and_releases_owned_permit() -> None:
+    async def scenario() -> None:
+        provider = _provider()
+        resolver = WireProfileResolver()
+        resolution = resolver.resolve(provider, "model-x")
+        leader = await resolver.begin_negotiation(
+            resolution, max_concurrent_per_provider=1, min_negotiation_interval_s=0
+        )
+        follower = await resolver.begin_negotiation(resolution)
+        with contextlib.suppress(asyncio.CancelledError):
+            async with leader:
+                raise asyncio.CancelledError
+
+        decision = await follower.wait_for_acceptance()
+        assert decision.result == "rejected"
+        assert decision.accepted_surface is None
+        assert resolver.snapshot()["inflight"] == 0
+        next_leader = await resolver.begin_negotiation(
+            resolver.resolve(provider, "model-y"),
+            max_concurrent_per_provider=1,
+            min_negotiation_interval_s=0,
+        )
+        await next_leader.__aenter__()
+        await next_leader.finish(result="accepted", surface="openai_responses")
 
     asyncio.run(scenario())
 
@@ -259,12 +353,31 @@ def test_rate_limit_stops_flight_and_throttles_the_next_one() -> None:
         leader = await resolver.begin_negotiation(
             resolution, min_negotiation_interval_s=0
         )
+        follower = await resolver.begin_negotiation(resolution)
         async with leader:
             result = await leader.rate_limited(retry_after_s=120.0)
         assert result.result == "rate_limited"
+        assert (await follower.wait_for_acceptance()).result == "rate_limited"
         next_leader = await resolver.begin_negotiation(
             resolution, min_negotiation_interval_s=0
         )
         assert next_leader.role == "throttled"
+
+    asyncio.run(scenario())
+
+
+def test_gate_occupancy_does_not_change_normal_resolution() -> None:
+    async def scenario() -> None:
+        provider = _provider()
+        resolver = WireProfileResolver()
+        resolution = resolver.resolve(provider, "model-x")
+        leader = await resolver.begin_negotiation(
+            resolution, max_concurrent_per_provider=1, min_negotiation_interval_s=0
+        )
+        await leader.__aenter__()
+        normal = resolver.resolve(provider, "model-x")
+        assert normal.preferred is not None
+        assert normal.preferred.surface == resolution.preferred.surface
+        await leader.finish(result="accepted", surface="openai_responses")
 
     asyncio.run(scenario())

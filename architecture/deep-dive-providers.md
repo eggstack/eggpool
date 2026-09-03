@@ -58,9 +58,14 @@ legacy compatibility field.
 profiles after account/provider selection. It orders fixed/operator, learned,
 verified catalog, bundled, and provider-priority candidates. A completed
 ordinary request refreshes the learned preference; deterministic rejection
-cooldowns and negotiation single-flight state are in memory only. The resolver
-does not inspect raw HTTP failures, start probes, or create alternate retries;
-the canonical failure-effects decision must authorize those transitions.
+cooldowns and negotiation single-flight state are in memory only. The
+coordinator admits an authorized alternate transition through one
+provider/model flight. Its leader owns the provider-wide abnormal-dispatch
+permit while submitting the next candidate; followers wait on the bounded wire
+decision and then make their own inference request. Ordinary known-good
+inference does not use this permit. The resolver does not inspect raw HTTP
+failures, start probes, or create alternate retries; the canonical
+failure-effects decision must authorize those transitions.
 
 Failure effects distinguish explicit credential invalidity from an ambiguous
 401. Only the former disables the selected account. Deterministic
@@ -92,7 +97,10 @@ required for ordinary installation or release automation.
   5xx, and midstream failures do not invalidate a surface.
 - Negotiation dispatches are single-flight per provider/model and separately
   bounded per provider. Normal known-good provider inference is not serialized
-  behind this abnormal-dispatch guard.
+  behind this abnormal-dispatch guard. A leader cancellation publishes a
+  rejected decision and releases only an acquired permit; follower cancellation
+  is isolated from the shared decision. A rate-limited leader wakes followers
+  and ends discovery without suppressing the candidate.
 - Wire path templates support only the validated `{model}` placeholder and
   quote the canonical model ID before URL composition.
 - Gemini `generateContent` streaming uses its explicit
