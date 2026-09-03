@@ -1,7 +1,7 @@
 # Plan 167 — Model-Router Correctness and Closure Pass
 
 Date: 2026-09-03
-Status: ready for implementation
+Status: complete
 Planning baseline: `9b8815bfb6ea88cceb3911f8c3ffd2d8f7f488a3`
 Parent work: `plans/162-optional-llm-model-router-selection-roadmap.md` through `plans/166-model-router-client-integration-docs-and-regression-closure.md`
 Priority: P0 correctness / closure
@@ -431,3 +431,33 @@ Do not use this pass to add:
 - benchmark/CI infrastructure beyond the existing repo gates.
 
 The desired result is a smaller, more correct closure patch—not a broader routing platform.
+
+## Closure evidence
+
+Plan 167 is complete on the exact implementation head `64d5fef` (`test: cover selector availability statuses`).
+
+Focused model-router and proxy regressions:
+
+```text
+PYTHONHASHSEED=0 TZ=UTC uv run pytest \
+  tests/unit/test_model_router_selector.py \
+  tests/unit/test_model_router_affinity.py \
+  tests/unit/test_model_router_metrics.py \
+  tests/unit/test_proxy.py \
+  tests/unit/test_api_models.py -q --tb=short --maxfail=1
+83 passed in 0.89s
+```
+
+Repository gates on that head:
+
+```text
+uv run ruff format --check src/ tests/ scripts/  # 710 files already formatted
+uv run ruff check src/ tests/ scripts/           # All checks passed!
+uv run pyright src/ scripts/                     # 0 errors, 0 warnings, 0 informations
+uv run pytest tests/smoke/ -q --tb=short --maxfail=1
+14 passed in 2.78s
+uv run pytest -q --tb=short --maxfail=1
+7909 passed, 42 skipped, 1 warning in 348.44s (0:05:48)
+```
+
+The full-suite warning is the existing Starlette/httpx deprecation warning. No new dependency, migration, background task, or CI matrix was introduced.
