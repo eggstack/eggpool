@@ -136,7 +136,7 @@ generation when safe.
 9. Server atomically publishes the new generation.
 10. Old generation retires after active streams drain.
 
-**Provider/account/routing/model-override/model-capability changes
+**Provider/account/routing/model-override/model-capability/model-router changes
 apply live**; other fields are still `RESTART_REQUIRED`. The control
 plane infrastructure (control socket, reload manager, candidate
 generation, persistence reconciliation, atomic publication) is fully

@@ -132,6 +132,7 @@ if TYPE_CHECKING:
     from eggpool.catalog.service import CatalogService
     from eggpool.db.connection import Database
     from eggpool.health.health_manager import HealthManager
+    from eggpool.model_router.registry import ModelRouterRegistry
     from eggpool.models.config import AppConfig
     from eggpool.providers.client_pool import ProviderClientPool
     from eggpool.providers.outbound import OutboundClientManager
@@ -147,6 +148,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _CLOSE_COUNTS_MAX_GENERATIONS = 64
+
+
+def _empty_model_router_registry() -> ModelRouterRegistry:
+    """Return the shared feature-off model-router registry lazily."""
+    from eggpool.model_router.registry import ModelRouterRegistry
+
+    return ModelRouterRegistry.empty()
 
 
 # ---------------------------------------------------------------------------
@@ -561,6 +569,9 @@ class RuntimeGeneration:
     model_quarantine: Any = None
     finalization_supervisor: RequestFinalizationSupervisor | None = None
     model_info: Any = None  # noqa: ANN401 — ModelInfoService when enabled
+    model_router_registry: ModelRouterRegistry = field(
+        default_factory=lambda: _empty_model_router_registry()
+    )
     local_pre_upstream_recorder: Any = None  # noqa: ANN401
     stream_diagnostics: Any = None  # noqa: ANN401
     immutable_request_state: ImmutableRequestState = field(
@@ -2472,6 +2483,9 @@ class RuntimeGenerationBuilder:
             model_info=services.get("model_info"),
             local_pre_upstream_recorder=services.get("local_pre_upstream_recorder"),
             stream_diagnostics=services.get("stream_diagnostics"),
+            model_router_registry=services.get(
+                "model_router_registry", _empty_model_router_registry()
+            ),
             created_at_monotonic=services.get("created_at_monotonic", now_mono),
             created_at_epoch=services.get("created_at_epoch", now_epoch),
             immutable_request_state=immutable_request_state,
@@ -2551,6 +2565,7 @@ def is_runtime_owned_attr(name: str) -> bool:
 _RUNTIME_OWNED_APP_STATE_ATTRS: frozenset[str] = frozenset(
     {
         "registry",
+        "model_router_registry",
         "catalog",
         "health_manager",
         "account_backoff_repo",

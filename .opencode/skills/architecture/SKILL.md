@@ -94,6 +94,23 @@ their own inference requests. Rate pressure completes the flight without
 candidate suppression, and cancellation releases only coordination state owned
 by that request. No background probes or second retry budget.
 
+## Model-router Registry
+
+`src/eggpool/model_router/` owns the typed optional `[model_routers.<id>]`
+configuration and its immutable compiled registry. Virtual aliases are exact,
+bounded, control-safe identifiers without `/`; selector and route targets must
+remain concrete references, and current catalog availability is deliberately
+not checked during config parsing. Routes receive deterministic compact IDs
+from sorted operator labels, while each compiled router carries a stable
+SHA-256 semantic fingerprint and bounded static selector policy.
+
+`RuntimeGenerationFactory` compiles the registry before candidate publication.
+The empty configuration uses a shared empty registry and adds no model-router-
+specific DB, catalog, health, quota, provider-client, or background-task work.
+The complete
+`model_routers` mapping is one atomic `LIVE` reload field; client dispatch does
+not consume it until the later model-router phases.
+
 Failure classification gives typed, context-qualified wire signals precedence
 over generic `capability`/`unsupported` error-class fallbacks; those class
 names alone never authorize migration. Strong model absence remains

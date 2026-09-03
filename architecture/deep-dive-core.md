@@ -63,6 +63,8 @@ Never raises `SystemExit` — errors are returned as structured objects.
 
 Typed configuration diff and reload policy:
 - `LIVE` fields: provider/account families, selected routing/model-override fields, `[transcoder]`, subset of `[models]`, retention durations
+- `[model_routers.<id>]` is classified as one atomic `LIVE` mapping; dynamic
+  route keys are not emitted as independent diff fields
 - `RESTART_REQUIRED` fields: everything else
 - `_FIELD_DISPOSITION` map is the single source of truth
 - `eggpool rehash` JSON output pinned at 9 keys

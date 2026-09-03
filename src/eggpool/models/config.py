@@ -28,6 +28,10 @@ from eggpool.constants import (
     DEFAULT_PROVIDER_ID,
 )
 from eggpool.errors import ConfigError
+from eggpool.model_router.config import (
+    ModelRouterConfig,
+    validate_model_router_mapping,
+)
 from eggpool.providers.auth import has_auth_scheme_prefix
 from eggpool.transcoder.policy import TranscoderPolicy
 from eggpool.wire.types import WireSurfaceName, validate_wire_path_template
@@ -1501,6 +1505,7 @@ class AppConfig(BaseModel):
     upstream: UpstreamConfig = Field(default_factory=UpstreamConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     models: ModelsConfig = Field(default_factory=ModelsConfig)
+    model_routers: dict[str, ModelRouterConfig] = Field(default_factory=dict)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
     pricing: PricingConfig = Field(default_factory=PricingConfig)
@@ -1573,6 +1578,15 @@ class AppConfig(BaseModel):
                     f"Provider key {provider_id!r} does not match its "
                     f"declared id {provider.id!r}"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def validate_model_routers(self) -> AppConfig:
+        """Validate router aliases and cross-router recursion structurally."""
+        try:
+            validate_model_router_mapping(self.model_routers)
+        except (ConfigError, ValueError) as exc:
+            raise ConfigError(f"Invalid model_routers configuration: {exc}") from exc
         return self
 
     @model_validator(mode="after")

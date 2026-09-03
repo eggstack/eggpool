@@ -149,6 +149,10 @@ _FIELD_DISPOSITION: Final[dict[str, ReloadDisposition]] = {
     "models.allow_stale_catalog": ReloadDisposition.LIVE,
     "models.ping_retain_days": ReloadDisposition.LIVE,
     "models.catalog_withdrawal_policy": ReloadDisposition.RESTART_REQUIRED,
+    # The complete virtual-router mapping is compiled atomically into each
+    # candidate generation. Dynamic route keys intentionally stay collapsed
+    # to this one top-level field.
+    "model_routers": ReloadDisposition.LIVE,
     # ---- routing strategy + scoring knobs (consumed at router construction) ----
     "routing.strategy": ReloadDisposition.LIVE,
     "routing.near_tie_epsilon": ReloadDisposition.LIVE,
@@ -398,6 +402,15 @@ def _display(value: object, *, secret: bool) -> str:
     return repr(value)
 
 
+def _display_field_value(field_name: str, value: object) -> str:
+    """Render a field without expanding dynamic model-router contents."""
+    if field_name == "model_routers" and isinstance(value, Mapping):
+        count = len(cast("Mapping[str, object]", value))
+        noun = "router" if count == 1 else "routers"
+        return f"{count} configured {noun}"
+    return _display(value, secret=_is_secret_field(field_name))
+
+
 def _path_segments(root: object, dotted_path: str) -> tuple[object, str]:
     """Return ``(parent, leaf_name)`` for ``dotted_path``.
 
@@ -498,8 +511,12 @@ def _diff_single_field(
         ConfigChange(
             path=field_name,
             disposition=_disposition_for(field_name),
-            old_display=_display(old, secret=secret),
-            new_display=_display(new, secret=secret),
+            old_display=(
+                _display_field_value(field_name, old) if not secret else "<changed>"
+            ),
+            new_display=(
+                _display_field_value(field_name, new) if not secret else "<changed>"
+            ),
             section=field_name.split(".", 1)[0],
             secret=secret,
         ),

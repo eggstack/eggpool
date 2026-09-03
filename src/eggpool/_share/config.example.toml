@@ -82,6 +82,23 @@ ping_retain_days = 7
 # a healthy subscription account.
 catalog_withdrawal_policy = "preserve_until_health"
 
+# Optional model-router definitions. These create exact client-visible virtual
+# model IDs and compile immutable selector policies during generation builds.
+# This foundation validates and publishes the registry; request dispatch will
+# consume it in a later model-router phase.
+# [model_routers.implementer]
+# selector_model = "qwen3-0.6b/local"
+# default_model = "muse-spark-1.3"
+# sticky = true
+# affinity_ttl_s = 43200
+# selector_timeout_s = 2.0
+# max_input_bytes = 2048
+# repair_attempts = 1
+#
+# [model_routers.implementer.routes.Implementer-hard]
+# model = "muse-spark-1.3"
+# description = "Use for the most difficult queries."
+
 # ─── Protocol Transcoding ────────────────────────────────────────────
 # Transcoding is **on by default**. Requests from clients using one
 # protocol (OpenAI or Anthropic) are automatically forwarded to upstream

@@ -11,10 +11,14 @@ Pydantic v2 models for configuration, domain objects, API payloads, and database
 ```
 src/eggpool/models/
 ├── __init__.py
-├── config.py          # TOML config models (~1571 lines)
+├── config.py          # AppConfig and TOML config models
 ├── api.py             # Internal API models (health, errors, model listing)
 ├── database.py        # SQLite row models
 └── domain.py          # Domain objects shared across modules
+
+src/eggpool/model_router/
+├── config.py           # Structural virtual-router config models
+└── registry.py         # Immutable compiled generation registry
 ```
 
 ## Key Components
@@ -30,6 +34,7 @@ class AppConfig(BaseModel):
     upstream: UpstreamConfig
     database: DatabaseConfig
     models: ModelsConfig
+    model_routers: dict[str, ModelRouterConfig]
     routing: RoutingConfig
     limits: LimitsConfig
     pricing: PricingConfig
@@ -51,7 +56,10 @@ class AppConfig(BaseModel):
 ```
 
 **Key nested models:**
-- `ServerConfig` — host, port, threads (constrained `le=1`), max_request_body_bytes
+- `ServerConfig` — host, port, Granian runtime threads, max_request_body_bytes
+- `ModelRouterConfig` / `ModelRouteConfig` — bounded selector/default references,
+  labelled concrete targets, selector policy limits, and structural recursion
+  validation; catalog availability is intentionally not checked here
 - `ProviderConfig` — id, base_url, legacy protocol paths, candidate
   `wire_surfaces`, optional `model_wire` preferences, auth, accounts,
   models_endpoint, static_models, verify
@@ -68,6 +76,10 @@ class AppConfig(BaseModel):
 - Wire path-template validation (only `{model}` is supported)
 - Packaged wire-profile registry validation (closed codec IDs and advisory
   hint references)
+- Model-router validation rejects empty/control-containing/slashed virtual IDs,
+  missing routes, invalid defaults, virtual-to-virtual targets, and oversized
+  compiled policies; it preserves exact alias spelling and does not query the
+  model catalog
 - Config file parsing with `tomllib`
 
 ### API Models (`api.py`)

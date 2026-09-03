@@ -249,10 +249,11 @@ restart. The command validates the config locally, contacts the running
 server's control socket, and the server atomically swaps the active
 configuration generation when safe.
 
-The closure pass enables provider/account/routing/model-override
+The closure pass enables provider/account/routing/model-override/model-router
 families as `LIVE`, so editing ``[providers.<id>]``,
 ``[[providers.<id>.accounts]]``, ``[routing]``, ``[model_overrides.<id>]``,
-or ``[model_capabilities.<id>]`` applies without a restart. Other
+``[model_capabilities.<id>]``, or ``[model_routers.<id>]`` applies without a
+restart. Other
 fields (server bind host/port, Granian construction, database path,
 middleware, security headers and trusted-proxy attribution, metrics topology, backup paths,
 transcoder storage topology) remain `RESTART_REQUIRED` —

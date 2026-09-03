@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from eggpool.catalog.pricing import CostCalculator
     from eggpool.catalog.service import CatalogService
     from eggpool.health.health_manager import HealthManager
+    from eggpool.model_router.registry import ModelRouterRegistry
     from eggpool.models.config import AppConfig
     from eggpool.providers.client_pool import ProviderClientPool
     from eggpool.providers.outbound import OutboundClientManager
@@ -89,6 +90,7 @@ class PreparedRuntimeGeneration:
     supervisor: TaskSupervisor
     routing_trace_guard: RoutingTraceGuard | None
     routing_trace_writer: Any
+    model_router_registry: ModelRouterRegistry
     local_pre_upstream_recorder: Any = None
     stream_diagnostics: Any = None
     finalization_supervisor: RequestFinalizationSupervisor | None = None
@@ -190,6 +192,12 @@ class RuntimeGenerationFactory:
 
         db = process.db
         config.validate_optional_dependencies()
+        from eggpool.model_router.registry import ModelRouterRegistry  # noqa: PLC0415
+
+        # Compilation is pure configuration work. Do it before constructing
+        # any generation-owned resource so an oversized candidate cannot
+        # partially build a live service graph.
+        model_router_registry = ModelRouterRegistry.from_config(config.model_routers)
         _register = candidate.register_resource if candidate is not None else None
 
         # -- Client pool (generation-owned) --------------------------------
@@ -547,6 +555,7 @@ class RuntimeGenerationFactory:
             model_quarantine=quarantine,
             finalization_supervisor=finalization_supervisor,
             model_info=model_info,
+            model_router_registry=model_router_registry,
             local_pre_upstream_recorder=local_pre_upstream_recorder,
             stream_diagnostics=stream_diagnostics,
             generation_cleanup_callbacks=(close_recovery_tasks,),
@@ -574,6 +583,7 @@ class RuntimeGenerationFactory:
             stream_diagnostics=stream_diagnostics,
             finalization_supervisor=finalization_supervisor,
             model_info=model_info,
+            model_router_registry=model_router_registry,
         )
 
     # -- Internal helpers ---------------------------------------------------

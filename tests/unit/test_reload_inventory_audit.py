@@ -223,6 +223,7 @@ EXPECTED_INVENTORY_SNAPSHOT: tuple[tuple[str, str, bool], ...] = (
     ("model_info.startup_refresh", "restart_required", False),
     ("model_info.store_raw_observations", "restart_required", False),
     ("model_overrides", "live", False),
+    ("model_routers", "live", False),
     ("models.allow_stale_catalog", "live", False),
     ("models.catalog_withdrawal_policy", "restart_required", False),
     ("models.collapse_models", "live", False),

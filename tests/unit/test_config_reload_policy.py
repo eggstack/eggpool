@@ -119,6 +119,8 @@ class TestPolicyDefaults:
             # Model overrides and per-model capability overrides:
             "model_overrides",
             "model_capabilities",
+            # Model-router definitions compile atomically per generation.
+            "model_routers",
             # Milestone D1: request-policy blocks consumed via
             # generation-owned policy objects on the candidate
             # ``RequestCoordinator`` and ``CatalogService``.
@@ -1187,6 +1189,10 @@ LIVE_FIELD_CONSUMERS: dict[str, tuple[str, ...]] = {
     # the capability resolver inside ``RequestCoordinator``.
     "model_overrides": ("Router.quota_estimator", "CostCalculator"),
     "model_capabilities": ("RequestCoordinator",),
+    # The whole mapping is compiled by RuntimeGenerationFactory before the
+    # candidate generation is published; dynamic route keys are not tracked
+    # as independent reload fields.
+    "model_routers": ("RuntimeGeneration.model_router_registry",),
     # Milestone D1: request-policy blocks consumed via the
     # generation-owned policy objects on the candidate
     # ``RequestCoordinator`` (see ``_build_candidate_generation``).

@@ -48,6 +48,12 @@ Runtime generation ownership:
 - **`ProcessRuntime`**: holds process-owned containers (DB connections) that outlive generations
 - **Generation builder**: constructs candidate generations for live reload
 
+`ModelRouterRegistry` is generation-owned and compiled by
+`RuntimeGenerationFactory` before the rest of the candidate graph is built.
+It is an immutable lookup of exact virtual aliases to compiled route policies.
+The empty configuration uses a shared empty registry and adds no model-router-
+specific catalog, health, quota, database, network, or background-task work.
+
 `ProcessRuntime.wire_profile_resolver` is a process-owned, bounded in-memory
 state container. It survives safe generation swaps, while each generation
 passes immutable resolved provider profiles to its coordinator. Candidate
@@ -181,6 +187,7 @@ failed durable clear leaves the current in-memory suppression intact.
 | Model catalog | `RuntimeGeneration` | No (rebuilt) |
 | Health manager | `RuntimeGeneration` | No (rebuilt) |
 | Quota estimator | `RuntimeGeneration` | No (rebuilt) |
+| Model-router registry | `RuntimeGeneration` | No (rebuilt) |
 | Finalization supervisor and accepted terminal jobs | `RuntimeGeneration` | No (retained until convergence) |
 
 ## Key Invariants

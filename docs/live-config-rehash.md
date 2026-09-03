@@ -36,6 +36,12 @@ The closure pass enables the following families of fields as `LIVE`:
   when the generation's structural candidate fingerprint is unchanged.
 - **Model overrides and per-model capability overrides**:
   ``[model_overrides.<id>]`` and ``[model_capabilities.<id>]``.
+- **Model-router definitions**: the complete ``[model_routers.<id>]`` mapping
+  is one ``LIVE`` field. Each candidate generation compiles the aliases and
+  route policies atomically; route keys are deliberately not expanded into
+  independent diff fields. Invalid structural definitions or an over-large
+  compiled policy reject the candidate while the active generation continues
+  serving.
 
 ### Closure pass D1 — request-policy expansion
 

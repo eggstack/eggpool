@@ -635,6 +635,7 @@ def mirror_generation_on_app_state(
     )
     mirrors: dict[str, object] = {
         "registry": generation.registry,
+        "model_router_registry": getattr(generation, "model_router_registry", None),
         "catalog": generation.catalog,
         "model_info": getattr(generation, "model_info", None),
         "router": generation.router,

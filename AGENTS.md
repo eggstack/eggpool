@@ -133,6 +133,7 @@ Non-obvious wiring:
 
 - **Request lifecycle**: `RequestCoordinator` in `src/eggpool/request/` orchestrates endpoint → routing → persistence → dispatch → finalization; HTTP layer in `src/eggpool/api/`
 - **Runtime generations**: `RuntimeManager` (package root, `runtime_manager.py`) owns active/retiring slots and leases; generation-owned attributes mirrored on `app.state` are mirrors, not authority
+- **Model-router registry**: `ModelRouterRegistry` in `src/eggpool/model_router/` is immutable generation-owned configuration; it compiles exact virtual aliases and stable route IDs without consulting catalog, health, quota, DB, or network state
 - **Protocol transcoding**: `src/eggpool/transcoder/` converts OpenAI ↔ Anthropic; operator guide `docs/transcoding.md`
 - **Wire surfaces**: `/v1/responses` is stateless but may adapt through the canonical wire boundary to OpenAI Chat, Anthropic Messages, or native Gemini surfaces. Surface selection is the `request_surface` field (`"chat_completions"` | `"responses"`), while concrete upstream selection is `WireProfile.surface` → `architecture/deep-dive-request-lifecycle.md`
 - **Control plane**: live config reload (rehash) over a Unix-domain socket, `src/eggpool/control/`
@@ -146,6 +147,7 @@ Non-obvious wiring:
 - **Task-owned transactions**: SQLite access runs inside `db.transaction()` owned by the owning task; process transitions execute inside transactions with atomic rollback. Foreign-task access raises `DatabaseTransactionOwnershipError`
 - **`/readyz` never performs a write**: reads a cached probe snapshot
 - **`eggpool rehash` serializes reloads**: one reload at a time; concurrent attempts exit with code 4 (`EXIT_RELOAD_BUSY` from `cli_exit_codes.py` — use the constant). Disruptive changes (host, port, db path) require restart instead
+- **Model routers are foundation-only in Plan 163**: `[model_routers.<id>]` is optional, structurally validated, compiled during candidate generation construction, and live-reloadable as one mapping; client dispatch remains concrete until a later phase
 - **`ReloadObserver` is inert in production**: observer protocol defaults to no-ops
 - **`eggpool connect`/`logout` don't silently restart**: healthy server with missing control socket returns `(False, "control unavailable (server healthy)")`
 - **`eggpool update` does a live PyPI lookup**: bare update uses freshness-aware latest check; explicit `VERSION` uses the exact release endpoint and permits deliberate downgrades

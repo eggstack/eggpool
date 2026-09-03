@@ -52,6 +52,16 @@ unresolved-model, and migration compatibility suites before the smoke gate. The
 focused assertions should inspect durable rows/application DML effects, not
 SQLite page-write counts.
 
+Model-router foundation changes should run
+`tests/unit/test_model_router_config.py`,
+`tests/unit/test_model_router_registry.py`, and
+`tests/unit/test_config_reload_policy.py` before the smoke gate. Verify exact
+alias preservation, structural recursion rejection without catalog access,
+sorted stable route IDs, byte-stable static policies, semantic fingerprints,
+aggregate policy bounds, collision precedence, and the shared empty registry.
+The generation factory must compile candidates before publication, while the
+feature-off path adds no DB migration or background task.
+
 Model-info lifecycle changes should run the model-info source/enrichment suites,
 the runtime-task inventory, and the integration lifecycle path. Verify both
 halves of the task contract: no standalone `model_info_refresh` task exists,

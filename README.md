@@ -14,6 +14,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Transparent bidirectional protocol transcoding between OpenAI and Anthropic, plus native Gemini wire codecs
 - Canonical request/reasoning/response-event boundary for safe cross-surface translation and stream termination
 - Dynamic model discovery with load-based routing across multiple providers and accounts
+- Optional model-router configuration with exact virtual model IDs and stable route policies
 - Provider/model wire-surface contracts with per-surface paths and auth shapes
 - Request, token, latency, error, and cost tracking in SQLite
 - Multi-page dashboard with 50 themes
@@ -175,6 +176,7 @@ Use `eggpool connect` for interactive provider setup. See [docs/providers.md](do
 | `[upstream]` | Upstream API base URL, timeouts, connection pool |
 | `[database]` | SQLite path, WAL mode, WAL size limit |
 | `[models]` | Catalog refresh, exposure mode, model collapse, withdrawal policy |
+| `[model_routers.<id>]` | Optional virtual-model selector policy and concrete route targets |
 | `[routing]` | Routing strategy, retry limits, quota mode, same-tier fairness, bounded wire negotiation |
 | `[dashboard]` | Dashboard toggle, theme, refresh interval |
 | `[providers.*]` | Provider configs with accounts and routing priority |
@@ -216,6 +218,13 @@ upstream-submission budget.
 
 Full config reference: [`config.example.toml`](config.example.toml) | [docs/providers.md](docs/providers.md)
 
+Model routers are optional and disabled by default. A `[model_routers.<id>]`
+block defines a virtual model alias, selector model, default concrete model,
+and labelled concrete targets. Definitions are structurally validated and
+compiled into each runtime generation; this foundation does not yet redirect
+client requests through the selector. Virtual aliases are exact and cannot
+contain `/`, and router targets must remain concrete model references.
+
 When `[model_info].enabled = true`, startup performs one bounded external
 enrichment pass when `model_info.startup_refresh = true`. Later enrichment uses
 the existing `[models].refresh_interval_s` catalog event; model-info
@@ -236,7 +245,7 @@ accept every control shape.
 
 ### Live Config Changes
 
-`eggpool rehash` applies provider/account/routing/model-override changes without a restart. Disruptive changes (host, port, database path) require `eggpool restart`.
+`eggpool rehash` applies provider/account/routing/model-override/model-router changes without a restart. Disruptive changes (host, port, database path) require `eggpool restart`.
 
 See [Live Configuration Rehash](docs/live-config-rehash.md) for the full reload flow and supported fields.
 

@@ -1,7 +1,7 @@
 # Plan 163 — Model-Router Configuration, Registry, and Virtual-Model Foundations
 
 Date: 2026-09-03
-Status: ready for implementation
+Status: complete (verified 2026-09-03)
 Planning baseline: `525189763a3a6d506e9e8001e2426c9bd9a247fe`
 Parent roadmap: `plans/162-optional-llm-model-router-selection-roadmap.md`
 Priority: P1 configuration/runtime correctness
@@ -302,3 +302,12 @@ Plan 163 is complete when:
 5. Empty configuration adds no DB state, background work, mandatory dependency, or provider/account routing behavior.
 6. Collision precedence is explicitly tested.
 7. Later phases can consume one immutable `CompiledModelRouter` without reparsing TOML or inventing their own validation.
+
+## Closure evidence
+
+Implemented the typed `model_routers` configuration, structural validation,
+deterministic immutable compilation, generation-owned registry, atomic live
+reload wiring, exact alias precedence contract, and feature-off characterization
+without database migrations or background-task changes. The local CI-equivalent
+gate passed, and the full suite passed with 7,843 tests passed and 42 expected
+skips. Live provider tests were not needed for this configuration-only phase.

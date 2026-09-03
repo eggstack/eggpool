@@ -32,6 +32,10 @@ the provider pool, outbound clients, catalog, router, coordinator, health
 manager, statistics service, and generation-leased background tasks. Rehash
 prepares a complete candidate through `RuntimeGenerationFactory`, then swaps
 it atomically; leases keep in-flight requests on the generation they acquired.
+The optional `ModelRouterRegistry` is also generation-owned. It contains only
+compiled configuration for exact virtual model aliases, so changing
+`[model_routers.<id>]` publishes a fresh registry atomically without adding
+catalog, health, quota, database, network, or background-task work.
 
 ## Request lifecycle
 
@@ -132,6 +136,8 @@ failure cannot fail catalog discovery or routing.
 loopback by default; LAN or wildcard binds require the existing server API key.
 Live-reloadable settings are explicitly listed in
 `src/eggpool/config_reload_policy.py`; unknown fields are rejected.
+`[model_routers.<id>]` is an optional live-reloadable configuration surface;
+its structural validation does not check current catalog availability.
 
 See [deep-dive-deployment.md](deep-dive-deployment.md), `docs/deployment.md`,
 and `docs/live-config-rehash.md`.
