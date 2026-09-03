@@ -1,7 +1,7 @@
 # Plan 155 — Wire Rejection Classification and Live Acceptance Closure
 
 Date: 2026-09-03
-Status: deterministic implementation and local CI closure complete; credentialed live acceptance pending
+Status: deterministic implementation, local CI, and credentialed OpenCode Go acceptance complete; Gemini acceptance pending
 Parent roadmap: `plans/147-dynamic-wire-surface-negotiation-roadmap.md`
 Corrects: Plans 151–153 acceptance gaps
 Depends on: current Plans 148–153 implementation; Plan 154 should land before final closure
@@ -511,9 +511,10 @@ Local evidence:
 - Focused regression suite: 103 passed.
 - Contract, URL, transcoder/proxy, and resolver suites: 180 passed.
 - Pyright (`src/`, `scripts/`): 0 errors, 0 warnings, 0 informations.
-- Opt-in OpenCode Go live command: 5 skipped because
-  `EGGPOOL_E2E_OPENCODE_GO_API_KEY` was not configured.
+- Opt-in OpenCode Go live command with the user-supplied credential: 5 passed
+  in 44.02s. The credential was supplied only through the ephemeral test
+  process environment and was not written to the repository or logs.
 
-Credentialed OpenCode Go and Gemini live acceptance remain pending until the
-corresponding test-only credentials are supplied. No live-provider claim is
-made from the clean skip.
+Credentialed OpenCode Go acceptance is complete. Gemini live acceptance
+remains pending until its corresponding test-only credential is supplied; no
+Gemini live-provider claim is made here.

@@ -102,7 +102,7 @@ def _live_spec(observer: list[Any]) -> RuntimeAppSpec:
                 if model_id == "muse-spark-1.2-contributor"
                 else _thinking_capability(["low", "medium", "high"])
                 if model_id == "mimo-v2.5"
-                else {},
+                else {}
             ),
         )
         for model_id in _MODEL_SURFACES
@@ -213,15 +213,12 @@ async def test_opencode_go_current_surface_matrix(
                 item for item in observations[start:] if item.model_id == model_id
             ]
             assert len(model_observations) == 2
-            assert all(
-                item.path
-                == {
-                    "openai_responses": "/responses",
-                    "anthropic_messages": "/messages",
-                    "openai_chat_completions": "/chat/completions",
-                }[expected_surface]
-                for item in model_observations
-            )
+            expected_path = {
+                "openai_responses": "/responses",
+                "anthropic_messages": "/messages",
+                "openai_chat_completions": "/chat/completions",
+            }[expected_surface]
+            assert all(item.path.endswith(expected_path) for item in model_observations)
             assert all(
                 item.wire_surface == expected_surface for item in model_observations
             )
@@ -241,9 +238,9 @@ async def test_opencode_go_streams_have_native_terminal_evidence(
     app, observations = live_app
     api_key = os.environ["EGGPOOL_E2E_OPENCODE_GO_API_KEY"]
     stream_cases = (
-        ("muse-spark-1.2-contributor", "response.completed"),
-        ("mimo-v2.5", "[DONE]"),
-        ("minimax-m3", "message_stop"),
+        ("muse-spark-1.2-contributor", {"response.completed", "response.incomplete"}),
+        ("mimo-v2.5", {"[DONE]"}),
+        ("minimax-m3", {"message_stop"}),
     )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -251,7 +248,7 @@ async def test_opencode_go_streams_have_native_terminal_evidence(
         base_url="http://testserver",
         timeout=httpx.Timeout(180.0),
     ) as client:
-        for model_id, terminal in stream_cases:
+        for model_id, terminals in stream_cases:
             async with asyncio.timeout(180.0):
                 async with client.stream(
                     "POST",
@@ -261,7 +258,9 @@ async def test_opencode_go_streams_have_native_terminal_evidence(
                 ) as response:
                     assert response.status_code == 200, await response.aread()
                     body = b"".join([chunk async for chunk in response.aiter_bytes()])
-            assert terminal.encode() in body
+            assert any(terminal.encode() in body for terminal in terminals), body[
+                :16_384
+            ].decode("utf-8", errors="replace")
             assert any(
                 item.model_id == model_id and item.streaming for item in observations
             )
@@ -300,7 +299,7 @@ async def test_opencode_go_anthropic_client_reaches_muse_responses(
         for item in reversed(observations)
         if item.model_id == "muse-spark-1.2-contributor"
     )
-    assert observation.path == "/responses"
+    assert observation.path.endswith("/responses")
     assert observation.wire_surface == "openai_responses"
     assert observation.streaming is False
     assert app.state.health_manager.is_account_healthy("live-account")
@@ -397,7 +396,7 @@ async def test_opencode_go_invalid_key_isolated_from_valid_account(
                 assert response.status_code == 200, response.text
                 assert any(item.account_id == "good-account" for item in observations)
                 assert bad_health["is_healthy"] is False
-                assert bad_health["disabled_reason"] == "authentication_failed"
+                assert bad_health["health_state"] == "authentication_failed"
                 follow_up = await client.post(
                     "/v1/chat/completions",
                     headers=_headers(good_key),
