@@ -72,11 +72,6 @@ Tracks per-model capabilities including:
   `budget_tokens`; omitted metadata remains unknown while a complete empty
   list means no caller control
 
-The canonical OpenCode Go provider also receives bundled thinking metadata for
-Muse Spark 1.2 and 1.3 Contributors, including their OpenAI-native effort
-levels. This provider-scoped seed is applied before routing so those models do
-not fall back to an unknown capability status when live catalog metadata is
-absent.
 - Compatibility projections for budget bounds, accepted efforts, and explicit
   effort-to-budget mappings. Discovery never fabricates token mappings from
   effort labels.
@@ -122,17 +117,19 @@ runtime.
 Merges metadata from external `models.dev` sources:
 - `fetch_models_dev_provider_models()` — fetches from models.dev API
 - `merge_models_dev_metadata()` — merges with provider-sourced data
-- `derive_opencode_go_supported_efforts()` — reads explicitly declared effort
-  values for compatibility callers without filling missing metadata
-- `apply_supported_efforts_to_capabilities()` — applies explicit effort labels
-  without inventing token budgets
+
+The models.dev row is passed through the same `parse_reasoning_options()` path
+used for live provider metadata and is tagged `model_info`. Source authority is
+field-level: explicit live provider facts replace models.dev facts, while
+omitted live dimensions are filled from models.dev. Operator capability
+overrides are applied after both sources.
 
 ## Data Flow
 
 ```
-Provider /v1/models → fetcher → normalizer → cache
-                                              ↓
-models.dev metadata ─────────────→ merge ──→ cache
+Provider /v1/models → fetcher → normalizer ─┐
+                                           ├→ authority merge → cache
+models.dev metadata ── fetch/enrich ───────┘
                                               ↓
 Pricing aliases ─────────────────→ resolve ──→ cache
                                               ↓
@@ -149,6 +146,10 @@ Catalog service ─────────────────────�
 - Protocol resolution is deterministic — same input always produces same output
 - Pricing is advisory only — never used for routing decisions
 - `static_models` in config is the source of truth for provider-specific protocol when live fetch fails
+- Reasoning support and caller controls are provider/model facts. Source order
+  is operator override, explicit live provider metadata, verified provider-
+  scoped models.dev metadata, then unknown; model-family names never supply
+  control defaults.
 
 ## Configuration
 

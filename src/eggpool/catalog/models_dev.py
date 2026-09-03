@@ -7,16 +7,6 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import httpx
 
-from eggpool.catalog.capabilities import (
-    ModelCapabilities,
-    ThinkingCapability,
-    ThinkingControlContract,
-    dict_to_model_capabilities,
-    merge_model_capabilities,
-    model_capabilities_to_dict,
-    parse_reasoning_options,
-)
-
 logger = logging.getLogger(__name__)
 
 MODELS_DEV_BASE_URL = "https://models.dev"
@@ -93,59 +83,3 @@ def merge_models_dev_metadata(
     source_metadata["metadata_source"] = "models.dev"
     source_metadata["models_dev_provider_id"] = OPENCODE_GO_MODELS_DEV_PROVIDER_ID
     model["source_metadata"] = source_metadata
-
-
-def derive_opencode_go_supported_efforts(
-    _model_id: str,
-    metadata: Mapping[str, Any],
-) -> list[str]:
-    """Return OpenCode-compatible effort variants for a Go model.
-
-    This reads the provider-declared effort list for compatibility callers.
-    Missing ``reasoning_options`` remains unknown; this helper must not turn
-    a reasoning boolean into guessed host controls.
-    """
-    if metadata.get("reasoning") is not True:
-        return []
-
-    # models.dev mirrors OpenCode's provider catalog and can carry the exact
-    # effort set for newer models. Prefer it when present so newly released
-    # levels (for example Muse Spark's ``xhigh``) are not silently dropped.
-    options = parse_reasoning_options(
-        metadata.get("reasoning_options"),
-        complete="reasoning_options" in metadata,
-    )
-    if options.present:
-        # An explicit empty list means this host exposes no caller-selected
-        # effort variants. Do not replace it with a guessed compatibility set.
-        return options.accepted_efforts
-    return []
-
-
-def apply_supported_efforts_to_capabilities(
-    capabilities: dict[str, Any],
-    *,
-    efforts: list[str],
-) -> dict[str, Any]:
-    """Return capabilities with an explicit thinking supported-efforts list."""
-    if not efforts:
-        return capabilities
-    base = dict_to_model_capabilities(cast("dict[str, object]", capabilities))
-    override = ModelCapabilities(
-        thinking=ThinkingCapability(
-            status="supported",
-            source="provider_catalog",
-            native_protocols=["openai"],
-            supported_efforts=efforts,
-            control_contract=ThinkingControlContract(
-                effort="supported",
-                accepted_efforts=list(efforts),
-                source="provider_catalog",
-            ),
-            notes="OpenCode-compatible model metadata reports reasoning efforts.",
-        )
-    )
-    merged = merge_model_capabilities(base, override)
-    result = dict(capabilities)
-    result.update(model_capabilities_to_dict(merged))
-    return result

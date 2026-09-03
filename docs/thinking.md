@@ -16,6 +16,13 @@ Key invariants:
 - **No fabrication.** EggPool does not generate hidden reasoning. It only forwards provider-exposed content. If the upstream does not return thinking blocks, the client does not receive them.
 - **Protocol compatibility alone does not imply thinking support.** A model reachable via the OpenAI Chat Completions-compatible protocol may still lack thinking support. Capability status is independent of protocol compatibility.
 
+Reasoning facts are scoped to the exact provider/model pair. Source authority is
+operator override, explicit live provider metadata, verified provider-scoped
+model-info metadata, then unknown. A live source may leave a control dimension
+unknown while still allowing a lower source to fill it; an explicit empty
+`reasoning_options` list is a complete no-control declaration. Model-family
+names never supply effort defaults.
+
 ### Compositional provider controls
 
 `ThinkingControlContract` is the canonical provider/model contract for caller

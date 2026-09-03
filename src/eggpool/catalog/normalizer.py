@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 
 from eggpool.catalog.capabilities import (
+    CapabilitySource,
     ModelCapabilities,
     ThinkingCapability,
     ThinkingClientControls,
@@ -113,8 +114,13 @@ def _thinking_capability_from_metadata(
     item: dict[str, Any],
     *,
     protocol: str | None,
+    source: CapabilitySource = "provider_catalog",
 ) -> ThinkingCapability:
-    """Extract structured thinking metadata from a model-list row."""
+    """Extract structured thinking metadata from a model-list row.
+
+    ``source`` identifies who published the row; parsing is shared by live
+    provider catalogs and verified external model-info enrichment.
+    """
     raw_caps = item.get("capabilities")
     base = ModelCapabilities()
     if isinstance(raw_caps, dict):
@@ -157,19 +163,19 @@ def _thinking_capability_from_metadata(
         effort_aliases=options.effort_aliases,
         explicit_budget_min=options.explicit_budget_min,
         explicit_budget_max=options.explicit_budget_max,
-        source="provider_catalog",
+        source=source,
     )
     if status == "unsupported":
         contract = ThinkingControlContract(
             toggle="unsupported",
             effort="unsupported",
             budget="unsupported",
-            source="provider_catalog",
+            source=source,
         )
     override = ModelCapabilities(
         thinking=ThinkingCapability(
             status=cast("Any", status),
-            source="provider_catalog",
+            source=source,
             native_protocols=_native_protocols_for_metadata(protocol),
             client_controls=_client_controls_for_metadata(
                 protocol=protocol,
@@ -194,9 +200,14 @@ def extract_capabilities_from_metadata(
     item: dict[str, Any],
     *,
     protocol: str | None = None,
+    source: CapabilitySource = "provider_catalog",
 ) -> dict[str, object]:
-    """Extract EggPool capability metadata from an upstream model-list row."""
-    capability = _thinking_capability_from_metadata(item, protocol=protocol)
+    """Extract EggPool capability metadata from a model metadata row."""
+    capability = _thinking_capability_from_metadata(
+        item,
+        protocol=protocol,
+        source=source,
+    )
     return model_capabilities_to_dict(ModelCapabilities(thinking=capability))
 
 

@@ -114,7 +114,7 @@ def test_provider_stream_timeout_values_are_rejected(values: dict[str, float]) -
         )
 
 
-def test_legacy_opencode_go_accounts_seed_mimo_thinking_capability() -> None:
+def test_legacy_opencode_go_accounts_do_not_seed_thinking_capabilities() -> None:
     config = AppConfig.from_dict(
         {
             "accounts": [
@@ -124,21 +124,10 @@ def test_legacy_opencode_go_accounts_seed_mimo_thinking_capability() -> None:
     )
 
     provider = config.providers["opencode-go"]
-    thinking = provider.model_capabilities["mimo-v2.5"].thinking
-    assert thinking is not None
-    assert thinking.status == "supported"
-    assert thinking.source == "provider_catalog"
-    assert thinking.native_protocols == ["openai", "anthropic"]
-    assert thinking.supported_efforts == ["low", "medium", "high"]
-    assert thinking.effort_to_budget_tokens == {
-        "low": 1024,
-        "med": 4096,
-        "medium": 4096,
-        "high": 16384,
-    }
+    assert provider.model_capabilities == {}
 
 
-def test_explicit_opencode_go_provider_seeds_mimo_thinking_capability() -> None:
+def test_explicit_opencode_go_provider_does_not_seed_thinking_capabilities() -> None:
     config = AppConfig.from_dict(
         {
             "providers": {
@@ -152,12 +141,10 @@ def test_explicit_opencode_go_provider_seeds_mimo_thinking_capability() -> None:
         }
     )
 
-    thinking = config.providers["opencode-go"].model_capabilities["mimo-v2.5"].thinking
-    assert thinking is not None
-    assert thinking.status == "supported"
+    assert config.providers["opencode-go"].model_capabilities == {}
 
 
-def test_opencode_go_seeds_muse_spark_xhigh_thinking_capability() -> None:
+def test_opencode_go_does_not_seed_muse_spark_capabilities() -> None:
     config = AppConfig.from_dict(
         {
             "providers": {
@@ -171,44 +158,10 @@ def test_opencode_go_seeds_muse_spark_xhigh_thinking_capability() -> None:
         }
     )
 
-    thinking = (
-        config.providers["opencode-go"]
-        .model_capabilities["muse-spark-1.2-contributor"]
-        .thinking
-    )
-    assert thinking is not None
-    assert thinking.status == "supported"
-    assert thinking.supported_efforts == ["minimal", "low", "medium", "high", "xhigh"]
-    assert thinking.effort_to_budget_tokens is not None
-    assert thinking.effort_to_budget_tokens["xhigh"] == 24576
+    assert config.providers["opencode-go"].model_capabilities == {}
 
 
-def test_opencode_go_seeds_muse_spark_13_thinking_capability() -> None:
-    config = AppConfig.from_dict(
-        {
-            "providers": {
-                "opencode-go": {
-                    "id": "opencode-go",
-                    "base_url": "https://opencode.ai/zen/go/v1",
-                    "protocols": ["openai", "anthropic"],
-                    "accounts": [{"name": "personal", "api_key": "sk-test"}],
-                }
-            }
-        }
-    )
-
-    thinking = (
-        config.providers["opencode-go"]
-        .model_capabilities["muse-spark-1.3-contributor"]
-        .thinking
-    )
-    assert thinking is not None
-    assert thinking.status == "supported"
-    assert thinking.native_protocols == ["openai"]
-    assert thinking.supported_efforts == ["minimal", "low", "medium", "high", "xhigh"]
-
-
-def test_canonical_opencode_go_clone_seeds_mimo_thinking_capability() -> None:
+def test_opencode_go_clone_does_not_seed_thinking_capabilities() -> None:
     config = AppConfig.from_dict(
         {
             "providers": {
@@ -222,14 +175,10 @@ def test_canonical_opencode_go_clone_seeds_mimo_thinking_capability() -> None:
         }
     )
 
-    thinking = (
-        config.providers["opencode-go-plan-a"].model_capabilities["mimo-v2.5"].thinking
-    )
-    assert thinking is not None
-    assert thinking.status == "supported"
+    assert config.providers["opencode-go-plan-a"].model_capabilities == {}
 
 
-def test_opencode_go_builtin_capability_does_not_clobber_operator_override() -> None:
+def test_opencode_go_operator_capability_override_remains_supported() -> None:
     config = AppConfig.from_dict(
         {
             "providers": {
@@ -256,7 +205,7 @@ def test_opencode_go_builtin_capability_does_not_clobber_operator_override() -> 
     assert thinking.source == "manual_override"
 
 
-def test_noncanonical_opencode_go_provider_does_not_seed_mimo_capability() -> None:
+def test_noncanonical_opencode_go_provider_has_no_capability_defaults() -> None:
     config = AppConfig.from_dict(
         {
             "providers": {

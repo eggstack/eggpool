@@ -16,10 +16,9 @@ The acceptance criteria from the bug report require that:
 
 This module runs the entire request flow through the real EggPool
 ASGI surface with respx mocking the upstream; it never calls a live service.
-The OpenCode Go Muse
-Spark contract is mirrored from the bundled builtin in
-``models/config.py`` so the test exercises the same capability rows
-that production sees for the canonical opencode-go provider.
+The OpenCode Go Muse Spark contract is declared explicitly in the fixture,
+matching the provider-scoped metadata or operator override required by
+production for this mocked endpoint.
 """
 
 from __future__ import annotations
@@ -49,10 +48,9 @@ pytestmark = [pytest.mark.integration]
 
 
 # ---------------------------------------------------------------------------
-# Built-in capability override matching the bundled opencode-go defaults
-# for the Muse Spark Contributor models (Plan: tests rely on the bundled
-# override so the test mirrors production behaviour for the canonical
-# upstream URL).
+# Explicit provider capability metadata for the Muse Spark Contributor
+# models. Production does not infer these controls from endpoint identity
+# or model names, so the mocked provider advertises them directly.
 # ---------------------------------------------------------------------------
 
 _MUSE_SPARK_MODEL_IDS = (
@@ -72,6 +70,21 @@ _MUSE_SPARK_THINKING_CAPABILITY = {
             "medium": 4096,
             "high": 16384,
             "xhigh": 24576,
+        },
+        "control_contract": {
+            "mode": "effort_or_budget",
+            "request_fields": ["thinking", "thinking_budget", "reasoning_effort"],
+            "accepted_efforts": ["minimal", "low", "medium", "high", "xhigh"],
+            "effort_to_budget_tokens": {
+                "minimal": 1024,
+                "low": 1024,
+                "medium": 4096,
+                "high": 16384,
+                "xhigh": 24576,
+            },
+            "explicit_budget_min": 1024,
+            "explicit_budget_max": 24576,
+            "source": "provider_catalog",
         },
         "notes": "OpenCode Go exposes minimal/low/medium/high/xhigh thinking controls.",
     },

@@ -15,6 +15,11 @@ from eggpool.catalog.cache import (
     AccountCatalogUpdateResult,
     ModelCatalogCache,
 )
+from eggpool.catalog.capabilities import (
+    dict_to_model_capabilities,
+    merge_model_capabilities_by_source,
+    model_capabilities_to_dict,
+)
 from eggpool.catalog.catalog_resolvers import (
     CatalogConfig,
     CatalogHttpClient,
@@ -26,8 +31,6 @@ from eggpool.catalog.fetcher import fetch_models_for_account
 from eggpool.catalog.limits import ModelLimitResolver, extract_upstream_limits
 from eggpool.catalog.models_dev import (
     OPENCODE_GO_MODELS_DEV_PROVIDER_ID,
-    apply_supported_efforts_to_capabilities,
-    derive_opencode_go_supported_efforts,
     fetch_models_dev_provider_models,
     merge_models_dev_metadata,
 )
@@ -369,22 +372,29 @@ class CatalogService:
                 if isinstance(capabilities_raw, dict)
                 else {}
             )
-            capabilities.update(
+            live_capabilities = dict_to_model_capabilities(
+                cast("dict[str, object]", capabilities)
+            )
+            model_info_capabilities = dict_to_model_capabilities(
                 extract_capabilities_from_metadata(
                     metadata,
                     protocol=model.get("protocol")
                     if isinstance(model.get("protocol"), str)
                     else None,
+                    source="model_info",
                 )
             )
-            efforts = derive_opencode_go_supported_efforts(
-                str(model.get("model_id")),
-                metadata,
+            merged_capabilities = merge_model_capabilities_by_source(
+                model_info_capabilities,
+                live_capabilities,
             )
-            model["capabilities"] = apply_supported_efforts_to_capabilities(
-                capabilities,
-                efforts=efforts,
-            )
+            structured = model_capabilities_to_dict(merged_capabilities)
+            thinking = structured.get("thinking")
+            if thinking is not None:
+                capabilities["thinking"] = thinking
+            else:
+                capabilities.pop("thinking", None)
+            model["capabilities"] = capabilities
 
     def set_price_change_callback(
         self, callback: Callable[[str, str | None], None]

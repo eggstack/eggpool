@@ -463,15 +463,10 @@ enabled = false
 # mode = "api_key"
 # header = "x-api-key"
 #
-# # OpenCode Go exposes low/medium/high thinking controls for mimo-v2.5 and
-# # minimal/low/medium/high/xhigh for muse-spark-1.2-contributor and
-# # muse-spark-1.3-contributor.
-# [providers.opencode-go.model_capabilities."mimo-v2.5".thinking]
-# status = "supported"
-# source = "provider_catalog"
-# native_protocols = ["openai", "anthropic"]
-# supported_efforts = ["low", "medium", "high"]
-# effort_to_budget_tokens = { low = 1024, med = 4096, medium = 4096, high = 16384 }
+# Reasoning support and caller controls are discovered independently for each
+# provider/model from explicit upstream or model-info metadata. Do not add a
+# model-family default here; use an explicit override only when you have
+# provider-specific evidence that should intentionally replace discovery.
 #
 # # Provider-specific model context limits override upstream metadata.
 # # Use the base model ID (not the provider-suffixed ID).

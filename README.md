@@ -216,6 +216,11 @@ upstream-submission budget.
 
 Full config reference: [`config.example.toml`](config.example.toml) | [docs/providers.md](docs/providers.md)
 
+Reasoning support and caller controls are discovered per provider/model from
+explicit upstream or verified model-info metadata. EggPool does not infer
+effort levels from model-family names; use a model capability override only
+for intentional provider-specific evidence.
+
 ### Live Config Changes
 
 `eggpool rehash` applies provider/account/routing/model-override changes without a restart. Disruptive changes (host, port, database path) require `eggpool restart`.

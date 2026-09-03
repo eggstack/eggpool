@@ -61,79 +61,6 @@ class BuiltinProviderContract:
     contract: ThinkingControlContract
 
 
-# ---------------------------------------------------------------------------
-# OpenCode Go Muse Spark Contributor contract
-# ---------------------------------------------------------------------------
-# The OpenCode Go model list does not include capability metadata, so this
-# models need a curated contract for their Responses/OpenAI-family path. The
-# effort vocabulary is mirrored from the current models.dev/OpenCode model
-# record, including the newer ``minimal`` and ``xhigh`` levels.
-_OPENCODE_GO_MUSE_CONTRACT = BuiltinProviderContract(
-    key=ProviderContractKey(
-        provider_id_pattern=r"^opencode-go$",
-        model_id_pattern=r"^muse-spark-1\.[23]-contributor$",
-        protocol="openai",
-        priority=10,
-    ),
-    contract=ThinkingControlContract(
-        effort="supported",
-        budget="supported",
-        request_fields=["thinking", "reasoning_effort"],
-        accepted_efforts=["minimal", "low", "medium", "high", "xhigh"],
-        effort_to_budget_tokens={
-            "minimal": 1024,
-            "low": 1024,
-            "medium": 4096,
-            "high": 16384,
-            "xhigh": 24576,
-        },
-        explicit_budget_min=1024,
-        explicit_budget_max=131072,
-        historical_reasoning_content="accepted",
-        source="provider_catalog",
-    ),
-)
-
-_OPENCODE_GO_MUSE_URL_COMPAT_CONTRACT = BuiltinProviderContract(
-    key=ProviderContractKey(
-        provider_base_url_pattern=r".*opencode\.ai/zen/go/v1.*",
-        model_id_pattern=r"^muse-spark-1\.[23]-contributor$",
-        protocol="openai",
-        priority=10,
-    ),
-    contract=_OPENCODE_GO_MUSE_CONTRACT.contract,
-)
-
-# ---------------------------------------------------------------------------
-# OpenCode Go MiniMax-M3 contract
-# ---------------------------------------------------------------------------
-# OpenCode Go routes MiniMax-M3 through its own proxy.  The canonical
-# provider ID is ``opencode-go`` and the default upstream URL is
-# ``https://opencode.ai/zen/go/v1``.  Empirically the upstream accepts
-# both ``thinking`` (Anthropic Messages) and ``reasoning_effort``
-# (OpenAI Chat Completions) for low/medium/high, matching the native
-# MiniMax contract.  The OpenAI-to-Messages adapter represents the
-# selected effort as Anthropic ``thinking.budget_tokens``, so this
-# deployment accepts either equivalent control form.
-_OPENCODE_GO_MINIMAX_CONTRACT = BuiltinProviderContract(
-    key=ProviderContractKey(
-        provider_id_pattern=r"^opencode-go$",
-        model_id_pattern=r".*minimax.*m3.*|.*m3.*minimax.*",
-        protocol="anthropic",
-        priority=10,
-    ),
-    contract=ThinkingControlContract(
-        effort="supported",
-        budget="supported",
-        request_fields=["thinking", "reasoning_effort"],
-        accepted_efforts=["low", "medium", "high"],
-        effort_aliases={"med": "medium"},
-        effort_to_budget_tokens={"low": 1024, "medium": 4096, "high": 16384},
-        historical_reasoning_content="accepted",
-        source="manual_override",
-    ),
-)
-
 # MiniMax's own native Anthropic endpoint — accepts effort controls.
 _MINIMAX_NATIVE_CONTRACT = BuiltinProviderContract(
     key=ProviderContractKey(
@@ -145,28 +72,6 @@ _MINIMAX_NATIVE_CONTRACT = BuiltinProviderContract(
     contract=ThinkingControlContract(
         effort="supported",
         request_fields=["thinking"],
-        accepted_efforts=["low", "medium", "high"],
-        effort_aliases={"med": "medium"},
-        effort_to_budget_tokens={"low": 1024, "medium": 4096, "high": 16384},
-        historical_reasoning_content="accepted",
-        source="manual_override",
-    ),
-)
-
-# OpenCode Go URL compatibility — same effort-or-budget contract as the ID-based
-# rule, for providers configured with an OpenCode Go upstream URL but a
-# non-canonical provider ID.
-_OPENCODE_GO_URL_COMPAT_CONTRACT = BuiltinProviderContract(
-    key=ProviderContractKey(
-        provider_base_url_pattern=r".*opencode\.ai.*",
-        model_id_pattern=r".*minimax.*m3.*|.*m3.*minimax.*",
-        protocol="anthropic",
-        priority=10,
-    ),
-    contract=ThinkingControlContract(
-        effort="supported",
-        budget="supported",
-        request_fields=["thinking", "reasoning_effort"],
         accepted_efforts=["low", "medium", "high"],
         effort_aliases={"med": "medium"},
         effort_to_budget_tokens={"low": 1024, "medium": 4096, "high": 16384},
@@ -218,11 +123,7 @@ _OPENAI_NATIVE_CONTRACT = BuiltinProviderContract(
 
 # All built-in contracts, in declaration order (used for iteration).
 BUILTIN_CONTRACTS: tuple[BuiltinProviderContract, ...] = (
-    _OPENCODE_GO_MUSE_CONTRACT,
-    _OPENCODE_GO_MUSE_URL_COMPAT_CONTRACT,
-    _OPENCODE_GO_MINIMAX_CONTRACT,
     _MINIMAX_NATIVE_CONTRACT,
-    _OPENCODE_GO_URL_COMPAT_CONTRACT,
     _ANTHROPIC_NATIVE_CONTRACT,
     _OPENAI_NATIVE_CONTRACT,
 )

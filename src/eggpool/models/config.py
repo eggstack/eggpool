@@ -1160,9 +1160,9 @@ class ModelOverrideConfig(ModelLimitOverrideConfig):
 class ThinkingCapabilityOverrideConfig(BaseModel):
     """Override fields for the thinking/reasoning capability.
 
-    When ``status`` is ``None`` the entire override is a no-op (all other
-    fields should also be ``None``).  When ``status`` is set but ``source``
-    is omitted it defaults to ``"manual_override"``.
+    Each field is independently optional so an operator can replace one
+    reasoning fact without restating the others. When any fact is supplied
+    and ``source`` is omitted it defaults to ``"manual_override"``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1197,24 +1197,22 @@ class ThinkingCapabilityOverrideConfig(BaseModel):
     @model_validator(mode="after")
     def validate_thinking_overrides(self) -> ThinkingCapabilityOverrideConfig:
         """Enforce cross-field constraints for thinking overrides."""
-        # When status is None the override is a no-op — all other fields
-        # should be None too.  We silently accept and clear them so callers
-        # don't have to be precise about every key.
-        if self.status is None:
-            self.source = None
-            self.native_protocols = None
-            self.budget_tokens_min = None
-            self.budget_tokens_max = None
-            self.supported_efforts = None
-            self.effort_to_budget_tokens = None
-            self.toggle = None
-            self.effort = None
-            self.budget = None
-            self.notes = None
-            return self
-
-        # Default source to manual_override when status is set but source is not.
-        if self.source is None:
+        # Default source to manual_override for any explicit operator fact.
+        if self.source is None and any(
+            value is not None
+            for value in (
+                self.status,
+                self.native_protocols,
+                self.budget_tokens_min,
+                self.budget_tokens_max,
+                self.supported_efforts,
+                self.effort_to_budget_tokens,
+                self.toggle,
+                self.effort,
+                self.budget,
+                self.notes,
+            )
+        ):
             self.source = "manual_override"
 
         if self.budget_tokens_min is not None and self.budget_tokens_min <= 0:
@@ -1303,97 +1301,6 @@ class ModelCapabilitiesOverrideConfig(BaseModel):
     thinking: ThinkingCapabilityOverrideConfig | None = None
     transcoding: TranscodingCapabilities | None = None
     multimodal: MultimodalCapabilityOverrideConfig | None = None
-
-
-_OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"
-_OPENCODE_GO_THINKING_MODELS: frozenset[str] = frozenset(
-    {
-        "mimo-v2.5",
-        "minimax-m3",
-        "muse-spark-1.2-contributor",
-        "muse-spark-1.3-contributor",
-    }
-)
-_OPENCODE_GO_THINKING_EFFORTS: dict[str, list[str]] = {
-    "muse-spark-1.2-contributor": ["minimal", "low", "medium", "high", "xhigh"],
-    "muse-spark-1.3-contributor": ["minimal", "low", "medium", "high", "xhigh"],
-}
-_OPENCODE_GO_EFFORT_BUDGETS: dict[str, int] = {
-    "minimal": 1024,
-    "low": 1024,
-    "med": 4096,
-    "medium": 4096,
-    "high": 16384,
-    "xhigh": 24576,
-}
-
-
-def _default_opencode_go_thinking_capabilities() -> dict[
-    str, ModelCapabilitiesOverrideConfig
-]:
-    """Return built-in capability metadata for the canonical OpenCode Go host."""
-    model_efforts = {
-        model_id: _OPENCODE_GO_THINKING_EFFORTS.get(
-            model_id,
-            ["low", "medium", "high"],
-        )
-        for model_id in _OPENCODE_GO_THINKING_MODELS
-    }
-    result: dict[str, ModelCapabilitiesOverrideConfig] = {}
-    for model_id, efforts in model_efforts.items():
-        effort_to_budget = {
-            effort: _OPENCODE_GO_EFFORT_BUDGETS[effort]
-            for effort in efforts
-            if effort in _OPENCODE_GO_EFFORT_BUDGETS
-        }
-        # Keep the historical ``med`` alias for the original built-in
-        # contracts. Muse's advertised set uses the canonical ``medium``.
-        if model_id not in {
-            "muse-spark-1.2-contributor",
-            "muse-spark-1.3-contributor",
-        }:
-            effort_to_budget["med"] = _OPENCODE_GO_EFFORT_BUDGETS["med"]
-        result[model_id] = ModelCapabilitiesOverrideConfig(
-            thinking=ThinkingCapabilityOverrideConfig(
-                status="supported",
-                source="provider_catalog",
-                native_protocols=(
-                    ["openai"]
-                    if model_id
-                    in {
-                        "muse-spark-1.2-contributor",
-                        "muse-spark-1.3-contributor",
-                    }
-                    else ["openai", "anthropic"]
-                ),
-                supported_efforts=efforts,
-                effort_to_budget_tokens=effort_to_budget,
-                notes=(
-                    "OpenCode Go exposes minimal/low/medium/high/xhigh thinking "
-                    "controls."
-                    if model_id
-                    in {
-                        "muse-spark-1.2-contributor",
-                        "muse-spark-1.3-contributor",
-                    }
-                    else "OpenCode Go exposes low/medium/high thinking controls."
-                ),
-            )
-        )
-    return result
-
-
-def _provider_is_canonical_opencode_go(provider: ProviderConfig) -> bool:
-    """Return whether *provider* is the bundled OpenCode Go endpoint."""
-    return provider.base_url.rstrip("/") == _OPENCODE_GO_BASE_URL
-
-
-def _seed_builtin_provider_capabilities(provider: ProviderConfig) -> None:
-    """Seed known provider capabilities without clobbering operator overrides."""
-    if not _provider_is_canonical_opencode_go(provider):
-        return
-    for model_id, capability in _default_opencode_go_thinking_capabilities().items():
-        provider.model_capabilities.setdefault(model_id, capability)
 
 
 class NetworkConfig(BaseModel):
@@ -1622,8 +1529,6 @@ class AppConfig(BaseModel):
             )
             self.providers = {DEFAULT_PROVIDER_ID: provider}
             self.accounts = []
-        for provider in self.providers.values():
-            _seed_builtin_provider_capabilities(provider)
         return self
 
     @model_validator(mode="after")

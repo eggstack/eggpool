@@ -426,14 +426,14 @@ class TestFormatProviderBlock:
         assert config.providers["ollama-local"].accounts[0].api_key is None
         assert "api_key =" not in block
 
-    def test_opencode_go_template_includes_mimo_thinking_capability(
+    def test_opencode_go_template_leaves_thinking_capability_to_discovery(
         self, tmp_path: Path
     ) -> None:
-        """The bundled OpenCode Go template carries known thinking metadata."""
+        """The bundled template does not invent model reasoning controls."""
         from eggpool.models.config import AppConfig
 
         data = load_provider_templates()["opencode-go"]["data"]
-        assert "model_capabilities" in data
+        assert "model_capabilities" not in data
         block = _format_provider_block(
             "opencode-go", data, "OPENCODE_KEY", "opencode-go-0001"
         )
@@ -441,17 +441,7 @@ class TestFormatProviderBlock:
         config_file.write_text(block, encoding="utf-8")
 
         cfg = AppConfig.from_toml(str(config_file))
-        thinking = cfg.providers["opencode-go"].model_capabilities["mimo-v2.5"].thinking
-        assert thinking is not None
-        assert thinking.status == "supported"
-        assert thinking.source == "provider_catalog"
-        assert thinking.supported_efforts == ["low", "medium", "high"]
-        assert thinking.effort_to_budget_tokens == {
-            "low": 1024,
-            "med": 4096,
-            "medium": 4096,
-            "high": 16384,
-        }
+        assert cfg.providers["opencode-go"].model_capabilities == {}
 
     def test_opencode_go_template_emits_surface_auth(self, tmp_path: Path) -> None:
         """The bundled OpenCode Go template renders auth per surface."""

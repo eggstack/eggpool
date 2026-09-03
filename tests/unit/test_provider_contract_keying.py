@@ -16,14 +16,14 @@ from eggpool.transcoder.builtin_contracts import (
 )
 
 # ---------------------------------------------------------------------------
-# 1. OpenCode Go canonical provider ID + default URL + MiniMax-M3 + anthropic
+# 1. OpenCode Go has no bundled model reasoning contract
 # ---------------------------------------------------------------------------
 
 
 class TestOpenCodeGoProviderIdentity:
-    """OpenCode Go contract resolves from provider identity, not URL."""
+    """OpenCode Go reasoning controls come from provider/model metadata."""
 
-    def test_canonical_provider_id_resolves_effort(self) -> None:
+    def test_canonical_provider_id_does_not_resolve_effort(self) -> None:
         cap = ThinkingCapability(status="supported")
         contract = resolve_control_contract(
             capability=cap,
@@ -31,52 +31,46 @@ class TestOpenCodeGoProviderIdentity:
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        assert contract.effort == "supported"
-        assert contract.budget == "supported"
-        assert contract.accepted_efforts == ["low", "medium", "high"]
+        assert contract.effort == "unknown"
+        assert contract.budget == "unknown"
+        assert contract.accepted_efforts == []
 
     def test_default_opencode_go_url_configures_correctly(self) -> None:
-        """The default OpenCode Go URL resolves the OpenCode Go contract."""
+        """The OpenCode Go URL does not provide a capability fallback."""
         contract = lookup_builtin_contract(
             provider_id="opencode-go",
             provider_base_url="https://opencode.ai/zen/go/v1",
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        assert contract is not None
-        assert contract.effort == "supported"
-        assert contract.budget == "supported"
+        assert contract is None
 
     def test_opencode_go_resolves_without_url(self) -> None:
-        """Provider ID match works even when URL is absent."""
+        """Provider ID alone is identity, not capability evidence."""
         contract = lookup_builtin_contract(
             provider_id="opencode-go",
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        assert contract is not None
-        assert contract.effort == "supported"
-        assert contract.budget == "supported"
+        assert contract is None
 
 
 # ---------------------------------------------------------------------------
-# 2. OpenCode Go URL fallback (compatibility)
+# 2. OpenCode Go URL has no compatibility fallback
 # ---------------------------------------------------------------------------
 
 
 class TestOpenCodeGoUrlFallback:
-    """URL fallback for OpenCode Go matches when provider_id is absent."""
+    """URL identity must not synthesize model controls."""
 
-    def test_url_fallback_resolves_effort(self) -> None:
-        """URL pattern alone resolves the OpenCode Go effort contract."""
+    def test_url_fallback_does_not_resolve_effort(self) -> None:
+        """URL pattern alone does not resolve the OpenCode Go contract."""
         contract = lookup_builtin_contract(
             provider_base_url="https://opencode.ai/zen/go/v1",
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        assert contract is not None
-        assert contract.effort == "supported"
-        assert contract.budget == "supported"
+        assert contract is None
 
     def test_minimax_url_fallback_does_not_capture_native(self) -> None:
         """minimax.io URL fallback does NOT match OpenCode Go or native MiniMax."""
@@ -85,7 +79,7 @@ class TestOpenCodeGoUrlFallback:
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        # Neither OpenCode Go nor native MiniMax have URL rules for minimax.io.
+        # No OpenCode Go or native MiniMax URL rule matches minimax.io.
         assert contract is None
 
 
@@ -127,11 +121,10 @@ class TestNativeMiniMaxProviderIdentity:
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        # Both accept effort, but the underlying contract objects come from
-        # distinct built-in rules so the operator can override either side
-        # without affecting the other.
-        assert contract_opencode.effort == "supported"
-        assert contract_opencode.budget == "supported"
+        # OpenCode Go remains unknown without provider metadata; native
+        # MiniMax keeps its independently scoped provider contract.
+        assert contract_opencode.mode == "unknown"
+        assert contract_opencode.accepted_efforts == []
         assert contract_minimax.mode == "effort"
         assert contract_opencode is not contract_minimax
 
@@ -185,7 +178,7 @@ class TestUnknownProviderFallback:
 class TestOperatorOverridePrecedence:
     """Explicit control_contract on capability takes highest precedence."""
 
-    def test_override_wins_over_opencode_go_builtin(self) -> None:
+    def test_opencode_go_explicit_override_resolves_effort(self) -> None:
         cap = ThinkingCapability(
             status="supported",
             control_contract=ThinkingControlContract(
@@ -200,7 +193,7 @@ class TestOperatorOverridePrecedence:
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        # Override says effort, but built-in says fixed.
+        # Explicit provider/model metadata wins over the unknown default.
         assert contract.mode == "effort"
 
     def test_override_wins_over_minimax_native_builtin(self) -> None:
@@ -237,7 +230,7 @@ class TestOperatorOverridePrecedence:
         )
         assert contract_override.mode == "budget"
 
-        # A fresh capability without override still gets the built-in.
+        # A fresh capability without metadata remains unknown.
         cap_fresh = ThinkingCapability(status="supported")
         contract_fresh = resolve_control_contract(
             capability=cap_fresh,
@@ -245,8 +238,7 @@ class TestOperatorOverridePrecedence:
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        assert contract_fresh.effort == "supported"
-        assert contract_fresh.budget == "supported"
+        assert contract_fresh.mode == "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -265,8 +257,7 @@ class TestCollapsedModelResolution:
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        assert contract.effort == "supported"
-        assert contract.budget == "supported"
+        assert contract.mode == "unknown"
 
     def test_suffixed_minimax_m3(self) -> None:
         cap = ThinkingCapability(status="supported")
@@ -276,13 +267,10 @@ class TestCollapsedModelResolution:
             model_id="MiniMax-M3/opencode-go",
             protocol="anthropic",
         )
-        assert contract.effort == "supported"
-        assert contract.budget == "supported"
+        assert contract.mode == "unknown"
 
     def test_collapsed_minimax_m3_matches_native_lowercase(self) -> None:
-        """The builtin model_id_pattern is case-insensitive so the lowercase
-        upstream id (``minimax-m3``) used by opencode-go still resolves the
-        same effort contract as the canonical capitalised form."""
+        """Model spelling does not affect the unknown metadata fallback."""
         cap = ThinkingCapability(status="supported")
         canonical = resolve_control_contract(
             capability=cap,
@@ -296,8 +284,7 @@ class TestCollapsedModelResolution:
             model_id="minimax-m3",
             protocol="anthropic",
         )
-        assert canonical.effort == lowercase.effort == "supported"
-        assert canonical.budget == lowercase.budget == "supported"
+        assert canonical.mode == lowercase.mode == "unknown"
         assert canonical.accepted_efforts == lowercase.accepted_efforts
 
     def test_both_resolve_same_contract(self) -> None:
@@ -314,8 +301,7 @@ class TestCollapsedModelResolution:
             model_id="MiniMax-M3/opencode-go",
             protocol="anthropic",
         )
-        assert c1.effort == c2.effort == "supported"
-        assert c1.budget == c2.budget == "supported"
+        assert c1.mode == c2.mode == "unknown"
 
 
 # ---------------------------------------------------------------------------

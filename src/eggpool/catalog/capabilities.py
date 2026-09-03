@@ -501,10 +501,10 @@ def merge_thinking_capabilities(
 ) -> ThinkingCapability:
     """Merge two :class:`ThinkingCapability` values with override semantics.
 
-    Merge order (lowest to highest priority):
-
-    1. Built-in safe defaults (``base``).
-    2. Provider catalog / model-info data (``override``).
+    ``override`` is the higher-authority layer for this operation. Callers
+    that combine multiple sources should use
+    :func:`merge_model_capabilities_by_source` so the governing source order
+    is applied consistently.
 
     ``override`` is the higher-authority layer for this operation. Explicit
     control dimensions replace the corresponding base dimensions independently;
@@ -601,7 +601,11 @@ def merge_thinking_capabilities(
         ),
         source=(
             override_contract.source
-            if any(state != "unknown" for state in contract_states)
+            if any(
+                cast("ControlSupport", getattr(override_contract, dimension))
+                != "unknown"
+                for dimension in ("toggle", "effort", "budget")
+            )
             and override_contract.source != "unknown"
             else base_contract.source
         ),
@@ -673,6 +677,39 @@ def merge_model_capabilities(
             else base.multimodal
         ),
     )
+
+
+_CAPABILITY_SOURCE_RANK: dict[CapabilitySource, int] = {
+    "unknown": 0,
+    "model_info": 10,
+    "provider_catalog": 20,
+    "manual_override": 30,
+    # These labels remain valid for older non-reasoning capability data, but
+    # are deliberately below verified sources when encountered in a legacy
+    # thinking record.
+    "heuristic": 1,
+    "aggregate": 0,
+}
+
+
+def merge_model_capabilities_by_source(
+    *capabilities: ModelCapabilities,
+) -> ModelCapabilities:
+    """Merge capability records from lowest to highest source authority.
+
+    The merge remains field-level: an explicit higher-source negative or
+    complete empty control list clears the corresponding lower-source fact,
+    while an omitted/unknown dimension allows a lower source to fill it.
+    This small helper makes the catalog source order explicit at call sites.
+    """
+    result = ModelCapabilities()
+    ordered = sorted(
+        capabilities,
+        key=lambda value: _CAPABILITY_SOURCE_RANK.get(value.thinking.source, 0),
+    )
+    for capability in ordered:
+        result = merge_model_capabilities(result, capability)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1054,7 +1091,7 @@ def thinking_override_to_capability(
 
     if status is None:
         status = "unknown"
-    if source is None and status != "unknown":
+    if source is None and (status != "unknown" or has_any):
         source = "manual_override"
     if native_protocols is None:
         native_protocols = []
@@ -1162,16 +1199,22 @@ def thinking_override_to_capability(
             explicit_budget_min=control_contract.explicit_budget_min,
             explicit_budget_max=control_contract.explicit_budget_max,
             historical_reasoning_content=control_contract.historical_reasoning_content,
-            source=control_contract.source or cap_source,
+            source=(
+                control_contract.source
+                if control_contract.source != "unknown"
+                else cap_source
+            ),
         )
 
     # Legacy operator fields are normalized into the canonical dimensions.
     # An explicitly empty effort list is a negative fact, not missing data.
-    if isinstance(supported_efforts, list) and effort_support is None:
-        control_contract.effort = (
-            "supported" if supported_effort_list else "unsupported"
-        )
-        control_contract.accepted_efforts = list(supported_effort_list)
+    if isinstance(supported_efforts, list):
+        if effort_support is None:
+            control_contract.effort = (
+                "supported" if supported_effort_list else "unsupported"
+            )
+        if not control_contract.accepted_efforts:
+            control_contract.accepted_efforts = list(supported_effort_list)
     if effort_dict is not None and effort_support is None:
         control_contract.effort = "supported"
         if not control_contract.accepted_efforts:
@@ -1536,8 +1579,8 @@ def model_capabilities_to_dict(capabilities: ModelCapabilities) -> dict[str, obj
     tc = capabilities.thinking
     # Only an explicitly stored contract is canonicalized into cache data.
     # Legacy top-level fields remain compatibility input; re-emitting an
-    # inferred partial contract would accidentally mask a later built-in
-    # provider contract during cache hydration.
+    # inferred partial contract would accidentally mask a later explicit
+    # provider fact during cache hydration.
     contract = tc.control_contract
 
     thinking_dict: dict[str, object] = {}

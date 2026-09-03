@@ -3,15 +3,15 @@
 Repro scenario (mocked):
 
 - The router is configured with two accounts under the ``opencode-go``
-  provider.  Both accounts advertise ``muse-spark-1.2-contributor`` with
-  no upstream capability metadata (only the built-in override marks
-  the model ``thinking.status="supported"``).
+  provider. Both accounts advertise ``muse-spark-1.2-contributor`` with
+  an explicit provider capability row marking
+  ``thinking.status="supported"``.
 
 - Pre-fix behavior: the first muse-spark request surfaces an upstream
   error and both get retried; once both accounts are filtered, the
   capability-status attribution falls back to ``cache.get_model()``
   (which returns the raw entry without applying the per-provider
-  built-in override), so the rejection status reports ``"unknown"`` even
+  capability row), so the rejection status reports ``"unknown"`` even
   though the provider actually supports thinking.  The user sees:
 
       "Model 'muse-spark-1.2-contributor' is available, but no eligible
@@ -21,8 +21,8 @@ Repro scenario (mocked):
 - Post-fix behavior: when every supporting account is filtered for
   reasons unrelated to the thinking capability, the rejection path
   surfaces a transient ``No accounts available for model`` (503) error
-  instead of the misleading client-validation 400.  The built-in
-  capability override remains authoritative — the model still
+  instead of the misleading client-validation 400. The explicit provider
+  capability row remains authoritative — the model still
   advertises ``thinking.status="supported"`` for both the catalog
   exposure and the routing trace metrics.
 
@@ -61,17 +61,15 @@ pytestmark = [pytest.mark.integration]
 # ---------------------------------------------------------------------------
 
 
-# Capability override applied to mirror the bundled built-in override
-# for the canonical opencode-go provider.  The default real-runtime
-# fixture uses ``UPSTREAM_BASE`` which is NOT the canonical
-# ``https://opencode.ai/zen/go/v1`` URL, so the built-in override
-# from ``models/config.py`` would not auto-seed; we declare it
-# explicitly here.
+# Explicit provider capability metadata for the mocked opencode-go
+# catalog. The fixture uses ``UPSTREAM_BASE`` and therefore cannot rely
+# on endpoint identity; it declares the verified thinking controls directly.
 _MUSE_SPARK_THINKING_CAPABILITY = {
     "thinking": {
         "status": "supported",
         "source": "provider_catalog",
         "native_protocols": ["openai"],
+        "budget": "supported",
         "supported_efforts": ["minimal", "low", "medium", "high", "xhigh"],
         "effort_to_budget_tokens": {
             "minimal": 1024,
@@ -79,6 +77,21 @@ _MUSE_SPARK_THINKING_CAPABILITY = {
             "medium": 4096,
             "high": 16384,
             "xhigh": 24576,
+        },
+        "control_contract": {
+            "mode": "effort_or_budget",
+            "request_fields": ["thinking", "thinking_budget", "reasoning_effort"],
+            "accepted_efforts": ["minimal", "low", "medium", "high", "xhigh"],
+            "effort_to_budget_tokens": {
+                "minimal": 1024,
+                "low": 1024,
+                "medium": 4096,
+                "high": 16384,
+                "xhigh": 24576,
+            },
+            "explicit_budget_min": 1024,
+            "explicit_budget_max": 24576,
+            "source": "provider_catalog",
         },
         "notes": "OpenCode Go exposes minimal/low/medium/high/xhigh thinking controls.",
     },
@@ -155,8 +168,8 @@ class TestMuseSparkCapabilityStatusAttribution:
         """After both accounts are filtered for muse-spark, the router
         must surface a transient upstream-unavailability response, NOT
         a misleading client-validation 400 with a false ``unknown``
-        capability status.  The built-in override marks thinking as
-        ``supported`` for the canonical opencode-go provider, so the
+        capability status. The explicit provider capability row marks
+        thinking as ``supported`` for opencode-go, so the
         ``rejected_status`` must not be ``"unknown"`` (or
         ``"unsupported"``).
         """
@@ -183,13 +196,13 @@ class TestMuseSparkCapabilityStatusAttribution:
                     "thinking": {"type": "enabled", "budget_tokens": 1024},
                 },
             )
-            assert first.status_code == 500
+            assert first.status_code == 500, first.text
 
             # Subsequent requests with thinking controls: both
             # accounts are quarantined for muse-spark. The router
             # must surface 503 (no accounts available) — NOT a 400
             # claiming the provider cannot support thinking, since
-            # the built-in capability override marks the provider
+            # the explicit capability row marks the provider
             # ``thinking.status="supported"``.
             second = await client.post(
                 "/v1/messages",
@@ -219,7 +232,7 @@ class TestMuseSparkCapabilityStatusAttribution:
         muse_spark_status_app: FastAPI,
     ) -> None:
         """The catalog ``/v1/models`` exposure must still advertise the
-        built-in capability override (``thinking.status="supported"``)
+        explicit provider capability metadata (``thinking.status="supported"``)
         before any quarantine; only the routing eligibility changes,
         not the catalog contract.
         """
@@ -229,7 +242,7 @@ class TestMuseSparkCapabilityStatusAttribution:
         async with httpx.AsyncClient(
             transport=transport, base_url="http://testserver"
         ) as client:
-            # Catalog at startup must report the override
+            # Catalog at startup must report the explicit provider metadata
             models_resp = await client.get(
                 "/v1/models", headers={"Authorization": "Bearer rt-test-key"}
             )
@@ -244,7 +257,7 @@ class TestMuseSparkCapabilityStatusAttribution:
                     row.get("eggpool", {}).get("capabilities", {}).get("thinking", {})
                 )
                 assert thinking.get("status") == "supported", (
-                    f"catalog must report the supported override; row={row!r}"
+                    f"catalog must report the supported capability; row={row!r}"
                 )
             # Now trigger quarantine and confirm the failure-mode behavior
             respx.post(f"{UPSTREAM_BASE}/chat/completions").mock(

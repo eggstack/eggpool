@@ -220,8 +220,8 @@ class TestNativeUnknownContractSkip:
 class TestNativeContractResolution:
     """Verify contract resolution for native provider URLs."""
 
-    def test_opencode_go_native_resolves_effort(self) -> None:
-        """OpenCode Go MiniMax-M3 → effort contract (by provider ID)."""
+    def test_opencode_go_native_without_metadata_is_unknown(self) -> None:
+        """OpenCode Go does not infer controls from provider/model identity."""
         cap = ThinkingCapability(status="supported")
         contract = resolve_control_contract(
             capability=cap,
@@ -229,8 +229,7 @@ class TestNativeContractResolution:
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        assert contract.effort == "supported"
-        assert contract.budget == "supported"
+        assert contract.mode == "unknown"
 
     def test_minimax_native_resolves_effort(self) -> None:
         """MiniMax native provider ID → effort contract."""

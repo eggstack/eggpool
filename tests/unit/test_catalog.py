@@ -8,13 +8,16 @@ import httpx
 import pytest
 
 from eggpool.catalog.cache import ModelCatalogCache, parse_model_id
-from eggpool.catalog.capabilities import parse_reasoning_options
+from eggpool.catalog.capabilities import (
+    dict_to_model_capabilities,
+    merge_model_capabilities_by_source,
+    parse_reasoning_options,
+)
 from eggpool.catalog.models_dev import (
-    apply_supported_efforts_to_capabilities,
-    derive_opencode_go_supported_efforts,
     fetch_models_dev_provider_models,
 )
 from eggpool.catalog.normalizer import (
+    extract_capabilities_from_metadata,
     normalize_anthropic_models,
     normalize_models,
     normalize_openai_models,
@@ -289,52 +292,215 @@ async def test_models_dev_cache_caches_empty_results_and_evicts_old_entries(
     assert len(service._models_dev_provider_cache) == 64  # type: ignore[attr-defined]
 
 
-def test_models_dev_derives_opencode_go_efforts_from_opencode_rules() -> None:
-    assert (
-        derive_opencode_go_supported_efforts(
-            "mimo-v2.5",
-            {"reasoning": True},
-        )
-        == []
-    )
-    assert (
-        derive_opencode_go_supported_efforts(
-            "deepseek-v4-flash",
-            {"reasoning": True},
-        )
-        == []
-    )
-    assert derive_opencode_go_supported_efforts(
-        "muse-spark-1.2-contributor",
+@pytest.mark.asyncio
+async def test_models_dev_enrichment_merges_by_source_authority() -> None:
+    from eggpool.catalog.service import CatalogService
+
+    config = AppConfig.from_dict(
         {
-            "reasoning": True,
-            "reasoning_options": [
+            "model_info": {"enabled": True},
+            "providers": {
+                "opencode-go": {
+                    "id": "opencode-go",
+                    "base_url": "https://opencode.ai/zen/go/v1",
+                    "protocols": ["openai", "anthropic"],
+                }
+            },
+        }
+    )
+    service = object.__new__(CatalogService)
+    service._config = config
+
+    async def fake_models_dev(_provider_id: str) -> dict[str, dict[str, object]]:
+        return {
+            "minimax-m3": {
+                "reasoning": True,
+                "reasoning_options": [
+                    {"type": "effort", "values": ["low", "medium", "high"]}
+                ],
+            }
+        }
+
+    service._get_models_dev_provider_models = fake_models_dev  # type: ignore[method-assign]
+    models = normalize_openai_models(
+        {
+            "data": [
+                {
+                    "id": "minimax-m3",
+                    "reasoning": True,
+                }
+            ]
+        }
+    )
+
+    await service._enrich_opencode_go_models(  # type: ignore[attr-defined]
+        "opencode-go",
+        config.providers["opencode-go"],
+        models,
+    )
+
+    thinking = models[0]["capabilities"]["thinking"]
+    assert thinking["status"] == "supported"
+    assert thinking["supported_efforts"] == ["low", "medium", "high"]
+    assert thinking["control_contract"]["effort"] == "supported"
+    assert thinking["control_contract"]["source"] == "model_info"
+
+
+@pytest.mark.asyncio
+async def test_models_dev_enrichment_does_not_cross_provider_identity() -> None:
+    from eggpool.catalog.service import CatalogService
+
+    config = AppConfig.from_dict(
+        {
+            "model_info": {"enabled": True},
+            "providers": {
+                "custom": {
+                    "id": "custom",
+                    "base_url": "https://example.com/v1",
+                }
+            },
+        }
+    )
+    service = object.__new__(CatalogService)
+    service._config = config
+
+    async def unexpected_fetch(_provider_id: str) -> dict[str, dict[str, object]]:
+        raise AssertionError("unmapped providers must not fetch models.dev")
+
+    service._get_models_dev_provider_models = unexpected_fetch  # type: ignore[method-assign]
+    models = normalize_openai_models({"data": [{"id": "minimax-m3"}]})
+
+    await service._enrich_opencode_go_models(  # type: ignore[attr-defined]
+        "custom",
+        config.providers["custom"],
+        models,
+    )
+
+    assert "thinking" not in models[0]["capabilities"]
+
+
+@pytest.mark.asyncio
+async def test_models_dev_outage_preserves_live_capabilities() -> None:
+    from eggpool.catalog.service import CatalogService
+
+    config = AppConfig.from_dict(
+        {
+            "model_info": {"enabled": True},
+            "providers": {
+                "opencode-go": {
+                    "id": "opencode-go",
+                    "base_url": "https://opencode.ai/zen/go/v1",
+                }
+            },
+        }
+    )
+    service = object.__new__(CatalogService)
+    service._config = config
+
+    async def models_dev_outage(_provider_id: str) -> dict[str, dict[str, object]]:
+        return {}
+
+    service._get_models_dev_provider_models = models_dev_outage  # type: ignore[method-assign]
+    models = normalize_openai_models(
+        {
+            "data": [
+                {
+                    "id": "minimax-m3",
+                    "reasoning": True,
+                    "reasoning_options": [{"type": "toggle"}],
+                }
+            ]
+        }
+    )
+
+    await service._enrich_opencode_go_models(  # type: ignore[attr-defined]
+        "opencode-go",
+        config.providers["opencode-go"],
+        models,
+    )
+
+    thinking = models[0]["capabilities"]["thinking"]
+    assert thinking["source"] == "provider_catalog"
+    assert thinking["control_contract"]["toggle"] == "supported"
+
+
+@pytest.mark.parametrize(
+    ("model_id", "options", "expected_efforts"),
+    [
+        ("minimax-m3", [{"type": "toggle"}], []),
+        ("mimo-v2.5", [], []),
+        (
+            "muse-spark-1.3-contributor",
+            [
                 {
                     "type": "effort",
                     "values": ["minimal", "low", "medium", "high", "xhigh"],
                 }
             ],
-        },
-    ) == ["minimal", "low", "medium", "high", "xhigh"]
-
-
-def test_apply_supported_efforts_does_not_fabricate_budget_map() -> None:
-    capabilities = {
-        "thinking": {
-            "status": "supported",
-            "source": "provider_catalog",
-        }
+            ["minimal", "low", "medium", "high", "xhigh"],
+        ),
+    ],
+)
+def test_models_dev_rows_use_canonical_reasoning_parser(
+    model_id: str,
+    options: list[dict[str, object]],
+    expected_efforts: list[str],
+) -> None:
+    metadata = {
+        "id": model_id,
+        "reasoning": True,
+        "reasoning_options": options,
     }
-
-    merged = apply_supported_efforts_to_capabilities(
-        capabilities,
-        efforts=["low", "medium", "high", "max"],
+    capabilities = extract_capabilities_from_metadata(
+        metadata,
+        source="model_info",
     )
+    thinking = capabilities["thinking"]
 
-    thinking = merged["thinking"]
-    assert thinking["supported_efforts"] == ["low", "medium", "high", "max"]
-    assert "effort_to_budget_tokens" not in thinking
-    assert thinking["control_contract"]["effort"] == "supported"
+    assert thinking["status"] == "supported"
+    assert thinking["source"] == "model_info"
+    assert thinking.get("supported_efforts") == expected_efforts or (
+        expected_efforts == [] and "supported_efforts" not in thinking
+    )
+    contract = thinking["control_contract"]
+    assert contract["toggle"] == (
+        "supported" if model_id == "minimax-m3" else "unsupported"
+    )
+    assert contract["effort"] == ("supported" if expected_efforts else "unsupported")
+    assert contract["budget"] == "unsupported"
+
+
+def test_models_dev_metadata_fills_live_omissions_but_live_empty_clears_effort() -> (
+    None
+):
+    model_info = dict_to_model_capabilities(
+        extract_capabilities_from_metadata(
+            {
+                "id": "minimax-m3",
+                "reasoning": True,
+                "reasoning_options": [
+                    {"type": "effort", "values": ["low", "medium", "high"]}
+                ],
+            },
+            source="model_info",
+        )
+    )
+    live_toggle_only = dict_to_model_capabilities(
+        extract_capabilities_from_metadata(
+            {
+                "id": "minimax-m3",
+                "reasoning": True,
+                "reasoning_options": [{"type": "toggle"}],
+            },
+            source="provider_catalog",
+        )
+    )
+    merged = merge_model_capabilities_by_source(model_info, live_toggle_only)
+
+    assert merged.thinking.status == "supported"
+    assert merged.thinking.control_contract.toggle == "supported"
+    assert merged.thinking.control_contract.effort == "unsupported"
+    assert merged.thinking.supported_efforts == []
 
 
 def test_normalize_anthropic_models() -> None:
@@ -1132,12 +1298,7 @@ def test_collapsed_single_provider_applies_provider_capability_overrides() -> No
 
     result = cache.get_models_for_exposure("union", {"a1"})
 
-    assert result[0]["capabilities"]["thinking"]["status"] == "supported"
-    assert result[0]["capabilities"]["thinking"]["supported_efforts"] == [
-        "low",
-        "medium",
-        "high",
-    ]
+    assert "thinking" not in result[0]["capabilities"]
 
 
 def test_collapsed_entry_providers_excludes_uneligible() -> None:
@@ -1434,6 +1595,47 @@ def test_get_provider_model_entries_applies_capability_overrides() -> None:
     thinking = entry["capabilities"].get("thinking", {})
     # Override should have promoted the thinking capability to "supported".
     assert thinking.get("status") in {"supported", "mixed"}
+
+
+def test_operator_override_wins_per_control_dimension() -> None:
+    cache = ModelCatalogCache()
+    cache._provider_models[("minimax-m3", "opencode-go")] = {
+        "model_id": "minimax-m3",
+        "protocol": "openai",
+        "capabilities": {
+            "thinking": {
+                "status": "supported",
+                "source": "provider_catalog",
+                "control_contract": {
+                    "toggle": "supported",
+                    "effort": "unsupported",
+                    "budget": "unsupported",
+                    "source": "provider_catalog",
+                },
+            }
+        },
+    }
+    config = AppConfig.model_validate(
+        {
+            "model_capabilities": {
+                "minimax-m3": {
+                    "thinking": {
+                        "effort": "supported",
+                        "supported_efforts": ["low", "medium", "high"],
+                    }
+                }
+            }
+        }
+    )
+    cache.set_config(config)
+
+    thinking = cache.get_provider_model_entries()[("minimax-m3", "opencode-go")][
+        "capabilities"
+    ]["thinking"]
+    assert thinking["control_contract"]["toggle"] == "supported"
+    assert thinking["control_contract"]["effort"] == "supported"
+    assert thinking["supported_efforts"] == ["low", "medium", "high"]
+    assert thinking["control_contract"]["source"] == "manual_override"
 
 
 def test_capability_override_cache_refreshes_when_config_is_replaced() -> None:

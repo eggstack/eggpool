@@ -618,8 +618,8 @@ class TestConfigSetup:
         assert snippet["provider"]["eggpool"]["options"]["apiKey"] == server_key
         assert "11300" in snippet["provider"]["eggpool"]["options"]["baseURL"]
 
-    def test_configsetup_opencode_exposes_muse_spark_xhigh(self, tmp_path):
-        """The CLI emits every known Muse Spark thinking variant."""
+    def test_configsetup_opencode_does_not_infer_muse_spark_variants(self, tmp_path):
+        """The CLI does not emit reasoning variants without metadata."""
         import json
 
         config_path = tmp_path / "config.toml"
@@ -658,13 +658,8 @@ protocol = "openai"
         model = snippet["provider"]["eggpool"]["models"][
             "muse-spark-1.2-contributor/opencode-go"
         ]
-        assert list(model["variants"]) == [
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-        ]
+        assert "variants" not in model
+        assert "reasoning" not in model
 
     def test_configsetup_opencode_collapse_models_branch(self, tmp_path) -> None:
         """``configsetup opencode`` branches on ``models.collapse_models``:

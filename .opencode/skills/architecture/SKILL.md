@@ -61,7 +61,10 @@ legacy field-level transcoder applies; on by default. Provider payload is
 `ProviderBoundRequest` with copy-on-write ownership; cross-protocol
 encoders receive a read-only `Mapping` and return fresh target graphs.
 `ReasoningIntent` is captured before target selection; effort labels are not
-converted to guessed budgets. The compatibility Chat/Messages codecs in
+converted to guessed budgets. Reasoning support and caller controls are
+discovered per provider/model from explicit catalog or verified model-info
+metadata, with operator overrides as the intentional escape hatch; model
+family names never supply defaults. The compatibility Chat/Messages codecs in
 `wire/codecs/compat.py` are the staged boundary adapters; mature field-level
 translators remain production-owned until later surface migration.
 Native prompt-cache, thinking control, structured outputs, and tool
@@ -318,6 +321,11 @@ empty list and never assigns effort token budgets from labels. Legacy `mode`
 values are decode-only compatibility input. `ControlFieldAdaptation` provides
 per-field dispositions. Built-in contract resolution: specificity before
 priority.
+
+Catalog source authority is field-level: manual operator overrides outrank
+explicit live provider metadata, which outranks verified provider-scoped
+model-info metadata; omitted facts remain unknown. Model-family names and
+provider identity alone never supply reasoning-control defaults.
 
 ## Failure Effects and Quarantine
 

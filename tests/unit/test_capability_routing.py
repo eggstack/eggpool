@@ -453,6 +453,19 @@ class TestEligibilityWithThinking:
                         "base_url": "https://opencode.ai/zen/go/v1",
                         "protocols": ["openai", "anthropic"],
                         "accounts": [{"name": "acct1", "api_key": "sk-test"}],
+                        "model_capabilities": {
+                            "mimo-v2.5": {
+                                "thinking": {
+                                    "status": "supported",
+                                    "effort": "supported",
+                                    "supported_efforts": [
+                                        "low",
+                                        "medium",
+                                        "high",
+                                    ],
+                                }
+                            }
+                        },
                     }
                 }
             }

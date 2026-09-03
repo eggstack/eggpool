@@ -16,6 +16,7 @@ from eggpool.catalog.capabilities import (
     has_thinking_support,
     is_thinking_warning,
     merge_model_capabilities,
+    merge_model_capabilities_by_source,
     merge_thinking_capabilities,
     serialize_model_capabilities,
     serialize_thinking_for_models,
@@ -232,6 +233,65 @@ class TestMergeModelCapabilities:
         result = merge_model_capabilities(base, override)
         assert result.thinking.status == "supported"
         assert result.thinking.source == "model_info"
+
+    def test_source_order_preserves_lower_fact_when_live_omits_it(self) -> None:
+        model_info = ModelCapabilities(
+            thinking=ThinkingCapability(
+                status="supported",
+                source="model_info",
+                control_contract=ThinkingControlContract(
+                    effort="supported",
+                    accepted_efforts=["minimal", "low", "high"],
+                    source="model_info",
+                ),
+                supported_efforts=["minimal", "low", "high"],
+            )
+        )
+        live = ModelCapabilities(
+            thinking=ThinkingCapability(
+                status="supported",
+                source="provider_catalog",
+            )
+        )
+
+        result = merge_model_capabilities_by_source(model_info, live)
+
+        assert result.thinking.status == "supported"
+        assert result.thinking.source == "provider_catalog"
+        assert result.thinking.control_contract.effort == "supported"
+        assert result.thinking.supported_efforts == ["minimal", "low", "high"]
+
+    def test_source_order_allows_live_empty_options_to_clear_external(self) -> None:
+        model_info = ModelCapabilities(
+            thinking=ThinkingCapability(
+                status="supported",
+                source="model_info",
+                control_contract=ThinkingControlContract(
+                    effort="supported",
+                    accepted_efforts=["low", "medium", "high"],
+                    source="model_info",
+                ),
+                supported_efforts=["low", "medium", "high"],
+            )
+        )
+        live = ModelCapabilities(
+            thinking=ThinkingCapability(
+                status="supported",
+                source="provider_catalog",
+                control_contract=ThinkingControlContract(
+                    toggle="supported",
+                    effort="unsupported",
+                    budget="unsupported",
+                    source="provider_catalog",
+                ),
+            )
+        )
+
+        result = merge_model_capabilities_by_source(model_info, live)
+
+        assert result.thinking.control_contract.toggle == "supported"
+        assert result.thinking.control_contract.effort == "unsupported"
+        assert result.thinking.supported_efforts == []
 
 
 # ---------------------------------------------------------------------------

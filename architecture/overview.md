@@ -364,6 +364,9 @@ with independent `toggle`, `effort`, and `budget` support dimensions. The
 catalog normalizer distinguishes omitted `reasoning_options` from a complete
 empty list and never fabricates effort token budgets; legacy `mode` and
 top-level capability fields are compatibility inputs/projections only.
+Authority is field-level: operator overrides, explicit live provider metadata,
+verified provider-scoped model-info metadata, then unknown. Model-family names
+never provide reasoning-control defaults.
 
 ### Request Finalization
 Every live terminal outcome is owned by one kind-qualified command in the generation-owned `RequestFinalizationSupervisor`: selected request finalization, failed-attempt cleanup, or post-commit claim compensation. Each accepted command retains one terminal reference on its generation until durable and required runtime convergence.

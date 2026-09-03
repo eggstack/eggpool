@@ -132,25 +132,17 @@ class TestThinkingCapabilityOverrideConfig:
                 {"status": "supported", "bogus_field": True}
             )
 
-    def test_status_none_clears_all_fields(self) -> None:
+    def test_control_fact_does_not_require_status(self) -> None:
         cfg = ThinkingCapabilityOverrideConfig.model_validate(
             {
-                "status": None,
-                "source": "provider_catalog",
-                "native_protocols": ["openai"],
-                "budget_tokens_min": 100,
-                "budget_tokens_max": 5000,
-                "effort_to_budget_tokens": {"low": 100},
-                "notes": "should be cleared",
+                "effort": "supported",
+                "supported_efforts": ["low", "medium", "high"],
             }
         )
         assert cfg.status is None
-        assert cfg.source is None
-        assert cfg.native_protocols is None
-        assert cfg.budget_tokens_min is None
-        assert cfg.budget_tokens_max is None
-        assert cfg.effort_to_budget_tokens is None
-        assert cfg.notes is None
+        assert cfg.source == "manual_override"
+        assert cfg.effort == "supported"
+        assert cfg.supported_efforts == ["low", "medium", "high"]
 
 
 class TestThinkingCapabilityOverrideConfigStatusValues:

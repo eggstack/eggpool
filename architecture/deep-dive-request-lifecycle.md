@@ -350,10 +350,8 @@ frozen: it does not begin a new generation.
 When all eligible accounts are filtered out (including quarantine) and
 the request carries thinking controls,
 `_determine_thinking_rejection_status()` attributes the rejection to a
-capability status. Per-provider thinking overrides (e.g. the bundled
-OpenCode Go host capabilities for `muse-spark-1.2-contributor` and
-`muse-spark-1.3-contributor`)
-live in the provider-scoped cache row, **not** the collapsed
+capability status. Per-provider thinking facts live in the provider-scoped
+cache row, **not** the collapsed
 `models` row. `cache.get_model()` deliberately does **not** apply
 overrides; `cache.get_provider_model_entry()` and
 `cache.get_provider_model_entries()` do.

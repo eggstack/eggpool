@@ -274,15 +274,33 @@ _OPENCODE_GO_REJECT_SPEC = RuntimeAppSpec(
     },
 )
 
-# Canonical OpenCode Go Muse Spark model with no capability metadata in the
-# provider /models response. The AppConfig built-in capability seed must make
-# the xhigh request routable before any optional metadata enrichment runs.
+# Canonical OpenCode Go Muse Spark model with an explicit provider capability
+# declaration. Production no longer infers this contract from the host or
+# model name, so the fixture supplies the same verified facts a provider
+# catalog or operator override would provide.
+_MUSE_SPARK_THINKING_CAPABILITY = {
+    "thinking": {
+        "status": "supported",
+        "source": "provider_catalog",
+        "native_protocols": ["openai"],
+        "supported_efforts": ["minimal", "low", "medium", "high", "xhigh"],
+        "effort_to_budget_tokens": {
+            "minimal": 1024,
+            "low": 1024,
+            "medium": 4096,
+            "high": 16384,
+            "xhigh": 24576,
+        },
+    },
+}
+
 _MUSE_SPARK_SPEC = RuntimeAppSpec(
     account_names=("rt-acct-1",),
     models=(
         ModelSpec(
             model_id="muse-spark-1.2-contributor",
             protocol="openai",
+            capabilities=_MUSE_SPARK_THINKING_CAPABILITY,
         ),
     ),
     providers=(
@@ -294,6 +312,7 @@ _MUSE_SPARK_SPEC = RuntimeAppSpec(
                 ModelSpec(
                     model_id="muse-spark-1.2-contributor",
                     protocol="openai",
+                    capabilities=_MUSE_SPARK_THINKING_CAPABILITY,
                 ),
             ),
             account_names=("rt-acct-1",),

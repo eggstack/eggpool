@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Plan 159 reasoning capability source precedence.** Removed static
+  OpenCode Go reasoning seeds and model-family effort inference. Live
+  provider metadata, verified provider-scoped model-info metadata, and
+  operator overrides now merge by explicit fact with truthful provenance;
+  missing reasoning controls remain unknown.
 - **Plan 085 runtime closure.** The lean profile was compared with the
   planning-baseline SBC-shaped profile using the existing runtime snapshot and
   short manual process measurements. The comparison confirmed fewer worker
@@ -50,10 +55,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   2. `RequestCoordinator._determine_thinking_rejection_status` now
      aggregates per-provider capability overrides when the collapsed
-     entry reports `unknown`. Built-in overrides (e.g. the canonical
-     OpenCode Go host capabilities for `muse-spark-1.2-contributor`) live
-     in the provider-scoped cache row, so the previous bare-model lookup
-     missed them and surfaced a misleading client-validation 400. The
+     entry reports `unknown`. Provider-scoped capability metadata (for
+     example, the canonical OpenCode Go capability for
+     `muse-spark-1.2-contributor`) lives in the provider-scoped cache row,
+     so the previous bare-model lookup missed it and surfaced a misleading
+     client-validation 400. The
      capability-error path now requires `rejected_status` to be truly
      `unknown`/`unsupported` before surfacing the 400; otherwise the
      router falls through to a transient `No accounts available` (503).

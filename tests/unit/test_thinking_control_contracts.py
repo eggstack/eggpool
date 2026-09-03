@@ -418,33 +418,26 @@ class TestSpecificityOutranksPriority:
 
 
 class TestOpenCodeGoUrlCompatibility:
-    """Defect 5: URL-based compatibility for OpenCode Go.
-
-    Both the canonical ``opencode-go`` provider ID and a matching
-    ``opencode.ai`` upstream URL resolve the same effort-or-budget contract.
-    """
+    """OpenCode Go identity does not synthesize reasoning controls."""
 
     def test_opencode_go_url_resolves_effort_or_budget(self) -> None:
-        """OpenCode Go URL resolves the contract without provider_id."""
+        """OpenCode Go URL alone leaves controls unknown."""
         contract = lookup_builtin_contract(
             provider_base_url="https://opencode.ai/zen/go/v1",
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        assert contract is not None
-        assert contract.mode == "effort_or_budget"
-        assert contract.accepted_efforts == ["low", "medium", "high"]
+        assert contract is None
 
     def test_opencode_go_id_still_wins(self) -> None:
-        """Exact provider_id match wins over URL match."""
+        """Provider identity does not replace provider metadata."""
         contract = lookup_builtin_contract(
             provider_id="opencode-go",
             provider_base_url="https://opencode.ai/zen/go/v1",
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        assert contract is not None
-        assert contract.mode == "effort_or_budget"
+        assert contract is None
 
     def test_native_minimax_not_captured_by_opencode_url(self) -> None:
         """Native MiniMax URL does not match OpenCode Go URL rule."""
@@ -456,17 +449,14 @@ class TestOpenCodeGoUrlCompatibility:
         assert contract is None
 
     def test_provider_id_resembling_minimax_with_opencode_url(self) -> None:
-        """Provider ID 'minimax-proxy' with OpenCode URL resolves by ID
-        specificity (no ID match) then URL match."""
+        """A provider ID resembling MiniMax cannot activate OpenCode rules."""
         contract = lookup_builtin_contract(
             provider_id="minimax-proxy",
             provider_base_url="https://opencode.ai/zen/go/v1",
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        # minimax-proxy doesn't match any ID rule; URL rule matches.
-        assert contract is not None
-        assert contract.mode == "effort_or_budget"
+        assert contract is None
 
     def test_native_minimax_id_wins_over_opencode_url(self) -> None:
         """Native MiniMax ID wins over OpenCode URL when both could match."""
@@ -476,7 +466,7 @@ class TestOpenCodeGoUrlCompatibility:
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        # Both rules match; native MiniMax ID wins at specificity 3.
+        # Native MiniMax remains independently scoped to its provider ID.
         assert contract is not None
         assert contract.mode == "effort"
 
@@ -814,7 +804,7 @@ class TestShippedContractsUnambiguous:
         assert errors == [], f"Ambiguous contracts: {errors}"
 
     def test_all_entries_in_builtin_contracts(self) -> None:
-        assert len(BUILTIN_CONTRACTS) >= 5
+        assert len(BUILTIN_CONTRACTS) >= 3
 
 
 # ---------------------------------------------------------------------------

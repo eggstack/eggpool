@@ -236,7 +236,9 @@ class TestIntegrationContext:
         with pytest.raises(AttributeError):
             ctx_empty.api_key = "new_key"  # type: ignore[misc]
 
-    def test_apply_capabilities_adds_opencode_go_thinking_override(self) -> None:
+    def test_apply_capabilities_does_not_add_opencode_go_thinking_override(
+        self,
+    ) -> None:
         from eggpool.models.config import AppConfig
 
         config = AppConfig.from_dict(
@@ -262,9 +264,7 @@ class TestIntegrationContext:
 
         result = _apply_capabilities(models, config)
 
-        thinking = result[0]["capabilities"]["thinking"]
-        assert thinking["status"] == "supported"
-        assert thinking["supported_efforts"] == ["low", "medium", "high"]
+        assert "thinking" not in result[0]["capabilities"]
 
 
 # ---------------------------------------------------------------------------

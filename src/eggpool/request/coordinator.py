@@ -2390,8 +2390,8 @@ class RequestCoordinator:
                 )
                 # ``rejected_status`` is ``"unknown"`` or
                 # ``"unsupported"`` when the capability row is
-                # truly authoritative (built-in override plus any
-                # provider-scoped row report the same status);
+                # truly authoritative (explicit provider metadata and
+                # applied overrides report the same status);
                 # ``None`` means every supporting provider has been
                 # quarantined or filtered for reasons unrelated to
                 # the thinking capability — the underlying provider
@@ -4979,13 +4979,12 @@ class RequestCoordinator:
         rejection, also consult the provider-scoped entries when the
         collapsed one reports ``"unknown"`` — first the routing
         ``context.provider_id`` if it is set, and otherwise every
-        provider with a known provider-scoped row. Built-in capability
-        overrides (e.g. the canonical OpenCode Go host capabilities for
-        ``muse-spark-1.2-contributor``) are applied at request time by
+        provider with a known provider-scoped row. Provider-scoped capability
+        overrides are applied at request time by
         ``ModelCatalogCache.get_provider_model_entry``; the bare-model
-        request path therefore still resolves the correct
-        ``supported`` status even when ``provider_id`` was not parsed
-        out of the client request.
+        request path therefore still resolves the correct provider-specific
+        status even when ``provider_id`` was not parsed out of the client
+        request. Missing reasoning metadata remains unknown.
         """
         from eggpool.catalog.capabilities import extract_thinking_status_from_entry
 
@@ -5004,13 +5003,13 @@ class RequestCoordinator:
                 status = extract_thinking_status_from_entry(provider_entry)
             else:
                 # No provider hint: aggregate every provider with a
-                # known provider-scoped entry for the model so per-
-                # provider built-in overrides still surface as
-                # ``supported`` rather than collapsing to a misleading
+                # known provider-scoped entry for the model so provider
+                # metadata still surfaces as ``supported`` rather than
+                # collapsing to a misleading
                 # ``unknown``. The router may have just marked every
                 # supporting account as quarantined for this model
-                # while the provider entry (and its built-in override)
-                # is still authoritative for the catalog.
+                # while the provider entry remains authoritative for the
+                # catalog.
                 # ``get_provider_model_entries`` returns the override-
                 # applied view for every ``(model_id, provider_id)``
                 # row in the cache, including rows whose accounts were
