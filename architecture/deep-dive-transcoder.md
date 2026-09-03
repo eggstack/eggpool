@@ -181,8 +181,11 @@ attempt-loop seam treats this as a client-validation outcome:
   backoff effect is applied.
 
 Serialized via `model_capabilities_to_dict` / `dict_to_model_capabilities`
-for the catalog cache round-trip. Merge via `merge_model_capabilities` uses
-override-wins semantics.
+for the catalog cache round-trip. The canonical serialized contract contains
+independent `toggle`, `effort`, and `budget` states; old `mode` values are
+decoded as compatibility input only. Merge via `merge_model_capabilities`
+applies known control dimensions independently, so an explicit unsupported
+dimension clears stale accepted values and bounds.
 
 ### Media validation memory contract
 
@@ -197,11 +200,12 @@ unchanged.
 
 `resolve_thinking_budget()` — single source of truth for effort-to-budget translation:
 1. Explicit `thinking.budget_tokens` (Anthropic style)
-2. `reasoning_effort` via `ThinkingCapability.effort_to_budget_tokens`
+2. `reasoning_effort` via an explicit provider/model effort-to-budget mapping
 3. `[transcoder.thinking_budget_defaults]`
 4. Hard-coded fallback (low=1024, medium=4096, high=16384)
 
-The hard-coded fallback is only for the legacy `low`/`medium`/`high` values.
+The hard-coded fallback is a legacy translation-policy compatibility fallback,
+not discovered provider metadata.
 `none` is an explicit disable signal and emits no Anthropic thinking block.
 Other effort labels, including current provider values such as `xhigh` or
 `max`, require an explicit verified capability mapping. With no mapping,
@@ -313,7 +317,8 @@ native field is emitted merely because the protocol family matches.
 
 OpenAI `reasoning_effort` is mapped to Anthropic `thinking.budget_tokens` only
 through the existing target thinking capability budget mapping or the legacy
-low/medium/high compatibility defaults. OpenAI's effort values are
+low/medium/high compatibility defaults. The catalog contract keeps effort
+support independent from budget support. OpenAI's effort values are
 model-dependent; `none` disables reasoning and is never converted into a
 positive Anthropic budget. Unmapped values are rejected or dropped according
 to policy, never assigned a guessed medium budget. Anthropic manual thinking

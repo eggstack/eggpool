@@ -6,6 +6,7 @@ from eggpool.catalog.capabilities import (
     ModelCapabilities,
     ThinkingCapability,
     ThinkingClientControls,
+    ThinkingControlContract,
     aggregate_model_capabilities,
     aggregate_thinking_capabilities,
     aggregate_thinking_status,
@@ -179,6 +180,33 @@ class TestMergeThinkingCapabilities:
         )
         result = merge_thinking_capabilities(base, override)
         assert result.effort_to_budget_tokens == {"low": 2000}
+
+    def test_explicit_no_control_clears_lower_authority_controls(self) -> None:
+        base = ThinkingCapability(
+            status="supported",
+            supported_efforts=["low", "high"],
+            effort_to_budget_tokens={"low": 1000, "high": 8000},
+            budget_tokens_min=1000,
+            budget_tokens_max=8000,
+        )
+        override = ThinkingCapability(
+            status="supported",
+            source="provider_catalog",
+            control_contract=ThinkingControlContract(
+                toggle="unsupported",
+                effort="unsupported",
+                budget="unsupported",
+                source="provider_catalog",
+            ),
+        )
+        result = merge_thinking_capabilities(base, override)
+
+        assert result.control_contract.effort == "unsupported"
+        assert result.control_contract.budget == "unsupported"
+        assert result.supported_efforts == []
+        assert result.effort_to_budget_tokens is None
+        assert result.budget_tokens_min is None
+        assert result.budget_tokens_max is None
 
     def test_merge_notes_override_wins(self) -> None:
         base = ThinkingCapability(notes="base note")

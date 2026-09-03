@@ -48,11 +48,126 @@ CapabilitySource = Literal[
     "unknown",
 ]
 
-# Literal type for thinking control contract modes — used in casts.
+ControlSupport = Literal["supported", "unsupported", "unknown"]
+ControlSummary = Literal["supported", "unsupported", "unknown", "mixed"]
+
+# Legacy mode values are accepted as compatibility input only.  They are not
+# the canonical representation and are excluded from serialized capability
+# dictionaries.
 _ThinkingControlMode = Literal[
     "unknown", "none", "fixed", "effort", "budget", "effort_or_budget"
 ]
 _HistoricalReasoningContent = Literal["unknown", "accepted", "required", "rejected"]
+
+_REASONING_OPTION_TYPES = frozenset({"toggle", "effort", "budget_tokens"})
+
+
+@dataclass(frozen=True, slots=True)
+class ReasoningOptionsParseResult:
+    """Bounded result of parsing one provider's ``reasoning_options`` field."""
+
+    present: bool
+    toggle: ControlSupport
+    effort: ControlSupport
+    budget: ControlSupport
+    accepted_efforts: list[str] = field(default_factory=lambda: [])
+    effort_aliases: dict[str, str] = field(default_factory=lambda: {})
+    explicit_budget_min: int | None = None
+    explicit_budget_max: int | None = None
+    unknown_types: tuple[str, ...] = ()
+
+
+def _normalize_reasoning_effort_label(value: object) -> str | None:
+    """Normalize a provider effort label without assigning numeric meaning."""
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    if not normalized:
+        return None
+    return "medium" if normalized == "med" else normalized
+
+
+def parse_reasoning_options(
+    value: object,
+    *,
+    complete: bool = False,
+) -> ReasoningOptionsParseResult:
+    """Parse the shared provider ``reasoning_options`` shape.
+
+    ``present`` distinguishes an omitted field from a present list.  When
+    *complete* is true, a present list is the complete host control set, so
+    recognized but unlisted controls are explicitly unsupported.  Malformed
+    rows are ignored independently and unknown future types are retained only
+    as bounded metadata; neither authorizes a control.
+    """
+    if not isinstance(value, list):
+        return ReasoningOptionsParseResult(
+            present=False,
+            toggle="unknown",
+            effort="unknown",
+            budget="unknown",
+        )
+
+    toggle: ControlSupport = "unsupported" if complete else "unknown"
+    effort: ControlSupport = "unsupported" if complete else "unknown"
+    budget: ControlSupport = "unsupported" if complete else "unknown"
+    accepted_efforts: list[str] = []
+    effort_aliases: dict[str, str] = {}
+    unknown_types: list[str] = []
+    budget_min: int | None = None
+    budget_max: int | None = None
+
+    for raw_option in cast("list[object]", value):
+        if not isinstance(raw_option, dict):
+            continue
+        option = cast("dict[str, object]", raw_option)
+        raw_type = option.get("type")
+        if not isinstance(raw_type, str):
+            continue
+        option_type = raw_type.strip().lower()
+        if option_type not in _REASONING_OPTION_TYPES:
+            if option_type and option_type not in unknown_types:
+                unknown_types.append(option_type)
+            continue
+
+        if option_type == "toggle":
+            toggle = "supported"
+            continue
+        if option_type == "effort":
+            raw_values = option.get("values")
+            if not isinstance(raw_values, list):
+                continue
+            effort = "supported"
+            for raw_value in cast("list[object]", raw_values):
+                normalized = _normalize_reasoning_effort_label(raw_value)
+                if normalized is None or normalized in accepted_efforts:
+                    continue
+                accepted_efforts.append(normalized)
+                if isinstance(raw_value, str) and raw_value.strip().lower() == "med":
+                    effort_aliases[raw_value.strip().lower()] = normalized
+            continue
+
+        # budget_tokens
+        budget = "supported"
+        raw_min = option.get("min")
+        raw_max = option.get("max")
+        if isinstance(raw_min, int) and not isinstance(raw_min, bool) and raw_min > 0:
+            budget_min = raw_min
+        if isinstance(raw_max, int) and not isinstance(raw_max, bool) and raw_max > 0:
+            budget_max = raw_max
+
+    return ReasoningOptionsParseResult(
+        present=True,
+        toggle=toggle,
+        effort=effort,
+        budget=budget,
+        accepted_efforts=accepted_efforts,
+        effort_aliases=effort_aliases,
+        explicit_budget_min=budget_min,
+        explicit_budget_max=budget_max,
+        unknown_types=tuple(unknown_types[:8]),
+    )
+
 
 # ---------------------------------------------------------------------------
 # Pydantic models
@@ -73,27 +188,19 @@ class ThinkingClientControls(BaseModel):
 
 
 class ThinkingControlContract(BaseModel):
-    """Explicit provider-bound contract for thinking/reasoning controls.
+    """Provider/model reasoning controls as independent dimensions.
 
-    Distinguishes *whether the model produces reasoning* from
-    *whether this provider deployment accepts client-selectable
-    effort or budget controls*.  This eliminates the previous
-    ambiguity where an empty ``supported_efforts`` list could mean
-    both "unknown metadata" and "known fixed behaviour."
-
-    Control modes:
-
-    - ``"unknown"``: metadata absent; policy decides best-effort routing.
-    - ``"none"``: reasoning controls not accepted; reasoning not available.
-    - ``"fixed"``: model may reason, but client cannot select effort/budget.
-    - ``"effort"``: a named effort field is accepted.
-    - ``"budget"``: an explicit token budget is accepted.
-    - ``"effort_or_budget"``: both effort and budget are accepted.
+    ``status`` on :class:`ThinkingCapability` answers whether reasoning is
+    available.  These fields answer which caller controls the selected host
+    accepts.  The deprecated ``mode`` field is accepted only when decoding
+    old configuration/cache values and is excluded from serialized output.
     """
 
-    mode: Literal[
-        "unknown", "none", "fixed", "effort", "budget", "effort_or_budget"
-    ] = "unknown"
+    model_config = ConfigDict(extra="forbid")
+
+    toggle: ControlSummary = "unknown"
+    effort: ControlSummary = "unknown"
+    budget: ControlSummary = "unknown"
     request_fields: list[str] = Field(default_factory=list)
     accepted_efforts: list[str] = Field(default_factory=list)
     effort_aliases: dict[str, str] = Field(default_factory=dict)
@@ -105,6 +212,63 @@ class ThinkingControlContract(BaseModel):
     ] = "unknown"
     source: CapabilitySource = "unknown"
 
+    # Compatibility input for pre-Plan-158 values.  This is intentionally
+    # excluded from model dumps; callers must use the three dimensions above.
+    mode: str = Field(default="unknown", exclude=True)
+
+    def model_post_init(self, __context: object) -> None:
+        """Translate legacy mode input and derive its compatibility label."""
+        if self.mode != "unknown":
+            if self.mode in {"none", "fixed"}:
+                self.toggle = self.effort = self.budget = "unsupported"
+            elif self.mode == "effort":
+                self.effort = "supported"
+            elif self.mode == "budget":
+                self.budget = "supported"
+            elif self.mode == "effort_or_budget":
+                self.effort = self.budget = "supported"
+            return
+        # Keep the old label readable for compatibility callers.  New code
+        # uses ``summary()`` or the individual dimensions instead.
+        if self.effort == "supported" and self.budget == "supported":
+            self.mode = "effort_or_budget"
+        elif self.effort == "supported":
+            self.mode = "effort"
+        elif self.budget == "supported":
+            self.mode = "budget"
+        elif self.all_unsupported():
+            self.mode = "fixed"
+        else:
+            self.mode = self.summary()
+
+    def summary(self) -> str:
+        """Return a derived human-readable control summary."""
+        states = (self.toggle, self.effort, self.budget)
+        if all(state == "unknown" for state in states):
+            return "unknown"
+        if all(state == "unsupported" for state in states):
+            return "fixed"
+        supported = [
+            name
+            for name, state in zip(("toggle", "effort", "budget"), states, strict=True)
+            if state == "supported"
+        ]
+        if not supported:
+            return "unknown"
+        return "+".join(supported)
+
+    def all_unknown(self) -> bool:
+        """Return whether no control dimension has an observed state."""
+        return all(
+            state == "unknown" for state in (self.toggle, self.effort, self.budget)
+        )
+
+    def all_unsupported(self) -> bool:
+        """Return whether the contract explicitly accepts no caller control."""
+        return all(
+            state == "unsupported" for state in (self.toggle, self.effort, self.budget)
+        )
+
 
 def infer_control_contract(capability: ThinkingCapability) -> ThinkingControlContract:
     """Infer a :class:`ThinkingControlContract` from legacy capability fields.
@@ -115,7 +279,7 @@ def infer_control_contract(capability: ThinkingCapability) -> ThinkingControlCon
     fields so downstream code can always inspect the contract without
     branching on its presence.
     """
-    if capability.control_contract.mode != "unknown":
+    if not capability.control_contract.all_unknown():
         return capability.control_contract
 
     status = capability.status
@@ -127,11 +291,14 @@ def infer_control_contract(capability: ThinkingCapability) -> ThinkingControlCon
         return ThinkingControlContract(
             mode="none",
             source=capability.source,
+            toggle="unsupported",
+            effort="unsupported",
+            budget="unsupported",
         )
 
-    if efforts:
+    if efforts or capability.effort_to_budget_tokens is not None:
         contract = ThinkingControlContract(
-            mode="effort",
+            effort="supported",
             accepted_efforts=list(efforts),
             source=capability.source,
         )
@@ -143,11 +310,12 @@ def infer_control_contract(capability: ThinkingCapability) -> ThinkingControlCon
             contract.explicit_budget_min = budget_min
         if budget_max is not None:
             contract.explicit_budget_max = budget_max
+        contract.mode = contract.summary()
         return contract
 
     if budget_min is not None or budget_max is not None:
         return ThinkingControlContract(
-            mode="budget",
+            budget="supported",
             explicit_budget_min=budget_min,
             explicit_budget_max=budget_max,
             source=capability.source,
@@ -326,22 +494,6 @@ class ModelCapabilities(BaseModel):
 # Merge helpers
 # ---------------------------------------------------------------------------
 
-_MERGE_PRECEDENCE: list[CapabilityStatus] = [
-    "supported",
-    "unsupported",
-    "mixed",
-    "conflicting",
-    "unknown",
-]
-
-
-def _status_priority(status: CapabilityStatus) -> int:
-    """Lower index = higher priority for merge precedence."""
-    try:
-        return _MERGE_PRECEDENCE.index(status)
-    except ValueError:
-        return len(_MERGE_PRECEDENCE)
-
 
 def merge_thinking_capabilities(
     base: ThinkingCapability,
@@ -354,22 +506,19 @@ def merge_thinking_capabilities(
     1. Built-in safe defaults (``base``).
     2. Provider catalog / model-info data (``override``).
 
-    When ``override`` carries non-default values they win.  When both
-    sides carry non-default values the higher-priority status wins
-    (``supported`` > ``unsupported`` > ``mixed`` > ``conflicting`` >
-    ``unknown``).  If statuses are equal the override's metadata is
-    preferred.
+    ``override`` is the higher-authority layer for this operation. Explicit
+    control dimensions replace the corresponding base dimensions independently;
+    explicit unsupported values therefore clear stale accepted values and
+    bounds. Unknown override dimensions preserve the base fact.
     """
     # If override is fully default, keep base unchanged.
     if override.status == "unknown" and override.source == "unknown":
         return base.model_copy(deep=True)
 
-    # Status merge: higher-priority wins; on tie prefer override.
-    base_prio = _status_priority(base.status)
-    override_prio = _status_priority(override.status)
-    if override.status != "unknown" and (
-        base.status == "unknown" or override_prio <= base_prio
-    ):
+    # ``override`` is the higher-authority layer for this merge operation.
+    # In particular, an explicit unsupported status must be able to clear a
+    # lower layer's supported claim; status labels are not a truth ranking.
+    if override.status != "unknown":
         merged_status = override.status
         merged_source = override.source
     elif base.status != "unknown" and override.status == "unknown":
@@ -393,33 +542,100 @@ def merge_thinking_capabilities(
         elif proto in base.client_controls:
             controls[proto] = base.client_controls[proto]
 
-    # Budget tokens: override wins when non-None.
-    budget_min = (
-        override.budget_tokens_min
-        if override.budget_tokens_min is not None
-        else base.budget_tokens_min
-    )
-    budget_max = (
-        override.budget_tokens_max
-        if override.budget_tokens_max is not None
-        else base.budget_tokens_max
-    )
-    effort = (
-        override.effort_to_budget_tokens
-        if override.effort_to_budget_tokens is not None
-        else base.effort_to_budget_tokens
-    )
-    supported_efforts = (
-        override.supported_efforts
-        if override.supported_efforts
-        else base.supported_efforts
-    )
-    notes = override.notes if override.notes is not None else base.notes
+    base_contract = infer_control_contract(base)
+    override_contract = infer_control_contract(override)
+    contract_states: list[ControlSummary] = []
+    for dimension in ("toggle", "effort", "budget"):
+        override_state = cast("ControlSupport", getattr(override_contract, dimension))
+        base_state = cast("ControlSupport", getattr(base_contract, dimension))
+        contract_states.append(
+            cast(
+                "ControlSummary",
+                override_state if override_state != "unknown" else base_state,
+            )
+        )
 
-    # Control contract: override wins when non-default.
-    contract = base.control_contract
-    if override.control_contract.mode != "unknown":
-        contract = override.control_contract
+    toggle, effort_state, budget_state = contract_states
+    selected_override_effort = override_contract.effort != "unknown"
+    selected_override_budget = override_contract.budget != "unknown"
+    selected_contract = ThinkingControlContract(
+        toggle=toggle,
+        effort=effort_state,
+        budget=budget_state,
+        request_fields=(
+            override_contract.request_fields
+            if override_contract.request_fields
+            else base_contract.request_fields
+        ),
+        accepted_efforts=(
+            override_contract.accepted_efforts
+            if selected_override_effort
+            else base_contract.accepted_efforts
+        ),
+        effort_aliases=(
+            override_contract.effort_aliases
+            if selected_override_effort
+            else base_contract.effort_aliases
+        ),
+        effort_to_budget_tokens=(
+            override_contract.effort_to_budget_tokens
+            if selected_override_effort
+            else base_contract.effort_to_budget_tokens
+        ),
+        explicit_budget_min=(
+            override_contract.explicit_budget_min
+            if selected_override_budget
+            and override_contract.explicit_budget_min is not None
+            else base_contract.explicit_budget_min
+        ),
+        explicit_budget_max=(
+            override_contract.explicit_budget_max
+            if selected_override_budget
+            and override_contract.explicit_budget_max is not None
+            else base_contract.explicit_budget_max
+        ),
+        historical_reasoning_content=(
+            override_contract.historical_reasoning_content
+            if override_contract.historical_reasoning_content != "unknown"
+            else base_contract.historical_reasoning_content
+        ),
+        source=(
+            override_contract.source
+            if any(state != "unknown" for state in contract_states)
+            and override_contract.source != "unknown"
+            else base_contract.source
+        ),
+    )
+
+    # Compatibility fields are generated from the selected contract.  This
+    # prevents an explicit negative dimension from retaining stale values.
+    if effort_state == "supported":
+        supported_efforts = list(selected_contract.accepted_efforts)
+        effort = (
+            dict(selected_contract.effort_to_budget_tokens)
+            if selected_contract.effort_to_budget_tokens is not None
+            else None
+        )
+    elif effort_state == "unsupported":
+        supported_efforts = []
+        effort = None
+    else:
+        supported_efforts = list(base.supported_efforts)
+        effort = (
+            dict(base.effort_to_budget_tokens)
+            if base.effort_to_budget_tokens is not None
+            else None
+        )
+
+    if budget_state == "supported":
+        budget_min = selected_contract.explicit_budget_min
+        budget_max = selected_contract.explicit_budget_max
+    elif budget_state == "unsupported":
+        budget_min = budget_max = None
+    else:
+        budget_min = base.budget_tokens_min
+        budget_max = base.budget_tokens_max
+    notes = override.notes if override.notes is not None else base.notes
 
     return ThinkingCapability(
         status=merged_status,
@@ -430,7 +646,7 @@ def merge_thinking_capabilities(
         budget_tokens_max=budget_max,
         supported_efforts=supported_efforts,
         effort_to_budget_tokens=effort,
-        control_contract=contract,
+        control_contract=selected_contract,
         notes=notes,
     )
 
@@ -521,6 +737,27 @@ def aggregate_thinking_capabilities(
         for proto, ctrl in c.client_controls.items():
             controls[proto] = ctrl
 
+    contracts = [infer_control_contract(c) for c in capabilities]
+
+    def aggregate_control(dimension: str) -> ControlSummary:
+        states = {getattr(contract, dimension) for contract in contracts}
+        if len(states) == 1:
+            return cast("ControlSummary", next(iter(states)))
+        if states == {"unknown"}:
+            return "unknown"
+        return "mixed"
+
+    toggle = aggregate_control("toggle")
+    effort_state = aggregate_control("effort")
+    budget_state = aggregate_control("budget")
+    effort_value_sets = {
+        tuple(contract.accepted_efforts)
+        for contract in contracts
+        if contract.effort == "supported"
+    }
+    if len(effort_value_sets) > 1 and effort_state == "supported":
+        effort_state = "mixed"
+
     # Conservative budget bounds.
     mins = [
         c.budget_tokens_min for c in capabilities if c.budget_tokens_min is not None
@@ -536,22 +773,29 @@ def aggregate_thinking_capabilities(
     if budget_min is not None and budget_max is not None and budget_min > budget_max:
         budget_min = None
 
-    # Merge effort metadata conservatively: retain the lowest budget for
-    # each effort so the aggregate never promises more than one provider
-    # can support. Advertised effort labels remain a union.
+    # Keep legacy effort projections for compatibility, but mark differing
+    # provider vocabularies as ``mixed`` in the canonical contract so they
+    # cannot be mistaken for one provider's contract.
     effort: dict[str, int] | None = None
     supported_efforts: list[str] = []
-    for c in capabilities:
-        if c.effort_to_budget_tokens is not None:
-            if effort is None:
-                effort = {}
-            for effort_name, budget in c.effort_to_budget_tokens.items():
-                previous = effort.get(effort_name)
-                if previous is None or budget < previous:
-                    effort[effort_name] = budget
-        for item in c.supported_efforts:
-            if item not in supported_efforts:
-                supported_efforts.append(item)
+    if effort_state in {"supported", "mixed"}:
+        for capability in capabilities:
+            for item in capability.supported_efforts:
+                if item not in supported_efforts:
+                    supported_efforts.append(item)
+        maps = [
+            contract.effort_to_budget_tokens
+            for contract in contracts
+            if contract.effort == "supported"
+            and contract.effort_to_budget_tokens is not None
+        ]
+        if maps:
+            effort = {}
+            for mapping in maps:
+                for name, budget in mapping.items():
+                    previous = effort.get(name)
+                    if previous is None or budget < previous:
+                        effort[name] = budget
 
     return ThinkingCapability(
         status=agg_status,
@@ -562,6 +806,16 @@ def aggregate_thinking_capabilities(
         budget_tokens_max=budget_max,
         supported_efforts=supported_efforts,
         effort_to_budget_tokens=effort,
+        control_contract=ThinkingControlContract(
+            toggle=cast("ControlSupport", toggle),
+            effort=cast("ControlSupport", effort_state),
+            budget=cast("ControlSupport", budget_state),
+            accepted_efforts=(supported_efforts if effort_state == "supported" else []),
+            effort_to_budget_tokens=(effort if effort_state == "supported" else None),
+            explicit_budget_min=(budget_min if budget_state == "supported" else None),
+            explicit_budget_max=(budget_max if budget_state == "supported" else None),
+            source="aggregate",
+        ),
     )
 
 
@@ -599,6 +853,7 @@ def serialize_thinking_for_models(
     individual thinking status so clients can see per-provider truth.
     """
     result: dict[str, object] = {"status": capability.status}
+    contract = infer_control_contract(capability)
     if capability.source != "unknown":
         result["source"] = capability.source
     if capability.native_protocols:
@@ -622,20 +877,38 @@ def serialize_thinking_for_models(
                     ctrl.response_block_types,
                 )
 
-    if capability.budget_tokens_min is not None:
+    if capability.budget_tokens_min is not None and (
+        contract.budget == "supported"
+        or contract.all_unknown()
+        or contract.explicit_budget_min is not None
+        or contract.explicit_budget_max is not None
+    ):
         result["budget_tokens_min"] = capability.budget_tokens_min
-    if capability.budget_tokens_max is not None:
+    if capability.budget_tokens_max is not None and (
+        contract.budget == "supported"
+        or contract.all_unknown()
+        or contract.explicit_budget_min is not None
+        or contract.explicit_budget_max is not None
+    ):
         result["budget_tokens_max"] = capability.budget_tokens_max
-    if capability.supported_efforts:
+    if capability.supported_efforts and (
+        contract.effort == "supported" or contract.all_unknown()
+    ):
         result["supported_efforts"] = list(capability.supported_efforts)
-    if capability.effort_to_budget_tokens is not None:
+    if capability.effort_to_budget_tokens is not None and (
+        contract.effort == "supported" or contract.all_unknown()
+    ):
         result["effort_to_budget_tokens"] = dict(capability.effort_to_budget_tokens)
 
-    # Provider-bound control contract — always emit when mode is not
-    # "unknown" so clients and operators can see the explicit contract.
-    contract = infer_control_contract(capability)
-    if contract.mode != "unknown":
-        contract_dict: dict[str, object] = {"mode": contract.mode}
+    # Provider-bound control contract — emit independent dimensions.  The
+    # legacy mode label is intentionally not persisted or returned as the
+    # canonical provider truth.
+    if not contract.all_unknown():
+        contract_dict: dict[str, object] = {
+            "toggle": contract.toggle,
+            "effort": contract.effort,
+            "budget": contract.budget,
+        }
         if contract.request_fields:
             contract_dict["request_fields"] = list(contract.request_fields)
         if contract.accepted_efforts:
@@ -757,6 +1030,9 @@ def thinking_override_to_capability(
     budget_max = override.get("budget_tokens_max")
     supported_efforts = override.get("supported_efforts")
     effort = override.get("effort_to_budget_tokens")
+    toggle_support = override.get("toggle")
+    effort_support = override.get("effort")
+    budget_support = override.get("budget")
     notes = override.get("notes")
 
     fields = (
@@ -767,6 +1043,9 @@ def thinking_override_to_capability(
         budget_max,
         supported_efforts,
         effort,
+        toggle_support,
+        effort_support,
+        budget_support,
         notes,
     )
     has_any = any(v is not None for v in fields)
@@ -857,6 +1136,63 @@ def thinking_override_to_capability(
                 str(cc_hist),
             ),
             source=cc_source,
+        )
+
+    explicit_controls = (toggle_support, effort_support, budget_support)
+    if any(value is not None for value in explicit_controls):
+        control_contract = ThinkingControlContract(
+            toggle=(
+                cast("ControlSummary", str(toggle_support))
+                if toggle_support is not None
+                else control_contract.toggle
+            ),
+            effort=(
+                cast("ControlSummary", str(effort_support))
+                if effort_support is not None
+                else control_contract.effort
+            ),
+            budget=(
+                cast("ControlSummary", str(budget_support))
+                if budget_support is not None
+                else control_contract.budget
+            ),
+            accepted_efforts=control_contract.accepted_efforts,
+            effort_aliases=control_contract.effort_aliases,
+            effort_to_budget_tokens=control_contract.effort_to_budget_tokens,
+            explicit_budget_min=control_contract.explicit_budget_min,
+            explicit_budget_max=control_contract.explicit_budget_max,
+            historical_reasoning_content=control_contract.historical_reasoning_content,
+            source=control_contract.source or cap_source,
+        )
+
+    # Legacy operator fields are normalized into the canonical dimensions.
+    # An explicitly empty effort list is a negative fact, not missing data.
+    if isinstance(supported_efforts, list) and effort_support is None:
+        control_contract.effort = (
+            "supported" if supported_effort_list else "unsupported"
+        )
+        control_contract.accepted_efforts = list(supported_effort_list)
+    if effort_dict is not None and effort_support is None:
+        control_contract.effort = "supported"
+        if not control_contract.accepted_efforts:
+            control_contract.accepted_efforts = list(effort_dict)
+        control_contract.effort_to_budget_tokens = dict(effort_dict)
+    if (
+        isinstance(budget_min, int) or isinstance(budget_max, int)
+    ) and budget_support is None:
+        control_contract.budget = "supported"
+        control_contract.explicit_budget_min = (
+            budget_min if isinstance(budget_min, int) else None
+        )
+        control_contract.explicit_budget_max = (
+            budget_max if isinstance(budget_max, int) else None
+        )
+    if cap_status == "unsupported":
+        control_contract = ThinkingControlContract(
+            toggle="unsupported",
+            effort="unsupported",
+            budget="unsupported",
+            source=cap_source,
         )
 
     return ThinkingCapability(
@@ -1054,12 +1390,13 @@ def dict_to_model_capabilities(data: dict[str, object]) -> ModelCapabilities:
                     ),
                 )
 
-    # Parse provider-bound control contract.
+    # Parse provider-bound control contract.  ``mode`` is accepted here as a
+    # bounded legacy decoder but is never required by the new representation.
     contract_raw = tr.get("control_contract")
     control_contract = ThinkingControlContract()
     if isinstance(contract_raw, dict):
         cc_dict = cast("dict[str, object]", contract_raw)
-        cc_mode = str(cc_dict.get("mode", "unknown"))
+        cc_mode = cc_dict.get("mode")
         cc_source_raw = cc_dict.get("source")
         cc_source: CapabilitySource = (
             cast("CapabilitySource", str(cc_source_raw))
@@ -1101,7 +1438,23 @@ def dict_to_model_capabilities(data: dict[str, object]) -> ModelCapabilities:
         cc_budget_max_raw = cc_dict.get("explicit_budget_max")
         cc_historical_raw = cc_dict.get("historical_reasoning_content", "unknown")
         control_contract = ThinkingControlContract(
-            mode=cast("_ThinkingControlMode", cc_mode),
+            mode=(
+                cast("_ThinkingControlMode", cc_mode)
+                if isinstance(cc_mode, str)
+                else "unknown"
+            ),
+            toggle=cast(
+                "ControlSummary",
+                str(cc_dict.get("toggle", "unknown")),
+            ),
+            effort=cast(
+                "ControlSummary",
+                str(cc_dict.get("effort", "unknown")),
+            ),
+            budget=cast(
+                "ControlSummary",
+                str(cc_dict.get("budget", "unknown")),
+            ),
             request_fields=cc_request_fields,
             accepted_efforts=cc_accepted_efforts,
             effort_aliases=cc_effort_aliases,
@@ -1181,6 +1534,11 @@ def model_capabilities_to_dict(capabilities: ModelCapabilities) -> dict[str, obj
             result["multimodal"] = mm_dict
 
     tc = capabilities.thinking
+    # Only an explicitly stored contract is canonicalized into cache data.
+    # Legacy top-level fields remain compatibility input; re-emitting an
+    # inferred partial contract would accidentally mask a later built-in
+    # provider contract during cache hydration.
+    contract = tc.control_contract
 
     thinking_dict: dict[str, object] = {}
     if tc.status != "unknown":
@@ -1194,17 +1552,35 @@ def model_capabilities_to_dict(capabilities: ModelCapabilities) -> dict[str, obj
             proto: ctrl.model_dump(exclude_none=True)
             for proto, ctrl in tc.client_controls.items()
         }
-    if tc.budget_tokens_min is not None:
+    if tc.budget_tokens_min is not None and (
+        contract.budget == "supported"
+        or contract.all_unknown()
+        or contract.explicit_budget_min is not None
+        or contract.explicit_budget_max is not None
+    ):
         thinking_dict["budget_tokens_min"] = tc.budget_tokens_min
-    if tc.budget_tokens_max is not None:
+    if tc.budget_tokens_max is not None and (
+        contract.budget == "supported"
+        or contract.all_unknown()
+        or contract.explicit_budget_min is not None
+        or contract.explicit_budget_max is not None
+    ):
         thinking_dict["budget_tokens_max"] = tc.budget_tokens_max
-    if tc.supported_efforts:
+    if tc.supported_efforts and (
+        contract.effort == "supported" or contract.all_unknown()
+    ):
         thinking_dict["supported_efforts"] = list(tc.supported_efforts)
-    if tc.effort_to_budget_tokens is not None:
+    if tc.effort_to_budget_tokens is not None and (
+        contract.effort == "supported" or contract.all_unknown()
+    ):
         thinking_dict["effort_to_budget_tokens"] = dict(tc.effort_to_budget_tokens)
-    if tc.control_contract.mode != "unknown":
-        cc = tc.control_contract
-        contract_dict: dict[str, object] = {"mode": cc.mode}
+    if not contract.all_unknown():
+        cc = contract
+        contract_dict: dict[str, object] = {
+            "toggle": cc.toggle,
+            "effort": cc.effort,
+            "budget": cc.budget,
+        }
         if cc.request_fields:
             contract_dict["request_fields"] = list(cc.request_fields)
         if cc.accepted_efforts:

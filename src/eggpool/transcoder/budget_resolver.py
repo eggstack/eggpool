@@ -33,6 +33,7 @@ from typing import Any
 
 from eggpool.catalog.capabilities import (
     ThinkingCapability,
+    infer_control_contract,
     is_reasoning_disabled_effort,
 )
 from eggpool.errors import CapabilityError
@@ -185,8 +186,9 @@ def _resolve_effort(
     provider_label = provider_id or "unknown"
 
     # 2a: capability's per-model/provider effort mapping
-    if capability.effort_to_budget_tokens is not None:
-        raw = capability.effort_to_budget_tokens.get(effort)
+    contract = infer_control_contract(capability)
+    if contract.effort_to_budget_tokens is not None:
+        raw = contract.effort_to_budget_tokens.get(effort)
         if raw is not None:
             budget, clamped, clamp_warnings = _clamp_budget(
                 raw, capability, model_id, provider_label
@@ -349,8 +351,9 @@ def _clamp_budget(
     Returns ``(clamped_value, was_clamped, warnings)``.
     """
     warnings: list[dict[str, Any]] = []
-    budget_min = capability.budget_tokens_min
-    budget_max = capability.budget_tokens_max
+    contract = infer_control_contract(capability)
+    budget_min = contract.explicit_budget_min
+    budget_max = contract.explicit_budget_max
     clamped = False
 
     # External model-info sources are not validated by the config model.

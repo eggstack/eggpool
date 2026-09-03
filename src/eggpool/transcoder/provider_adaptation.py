@@ -158,7 +158,7 @@ def adapt_thinking_controls(
         )
 
     # If the contract is unknown, apply the unknown_contract policy.
-    if contract.mode == "unknown":
+    if contract.all_unknown():
         if policy.unknown_contract == "allow_with_warning":
             return ProviderRequestAdaptation(
                 payload=payload,
@@ -180,7 +180,7 @@ def adapt_thinking_controls(
         )
 
     # If the contract says no thinking controls are accepted.
-    if contract.mode == "none":
+    if capability.status == "unsupported":
         return _handle_none_contract(
             payload=payload,
             model_id=model_id,
@@ -191,7 +191,7 @@ def adapt_thinking_controls(
         )
 
     # If the contract says reasoning is fixed (no client controls).
-    if contract.mode == "fixed":
+    if contract.all_unsupported():
         return _handle_fixed_contract(
             payload=payload,
             model_id=model_id,
@@ -201,7 +201,7 @@ def adapt_thinking_controls(
             policy=policy,
         )
 
-    # For effort/budget/effort_or_budget modes, validate and adapt.
+    # For the remaining contracts, validate each requested dimension.
     return _handle_effort_budget_contract(
         payload=payload,
         client_protocol=client_protocol,
@@ -607,10 +607,7 @@ def _adapt_thinking_block(
         thinking_dict.pop(field.removeprefix("thinking."), None)
         removed_fields.append(field)
 
-    if "type" in thinking_dict and contract.mode not in (
-        "effort",
-        "effort_or_budget",
-    ):
+    if "type" in thinking_dict and contract.effort != "supported":
         unsupported("thinking.type", "thinking type is not selectable")
 
     if "effort" in thinking_dict:
@@ -621,7 +618,7 @@ def _adapt_thinking_block(
             normalized = value.lower()
             alias = contract.effort_aliases.get(normalized)
             accepted = {effort.lower(): effort for effort in contract.accepted_efforts}
-            if contract.mode not in ("effort", "effort_or_budget"):
+            if contract.effort != "supported":
                 unsupported("thinking.effort", "effort is not accepted")
             elif alias is not None:
                 thinking_dict["effort"] = alias
@@ -643,7 +640,7 @@ def _adapt_thinking_block(
             valid_budget = numeric_budget >= contract.explicit_budget_min
         if numeric_budget is not None and contract.explicit_budget_max is not None:
             valid_budget = numeric_budget <= contract.explicit_budget_max
-        if contract.mode not in ("budget", "effort_or_budget"):
+        if contract.budget != "supported":
             if policy.unsupported_control == "map_if_known":
                 accepted_efforts = {
                     effort.lower() for effort in contract.accepted_efforts
@@ -733,7 +730,7 @@ def _adapt_thinking_budget(
     if valid_budget and contract.explicit_budget_max is not None:
         valid_budget = value <= contract.explicit_budget_max
 
-    if contract.mode in ("budget", "effort_or_budget") and valid_budget:
+    if contract.budget == "supported" and valid_budget:
         return ControlFieldAdaptation(
             disposition="unchanged",
             payload=new_payload,
@@ -793,7 +790,7 @@ def _adapt_thinking_budget(
                 kind="thinking_control_dropped",
                 field_name="thinking_budget",
                 detail=(
-                    f"contract mode {contract.mode!r} does not accept budget"
+                    f"contract summary {contract.summary()!r} does not accept budget"
                     if valid_budget
                     else "thinking budget is invalid or outside provider bounds"
                 ),

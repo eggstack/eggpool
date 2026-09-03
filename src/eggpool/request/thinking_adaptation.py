@@ -271,7 +271,7 @@ def adapt_provider_thinking_controls(
     # apply normalization when we have a definitive contract.  Unknown
     # contracts pass through — the upstream will reject if needed.
     is_native = context.protocol == (context.upstream_protocol or context.protocol)
-    if is_native and contract.mode == "unknown":
+    if is_native and contract.all_unknown():
         return
 
     # Build the adaptation policy from config.

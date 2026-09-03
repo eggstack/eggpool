@@ -76,7 +76,8 @@ _OPENCODE_GO_MUSE_CONTRACT = BuiltinProviderContract(
         priority=10,
     ),
     contract=ThinkingControlContract(
-        mode="effort_or_budget",
+        effort="supported",
+        budget="supported",
         request_fields=["thinking", "reasoning_effort"],
         accepted_efforts=["minimal", "low", "medium", "high", "xhigh"],
         effort_to_budget_tokens={
@@ -122,7 +123,8 @@ _OPENCODE_GO_MINIMAX_CONTRACT = BuiltinProviderContract(
         priority=10,
     ),
     contract=ThinkingControlContract(
-        mode="effort_or_budget",
+        effort="supported",
+        budget="supported",
         request_fields=["thinking", "reasoning_effort"],
         accepted_efforts=["low", "medium", "high"],
         effort_aliases={"med": "medium"},
@@ -141,7 +143,7 @@ _MINIMAX_NATIVE_CONTRACT = BuiltinProviderContract(
         priority=10,
     ),
     contract=ThinkingControlContract(
-        mode="effort",
+        effort="supported",
         request_fields=["thinking"],
         accepted_efforts=["low", "medium", "high"],
         effort_aliases={"med": "medium"},
@@ -162,7 +164,8 @@ _OPENCODE_GO_URL_COMPAT_CONTRACT = BuiltinProviderContract(
         priority=10,
     ),
     contract=ThinkingControlContract(
-        mode="effort_or_budget",
+        effort="supported",
+        budget="supported",
         request_fields=["thinking", "reasoning_effort"],
         accepted_efforts=["low", "medium", "high"],
         effort_aliases={"med": "medium"},
@@ -181,7 +184,8 @@ _ANTHROPIC_NATIVE_CONTRACT = BuiltinProviderContract(
         priority=20,
     ),
     contract=ThinkingControlContract(
-        mode="effort_or_budget",
+        effort="supported",
+        budget="supported",
         request_fields=["thinking"],
         accepted_efforts=["low", "medium", "high"],
         effort_aliases={"med": "medium"},
@@ -202,7 +206,7 @@ _OPENAI_NATIVE_CONTRACT = BuiltinProviderContract(
         priority=20,
     ),
     contract=ThinkingControlContract(
-        mode="effort",
+        effort="supported",
         request_fields=["reasoning_effort"],
         accepted_efforts=["low", "medium", "high"],
         effort_aliases={"med": "medium"},
@@ -344,7 +348,7 @@ def lookup_builtin_contract(
     logger.debug(
         "builtin_contract_match "
         "provider_id=%s kind=%s url=%s model=%s protocol=%s "
-        "specificity=%d priority=%d -> mode=%s",
+        "specificity=%d priority=%d -> controls=%s",
         provider_id,
         provider_kind,
         provider_base_url,
@@ -352,7 +356,7 @@ def lookup_builtin_contract(
         protocol,
         best_specificity,
         entry.key.priority,
-        entry.contract.mode,
+        entry.contract.summary(),
     )
     return entry.contract
 
@@ -464,7 +468,7 @@ def resolve_control_contract(
     3. Inferred contract from legacy capability fields.
     """
     # 1. Explicit override on the capability.
-    if capability.control_contract.mode != "unknown":
+    if not capability.control_contract.all_unknown():
         return capability.control_contract
 
     # 2. Built-in contract.

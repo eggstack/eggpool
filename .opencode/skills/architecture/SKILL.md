@@ -311,7 +311,13 @@ diagnostic only and never supplies finalization correctness.
 
 ## Thinking Control Normalization
 
-Provider-bound `ThinkingControlContract` validates/normalizes thinking controls. `ControlFieldAdaptation` provides per-field dispositions. Built-in contract resolution: specificity before priority.
+Provider-bound `ThinkingControlContract` validates/normalizes independent
+`toggle`, `effort`, and `budget` control dimensions. The catalog's shared
+`parse_reasoning_options()` distinguishes absent metadata from a complete
+empty list and never assigns effort token budgets from labels. Legacy `mode`
+values are decode-only compatibility input. `ControlFieldAdaptation` provides
+per-field dispositions. Built-in contract resolution: specificity before
+priority.
 
 ## Failure Effects and Quarantine
 

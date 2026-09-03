@@ -18,7 +18,8 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Request, token, latency, error, and cost tracking in SQLite
 - Multi-page dashboard with 50 themes
 - Model metadata enrichment from provider catalogs, OpenRouter, Artificial Analysis, and Hugging Face
-- Thinking/reasoning capability-aware routing with configurable budget mapping
+- Thinking/reasoning capability metadata with compositional toggle/effort/budget
+  controls and explicit translation-policy budget mapping
 - Per-account outbound proxy support ([pproxy](https://pypi.org/project/pproxy/) — install with `uv sync --extra proxy`)
 - Optional `orjson` backend for faster JSON handling (`uv sync --extra fast`)
 - Designed for lightweight deployments (Raspberry Pi, SBCs)

@@ -63,14 +63,23 @@ Transforms heterogeneous provider responses into a canonical model list. Handles
 
 Tracks per-model capabilities including:
 - Thinking/reasoning support (`CapabilityStatus`: supported, unsupported, unknown, mixed, conflicting)
+- Independent provider control dimensions (`toggle`, `effort`, `budget`), each
+  `supported`, `unsupported`, or `unknown` on provider-bound entries
+- Explicit no-control reasoning (`reasoning.status = supported` with all three
+  controls `unsupported`), distinct from unsupported reasoning and absent
+  metadata
+- One shared `parse_reasoning_options()` parser for `toggle`, `effort`, and
+  `budget_tokens`; omitted metadata remains unknown while a complete empty
+  list means no caller control
 
 The canonical OpenCode Go provider also receives bundled thinking metadata for
 Muse Spark 1.2 and 1.3 Contributors, including their OpenAI-native effort
 levels. This provider-scoped seed is applied before routing so those models do
 not fall back to an unknown capability status when live catalog metadata is
 absent.
-- Budget bounds (`budget_tokens_min`, `budget_tokens_max`)
-- Effort-to-budget token mappings
+- Compatibility projections for budget bounds, accepted efforts, and explicit
+  effort-to-budget mappings. Discovery never fabricates token mappings from
+  effort labels.
 - Tool support, streaming support
 
 ### Pricing (`pricing.py`, `pricing_resolver.py`, `pricing_aliases.py`)
@@ -113,8 +122,10 @@ runtime.
 Merges metadata from external `models.dev` sources:
 - `fetch_models_dev_provider_models()` — fetches from models.dev API
 - `merge_models_dev_metadata()` — merges with provider-sourced data
-- `derive_opencode_go_supported_efforts()` — derives thinking effort support for OpenCode Go models
-- `apply_supported_efforts_to_capabilities()` — applies effort mappings to capability objects
+- `derive_opencode_go_supported_efforts()` — reads explicitly declared effort
+  values for compatibility callers without filling missing metadata
+- `apply_supported_efforts_to_capabilities()` — applies explicit effort labels
+  without inventing token budgets
 
 ## Data Flow
 

@@ -229,7 +229,8 @@ class TestNativeContractResolution:
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        assert contract.mode == "effort"
+        assert contract.effort == "supported"
+        assert contract.budget == "supported"
 
     def test_minimax_native_resolves_effort(self) -> None:
         """MiniMax native provider ID → effort contract."""

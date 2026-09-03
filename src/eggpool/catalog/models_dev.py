@@ -10,25 +10,17 @@ import httpx
 from eggpool.catalog.capabilities import (
     ModelCapabilities,
     ThinkingCapability,
+    ThinkingControlContract,
     dict_to_model_capabilities,
     merge_model_capabilities,
     model_capabilities_to_dict,
+    parse_reasoning_options,
 )
 
 logger = logging.getLogger(__name__)
 
 MODELS_DEV_BASE_URL = "https://models.dev"
 OPENCODE_GO_MODELS_DEV_PROVIDER_ID = "opencode-go"
-OPENCODE_COMPATIBLE_EFFORTS = ["low", "medium", "high"]
-_EFFORT_BUDGET_DEFAULTS = {
-    "minimal": 1024,
-    "low": 1024,
-    "medium": 4096,
-    "high": 16384,
-    "max": 32768,
-}
-
-
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
@@ -104,16 +96,14 @@ def merge_models_dev_metadata(
 
 
 def derive_opencode_go_supported_efforts(
-    model_id: str,
+    _model_id: str,
     metadata: Mapping[str, Any],
 ) -> list[str]:
     """Return OpenCode-compatible effort variants for a Go model.
 
-    This mirrors the relevant OpenCode provider transform for the Go
-    catalog. models.dev is used as the source of whether the model
-    supports reasoning at all; OpenCode's compatible provider layer
-    supplies common effort variants for families whose metadata does
-    not enumerate them directly.
+    This reads the provider-declared effort list for compatibility callers.
+    Missing ``reasoning_options`` remains unknown; this helper must not turn
+    a reasoning boolean into guessed host controls.
     """
     if metadata.get("reasoning") is not True:
         return []
@@ -121,48 +111,15 @@ def derive_opencode_go_supported_efforts(
     # models.dev mirrors OpenCode's provider catalog and can carry the exact
     # effort set for newer models. Prefer it when present so newly released
     # levels (for example Muse Spark's ``xhigh``) are not silently dropped.
-    reasoning_options = metadata.get("reasoning_options")
-    if isinstance(reasoning_options, list):
-        efforts: list[str] = []
-        for option in cast("list[object]", reasoning_options):
-            if not isinstance(option, dict):
-                continue
-            option_dict = cast("dict[str, object]", option)
-            if option_dict.get("type") != "effort":
-                continue
-            values = option_dict.get("values")
-            if not isinstance(values, list):
-                continue
-            for value in cast("list[object]", values):
-                if not isinstance(value, str):
-                    continue
-                effort = value.strip().lower()
-                if effort == "med":
-                    effort = "medium"
-                if effort and effort not in efforts:
-                    efforts.append(effort)
-        if efforts:
-            return efforts
-
-    lowered = model_id.lower()
-    if "deepseek-v4" in lowered:
-        return [*OPENCODE_COMPATIBLE_EFFORTS, "max"]
-    if any(name in lowered for name in ("glm-5.2", "glm-5-2", "glm-5p2")):
-        return ["high", "max"]
-    if any(
-        name in lowered
-        for name in (
-            "deepseek-v3",
-            "minimax",
-            "glm",
-            "kimi",
-            "qwen",
-            "k2p",
-            "big-pickle",
-        )
-    ):
-        return []
-    return list(OPENCODE_COMPATIBLE_EFFORTS)
+    options = parse_reasoning_options(
+        metadata.get("reasoning_options"),
+        complete="reasoning_options" in metadata,
+    )
+    if options.present:
+        # An explicit empty list means this host exposes no caller-selected
+        # effort variants. Do not replace it with a guessed compatibility set.
+        return options.accepted_efforts
+    return []
 
 
 def apply_supported_efforts_to_capabilities(
@@ -174,18 +131,17 @@ def apply_supported_efforts_to_capabilities(
     if not efforts:
         return capabilities
     base = dict_to_model_capabilities(cast("dict[str, object]", capabilities))
-    effort_to_budget = {
-        effort: _EFFORT_BUDGET_DEFAULTS[effort]
-        for effort in efforts
-        if effort in _EFFORT_BUDGET_DEFAULTS
-    }
     override = ModelCapabilities(
         thinking=ThinkingCapability(
             status="supported",
             source="provider_catalog",
             native_protocols=["openai"],
             supported_efforts=efforts,
-            effort_to_budget_tokens=effort_to_budget or None,
+            control_contract=ThinkingControlContract(
+                effort="supported",
+                accepted_efforts=list(efforts),
+                source="provider_catalog",
+            ),
             notes="OpenCode-compatible model metadata reports reasoning efforts.",
         )
     )

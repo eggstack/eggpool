@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from eggpool.catalog.capabilities import (  # noqa: TCH001
     CapabilitySource,
     CapabilityStatus,
+    ControlSupport,
     TranscodingCapabilities,
 )
 from eggpool.catalog.pricing import (
@@ -1173,6 +1174,9 @@ class ThinkingCapabilityOverrideConfig(BaseModel):
     budget_tokens_max: int | None = None
     supported_efforts: list[str] | None = None
     effort_to_budget_tokens: dict[str, int] | None = None
+    toggle: ControlSupport | None = None
+    effort: ControlSupport | None = None
+    budget: ControlSupport | None = None
     notes: str | None = None
 
     @field_validator("native_protocols", mode="after")
@@ -1203,6 +1207,9 @@ class ThinkingCapabilityOverrideConfig(BaseModel):
             self.budget_tokens_max = None
             self.supported_efforts = None
             self.effort_to_budget_tokens = None
+            self.toggle = None
+            self.effort = None
+            self.budget = None
             self.notes = None
             return self
 

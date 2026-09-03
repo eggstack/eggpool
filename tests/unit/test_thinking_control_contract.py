@@ -210,7 +210,8 @@ class TestSerializeThinkingForModels:
         assert "control_contract" in result
         cc = result["control_contract"]
         assert isinstance(cc, dict)
-        assert cc["mode"] == "effort"
+        assert cc["effort"] == "supported"
+        assert cc["toggle"] == "unknown"
         assert cc["accepted_efforts"] == ["low", "medium", "high"]
 
     def test_contract_omitted_when_unknown(self) -> None:
@@ -268,7 +269,8 @@ class TestDictRoundTrip:
         assert "control_contract" in tc
         cc_out = tc["control_contract"]
         assert isinstance(cc_out, dict)
-        assert cc_out["mode"] == "effort"
+        assert cc_out["effort"] == "supported"
+        assert cc_out["toggle"] == "unknown"
         assert cc_out["accepted_efforts"] == ["low", "medium", "high"]
 
     def test_legacy_capability_without_contract(self) -> None:
@@ -287,6 +289,40 @@ class TestDictRoundTrip:
 
         inferred = infer_control_contract(caps.thinking)
         assert inferred.mode == "effort"
+
+    @pytest.mark.parametrize(
+        ("mode", "expected"),
+        [
+            (
+                "fixed",
+                {
+                    "toggle": "unsupported",
+                    "effort": "unsupported",
+                    "budget": "unsupported",
+                },
+            ),
+            (
+                "effort",
+                {"toggle": "unknown", "effort": "supported", "budget": "unknown"},
+            ),
+            (
+                "effort_or_budget",
+                {"toggle": "unknown", "effort": "supported", "budget": "supported"},
+            ),
+        ],
+    )
+    def test_legacy_modes_decode_to_dimensions(
+        self, mode: str, expected: dict[str, str]
+    ) -> None:
+        caps = dict_to_model_capabilities(
+            {"thinking": {"status": "supported", "control_contract": {"mode": mode}}}
+        )
+        contract = caps.thinking.control_contract
+        assert {name: getattr(contract, name) for name in expected} == expected
+
+        serialized = model_capabilities_to_dict(caps)
+        contract_dict = serialized["thinking"]["control_contract"]
+        assert "mode" not in contract_dict
 
 
 class TestThinkingOverrideToCapability:

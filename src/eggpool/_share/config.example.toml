@@ -141,6 +141,12 @@ prefer_native = true      # prefer native-protocol accounts in routing
 # native_protocols = ["anthropic"]
 # budget_tokens_min = 1024
 # budget_tokens_max = 16384
+# Independent provider control facts (each: "supported", "unsupported", or
+# "unknown"). These are canonical; legacy supported_efforts/budget fields
+# below remain accepted as compatibility input.
+# toggle = "supported"
+# effort = "unsupported"
+# budget = "supported"
 #
 # Native cache controls require a provider/model contract; protocol names alone
 # do not enable them:

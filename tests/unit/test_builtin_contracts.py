@@ -21,7 +21,8 @@ class TestLookupBuiltinContract:
             protocol="anthropic",
         )
         assert contract is not None
-        assert contract.mode == "effort_or_budget"
+        assert contract.effort == "supported"
+        assert contract.budget == "supported"
 
     def test_opencode_go_by_url_fallback(self) -> None:
         """OpenCode Go matches via URL fallback when provider_id is absent."""
@@ -32,7 +33,8 @@ class TestLookupBuiltinContract:
         )
         # URL-based rule for OpenCode Go matches the effort-or-budget contract.
         assert contract is not None
-        assert contract.mode == "effort_or_budget"
+        assert contract.effort == "supported"
+        assert contract.budget == "supported"
 
     def test_minimax_native_effort(self) -> None:
         contract = lookup_builtin_contract(
@@ -50,7 +52,8 @@ class TestLookupBuiltinContract:
             protocol="anthropic",
         )
         assert contract is not None
-        assert contract.mode == "effort_or_budget"
+        assert contract.effort == "supported"
+        assert contract.budget == "supported"
 
     def test_openai_native(self) -> None:
         contract = lookup_builtin_contract(

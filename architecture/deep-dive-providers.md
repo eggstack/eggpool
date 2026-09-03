@@ -47,12 +47,14 @@ from TOML. `wire/codecs/defaults.py` owns the Responses and Gemini codecs,
 while `compat.py` owns the Chat and Messages codecs. Bundled model hints are
 preferences with source/verification metadata, not permanent routing truth.
 
-The canonical OpenCode Go host seeds supported OpenAI-native thinking controls
+The canonical OpenCode Go host seeds supported OpenAI-native thinking metadata
 for Muse Spark 1.2 and 1.3 Contributors (`minimal`, `low`, `medium`, `high`,
 and `xhigh`) and resolves the same bounded effort-or-budget contract for both
-Responses models. This metadata keeps a transient upstream failure from being
-misreported as an unknown thinking capability and therefore preserves
-retryable model availability semantics.
+Responses models. Provider catalog `reasoning_options` are normalized into
+independent toggle/effort/budget dimensions; omitted options remain unknown,
+while a complete empty list means fixed/no caller control. This metadata keeps
+a transient upstream failure from being misreported as an unknown thinking
+capability and therefore preserves retryable model availability semantics.
 
 Use `resolve_provider_wire_profiles()` to obtain immutable structural profiles
 and `build_wire_profile_headers()` to render the selected account credential.

@@ -16,6 +16,19 @@ Key invariants:
 - **No fabrication.** EggPool does not generate hidden reasoning. It only forwards provider-exposed content. If the upstream does not return thinking blocks, the client does not receive them.
 - **Protocol compatibility alone does not imply thinking support.** A model reachable via the OpenAI Chat Completions-compatible protocol may still lack thinking support. Capability status is independent of protocol compatibility.
 
+### Compositional provider controls
+
+`ThinkingControlContract` is the canonical provider/model contract for caller
+controls. It records `toggle`, `effort`, and `budget` independently, each as
+`supported`, `unsupported`, or `unknown`. This lets the catalog represent
+toggle-only, effort-only, budget-only, and combined hosts without a growing
+combination enum. Reasoning can be `supported` while all three controls are
+`unsupported`, which means fixed/no caller control.
+
+Provider-bound entries are authoritative. Collapsed entries use conservative
+`mixed` summaries when providers differ and must not be used to infer that one
+provider supports the union of another provider's controls.
+
 Status values (`CapabilityStatus`):
 
 | Value | Meaning |
@@ -26,7 +39,7 @@ Status values (`CapabilityStatus`):
 | `mixed` | Some backing providers support thinking, others do not |
 | `conflicting` | External sources disagree on support status; requires operator resolution via manual override |
 
-Source: `src/eggpool/catalog/capabilities.py:36-44`
+Source: `src/eggpool/catalog/capabilities.py`
 
 ## 2. Thinking Transcoding
 
@@ -71,7 +84,8 @@ thinking = true          # Enable thinking/reasoning transcoding (default: true)
 
 ### Budget Defaults
 
-Global effort→budget token mapping, used when the model's capability does not carry a per-model mapping:
+Global effort→budget token mapping is a legacy translation-policy fallback,
+used only when the selected model contract does not carry a verified mapping:
 
 ```toml
 [transcoder.thinking_budget_defaults]
@@ -173,6 +187,9 @@ native_protocols = ["openai"]
 budget_tokens_min = 1024
 budget_tokens_max = 32768
 effort_to_budget_tokens = { low = 512, medium = 2048, high = 8192 }
+toggle = "unsupported"
+effort = "supported"
+budget = "unsupported"
 notes = "Operator-confirmed thinking support via OpenAI"
 ```
 
@@ -184,9 +201,36 @@ notes = "Operator-confirmed thinking support via OpenAI"
 | `budget_tokens_min` | int | Minimum budget (must be > 0) |
 | `budget_tokens_max` | int | Maximum budget (must be > 0, ≥ min) |
 | `effort_to_budget_tokens` | dict | Custom effort→budget mapping (e.g. `{ low = 512, medium = 2048 }`) |
+| `toggle` | string | Host toggle support: `supported`, `unsupported`, or `unknown` |
+| `effort` | string | Host effort support: `supported`, `unsupported`, or `unknown` |
+| `budget` | string | Host numeric-budget support: `supported`, `unsupported`, or `unknown` |
 | `notes` | string | Operator notes |
 
-When `status = None`, the entire override is a no-op — all other fields are cleared.
+The three control fields are independent of `status`: supported reasoning can
+be fixed/no-control, toggle-only, effort-only, budget-only, or any explicit
+combination. When `status = None`, the entire override is a no-op — all other
+fields are cleared. Existing `supported_efforts`, budget bounds, and explicit
+effort maps continue to decode into the corresponding canonical dimensions;
+an explicitly empty `supported_efforts` list means effort is unsupported.
+
+### Provider metadata normalization
+
+The catalog reads one shared `reasoning_options` shape:
+
+```json
+[
+  {"type": "toggle"},
+  {"type": "effort", "values": ["minimal", "low", "medium", "high", "xhigh"]},
+  {"type": "budget_tokens", "min": 1024, "max": 32768}
+]
+```
+
+The list is normalized independently by control type. An omitted field leaves
+all control dimensions `unknown`; a complete empty list marks all three
+`unsupported` while reasoning itself can remain `supported`. Effort labels are
+preserved in first-seen order (`med` normalizes to `medium`) and do not create
+numeric budgets. A provider/model budget map is retained only when supplied by
+metadata or configuration.
 
 ### Provider-Scoped Example
 
@@ -199,7 +243,7 @@ budget_tokens_max = 128000
 effort_to_budget_tokens = { low = 1024, medium = 10000, high = 128000 }
 ```
 
-Source: `src/eggpool/models/config.py:666-737`, `src/eggpool/catalog/capabilities.py:485-513`
+Source: `src/eggpool/models/config.py`, `src/eggpool/catalog/capabilities.py`
 
 ## 5. `/v1/models` Metadata
 
@@ -223,6 +267,12 @@ When `models.collapse_models = false` (the default), each provider gets its own 
         "status": "supported",
         "source": "provider_catalog",
         "native_protocols": ["anthropic"],
+        "control_contract": {
+          "toggle": "unsupported",
+          "effort": "supported",
+          "budget": "supported",
+          "accepted_efforts": ["low", "medium", "high"]
+        },
         "anthropic_request_fields": ["thinking", "thinking_budget"],
         "anthropic_response_fields": ["thinking"],
         "anthropic_stream_delta_fields": ["thinking"],
@@ -264,7 +314,7 @@ When `models.collapse_models = true`, a single entry aggregates all providers:
 
 The `providers` dict in the thinking block shows per-provider status so clients can understand why the aggregate is `mixed`.
 
-Source: `src/eggpool/catalog/capabilities.py:322-372`
+Source: `src/eggpool/catalog/capabilities.py`
 
 ## 6. Routing Policy
 
@@ -332,9 +382,10 @@ reasoning content is not a selectable control and remains unchanged.
 
 The budget resolver translates client-side effort levels or explicit budgets into a concrete token count.
 
-### Default Mapping
+### Legacy Translation-Policy Default Mapping
 
-When no per-model or global config overrides apply:
+When no verified provider/model mapping or global config override applies, the
+legacy translation policy uses:
 
 | Effort Level | Budget Tokens |
 |---|---|

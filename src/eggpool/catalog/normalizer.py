@@ -8,9 +8,11 @@ from eggpool.catalog.capabilities import (
     ModelCapabilities,
     ThinkingCapability,
     ThinkingClientControls,
+    ThinkingControlContract,
     dict_to_model_capabilities,
     merge_model_capabilities,
     model_capabilities_to_dict,
+    parse_reasoning_options,
 )
 
 if TYPE_CHECKING:
@@ -20,15 +22,6 @@ _OPENAI_SOURCE_EXCLUDE = frozenset({"id", "name", "title", "object"})
 _ANTHROPIC_SOURCE_EXCLUDE = frozenset({"id", "display_name", "type"})
 _OPENAI_THINKING_FIELDS = ("reasoning_effort", "reasoning")
 _ANTHROPIC_THINKING_FIELDS = ("thinking", "effort")
-_EFFORT_BUDGET_DEFAULTS = {
-    "minimal": 1024,
-    "low": 1024,
-    "med": 4096,
-    "medium": 4096,
-    "high": 16384,
-    "xhigh": 24576,
-    "max": 32768,
-}
 
 
 def iter_model_items(raw_response: dict[str, Any]) -> Iterator[dict[str, Any]]:
@@ -74,50 +67,6 @@ def _normalize_item(
             key: value for key, value in item.items() if key not in source_exclude
         },
     }
-
-
-def _dedupe(values: list[str]) -> list[str]:
-    """Return values in first-seen order without duplicates."""
-    result: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        if value not in seen:
-            seen.add(value)
-            result.append(value)
-    return result
-
-
-def _normalize_effort(value: object) -> str | None:
-    """Normalize an upstream reasoning effort label."""
-    if not isinstance(value, str):
-        return None
-    text = value.strip().lower()
-    if not text:
-        return None
-    if text == "med":
-        return "medium"
-    return text
-
-
-def _extract_efforts_from_reasoning_options(value: object) -> list[str]:
-    """Extract effort values from models.dev/OpenCode-style reasoning_options."""
-    if not isinstance(value, list):
-        return []
-    efforts: list[str] = []
-    for item in cast("list[object]", value):
-        if not isinstance(item, dict):
-            continue
-        option = cast("dict[str, object]", item)
-        if option.get("type") != "effort":
-            continue
-        raw_values = option.get("values")
-        if not isinstance(raw_values, list):
-            continue
-        for raw in cast("list[object]", raw_values):
-            effort = _normalize_effort(raw)
-            if effort is not None:
-                efforts.append(effort)
-    return _dedupe(efforts)
 
 
 def _extract_supported_parameters(value: object) -> list[str]:
@@ -176,24 +125,47 @@ def _thinking_capability_from_metadata(
 
     reasoning = item.get("reasoning")
     params = _extract_supported_parameters(item.get("supported_parameters"))
-    efforts = _extract_efforts_from_reasoning_options(item.get("reasoning_options"))
+    options = parse_reasoning_options(
+        item.get("reasoning_options"),
+        complete="reasoning_options" in item,
+    )
 
     status: str | None = None
     if isinstance(reasoning, bool):
         status = "supported" if reasoning else "unsupported"
-    elif efforts or any(
-        ("reasoning" in param or "thinking" in param) for param in params
+    elif (
+        options.toggle == "supported"
+        or options.effort == "supported"
+        or options.budget == "supported"
+        or any(("reasoning" in param or "thinking" in param) for param in params)
     ):
         status = "supported"
 
     if status is None:
         return base.thinking
 
-    effort_to_budget = {
-        effort: _EFFORT_BUDGET_DEFAULTS[effort]
-        for effort in efforts
-        if effort in _EFFORT_BUDGET_DEFAULTS
-    }
+    parameter_effort = any(param in {"reasoning_effort", "effort"} for param in params)
+    contract = ThinkingControlContract(
+        toggle=options.toggle,
+        effort=(
+            "supported"
+            if options.effort == "supported" or parameter_effort
+            else options.effort
+        ),
+        budget=options.budget,
+        accepted_efforts=options.accepted_efforts,
+        effort_aliases=options.effort_aliases,
+        explicit_budget_min=options.explicit_budget_min,
+        explicit_budget_max=options.explicit_budget_max,
+        source="provider_catalog",
+    )
+    if status == "unsupported":
+        contract = ThinkingControlContract(
+            toggle="unsupported",
+            effort="unsupported",
+            budget="unsupported",
+            source="provider_catalog",
+        )
     override = ModelCapabilities(
         thinking=ThinkingCapability(
             status=cast("Any", status),
@@ -203,8 +175,11 @@ def _thinking_capability_from_metadata(
                 protocol=protocol,
                 params=params,
             ),
-            supported_efforts=efforts,
-            effort_to_budget_tokens=effort_to_budget or None,
+            supported_efforts=list(options.accepted_efforts),
+            effort_to_budget_tokens=None,
+            budget_tokens_min=options.explicit_budget_min,
+            budget_tokens_max=options.explicit_budget_max,
+            control_contract=contract,
             notes=(
                 "Upstream model metadata reports reasoning/thinking controls."
                 if status == "supported"

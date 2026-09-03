@@ -359,6 +359,12 @@ SQLite WAL with single-connection serialization. All DML runs inside `async with
 ### Thinking-Control Adaptation Ownership
 `adapt_thinking_controls()` accepts a read-only `Mapping[str, Any]` source and builds its own shallow-copied working root. No-op adaptation leaves `payload_generation` unchanged and preserves the cached provider bytes.
 
+Provider/model reasoning metadata is represented by `ThinkingControlContract`
+with independent `toggle`, `effort`, and `budget` support dimensions. The
+catalog normalizer distinguishes omitted `reasoning_options` from a complete
+empty list and never fabricates effort token budgets; legacy `mode` and
+top-level capability fields are compatibility inputs/projections only.
+
 ### Request Finalization
 Every live terminal outcome is owned by one kind-qualified command in the generation-owned `RequestFinalizationSupervisor`: selected request finalization, failed-attempt cleanup, or post-commit claim compensation. Each accepted command retains one terminal reference on its generation until durable and required runtime convergence.
 

@@ -155,10 +155,10 @@ class ThinkingBudgetDefaults(BaseModel):
     """Global effort→budget token mapping for thinking/reasoning.
 
     These defaults are used when the resolved model's
-    ``ThinkingCapability.effort_to_budget_tokens`` does not contain the
-    requested effort level. Only the legacy ``low``/``medium``/``high``
-    compatibility defaults are global; other labels require an explicit
-    capability mapping. Values must be > 0.
+    the canonical provider contract does not contain the requested effort
+    mapping. Only the legacy ``low``/``medium``/``high`` compatibility
+    defaults are global; other labels require an explicit provider contract
+    mapping. Values must be > 0.
     """
 
     model_config = ConfigDict(extra="forbid")

@@ -31,7 +31,8 @@ class TestOpenCodeGoProviderIdentity:
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        assert contract.mode == "effort"
+        assert contract.effort == "supported"
+        assert contract.budget == "supported"
         assert contract.accepted_efforts == ["low", "medium", "high"]
 
     def test_default_opencode_go_url_configures_correctly(self) -> None:
@@ -43,7 +44,8 @@ class TestOpenCodeGoProviderIdentity:
             protocol="anthropic",
         )
         assert contract is not None
-        assert contract.mode == "effort"
+        assert contract.effort == "supported"
+        assert contract.budget == "supported"
 
     def test_opencode_go_resolves_without_url(self) -> None:
         """Provider ID match works even when URL is absent."""
@@ -53,7 +55,8 @@ class TestOpenCodeGoProviderIdentity:
             protocol="anthropic",
         )
         assert contract is not None
-        assert contract.mode == "effort"
+        assert contract.effort == "supported"
+        assert contract.budget == "supported"
 
 
 # ---------------------------------------------------------------------------
@@ -72,7 +75,8 @@ class TestOpenCodeGoUrlFallback:
             protocol="anthropic",
         )
         assert contract is not None
-        assert contract.mode == "effort"
+        assert contract.effort == "supported"
+        assert contract.budget == "supported"
 
     def test_minimax_url_fallback_does_not_capture_native(self) -> None:
         """minimax.io URL fallback does NOT match OpenCode Go or native MiniMax."""
@@ -101,7 +105,8 @@ class TestNativeMiniMaxProviderIdentity:
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        assert contract.mode == "effort"
+        assert contract.effort == "supported"
+        assert contract.budget == "unknown"
         assert "low" in contract.accepted_efforts
         assert "medium" in contract.accepted_efforts
         assert "high" in contract.accepted_efforts
@@ -125,7 +130,8 @@ class TestNativeMiniMaxProviderIdentity:
         # Both accept effort, but the underlying contract objects come from
         # distinct built-in rules so the operator can override either side
         # without affecting the other.
-        assert contract_opencode.mode == "effort"
+        assert contract_opencode.effort == "supported"
+        assert contract_opencode.budget == "supported"
         assert contract_minimax.mode == "effort"
         assert contract_opencode is not contract_minimax
 
@@ -239,7 +245,8 @@ class TestOperatorOverridePrecedence:
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        assert contract_fresh.mode == "effort"
+        assert contract_fresh.effort == "supported"
+        assert contract_fresh.budget == "supported"
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +265,8 @@ class TestCollapsedModelResolution:
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        assert contract.mode == "effort"
+        assert contract.effort == "supported"
+        assert contract.budget == "supported"
 
     def test_suffixed_minimax_m3(self) -> None:
         cap = ThinkingCapability(status="supported")
@@ -268,7 +276,8 @@ class TestCollapsedModelResolution:
             model_id="MiniMax-M3/opencode-go",
             protocol="anthropic",
         )
-        assert contract.mode == "effort"
+        assert contract.effort == "supported"
+        assert contract.budget == "supported"
 
     def test_collapsed_minimax_m3_matches_native_lowercase(self) -> None:
         """The builtin model_id_pattern is case-insensitive so the lowercase
@@ -287,7 +296,8 @@ class TestCollapsedModelResolution:
             model_id="minimax-m3",
             protocol="anthropic",
         )
-        assert canonical.mode == lowercase.mode == "effort"
+        assert canonical.effort == lowercase.effort == "supported"
+        assert canonical.budget == lowercase.budget == "supported"
         assert canonical.accepted_efforts == lowercase.accepted_efforts
 
     def test_both_resolve_same_contract(self) -> None:
@@ -304,7 +314,8 @@ class TestCollapsedModelResolution:
             model_id="MiniMax-M3/opencode-go",
             protocol="anthropic",
         )
-        assert c1.mode == c2.mode
+        assert c1.effort == c2.effort == "supported"
+        assert c1.budget == c2.budget == "supported"
 
 
 # ---------------------------------------------------------------------------

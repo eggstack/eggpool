@@ -49,6 +49,17 @@ class TestThinkingCapabilityOverrideConfig:
         cfg = ThinkingCapabilityOverrideConfig(status="supported")
         assert cfg.source == "manual_override"
 
+    def test_independent_control_overrides(self) -> None:
+        cfg = ThinkingCapabilityOverrideConfig(
+            status="supported",
+            toggle="supported",
+            effort="unsupported",
+            budget="supported",
+        )
+        assert cfg.toggle == "supported"
+        assert cfg.effort == "unsupported"
+        assert cfg.budget == "supported"
+
     def test_explicit_source_overrides_default(self) -> None:
         cfg = ThinkingCapabilityOverrideConfig(
             status="supported", source="provider_catalog"
@@ -264,6 +275,27 @@ class TestThinkingOverrideToCapability:
         assert cap.budget_tokens_max == 80000
         assert cap.effort_to_budget_tokens == {"low": 500, "high": 8000}
         assert cap.notes == "custom override"
+
+    def test_independent_control_override_conversion(self) -> None:
+        cap = thinking_override_to_capability(
+            {
+                "status": "supported",
+                "toggle": "supported",
+                "effort": "unsupported",
+                "budget": "supported",
+            }
+        )
+        assert cap.control_contract.toggle == "supported"
+        assert cap.control_contract.effort == "unsupported"
+        assert cap.control_contract.budget == "supported"
+
+    def test_explicit_empty_legacy_efforts_disable_effort_only(self) -> None:
+        cap = thinking_override_to_capability(
+            {"status": "supported", "supported_efforts": []}
+        )
+        assert cap.control_contract.effort == "unsupported"
+        assert cap.control_contract.toggle == "unknown"
+        assert cap.control_contract.budget == "unknown"
 
     def test_native_protocols_conversion(self) -> None:
         cap = thinking_override_to_capability(

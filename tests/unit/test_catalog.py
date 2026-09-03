@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from eggpool.catalog.cache import ModelCatalogCache, parse_model_id
+from eggpool.catalog.capabilities import parse_reasoning_options
 from eggpool.catalog.models_dev import (
     apply_supported_efforts_to_capabilities,
     derive_opencode_go_supported_efforts,
@@ -90,7 +91,121 @@ def test_normalize_openai_reasoning_options_to_thinking_capability() -> None:
     assert thinking["status"] == "supported"
     assert thinking["source"] == "provider_catalog"
     assert thinking["supported_efforts"] == ["low", "medium", "high", "max"]
-    assert thinking["effort_to_budget_tokens"]["max"] == 32768
+    assert "effort_to_budget_tokens" not in thinking
+    assert thinking["control_contract"] == {
+        "toggle": "supported",
+        "effort": "supported",
+        "budget": "unsupported",
+        "accepted_efforts": ["low", "medium", "high", "max"],
+        "source": "provider_catalog",
+    }
+
+
+def test_reasoning_options_absent_and_empty_are_distinct() -> None:
+    absent = normalize_openai_models({"data": [{"id": "reasoner", "reasoning": True}]})[
+        0
+    ]["capabilities"]["thinking"]
+    empty = normalize_openai_models(
+        {"data": [{"id": "fixed", "reasoning": True, "reasoning_options": []}]}
+    )[0]["capabilities"]["thinking"]
+
+    assert "control_contract" not in absent
+    assert empty["control_contract"]["toggle"] == "unsupported"
+    assert empty["control_contract"]["effort"] == "unsupported"
+    assert empty["control_contract"]["budget"] == "unsupported"
+
+
+def test_reasoning_options_preserve_toggle_budget_and_exact_efforts() -> None:
+    models = normalize_openai_models(
+        {
+            "data": [
+                {
+                    "id": "toggle-budget",
+                    "reasoning": True,
+                    "reasoning_options": [
+                        {"type": "toggle"},
+                        {"type": "budget_tokens", "min": 256, "max": 8192},
+                    ],
+                },
+                {
+                    "id": "muse",
+                    "reasoning": True,
+                    "reasoning_options": [
+                        {
+                            "type": "effort",
+                            "values": ["minimal", "low", "medium", "high", "xhigh"],
+                        }
+                    ],
+                },
+            ]
+        }
+    )
+
+    toggle_budget = models[0]["capabilities"]["thinking"]
+    assert toggle_budget["control_contract"]["toggle"] == "supported"
+    assert toggle_budget["control_contract"]["effort"] == "unsupported"
+    assert toggle_budget["control_contract"]["budget"] == "supported"
+    assert toggle_budget["budget_tokens_min"] == 256
+    assert toggle_budget["budget_tokens_max"] == 8192
+    assert "effort_to_budget_tokens" not in toggle_budget
+
+    muse = models[1]["capabilities"]["thinking"]
+    assert muse["supported_efforts"] == [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+    ]
+    assert muse["control_contract"]["toggle"] == "unsupported"
+    assert muse["control_contract"]["effort"] == "supported"
+    assert muse["control_contract"]["budget"] == "unsupported"
+    assert "effort_to_budget_tokens" not in muse
+
+
+def test_reasoning_false_with_positive_options_is_not_supported() -> None:
+    thinking = normalize_openai_models(
+        {
+            "data": [
+                {
+                    "id": "contradictory",
+                    "reasoning": False,
+                    "reasoning_options": [{"type": "toggle"}],
+                }
+            ]
+        }
+    )[0]["capabilities"]["thinking"]
+
+    assert thinking["status"] == "unsupported"
+    assert thinking["control_contract"] == {
+        "toggle": "unsupported",
+        "effort": "unsupported",
+        "budget": "unsupported",
+        "source": "provider_catalog",
+    }
+
+
+def test_reasoning_options_parser_ignores_malformed_rows_and_bounds_unknowns() -> None:
+    parsed = parse_reasoning_options(
+        [
+            "not an option",
+            {"type": "effort", "values": ["med", "medium", None, "high"]},
+            {"type": "future_control", "secret": "ignored"},
+            {"type": "budget_tokens", "min": -1, "max": 4096},
+            {"type": "effort", "values": "malformed"},
+            {"type": "future_control", "again": True},
+        ],
+        complete=True,
+    )
+
+    assert parsed.effort == "supported"
+    assert parsed.budget == "supported"
+    assert parsed.toggle == "unsupported"
+    assert parsed.accepted_efforts == ["medium", "high"]
+    assert parsed.effort_aliases == {"med": "medium"}
+    assert parsed.explicit_budget_min is None
+    assert parsed.explicit_budget_max == 4096
+    assert parsed.unknown_types == ("future_control",)
 
 
 def test_normalize_supported_parameters_to_thinking_capability() -> None:
@@ -175,14 +290,20 @@ async def test_models_dev_cache_caches_empty_results_and_evicts_old_entries(
 
 
 def test_models_dev_derives_opencode_go_efforts_from_opencode_rules() -> None:
-    assert derive_opencode_go_supported_efforts(
-        "mimo-v2.5",
-        {"reasoning": True},
-    ) == ["low", "medium", "high"]
-    assert derive_opencode_go_supported_efforts(
-        "deepseek-v4-flash",
-        {"reasoning": True},
-    ) == ["low", "medium", "high", "max"]
+    assert (
+        derive_opencode_go_supported_efforts(
+            "mimo-v2.5",
+            {"reasoning": True},
+        )
+        == []
+    )
+    assert (
+        derive_opencode_go_supported_efforts(
+            "deepseek-v4-flash",
+            {"reasoning": True},
+        )
+        == []
+    )
     assert derive_opencode_go_supported_efforts(
         "muse-spark-1.2-contributor",
         {
@@ -197,7 +318,7 @@ def test_models_dev_derives_opencode_go_efforts_from_opencode_rules() -> None:
     ) == ["minimal", "low", "medium", "high", "xhigh"]
 
 
-def test_apply_supported_efforts_updates_capability_budget_map() -> None:
+def test_apply_supported_efforts_does_not_fabricate_budget_map() -> None:
     capabilities = {
         "thinking": {
             "status": "supported",
@@ -212,7 +333,8 @@ def test_apply_supported_efforts_updates_capability_budget_map() -> None:
 
     thinking = merged["thinking"]
     assert thinking["supported_efforts"] == ["low", "medium", "high", "max"]
-    assert thinking["effort_to_budget_tokens"]["max"] == 32768
+    assert "effort_to_budget_tokens" not in thinking
+    assert thinking["control_contract"]["effort"] == "supported"
 
 
 def test_normalize_anthropic_models() -> None:
