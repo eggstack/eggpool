@@ -111,8 +111,9 @@ _OPENCODE_GO_MUSE_URL_COMPAT_CONTRACT = BuiltinProviderContract(
 # ``https://opencode.ai/zen/go/v1``.  Empirically the upstream accepts
 # both ``thinking`` (Anthropic Messages) and ``reasoning_effort``
 # (OpenAI Chat Completions) for low/medium/high, matching the native
-# MiniMax contract.  Treat the deployment as effort-selectable rather
-# than fixed; budget tokens map the same way the native endpoint does.
+# MiniMax contract.  The OpenAI-to-Messages adapter represents the
+# selected effort as Anthropic ``thinking.budget_tokens``, so this
+# deployment accepts either equivalent control form.
 _OPENCODE_GO_MINIMAX_CONTRACT = BuiltinProviderContract(
     key=ProviderContractKey(
         provider_id_pattern=r"^opencode-go$",
@@ -121,7 +122,7 @@ _OPENCODE_GO_MINIMAX_CONTRACT = BuiltinProviderContract(
         priority=10,
     ),
     contract=ThinkingControlContract(
-        mode="effort",
+        mode="effort_or_budget",
         request_fields=["thinking", "reasoning_effort"],
         accepted_efforts=["low", "medium", "high"],
         effort_aliases={"med": "medium"},
@@ -150,7 +151,7 @@ _MINIMAX_NATIVE_CONTRACT = BuiltinProviderContract(
     ),
 )
 
-# OpenCode Go URL compatibility — same effort contract as the ID-based
+# OpenCode Go URL compatibility — same effort-or-budget contract as the ID-based
 # rule, for providers configured with an OpenCode Go upstream URL but a
 # non-canonical provider ID.
 _OPENCODE_GO_URL_COMPAT_CONTRACT = BuiltinProviderContract(
@@ -161,7 +162,7 @@ _OPENCODE_GO_URL_COMPAT_CONTRACT = BuiltinProviderContract(
         priority=10,
     ),
     contract=ThinkingControlContract(
-        mode="effort",
+        mode="effort_or_budget",
         request_fields=["thinking", "reasoning_effort"],
         accepted_efforts=["low", "medium", "high"],
         effort_aliases={"med": "medium"},
