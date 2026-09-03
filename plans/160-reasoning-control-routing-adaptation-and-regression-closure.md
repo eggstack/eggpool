@@ -530,6 +530,7 @@ When these criteria pass, mark Plans 157–160 complete and stop. If a future pr
 - Deterministic and full retained suites pass locally: `7818 passed, 42 skipped`.
 - The CI-equivalent format, lint, type, smoke, and standard/SBC config checks
   pass locally under `PYTHONHASHSEED=0 TZ=UTC`.
-- Credentialed OpenCode Go verification is blocked in this environment because
-  `EGGPOOL_E2E_OPENCODE_GO_API_KEY` is unavailable. The live suite remains
-  opt-in and skipped; no live success is claimed here.
+- Credentialed OpenCode Go verification passed: all 6 existing
+  `live_opencode_go` tests passed, including MiniMax toggle adaptation,
+  invalid-effort pre-dispatch rejection, and invalid-key isolation. The key
+  was supplied only as a process environment variable and was not stored.

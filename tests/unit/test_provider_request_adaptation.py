@@ -98,7 +98,10 @@ class TestIndependentControlDimensions:
 
     def test_toggle_only_maps_binary_openai_shape_to_anthropic(self) -> None:
         result = adapt_thinking_controls(
-            payload={"model": "test", "reasoning": {"enabled": True}},
+            # The protocol transcoder may already have removed the source
+            # spelling; the canonical intent must still produce the target
+            # toggle after selection.
+            payload={"model": "test"},
             client_protocol="openai",
             model_id="test-model",
             provider_id="opencode-go",

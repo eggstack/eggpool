@@ -63,8 +63,8 @@ def client_has_thinking_controls(
 ) -> bool:
     """Return True when the client request contains thinking/reasoning controls.
 
-    Checks for OpenAI-style ``reasoning_effort`` or Anthropic-style
-    ``thinking`` / ``thinking_budget`` fields.  Used by the prepared
+    Checks for OpenAI-style ``reasoning_effort`` / binary ``reasoning`` or
+    Anthropic-style ``thinking`` / ``thinking_budget`` fields. Used by the prepared
     transcode reuse logic to decide whether the cached preflight
     translation is safe to skip — thinking budget resolution depends
     on provider-specific capability lookup, which is not available
@@ -83,6 +83,8 @@ def client_has_thinking_controls(
         return False
     body: dict[str, object] = body_obj  # pyright: ignore[reportUnknownVariableType]
     if isinstance(body.get("reasoning_effort"), str):
+        return True
+    if "reasoning" in body:
         return True
     thinking_obj = body.get("thinking")
     if isinstance(thinking_obj, dict) and "budget_tokens" in thinking_obj:

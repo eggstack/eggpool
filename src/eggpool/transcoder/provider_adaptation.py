@@ -828,12 +828,24 @@ def _adapt_reasoning_toggle(
             emitted_field="reasoning",
         )
     raw_toggle = new_payload.get("reasoning")
-    enabled = (
-        cast("dict[str, Any]", raw_toggle).get("enabled")
-        if isinstance(raw_toggle, dict)
-        else raw_toggle
-    )
+    if raw_toggle is None and intent.requested_toggle is not None:
+        enabled = intent.requested_toggle
+    else:
+        enabled = (
+            cast("dict[str, Any]", raw_toggle).get("enabled")
+            if isinstance(raw_toggle, dict)
+            else raw_toggle
+        )
     if not isinstance(enabled, bool) or upstream_protocol == "openai":
+        if raw_toggle is None and isinstance(enabled, bool):
+            modified = dict(new_payload)
+            modified["reasoning"] = {"enabled": enabled}
+            return ControlFieldAdaptation(
+                disposition="mapped",
+                payload=modified,
+                requested_field="reasoning",
+                emitted_field="reasoning",
+            )
         return ControlFieldAdaptation(
             disposition="unchanged",
             payload=new_payload,
