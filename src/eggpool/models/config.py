@@ -1300,10 +1300,16 @@ class ModelCapabilitiesOverrideConfig(BaseModel):
 
 _OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"
 _OPENCODE_GO_THINKING_MODELS: frozenset[str] = frozenset(
-    {"mimo-v2.5", "minimax-m3", "muse-spark-1.2-contributor"}
+    {
+        "mimo-v2.5",
+        "minimax-m3",
+        "muse-spark-1.2-contributor",
+        "muse-spark-1.3-contributor",
+    }
 )
 _OPENCODE_GO_THINKING_EFFORTS: dict[str, list[str]] = {
     "muse-spark-1.2-contributor": ["minimal", "low", "medium", "high", "xhigh"],
+    "muse-spark-1.3-contributor": ["minimal", "low", "medium", "high", "xhigh"],
 }
 _OPENCODE_GO_EFFORT_BUDGETS: dict[str, int] = {
     "minimal": 1024,
@@ -1335,15 +1341,22 @@ def _default_opencode_go_thinking_capabilities() -> dict[
         }
         # Keep the historical ``med`` alias for the original built-in
         # contracts. Muse's advertised set uses the canonical ``medium``.
-        if model_id != "muse-spark-1.2-contributor":
+        if model_id not in {
+            "muse-spark-1.2-contributor",
+            "muse-spark-1.3-contributor",
+        }:
             effort_to_budget["med"] = _OPENCODE_GO_EFFORT_BUDGETS["med"]
         result[model_id] = ModelCapabilitiesOverrideConfig(
             thinking=ThinkingCapabilityOverrideConfig(
                 status="supported",
                 source="provider_catalog",
                 native_protocols=(
-                    ["anthropic"]
-                    if model_id == "muse-spark-1.2-contributor"
+                    ["openai"]
+                    if model_id
+                    in {
+                        "muse-spark-1.2-contributor",
+                        "muse-spark-1.3-contributor",
+                    }
                     else ["openai", "anthropic"]
                 ),
                 supported_efforts=efforts,
@@ -1351,7 +1364,11 @@ def _default_opencode_go_thinking_capabilities() -> dict[
                 notes=(
                     "OpenCode Go exposes minimal/low/medium/high/xhigh thinking "
                     "controls."
-                    if model_id == "muse-spark-1.2-contributor"
+                    if model_id
+                    in {
+                        "muse-spark-1.2-contributor",
+                        "muse-spark-1.3-contributor",
+                    }
                     else "OpenCode Go exposes low/medium/high thinking controls."
                 ),
             )

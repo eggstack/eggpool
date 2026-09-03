@@ -49,38 +49,42 @@ def _opencode_go_capability() -> tuple[ThinkingCapability, ThinkingControlContra
 
 
 def test_muse_spark_responses_contract_includes_xhigh() -> None:
-    contract = resolve_control_contract(
-        capability=ThinkingCapability(status="supported"),
-        provider_id="opencode-go",
-        model_id="muse-spark-1.2-contributor",
-        protocol="openai",
-    )
+    for model_id in (
+        "muse-spark-1.2-contributor",
+        "muse-spark-1.3-contributor",
+    ):
+        contract = resolve_control_contract(
+            capability=ThinkingCapability(status="supported"),
+            provider_id="opencode-go",
+            model_id=model_id,
+            protocol="openai",
+        )
 
-    assert contract.mode == "effort_or_budget"
-    assert contract.accepted_efforts == [
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-    ]
-    assert contract.effort_to_budget_tokens is not None
-    assert contract.effort_to_budget_tokens["xhigh"] == 24576
+        assert contract.mode == "effort_or_budget"
+        assert contract.accepted_efforts == [
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+        ]
+        assert contract.effort_to_budget_tokens is not None
+        assert contract.effort_to_budget_tokens["xhigh"] == 24576
 
-    url_compat = resolve_control_contract(
-        capability=ThinkingCapability(status="supported"),
-        provider_id="custom-opencode-go",
-        provider_base_url="https://opencode.ai/zen/go/v1",
-        model_id="muse-spark-1.2-contributor",
-        protocol="openai",
-    )
-    assert url_compat.accepted_efforts == contract.accepted_efforts
+        url_compat = resolve_control_contract(
+            capability=ThinkingCapability(status="supported"),
+            provider_id="custom-opencode-go",
+            provider_base_url="https://opencode.ai/zen/go/v1",
+            model_id=model_id,
+            protocol="openai",
+        )
+        assert url_compat.accepted_efforts == contract.accepted_efforts
 
 
 class TestOpenCodeGoAdaptationBehavior:
-    def test_contract_is_effort_mode(self) -> None:
+    def test_contract_is_effort_or_budget_mode(self) -> None:
         _, contract = _opencode_go_capability()
-        assert contract.mode == "effort"
+        assert contract.mode == "effort_or_budget"
         assert "low" in contract.accepted_efforts
         assert "medium" in contract.accepted_efforts
         assert "high" in contract.accepted_efforts
@@ -121,7 +125,8 @@ class TestOpenCodeGoAdaptationBehavior:
 
     def test_url_compat_contract_matches_id_contract(self) -> None:
         """Providers configured with the opencode.ai URL but a non-canonical
-        provider ID resolve to the same effort contract as the ID-based rule."""
+        provider ID resolve to the same effort-or-budget contract as the
+        ID-based rule."""
         url_compat = resolve_control_contract(
             capability=ThinkingCapability(status="supported"),
             provider_id="custom-id",
@@ -135,5 +140,5 @@ class TestOpenCodeGoAdaptationBehavior:
             model_id="MiniMax-M3",
             protocol="anthropic",
         )
-        assert url_compat.mode == id_match.mode == "effort"
+        assert url_compat.mode == id_match.mode == "effort_or_budget"
         assert url_compat.accepted_efforts == id_match.accepted_efforts

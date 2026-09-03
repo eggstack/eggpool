@@ -62,16 +62,16 @@ class BuiltinProviderContract:
 
 
 # ---------------------------------------------------------------------------
-# OpenCode Go Muse Spark 1.2 Contributor contract
+# OpenCode Go Muse Spark Contributor contract
 # ---------------------------------------------------------------------------
 # The OpenCode Go model list does not include capability metadata, so this
-# model needs a curated contract for its Responses/OpenAI-family path. The
+# models need a curated contract for their Responses/OpenAI-family path. The
 # effort vocabulary is mirrored from the current models.dev/OpenCode model
 # record, including the newer ``minimal`` and ``xhigh`` levels.
 _OPENCODE_GO_MUSE_CONTRACT = BuiltinProviderContract(
     key=ProviderContractKey(
         provider_id_pattern=r"^opencode-go$",
-        model_id_pattern=r"^muse-spark-1\.2-contributor$",
+        model_id_pattern=r"^muse-spark-1\.[23]-contributor$",
         protocol="openai",
         priority=10,
     ),
@@ -96,7 +96,7 @@ _OPENCODE_GO_MUSE_CONTRACT = BuiltinProviderContract(
 _OPENCODE_GO_MUSE_URL_COMPAT_CONTRACT = BuiltinProviderContract(
     key=ProviderContractKey(
         provider_base_url_pattern=r".*opencode\.ai/zen/go/v1.*",
-        model_id_pattern=r"^muse-spark-1\.2-contributor$",
+        model_id_pattern=r"^muse-spark-1\.[23]-contributor$",
         protocol="openai",
         priority=10,
     ),

@@ -24,6 +24,7 @@ that production sees for the canonical opencode-go provider.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -49,10 +50,15 @@ pytestmark = [pytest.mark.integration]
 
 # ---------------------------------------------------------------------------
 # Built-in capability override matching the bundled opencode-go defaults
-# for ``muse-spark-1.2-contributor`` (Plan: tests rely on the bundled
+# for the Muse Spark Contributor models (Plan: tests rely on the bundled
 # override so the test mirrors production behaviour for the canonical
 # upstream URL).
 # ---------------------------------------------------------------------------
+
+_MUSE_SPARK_MODEL_IDS = (
+    "muse-spark-1.2-contributor",
+    "muse-spark-1.3-contributor",
+)
 
 _MUSE_SPARK_THINKING_CAPABILITY = {
     "thinking": {
@@ -95,14 +101,19 @@ _MUSE_WIRE_SURFACES = {
 }
 
 
+_MUSE_SPARK_MODEL_SPECS = tuple(
+    ModelSpec(
+        model_id=model_id,
+        protocol="openai",
+        capabilities=_MUSE_SPARK_THINKING_CAPABILITY,
+    )
+    for model_id in _MUSE_SPARK_MODEL_IDS
+)
+
 _MUSE_SPEC = RuntimeAppSpec(
     account_names=("rt-acct-1", "rt-acct-2"),
     models=(
-        ModelSpec(
-            model_id="muse-spark-1.2-contributor",
-            protocol="openai",
-            capabilities=_MUSE_SPARK_THINKING_CAPABILITY,
-        ),
+        *_MUSE_SPARK_MODEL_SPECS,
         ModelSpec(
             model_id="sibling-model",
             protocol="openai",
@@ -115,11 +126,7 @@ _MUSE_SPEC = RuntimeAppSpec(
             base_url=UPSTREAM_BASE,
             protocols=("openai",),
             static_models=(
-                ModelSpec(
-                    model_id="muse-spark-1.2-contributor",
-                    protocol="openai",
-                    capabilities=_MUSE_SPARK_THINKING_CAPABILITY,
-                ),
+                *_MUSE_SPARK_MODEL_SPECS,
                 ModelSpec(
                     model_id="sibling-model",
                     protocol="openai",
@@ -184,25 +191,27 @@ def _openai_500() -> dict[str, Any]:
 
 
 class TestMuseSparkRouting:
-    """End-to-end mocked routing for muse-spark-1.2-contributor."""
+    """End-to-end mocked routing for the Muse Spark Contributor models."""
 
     @respx.mock
     @pytest.mark.asyncio()
+    @pytest.mark.parametrize("model_id", _MUSE_SPARK_MODEL_IDS)
     async def test_muse_spark_with_thinking_routes_successfully(
         self,
         muse_app: FastAPI,
+        model_id: str,
     ) -> None:
-        """Happy path — both accounts serve muse-spark with thinking."""
+        """Happy path — each Muse Spark model serves thinking end-to-end."""
         from httpx import ASGITransport
 
         transport = ASGITransport(app=muse_app)
         async with httpx.AsyncClient(
             transport=transport, base_url="http://testserver"
         ) as client:
-            respx.post(f"{UPSTREAM_BASE}/responses").mock(
+            route = respx.post(f"{UPSTREAM_BASE}/responses").mock(
                 return_value=httpx.Response(
                     200,
-                    json=_responses_success("muse-spark-1.2-contributor", "Hi!"),
+                    json=_responses_success(model_id, "Hi!"),
                 )
             )
 
@@ -210,7 +219,7 @@ class TestMuseSparkRouting:
                 "/v1/messages",
                 headers={"Authorization": "Bearer rt-test-key"},
                 json={
-                    "model": "muse-spark-1.2-contributor",
+                    "model": model_id,
                     "max_tokens": 64,
                     "messages": [{"role": "user", "content": "say hi"}],
                     "thinking": {
@@ -222,7 +231,13 @@ class TestMuseSparkRouting:
             assert resp.status_code == 200, resp.text
             body = resp.json()
             assert body["content"][0]["text"] == "Hi!"
-            assert body["model"] == "muse-spark-1.2-contributor"
+            assert body["model"] == model_id
+
+            assert route.call_count == 1
+            upstream_body = json.loads(route.calls.last.request.content)
+            assert upstream_body["model"] == model_id
+            assert "input" in upstream_body
+            assert upstream_body["max_output_tokens"] == 64
 
     @respx.mock
     @pytest.mark.asyncio()

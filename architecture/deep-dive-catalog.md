@@ -63,6 +63,12 @@ Transforms heterogeneous provider responses into a canonical model list. Handles
 
 Tracks per-model capabilities including:
 - Thinking/reasoning support (`CapabilityStatus`: supported, unsupported, unknown, mixed, conflicting)
+
+The canonical OpenCode Go provider also receives bundled thinking metadata for
+Muse Spark 1.2 and 1.3 Contributors, including their OpenAI-native effort
+levels. This provider-scoped seed is applied before routing so those models do
+not fall back to an unknown capability status when live catalog metadata is
+absent.
 - Budget bounds (`budget_tokens_min`, `budget_tokens_max`)
 - Effort-to-budget token mappings
 - Tool support, streaming support

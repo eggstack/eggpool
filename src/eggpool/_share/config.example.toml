@@ -458,7 +458,8 @@ enabled = false
 # header = "x-api-key"
 #
 # # OpenCode Go exposes low/medium/high thinking controls for mimo-v2.5 and
-# # minimal/low/medium/high/xhigh for muse-spark-1.2-contributor.
+# # minimal/low/medium/high/xhigh for muse-spark-1.2-contributor and
+# # muse-spark-1.3-contributor.
 # [providers.opencode-go.model_capabilities."mimo-v2.5".thinking]
 # status = "supported"
 # source = "provider_catalog"

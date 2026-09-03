@@ -65,12 +65,14 @@ _SURFACE_CONFIG = {
 
 _MODEL_SURFACES = {
     "muse-spark-1.2-contributor": "openai_responses",
+    "muse-spark-1.3-contributor": "openai_responses",
     "gpt-5.6-luna": "openai_responses",
     "minimax-m3": "anthropic_messages",
     "mimo-v2.5": "openai_chat_completions",
 }
 _MODEL_PROTOCOLS = {
     "muse-spark-1.2-contributor": "openai",
+    "muse-spark-1.3-contributor": "openai",
     "gpt-5.6-luna": "openai",
     "minimax-m3": "anthropic",
     "mimo-v2.5": "openai",
@@ -100,6 +102,7 @@ def _live_spec(observer: list[Any]) -> RuntimeAppSpec:
             capabilities=(
                 _thinking_capability(["minimal", "low", "medium", "high", "xhigh"])
                 if model_id == "muse-spark-1.2-contributor"
+                or model_id == "muse-spark-1.3-contributor"
                 else _thinking_capability(["low", "medium", "high"])
                 if model_id == "mimo-v2.5"
                 else {}
@@ -315,6 +318,7 @@ async def test_opencode_go_reasoning_shapes_are_surface_native(
     transport = httpx.ASGITransport(app=app)
     cases = (
         ("muse-spark-1.2-contributor", {"reasoning"}),
+        ("muse-spark-1.3-contributor", {"reasoning"}),
         ("mimo-v2.5", {"reasoning_effort"}),
     )
     async with httpx.AsyncClient(
@@ -324,14 +328,23 @@ async def test_opencode_go_reasoning_shapes_are_surface_native(
     ) as client:
         for model_id, expected_fields in cases:
             payload = _payload(model_id)
-            if model_id == "muse-spark-1.2-contributor":
+            if model_id in {
+                "muse-spark-1.2-contributor",
+                "muse-spark-1.3-contributor",
+            }:
                 payload["reasoning"] = {"effort": "low"}
             else:
                 payload["reasoning_effort"] = "low"
             response = await client.post(
                 _endpoint(model_id), headers=_headers(api_key), json=payload
             )
-            assert response.status_code in {200, 400}, response.text
+            if model_id in {
+                "muse-spark-1.2-contributor",
+                "muse-spark-1.3-contributor",
+            }:
+                assert response.status_code == 200, response.text
+            else:
+                assert response.status_code in {200, 400}, response.text
             item = next(
                 item for item in reversed(observations) if item.model_id == model_id
             )

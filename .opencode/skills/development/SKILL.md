@@ -185,7 +185,9 @@ latency.
 Live provider tests under `tests/live/` are never part of default pytest, smoke,
 or CI. They require explicit test-only environment variables, use temporary
 state and bounded requests, and record only sanitized structural outbound
-observations. Run the OpenCode Go acceptance manually with:
+observations. The OpenCode Go acceptance covers both Muse Spark Contributor
+models on Responses, including reasoning requests, plus the other current
+surface representatives. Run it manually with:
 
 ```bash
 uv run pytest tests/live/test_opencode_go_wire_live.py -m live_opencode_go -v
