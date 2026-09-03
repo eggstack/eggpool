@@ -222,8 +222,10 @@ Model routers are optional and disabled by default. A `[model_routers.<id>]`
 block defines a virtual model alias, selector model, default concrete model,
 and labelled concrete targets. Definitions are structurally validated and
 compiled into each runtime generation. A virtual request builds a bounded
-deterministic selector prompt, accepts only an exact compact route ID, permits
-one repair request, and falls back to `default_model` on selector failure.
+deterministic selector prompt, accepts only an exact compact route ID, and
+permits one repair request only after a successful response contains invalid
+route text. The repair reuses the same bounded semantic request context and
+falls back to `default_model` when selection is unavailable or remains invalid.
 Selector calls are ordinary concrete EggPool requests, so their usage remains
 visible in request, quota, and cost accounting.
 
@@ -232,7 +234,9 @@ TTL/LRU affinity from a conversation to the selected concrete model. Clients
 should send `X-EggPool-Route-Session: <opaque-id>` when they have a stable
 conversation ID; the value is hashed immediately, never logged, persisted, or
 forwarded upstream. Chat/Messages requests without that header may use a
-conservative hash of the system/developer instructions and first user turn.
+conservative bounded hash of the system/developer instructions and first user
+turn; a reserved portion of the existing prefix budget always includes bytes
+from that first user turn when one exists.
 Responses is stateless and should use the explicit header for stickiness across
 independent requests. `sticky = false` invokes the selector for every request.
 Affinity never pins an account/provider, bypasses health/quota routing, or

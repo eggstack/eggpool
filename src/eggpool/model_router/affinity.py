@@ -19,12 +19,13 @@ if TYPE_CHECKING:
 
     from eggpool.model_router.registry import CompiledModelRouter
     from eggpool.model_router.selector import ModelSelection
-    from eggpool.wire.ir import CanonicalRequest
+    from eggpool.wire.ir import CanonicalMessage, CanonicalRequest
 
 AFFINITY_CACHE_MAX_ENTRIES: Final = 4096
 AFFINITY_SESSION_HEADER: Final = "x-eggpool-route-session"
 AFFINITY_SESSION_HEADER_MAX_BYTES: Final = 512
 AUTOMATIC_PREFIX_MAX_BYTES: Final = 4096
+AUTOMATIC_FIRST_USER_MIN_BYTES: Final = 1536
 
 SessionSource = Literal["explicit_session", "automatic_session"]
 AffinityDecisionSource = Literal["selector", "default"]
@@ -112,10 +113,33 @@ def _normalize_identity_text(value: str) -> str:
 
 
 def _bounded_utf8(value: str, max_bytes: int) -> bytes:
+    if max_bytes <= 0:
+        return b""
     encoded = value.encode("utf-8")
     if len(encoded) <= max_bytes:
         return encoded
-    return encoded[:max_bytes].decode("utf-8", errors="ignore").encode("utf-8")
+    head_budget = max_bytes // 2
+    tail_budget = max_bytes - head_budget
+    head = encoded[:head_budget].decode("utf-8", errors="ignore").encode("utf-8")
+    tail = encoded[-tail_budget:].decode("utf-8", errors="ignore").encode("utf-8")
+    return head + tail
+
+
+def _bounded_identity_field(role: str, text: str, max_bytes: int) -> bytes:
+    """Frame one bounded identity field, accounting for framing first."""
+    role_bytes = role.encode("ascii")
+    framing_bytes = 2 + len(role_bytes) + 4
+    if max_bytes <= framing_bytes:
+        return b""
+    text_bytes = _bounded_utf8(text, max_bytes - framing_bytes)
+    if not text_bytes:
+        return b""
+    return (
+        len(role_bytes).to_bytes(2, "big")
+        + role_bytes
+        + len(text_bytes).to_bytes(4, "big")
+        + text_bytes
+    )
 
 
 def automatic_session_identity(
@@ -133,25 +157,16 @@ def automatic_session_identity(
     if client_surface == "responses":
         return None
 
-    fields: list[tuple[str, str]] = []
-    for message in request.messages:
-        if message.role not in {"system", "developer"}:
-            continue
-        text = _normalize_identity_text(message.text())
-        if text:
-            fields.append((message.role, text))
-
-    first_user_text = False
+    first_user_message: CanonicalMessage | None = None
     for message in request.messages:
         if message.role != "user":
             continue
         text = _normalize_identity_text(message.text())
         if text:
-            fields.append(("user", text))
-            first_user_text = True
+            first_user_message = message
         break
 
-    if not fields or not first_user_text:
+    if first_user_message is None:
         return None
 
     digest = hashlib.sha256()
@@ -159,17 +174,30 @@ def automatic_session_identity(
     digest.update(len(client_surface).to_bytes(2, "big"))
     digest.update(client_surface.encode("ascii"))
     remaining = AUTOMATIC_PREFIX_MAX_BYTES
-    for role, text in fields:
-        role_bytes = role.encode("ascii")
-        text_bytes = _bounded_utf8(text, remaining)
-        field_size = 2 + len(role_bytes) + 4 + len(text_bytes)
-        if field_size > remaining:
-            break
-        digest.update(len(role_bytes).to_bytes(2, "big"))
-        digest.update(role_bytes)
-        digest.update(len(text_bytes).to_bytes(4, "big"))
-        digest.update(text_bytes)
+    user_role_overhead = 2 + len(b"user") + 4
+    reserved_user_bytes = min(
+        AUTOMATIC_FIRST_USER_MIN_BYTES,
+        max(0, remaining - user_role_overhead),
+    )
+    system_budget = max(0, remaining - user_role_overhead - reserved_user_bytes)
+    for message in request.messages:
+        if message.role not in {"system", "developer"}:
+            continue
+        text = _normalize_identity_text(message.text())
+        if not text or system_budget <= 0:
+            continue
+        field = _bounded_identity_field(message.role, text, system_budget)
+        if not field:
+            continue
+        digest.update(field)
+        field_size = len(field)
         remaining -= field_size
+        system_budget -= field_size
+
+    user_text = _normalize_identity_text(first_user_message.text())
+    user_field = _bounded_identity_field("user", user_text, remaining)
+    if user_field:
+        digest.update(user_field)
 
     return SessionIdentity(digest=digest.digest(), source="automatic_session")
 

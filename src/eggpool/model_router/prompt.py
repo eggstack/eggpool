@@ -156,15 +156,21 @@ def compile_selector_prompt(
     )
 
 
-def compile_repair_prompt(router: CompiledModelRouter) -> dict[str, Any]:
-    """Build the fixed, bounded repair request for an invalid answer."""
+def compile_repair_prompt(
+    router: CompiledModelRouter,
+    initial_prompt: SelectorPrompt,
+) -> dict[str, Any]:
+    """Build a fixed repair request while retaining the initial context."""
     route_ids = "|".join(router.route_by_id)
+    messages = [
+        {"role": "system", "content": initial_prompt.static_prefix},
+    ]
+    if initial_prompt.variable_text:
+        messages.append({"role": "user", "content": initial_prompt.variable_text})
+    messages.append({"role": "user", "content": f"invalid;reply only:{route_ids}"})
     return {
         "model": router.selector_model,
-        "messages": [
-            {"role": "system", "content": router.static_policy.decode("utf-8")},
-            {"role": "user", "content": f"invalid;reply only:{route_ids}"},
-        ],
+        "messages": messages,
         "stream": False,
         "max_tokens": 16,
     }

@@ -43,7 +43,9 @@ virtual aliases resolve before concrete catalog/provider routing. Sticky
 routers use `ProcessRuntime.model_router_affinity`, a bounded process-local
 TTL/LRU cache keyed by virtual model, semantic router fingerprint, and a
 hashed explicit or conservative automatic session identity. It never pins an
-account/provider or stores raw request/header data.
+account/provider or stores raw request/header data. Automatic Chat/Messages
+identities reserve bounded first-user entropy before consuming the shared
+system/developer prefix budget; Responses requires explicit session identity.
 
 ## Request lifecycle
 
@@ -54,11 +56,14 @@ adaptation failures are terminal local errors. Only typed HTTPX transport
 failures may retry, and only across distinct accounts before downstream handoff.
 The optional model-router selector is a pre-routing semantic helper: its bounded
 non-streaming selector and optional repair requests are concrete child requests
-with independent IDs and ordinary accounting. Invalid output, unavailable
-selector models, and selector errors return the compiled router's default route;
-parent cancellation remains cancellation. Sticky virtual routers can reuse a
-process-owned concrete-model affinity decision keyed by a hashed session
-identity and the router fingerprint; the selector is skipped on a hit.
+with independent IDs and ordinary accounting. Only a successful 2xx selector
+response with invalid route text is eligible for the one repair request, which
+reuses the initial bounded semantic context. Non-2xx selector responses are
+unavailable and fall back without repair; malformed successful output after
+repair returns the compiled router's default route. Parent cancellation remains
+cancellation. Sticky virtual routers can reuse a process-owned concrete-model
+affinity decision keyed by a hashed session identity and the router fingerprint;
+the selector is skipped on a hit.
 
 The database uses SQLite WAL, one serialized primary connection, and caller-owned
 `async with db.transaction()` boundaries for DML. Durable identities are created

@@ -115,8 +115,10 @@ semantic fingerprint, and hashed explicit/automatic session identity; it never
 pins provider/account state or stores raw identity/request data. The
 independently callable `ModelRouterSelector` compiles a deterministic bounded
 prompt and invokes `RequestCoordinator.execute()` with a child concrete
-context; exact route IDs, one optional repair, default fallback, and parent
-cancellation semantics are owned by that component.
+context; exact route IDs, one optional repair using the initial bounded
+semantic context, default fallback, and parent cancellation semantics are owned
+by that component. Only 2xx invalid output is repairable; non-2xx selector
+responses are `unavailable` and skip repair.
 
 Failure classification gives typed, context-qualified wire signals precedence
 over generic `capability`/`unsupported` error-class fallbacks; those class

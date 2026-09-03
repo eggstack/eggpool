@@ -65,10 +65,11 @@ feature-off path adds no DB migration or background task.
 Model-router selector changes should also run
 `tests/unit/test_model_router_selector.py`. Verify deterministic static-policy
 and semantic-view bytes, UTF-8 head/tail bounds, omission of tool schemas,
-tool results, and binary content, exact route-ID parsing, one bounded repair,
-normal coordinator child dispatch, default fallback after selector errors or
-timeouts, and propagation of parent cancellation. Selector tests must use fake
-coordinator/provider responses; no live local model is required.
+tool results, and binary content, exact route-ID parsing, one bounded repair
+that reuses the initial semantic context, non-2xx availability fallback without
+repair, normal coordinator child dispatch, default fallback after selector
+errors or timeouts, and propagation of parent cancellation. Selector tests must
+use fake coordinator/provider responses; no live local model is required.
 
 Model-router request-path closure changes should also run
 `tests/unit/test_proxy.py`, `tests/unit/test_api_models.py`, and the focused
@@ -82,7 +83,8 @@ Run the relevant proxy integration tests before the smoke gate.
 Model-router affinity changes should also run
 `tests/unit/test_model_router_affinity.py` and the header-forwarding suite.
 Verify explicit identities are hashed and bounded, automatic Chat/Messages
-prefixes remain stable as histories grow, Responses uses explicit identity,
+prefixes reserve bounded first-user entropy and remain stable as histories grow,
+Responses uses explicit identity, UTF-8 field framing stays within budget,
 TTL/LRU cleanup is bounded, router fingerprints partition decisions, sticky
 false bypasses the cache, and concurrent misses single-flight without leaked
 coordination state. Rehash integration must exercise the staged generation

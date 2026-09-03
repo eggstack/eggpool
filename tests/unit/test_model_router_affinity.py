@@ -9,6 +9,7 @@ import pytest
 
 from eggpool.model_router.affinity import (
     ModelRouterAffinity,
+    _bounded_identity_field,
     automatic_session_identity,
     session_identity_from_header,
 )
@@ -117,6 +118,97 @@ def test_automatic_identity_uses_initial_text_only_and_omits_responses() -> None
         )
         is None
     )
+
+
+def test_automatic_identity_reserves_entropy_for_long_first_user_turns() -> None:
+    common_prefix = "same beginning " * 500
+    first = _canonical(
+        {
+            "model": "virtual",
+            "messages": [
+                {"role": "user", "content": common_prefix + "ending-a"},
+            ],
+        }
+    )
+    second = _canonical(
+        {
+            "model": "virtual",
+            "messages": [
+                {"role": "user", "content": common_prefix + "ending-b"},
+            ],
+        }
+    )
+    first_identity = automatic_session_identity(
+        first, client_surface="chat_completions"
+    )
+    second_identity = automatic_session_identity(
+        second, client_surface="chat_completions"
+    )
+
+    assert first_identity is not None
+    assert second_identity is not None
+    assert first_identity != second_identity
+
+
+def test_automatic_identity_keeps_first_user_entropy_after_large_system_prefix() -> (
+    None
+):
+    system = "shared system prefix " * 2000
+    identities = []
+    for user in ("first request", "second request"):
+        identities.append(
+            automatic_session_identity(
+                _canonical(
+                    {
+                        "model": "virtual",
+                        "messages": [
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": user},
+                        ],
+                    }
+                ),
+                client_surface="chat_completions",
+            )
+        )
+
+    assert identities[0] is not None
+    assert identities[1] is not None
+    assert identities[0] != identities[1]
+
+
+def test_automatic_identity_is_bounded_and_utf8_deterministic() -> None:
+    payload = {
+        "model": "virtual",
+        "messages": [
+            {"role": "developer", "content": "开发者 " * 5000},
+            {"role": "user", "content": "用户请求 🚀 " * 5000},
+        ],
+    }
+    first = automatic_session_identity(
+        _canonical(payload), client_surface="chat_completions"
+    )
+    second = automatic_session_identity(
+        _canonical(payload), client_surface="chat_completions"
+    )
+
+    assert first is not None
+    assert first == second
+    assert len(_bounded_identity_field("user", "x" * 1_000_000, 64)) <= 64
+    assert len(_bounded_identity_field("user", "x", 10)) == 0
+
+
+def test_automatic_identity_without_a_first_user_is_unavailable() -> None:
+    identity = automatic_session_identity(
+        _canonical(
+            {
+                "model": "virtual",
+                "messages": [{"role": "system", "content": "instructions"}],
+            }
+        ),
+        client_surface="chat_completions",
+    )
+
+    assert identity is None
 
 
 @pytest.mark.asyncio

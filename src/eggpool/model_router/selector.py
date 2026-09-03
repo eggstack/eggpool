@@ -94,26 +94,37 @@ class ModelRouterSelector:
                 )
                 attempts = 1
                 result = await self._execute_selector(router, prompt.payload)
-                route_id = parse_route_id(
-                    result.body,
-                    router,
-                    max_response_bytes=self._max_response_bytes,
-                )
-                if route_id is None and router.repair_attempts:
-                    repair_attempted = True
-                    repair = compile_repair_prompt(router)
-                    attempts = 2
-                    result = await self._execute_selector(router, repair)
+                route_id: str | None = None
+                if not 200 <= result.status_code < 300:
+                    fallback_reason = "unavailable"
+                else:
                     route_id = parse_route_id(
                         result.body,
                         router,
                         max_response_bytes=self._max_response_bytes,
                     )
-                    if route_id is not None:
-                        repair_succeeded = True
+                if (
+                    route_id is None
+                    and router.repair_attempts
+                    and fallback_reason is None
+                ):
+                    repair_attempted = True
+                    repair = compile_repair_prompt(router, prompt)
+                    attempts = 2
+                    result = await self._execute_selector(router, repair)
+                    if not 200 <= result.status_code < 300:
+                        fallback_reason = "unavailable"
                     else:
-                        fallback_reason = "repair_failed"
-                elif route_id is None:
+                        route_id = parse_route_id(
+                            result.body,
+                            router,
+                            max_response_bytes=self._max_response_bytes,
+                        )
+                        if route_id is not None:
+                            repair_succeeded = True
+                        else:
+                            fallback_reason = "repair_failed"
+                elif route_id is None and fallback_reason is None:
                     fallback_reason = "invalid_output"
                 if route_id is not None:
                     route = router.route_by_id[route_id]

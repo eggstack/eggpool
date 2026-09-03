@@ -84,11 +84,15 @@ bound cost, latency, and privacy exposure.
 
 The selector must answer with exactly one compiled route ID. A malformed,
 unknown, oversized, unavailable, or timed-out response never becomes a model
-name. With `repair_attempts = 1`, EggPool makes one fixed repair request. If
-classification still fails, the configured default is used. A selector failure
-with a healthy default is therefore transparent to the client; if the default
-itself is unavailable, the client receives the normal concrete-model
-availability error.
+name. With `repair_attempts = 1`, EggPool makes one fixed repair request only
+after a successful 2xx response has invalid route text. The repair reuses the
+same already-bounded semantic request view and adds only a fixed instruction;
+it does not include the invalid answer, tools, tool results, or binary content.
+If the first or repair response is non-2xx, selection is immediately classified
+as `unavailable` and the default is used. If a successful repair response is
+still invalid, the result is `repair_failed`. A selector failure with a healthy
+default is therefore transparent to the client; if the default itself is
+unavailable, the client receives the normal concrete-model availability error.
 
 Selector calls are ordinary non-streaming concrete EggPool requests. Their
 usage, quota, latency, and cost appear in the existing request/accounting
@@ -116,7 +120,10 @@ no effect on concrete model requests. For stateless OpenAI Responses calls,
 where server-side conversation state is intentionally unsupported, this
 explicit header is the recommended way to carry affinity across independent
 requests. Chat Completions and Messages may derive a conservative identity
-from the system/developer prefix and first user turn when the header is absent.
+from a bounded system/developer prefix and first user turn when the header is
+absent. Field framing is included in the existing 4096-byte identity budget,
+and a reserved portion of that budget always includes bytes from the first user
+turn when it exists, even if the shared system/developer prefix is very large.
 
 `sticky = false` invokes the selector for every request. Affinity is lost on
 process restart. A safe rehash preserves entries only when the router's

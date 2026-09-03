@@ -118,7 +118,10 @@ Rotor position map capped at 4096 entries (`_ROTOR_HARD_CAP`). Eviction is LRU (
 hard cap of 4096 entries and bounded lazy cleanup. Keys are
 `(virtual_model, router_fingerprint, session_digest)`. Explicit session headers
 are SHA-256 digests; automatic identities use only bounded system/developer
-text and the first user text on Chat/Messages surfaces. Responses requires the
+text and the first user text on Chat/Messages surfaces. Field framing is counted
+before truncation, and a reserved portion of the 4096-byte field budget always
+remains available for the first user turn, so a large common prefix cannot
+collapse unrelated conversations to one identity. Responses requires the
 explicit header for cross-request stickiness. Concurrent misses single-flight
 one selector call per key; cancelled leaders release followers to retry. A
 concrete target's downstream health or availability never changes the cached

@@ -206,8 +206,14 @@ def test_internal_context_is_concrete_non_streaming_and_normalized() -> None:
 
 
 class _FakeCoordinator:
-    def __init__(self, responses: list[bytes] | None = None) -> None:
+    def __init__(
+        self,
+        responses: list[bytes] | None = None,
+        *,
+        statuses: list[int] | None = None,
+    ) -> None:
         self.responses = list(responses or [])
+        self.statuses = list(statuses or [])
         self.contexts: list[Any] = []
         self.started = asyncio.Event()
         self.release = asyncio.Event()
@@ -220,8 +226,11 @@ class _FakeCoordinator:
             await self.release.wait()
         if not self.responses:
             raise RuntimeError("no fake response")
+        status_code = self.statuses.pop(0) if self.statuses else 200
         return PreparedProxyResponse(
-            status_code=200, headers=[], body=self.responses.pop(0)
+            status_code=status_code,
+            headers=[],
+            body=self.responses.pop(0),
         )
 
 
@@ -247,16 +256,100 @@ async def test_selector_valid_first_attempt_uses_coordinator_and_child_request()
 @pytest.mark.asyncio
 async def test_selector_repairs_once_then_accepts() -> None:
     coordinator = _FakeCoordinator([_response("not-a-route"), _response("2")])
+    payload = {
+        "model": "client-model",
+        "messages": [
+            {"role": "system", "content": "classify carefully"},
+            {"role": "user", "content": "x"},
+            {"role": "tool", "content": "private tool result"},
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": "secret_tool", "parameters": {"x": 1}},
+            }
+        ],
+    }
     selection = await ModelRouterSelector(coordinator).select(
         _router(),
-        {"model": "client-model", "messages": [{"role": "user", "content": "x"}]},
+        payload,
     )
 
     assert selection.concrete_model == "model-hard"
     assert selection.source == "selector"
     assert selection.selector_attempts == 2
     repair_payload = coordinator.contexts[1].provider_bound.client_payload
-    assert repair_payload["messages"][1]["content"] == "invalid;reply only:0|1|2"
+    assert repair_payload["messages"] == [
+        {
+            "role": "system",
+            "content": coordinator.contexts[0].provider_bound.client_payload[
+                "messages"
+            ][0]["content"],
+        },
+        {
+            "role": "user",
+            "content": "system: classify carefully\nuser: x\nfeatures: tools",
+        },
+        {"role": "user", "content": "invalid;reply only:0|1|2"},
+    ]
+    assert "not-a-route" not in json.dumps(repair_payload)
+    assert "secret_tool" not in json.dumps(repair_payload)
+    assert "private tool result" not in json.dumps(repair_payload)
+
+
+@pytest.mark.asyncio
+async def test_selector_repair_reuses_the_initial_bounded_semantic_context() -> None:
+    coordinator = _FakeCoordinator([_response("invalid"), _response("0")])
+    user_text = "前半分 " * 500 + " actual-request-at-end"
+    selection = await ModelRouterSelector(coordinator).select(
+        _router(max_input_bytes=128),
+        {
+            "model": "client-model",
+            "messages": [{"role": "user", "content": user_text}],
+        },
+    )
+
+    assert selection.source == "selector"
+    initial = coordinator.contexts[0].provider_bound.client_payload
+    repair = coordinator.contexts[1].provider_bound.client_payload
+    assert repair["messages"][0] == initial["messages"][0]
+    assert repair["messages"][1] == initial["messages"][1]
+    assert repair["messages"][2]["content"] == "invalid;reply only:0|1|2"
+    assert len(repair["messages"][1]["content"].encode()) <= 128
+    assert "invalid" not in repair["messages"][1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_selector_non_2xx_response_falls_back_without_repair() -> None:
+    coordinator = _FakeCoordinator([b'{"error":"unavailable"}'], statuses=[503])
+    selection = await ModelRouterSelector(coordinator).select(
+        _router(),
+        {"model": "client-model", "messages": [{"role": "user", "content": "x"}]},
+    )
+
+    assert selection.source == "default"
+    assert selection.selector_attempts == 1
+    assert selection.fallback_reason == "unavailable"
+    assert selection.repair_attempted is False
+    assert len(coordinator.contexts) == 1
+
+
+@pytest.mark.asyncio
+async def test_selector_non_2xx_repair_response_is_unavailable() -> None:
+    coordinator = _FakeCoordinator(
+        [_response("invalid"), b'{"error":"unavailable"}'],
+        statuses=[200, 502],
+    )
+    selection = await ModelRouterSelector(coordinator).select(
+        _router(),
+        {"model": "client-model", "messages": [{"role": "user", "content": "x"}]},
+    )
+
+    assert selection.source == "default"
+    assert selection.selector_attempts == 2
+    assert selection.fallback_reason == "unavailable"
+    assert selection.repair_attempted is True
+    assert selection.repair_succeeded is False
 
 
 @pytest.mark.asyncio
@@ -330,6 +423,11 @@ async def test_parent_cancellation_propagates_and_does_not_fallback() -> None:
 
 
 def test_repair_prompt_is_static_and_bounded() -> None:
-    payload = compile_repair_prompt(_router())
-    assert payload["messages"][1]["content"] == "invalid;reply only:0|1|2"
+    initial = compile_selector_prompt(
+        _router(),
+        {"model": "client-model", "messages": [{"role": "user", "content": "x"}]},
+    )
+    payload = compile_repair_prompt(_router(), initial)
+    assert payload["messages"][2]["content"] == "invalid;reply only:0|1|2"
+    assert payload["messages"][1]["content"] == initial.variable_text
     assert len(json.dumps(payload).encode()) < 1024

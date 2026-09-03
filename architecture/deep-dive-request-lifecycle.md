@@ -130,9 +130,15 @@ concrete `ProxyRequestContext` directly; `ModelRouterSelector` then calls
 
 Selector execution is non-streaming, uses a small `max_tokens` allowance, and
 permits at most one fixed repair request. Response parsing accepts only one
-exact compact route ID from the compiled registry. Selector model absence,
-transport/server/rate failures, malformed output, repair failure, and internal
-timeout all resolve to the configured default route. Parent
+exact compact route ID from the compiled registry. The repair is compiled from
+the initial `SelectorPrompt`, preserving its static policy and already-bounded
+semantic user text; it adds only the fixed route-ID instruction and never
+includes the invalid selector output or excluded request content. A successful
+2xx response with invalid route text is eligible for repair. A non-2xx response
+from either selector attempt is `unavailable`, returns the default immediately,
+and never undergoes output repair. Selector model absence, transport/server/
+rate failures, malformed output, repair failure, and internal timeout all
+resolve to the configured default route. Parent
 `asyncio.CancelledError` propagates, allowing the coordinator's normal
 reservation/attempt cleanup to complete without dispatching a default request.
 Selector child requests are ordinary durable usage/accounting events; semantic
