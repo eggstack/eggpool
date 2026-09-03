@@ -319,9 +319,12 @@ async def test_selector_repair_reuses_the_initial_bounded_semantic_context() -> 
     assert "invalid" not in repair["messages"][1]["content"]
 
 
+@pytest.mark.parametrize("status_code", [400, 429, 500, 503])
 @pytest.mark.asyncio
-async def test_selector_non_2xx_response_falls_back_without_repair() -> None:
-    coordinator = _FakeCoordinator([b'{"error":"unavailable"}'], statuses=[503])
+async def test_selector_non_2xx_response_falls_back_without_repair(
+    status_code: int,
+) -> None:
+    coordinator = _FakeCoordinator([b'{"error":"unavailable"}'], statuses=[status_code])
     selection = await ModelRouterSelector(coordinator).select(
         _router(),
         {"model": "client-model", "messages": [{"role": "user", "content": "x"}]},
